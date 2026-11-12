@@ -1,0 +1,397 @@
+import { sql } from "drizzle-orm";
+import {
+	index,
+	integer,
+	primaryKey,
+	real,
+	sqliteTable,
+	text,
+	unique,
+} from "drizzle-orm/sqlite-core";
+
+const now = sql`CURRENT_TIMESTAMP`;
+
+export const meta = sqliteTable("meta", {
+	key: text("key").primaryKey(),
+	value: text("value").notNull(),
+});
+
+export const users = sqliteTable("users", {
+	createdAt: text("created_at").notNull().default(now),
+	displayName: text("display_name"),
+	id: text("id").primaryKey(),
+	isAdmin: integer("is_admin").notNull().default(0),
+	kind: text("kind", { enum: ["human", "bot", "system"] }).notNull(),
+	notes: text("notes"),
+	preferredName: text("preferred_name"),
+	trustLevel: text("trust_level").notNull().default("normal"),
+	updatedAt: text("updated_at").notNull().default(now),
+});
+
+export const identities = sqliteTable(
+	"identities",
+	{
+		canonicalUserId: text("canonical_user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "restrict" }),
+		createdAt: text("created_at").notNull().default(now),
+		displayName: text("display_name"),
+		externalId: text("external_id").notNull(),
+		id: text("id").primaryKey(),
+		kind: text("kind", { enum: ["user", "group", "system"] }).notNull(),
+		platform: text("platform").notNull(),
+		platformAccountId: text("platform_account_id").notNull(),
+		rawMetadataJson: text("raw_metadata_json"),
+		updatedAt: text("updated_at").notNull().default(now),
+	},
+	(table) => [
+		unique("identities_platform_unique").on(
+			table.platform,
+			table.platformAccountId,
+			table.externalId,
+			table.kind,
+		),
+		index("identities_canonical_idx").on(table.canonicalUserId),
+	],
+);
+
+export const userAliases = sqliteTable(
+	"user_aliases",
+	{
+		alias: text("alias").notNull(),
+		confidence: real("confidence").notNull().default(1),
+		createdAt: text("created_at").notNull().default(now),
+		id: text("id").primaryKey(),
+		source: text("source").notNull(),
+		userId: text("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+	},
+	(table) => [unique("user_aliases_user_alias_unique").on(table.userId, table.alias)],
+);
+
+export const conversations = sqliteTable(
+	"conversations",
+	{
+		channelId: text("channel_id"),
+		createdAt: text("created_at").notNull().default(now),
+		durableConversationId: text("durable_conversation_id").notNull(),
+		id: text("id").primaryKey(),
+		kind: text("kind", { enum: ["private", "group", "webui", "task", "plugin"] }).notNull(),
+		platformConversationId: text("platform_conversation_id"),
+		status: text("status").notNull().default("active"),
+		title: text("title"),
+		updatedAt: text("updated_at").notNull().default(now),
+	},
+	(table) => [
+		unique("conversations_channel_platform_unique").on(
+			table.channelId,
+			table.platformConversationId,
+		),
+		index("conversations_channel_idx").on(table.channelId, table.kind, table.status),
+	],
+);
+
+export const conversationMembers = sqliteTable(
+	"conversation_members",
+	{
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		joinedAt: text("joined_at"),
+		lastSeenAt: text("last_seen_at"),
+		platformRole: text("platform_role"),
+		role: text("role", { enum: ["member", "admin", "bot", "observer"] }).notNull(),
+		userId: text("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+	},
+	(table) => [primaryKey({ columns: [table.conversationId, table.userId] })],
+);
+
+export const messages = sqliteTable(
+	"messages",
+	{
+		activityId: text("activity_id"),
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		direction: text("direction", { enum: ["inbound", "outbound", "system"] }).notNull(),
+		durableEntryId: text("durable_entry_id"),
+		id: text("id").primaryKey(),
+		ingestedAt: text("ingested_at").notNull().default(now),
+		isAggregated: integer("is_aggregated").notNull().default(0),
+		kind: text("kind").notNull(),
+		occurredAt: text("occurred_at").notNull(),
+		platformMessageId: text("platform_message_id"),
+		rawRefJson: text("raw_ref_json"),
+		senderUserId: text("sender_user_id").references(() => users.id, { onDelete: "set null" }),
+	},
+	(table) => [
+		unique("messages_conversation_platform_unique").on(
+			table.conversationId,
+			table.platformMessageId,
+		),
+		index("messages_conversation_time_idx").on(table.conversationId, table.occurredAt),
+		index("messages_sender_idx").on(table.senderUserId),
+	],
+);
+
+export const activities = sqliteTable(
+	"activities",
+	{
+		closedAt: text("closed_at"),
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		id: text("id").primaryKey(),
+		modelContextJson: text("model_context_json"),
+		openedAt: text("opened_at").notNull(),
+		status: text("status", {
+			enum: ["collecting", "processing", "completed", "cancelled"],
+		}).notNull(),
+		summary: text("summary"),
+		triggerMessageId: text("trigger_message_id")
+			.notNull()
+			.references(() => messages.id, { onDelete: "restrict" }),
+	},
+	(table) => [
+		unique("activities_conversation_trigger_unique").on(
+			table.conversationId,
+			table.triggerMessageId,
+		),
+		index("activities_conversation_idx").on(table.conversationId, table.openedAt),
+	],
+);
+
+export const activityMessages = sqliteTable(
+	"activity_messages",
+	{
+		activityId: text("activity_id")
+			.notNull()
+			.references(() => activities.id, { onDelete: "cascade" }),
+		messageId: text("message_id")
+			.notNull()
+			.references(() => messages.id, { onDelete: "cascade" }),
+		position: integer("position").notNull(),
+	},
+	(table) => [primaryKey({ columns: [table.activityId, table.messageId] })],
+);
+
+export const personas = sqliteTable(
+	"personas",
+	{
+		behaviorJson: text("behavior_json").notNull(),
+		createdAt: text("created_at").notNull().default(now),
+		createdBy: text("created_by"),
+		id: text("id").primaryKey(),
+		isActive: integer("is_active").notNull().default(0),
+		modelPolicyId: text("model_policy_id"),
+		name: text("name").notNull(),
+		promptJson: text("prompt_json").notNull(),
+		summary: text("summary").notNull(),
+		version: integer("version").notNull(),
+	},
+	(table) => [unique("personas_id_version_unique").on(table.id, table.version)],
+);
+
+export const personaBindings = sqliteTable("persona_bindings", {
+	conversationId: text("conversation_id").references(() => conversations.id, {
+		onDelete: "cascade",
+	}),
+	createdAt: text("created_at").notNull().default(now),
+	id: text("id").primaryKey(),
+	isActive: integer("is_active").notNull().default(1),
+	isGlobal: integer("is_global").notNull(),
+	personaId: text("persona_id")
+		.notNull()
+		.references(() => personas.id, { onDelete: "restrict" }),
+});
+
+export const modelPolicies = sqliteTable(
+	"model_policies",
+	{
+		allowedToolsJson: text("allowed_tools_json"),
+		capability: text("capability").notNull(),
+		createdAt: text("created_at").notNull().default(now),
+		dailyBudgetUsd: real("daily_budget_usd"),
+		fallbacksJson: text("fallbacks_json").notNull(),
+		id: text("id").primaryKey(),
+		isActive: integer("is_active").notNull().default(1),
+		maxOutputTokens: integer("max_output_tokens"),
+		primaryModel: text("primary_model").notNull(),
+		primaryProvider: text("primary_provider").notNull(),
+		thinkingLevel: text("thinking_level"),
+		updatedAt: text("updated_at").notNull().default(now),
+	},
+	(table) => [unique("model_policies_capability_unique").on(table.capability)],
+);
+
+export const memories = sqliteTable(
+	"memories",
+	{
+		confidence: real("confidence").notNull().default(1),
+		content: text("content").notNull(),
+		conversationId: text("conversation_id").references(() => conversations.id, {
+			onDelete: "cascade",
+		}),
+		createdAt: text("created_at").notNull().default(now),
+		createdBy: text("created_by", { enum: ["agent", "user", "migration", "system"] }).notNull(),
+		expiresAt: text("expires_at"),
+		id: text("id").primaryKey(),
+		importance: real("importance").notNull().default(0.5),
+		kind: text("kind").notNull(),
+		projectId: text("project_id"),
+		revokedAt: text("revoked_at"),
+		scope: text("scope", {
+			enum: ["global", "persona", "user", "conversation", "project", "ephemeral"],
+		}).notNull(),
+		sourceActivityId: text("source_activity_id"),
+		sourceConversationId: text("source_conversation_id").references(() => conversations.id, {
+			onDelete: "set null",
+		}),
+		sourceEntryId: text("source_entry_id"),
+		subjectUserId: text("subject_user_id").references(() => users.id, { onDelete: "cascade" }),
+		summary: text("summary").notNull(),
+		updatedAt: text("updated_at").notNull().default(now),
+		visibility: text("visibility").notNull().default("private"),
+	},
+	(table) => [
+		index("memories_scope_idx").on(
+			table.scope,
+			table.subjectUserId,
+			table.conversationId,
+			table.updatedAt,
+		),
+		index("memories_content_idx").on(table.summary),
+	],
+);
+
+export const memoryLinks = sqliteTable(
+	"memory_links",
+	{
+		memoryId: text("memory_id")
+			.notNull()
+			.references(() => memories.id, { onDelete: "cascade" }),
+		relation: text("relation").notNull(),
+		targetId: text("target_id").notNull(),
+		targetKind: text("target_kind", {
+			enum: ["user", "conversation", "persona", "project", "media"],
+		}).notNull(),
+	},
+	(table) => [
+		primaryKey({
+			columns: [table.memoryId, table.targetKind, table.targetId, table.relation],
+		}),
+	],
+);
+
+export const plugins = sqliteTable(
+	"plugins",
+	{
+		apiVersion: text("api_version").notNull(),
+		configJson: text("config_json"),
+		configSchemaJson: text("config_schema_json"),
+		enabled: integer("enabled").notNull().default(0),
+		id: text("id").primaryKey(),
+		installedAt: text("installed_at").notNull().default(now),
+		kind: text("kind", { enum: ["builtin", "first-party", "third-party"] }).notNull(),
+		manifestJson: text("manifest_json").notNull(),
+		name: text("name").notNull(),
+		runMode: text("run_mode", { enum: ["host", "worker"] }).notNull(),
+		updatedAt: text("updated_at").notNull().default(now),
+		version: text("version").notNull(),
+	},
+	(table) => [
+		unique("plugins_name_unique").on(table.name),
+		index("plugins_enabled_idx").on(table.enabled, table.kind),
+	],
+);
+
+export const pluginGrants = sqliteTable("plugin_grants", {
+	granted: integer("granted").notNull().default(0),
+	grantedAt: text("granted_at"),
+	grantedBy: text("granted_by"),
+	permission: text("permission").notNull(),
+	pluginId: text("plugin_id")
+		.notNull()
+		.references(() => plugins.id, { onDelete: "cascade" }),
+});
+
+export const policies = sqliteTable("policies", {
+	conversationId: text("conversation_id").references(() => conversations.id, {
+		onDelete: "cascade",
+	}),
+	createdAt: text("created_at").notNull().default(now),
+	id: text("id").primaryKey(),
+	isActive: integer("is_active").notNull().default(1),
+	policyJson: text("policy_json").notNull(),
+	scope: text("scope", { enum: ["global", "conversation", "plugin", "model", "coding"] }).notNull(),
+	updatedAt: text("updated_at").notNull().default(now),
+});
+
+export const auditLog = sqliteTable(
+	"audit_log",
+	{
+		action: text("action").notNull(),
+		actorId: text("actor_id"),
+		actorKind: text("actor_kind", { enum: ["user", "agent", "plugin", "system"] }).notNull(),
+		id: text("id").primaryKey(),
+		occurredAt: text("occurred_at").notNull(),
+		payloadJson: text("payload_json"),
+		reason: text("reason"),
+		result: text("result", { enum: ["ok", "denied", "failed"] }).notNull(),
+		targetId: text("target_id"),
+		targetKind: text("target_kind").notNull(),
+	},
+	(table) => [index("audit_time_idx").on(table.occurredAt)],
+);
+
+export const media = sqliteTable("media", {
+	createdAt: text("created_at").notNull().default(now),
+	durationMs: integer("duration_ms"),
+	expiresAt: text("expires_at"),
+	height: integer("height"),
+	id: text("id").primaryKey(),
+	kind: text("kind", { enum: ["image", "sticker", "audio", "video", "file"] }).notNull(),
+	metadataJson: text("metadata_json"),
+	mimeType: text("mime_type").notNull(),
+	sha256: text("sha256").notNull(),
+	sizeBytes: integer("size_bytes").notNull(),
+	source: text("source", { enum: ["onebot", "webui", "migration", "generated"] }).notNull(),
+	sourceUrl: text("source_url"),
+	width: integer("width"),
+});
+
+export const migrationRecords = sqliteTable(
+	"migration_records",
+	{
+		createdAt: text("created_at").notNull().default(now),
+		id: text("id").primaryKey(),
+		migrationRunId: text("migration_run_id").notNull(),
+		reason: text("reason"),
+		sourceHash: text("source_hash").notNull(),
+		sourceId: text("source_id").notNull(),
+		sourceSystem: text("source_system").notNull(),
+		status: text("status", {
+			enum: ["planned", "imported", "skipped", "failed", "rolled_back"],
+		}).notNull(),
+		targetId: text("target_id"),
+		targetKind: text("target_kind").notNull(),
+		updatedAt: text("updated_at").notNull().default(now),
+	},
+	(table) => [
+		unique("migration_source_unique").on(table.sourceSystem, table.sourceId, table.targetKind),
+	],
+);
+
+export const migrationRuns = sqliteTable("migration_runs", {
+	finishedAt: text("finished_at"),
+	id: text("id").primaryKey(),
+	mode: text("mode", { enum: ["dry-run", "import"] }).notNull(),
+	reportJson: text("report_json"),
+	startedAt: text("started_at").notNull(),
+	status: text("status", {
+		enum: ["dry_run", "running", "completed", "failed", "rolled_back"],
+	}).notNull(),
+});
