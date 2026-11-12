@@ -2,9 +2,9 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Circle, MessageCircle } from "lucide-react";
-import { useState } from "react";
 import { Button } from "@/components/motion/button";
 import { api, type DeliveryStatus } from "@/lib/api";
+import { errorMessage, useToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { useShellNavigation } from "../../_modules/shell/admin-shell";
@@ -36,12 +36,9 @@ function chatKindLabel(kind: "private" | "group" | "webui" | "task" | "plugin"):
 }
 
 export function ChatPage({ sessionId }: { sessionId: string }) {
+	const toast = useToast();
 	const queryClient = useQueryClient();
 	const { mobile, showSidebar } = useShellNavigation();
-	const [notice, setNotice] = useState<{
-		message: string;
-		tone: "danger" | "neutral" | "warning";
-	} | null>(null);
 	const session = useQuery({
 		queryFn: () => api.sessions.get(sessionId),
 		queryKey: ["admin", "session", sessionId],
@@ -60,16 +57,22 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 	const send = useMutation({
 		mutationFn: (input: { target: "channel" | "elaina"; text: string }) =>
 			api.sessions.send({ ...input, sessionId }),
-		onMutate: () => setNotice(null),
-		onError: (error) => setNotice({ message: error.message, tone: "danger" }),
+		onError: (error) =>
+			toast.error(m.toast_message_send_failed(), {
+				description: errorMessage(error),
+			}),
 		onSuccess: async (message) => {
-			const tone =
-				message.deliveryStatus === "failed"
-					? "danger"
-					: message.deliveryStatus === "uncertain"
-						? "warning"
-						: "neutral";
-			setNotice({ message: deliveryNotice(message.deliveryStatus), tone });
+			const notice = deliveryNotice(message.deliveryStatus);
+			if (message.deliveryStatus === "failed") toast.error(notice);
+			else if (
+				message.deliveryStatus === "accepted" ||
+				message.deliveryStatus === "sent" ||
+				message.deliveryStatus === "received"
+			) {
+				toast.success(notice);
+			} else {
+				toast.info(notice);
+			}
 			await Promise.all([
 				queryClient.invalidateQueries({
 					queryKey: ["admin", "session", sessionId, "messages"],
@@ -205,22 +208,6 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 					<MessageList messages={messages.data ?? []} />
 				)}
 			</div>
-
-			{notice ? (
-				<div
-					role="status"
-					className={cn(
-						"border-t border-border px-5 py-1.5 text-[11px]",
-						notice.tone === "danger"
-							? "bg-destructive/5 text-destructive"
-							: notice.tone === "warning"
-								? "bg-warning/5 text-warning"
-								: "text-muted-foreground",
-					)}
-				>
-					{notice.message}
-				</div>
-			) : null}
 
 			{archived ? null : (
 				<MessageComposer

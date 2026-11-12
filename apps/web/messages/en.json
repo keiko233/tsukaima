@@ -19,6 +19,7 @@
 	"toast_models_fetch_failed": "Could not fetch models",
 	"toast_models_loaded": "Models loaded",
 	"toast_models_loaded_description": "{count} models available from the provider.",
+	"toast_message_send_failed": "Message could not be sent",
 	"toast_policy_save_failed": "Could not save policy",
 	"toast_policy_saved": "Policy saved",
 	"toast_settings_save_failed": "Could not save settings",

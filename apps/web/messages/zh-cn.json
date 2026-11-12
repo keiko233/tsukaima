@@ -19,6 +19,7 @@
 	"toast_models_fetch_failed": "模型获取失败",
 	"toast_models_loaded": "模型已获取",
 	"toast_models_loaded_description": "已从 Provider 获取 {count} 个可用模型。",
+	"toast_message_send_failed": "消息发送失败",
 	"toast_policy_save_failed": "策略保存失败",
 	"toast_policy_saved": "策略已保存",
 	"toast_settings_save_failed": "设置保存失败",
