@@ -234,6 +234,16 @@ export interface PublicRuntimeSettings {
 	readonly onebotWsUrl?: string;
 }
 
+export interface RemoteModel {
+	readonly id: string;
+	readonly ownedBy?: string;
+}
+
+export interface RemoteModelList {
+	readonly baseUrl: string;
+	readonly models: readonly RemoteModel[];
+}
+
 export interface RuntimeSettingsPatch {
 	readonly logLevel?: LogLevel;
 	readonly openAiApiKey?: string | null;
@@ -317,6 +327,8 @@ export const api = {
 	},
 	settings: {
 		get: () => rpcCall<PublicRuntimeSettings>("admin/settings/get"),
+		models: (input: { apiKey?: string; baseUrl?: string } = {}) =>
+			rpcCall<RemoteModelList>("admin/settings/models", input),
 		update: (input: RuntimeSettingsPatch) =>
 			rpcCall<PublicRuntimeSettings>("admin/settings/update", input),
 	},

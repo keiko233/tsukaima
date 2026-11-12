@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/motion/button";
 import { Card } from "@/components/motion/card";
@@ -38,6 +39,9 @@ export function SettingsPage() {
 			await queryClient.invalidateQueries({ queryKey: ["admin"] });
 		},
 	});
+	const fetchModels = useMutation({
+		mutationFn: api.settings.models,
+	});
 	const [providerBaseUrl, setProviderBaseUrl] = useState<string | undefined>(undefined);
 	const [providerModelId, setProviderModelId] = useState<string | undefined>(undefined);
 	const [providerApiKey, setProviderApiKey] = useState("");
@@ -53,11 +57,23 @@ export function SettingsPage() {
 	const currentProviderBaseUrl = providerBaseUrl ?? settings?.openAiBaseUrl ?? "";
 	const currentProviderModelId = providerModelId ?? settings?.openAiModelId ?? "";
 	const currentUrl = onebotWsUrl ?? settings?.onebotWsUrl ?? "";
+	const remoteModels = fetchModels.data?.models ?? [];
+	const remoteModelValue = remoteModels.some((model) => model.id === currentProviderModelId)
+		? currentProviderModelId
+		: "";
 	const changeLocale = (value: string) => {
 		const next = toLocale(value);
 		if (next === undefined || next === locale) return;
 		setLocaleState(next);
 		applyLocale(next);
+	};
+	const changeProviderBaseUrl = (value: string) => {
+		setProviderBaseUrl(value);
+		fetchModels.reset();
+	};
+	const changeProviderApiKey = (value: string) => {
+		setProviderApiKey(value);
+		fetchModels.reset();
 	};
 
 	return (
@@ -113,13 +129,7 @@ export function SettingsPage() {
 							label={m.settings_provider_base_url_label()}
 							placeholder="https://magpie.example/v1"
 							value={currentProviderBaseUrl}
-							onChange={setProviderBaseUrl}
-						/>
-						<Input
-							label={m.settings_provider_model_label()}
-							placeholder="magpie-chat"
-							value={currentProviderModelId}
-							onChange={setProviderModelId}
+							onChange={changeProviderBaseUrl}
 						/>
 						<Input
 							label={m.settings_provider_key_label()}
@@ -130,8 +140,87 @@ export function SettingsPage() {
 							}
 							type="password"
 							value={providerApiKey}
-							onChange={setProviderApiKey}
+							onChange={changeProviderApiKey}
 						/>
+						<div className="space-y-2">
+							<div className="flex items-end gap-2">
+								<Input
+									label={m.settings_provider_model_label()}
+									placeholder="magpie-chat"
+									value={currentProviderModelId}
+									onChange={setProviderModelId}
+									className="flex-1"
+								/>
+								<Button
+									variant="outline"
+									className="h-11 shrink-0"
+									disabled={fetchModels.isPending || updateSettings.isPending}
+									aria-busy={fetchModels.isPending}
+									onClick={() =>
+										fetchModels.mutate({
+											...(currentProviderBaseUrl.trim().length > 0
+												? { baseUrl: currentProviderBaseUrl.trim() }
+												: {}),
+											...(providerApiKey.trim().length > 0
+												? { apiKey: providerApiKey.trim() }
+												: {}),
+										})
+									}
+								>
+									<RefreshCw className={fetchModels.isPending ? "size-4 animate-spin" : "size-4"} />
+									{fetchModels.isPending ? m.settings_models_fetching() : m.settings_models_fetch()}
+								</Button>
+							</div>
+							{fetchModels.data !== undefined ? (
+								<div className="space-y-1.5">
+									<div className="flex items-center justify-between gap-2 px-1">
+										<span className="text-sm font-medium text-foreground">
+											{m.settings_remote_models_label()}
+										</span>
+										<span className="text-xs text-muted-foreground">
+											{m.settings_remote_models_count({
+												count: remoteModels.length,
+											})}
+										</span>
+									</div>
+									{remoteModels.length > 0 ? (
+										<Select value={remoteModelValue} onValueChange={setProviderModelId}>
+											<SelectTrigger className="w-full">
+												<span className="sr-only">{m.settings_remote_models_label()}: </span>
+												<SelectValue placeholder={m.settings_remote_models_placeholder()} />
+											</SelectTrigger>
+											<SelectContent className="max-h-64 overflow-y-auto">
+												{remoteModels.map((model) => (
+													<SelectItem key={model.id} value={model.id}>
+														{model.id}
+													</SelectItem>
+												))}
+											</SelectContent>
+										</Select>
+									) : (
+										<p className="px-1 text-xs text-muted-foreground">
+											{m.settings_remote_models_empty()}
+										</p>
+									)}
+									<p className="px-1 text-xs text-muted-foreground">
+										{m.settings_models_fetched_from({
+											baseUrl: fetchModels.data.baseUrl,
+										})}
+									</p>
+									<p className="px-1 text-xs text-muted-foreground">
+										{m.settings_remote_models_hint()}
+									</p>
+								</div>
+							) : null}
+							<p className="text-xs text-muted-foreground">{m.settings_models_hint()}</p>
+							{fetchModels.isError ? (
+								<div className="text-xs text-destructive">
+									{m.settings_models_error({
+										message: fetchModels.error.message,
+									})}
+								</div>
+							) : null}
+						</div>
 						<p className="text-xs text-muted-foreground">{m.settings_provider_hint()}</p>
 						<div className="border-t border-border" />
 						<Input

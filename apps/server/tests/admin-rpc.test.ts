@@ -107,4 +107,55 @@ describe("admin RPC", () => {
 		await lifecycle.stop();
 		expect(app).toBeDefined();
 	});
+
+	test("fetches provider models through the server without returning the API key", async () => {
+		const provider = Bun.serve({
+			fetch(request) {
+				const url = new URL(request.url);
+				expect(url.pathname).toBe("/v1/models");
+				expect(request.headers.get("authorization")).toBe("Bearer unsaved-provider-secret");
+				return Response.json({
+					data: [{ id: "model-b", owned_by: "vendor" }, { id: "model-a" }],
+					object: "list",
+				});
+			},
+			port: 0,
+		});
+		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-admin-model-list-"));
+		directories.push(directory);
+		const { lifecycle } = createApp({
+			ELAINA_DATA_DIR: directory,
+			ELAINA_PORT: "7420",
+			ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+		});
+		await lifecycle.start();
+
+		try {
+			const handler = new RPCHandler(appRouter);
+			const response = await handler.handle(
+				new Request("http://localhost/rpc/admin/settings/models", {
+					body: JSON.stringify({
+						json: {
+							apiKey: "unsaved-provider-secret",
+							baseUrl: `http://127.0.0.1:${provider.port}/v1`,
+						},
+					}),
+					headers: { "content-type": "application/json" },
+					method: "POST",
+				}),
+				{ context: { lifecycle }, prefix: "/rpc" },
+			);
+			if (response.response === undefined) throw new Error("No model-list response");
+			const result = (await response.response.json()) as { json: unknown };
+
+			expect(result.json).toEqual({
+				baseUrl: `http://127.0.0.1:${provider.port}/v1`,
+				models: [{ id: "model-a" }, { id: "model-b", ownedBy: "vendor" }],
+			});
+			expect(JSON.stringify(result.json)).not.toContain("unsaved-provider-secret");
+		} finally {
+			provider.stop(true);
+			await lifecycle.stop();
+		}
+	});
 });
