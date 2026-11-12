@@ -1,0 +1,14 @@
+{
+	"name": "@tsukaima/chaos",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"dependencies": {
+		"@earendil-works/pi-durable": "1.5.2",
+		"@tsukaima/contracts": "workspace:*",
+		"@tsukaima/durable": "workspace:*"
+	}
+}
