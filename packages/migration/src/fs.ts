@@ -9,7 +9,12 @@ export function sha256String(value: string): string {
 }
 
 export async function sha256File(path: string): Promise<string> {
-	return hashPrefix + createHash("sha256").update(await fs.readFile(path)).digest("hex");
+	return (
+		hashPrefix +
+		createHash("sha256")
+			.update(await fs.readFile(path))
+			.digest("hex")
+	);
 }
 
 export async function listFiles(root: string): Promise<string[]> {

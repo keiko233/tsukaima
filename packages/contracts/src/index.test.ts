@@ -13,7 +13,9 @@ describe("contracts", () => {
 			maxMessages: 20,
 			windowMs: 6_000,
 		});
-		expect(() => activityAggregationPolicySchema.parse({ maxMessages: 1, windowMs: 2_000 })).toThrow();
+		expect(() =>
+			activityAggregationPolicySchema.parse({ maxMessages: 1, windowMs: 2_000 }),
+		).toThrow();
 	});
 
 	test("validates conversation policy", () => {

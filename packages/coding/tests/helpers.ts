@@ -3,7 +3,12 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-const GIT_CONFIG_ARGS = ["-c", "user.name=tsukaima-test", "-c", "user.email=test@tsukaima.local"] as const;
+const GIT_CONFIG_ARGS = [
+	"-c",
+	"user.name=tsukaima-test",
+	"-c",
+	"user.email=test@tsukaima.local",
+] as const;
 
 export function gitSync(cwd: string, args: readonly string[]): string {
 	return execFileSync("git", [...GIT_CONFIG_ARGS, ...args], {

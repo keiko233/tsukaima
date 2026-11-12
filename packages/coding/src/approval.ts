@@ -72,9 +72,8 @@ export class JsonFileApprovalStore implements ApprovalGate {
 			status: "pending",
 			taskId: input.taskId,
 		};
-		const stored = input.proposalId !== undefined
-			? { ...request, proposalId: input.proposalId }
-			: request;
+		const stored =
+			input.proposalId !== undefined ? { ...request, proposalId: input.proposalId } : request;
 		requests.push(stored);
 		await this.#write(requests);
 		return stored;

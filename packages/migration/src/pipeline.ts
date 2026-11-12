@@ -16,11 +16,7 @@ import {
 	users,
 } from "@tsukaima/db";
 import { DSH_SOURCE } from "./dsh-inspect.ts";
-import {
-	FakeCompressor,
-	type Compressor,
-	type CompressionResult,
-} from "./compressor.ts";
+import { FakeCompressor, type Compressor, type CompressionResult } from "./compressor.ts";
 import {
 	countRecords,
 	normalizeSnapshot,
@@ -262,7 +258,13 @@ export function createPipeline(target: string): MigrationPipeline {
 					string,
 					typeof migrationRecords.$inferInsert & { status: "planned" }
 				>();
-				const record = (targetKind: string, recordId: string, sourceId: string, sourceHash: string, targetId?: string) => {
+				const record = (
+					targetKind: string,
+					recordId: string,
+					sourceId: string,
+					sourceHash: string,
+					targetId?: string,
+				) => {
 					const id = `${DSH_SOURCE}:${targetKind}:${recordId}`;
 					if (!ledger.has(id)) {
 						ledger.set(id, {
@@ -282,7 +284,12 @@ export function createPipeline(target: string): MigrationPipeline {
 					record("users", user.canonicalId, user.sourceId, user.sourceHash);
 				}
 				for (const conversation of normalized.database.conversations) {
-					record("conversations", conversation.canonicalId, conversation.sourceId, conversation.sourceHash);
+					record(
+						"conversations",
+						conversation.canonicalId,
+						conversation.sourceId,
+						conversation.sourceHash,
+					);
 				}
 				for (const message of normalized.database.messages) {
 					record("messages", message.sourceId, message.sourceId, message.sourceHash);
@@ -307,50 +314,65 @@ export function createPipeline(target: string): MigrationPipeline {
 						}
 					};
 
-					await insert(users, normalized.database.users.map((user) => ({
-						id: user.canonicalId,
-						kind: user.kind,
-						displayName: user.displayName,
-						isAdmin: user.isAdmin,
-					})));
-					await insert(conversations, normalized.database.conversations.map((conversation) => ({
-						id: conversation.canonicalId,
-						kind: conversation.kind,
-						channelId: conversation.channelId,
-						platformConversationId: conversation.platformConversationId,
-						durableConversationId: conversation.durableConversationId,
-						title: conversation.title,
-						status: conversation.status,
-						createdAt: conversation.createdAt,
-						updatedAt: conversation.updatedAt,
-					})));
-					await insert(conversationMembers, normalized.database.conversations.flatMap((conversation) =>
-						conversation.memberUserIds.map((userId) => ({
-							conversationId: conversation.canonicalId,
-							userId,
-							role: userId.includes("assistant") ? "bot" : "member",
+					await insert(
+						users,
+						normalized.database.users.map((user) => ({
+							id: user.canonicalId,
+							kind: user.kind,
+							displayName: user.displayName,
+							isAdmin: user.isAdmin,
 						})),
-					));
+					);
+					await insert(
+						conversations,
+						normalized.database.conversations.map((conversation) => ({
+							id: conversation.canonicalId,
+							kind: conversation.kind,
+							channelId: conversation.channelId,
+							platformConversationId: conversation.platformConversationId,
+							durableConversationId: conversation.durableConversationId,
+							title: conversation.title,
+							status: conversation.status,
+							createdAt: conversation.createdAt,
+							updatedAt: conversation.updatedAt,
+						})),
+					);
+					await insert(
+						conversationMembers,
+						normalized.database.conversations.flatMap((conversation) =>
+							conversation.memberUserIds.map((userId) => ({
+								conversationId: conversation.canonicalId,
+								userId,
+								role: userId.includes("assistant") ? "bot" : "member",
+							})),
+						),
+					);
 					await insert(messages, normalized.database.messages.map(messageRow));
-					await insert(personas, normalized.database.personas.map((persona) => ({
-						id: persona.canonicalId,
-						name: persona.name,
-						summary: persona.summary,
-						promptJson: persona.promptJson,
-						behaviorJson: persona.behaviorJson,
-						version: persona.version,
-						isActive: true,
-						createdBy: "migration",
-					})));
-					await insert(personaBindings, normalized.database.personas.flatMap((persona) =>
-						persona.boundConversationIds.map((conversationId) => ({
-							id: `${persona.canonicalId}:${conversationId}`,
-							conversationId,
+					await insert(
+						personas,
+						normalized.database.personas.map((persona) => ({
+							id: persona.canonicalId,
+							name: persona.name,
+							summary: persona.summary,
+							promptJson: persona.promptJson,
+							behaviorJson: persona.behaviorJson,
+							version: persona.version,
 							isActive: true,
-							isGlobal: false,
-							personaId: persona.canonicalId,
+							createdBy: "migration",
 						})),
-					));
+					);
+					await insert(
+						personaBindings,
+						normalized.database.personas.flatMap((persona) =>
+							persona.boundConversationIds.map((conversationId) => ({
+								id: `${persona.canonicalId}:${conversationId}`,
+								conversationId,
+								isActive: true,
+								isGlobal: false,
+								personaId: persona.canonicalId,
+							})),
+						),
+					);
 					await insert(memories, normalized.database.memories.map(memoryRow));
 					await insert(policies, normalized.database.settings.map(settingsRecord));
 					await insert(media, normalized.database.stickers.map(mediaRecord));
@@ -358,9 +380,11 @@ export function createPipeline(target: string): MigrationPipeline {
 
 					const importedRecordIds = new Set(ledger.keys());
 					for (const conversation of normalized.database.conversations) {
-						if (!normalized.database.messages.some((message) =>
-							message.conversationId === conversation.canonicalId,
-						)) {
+						if (
+							!normalized.database.messages.some(
+								(message) => message.conversationId === conversation.canonicalId,
+							)
+						) {
 							continue;
 						}
 						const compression = await compressionSummary(
@@ -369,7 +393,7 @@ export function createPipeline(target: string): MigrationPipeline {
 							compressor,
 						);
 						const memoryId = `${conversation.canonicalId}_summary`;
-					await transaction.insert(memories).values({
+						await transaction.insert(memories).values({
 							id: memoryId,
 							scope: "conversation",
 							content: compression.summary,
@@ -383,7 +407,7 @@ export function createPipeline(target: string): MigrationPipeline {
 							createdBy: "migration",
 							visibility: "private",
 						});
-					await transaction.insert(migrationRecords).values({
+						await transaction.insert(migrationRecords).values({
 							id: `${DSH_SOURCE}:memories:${memoryId}`,
 							migrationRunId: runId,
 							sourceHash: compression.summary,
@@ -396,18 +420,24 @@ export function createPipeline(target: string): MigrationPipeline {
 						importedRecordIds.add(`${DSH_SOURCE}:memories:${memoryId}`);
 					}
 
-					await transaction.update(migrationRecords).set({ status: "imported" }).where(
-						eq(migrationRecords.migrationRunId, runId),
-					);
+					await transaction
+						.update(migrationRecords)
+						.set({ status: "imported" })
+						.where(eq(migrationRecords.migrationRunId, runId));
 					importedRecordIds.clear();
 				});
 
-					await database.update(migrationRuns).set({
+				await database
+					.update(migrationRuns)
+					.set({
 						finishedAt: new Date().toISOString(),
 						status: "completed",
-					}).where(eq(migrationRuns.id, runId));
+					})
+					.where(eq(migrationRuns.id, runId));
 
-				const ledgerRows = await database.select().from(migrationRecords)
+				const ledgerRows = await database
+					.select()
+					.from(migrationRecords)
 					.where(eq(migrationRecords.migrationRunId, runId));
 				return {
 					runId,
@@ -419,7 +449,9 @@ export function createPipeline(target: string): MigrationPipeline {
 		async verify(source) {
 			const normalized = await normalizeSnapshot(source);
 			return withDatabase(async (database) => {
-				const ledgerRows = await database.select().from(migrationRecords)
+				const ledgerRows = await database
+					.select()
+					.from(migrationRecords)
 					.where(eq(migrationRecords.sourceSystem, DSH_SOURCE));
 				const actualCounts = countByKind(ledgerRows);
 				const expectedCounts = normalized.plan;
@@ -433,7 +465,8 @@ export function createPipeline(target: string): MigrationPipeline {
 						.join("\n").length || 0,
 				);
 				return {
-					ok: actualCounts.messages === expectedCounts.messages &&
+					ok:
+						actualCounts.messages === expectedCounts.messages &&
 						actualCounts.conversations === expectedCounts.conversations &&
 						actualChecksum === expectedChecksum,
 					expectedCounts,
@@ -441,9 +474,7 @@ export function createPipeline(target: string): MigrationPipeline {
 					messageChecksums: {
 						expected: Number(expectedChecksum),
 						actual: Number(actualChecksum),
-						matched: actualChecksum === expectedChecksum
-							? normalized.database.messages.length
-							: 0,
+						matched: actualChecksum === expectedChecksum ? normalized.database.messages.length : 0,
 					},
 				};
 			});
@@ -451,15 +482,17 @@ export function createPipeline(target: string): MigrationPipeline {
 
 		async rollback(runId) {
 			return withDatabase(async (database) => {
-				const ledgerRows = await database.select().from(migrationRecords)
+				const ledgerRows = await database
+					.select()
+					.from(migrationRecords)
 					.where(eq(migrationRecords.migrationRunId, runId));
 				if (ledgerRows.length === 0) {
 					throw new Error(`Migration run not found: ${runId}`);
 				}
 				const before = countByKind(ledgerRows);
-				const targetIds = ledgerRows.flatMap((row) => row.targetId ? [row.targetId] : []);
+				const targetIds = ledgerRows.flatMap((row) => (row.targetId ? [row.targetId] : []));
 
-const inTargetIds = (column: unknown) => inArray(column as never, targetIds);
+				const inTargetIds = (column: unknown) => inArray(column as never, targetIds);
 				await database.transaction(async (transaction) => {
 					if (targetIds.length > 0) {
 						await transaction.delete(media).where(inTargetIds(media.id));
@@ -468,14 +501,20 @@ const inTargetIds = (column: unknown) => inArray(column as never, targetIds);
 						await transaction.delete(personas).where(inTargetIds(personas.id));
 						await transaction.delete(policies).where(inTargetIds(policies.id));
 						await transaction.delete(messages).where(inTargetIds(messages.id));
-						await transaction.delete(conversationMembers).where(inTargetIds(conversationMembers.conversationId));
+						await transaction
+							.delete(conversationMembers)
+							.where(inTargetIds(conversationMembers.conversationId));
 						await transaction.delete(conversations).where(inTargetIds(conversations.id));
 						await transaction.delete(users).where(inTargetIds(users.id));
 					}
-					await transaction.delete(migrationRecords).where(eq(migrationRecords.migrationRunId, runId));
+					await transaction
+						.delete(migrationRecords)
+						.where(eq(migrationRecords.migrationRunId, runId));
 				});
 
-				await database.update(migrationRuns).set({ status: "rolled_back" })
+				await database
+					.update(migrationRuns)
+					.set({ status: "rolled_back" })
 					.where(eq(migrationRuns.id, runId));
 				return {
 					runId,

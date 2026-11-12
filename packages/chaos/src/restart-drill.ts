@@ -28,7 +28,9 @@ export async function runRestartDrill(
 	{
 		const session = createSession(first.storage, { documentRetentionMs: Number.POSITIVE_INFINITY });
 		const committed = await session.commit(async (transaction) => {
-			const conversation = await transaction.createConversation({ ownership: { kind: "ownerless" } });
+			const conversation = await transaction.createConversation({
+				ownership: { kind: "ownerless" },
+			});
 			const entry = await transaction.appendEntry(conversation.id, {
 				data: { reason: "restart-drill" },
 				kind: restartDrillEntry.kind,

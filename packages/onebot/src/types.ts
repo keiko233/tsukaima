@@ -51,7 +51,10 @@ export type OneBotTransport = {
 	send(data: string): void;
 };
 
-export type OneBotTransportFactory = (url: string, headers: Record<string, string>) => OneBotTransport;
+export type OneBotTransportFactory = (
+	url: string,
+	headers: Record<string, string>,
+) => OneBotTransport;
 
 export type OneBotChannelDiagnostics = {
 	eventCount: number;

@@ -16,19 +16,10 @@ export { CodingRunner, CommandRejectedError } from "./runner.ts";
 export type { CommandResult, RunnerConfig } from "./runner.ts";
 
 export { isPathWithinAllowlist, WorktreeError, WorktreeManager } from "./worktree.ts";
-export type {
-	GitExecResult,
-	WorktreeInfo,
-	WorktreeManagerConfig,
-} from "./worktree.ts";
+export type { GitExecResult, WorktreeInfo, WorktreeManagerConfig } from "./worktree.ts";
 
 export { CodingTools, parseDiffOutput, parseTestOutput } from "./tools.ts";
-export type {
-	BuildResult,
-	DiffFileEntry,
-	DiffResult,
-	TestRunResult,
-} from "./tools.ts";
+export type { BuildResult, DiffFileEntry, DiffResult, TestRunResult } from "./tools.ts";
 
 export { ApprovalError, JsonFileApprovalStore } from "./approval.ts";
 export type {

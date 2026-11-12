@@ -1,4 +1,9 @@
-import { createModels, createProvider, type Models, type ProviderStreams } from "@earendil-works/pi-ai";
+import {
+	createModels,
+	createProvider,
+	type Models,
+	type ProviderStreams,
+} from "@earendil-works/pi-ai";
 
 export interface ModelPort {
 	readonly providerId: string;
@@ -23,24 +28,30 @@ export function createFakeModel(options: FakeModelOptions = {}): ModelPort {
 		},
 		streamSimple(model, context, _streamOptions) {
 			const asyncStream = streams.stream(model, context, options);
-			return { async *[Symbol.asyncIterator]() { yield* asyncStream; } };
+			return {
+				async *[Symbol.asyncIterator]() {
+					yield* asyncStream;
+				},
+			};
 		},
 	};
 
 	const provider = createProvider({
 		auth: { apiKey: { name: "Fake key", resolve: async () => ({ auth: {} }) } },
 		id: providerId,
-		models: [{
-			api: "fake",
-			contextWindow: 128_000,
-			cost: { input: 0, output: 0 },
-			id: modelId,
-			input: ["text"],
-			maxTokens: 8_000,
-			name: "Deterministic fake model",
-			provider: providerId,
-			reasoning: false,
-		}],
+		models: [
+			{
+				api: "fake",
+				contextWindow: 128_000,
+				cost: { input: 0, output: 0 },
+				id: modelId,
+				input: ["text"],
+				maxTokens: 8_000,
+				name: "Deterministic fake model",
+				provider: providerId,
+				reasoning: false,
+			},
+		],
 		api: streams,
 	});
 

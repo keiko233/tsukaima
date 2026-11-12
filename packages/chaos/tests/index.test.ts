@@ -61,8 +61,14 @@ describe("chaos rate limit", () => {
 			rateLimiter: new RateLimiter({ intervalMs: 1_000, limit: 2 }),
 			sizeLimitBytes: 65_536,
 		});
-		expect(ingest.ingest({ envelope: envelope("m1"), key: "sender", nowMs: 1 })).toEqual({ allowed: true, remaining: 1, retryAfterMs: 0 });
-		expect(() => ingest.ingest({ envelope: envelope("m1"), key: "sender", nowMs: 2 })).toThrow(DuplicateEnvelopeIdError);
+		expect(ingest.ingest({ envelope: envelope("m1"), key: "sender", nowMs: 1 })).toEqual({
+			allowed: true,
+			remaining: 1,
+			retryAfterMs: 0,
+		});
+		expect(() => ingest.ingest({ envelope: envelope("m1"), key: "sender", nowMs: 2 })).toThrow(
+			DuplicateEnvelopeIdError,
+		);
 		const next = ingest.ingest({ envelope: envelope("m2"), key: "sender", nowMs: 2_000 });
 		expect(next.allowed).toBeTrue();
 	});
@@ -100,8 +106,8 @@ describe("chaos restart drill", () => {
 			const result = await runRestartDrill(join(directory, "durable.sqlite"));
 			expect(result.committedBeforeRestart).toBeTrue();
 			expect(result.observedAfterRestart).toBeTrue();
-		expect(result.conversationId).toBeGreaterThan(0);
-		expect(result.entryId).toBeGreaterThan(0);
+			expect(result.conversationId).toBeGreaterThan(0);
+			expect(result.entryId).toBeGreaterThan(0);
 		} finally {
 			await rm(directory, { force: true, recursive: true });
 		}
