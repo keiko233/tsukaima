@@ -7,8 +7,9 @@ This file is the cross-session handoff record. Update it whenever implementation
 - Project name: `elaina-chatbot`.
 - Repository initialized at `/home/keiko/Code/elaina-chatbot` on branch `main`.
 - First commit: `5dc80bc Add Elaina Chatbot architecture and DSH migration plan`.
-- Current phase: architecture and detailed design, before implementation.
-- No production code has been added yet.
+- Current phase: Phase 1 review scaffold.
+- Bun workspace, strict TypeScript config, lint/format checks, domain schema, Pi Durable Bun SQLite adapter, startup lifecycle, and minimal Elysia + oRPC health API exist.
+- No real models, NapCat, plugins, WebUI, or self-iteration code have been added yet.
 - Runtime target is Bun.
 - Frontend and API stack are selected but not scaffolded.
 
@@ -92,14 +93,15 @@ Do these in order unless a later decision changes the plan:
    - `packages/onebot`
    - `packages/coding`
    - `packages/migration`
-2. Add TypeScript strict config, oxlint, oxfmt, commitlint, lint-staged, Husky.
+2. Add TypeScript strict config, oxlint, oxfmt. Commitlint, lint-staged, and Husky remain pending.
 3. Add Drizzle with `domain.sqlite` schema for identities, conversations metadata, personas, memory, plugins, policy, audit, media, migration ledger.
-4. Implement `BunSqliteStorage` adapter against `pi-durable`'s SQLite interface.
-5. Build fake model and fake OneBot channel fixtures.
-6. Implement minimal Elysia + oRPC host.
-7. Build a minimal TanStack + beUI WebUI shell.
-8. Connect fake model and fake channel to a durable conversation and verify steering/follow-up.
-9. Implement real OneBot normalization only after the fake path is stable.
+4. Implement the Bun SQLite adapter against `pi-durable`'s SQLite interface and run its storage conformance suite.
+5. Implement the startup lifecycle and minimal Elysia + oRPC health API.
+6. Review the scaffold and lock remaining API/domain naming.
+7. Build fake model and fake OneBot channel fixtures.
+8. Build a minimal TanStack + beUI WebUI shell.
+9. Connect fake model and fake channel to a durable conversation and verify steering/follow-up.
+10. Implement real OneBot normalization only after the fake path is stable.
 
 ## How to resume in a new session
 

@@ -21,7 +21,17 @@
 
 ## Status
 
-Design phase. The implementation repository starts with architecture documents, migration requirements, and decision records.
+Architecture is captured in the documents below. The repository now contains the Phase 1 review scaffold: a Bun workspace, strict TypeScript configuration, contracts/domain seams, Drizzle schema and startup migrations, durable storage boundary, and a server skeleton with health/readiness lifecycle.
+
+The scaffold intentionally does not connect real models, NapCat, plugins, or the WebUI yet.
+
+## Development commands
+
+```sh
+bun install
+bun run check
+bun run dev
+```
 
 ## Key decisions
 
