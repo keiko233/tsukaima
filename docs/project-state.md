@@ -15,11 +15,14 @@ This file is the cross-session handoff record. Update it whenever implementation
   - `packages/onebot`: outbound WebSocket channel, NapCat event normalization, private/group send actions, access-token headers, reconnect backoff, and action timeouts.
   - `packages/coding`: self-iteration runner, worktree policy, test/build/diff tools, DB-backed approval/proposal stores, and local reload controller.
   - `packages/migration`: DSH snapshot inspection, session/persona/memory/sticker/settings normalization, compression hook, dry-run/import/verify/rollback pipeline.
-  - `packages/sdk` and `packages/plugin-registry`: plugin manifest validation, permissions, tool/hook/UI bridges, runtime context, install/uninstall registry, and real Bun Worker isolation.
+  - `packages/sdk` and `packages/plugin-registry`: plugin manifest validation, permissions, tool/hook/UI bridges, runtime context, channel/settings/requests/audit host surfaces, install/uninstall registry, and real Bun Worker isolation.
+  - `plugins/onebot-napcat`: built-in channel plugin that owns the OneBot channel lifecycle, settings, diagnostics, and request resolution.
   - `packages/chaos`: transient storage failure injection, restart drill, rate limiting, idempotent ingestion, and abuse guards.
 - Runtime target is Bun.
-- Runtime settings for log level, OneBot, and OpenAI-compatible/Magpie provider configuration are persisted in the domain database and editable from the WebUI. Secret values are never returned by the API.
-- OneBot settings resolve from runtime settings with environment fallback and apply live: changing the WebSocket URL or access token restarts the channel and reconnects without a server restart. Provider settings still require a restart.
+- Runtime settings for log level and OpenAI-compatible/Magpie provider configuration are persisted in the domain database and editable from the WebUI. Secret values are never returned by the API.
+- Built-in plugins are loaded from `apps/server/src/plugins/builtin.ts`; the OneBot channel is now a plugin, not lifecycle code. `TsukaimaLifecycle` no longer holds channel, request, or identity-resolution logic.
+- Plugin configuration lives in the domain `meta` table under `plugin-config:<pluginId>` with `manifest.configEnv` fallbacks. `/admin/settings` keeps its `onebot*` fields as a legacy alias mapped onto the `onebot-napcat` plugin config, so the WebUI contract is unchanged.
+- OneBot settings apply live through the plugin's `settings.onChange`: changing the WebSocket URL or access token restarts the channel and reconnects without a server restart. Provider settings still require a restart.
 - Runtime logging uses structured records rendered in Rust `tracing` style, with a bounded in-memory buffer, SSE delivery, and a Shiki ANSI-rendered diagnostics viewer.
 - TanStack file-based routing, Paraglide i18n (`en`, `zh-cn`), TanStack Query data wiring, and beUI components under `apps/web/src` are active.
 - WebUI routes are grouped under `(messaging)` and `(system)`. Route-specific code lives in the matching `_modules` directory; shared shell code lives in `routes/_modules`.
@@ -110,19 +113,20 @@ bun run check
 ```
 
 Current baseline: lint, formatting, root TypeScript, WebUI TypeScript, WebUI production
-build, and 137 tests across 27 files pass.
+build, and 145 tests across 29 files pass.
 
 ## Next implementation steps
 
 Do these in order unless a later decision changes the plan:
 
 1. Add authenticated admin sessions and live WebSocket updates for conversations, activities, and diagnostics beyond the new log stream.
-2. Add full persona/memory/audit admin services and review UI.
-3. Add production memory extraction/retrieval jobs and persona seeding operations.
-4. Add sticker/meme and search plugins plus plugin worker supervision in the server lifecycle.
-5. Add task graph/audit visualization for self-iteration.
-6. Run the real DSH import, verify data, and cut NapCat from DSH to Tsukaima.
-7. Add secret scanning, backup/restore drills, and the production runbook.
+2. Extract the model provider into `plugins/openai-compatible` (phase C of `plugin-decoupling.md`); this needs the `models.registerProvider` host surface.
+3. Add full persona/memory/audit admin services and review UI.
+4. Add production memory extraction/retrieval jobs and persona seeding operations.
+5. Add sticker/meme and search plugins plus plugin-owned database migrations.
+6. Add task graph/audit visualization for self-iteration.
+7. Run the real DSH import, verify data, and cut NapCat from DSH to Tsukaima.
+8. Add secret scanning, backup/restore drills, and the production runbook.
 
 ## Current WebUI limitations
 

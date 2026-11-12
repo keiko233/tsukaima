@@ -245,7 +245,9 @@ Ordered by how much is in the core today (most entangled first).
 
 Each phase should keep `bun run check` green and add tests rather than only moving code.
 
-### Phase A — Host seam, no behavior change
+Status: **Phase A and Phase B are implemented.** Phases C–E remain.
+
+### Phase A — Host seam, no behavior change (done)
 
 1. Add `ChannelRegistry`, `ConversationRouter`, `RequestService`, `ModelRegistry`,
    `SettingsStore`, `AuditService`, `HookBus` to `apps/server/src/services/`.
@@ -257,7 +259,7 @@ Each phase should keep `bun run check` green and add tests rather than only movi
 5. Acceptance: existing tests pass unchanged; diagnostics output identical; add a
    multi-channel registry test proving a second fake adapter routes independently.
 
-### Phase B — Extract `plugins/onebot-napcat`
+### Phase B — Extract `plugins/onebot-napcat` (done)
 
 1. Create the workspace package; `setup()` builds `OneBotChannel` from its own settings and
    registers itself; `teardown()` stops it.
@@ -268,6 +270,19 @@ Each phase should keep `bun run check` green and add tests rather than only movi
    `rpc/admin.ts`, `services/webui.ts`.
 4. Acceptance: the server boots with `plugins/onebot-napcat` disabled and OneBot simply
    absent (no crash, no dead fields); a live WS test drives ingest through the plugin.
+
+Phase B shipped with these deviations from the sketch above:
+
+- The adapter keeps the channel id `onebot` (not `onebot-napcat`) because envelopes and
+  `chat_objects.channelId` are already written that way. The plugin package name and the
+  channel instance id are intentionally different.
+- `ChannelRegistry.register` wires the host ingestion pipeline, so plugins never call
+  `conversation.ingest` themselves — adapters only deliver envelopes.
+- Plugin settings live in the `meta` table under `plugin-config:<pluginId>` and resolve
+  `manifest.configEnv` fallbacks. The `admin/settings` onebot fields remain as a legacy wire
+  alias that the RPC layer maps onto the plugin config, so the WebUI did not change.
+- `plugins.rpc.register` and `plugins.models.registerProvider` were **not** added yet; no
+  implemented plugin needs them. They belong to Phases C–D.
 
 ### Phase C — Extract `plugins/openai-compatible`
 
