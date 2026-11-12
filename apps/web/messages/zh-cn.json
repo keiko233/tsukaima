@@ -1,0 +1,14 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"app_title": "Tsukaima 管理",
+	"nav_conversations": "会话",
+	"nav_policies": "策略",
+	"nav_plugins": "插件",
+	"nav_diagnostics": "诊断",
+	"conversation_system_message": "Fake runtime 已接入会话 host。",
+	"policy_capability_label": "能力",
+	"policy_capability_placeholder": "basic-chat",
+	"policy_save": "保存策略",
+	"plugins_empty": "尚未安装插件。",
+	"diagnostics_state_label": "运行状态"
+}
