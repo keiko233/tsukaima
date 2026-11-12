@@ -15,6 +15,7 @@ import { SelectTrigger } from "@/components/motion/select";
 import { SelectValue } from "@/components/motion/select";
 import { api, type LogLevel } from "@/lib/api";
 import { applyLocale } from "@/lib/locale";
+import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { getLocale, locales, toLocale, type Locale } from "@/paraglide/runtime";
 import { SystemPage } from "./page-header";
@@ -26,6 +27,7 @@ const LOCALE_LABELS: Record<Locale, string> = {
 };
 
 export function SettingsPage() {
+	const toast = useToast();
 	const queryClient = useQueryClient();
 	const settingsQuery = useQuery({
 		queryFn: api.settings.get,
@@ -33,14 +35,29 @@ export function SettingsPage() {
 	});
 	const updateSettings = useMutation({
 		mutationFn: api.settings.update,
+		onError: (error) =>
+			toast.error(m.toast_settings_save_failed(), {
+				description: errorMessage(error),
+			}),
 		onSuccess: async () => {
 			setProviderApiKey("");
 			setOnebotAccessToken("");
+			toast.success(m.toast_settings_saved());
 			await queryClient.invalidateQueries({ queryKey: ["admin"] });
 		},
 	});
 	const fetchModels = useMutation({
 		mutationFn: api.settings.models,
+		onError: (error) =>
+			toast.error(m.toast_models_fetch_failed(), {
+				description: errorMessage(error),
+			}),
+		onSuccess: (result) => {
+			const notify = result.models.length === 0 ? toast.info : toast.success;
+			notify(m.toast_models_loaded(), {
+				description: m.toast_models_loaded_description({ count: result.models.length }),
+			});
+		},
 	});
 	const [providerBaseUrl, setProviderBaseUrl] = useState<string | undefined>(undefined);
 	const [providerModelId, setProviderModelId] = useState<string | undefined>(undefined);
@@ -213,13 +230,6 @@ export function SettingsPage() {
 								</div>
 							) : null}
 							<p className="text-xs text-muted-foreground">{m.settings_models_hint()}</p>
-							{fetchModels.isError ? (
-								<div className="text-xs text-destructive">
-									{m.settings_models_error({
-										message: fetchModels.error.message,
-									})}
-								</div>
-							) : null}
 						</div>
 						<p className="text-xs text-muted-foreground">{m.settings_provider_hint()}</p>
 						<div className="border-t border-border" />
@@ -279,12 +289,6 @@ export function SettingsPage() {
 								</Button>
 							) : null}
 						</div>
-						{updateSettings.isSuccess ? (
-							<div className="text-xs text-muted-foreground">{m.settings_saved()}</div>
-						) : null}
-						{updateSettings.isError ? (
-							<div className="text-xs text-destructive">{updateSettings.error.message}</div>
-						) : null}
 					</CardContent>
 				</Card>
 			</div>
