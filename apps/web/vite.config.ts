@@ -16,7 +16,7 @@ export default defineConfig({
 		paraglideVitePlugin({
 			project: "./project.inlang",
 			outdir: "./src/paraglide",
-			strategy: ["globalVariable", "baseLocale"],
+			strategy: ["localStorage", "baseLocale"],
 			emitTsDeclarations: true,
 		}),
 		react(),
