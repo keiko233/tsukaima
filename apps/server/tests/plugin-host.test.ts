@@ -128,7 +128,7 @@ describe("plugin host", () => {
 			const plugins = lifecycle.pluginHost.list();
 			expect(plugins.map((plugin) => plugin.name)).toEqual(["onebot-napcat", "fake-channel"]);
 			expect(plugins[0]).toEqual(
-				expect.objectContaining({ enabled: true, kind: "builtin", runMode: "host" }),
+				expect.objectContaining({ apiVersion: "1", enabled: 1, kind: "builtin", runMode: "host" }),
 			);
 		}));
 

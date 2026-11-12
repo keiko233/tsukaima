@@ -26,7 +26,9 @@ export interface PluginHostOptions {
 }
 
 export interface PluginHostEntry {
-	readonly enabled: boolean;
+	readonly apiVersion: string;
+	/** 1/0 to match the WebUI plugin row contract. */
+	readonly enabled: number;
 	readonly id: string;
 	readonly kind: PluginManifest["kind"];
 	readonly name: string;
@@ -65,7 +67,8 @@ export class PluginHost {
 
 	list(): readonly PluginHostEntry[] {
 		return this.#registry.list().map((installed) => ({
-			enabled: installed.enabled,
+			apiVersion: installed.manifest.apiVersion,
+			enabled: installed.enabled ? 1 : 0,
 			id: installed.manifest.name,
 			kind: installed.manifest.kind,
 			name: installed.manifest.name,
