@@ -1,5 +1,6 @@
 import {
 	createAssistantMessageEventStream,
+	createModels,
 	contentText,
 	getCurrentTools,
 	getSystemMessageText,
@@ -17,6 +18,7 @@ import {
 	type TranscriptContext,
 	type Usage,
 } from "@earendil-works/pi-ai";
+import type { ModelPort } from "./model.ts";
 
 export interface OpenAICompatibleConfig {
 	readonly baseUrl: string;
@@ -472,6 +474,20 @@ export function createOpenAICompatibleProvider(
 		models,
 		name: "OpenAI-compatible",
 	});
+}
+
+export function createOpenAICompatibleModelPort(
+	providerConfig: OpenAICompatibleConfig,
+	modelConfigs: readonly OpenAICompatibleModelConfig[],
+): ModelPort {
+	const provider = createOpenAICompatibleProvider(providerConfig, modelConfigs);
+	const models = createModels();
+	models.setProvider(provider);
+	return {
+		modelId: modelConfigs[0]?.modelId ?? "",
+		models,
+		providerId: providerConfig.providerId ?? "openai-compatible",
+	};
 }
 
 export interface ModelPolicy {

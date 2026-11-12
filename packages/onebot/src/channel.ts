@@ -7,6 +7,7 @@ import type {
 	OneBotEvent,
 	OneBotTransport,
 	OneBotTransportFactory,
+	OneBotTransportEvents,
 } from "./types.ts";
 
 type PendingAction = {
@@ -220,7 +221,10 @@ export class OneBotChannel {
 		}
 		const response = parsed as { data?: unknown; echo: unknown; retcode: unknown };
 		const echo = typeof response.echo === "string" ? response.echo : undefined;
-		const pending = echo === undefined ? undefined : this.pending.get(echo);
+		if (echo === undefined) {
+			return false;
+		}
+		const pending = this.pending.get(echo);
 		if (pending === undefined) {
 			return false;
 		}

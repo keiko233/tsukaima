@@ -116,7 +116,7 @@ test("sends the access token as a bearer header", async () => {
 		return {
 			close: () => socket.close(),
 			on: (name, listener) => {
-				if (name === "open") socket.on("open", () => listener());
+				if (name === "open") socket.on("open", () => (listener as () => void)());
 			},
 			send: () => {},
 		};

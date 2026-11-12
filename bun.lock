@@ -65,6 +65,7 @@
       "name": "@elaina/chaos",
       "version": "0.1.0",
       "dependencies": {
+        "@earendil-works/chord": "1.5.2",
         "@earendil-works/pi-durable": "1.5.2",
         "@elaina/contracts": "workspace:*",
         "@elaina/durable": "workspace:*",

@@ -1,5 +1,6 @@
-import { assertPermission, hasPermission } from "./permissions.ts";
+import { assertPermission, hasPermission, type PluginPermission } from "./permissions.ts";
 import { pluginManifestSchema } from "./manifest.ts";
+import type { MessageEnvelope } from "@elaina/contracts";
 import type {
 	PluginChannelApi,
 	PluginConfig,
@@ -10,6 +11,7 @@ import type {
 	PluginTool,
 	PluginUiDefinition,
 	ToolInvocationContext,
+	ToolResult,
 } from "./types.ts";
 
 export class LocalPluginEventBridge {
@@ -60,7 +62,14 @@ export class LocalToolBridge {
 		return [...this.#tools.values()];
 	}
 
-	async invoke(name: string, input: Record<string, unknown>, context: ToolInvocationContext = {}) {
+	async invoke(
+		name: string,
+		input: Record<string, unknown>,
+		context: ToolInvocationContext = {},
+	): Promise<
+		| { ok: true; result: ToolResult }
+		| { ok: false; reason: "permission_denied"; permission: PluginPermission }
+	> {
 		const tool = this.#tools.get(name);
 		if (!tool) {
 			throw new Error(`Unknown tool ${name}`);
@@ -139,7 +148,7 @@ export interface PluginContextOptions {
 	logger?: PluginLogger;
 	storage?: PluginStorage;
 	conversation?: {
-		read(): Promise<readonly { readonly id: string; readonly text?: string }[]>;
+		read(): Promise<readonly MessageEnvelope[]>;
 	};
 	channel?: PluginChannelApi;
 }

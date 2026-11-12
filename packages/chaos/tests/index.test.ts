@@ -39,7 +39,7 @@ describe("chaos abuse guard", () => {
 		const guard = new AbuseGuard({ maxBytes: 1 });
 		expect(() => guard.check(envelope())).toThrow(OversizeMessageError);
 		const invalid = envelope("envelope-2");
-		(invalid.parts[0] as { text?: string; type: "text" }).text = undefined;
+		delete (invalid.parts[0] as { text?: string; type: "text" }).text;
 		expect(() => new AbuseGuard().check(invalid)).toThrow(EnvelopeValidationError);
 		expect(() => new AbuseGuard().check({ invalid: true })).toThrow(InvalidEnvelopeError);
 	});

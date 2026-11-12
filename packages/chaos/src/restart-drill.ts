@@ -1,5 +1,10 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createSession, type ConversationId, defineEntry } from "@earendil-works/pi-durable";
+import {
+	createSession,
+	type ConversationId,
+	type EntryId,
+	defineEntry,
+} from "@earendil-works/pi-durable";
 import type { ChaoticStorageOptions } from "./open-chaotic-storage.ts";
 import { openChaoticStorage } from "./open-chaotic-storage.ts";
 
@@ -17,7 +22,7 @@ export async function runRestartDrill(
 	options: ChaoticStorageOptions = {},
 ): Promise<RestartDrillResult> {
 	let conversationId: ConversationId | undefined;
-	let entryId: string | undefined;
+	let entryId: EntryId | undefined;
 	let committedBeforeRestart = false;
 	let injectedFailures = 0;
 
@@ -54,7 +59,7 @@ export async function runRestartDrill(
 		return {
 			committedBeforeRestart,
 			conversationId,
-			entryId,
+			entryId: Number(entryId),
 			observedAfterRestart: conversation !== undefined && entry !== undefined,
 		};
 	}

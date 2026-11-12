@@ -1,7 +1,6 @@
 export {
 	DSH_SOURCE,
 	DSH_TARGET_FIELDS,
-	type DshSettings,
 	inspectDshSnapshot,
 	type SnapshotInventory,
 	type SnapshotPathSource,
@@ -12,7 +11,6 @@ export { FakeCompressor, type Compressor, type CompressionResult } from "./compr
 export {
 	buildMigrationPlan,
 	type MigrationPlan,
-	type MigrationRunReport,
 	type NormalizedConversation,
 	type NormalizedDatabase,
 	type NormalizedMemory,

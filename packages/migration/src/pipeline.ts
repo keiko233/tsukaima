@@ -1,4 +1,5 @@
 import { eq, inArray } from "drizzle-orm";
+import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import {
 	conversations,
 	conversationMembers,
@@ -15,7 +16,7 @@ import {
 	policies,
 	users,
 } from "@elaina/db";
-import { DSH_SOURCE } from "./dsh-inspect.ts";
+import { DSH_SOURCE, type SnapshotSource } from "./dsh-inspect.ts";
 import { FakeCompressor, type Compressor, type CompressionResult } from "./compressor.ts";
 import {
 	countRecords,
@@ -26,7 +27,6 @@ import {
 	type NormalizedSetting,
 	type NormalizedSticker,
 	type RecordCounts,
-	type SnapshotSource,
 } from "./normalize.ts";
 
 export interface SnapshotPaths {
@@ -308,9 +308,9 @@ export function createPipeline(target: string): MigrationPipeline {
 				}
 
 				await database.transaction(async (transaction) => {
-					const insert = async (table: typeof migrationRecords, rows: unknown[]) => {
+					const insert = async (table: SQLiteTable, rows: readonly unknown[]) => {
 						if (rows.length > 0) {
-							await transaction.insert(table as never).values(rows as never);
+							await transaction.insert(table).values(rows as never);
 						}
 					};
 

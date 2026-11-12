@@ -1,4 +1,4 @@
-import type { PluginPermission } from "./types.ts";
+export type PluginPermission = string;
 
 export function permissionMatches(granted: PluginPermission, required: PluginPermission): boolean {
 	if (granted === required || granted === "*") {

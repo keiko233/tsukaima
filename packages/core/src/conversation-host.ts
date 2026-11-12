@@ -5,6 +5,7 @@ import {
 	Harness,
 	type ConversationId,
 	type Harness as DurableHarness,
+	type JsonObject,
 } from "@earendil-works/pi-durable";
 import {
 	type ActivityAggregationPolicy,
@@ -17,46 +18,68 @@ import type { SqliteStorage } from "@elaina/durable";
 import { createFakeModel, type ModelPort } from "./model.ts";
 import { shouldCloseActivityWindow } from "./index.ts";
 
-const conversationPolicyDoc = defineDocFamily<
-	{
-		enabled: boolean;
-		followUpWhenBusy: "follow-up" | "reject";
-		steerWhenBusy: "steer" | "follow-up" | "reject";
-	},
-	ConversationPolicy
->({
+type StoredEnvelope = JsonObject & {
+	readonly id: string;
+	readonly source: JsonObject & { readonly timestampMs: number };
+};
+
+type ActivityWindowDocument = JsonObject & {
+	closedAtMs: number | null;
+	envelopes: StoredEnvelope[];
+	openedAtMs: number;
+	status: "collecting" | "submitted" | "closed";
+};
+
+type ActivityWindowSeed = JsonObject & {
+	conversationId: number;
+	envelopes: StoredEnvelope[];
+	openedAtMs: number;
+};
+
+type StoredConversationPolicy = {
+	enabled: boolean;
+	followUpWhenBusy: "follow-up" | "reject";
+	steerWhenBusy: "steer" | "follow-up" | "reject";
+};
+
+const conversationPolicyDefinition = {
 	kind: durableDocumentKinds.activityPolicy,
 	version: 1,
+	family: true,
 	scope: "conversation",
+	fork: "current",
 	history: "latest",
 	checkpointWhen: () => true,
-	initial: (seed) => ({
+	initial: (seed: ConversationPolicy) => ({
 		enabled: seed.enabled,
 		followUpWhenBusy: seed.followUpWhenBusy,
 		steerWhenBusy: seed.steerWhenBusy,
 	}),
-});
+} as const;
 
-const activityWindowDoc = defineDocFamily<
-	{
-		closedAtMs?: number;
-		envelopes: MessageEnvelope[];
-		openedAtMs: number;
-		status: "collecting" | "submitted" | "closed";
-	},
-	{ conversationId: number; openedAtMs: number; envelopes?: MessageEnvelope[] }
->({
+const conversationPolicyDoc = defineDocFamily<StoredConversationPolicy, ConversationPolicy>(
+	conversationPolicyDefinition,
+);
+
+const activityWindowDefinition = {
 	kind: durableDocumentKinds.activityWindow,
 	version: 1,
+	family: true,
 	scope: "conversation",
+	fork: "current",
 	history: "latest",
 	checkpointWhen: () => true,
-	initial: (seed) => ({
-		envelopes: seed?.envelopes ?? [],
-		openedAtMs: seed?.openedAtMs ?? 0,
-		status: "collecting",
+	initial: (seed: ActivityWindowSeed) => ({
+		closedAtMs: null,
+		envelopes: seed.envelopes,
+		openedAtMs: seed.openedAtMs,
+		status: "collecting" as const,
 	}),
-});
+} as const;
+
+const activityWindowDoc = defineDocFamily<ActivityWindowDocument, ActivityWindowSeed>(
+	activityWindowDefinition,
+);
 
 export interface DurableConversationHostOptions {
 	readonly model?: ModelPort;
@@ -84,7 +107,7 @@ export class PiDurableConversationHost {
 			},
 			BACKGROUND_CONTEXT,
 		);
-		return conversation.id;
+		return String(conversation.id);
 	}
 
 	async append(input: {
@@ -110,13 +133,14 @@ export class PiDurableConversationHost {
 			activityId,
 			BACKGROUND_CONTEXT,
 		);
-		const envelopes = window?.envelopes ?? [];
+		const envelopes: StoredEnvelope[] = window?.envelopes ?? [];
 		const shouldOpen = !window || window.status !== "collecting";
-		const nextEnvelopes = shouldOpen ? [input.envelope] : [...envelopes, input.envelope];
+		const storedEnvelope = this.toStoredEnvelope(input.envelope);
+		const nextEnvelopes = shouldOpen ? [storedEnvelope] : [...envelopes, storedEnvelope];
 		const shouldSubmit =
 			nextEnvelopes.length >= this.policy.maxMessages ||
 			shouldCloseActivityWindow(
-				nextEnvelopes[0].source.timestampMs,
+				nextEnvelopes[0]?.source.timestampMs ?? input.envelope.source.timestampMs,
 				input.submittedAtMs,
 				this.policy,
 			);
@@ -124,25 +148,35 @@ export class PiDurableConversationHost {
 		const submissionId = await conversation.commit(async (tx) => {
 			const document = await tx.doc(activityWindowDoc, conversationId, activityId, {
 				conversationId,
+				envelopes: nextEnvelopes,
 				openedAtMs: input.submittedAtMs,
-				envelopes: shouldOpen ? [input.envelope] : [...envelopes, input.envelope],
 			});
-			document.envelopes = shouldOpen ? [input.envelope] : [...envelopes, input.envelope];
+			document.envelopes = nextEnvelopes;
 			document.openedAtMs = shouldOpen ? input.submittedAtMs : window.openedAtMs;
 			document.status = shouldSubmit ? "submitted" : "collecting";
-			return conversation.submit(tx, {
-				type: shouldSubmit ? "input" : "write",
-				content: this.envelopeToText(input.envelope),
-				entry: {
-					kind: durableDocumentKinds.activityWindow,
-					data: {
-						activityId,
-						envelopes: shouldOpen ? [input.envelope] : [...envelopes, input.envelope],
-					},
+			const entry = {
+				kind: durableDocumentKinds.activityWindow,
+				data: {
+					activityId,
+					envelopes: nextEnvelopes,
 				},
-				requestId: shouldSubmit ? activityId : `${activityId}:${input.envelope.id}`,
-				whenBusy: whenBusy === "follow-up" ? "followUp" : whenBusy,
-			});
+			};
+			return conversation.submit(
+				tx,
+				shouldSubmit
+					? {
+							type: "input",
+							content: this.envelopeToText(input.envelope),
+							entry,
+							requestId: activityId,
+							whenBusy: whenBusy === "follow-up" ? "followUp" : whenBusy,
+						}
+					: {
+							type: "write",
+							entry,
+							requestId: `${activityId}:${input.envelope.id}`,
+						},
+			);
 		}, BACKGROUND_CONTEXT);
 		const submission = await harness.submission(submissionId, BACKGROUND_CONTEXT);
 		const record = await submission?.status(BACKGROUND_CONTEXT);
@@ -172,6 +206,10 @@ export class PiDurableConversationHost {
 				return `[${part.type}]`;
 			})
 			.join(" ");
+	}
+
+	private toStoredEnvelope(envelope: MessageEnvelope): StoredEnvelope {
+		return JSON.parse(JSON.stringify(envelope)) as StoredEnvelope;
 	}
 
 	private async openHarness(): Promise<DurableHarness> {
