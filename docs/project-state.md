@@ -7,18 +7,19 @@ This file is the cross-session handoff record. Update it whenever implementation
 - Project name: `elaina-chatbot`.
 - Repository initialized at `/home/keiko/Code/elaina-chatbot` on branch `main`.
 - First commit: `5dc80bc Add Elaina Chatbot architecture and DSH migration plan`.
-- Current phase: Phase 1–7 core and library implementation complete; WebUI not scaffolded.
-- Bun workspace, strict TypeScript config, lint/format checks, domain schema, Pi Durable Bun SQLite adapter, startup lifecycle, and minimal Elysia + oRPC health API exist.
+- Current phase: Phase 1–7 core/library implementation complete; WebUI admin console is scaffolded and wired to live runtime data.
+- Bun workspace, strict TypeScript config, domain schema/migrations, Pi Durable Bun SQLite adapter, startup lifecycle, Elysia + oRPC API, and React/TanStack WebUI exist.
 - Implemented packages:
   - `packages/contracts`: message, conversation policy, activity window, submission, and admin event schemas.
   - `packages/core`: durable conversation host, activity aggregation, steering/follow-up submission, deterministic fake model, OpenAI-compatible provider, capability routing, and usage accounting.
   - `packages/onebot`: outbound WebSocket channel, NapCat event normalization, private/group send actions, access-token headers, reconnect backoff, and action timeouts.
-  - `packages/coding`: self-iteration runner, worktree policy, test/build/diff tools, approval store, deployment proposal store, and local reload controller.
+  - `packages/coding`: self-iteration runner, worktree policy, test/build/diff tools, DB-backed approval/proposal stores, and local reload controller.
   - `packages/migration`: DSH snapshot inspection, session/persona/memory/sticker/settings normalization, compression hook, dry-run/import/verify/rollback pipeline.
-  - `packages/sdk` and `packages/plugin-registry`: plugin manifest validation, permissions, tool/hook/UI bridges, runtime context, install/uninstall registry, and worker scaffold.
+  - `packages/sdk` and `packages/plugin-registry`: plugin manifest validation, permissions, tool/hook/UI bridges, runtime context, install/uninstall registry, and real Bun Worker isolation.
   - `packages/chaos`: transient storage failure injection, restart drill, rate limiting, idempotent ingestion, and abuse guards.
 - Runtime target is Bun.
-- Frontend and API stack are selected but not scaffolded.
+- Runtime settings for log level, OneBot, and OpenAI-compatible/Magpie provider configuration are persisted in the domain database and editable from the WebUI. Secret values are never returned by the API.
+- TanStack file-based routing, Paraglide i18n (`en`, `zh-cn`), TanStack Query data wiring, and beUI components under `apps/web/src` are active.
 
 ## Confirmed decisions
 
@@ -88,34 +89,32 @@ These are implementation-level decisions, not blockers for starting scaffolding:
 ## Implementation status
 
 - Phase 1: durable storage conformance, conversation host, fake model, activity policy/window, admin contracts, and health lifecycle are implemented.
-- Phase 2: OneBot outbound WebSocket channel and event normalization are implemented; server wiring is not yet connected.
-- Phase 3: model registry/policy routing, OpenAI-compatible provider, and usage accounting are implemented; Magpie-specific deployment values are not yet seeded.
-- Phase 4: plugin SDK and registry scaffold are implemented; real worker isolation, persistence, and WebUI are not yet built.
-- Phase 5: coding runner, worktree policy, tools, approval/proposal stores, and reload controller are implemented as libraries.
-- Phase 6: migration kit inspection/normalize/dry-run/import/verify/rollback are implemented as a library; CLI and live DSH cutover are not yet built.
+- Phase 2: OneBot outbound WebSocket is connected in lifecycle startup; inbound envelopes are normalized, deduplicated by domain conversation key, and routed to reusable durable conversations.
+- Phase 3: model registry/policy routing, OpenAI-compatible provider, provider settings, and usage accounting are implemented; live Magpie deployment values can be supplied through WebUI settings or environment variables.
+- Phase 4: plugin SDK, registry, config validation, bridges, admin WebUI, and real Bun Worker isolation are implemented.
+- Phase 5: coding runner, worktree policy, tools, DB-backed approval/proposal stores, and reload controller are implemented.
+- Phase 6: migration inspection/normalize/dry-run/import/verify/rollback, CLI, and persona/memory/sticker/settings import pipeline are implemented; live DSH cutover has not been executed.
 - Phase 7: chaos storage, restart drill, rate limiting, idempotency, and abuse guards are implemented as libraries.
 
 All existing tests pass:
 
 ```sh
-bun test
-bunx oxlint .
-oxfmt --check 'apps/**/*.ts' 'packages/**/*.ts' '*.json' '*.ts' '.env.example'
+bun run check
 ```
 
-Current test baseline: 113 passing tests across 17 files.
+Current baseline: lint, formatting, root TypeScript, WebUI TypeScript, and 122 tests across 23 files pass.
 
 ## Next implementation steps
 
 Do these in order unless a later decision changes the plan:
 
-1. Wire `apps/server` to OneBotChannel, PiDurableConversationHost, model policy routing, and plugin registry.
-2. Add oRPC procedures and admin WebSocket broadcasting for conversations, activities, policies, and diagnostics.
-3. Build a minimal TanStack + beUI WebUI shell.
-4. Add the migration CLI on top of `packages/migration`.
-5. Replace JSON approval/proposal stores with domain-backed persistence when integrating self-iteration.
-6. Add real worker isolation and plugin config validation in `packages/plugin-registry`.
-7. Seed Magpie/OpenAI-compatible deployment values from existing DSH docker configuration.
+1. Add authenticated admin sessions and live WebSocket updates for conversations, activities, and diagnostics.
+2. Add full persona/memory/audit admin services and review UI.
+3. Add production memory extraction/retrieval jobs and persona seeding operations.
+4. Add sticker/meme and search plugins plus plugin worker supervision in the server lifecycle.
+5. Add task graph/audit visualization for self-iteration.
+6. Run the real DSH import, verify data, and cut NapCat from DSH to Elaina.
+7. Add secret scanning, backup/restore drills, and the production runbook.
 
 ## How to resume in a new session
 
