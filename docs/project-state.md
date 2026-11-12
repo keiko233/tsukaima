@@ -7,9 +7,16 @@ This file is the cross-session handoff record. Update it whenever implementation
 - Project name: `elaina-chatbot`.
 - Repository initialized at `/home/keiko/Code/elaina-chatbot` on branch `main`.
 - First commit: `5dc80bc Add Elaina Chatbot architecture and DSH migration plan`.
-- Current phase: Phase 1 review scaffold.
+- Current phase: Phase 1–7 core and library implementation complete; WebUI not scaffolded.
 - Bun workspace, strict TypeScript config, lint/format checks, domain schema, Pi Durable Bun SQLite adapter, startup lifecycle, and minimal Elysia + oRPC health API exist.
-- No real models, NapCat, plugins, WebUI, or self-iteration code have been added yet.
+- Implemented packages:
+  - `packages/contracts`: message, conversation policy, activity window, submission, and admin event schemas.
+  - `packages/core`: durable conversation host, activity aggregation, steering/follow-up submission, deterministic fake model, OpenAI-compatible provider, capability routing, and usage accounting.
+  - `packages/onebot`: outbound WebSocket channel, NapCat event normalization, private/group send actions, access-token headers, reconnect backoff, and action timeouts.
+  - `packages/coding`: self-iteration runner, worktree policy, test/build/diff tools, approval store, deployment proposal store, and local reload controller.
+  - `packages/migration`: DSH snapshot inspection, session/persona/memory/sticker/settings normalization, compression hook, dry-run/import/verify/rollback pipeline.
+  - `packages/sdk` and `packages/plugin-registry`: plugin manifest validation, permissions, tool/hook/UI bridges, runtime context, install/uninstall registry, and worker scaffold.
+  - `packages/chaos`: transient storage failure injection, restart drill, rate limiting, idempotent ingestion, and abuse guards.
 - Runtime target is Bun.
 - Frontend and API stack are selected but not scaffolded.
 
@@ -72,36 +79,43 @@ These are implementation-level decisions, not blockers for starting scaffolding:
 
 1. Exact Drizzle schema version numbers and migration policy.
 2. Exact oRPC procedure shape for every WebUI screen.
-3. Exact plugin manifest JSON format and validation schema.
-4. Exact durable document kinds for conversation metadata, policy, aggregation, and media.
-5. Exact OneBot event/action schema definitions.
-6. Exact model policy seed values for Magpie.
+3. Exact plugin config validation behavior for `configSchema`.
+4. Exact model policy seed values for Magpie and the OpenAI-compatible deployment.
+5. Exact WebUI route/procedure surface.
 7. Exact DSH session format parser behavior for every field type.
 8. Exact self-iteration approval form and audit record shape.
+
+## Implementation status
+
+- Phase 1: durable storage conformance, conversation host, fake model, activity policy/window, admin contracts, and health lifecycle are implemented.
+- Phase 2: OneBot outbound WebSocket channel and event normalization are implemented; server wiring is not yet connected.
+- Phase 3: model registry/policy routing, OpenAI-compatible provider, and usage accounting are implemented; Magpie-specific deployment values are not yet seeded.
+- Phase 4: plugin SDK and registry scaffold are implemented; real worker isolation, persistence, and WebUI are not yet built.
+- Phase 5: coding runner, worktree policy, tools, approval/proposal stores, and reload controller are implemented as libraries.
+- Phase 6: migration kit inspection/normalize/dry-run/import/verify/rollback are implemented as a library; CLI and live DSH cutover are not yet built.
+- Phase 7: chaos storage, restart drill, rate limiting, idempotency, and abuse guards are implemented as libraries.
+
+All existing tests pass:
+
+```sh
+bun test
+bunx oxlint .
+oxfmt --check 'apps/**/*.ts' 'packages/**/*.ts' '*.json' '*.ts' '.env.example'
+```
+
+Current test baseline: 113 passing tests across 17 files.
 
 ## Next implementation steps
 
 Do these in order unless a later decision changes the plan:
 
-1. Create Bun workspace:
-   - `apps/server`
-   - `apps/web`
-   - `packages/contracts`
-   - `packages/core`
-   - `packages/durable`
-   - `packages/db`
-   - `packages/onebot`
-   - `packages/coding`
-   - `packages/migration`
-2. Add TypeScript strict config, oxlint, oxfmt. Commitlint, lint-staged, and Husky remain pending.
-3. Add Drizzle with `domain.sqlite` schema for identities, conversations metadata, personas, memory, plugins, policy, audit, media, migration ledger.
-4. Implement the Bun SQLite adapter against `pi-durable`'s SQLite interface and run its storage conformance suite.
-5. Implement the startup lifecycle and minimal Elysia + oRPC health API.
-6. Review the scaffold and lock remaining API/domain naming.
-7. Build fake model and fake OneBot channel fixtures.
-8. Build a minimal TanStack + beUI WebUI shell.
-9. Connect fake model and fake channel to a durable conversation and verify steering/follow-up.
-10. Implement real OneBot normalization only after the fake path is stable.
+1. Wire `apps/server` to OneBotChannel, PiDurableConversationHost, model policy routing, and plugin registry.
+2. Add oRPC procedures and admin WebSocket broadcasting for conversations, activities, policies, and diagnostics.
+3. Build a minimal TanStack + beUI WebUI shell.
+4. Add the migration CLI on top of `packages/migration`.
+5. Replace JSON approval/proposal stores with domain-backed persistence when integrating self-iteration.
+6. Add real worker isolation and plugin config validation in `packages/plugin-registry`.
+7. Seed Magpie/OpenAI-compatible deployment values from existing DSH docker configuration.
 
 ## How to resume in a new session
 
