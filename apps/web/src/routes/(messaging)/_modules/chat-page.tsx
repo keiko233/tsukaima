@@ -76,7 +76,10 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 		detail !== undefined &&
 		(detail.chat.kind === "private" || detail.chat.kind === "group") &&
 		detail.chat.platformConversationId !== null;
-	const channelConnected = diagnostics.data?.onebotConnected ?? false;
+	const channelConnected =
+		diagnostics.data?.channels.some(
+			(channel) => channel.kind === "onebot-v11" && channel.connected,
+		) ?? false;
 	const archived = detail?.status === "archived";
 
 	if (session.isPending) {

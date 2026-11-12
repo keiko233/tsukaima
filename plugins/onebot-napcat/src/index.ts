@@ -1,12 +1,21 @@
-import type { OneBotTransportFactory } from "@tsukaima/onebot";
 import type { TsukaimaPlugin, PluginContext } from "@tsukaima/sdk";
 import { OneBotChannelAdapter } from "./adapter.ts";
 import { oneBotPluginConfigSchema, resolveOneBotState } from "./config.ts";
 import { oneBotNapCatManifest } from "./manifest.ts";
+import type { OneBotTransportFactory } from "./protocol/index.ts";
 
 export { ONEBOT_CHANNEL_KIND, OneBotChannelAdapter } from "./adapter.ts";
 export { ONEBOT_DEFAULT_CHANNEL_ID, oneBotPluginConfigSchema } from "./config.ts";
 export { ONEBOT_PLUGIN_ID, oneBotNapCatManifest } from "./manifest.ts";
+export { OneBotChannel, normalizeOneBotEvent, normalizeOneBotRequest } from "./protocol/index.ts";
+export type {
+	OneBotChannelDiagnostics,
+	OneBotConfig,
+	OneBotEvent,
+	OneBotRequestEvent,
+	OneBotTransport,
+	OneBotTransportFactory,
+} from "./protocol/index.ts";
 
 /** Host binding that injects a transport factory (tests and custom networking). */
 export const ONEBOT_TRANSPORT_FACTORY_BINDING = "onebot.transportFactory";

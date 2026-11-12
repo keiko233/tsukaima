@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
 import type { MessageEnvelope } from "@tsukaima/contracts";
 import { conversations, messages } from "@tsukaima/db";
-import type { OneBotTransport, OneBotTransportFactory } from "@tsukaima/onebot";
+import {
+	ONEBOT_TRANSPORT_FACTORY_BINDING,
+	type OneBotTransport,
+	type OneBotTransportFactory,
+} from "@tsukaima-plugin/onebot-napcat";
 import { createApp } from "../src/app.ts";
 import { createLocalChat, sendMessage } from "../src/services/webui.ts";
 
@@ -75,7 +79,11 @@ async function createLifecycle(options: { onebot?: OneBotTransportFactory } = {}
 			TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 			...(options.onebot === undefined ? {} : { TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001" }),
 		},
-		options.onebot === undefined ? {} : { onebotTransportFactory: options.onebot },
+		options.onebot === undefined
+			? {}
+			: {
+					pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, options.onebot]]),
+				},
 	);
 	await lifecycle.start();
 	const database = lifecycle.domainDatabase;

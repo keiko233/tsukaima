@@ -38,7 +38,6 @@ export function SettingsPage() {
 				}),
 			onSuccess: async () => {
 				setProviderApiKey("");
-				setOnebotAccessToken("");
 				toast.success(m.toast_settings_saved());
 				await queryClient.invalidateQueries({ queryKey: orpc.admin.key() });
 			},
@@ -61,8 +60,6 @@ export function SettingsPage() {
 	const [providerBaseUrl, setProviderBaseUrl] = useState<string | undefined>(undefined);
 	const [providerModelId, setProviderModelId] = useState<string | undefined>(undefined);
 	const [providerApiKey, setProviderApiKey] = useState("");
-	const [onebotWsUrl, setOnebotWsUrl] = useState<string | undefined>(undefined);
-	const [onebotAccessToken, setOnebotAccessToken] = useState("");
 	const [locale, setLocaleState] = useState<Locale>(() => getLocale());
 
 	if (settingsQuery.isError) {
@@ -72,7 +69,6 @@ export function SettingsPage() {
 	const settings = settingsQuery.data;
 	const currentProviderBaseUrl = providerBaseUrl ?? settings?.openAiBaseUrl ?? "";
 	const currentProviderModelId = providerModelId ?? settings?.openAiModelId ?? "";
-	const currentUrl = onebotWsUrl ?? settings?.onebotWsUrl ?? "";
 	const remoteModels = fetchModels.data?.models ?? [];
 	const remoteModelValue = remoteModels.some((model) => model.id === currentProviderModelId)
 		? currentProviderModelId
@@ -231,25 +227,6 @@ export function SettingsPage() {
 							<p className="text-xs text-muted-foreground">{m.settings_models_hint()}</p>
 						</div>
 						<p className="text-xs text-muted-foreground">{m.settings_provider_hint()}</p>
-						<div className="border-t border-border" />
-						<Input
-							label={m.settings_onebot_url_label()}
-							placeholder="ws://127.0.0.1:3001"
-							value={currentUrl}
-							onChange={setOnebotWsUrl}
-						/>
-						<Input
-							label={m.settings_onebot_token_label()}
-							placeholder={
-								settings?.onebotAccessTokenSet
-									? m.settings_token_placeholder()
-									: m.settings_token_unset()
-							}
-							type="password"
-							value={onebotAccessToken}
-							onChange={setOnebotAccessToken}
-						/>
-						<p className="text-xs text-muted-foreground">{m.settings_onebot_hint()}</p>
 						<div className="flex flex-wrap gap-2">
 							<Button
 								disabled={updateSettings.isPending}
@@ -260,24 +237,11 @@ export function SettingsPage() {
 										...(providerApiKey.trim().length > 0
 											? { openAiApiKey: providerApiKey.trim() }
 											: {}),
-										onebotWsUrl: currentUrl.trim(),
-										...(onebotAccessToken.trim().length > 0
-											? { onebotAccessToken: onebotAccessToken.trim() }
-											: {}),
 									})
 								}
 							>
 								{m.settings_save()}
 							</Button>
-							{settings?.onebotAccessTokenSet ? (
-								<Button
-									variant="outline"
-									disabled={updateSettings.isPending}
-									onClick={() => updateSettings.mutate({ onebotAccessToken: null })}
-								>
-									{m.settings_clear_token()}
-								</Button>
-							) : null}
 							{settings?.openAiApiKeySet ? (
 								<Button
 									variant="outline"

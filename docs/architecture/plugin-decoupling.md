@@ -48,8 +48,9 @@ set of RPC fields.
 
 ### What is already correctly decoupled
 
-- `packages/onebot` is a standalone, tested protocol package (normalization, transport,
-  reconnect, action facade). It only needs to stop being *constructed* by the lifecycle.
+- `plugins/onebot-napcat/src/protocol` is the tested protocol implementation (normalization,
+  transport, reconnect, action facade), colocated with its only consumer. The lifecycle never
+  constructs it.
 - `packages/core`, `packages/db`, `packages/durable`, `packages/contracts` are domain and
   infrastructure libraries, not plugins. They stay.
 - `packages/coding`, `packages/migration`, `packages/chaos` are feature libraries that were
@@ -205,7 +206,7 @@ Ordered by how much is in the core today (most entangled first).
 
 | Plugin | Current home | Moves out of the core | Needs from host | Phase |
 | --- | --- | --- | --- | --- |
-| `onebot-napcat` | `lifecycle.ts` + `packages/onebot` (lib) | channel lifecycle, settings, diagnostics, envelope/request ingestion, request resolution, outbound send | `channels`, `conversation.ingest`, `requests`, `settings`, `audit`, `hooks` | A/B |
+| `onebot-napcat` | `plugins/onebot-napcat` (protocol code in `src/protocol`) | channel lifecycle, settings, diagnostics, envelope/request ingestion, request resolution, outbound send | `channels`, `conversation.ingest`, `requests`, `settings`, `audit`, `hooks` | A/B |
 | `openai-compatible` | `lifecycle.createModelPort`, `remote-models.ts`, `config.openAi*`, `runtime-settings.openAi*` | provider construction, model listing, usage recording | `models.registerProvider`, `settings` | C |
 | `self-iteration` | `packages/coding` (lib) | runner, worktree policy, proposal store, reload controller → add tools + RPC + UI panel | `tools`, `rpc`, `audit`, `tasks` | D |
 | `memory` | not implemented (`docs/architecture/memory.md`) | scoped storage, retrieval, extraction, recall tool | `memory` API + table ownership | D |

@@ -1,5 +1,4 @@
 import { conversations, modelPolicies } from "@tsukaima/db";
-import type { ChannelDiagnostics } from "@tsukaima/sdk";
 import { adminBase, type TsukaimaApiContext } from "./base.ts";
 import {
 	createLocalChat,
@@ -24,7 +23,6 @@ import {
 	readRuntimeSettings,
 } from "../runtime-settings.ts";
 import { listRemoteModels } from "../remote-models.ts";
-import { ONEBOT_DEFAULT_CHANNEL_ID, ONEBOT_PLUGIN_ID } from "../plugins/builtin.ts";
 
 type LifecycleModelPolicy = TsukaimaApiContext["lifecycle"]["routingPolicies"][number];
 
@@ -82,12 +80,12 @@ export const adminRouter = {
 		}),
 		status: adminBase.admin.diagnostics.status.handler(async ({ context }) => {
 			const lifecycle = context.lifecycle;
-			const onebot = await oneBotChannelDiagnostics(context);
 			return {
 				...(lifecycle.lastProcessingError === undefined
 					? {}
 					: { lastError: lifecycle.lastProcessingError.message }),
 				channels: lifecycle.channels.statuses().map((status) => ({
+					configured: status.configured ?? true,
 					connected: status.connected,
 					eventCount: status.eventCount ?? 0,
 					id: status.id,
@@ -98,12 +96,6 @@ export const adminRouter = {
 					state: status.state,
 				})),
 				logLevel: lifecycle.logLevel,
-				onebotConfigured: onebot?.configured ?? false,
-				onebotConnected: onebot?.connected ?? false,
-				onebotLastErrorClass: onebot?.lastErrorClass ?? null,
-				onebotReconnectAttempts: onebot?.reconnectAttempts ?? 0,
-				onebotState: onebot?.state ?? "closed",
-				onebotRestartRequired: onebot?.restartRequired ?? false,
 				processedMessages: lifecycle.processedMessageCount,
 				providerRestartRequired: lifecycle.providerRestartRequired,
 				routingPolicies: toContractPolicies(lifecycle.routingPolicies),
@@ -215,11 +207,9 @@ export const adminRouter = {
 	settings: {
 		get: adminBase.admin.settings.get.handler(async ({ context }) => {
 			const settings = await readRuntimeSettings(context.lifecycle.domainDatabase);
-			const onebot = await context.lifecycle.pluginConfigView(ONEBOT_PLUGIN_ID);
 			return {
 				...publicRuntimeSettings(settings),
-				onebotAccessTokenSet: onebot.secretsSet.includes("accessToken"),
-				...(typeof onebot.config.wsUrl === "string" ? { onebotWsUrl: onebot.config.wsUrl } : {}),
+				plugins: await context.lifecycle.pluginHost.configViews(),
 			};
 		}),
 		models: adminBase.admin.settings.models.handler(async ({ context, input }) => {
@@ -235,21 +225,11 @@ export const adminRouter = {
 		update: adminBase.admin.settings.update.handler(async ({ context, input }) => {
 			const database = context.lifecycle.domainDatabase;
 			if (database === undefined) throw new Error("Database not ready");
-			const pluginPatch: Record<string, unknown> = {};
-			if (Object.hasOwn(input, "onebotWsUrl")) pluginPatch.wsUrl = input.onebotWsUrl;
-			if (Object.hasOwn(input, "onebotAccessToken")) {
-				pluginPatch.accessToken = input.onebotAccessToken;
-			}
-			if (Object.keys(pluginPatch).length > 0) {
-				await context.lifecycle.updatePluginConfig(ONEBOT_PLUGIN_ID, pluginPatch);
-			}
 			const settings = await patchRuntimeSettings(database, input);
 			await context.lifecycle.applyRuntimeSettings(settings);
-			const onebot = await context.lifecycle.pluginConfigView(ONEBOT_PLUGIN_ID);
 			return {
 				...publicRuntimeSettings(settings),
-				onebotAccessTokenSet: onebot.secretsSet.includes("accessToken"),
-				...(typeof onebot.config.wsUrl === "string" ? { onebotWsUrl: onebot.config.wsUrl } : {}),
+				plugins: await context.lifecycle.pluginHost.configViews(),
 			};
 		}),
 	},
@@ -260,16 +240,3 @@ export const adminRouter = {
 		list: adminBase.admin.users.list.handler(async ({ context }) => listUsers(context.lifecycle)),
 	},
 };
-
-/**
- * Legacy WebUI contract: the diagnostics screen still reads `onebot*` fields. The data comes
- * from the channel registry, located through the onebot-napcat plugin's own config.
- */
-async function oneBotChannelDiagnostics(
-	context: TsukaimaApiContext,
-): Promise<ChannelDiagnostics | undefined> {
-	const config = await context.lifecycle.pluginConfig(ONEBOT_PLUGIN_ID);
-	const channelId =
-		typeof config.channelId === "string" ? config.channelId : ONEBOT_DEFAULT_CHANNEL_ID;
-	return context.lifecycle.channels.get(channelId)?.diagnostics();
-}

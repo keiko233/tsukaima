@@ -91,4 +91,40 @@ describe("PiDurableConversationHost", () => {
 			await rm(directory, { force: true, recursive: true });
 		}
 	});
+
+	test("submits each activity window as a distinct durable input", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const answers: string[] = [];
+			const host = new PiDurableConversationHost({
+				onAnswer: (answer) => {
+					answers.push(answer.text);
+				},
+				responses: ["first answer", "second answer"],
+				storage,
+			});
+			const conversationId = await host.createConversation();
+			const now = Date.now();
+			await host.append({
+				conversationId,
+				envelope: { ...envelope("turn-1", "first"), source: { timestampMs: now } },
+				forceSubmit: true,
+				submittedAtMs: now,
+			});
+			await Bun.sleep(100);
+			await host.append({
+				conversationId,
+				envelope: { ...envelope("turn-2", "second"), source: { timestampMs: now + 1 } },
+				forceSubmit: true,
+				submittedAtMs: now + 1,
+			});
+			await Bun.sleep(200);
+			expect(answers).toEqual(["first answer", "second answer"]);
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
 });

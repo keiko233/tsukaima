@@ -35,18 +35,21 @@ function connectionStatus(data: DiagnosticsData | undefined): {
 	tone: ConnectionTone;
 } {
 	if (data === undefined) return { label: m.connect_connecting, tone: "muted" };
-	const state = data.onebotState;
-	if (!data.onebotConfigured) {
-		return data.onebotRestartRequired
+	const channels = data.channels.filter((channel) => channel.kind === "onebot-v11");
+	const channel = channels[0];
+	if (channel === undefined) return { label: m.connect_unconfigured, tone: "muted" };
+	const state = channel.state;
+	if (!channel.configured) {
+		return channel.restartRequired
 			? { label: m.connect_disconnected, tone: "danger" }
 			: { label: m.connect_unconfigured, tone: "muted" };
 	}
-	if (state === "open" && data.onebotConnected) {
+	if (state === "open" && channel.connected) {
 		return { label: m.connect_connected, tone: "success" };
 	}
 	if (state === "connecting") return { label: m.connect_connecting, tone: "warning" };
 	if (state === "reconnecting") return { label: m.connect_reconnecting, tone: "warning" };
-	if (data.onebotLastErrorClass !== null) {
+	if (channel.lastErrorClass !== null) {
 		return { label: m.connect_error, tone: "danger" };
 	}
 	return { label: m.connect_disconnected, tone: "danger" };

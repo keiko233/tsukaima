@@ -15,7 +15,6 @@
 		"@tsukaima/core": "workspace:*",
 		"@tsukaima/db": "workspace:*",
 		"@tsukaima/durable": "workspace:*",
-		"@tsukaima/onebot": "workspace:*",
 		"@tsukaima/plugin-registry": "workspace:*",
 		"@tsukaima/sdk": "workspace:*",
 		"@orpc/server": "1.16.2",

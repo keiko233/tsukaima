@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import type { ChannelRequest, MessageEnvelope } from "@tsukaima/contracts";
-import type { OneBotTransport, OneBotTransportFactory } from "@tsukaima/onebot";
+import type { OneBotTransport, OneBotTransportFactory } from "./protocol/index.ts";
 import {
 	createPluginContext,
 	pluginManifestSchema,

@@ -161,7 +161,10 @@ export function DiagnosticsPage() {
 							<div className="min-w-0">
 								<dt className="text-xs text-muted-foreground">{m.diagnostics_onebot_label()}</dt>
 								<dd className="mt-1 font-medium">
-									{diagnostics.onebotConnected ? "true" : "false"}
+									{diagnostics.channels
+										.filter((channel) => channel.kind === "onebot-v11")
+										.map((channel) => `${channel.id}: ${channel.connected ? "true" : "false"}`)
+										.join(", ") || "false"}
 								</dd>
 							</div>
 							<div className="min-w-0">
@@ -189,7 +192,8 @@ export function DiagnosticsPage() {
 								</dd>
 							</div>
 						</dl>
-						{diagnostics.onebotRestartRequired || diagnostics.providerRestartRequired ? (
+						{diagnostics.channels.some((channel) => channel.restartRequired) ||
+						diagnostics.providerRestartRequired ? (
 							<p className="mt-4 border-t border-border pt-3 text-xs text-destructive">
 								{m.settings_restart_hint()}
 							</p>

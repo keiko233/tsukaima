@@ -274,6 +274,7 @@ export const diagnosticsDataSchema = z.object({
 	channels: z.array(
 		z.object({
 			connected: z.boolean(),
+			configured: z.boolean(),
 			eventCount: z.number().int(),
 			id: z.string(),
 			kind: z.string(),
@@ -285,12 +286,6 @@ export const diagnosticsDataSchema = z.object({
 	),
 	lastError: z.string().optional(),
 	logLevel: logLevelSchema,
-	onebotConfigured: z.boolean(),
-	onebotConnected: z.boolean(),
-	onebotLastErrorClass: z.string().nullable(),
-	onebotReconnectAttempts: z.number().int(),
-	onebotRestartRequired: z.boolean(),
-	onebotState: channelStateSchema,
 	processedMessages: z.number().int(),
 	providerRestartRequired: z.boolean(),
 	routingPolicies: z.array(modelPolicySchema),
@@ -312,11 +307,16 @@ export type DiagnosticsData = z.infer<typeof diagnosticsDataSchema>;
 
 export const settingsViewSchema = z.object({
 	logLevel: logLevelSchema,
-	onebotAccessTokenSet: z.boolean(),
-	onebotWsUrl: z.string().optional(),
 	openAiApiKeySet: z.boolean(),
 	openAiBaseUrl: z.string().optional(),
 	openAiModelId: z.string().optional(),
+	plugins: z.array(
+		z.object({
+			config: z.record(z.string(), z.unknown()),
+			id: z.string(),
+			secretsSet: z.array(z.string()),
+		}),
+	),
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
@@ -339,8 +339,6 @@ export const settingsModelsInputSchema = z.object({
 export const runtimeSettingsPatchSchema = z
 	.object({
 		logLevel: logLevelSchema.optional(),
-		onebotAccessToken: z.union([z.string().min(1), z.null()]).optional(),
-		onebotWsUrl: z.union([z.string().url(), z.literal(""), z.null()]).optional(),
 		openAiApiKey: z.union([z.string().min(1), z.null()]).optional(),
 		openAiBaseUrl: z.union([z.string().url(), z.literal(""), z.null()]).optional(),
 		openAiModelId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
@@ -348,8 +346,6 @@ export const runtimeSettingsPatchSchema = z
 	.refine(
 		(input) =>
 			input.logLevel !== undefined ||
-			input.onebotAccessToken !== undefined ||
-			input.onebotWsUrl !== undefined ||
 			input.openAiApiKey !== undefined ||
 			input.openAiBaseUrl !== undefined ||
 			input.openAiModelId !== undefined,

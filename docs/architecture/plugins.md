@@ -100,3 +100,6 @@ Planned first-party set:
 - `self-iteration`: coding tasks, repository worktrees, tests, and deployment proposals.
 
 Feature parity with DSH plugins is tracked in [docs/migration/dsh.md](../migration/dsh.md).
+
+The concrete inventory, remaining host surfaces, and migration order are in
+[builtin-plugin-migration.md](builtin-plugin-migration.md).

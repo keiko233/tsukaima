@@ -1,7 +1,6 @@
 import {
 	ONEBOT_DEFAULT_CHANNEL_ID,
 	ONEBOT_PLUGIN_ID,
-	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	oneBotNapCatPlugin,
 } from "@tsukaima-plugin/onebot-napcat";
 import type { TsukaimaPlugin } from "@tsukaima/sdk";
@@ -12,4 +11,4 @@ import type { TsukaimaPlugin } from "@tsukaima/sdk";
  */
 export const builtinPlugins: readonly TsukaimaPlugin[] = [oneBotNapCatPlugin];
 
-export { ONEBOT_DEFAULT_CHANNEL_ID, ONEBOT_PLUGIN_ID, ONEBOT_TRANSPORT_FACTORY_BINDING };
+export { ONEBOT_DEFAULT_CHANNEL_ID, ONEBOT_PLUGIN_ID };

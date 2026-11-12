@@ -1,6 +1,4 @@
 import type { ChannelRequest, MessageEnvelope, MessagePart } from "@tsukaima/contracts";
-import { OneBotChannel } from "@tsukaima/onebot";
-import type { OneBotConfig, OneBotTransportFactory } from "@tsukaima/onebot";
 import type {
 	ChannelAdapter,
 	ChannelCapability,
@@ -10,6 +8,8 @@ import type {
 	PluginLogger,
 	SendResult,
 } from "@tsukaima/sdk";
+import { OneBotChannel } from "./protocol/channel.ts";
+import type { OneBotConfig, OneBotTransportFactory } from "./protocol/types.ts";
 
 export const ONEBOT_CHANNEL_KIND = "onebot-v11";
 

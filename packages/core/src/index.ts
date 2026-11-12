@@ -11,6 +11,8 @@ export function shouldCloseActivityWindow(
 
 export {
 	PiDurableConversationHost,
+	activityIdFromSubmissionRequestId,
+	activitySubmissionRequestId,
 	type ActivityWindowEvent,
 	type AppendConversationResult,
 	type ConversationAnswer,
