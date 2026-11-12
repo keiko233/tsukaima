@@ -67,6 +67,10 @@ export const pluginManifestSchema = z.object({
 		.max(64)
 		.default([]),
 	configSchema: jsonObjectSchema.optional(),
+	/** Config key -> environment variable name, used as a fallback when unset. */
+	configEnv: z.record(z.string(), z.string().min(1)).default({}),
+	/** Config keys whose values are secrets and must never be returned by an API. */
+	secretKeys: z.array(z.string().min(1)).max(64).default([]),
 });
 
 export type PluginManifest = z.infer<typeof pluginManifestSchema>;

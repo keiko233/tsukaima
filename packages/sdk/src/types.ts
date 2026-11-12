@@ -1,4 +1,11 @@
 import type { MessageEnvelope, MessagePart } from "@tsukaima/contracts";
+import type {
+	PluginAuditApi,
+	PluginChannelRegistry,
+	PluginDependencyBag,
+	PluginRequestApi,
+	PluginSettingsApi,
+} from "./host.ts";
 import type { PluginManifest } from "./manifest.ts";
 import type { PluginPermission } from "./permissions.ts";
 
@@ -111,4 +118,14 @@ export interface PluginContext {
 	tools: PluginToolRegistry;
 	ui: PluginUiRegistry;
 	channel?: PluginChannelApi;
+	/** Present when the plugin declares channel permissions. */
+	channels?: PluginChannelRegistry;
+	/** Per-plugin configuration with host-resolved environment fallbacks. */
+	settings?: PluginSettingsApi;
+	/** Durable request inbox for friend/group requests. */
+	requests?: PluginRequestApi;
+	/** Host audit trail. */
+	audit?: PluginAuditApi;
+	/** Host bindings for built-in plugins; absent for third-party plugins. */
+	dependencies?: PluginDependencyBag;
 }
