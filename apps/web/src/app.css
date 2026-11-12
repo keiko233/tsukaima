@@ -173,6 +173,23 @@
 		backdrop-filter: blur(12px);
 		border: 1px solid var(--glass-border);
 	}
+
+	.runtime-log-token {
+		font-style: var(--shiki-light-font-style, inherit);
+		font-weight: var(--shiki-light-font-weight, inherit);
+		text-decoration: var(--shiki-light-text-decoration, none);
+	}
+
+	.dark .runtime-log-token {
+		background-color: var(--shiki-dark-bg, transparent) !important;
+		color: var(--shiki-dark, var(--runtime-log-light-color, currentColor)) !important;
+		font-style: var(--shiki-dark-font-style, var(--shiki-light-font-style, inherit));
+		font-weight: var(--shiki-dark-font-weight, var(--shiki-light-font-weight, inherit));
+		text-decoration: var(
+			--shiki-dark-text-decoration,
+			var(--shiki-light-text-decoration, none)
+		);
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {

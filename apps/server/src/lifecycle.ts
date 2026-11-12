@@ -30,11 +30,13 @@ import type { SqliteStorage } from "@tsukaima/durable";
 import { OneBotChannel } from "@tsukaima/onebot";
 import type { OneBotTransportFactory } from "@tsukaima/onebot";
 import { loadConfig, type TsukaimaConfig } from "./config.ts";
+import { createLogger, LogBuffer, type Logger } from "./logging.ts";
 import { readRuntimeSettings, type RuntimeSettings } from "./runtime-settings.ts";
 import type { ChannelRequest, MessageEnvelope, MessagePart } from "@tsukaima/contracts";
 
 export interface LifecycleOptions {
 	readonly onebotTransportFactory?: OneBotTransportFactory;
+	readonly logger?: Logger;
 }
 
 export interface LifecycleState {
@@ -63,6 +65,8 @@ export class TsukaimaLifecycle {
 	durableStorage: SqliteStorage | undefined;
 	lastProcessingError: Error | undefined;
 	logLevel: TsukaimaConfig["logLevel"];
+	readonly logs: LogBuffer;
+	readonly logger: Logger;
 	readonly modelUsageLedger = new ModelUsageLedger();
 	modelRouter: ModelPolicyRouter | undefined;
 	onebotChannel: OneBotChannel | undefined;
@@ -72,6 +76,7 @@ export class TsukaimaLifecycle {
 	routingPolicies: readonly ModelPolicy[] = [];
 	private readonly ingestingMessages = new Set<string>();
 	private readonly requestActions = new Set<string>();
+	private readonly runtimeLog: Logger;
 	private activeOneBotSettings: Pick<RuntimeSettings, "onebotAccessToken" | "onebotWsUrl"> = {};
 	private activeProviderSettings: Pick<
 		RuntimeSettings,
@@ -81,6 +86,14 @@ export class TsukaimaLifecycle {
 	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
 		this.config = config;
 		this.logLevel = config.logLevel;
+		this.logger =
+			options?.logger ??
+			createLogger({
+				level: config.logLevel,
+				target: "tsukaima::server",
+			});
+		this.logs = this.logger.buffer;
+		this.runtimeLog = this.logger.child("tsukaima::server::lifecycle");
 		if (options?.onebotTransportFactory !== undefined) {
 			this.onebotTransportFactory = options.onebotTransportFactory;
 		}
@@ -102,21 +115,15 @@ export class TsukaimaLifecycle {
 	private transition(stage: string, state: LifecycleState["state"] = "starting"): void {
 		this.currentStage = stage;
 		this.currentState = state;
-		this.log("info", stage);
+		this.runtimeLog.info(state === "ready" ? "server ready" : "lifecycle stage", {
+			stage,
+			state,
+		});
 	}
 
-	private log(level: TsukaimaConfig["logLevel"], message?: string): void {
-		const priority = { debug: 0, error: 3, info: 1, warn: 2 } as const;
-		if (priority[level] < priority[this.logLevel]) return;
-		const payload = {
-			level,
-			message: message ?? this.currentStage,
-			stage: this.currentStage,
-			timestamp: new Date().toISOString(),
-		};
-		if (level === "error") console.error(JSON.stringify(payload));
-		else if (level === "warn") console.warn(JSON.stringify(payload));
-		else console.log(JSON.stringify(payload));
+	private setLogLevel(level: TsukaimaConfig["logLevel"]): void {
+		this.logLevel = level;
+		this.logger.setLevel(level);
 	}
 
 	private createModelPort(settings: RuntimeSettings): ModelPort {
@@ -124,13 +131,19 @@ export class TsukaimaLifecycle {
 		const openAiBaseUrl = settings.openAiBaseUrl ?? this.config.openAiBaseUrl;
 		const openAiModelId = settings.openAiModelId ?? this.config.openAiModelId;
 		if (openAiBaseUrl === undefined || openAiApiKey === undefined || openAiModelId === undefined) {
-			this.log("info", "OpenAI-compatible provider not configured; using fake model");
+			this.runtimeLog.info(
+				"OpenAI-compatible provider not configured; using deterministic fake model",
+			);
 			return createFakeModel({
 				onMessage: (message) => {
 					this.modelUsageLedger.record(message, "basic-chat");
 				},
 			});
 		}
+		this.runtimeLog.info("OpenAI-compatible provider configured", {
+			modelId: openAiModelId,
+			providerId: "openai-compatible",
+		});
 		return createOpenAICompatibleModelPort(
 			{
 				apiKey: openAiApiKey,
@@ -154,7 +167,7 @@ export class TsukaimaLifecycle {
 		migrateDomainDatabase(this.domainDatabase);
 		this.transition("load-settings");
 		const settings = await readRuntimeSettings(this.domainDatabase);
-		this.logLevel = settings.logLevel;
+		this.setLogLevel(settings.logLevel);
 
 		this.transition("domain-services");
 		const model = this.createModelPort(settings);
@@ -195,11 +208,11 @@ export class TsukaimaLifecycle {
 		this.failureReason = reason;
 		this.currentState = "failed";
 		this.currentStage = "failed";
-		this.log("error", reason);
+		this.runtimeLog.error("lifecycle failed", { reason, stage: this.currentStage });
 	}
 
 	async applyRuntimeSettings(settings: RuntimeSettings): Promise<void> {
-		this.logLevel = settings.logLevel;
+		this.setLogLevel(settings.logLevel);
 		this.onebotRestartRequired =
 			settings.onebotWsUrl !== this.activeOneBotSettings.onebotWsUrl ||
 			settings.onebotAccessToken !== this.activeOneBotSettings.onebotAccessToken;
@@ -207,6 +220,11 @@ export class TsukaimaLifecycle {
 			settings.openAiApiKey !== this.activeProviderSettings.openAiApiKey ||
 			settings.openAiBaseUrl !== this.activeProviderSettings.openAiBaseUrl ||
 			settings.openAiModelId !== this.activeProviderSettings.openAiModelId;
+		this.runtimeLog.info("runtime settings applied", {
+			logLevel: settings.logLevel,
+			onebotRestartRequired: this.onebotRestartRequired,
+			providerRestartRequired: this.providerRestartRequired,
+		});
 	}
 
 	private async replaceOneBotChannel(settings: RuntimeSettings): Promise<void> {
@@ -219,9 +237,11 @@ export class TsukaimaLifecycle {
 			...(settings.onebotWsUrl === undefined ? {} : { onebotWsUrl: settings.onebotWsUrl }),
 		};
 		if (settings.onebotWsUrl === undefined) {
+			this.runtimeLog.debug("OneBot channel is not configured");
 			return;
 		}
 		try {
+			this.runtimeLog.info("starting OneBot channel");
 			const channel = new OneBotChannel(
 				{
 					botAccountId: "tsukaima-server",
@@ -243,12 +263,14 @@ export class TsukaimaLifecycle {
 			await channel.start();
 			this.onebotChannel = channel;
 			this.onebotRestartRequired = false;
+			this.runtimeLog.info("OneBot channel started", {
+				state: channel.diagnostics.state,
+			});
 		} catch (error) {
 			this.onebotRestartRequired = true;
-			this.log(
-				"error",
-				`OneBot channel failed to initialize: ${error instanceof Error ? error.message : String(error)}`,
-			);
+			this.runtimeLog.error("OneBot channel failed to initialize", {
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 
@@ -256,6 +278,14 @@ export class TsukaimaLifecycle {
 		const ingestionKey = `${envelope.channelId}:${envelope.source.messageId ?? envelope.id}`;
 		if (this.ingestingMessages.has(ingestionKey)) return;
 		this.ingestingMessages.add(ingestionKey);
+		const startedAt = performance.now();
+		const messageLog = this.runtimeLog.span("process_message", {
+			channelId: envelope.channelId,
+			messageId: envelope.source.messageId ?? envelope.id,
+		});
+		messageLog.debug("channel message accepted", {
+			conversationKind: envelope.conversationKey.kind,
+		});
 		try {
 			if (this.conversationHost === undefined) {
 				throw new Error("Conversation host is not ready");
@@ -276,6 +306,10 @@ export class TsukaimaLifecycle {
 				)
 				.limit(1);
 			if (existing.length > 0) {
+				messageLog.debug("duplicate channel message ignored", {
+					chatObjectId: target.chatObjectId,
+					sessionId: target.sessionId,
+				});
 				return;
 			}
 			const result = await this.conversationHost.append({
@@ -341,9 +375,16 @@ export class TsukaimaLifecycle {
 			if (!result.deduplicated) {
 				this.processedMessageCount += 1;
 			}
+			messageLog.info("channel message processed", {
+				chatObjectId: target.chatObjectId,
+				durationMs: Math.round(performance.now() - startedAt),
+				sessionId: target.sessionId,
+			});
 		} catch (error) {
 			this.lastProcessingError = error instanceof Error ? error : new Error(String(error));
-			this.log("error", "Failed to process channel message");
+			messageLog.error("failed to process channel message", {
+				error: error instanceof Error ? error.message : String(error),
+			});
 			throw error;
 		} finally {
 			this.ingestingMessages.delete(ingestionKey);
@@ -353,6 +394,11 @@ export class TsukaimaLifecycle {
 	async processRequest(request: ChannelRequest): Promise<void> {
 		const database = this.domainDatabase;
 		if (database === undefined) throw new Error("Domain database is not ready");
+		const requestLog = this.runtimeLog.span("process_request", {
+			channelId: request.channelId,
+			kind: request.kind,
+			requestFlag: request.flag,
+		});
 		try {
 			const now = new Date().toISOString();
 			await database
@@ -381,9 +427,15 @@ export class TsukaimaLifecycle {
 					},
 					target: [requests.channelId, requests.flag],
 				});
+			requestLog.info("channel request persisted", {
+				requesterId: request.requesterId,
+				...(request.groupId === undefined ? {} : { groupId: request.groupId }),
+			});
 		} catch (error) {
 			this.lastProcessingError = error instanceof Error ? error : new Error(String(error));
-			this.log("error", "Failed to persist channel request");
+			requestLog.error("failed to persist channel request", {
+				error: error instanceof Error ? error.message : String(error),
+			});
 			throw error;
 		}
 	}
@@ -459,6 +511,11 @@ export class TsukaimaLifecycle {
 				targetId: request.requesterExternalId,
 				targetKind: "request",
 			});
+			this.runtimeLog.info("channel request resolved", {
+				action,
+				requestId,
+				status,
+			});
 			return { status };
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -475,6 +532,12 @@ export class TsukaimaLifecycle {
 				result: "failed",
 				targetId: request.requesterExternalId,
 				targetKind: "request",
+			});
+			this.runtimeLog.warn("channel request resolution failed", {
+				action,
+				error: message,
+				requestId,
+				status,
 			});
 			return { status };
 		} finally {
@@ -703,6 +766,7 @@ export class TsukaimaLifecycle {
 		await this.conversationHost?.close();
 		await this.durableStorage?.close(BACKGROUND_CONTEXT);
 		this.domainDatabase?.$client.close();
+		this.runtimeLog.info("lifecycle stopped");
 	}
 }
 

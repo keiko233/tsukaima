@@ -109,7 +109,8 @@ Use Drizzle for explicit domain schema and queries. Use `pi-durable` APIs for co
 
 - Configuration is loaded from environment/files and validated with Zod.
 - Secrets come only from mounted secret files or environment; never from the database or Git.
-- Logging: structured JSON logs, with request ID, channel ID, conversation ID, task ID, and plugin name.
+- Logging: structured events rendered in Rust `tracing` style, with request ID, channel ID, conversation ID, task ID, and plugin name.
+- Diagnostics: a bounded in-memory log buffer exposed through oRPC and SSE, with ANSI output rendered by Shiki in the WebUI.
 - Audit: append-only records in SQLite for sends, administrative changes, memory edits, plugin permission changes, and deployment proposals.
 - Health endpoints expose process, database, channel, model gateway, and plugin-worker status.
 
@@ -122,6 +123,7 @@ Use Drizzle for explicit domain schema and queries. Use `pi-durable` APIs for co
 - Do not rely on a manual migration command in production. A separate CLI may exist for development and maintenance.
 
 See [startup-lifecycle.md](startup-lifecycle.md).
+See [logging.md](logging.md) for log fields, retention, transports, and rendering.
 
 ## Testing
 
