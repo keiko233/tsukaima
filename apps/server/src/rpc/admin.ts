@@ -3,9 +3,10 @@ import { z } from "zod";
 import { conversations, modelPolicies, plugins } from "@elaina/db";
 import type { ElainaApiContext } from "./health.ts";
 import {
+	patchRuntimeSettings,
+	publicRuntimeSettings,
 	readRuntimeSettings,
-	runtimeSettingsSchema,
-	writeRuntimeSettings,
+	runtimeSettingsPatchSchema,
 } from "../runtime-settings.ts";
 
 export const adminRouter = {
@@ -24,6 +25,7 @@ export const adminRouter = {
 					: { lastError: lifecycle.lastProcessingError.message }),
 				logLevel: lifecycle.logLevel,
 				onebotConnected: lifecycle.onebotChannel !== undefined,
+				onebotRestartRequired: lifecycle.onebotRestartRequired,
 				processedMessages: lifecycle.processedMessageCount,
 				routingPolicies: lifecycle.routingPolicies,
 				state: lifecycle.state,
@@ -87,15 +89,18 @@ export const adminRouter = {
 	},
 	settings: {
 		get: os.$context<ElainaApiContext>().handler(async ({ context }) => {
-			return readRuntimeSettings(context.lifecycle.domainDatabase);
+			const settings = await readRuntimeSettings(context.lifecycle.domainDatabase);
+			return publicRuntimeSettings(settings);
 		}),
 		update: os
 			.$context<ElainaApiContext>()
-			.input(runtimeSettingsSchema)
+			.input(runtimeSettingsPatchSchema)
 			.handler(async ({ context, input }) => {
 				const database = context.lifecycle.domainDatabase;
 				if (database === undefined) throw new Error("Database not ready");
-				return writeRuntimeSettings(database, input);
+				const settings = await patchRuntimeSettings(database, input);
+				await context.lifecycle.applyRuntimeSettings(settings);
+				return publicRuntimeSettings(settings);
 			}),
 	},
 };

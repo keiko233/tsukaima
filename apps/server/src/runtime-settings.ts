@@ -2,13 +2,37 @@ import { eq } from "drizzle-orm";
 import { type ElainaDatabase, meta } from "@elaina/db";
 import { z } from "zod";
 
+const logLevelSchema = z.enum(["debug", "info", "warn", "error"]);
+
 export const runtimeSettingsSchema = z.object({
-	logLevel: z.enum(["debug", "info", "warn", "error"]),
+	logLevel: logLevelSchema,
 	onebotAccessToken: z.string().min(1).optional(),
 	onebotWsUrl: z.string().url().optional(),
 });
 
 export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>;
+
+export const runtimeSettingsPatchSchema = z
+	.object({
+		logLevel: logLevelSchema.optional(),
+		onebotAccessToken: z.union([z.string().min(1), z.null()]).optional(),
+		onebotWsUrl: z.union([z.string().url(), z.literal(""), z.null()]).optional(),
+	})
+	.refine(
+		(input) =>
+			input.logLevel !== undefined ||
+			input.onebotAccessToken !== undefined ||
+			input.onebotWsUrl !== undefined,
+		{ message: "At least one setting must be provided" },
+	);
+
+export type RuntimeSettingsPatch = z.infer<typeof runtimeSettingsPatchSchema>;
+
+export interface PublicRuntimeSettings {
+	readonly logLevel: RuntimeSettings["logLevel"];
+	readonly onebotAccessTokenSet: boolean;
+	readonly onebotWsUrl?: string;
+}
 
 const SETTINGS_KEY = "runtime-settings";
 
@@ -62,4 +86,33 @@ export async function writeRuntimeSettings(
 		.values({ key: SETTINGS_KEY, value })
 		.onConflictDoUpdate({ target: meta.key, set: { value } });
 	return runtimeSettingsSchema.parse(JSON.parse(value) as unknown);
+}
+
+export function publicRuntimeSettings(settings: RuntimeSettings): PublicRuntimeSettings {
+	return {
+		logLevel: settings.logLevel,
+		onebotAccessTokenSet: settings.onebotAccessToken !== undefined,
+		...(settings.onebotWsUrl === undefined ? {} : { onebotWsUrl: settings.onebotWsUrl }),
+	};
+}
+
+export async function patchRuntimeSettings(
+	database: ElainaDatabase,
+	patch: RuntimeSettingsPatch,
+): Promise<RuntimeSettings> {
+	const current = await readRuntimeSettings(database);
+	const next: RuntimeSettings = {
+		logLevel: patch.logLevel ?? current.logLevel,
+	};
+	const onebotAccessToken =
+		patch.onebotAccessToken === null
+			? undefined
+			: (patch.onebotAccessToken ?? current.onebotAccessToken);
+	const onebotWsUrl =
+		patch.onebotWsUrl === null || patch.onebotWsUrl === ""
+			? undefined
+			: (patch.onebotWsUrl ?? current.onebotWsUrl);
+	if (onebotAccessToken !== undefined) next.onebotAccessToken = onebotAccessToken;
+	if (onebotWsUrl !== undefined) next.onebotWsUrl = onebotWsUrl;
+	return writeRuntimeSettings(database, next);
 }

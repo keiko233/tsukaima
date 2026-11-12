@@ -14,7 +14,7 @@ import type { SqliteStorage } from "@elaina/durable";
 import { OneBotChannel } from "@elaina/onebot";
 import type { OneBotTransportFactory } from "@elaina/onebot";
 import { loadConfig, type ElainaConfig } from "./config.ts";
-import { readRuntimeSettings } from "./runtime-settings.ts";
+import { readRuntimeSettings, type RuntimeSettings } from "./runtime-settings.ts";
 
 export interface LifecycleOptions {
 	readonly onebotTransportFactory?: OneBotTransportFactory;
@@ -42,8 +42,10 @@ export class ElainaLifecycle {
 	logLevel: ElainaConfig["logLevel"];
 	modelRouter: ModelPolicyRouter | undefined;
 	onebotChannel: OneBotChannel | undefined;
+	onebotRestartRequired = false;
 	processedMessageCount = 0;
 	routingPolicies: readonly ModelPolicy[] = [];
+	private activeOneBotSettings: Pick<RuntimeSettings, "onebotAccessToken" | "onebotWsUrl"> = {};
 
 	constructor(config: ElainaConfig, options?: LifecycleOptions) {
 		this.config = config;
@@ -129,43 +131,7 @@ export class ElainaLifecycle {
 		];
 
 		this.transition("channel-adapters");
-		if (settings.onebotWsUrl !== undefined) {
-			try {
-				this.onebotChannel = new OneBotChannel(
-					{
-						botAccountId: "elaina-server",
-						channelId: "onebot",
-						reconnect: { initialDelayMs: 1_000, jitterRatio: 0.1, maxDelayMs: 30_000 },
-						url: settings.onebotWsUrl,
-						...(settings.onebotAccessToken !== undefined
-							? { accessToken: settings.onebotAccessToken }
-							: {}),
-					},
-					this.onebotTransportFactory,
-				);
-				this.onebotChannel.onMessage(async (envelope) => {
-					try {
-						if (this.conversationHost === undefined) return;
-						const conversationId = await this.conversationHost.createConversation();
-						await this.conversationHost.append({
-							conversationId,
-							envelope,
-							submittedAtMs: Date.now(),
-						});
-						this.processedMessageCount += 1;
-					} catch (error) {
-						this.lastProcessingError = error instanceof Error ? error : new Error(String(error));
-						this.log("error", "Failed to process OneBot message");
-					}
-				});
-				await this.onebotChannel.start();
-			} catch (error) {
-				this.log(
-					"error",
-					`OneBot channel failed to initialize: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		}
+		await this.replaceOneBotChannel(settings);
 
 		this.transition("ready", "ready");
 	}
@@ -175,6 +141,65 @@ export class ElainaLifecycle {
 		this.currentState = "failed";
 		this.currentStage = "failed";
 		this.log("error", reason);
+	}
+
+	async applyRuntimeSettings(settings: RuntimeSettings): Promise<void> {
+		this.logLevel = settings.logLevel;
+		this.onebotRestartRequired =
+			settings.onebotWsUrl !== this.activeOneBotSettings.onebotWsUrl ||
+			settings.onebotAccessToken !== this.activeOneBotSettings.onebotAccessToken;
+	}
+
+	private async replaceOneBotChannel(settings: RuntimeSettings): Promise<void> {
+		this.onebotChannel?.stop();
+		this.onebotChannel = undefined;
+		this.activeOneBotSettings = {
+			...(settings.onebotAccessToken === undefined
+				? {}
+				: { onebotAccessToken: settings.onebotAccessToken }),
+			...(settings.onebotWsUrl === undefined ? {} : { onebotWsUrl: settings.onebotWsUrl }),
+		};
+		if (settings.onebotWsUrl === undefined) {
+			return;
+		}
+		try {
+			const channel = new OneBotChannel(
+				{
+					botAccountId: "elaina-server",
+					channelId: "onebot",
+					reconnect: { initialDelayMs: 1_000, jitterRatio: 0.1, maxDelayMs: 30_000 },
+					url: settings.onebotWsUrl,
+					...(settings.onebotAccessToken !== undefined
+						? { accessToken: settings.onebotAccessToken }
+						: {}),
+				},
+				this.onebotTransportFactory,
+			);
+			channel.onMessage(async (envelope) => {
+				try {
+					if (this.conversationHost === undefined) return;
+					const conversationId = await this.conversationHost.createConversation();
+					await this.conversationHost.append({
+						conversationId,
+						envelope,
+						submittedAtMs: Date.now(),
+					});
+					this.processedMessageCount += 1;
+				} catch (error) {
+					this.lastProcessingError = error instanceof Error ? error : new Error(String(error));
+					this.log("error", "Failed to process OneBot message");
+				}
+			});
+			await channel.start();
+			this.onebotChannel = channel;
+			this.onebotRestartRequired = false;
+		} catch (error) {
+			this.onebotRestartRequired = true;
+			this.log(
+				"error",
+				`OneBot channel failed to initialize: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 	}
 
 	async stop(): Promise<void> {
