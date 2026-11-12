@@ -68,7 +68,7 @@ export class PiDurableConversationHost {
 	private harness?: DurableHarness;
 	private readonly model: ModelPort;
 	private readonly policy: ActivityAggregationPolicy;
-	private readonly registry = createRegistry();
+	readonly registry = createRegistry();
 
 	constructor(private readonly options: DurableConversationHostOptions) {
 		this.model = options.model ?? createFakeModel();
