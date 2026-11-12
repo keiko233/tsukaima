@@ -10,12 +10,14 @@ import { AnimatedSidebarHeader } from "@/components/motion/animated-sidebar";
 import { AnimatedSidebarMenu } from "@/components/motion/animated-sidebar";
 import { AnimatedSidebarMenuItem } from "@/components/motion/animated-sidebar";
 import { AnimatedSidebarMenuButton } from "@/components/motion/animated-sidebar";
+import { m } from "@/paraglide/messages";
 
 const views = [
-	{ to: "/", label: "Conversations" },
-	{ to: "/policies", label: "Policies" },
-	{ to: "/plugins", label: "Plugins" },
-	{ to: "/diagnostics", label: "Diagnostics" },
+	{ to: "/", label: m.nav_conversations },
+	{ to: "/policies", label: m.nav_policies },
+	{ to: "/plugins", label: m.nav_plugins },
+	{ to: "/diagnostics", label: m.nav_diagnostics },
+	{ to: "/settings", label: m.nav_settings },
 ] as const;
 
 export function AdminShell({ children }: { readonly children: ReactNode }) {
@@ -26,7 +28,7 @@ export function AdminShell({ children }: { readonly children: ReactNode }) {
 				<AnimatedSidebar ariaLabel="Tsukaima admin">
 					<AnimatedSidebarHeader>
 						<AnimatedSidebarGroup>
-							<AnimatedSidebarGroupLabel>Tsukaima</AnimatedSidebarGroupLabel>
+							<AnimatedSidebarGroupLabel>{m.app_title()}</AnimatedSidebarGroupLabel>
 							<AnimatedSidebarGroupContent>
 								<AnimatedSidebarMenu>
 									{views.map((view) => (
@@ -36,7 +38,7 @@ export function AdminShell({ children }: { readonly children: ReactNode }) {
 												isActive={pathname === view.to}
 												onSelect={() => {}}
 											>
-												{view.label}
+												{view.label()}
 											</AnimatedSidebarMenuButton>
 										</AnimatedSidebarMenuItem>
 									))}
