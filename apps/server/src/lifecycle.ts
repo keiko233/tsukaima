@@ -7,6 +7,7 @@ import {
 	PiDurableConversationHost,
 	createFakeModel,
 	createOpenAICompatibleModelPort,
+	type ActivityWindowEvent,
 	type ModelPort,
 	type ModelPolicy,
 } from "@tsukaima/core";
@@ -27,9 +28,11 @@ import { readRuntimeSettings, type RuntimeSettings } from "./runtime-settings.ts
 import { ONEBOT_TRANSPORT_FACTORY_BINDING, builtinPlugins } from "./plugins/builtin.ts";
 import { ChannelRegistry } from "./services/channel-registry.ts";
 import { ConversationRouter } from "./services/conversation-router.ts";
+import { DrizzleContextProvider } from "./services/context-provider.ts";
 import { HookBus } from "./services/hook-bus.ts";
 import { PluginHost } from "./services/plugin-host.ts";
 import { PluginSettingsStore } from "./services/plugin-settings.ts";
+import { ReplyDispatcher } from "./services/reply-dispatcher.ts";
 import { RequestService } from "./services/request-service.ts";
 
 export interface LifecycleOptions {
@@ -52,10 +55,12 @@ export class TsukaimaLifecycle {
 	readonly config: TsukaimaConfig;
 	readonly startedAtMs = Date.now();
 	readonly channels: ChannelRegistry;
+	readonly contextProvider: DrizzleContextProvider;
 	readonly conversationRouter: ConversationRouter;
 	readonly hooks: HookBus;
 	readonly pluginHost: PluginHost;
 	readonly pluginSettings: PluginSettingsStore;
+	readonly replyDispatcher: ReplyDispatcher;
 	readonly requestService: RequestService;
 	private currentState: LifecycleState["state"] = "starting";
 	private currentStage = "initialize";
@@ -104,6 +109,10 @@ export class TsukaimaLifecycle {
 			host: () => this.conversationHost,
 			logger: this.runtimeLog,
 		});
+		this.contextProvider = new DrizzleContextProvider({
+			database: () => this.domainDatabase,
+			logger: this.runtimeLog,
+		});
 		this.requestService = new RequestService({
 			audit: (entry) => this.writeAudit(entry),
 			channels: this.channels,
@@ -113,6 +122,13 @@ export class TsukaimaLifecycle {
 		this.pluginSettings = new PluginSettingsStore({
 			database: () => this.domainDatabase,
 			env: options?.env ?? {},
+		});
+		this.replyDispatcher = new ReplyDispatcher({
+			audit: (entry) => this.writeAudit(entry),
+			channels: this.channels,
+			database: () => this.domainDatabase,
+			hooks: this.hooks,
+			logger: this.runtimeLog,
 		});
 		const bindings = new Map<string, unknown>();
 		if (options?.onebotTransportFactory !== undefined) {
@@ -211,7 +227,10 @@ export class TsukaimaLifecycle {
 			...(activeOpenAiModelId === undefined ? {} : { openAiModelId: activeOpenAiModelId }),
 		};
 		this.conversationHost = new PiDurableConversationHost({
+			contextProvider: this.contextProvider,
 			model,
+			onActivityEvent: (event) => this.forwardActivityEvent(event),
+			onAnswer: (answer) => this.replyDispatcher.handleAnswer(answer),
 			storage: this.durableStorage,
 		});
 		const persistedSessions = await this.domainDatabase
@@ -283,6 +302,18 @@ export class TsukaimaLifecycle {
 			this.lastProcessingError = error instanceof Error ? error : new Error(String(error));
 			throw error;
 		}
+	}
+
+	/**
+	 * Forward durable activity-window transitions to plugin hooks. Failing handlers never
+	 * affect message processing (`HookBus.emit` catches per handler).
+	 */
+	private forwardActivityEvent(event: ActivityWindowEvent): void {
+		this.hooks.emitDetached(event.type === "opened" ? "activity.opened" : "activity.closed", {
+			activityId: event.activityId,
+			conversationId: event.conversationId,
+			envelopeCount: event.envelopeCount,
+		});
 	}
 
 	private async handleChannelRequest(_channelId: string, request: ChannelRequest): Promise<void> {

@@ -22,7 +22,7 @@ import {
 	MorphPopoverContent,
 	MorphPopoverTrigger,
 } from "@/components/motion/popover-morph";
-import { api, type ChatSummary, type SessionSummary } from "@/lib/api";
+import { orpc, type ChatSummary, type SessionSummary } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -138,11 +138,9 @@ export function ChatTree({
 	const [renameSession, setRenameSession] = useState<SessionSummary | null>(null);
 	const [renameTitle, setRenameTitle] = useState("");
 
-	const chats = useQuery({
-		queryFn: () => api.chats.list({ status: "all" }),
-		queryKey: ["admin", "chats", "all"],
-		refetchInterval: 15_000,
-	});
+	const chats = useQuery(
+		orpc.admin.chats.list.queryOptions({ input: { status: "all" }, refetchInterval: 15_000 }),
+	);
 
 	useEffect(() => {
 		if (!chats.data) return;
@@ -159,59 +157,63 @@ export function ChatTree({
 
 	const invalidate = async () => {
 		await Promise.all([
-			queryClient.invalidateQueries({ queryKey: ["admin", "chats"] }),
-			queryClient.invalidateQueries({ queryKey: ["admin", "session"] }),
+			queryClient.invalidateQueries({ queryKey: orpc.admin.chats.key() }),
+			queryClient.invalidateQueries({ queryKey: orpc.admin.sessions.key() }),
 		]);
 	};
 
-	const createChat = useMutation({
-		mutationFn: api.chats.createLocal,
-		onError: (error) =>
-			toast.error(m.toast_chat_create_failed(), { description: errorMessage(error) }),
-		onSuccess: async ({ sessionId }) => {
-			setNewChatOpen(false);
-			setNewChatTitle("");
-			setNewChatSessionTitle("");
-			toast.success(m.toast_chat_created());
-			await invalidate();
-			onNavigate();
-			await navigate({ params: { sessionId }, to: "/chat/$sessionId" });
-		},
-	});
-	const createSession = useMutation({
-		mutationFn: api.sessions.create,
-		onError: (error) =>
-			toast.error(m.toast_session_create_failed(), { description: errorMessage(error) }),
-		onSuccess: async ({ id }) => {
-			setNewSessionChat(null);
-			setNewSessionTitle("");
-			toast.success(m.toast_session_created());
-			await invalidate();
-			onNavigate();
-			await navigate({ params: { sessionId: id }, to: "/chat/$sessionId" });
-		},
-	});
-	const updateSession = useMutation({
-		mutationFn: api.sessions.update,
-		onError: (error) =>
-			toast.error(m.toast_session_update_failed(), { description: errorMessage(error) }),
-		onSuccess: async (_, variables) => {
-			setRenameSession(null);
-			if (variables.title !== undefined) toast.success(m.toast_session_renamed());
-			else if (variables.status === "archived") toast.success(m.toast_session_archived());
-			else if (variables.status === "active") toast.success(m.toast_session_restored());
-			await invalidate();
-		},
-	});
-	const setReceiving = useMutation({
-		mutationFn: api.sessions.setReceiving,
-		onError: (error) =>
-			toast.error(m.toast_receiving_update_failed(), { description: errorMessage(error) }),
-		onSuccess: async () => {
-			toast.success(m.toast_receiving_updated());
-			await invalidate();
-		},
-	});
+	const createChat = useMutation(
+		orpc.admin.chats.createLocal.mutationOptions({
+			onError: (error) =>
+				toast.error(m.toast_chat_create_failed(), { description: errorMessage(error) }),
+			onSuccess: async ({ sessionId }) => {
+				setNewChatOpen(false);
+				setNewChatTitle("");
+				setNewChatSessionTitle("");
+				toast.success(m.toast_chat_created());
+				await invalidate();
+				onNavigate();
+				await navigate({ params: { sessionId }, to: "/chat/$sessionId" });
+			},
+		}),
+	);
+	const createSession = useMutation(
+		orpc.admin.sessions.create.mutationOptions({
+			onError: (error) =>
+				toast.error(m.toast_session_create_failed(), { description: errorMessage(error) }),
+			onSuccess: async ({ id }) => {
+				setNewSessionChat(null);
+				setNewSessionTitle("");
+				toast.success(m.toast_session_created());
+				await invalidate();
+				onNavigate();
+				await navigate({ params: { sessionId: id }, to: "/chat/$sessionId" });
+			},
+		}),
+	);
+	const updateSession = useMutation(
+		orpc.admin.sessions.update.mutationOptions({
+			onError: (error) =>
+				toast.error(m.toast_session_update_failed(), { description: errorMessage(error) }),
+			onSuccess: async (_, variables) => {
+				setRenameSession(null);
+				if (variables.title !== undefined) toast.success(m.toast_session_renamed());
+				else if (variables.status === "archived") toast.success(m.toast_session_archived());
+				else if (variables.status === "active") toast.success(m.toast_session_restored());
+				await invalidate();
+			},
+		}),
+	);
+	const setReceiving = useMutation(
+		orpc.admin.sessions.setReceiving.mutationOptions({
+			onError: (error) =>
+				toast.error(m.toast_receiving_update_failed(), { description: errorMessage(error) }),
+			onSuccess: async () => {
+				toast.success(m.toast_receiving_updated());
+				await invalidate();
+			},
+		}),
+	);
 
 	const query = search.trim().toLowerCase();
 	const visibleChats = (chats.data ?? [])
@@ -270,7 +272,7 @@ export function ChatTree({
 			actions.push({
 				icon: <CircleDot />,
 				label: m.set_receiving(),
-				onSelect: () => setReceiving.mutate(session.id),
+				onSelect: () => setReceiving.mutate({ sessionId: session.id }),
 			});
 		}
 		if (!session.isReceiving) {

@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Button } from "@/components/motion/button";
 import { Input } from "@/components/motion/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/motion/tabs";
-import { api } from "@/lib/api";
+import { orpc } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { ChatTree } from "./chat-tree";
@@ -33,11 +33,12 @@ export function AppSidebar({ onNavigate }: { onNavigate: () => void }) {
 		users: "",
 	});
 	const [chatFilter, setChatFilter] = useState<ChatFilter>("active");
-	const pendingRequests = useQuery({
-		queryFn: () => api.requests.list("pending"),
-		queryKey: ["admin", "requests", "pending"],
-		refetchInterval: 15_000,
-	});
+	const pendingRequests = useQuery(
+		orpc.admin.requests.list.queryOptions({
+			input: { status: "pending" },
+			refetchInterval: 15_000,
+		}),
+	);
 	const pendingCount = pendingRequests.data?.length ?? 0;
 
 	const placeholders: Record<Tab, string> = {

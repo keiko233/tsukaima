@@ -1,15 +1,10 @@
-import { os } from "@orpc/server";
 import { healthResponseSchema } from "@tsukaima/contracts";
-import type { TsukaimaLifecycle } from "../lifecycle.ts";
+import { apiBase } from "./base.ts";
 
-export interface TsukaimaApiContext {
-	readonly lifecycle: TsukaimaLifecycle;
-}
-
-const lifecycleContext = os.$context<TsukaimaApiContext>();
+export type { TsukaimaApiContext } from "./base.ts";
 
 export const healthRouter = {
-	status: lifecycleContext.handler(async ({ context }: { context: TsukaimaApiContext }) => {
+	status: apiBase.health.status.handler(async ({ context }) => {
 		const { state } = context.lifecycle;
 		return healthResponseSchema.parse({
 			stage: state.stage,

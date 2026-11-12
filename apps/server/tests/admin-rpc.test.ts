@@ -2,9 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RPCHandler } from "@orpc/server/fetch";
+import {
+	type ChatSummary,
+	diagnosticsDataSchema,
+	type DiagnosticsData,
+	logSnapshotSchema,
+} from "@tsukaima/contracts";
 import type { OneBotTransport } from "@tsukaima/onebot";
-import { appRouter } from "../src/rpc/index.ts";
 import { createApp } from "../src/app.ts";
 
 const directories: string[] = [];
@@ -25,6 +29,23 @@ const createOneBotTransportSpy = () => {
 	return { createTransport, urls };
 };
 
+const TEST_ADMIN = { password: "test-admin-password", username: "admin" };
+
+/** Signs in through the real HTTP surface and returns the session cookie. */
+async function signIn(app: ReturnType<typeof createApp>["app"]): Promise<string> {
+	const response = await app.handle(
+		new Request("http://localhost/rpc/auth/login", {
+			body: JSON.stringify({ json: TEST_ADMIN }),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		}),
+	);
+	if (response.status !== 200) throw new Error(`sign-in failed: ${response.status}`);
+	const setCookie = response.headers.get("set-cookie");
+	if (setCookie === null) throw new Error("sign-in did not set a session cookie");
+	return setCookie.split(";")[0] ?? "";
+}
+
 afterEach(async () => {
 	await Promise.all(
 		directories.splice(0).map((directory) => fs.rm(directory, { force: true, recursive: true })),
@@ -38,6 +59,8 @@ describe("admin RPC", () => {
 		const onebot = createOneBotTransportSpy();
 		const { app, lifecycle } = createApp(
 			{
+				TSUKAIMA_ADMIN_PASSWORD: TEST_ADMIN.password,
+				TSUKAIMA_ADMIN_USERNAME: TEST_ADMIN.username,
 				TSUKAIMA_DATA_DIR: directory,
 				TSUKAIMA_PORT: "7420",
 				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
@@ -46,29 +69,31 @@ describe("admin RPC", () => {
 		);
 		await lifecycle.start();
 
-		const handler = new RPCHandler(appRouter);
+		const cookie = await signIn(app);
 		const request = async (procedure: string, input?: unknown) => {
-			const response = await handler.handle(
+			const response = await app.handle(
 				new Request(`http://localhost/rpc/${procedure}`, {
 					body: JSON.stringify(input === undefined ? {} : { json: input }),
-					headers: { "content-type": "application/json" },
+					headers: { cookie, "content-type": "application/json" },
 					method: "POST",
 				}),
-				{ context: { lifecycle }, prefix: "/rpc" },
 			);
-			if (response.response === undefined) throw new Error(`No response from ${procedure}`);
-			const result = (await response.response.json()) as { json: unknown };
+			const result = (await response.json()) as { json: unknown };
+			if (response.status !== 200) {
+				throw new Error(`RPC ${procedure} failed: ${response.status} ${JSON.stringify(result)}`);
+			}
 			return result.json;
 		};
 
-		const diagnostics = await request("admin/diagnostics/status");
-		expect((diagnostics as { state: { state: string } }).state.state).toBe("ready");
-		expect((diagnostics as { processedMessages: number }).processedMessages).toBe(0);
-		expect((diagnostics as { routingPolicies: unknown[] }).routingPolicies.length).toBe(1);
-		const logs = (await request("admin/diagnostics/logs")) as {
-			capacity: number;
-			entries: Array<{ text: string }>;
-		};
+		// The server response is parsed through the shared contract schema, so any output drift from
+		// `appContract` fails the test rather than only the client.
+		const diagnostics: DiagnosticsData = diagnosticsDataSchema.parse(
+			await request("admin/diagnostics/status"),
+		);
+		expect(diagnostics.state.state).toBe("ready");
+		expect(diagnostics.processedMessages).toBe(0);
+		expect(diagnostics.routingPolicies.length).toBe(1);
+		const logs = logSnapshotSchema.parse(await request("admin/diagnostics/logs"));
 		expect(logs.capacity).toBeGreaterThan(0);
 		expect(logs.entries.length).toBeGreaterThan(0);
 		expect(logs.entries.every((entry) => entry.text.includes("tsukaima::server"))).toBe(true);
@@ -80,9 +105,7 @@ describe("admin RPC", () => {
 			sessionTitle: "Main",
 			title: "Local chat",
 		})) as { chatId: string; sessionId: string };
-		const chats = (await request("admin/chats/list", {
-			status: "active",
-		})) as Array<{ id: string; sessions: Array<{ id: string; isReceiving: boolean }> }>;
+		const chats = (await request("admin/chats/list", { status: "active" })) as ChatSummary[];
 		expect(chats).toHaveLength(1);
 		expect(chats[0]?.id).toBe(createdChat.chatId);
 		expect(chats[0]?.sessions[0]?.isReceiving).toBe(true);
@@ -143,7 +166,9 @@ describe("admin RPC", () => {
 		const clearedLogs = (await request("admin/diagnostics/logs")) as {
 			entries: Array<{ message: string }>;
 		};
-		expect(clearedLogs.entries.at(-1)?.message).toBe("log buffer cleared");
+		// The `/rpc` transport logs its own request completion afterwards, so assert presence
+		// rather than "last entry" here.
+		expect(clearedLogs.entries.some((entry) => entry.message === "log buffer cleared")).toBe(true);
 
 		await lifecycle.stop();
 		expect(app).toBeDefined();
@@ -164,7 +189,9 @@ describe("admin RPC", () => {
 		});
 		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-admin-model-list-"));
 		directories.push(directory);
-		const { lifecycle } = createApp({
+		const { app, lifecycle } = createApp({
+			TSUKAIMA_ADMIN_PASSWORD: TEST_ADMIN.password,
+			TSUKAIMA_ADMIN_USERNAME: TEST_ADMIN.username,
 			TSUKAIMA_DATA_DIR: directory,
 			TSUKAIMA_PORT: "7420",
 			TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
@@ -172,8 +199,8 @@ describe("admin RPC", () => {
 		await lifecycle.start();
 
 		try {
-			const handler = new RPCHandler(appRouter);
-			const response = await handler.handle(
+			const cookie = await signIn(app);
+			const response = await app.handle(
 				new Request("http://localhost/rpc/admin/settings/models", {
 					body: JSON.stringify({
 						json: {
@@ -181,13 +208,12 @@ describe("admin RPC", () => {
 							baseUrl: `http://127.0.0.1:${provider.port}/v1`,
 						},
 					}),
-					headers: { "content-type": "application/json" },
+					headers: { cookie, "content-type": "application/json" },
 					method: "POST",
 				}),
-				{ context: { lifecycle }, prefix: "/rpc" },
 			);
-			if (response.response === undefined) throw new Error("No model-list response");
-			const result = (await response.response.json()) as { json: unknown };
+			const result = (await response.json()) as { json: unknown };
+			expect(response.status).toBe(200);
 
 			expect(result.json).toEqual({
 				baseUrl: `http://127.0.0.1:${provider.port}/v1`,

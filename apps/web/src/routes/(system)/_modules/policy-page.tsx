@@ -6,7 +6,7 @@ import { Button } from "@/components/motion/button";
 import { Card } from "@/components/motion/card";
 import { CardContent } from "@/components/motion/card";
 import { Input } from "@/components/motion/input";
-import { api } from "@/lib/api";
+import { orpc } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { SystemPage } from "./page-header";
@@ -18,21 +18,19 @@ export function PolicyPage() {
 	const [primaryModel, setPrimaryModel] = useState("");
 	const queryClient = useQueryClient();
 
-	const policiesQuery = useQuery({
-		queryFn: api.modelPolicies.list,
-		queryKey: ["admin", "model-policies"],
-	});
-	const savePolicy = useMutation({
-		mutationFn: api.modelPolicies.set,
-		onError: (error) =>
-			toast.error(m.toast_policy_save_failed(), {
-				description: errorMessage(error),
-			}),
-		onSuccess: async () => {
-			toast.success(m.toast_policy_saved());
-			await queryClient.invalidateQueries({ queryKey: ["admin"] });
-		},
-	});
+	const policiesQuery = useQuery(orpc.admin.modelPolicies.list.queryOptions());
+	const savePolicy = useMutation(
+		orpc.admin.modelPolicies.set.mutationOptions({
+			onError: (error) =>
+				toast.error(m.toast_policy_save_failed(), {
+					description: errorMessage(error),
+				}),
+			onSuccess: async () => {
+				toast.success(m.toast_policy_saved());
+				await queryClient.invalidateQueries({ queryKey: orpc.admin.key() });
+			},
+		}),
+	);
 
 	if (policiesQuery.isError) {
 		return <Card className="p-4">{policiesQuery.error.message}</Card>;

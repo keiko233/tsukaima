@@ -54,7 +54,7 @@ function MessageBody({ message }: { message: MessageSummary }) {
 		<div className="space-y-1.5">
 			{textParts.length > 0 ? (
 				<p className="whitespace-pre-wrap break-words">
-					{textParts.map((part) => part.text).join("")}
+					{textParts.map((part) => (part.type === "text" ? part.text : "")).join("")}
 				</p>
 			) : null}
 			{mediaParts.length > 0 ? (

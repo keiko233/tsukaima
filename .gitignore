@@ -13,3 +13,4 @@ data/
 !.env.example
 .review-data/
 .test-data/
+apps/web/src/route-tree.gen.ts

@@ -17,6 +17,19 @@ export const meta = sqliteTable("meta", {
 	value: text("value").notNull(),
 });
 
+/**
+ * Single-row table holding the WebUI admin credential (argon2id hash). The row is bootstrapped
+ * once from `TSUKAIMA_ADMIN_USERNAME`/`TSUKAIMA_ADMIN_PASSWORD`; afterwards the database is the
+ * source of truth so rotating environment variables cannot silently rotate the password.
+ */
+export const adminCredentials = sqliteTable("admin_credentials", {
+	createdAt: text("created_at").notNull().default(now),
+	id: text("id").primaryKey(),
+	passwordHash: text("password_hash").notNull(),
+	updatedAt: text("updated_at").notNull().default(now),
+	username: text("username").notNull(),
+});
+
 export const users = sqliteTable("users", {
 	createdAt: text("created_at").notNull().default(now),
 	displayName: text("display_name"),
@@ -221,47 +234,6 @@ export const requests = sqliteTable(
 	],
 );
 
-export const activities = sqliteTable(
-	"activities",
-	{
-		closedAt: text("closed_at"),
-		conversationId: text("conversation_id")
-			.notNull()
-			.references(() => conversations.id, { onDelete: "cascade" }),
-		id: text("id").primaryKey(),
-		modelContextJson: text("model_context_json"),
-		openedAt: text("opened_at").notNull(),
-		status: text("status", {
-			enum: ["collecting", "processing", "completed", "cancelled"],
-		}).notNull(),
-		summary: text("summary"),
-		triggerMessageId: text("trigger_message_id")
-			.notNull()
-			.references(() => messages.id, { onDelete: "restrict" }),
-	},
-	(table) => [
-		unique("activities_conversation_trigger_unique").on(
-			table.conversationId,
-			table.triggerMessageId,
-		),
-		index("activities_conversation_idx").on(table.conversationId, table.openedAt),
-	],
-);
-
-export const activityMessages = sqliteTable(
-	"activity_messages",
-	{
-		activityId: text("activity_id")
-			.notNull()
-			.references(() => activities.id, { onDelete: "cascade" }),
-		messageId: text("message_id")
-			.notNull()
-			.references(() => messages.id, { onDelete: "cascade" }),
-		position: integer("position").notNull(),
-	},
-	(table) => [primaryKey({ columns: [table.activityId, table.messageId] })],
-);
-
 export const personas = sqliteTable(
 	"personas",
 	{
@@ -351,25 +323,6 @@ export const memories = sqliteTable(
 	],
 );
 
-export const memoryLinks = sqliteTable(
-	"memory_links",
-	{
-		memoryId: text("memory_id")
-			.notNull()
-			.references(() => memories.id, { onDelete: "cascade" }),
-		relation: text("relation").notNull(),
-		targetId: text("target_id").notNull(),
-		targetKind: text("target_kind", {
-			enum: ["user", "conversation", "persona", "project", "media"],
-		}).notNull(),
-	},
-	(table) => [
-		primaryKey({
-			columns: [table.memoryId, table.targetKind, table.targetId, table.relation],
-		}),
-	],
-);
-
 export const plugins = sqliteTable(
 	"plugins",
 	{
@@ -391,16 +344,6 @@ export const plugins = sqliteTable(
 		index("plugins_enabled_idx").on(table.enabled, table.kind),
 	],
 );
-
-export const pluginGrants = sqliteTable("plugin_grants", {
-	granted: integer("granted").notNull().default(0),
-	grantedAt: text("granted_at"),
-	grantedBy: text("granted_by"),
-	permission: text("permission").notNull(),
-	pluginId: text("plugin_id")
-		.notNull()
-		.references(() => plugins.id, { onDelete: "cascade" }),
-});
 
 export const policies = sqliteTable("policies", {
 	conversationId: text("conversation_id").references(() => conversations.id, {

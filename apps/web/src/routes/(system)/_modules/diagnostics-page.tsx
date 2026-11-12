@@ -21,7 +21,7 @@ import {
 	SelectValue,
 } from "@/components/motion/select";
 import { Switch } from "@/components/motion/switch";
-import { api, type LogEntry, type LogLevel, type LogSnapshot } from "@/lib/api";
+import { orpc, type LogEntry, type LogLevel, type LogSnapshot } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -30,7 +30,6 @@ import { SystemPage } from "./page-header";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 const LOG_STREAM_URL = import.meta.env.VITE_LOG_STREAM_URL ?? "/events/logs";
-const LOGS_QUERY_KEY = ["admin", "diagnostics", "logs"] as const;
 
 type LogFilter = "all" | LogLevel;
 type LogStreamState = "connecting" | "live" | "reconnecting";
@@ -46,18 +45,9 @@ function parseStreamData<T>(event: Event): T | null {
 export function DiagnosticsPage() {
 	const toast = useToast();
 	const queryClient = useQueryClient();
-	const diagnosticsQuery = useQuery({
-		queryFn: api.diagnostics.status,
-		queryKey: ["admin", "diagnostics"],
-	});
-	const settingsQuery = useQuery({
-		queryFn: api.settings.get,
-		queryKey: ["admin", "settings"],
-	});
-	const logsQuery = useQuery({
-		queryFn: api.diagnostics.logs,
-		queryKey: LOGS_QUERY_KEY,
-	});
+	const diagnosticsQuery = useQuery(orpc.admin.diagnostics.status.queryOptions());
+	const settingsQuery = useQuery(orpc.admin.settings.get.queryOptions());
+	const logsQuery = useQuery(orpc.admin.diagnostics.logs.queryOptions());
 	const [entries, setEntries] = useState<LogEntry[]>([]);
 	const [capacity, setCapacity] = useState(2_000);
 	const [filterLevel, setFilterLevel] = useState<LogFilter>("all");
@@ -67,32 +57,34 @@ export function DiagnosticsPage() {
 	const receivedSnapshot = useRef(false);
 	const capacityRef = useRef(capacity);
 
-	const updateSettings = useMutation({
-		mutationFn: api.settings.update,
-		onError: (error) =>
-			toast.error(m.toast_settings_save_failed(), {
-				description: errorMessage(error),
-			}),
-		onSuccess: async () => {
-			toast.success(m.toast_settings_saved());
-			await queryClient.invalidateQueries({ queryKey: ["admin"] });
-		},
-	});
-	const clearLogs = useMutation({
-		mutationFn: api.diagnostics.clearLogs,
-		onError: (error) =>
-			toast.error(m.toast_logs_clear_failed(), {
-				description: errorMessage(error),
-			}),
-		onSuccess: ({ cleared }) => {
-			const emptySnapshot: LogSnapshot = { capacity, dropped: 0, entries: [] };
-			setEntries([]);
-			queryClient.setQueryData(LOGS_QUERY_KEY, emptySnapshot);
-			toast.success(m.toast_logs_cleared(), {
-				description: m.toast_logs_cleared_description({ count: cleared }),
-			});
-		},
-	});
+	const updateSettings = useMutation(
+		orpc.admin.settings.update.mutationOptions({
+			onError: (error) =>
+				toast.error(m.toast_settings_save_failed(), {
+					description: errorMessage(error),
+				}),
+			onSuccess: async () => {
+				toast.success(m.toast_settings_saved());
+				await queryClient.invalidateQueries({ queryKey: orpc.admin.key() });
+			},
+		}),
+	);
+	const clearLogs = useMutation(
+		orpc.admin.diagnostics.clearLogs.mutationOptions({
+			onError: (error) =>
+				toast.error(m.toast_logs_clear_failed(), {
+					description: errorMessage(error),
+				}),
+			onSuccess: ({ cleared }) => {
+				const emptySnapshot: LogSnapshot = { capacity, dropped: 0, entries: [] };
+				setEntries([]);
+				queryClient.setQueryData(orpc.admin.diagnostics.logs.queryKey(), emptySnapshot);
+				toast.success(m.toast_logs_cleared(), {
+					description: m.toast_logs_cleared_description({ count: cleared }),
+				});
+			},
+		}),
+	);
 
 	useEffect(() => {
 		const snapshot = logsQuery.data;
@@ -157,39 +149,27 @@ export function DiagnosticsPage() {
 				: m.diagnostics_logs_connecting();
 
 	return (
-		<SystemPage
-			fill
-			description={m.diagnostics_page_description()}
-			title={m.nav_diagnostics()}
-		>
+		<SystemPage fill description={m.diagnostics_page_description()} title={m.nav_diagnostics()}>
 			<div className="flex min-h-0 flex-1 flex-col gap-4">
 				<Card size="compact" className="shrink-0">
 					<CardContent>
 						<dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 xl:grid-cols-6">
 							<div className="min-w-0">
-								<dt className="text-xs text-muted-foreground">
-									{m.diagnostics_state_label()}
-								</dt>
+								<dt className="text-xs text-muted-foreground">{m.diagnostics_state_label()}</dt>
 								<dd className="mt-1 truncate font-medium">{diagnostics.state.stage}</dd>
 							</div>
 							<div className="min-w-0">
-								<dt className="text-xs text-muted-foreground">
-									{m.diagnostics_onebot_label()}
-								</dt>
+								<dt className="text-xs text-muted-foreground">{m.diagnostics_onebot_label()}</dt>
 								<dd className="mt-1 font-medium">
 									{diagnostics.onebotConnected ? "true" : "false"}
 								</dd>
 							</div>
 							<div className="min-w-0">
-								<dt className="text-xs text-muted-foreground">
-									{m.diagnostics_processed_label()}
-								</dt>
+								<dt className="text-xs text-muted-foreground">{m.diagnostics_processed_label()}</dt>
 								<dd className="mt-1 font-mono tabular-nums">{diagnostics.processedMessages}</dd>
 							</div>
 							<div className="min-w-0">
-								<dt className="text-xs text-muted-foreground">
-									{m.diagnostics_log_level_label()}
-								</dt>
+								<dt className="text-xs text-muted-foreground">{m.diagnostics_log_level_label()}</dt>
 								<dd className="mt-1 font-mono">{diagnostics.logLevel}</dd>
 							</div>
 							<div className="min-w-0">

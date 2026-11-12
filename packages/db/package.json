@@ -7,7 +7,7 @@
 		".": "./src/index.ts"
 	},
 	"scripts": {
-		"generate": "drizzle-kit generate",
+		"generate": "drizzle-kit generate && oxfmt ./drizzle",
 		"migrate": "drizzle-kit migrate"
 	},
 	"dependencies": {

@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Circle, MessageCircle } from "lucide-react";
 import { Button } from "@/components/motion/button";
-import { api, type DeliveryStatus } from "@/lib/api";
+import { orpc, type DeliveryStatus } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -39,48 +39,42 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 	const toast = useToast();
 	const queryClient = useQueryClient();
 	const { mobile, showSidebar } = useShellNavigation();
-	const session = useQuery({
-		queryFn: () => api.sessions.get(sessionId),
-		queryKey: ["admin", "session", sessionId],
-		refetchInterval: 5_000,
-	});
-	const messages = useQuery({
-		queryFn: () => api.sessions.messages(sessionId),
-		queryKey: ["admin", "session", sessionId, "messages"],
-		refetchInterval: 3_000,
-	});
-	const diagnostics = useQuery({
-		queryFn: api.diagnostics.status,
-		queryKey: ["admin", "diagnostics"],
-		refetchInterval: 10_000,
-	});
-	const send = useMutation({
-		mutationFn: (input: { target: "channel" | "tsukaima"; text: string }) =>
-			api.sessions.send({ ...input, sessionId }),
-		onError: (error) =>
-			toast.error(m.toast_message_send_failed(), {
-				description: errorMessage(error),
-			}),
-		onSuccess: async (message) => {
-			const notice = deliveryNotice(message.deliveryStatus);
-			if (message.deliveryStatus === "failed") toast.error(notice);
-			else if (
-				message.deliveryStatus === "accepted" ||
-				message.deliveryStatus === "sent" ||
-				message.deliveryStatus === "received"
-			) {
-				toast.success(notice);
-			} else {
-				toast.info(notice);
-			}
-			await Promise.all([
-				queryClient.invalidateQueries({
-					queryKey: ["admin", "session", sessionId, "messages"],
+	const session = useQuery(
+		orpc.admin.sessions.get.queryOptions({ input: { sessionId }, refetchInterval: 5_000 }),
+	);
+	const messages = useQuery(
+		orpc.admin.sessions.messages.queryOptions({ input: { sessionId }, refetchInterval: 3_000 }),
+	);
+	const diagnostics = useQuery(
+		orpc.admin.diagnostics.status.queryOptions({ refetchInterval: 10_000 }),
+	);
+	const send = useMutation(
+		orpc.admin.sessions.send.mutationOptions({
+			onError: (error) =>
+				toast.error(m.toast_message_send_failed(), {
+					description: errorMessage(error),
 				}),
-				queryClient.invalidateQueries({ queryKey: ["admin", "chats"] }),
-			]);
-		},
-	});
+			onSuccess: async (message) => {
+				const notice = deliveryNotice(message.deliveryStatus);
+				if (message.deliveryStatus === "failed") toast.error(notice);
+				else if (
+					message.deliveryStatus === "accepted" ||
+					message.deliveryStatus === "sent" ||
+					message.deliveryStatus === "received"
+				) {
+					toast.success(notice);
+				} else {
+					toast.info(notice);
+				}
+				await Promise.all([
+					queryClient.invalidateQueries({
+						queryKey: orpc.admin.sessions.messages.key({ input: { sessionId } }),
+					}),
+					queryClient.invalidateQueries({ queryKey: orpc.admin.chats.key() }),
+				]);
+			},
+		}),
+	);
 
 	const detail = session.data;
 	const externalEligible =
@@ -215,7 +209,7 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 					channelConnected={channelConnected}
 					disabled={detail.chat.status !== "active"}
 					externalEligible={externalEligible}
-					onSend={(input) => send.mutateAsync(input)}
+					onSend={(input) => send.mutateAsync({ ...input, sessionId })}
 					sending={send.isPending}
 					sessionId={detail.id}
 				/>

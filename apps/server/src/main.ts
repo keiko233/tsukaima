@@ -1,6 +1,6 @@
 import { createApp } from "./app.ts";
 
-const { app, config, lifecycle } = createApp();
+const { app, auth, config, lifecycle } = createApp();
 await app.listen({ hostname: config.host, port: config.port });
 lifecycle.logger.info("server listening", {
 	host: config.host,
@@ -22,6 +22,7 @@ const shutdown = async () => {
 	shuttingDown = true;
 	lifecycle.logger.info("shutdown requested");
 	try {
+		auth.stop();
 		await lifecycle.stop();
 		await app.stop(true);
 	} finally {

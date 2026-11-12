@@ -1,11 +1,12 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
 	Activity,
 	ChevronDown,
 	Circle,
+	LogOut,
 	Moon,
 	PanelLeft,
 	Puzzle,
@@ -21,7 +22,7 @@ import {
 	MorphPopoverContent,
 	MorphPopoverTrigger,
 } from "@/components/motion/popover-morph";
-import { api, type DiagnosticsData } from "@/lib/api";
+import { orpc, type DiagnosticsData } from "@/lib/api";
 import { applyTheme, getInitialTheme, type Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -65,12 +66,20 @@ export function TopBar({
 	onToggleSidebar: () => void;
 }) {
 	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 	const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
-	const diagnostics = useQuery({
-		queryFn: api.diagnostics.status,
-		queryKey: ["admin", "diagnostics"],
-		refetchInterval: 10_000,
-	});
+	const diagnostics = useQuery(
+		orpc.admin.diagnostics.status.queryOptions({ refetchInterval: 10_000 }),
+	);
+	const authStatus = useQuery(orpc.auth.status.queryOptions());
+	const signOut = useMutation(
+		orpc.auth.logout.mutationOptions({
+			onSuccess: async () => {
+				await queryClient.invalidateQueries({ queryKey: orpc.auth.status.queryKey() });
+				void navigate({ replace: true, to: "/login" });
+			},
+		}),
+	);
 	const status = connectionStatus(diagnostics.data);
 
 	const toggleTheme = () => {
@@ -184,6 +193,21 @@ export function TopBar({
 								<Moon className="size-4 text-muted-foreground" />
 							)}
 							{m.theme_toggle()}
+						</button>
+						<div className="my-1 h-px bg-border" />
+						{authStatus.data?.username === undefined ? null : (
+							<div className="truncate px-2.5 pb-1 text-[11px] text-muted-foreground">
+								{m.auth_signed_in_as({ username: authStatus.data.username })}
+							</div>
+						)}
+						<button
+							type="button"
+							disabled={signOut.isPending}
+							onClick={() => signOut.mutate()}
+							className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+						>
+							<LogOut className="size-4 text-muted-foreground" />
+							{m.auth_sign_out()}
 						</button>
 					</MorphPopoverContent>
 				</MorphPopover>

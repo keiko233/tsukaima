@@ -86,6 +86,7 @@
       "name": "@tsukaima/contracts",
       "version": "0.1.0",
       "dependencies": {
+        "@orpc/contract": "1.16.2",
         "zod": "4.6.7",
       },
     },
