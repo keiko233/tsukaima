@@ -1,5 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { and, eq } from "drizzle-orm";
 import {
 	ModelPolicyRouter,
 	ModelUsageLedger,
@@ -9,13 +11,19 @@ import {
 	type ModelPort,
 	type ModelPolicy,
 } from "@elaina/core";
-import { type ElainaDatabase, migrateDomainDatabase, openDomainDatabase } from "@elaina/db";
+import {
+	conversations,
+	type ElainaDatabase,
+	migrateDomainDatabase,
+	openDomainDatabase,
+} from "@elaina/db";
 import { BACKGROUND_CONTEXT, openDurableStorage } from "@elaina/durable";
 import type { SqliteStorage } from "@elaina/durable";
 import { OneBotChannel } from "@elaina/onebot";
 import type { OneBotTransportFactory } from "@elaina/onebot";
 import { loadConfig, type ElainaConfig } from "./config.ts";
 import { readRuntimeSettings, type RuntimeSettings } from "./runtime-settings.ts";
+import type { MessageEnvelope } from "@elaina/contracts";
 
 export interface LifecycleOptions {
 	readonly onebotTransportFactory?: OneBotTransportFactory;
@@ -205,19 +213,7 @@ export class ElainaLifecycle {
 				this.onebotTransportFactory,
 			);
 			channel.onMessage(async (envelope) => {
-				try {
-					if (this.conversationHost === undefined) return;
-					const conversationId = await this.conversationHost.createConversation();
-					await this.conversationHost.append({
-						conversationId,
-						envelope,
-						submittedAtMs: Date.now(),
-					});
-					this.processedMessageCount += 1;
-				} catch (error) {
-					this.lastProcessingError = error instanceof Error ? error : new Error(String(error));
-					this.log("error", "Failed to process OneBot message");
-				}
+				await this.processEnvelope(envelope);
 			});
 			await channel.start();
 			this.onebotChannel = channel;
@@ -229,6 +225,71 @@ export class ElainaLifecycle {
 				`OneBot channel failed to initialize: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
+	}
+
+	async processEnvelope(envelope: MessageEnvelope): Promise<void> {
+		try {
+			const conversationId = await this.resolveConversationId(envelope);
+			if (this.conversationHost === undefined) {
+				throw new Error("Conversation host is not ready");
+			}
+			await this.conversationHost.append({
+				conversationId,
+				envelope,
+				submittedAtMs: Date.now(),
+			});
+			this.processedMessageCount += 1;
+		} catch (error) {
+			this.lastProcessingError = error instanceof Error ? error : new Error(String(error));
+			this.log("error", "Failed to process channel message");
+			throw error;
+		}
+	}
+
+	private async resolveConversationId(envelope: MessageEnvelope): Promise<string> {
+		if (this.conversationHost === undefined || this.domainDatabase === undefined) {
+			throw new Error("Conversation host or domain database is not ready");
+		}
+		const kind = envelope.conversationKey.kind;
+		if (kind !== "private" && kind !== "group") {
+			return this.conversationHost.createConversation();
+		}
+		const platformConversationId =
+			kind === "group" ? envelope.conversationKey.groupId : envelope.conversationKey.peerId;
+		if (platformConversationId === undefined) {
+			return this.conversationHost.createConversation();
+		}
+		const database = this.domainDatabase;
+		const findExisting = async () => {
+			const [row] = await database
+				.select({ durableConversationId: conversations.durableConversationId })
+				.from(conversations)
+				.where(
+					and(
+						eq(conversations.channelId, envelope.channelId),
+						eq(conversations.platformConversationId, platformConversationId),
+					),
+				)
+				.limit(1);
+			return row?.durableConversationId;
+		};
+		const existing = await findExisting();
+		if (existing !== undefined) {
+			return existing;
+		}
+		const durableConversationId = await this.conversationHost.createConversation();
+		await database
+			.insert(conversations)
+			.values({
+				channelId: envelope.channelId,
+				durableConversationId,
+				id: randomUUID(),
+				kind,
+				platformConversationId,
+				title: kind === "group" ? `Group ${platformConversationId}` : envelope.sender.displayName,
+			})
+			.onConflictDoNothing();
+		return (await findExisting()) ?? durableConversationId;
 	}
 
 	async stop(): Promise<void> {
