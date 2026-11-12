@@ -1,10 +1,18 @@
 import { assertPermission, hasPermission, type PluginPermission } from "./permissions.ts";
 import { pluginManifestSchema } from "./manifest.ts";
+import type {
+	PluginAuditApi,
+	PluginChannelRegistry,
+	PluginDependencyBag,
+	PluginRequestApi,
+	PluginSettingsApi,
+} from "./host.ts";
 import type { MessageEnvelope } from "@elaina/contracts";
 import type {
 	PluginChannelApi,
 	PluginConfig,
 	PluginContext,
+	PluginEvents,
 	PluginHookName,
 	PluginLogger,
 	PluginStorage,
@@ -151,12 +159,18 @@ export interface PluginContextOptions {
 		read(): Promise<readonly MessageEnvelope[]>;
 	};
 	channel?: PluginChannelApi;
+	channels?: PluginChannelRegistry;
+	events?: PluginEvents;
+	settings?: PluginSettingsApi;
+	requests?: PluginRequestApi;
+	audit?: PluginAuditApi;
+	dependencies?: PluginDependencyBag;
 }
 
 export function createPluginContext(options: PluginContextOptions = {}): PluginContext {
 	const storage = options.storage ?? new LocalStorageBridge();
 	const logger = options.logger ?? console;
-	const events = new LocalPluginEventBridge();
+	const events = options.events ?? new LocalPluginEventBridge();
 	const pluginId = options.pluginId ?? "plugin";
 	const manifest =
 		options.manifest ??
@@ -179,5 +193,10 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 		tools,
 		ui,
 		...(options.channel ? { channel: options.channel } : {}),
+		...(options.channels ? { channels: options.channels } : {}),
+		...(options.settings ? { settings: options.settings } : {}),
+		...(options.requests ? { requests: options.requests } : {}),
+		...(options.audit ? { audit: options.audit } : {}),
+		...(options.dependencies ? { dependencies: options.dependencies } : {}),
 	};
 }

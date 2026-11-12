@@ -24,6 +24,20 @@ export type {
 } from "./types.ts";
 export type { PluginManifest } from "./manifest.ts";
 export type { PluginPermission } from "./permissions.ts";
+export type {
+	AuditEntry,
+	ChannelAdapter,
+	ChannelCapability,
+	ChannelDiagnostics,
+	ChannelRequestDecision,
+	OutboundTarget,
+	PluginAuditApi,
+	PluginChannelRegistry,
+	PluginDependencyBag,
+	PluginRequestApi,
+	PluginSettingsApi,
+	SendResult,
+} from "./host.ts";
 export {
 	createPluginContext,
 	LocalPluginEventBridge,
