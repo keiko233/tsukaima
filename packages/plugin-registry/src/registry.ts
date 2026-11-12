@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk";
+import { validatePluginConfig } from "./config.ts";
 
 export type PluginRunMode = "host" | "worker";
 
@@ -77,6 +78,7 @@ export class PluginRegistry {
 				`Plugin ${manifest.name} has grants not declared in its manifest: ${undeclared.join(", ")}`,
 			);
 		}
+		validatePluginConfig(manifest.configSchema, options.config ?? {}, manifest.name);
 		const runMode = options.runMode ?? (manifest.kind === "third-party" ? "worker" : "host");
 		const installed: InstalledPlugin = {
 			config: options.config ?? {},

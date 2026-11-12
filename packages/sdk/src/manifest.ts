@@ -6,25 +6,7 @@ export const pluginPermissionSchema = z
 	.min(1)
 	.regex(/^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-<>.]*)?$/u, "Invalid permission name");
 
-const jsonObjectSchema: z.ZodType<Record<string, unknown>> = z.lazy(() =>
-	z
-		.object({})
-		.passthrough()
-		.superRefine((value, context) => {
-			for (const [key, child] of Object.entries(value)) {
-				const parsed = jsonObjectSchema.safeParse(child);
-				if (!parsed.success) {
-					context.addIssue({
-						code: z.ZodIssueCode.invalid_type,
-						expected: "object",
-						received: typeof child,
-						path: [key],
-						message: "JSON object values must be JSON-compatible objects",
-					});
-				}
-			}
-		}),
-);
+const jsonObjectSchema = z.record(z.string(), z.unknown());
 
 export const pluginManifestSchema = z.object({
 	name: z
@@ -41,7 +23,7 @@ export const pluginManifestSchema = z.object({
 			z.object({
 				name: z.string().min(1),
 				description: z.string().min(1),
-				parameters: jsonObjectSchema,
+				parameters: jsonObjectSchema.default({}),
 				requiredPermissions: z.array(pluginPermissionSchema).max(16).default([]),
 			}),
 		)

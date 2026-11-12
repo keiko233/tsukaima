@@ -19,17 +19,26 @@ export class LocalPluginWorker implements PluginWorkerChannel {
 	readonly mode = "worker" as const;
 	readonly #runtime: PluginRuntime;
 	#hostBridge?: ReturnType<PluginRuntime["hostBridge"]>;
+	#starting = false;
 
 	constructor(runtime: PluginRuntime) {
 		this.#runtime = runtime;
 	}
 
 	async start(): Promise<void> {
+		if (this.#starting) {
+			throw new PluginRegistryError("Plugin worker is already starting");
+		}
+		this.#starting = true;
 		await this.#runtime.start();
 		this.#hostBridge = this.#runtime.hostBridge();
+		this.#starting = false;
 	}
 
 	async stop(): Promise<void> {
+		if (this.#starting) {
+			throw new PluginRegistryError("Plugin worker is starting");
+		}
 		await this.#runtime.stop();
 		this.#hostBridge = undefined;
 	}

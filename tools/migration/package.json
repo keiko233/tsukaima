@@ -1,0 +1,12 @@
+{
+	"name": "@tsukaima/migration-cli",
+	"version": "0.1.0",
+	"private": true,
+	"bin": {
+		"tsukaima-migration": "./src/cli.ts"
+	},
+	"type": "module",
+	"dependencies": {
+		"@tsukaima/migration": "workspace:*"
+	}
+}
