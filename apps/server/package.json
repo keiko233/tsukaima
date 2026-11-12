@@ -1,0 +1,20 @@
+{
+	"name": "@tsukaima/server",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "bun --watch src/main.ts",
+		"start": "bun src/main.ts",
+		"build": "bun build src/main.ts --target bun --outdir ./dist"
+	},
+	"dependencies": {
+		"@tsukaima/contracts": "workspace:*",
+		"@tsukaima/core": "workspace:*",
+		"@tsukaima/db": "workspace:*",
+		"@tsukaima/durable": "workspace:*",
+		"@orpc/server": "1.16.2",
+		"elysia": "1.4.32",
+		"zod": "4.6.7"
+	}
+}
