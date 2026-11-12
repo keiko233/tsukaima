@@ -95,7 +95,7 @@ export function DiagnosticsPage() {
 	}, [logsQuery.data]);
 
 	useEffect(() => {
-		const source = new EventSource(LOG_STREAM_URL);
+		const source = new EventSource(LOG_STREAM_URL, { withCredentials: true });
 		const handleSnapshot = (event: Event) => {
 			const snapshot = parseStreamData<LogSnapshot>(event);
 			if (snapshot === null) return;

@@ -138,9 +138,7 @@ export function ChatTree({
 	const [renameSession, setRenameSession] = useState<SessionSummary | null>(null);
 	const [renameTitle, setRenameTitle] = useState("");
 
-	const chats = useQuery(
-		orpc.admin.chats.list.queryOptions({ input: { status: "all" }, refetchInterval: 15_000 }),
-	);
+	const chats = useQuery(orpc.admin.chats.list.queryOptions({ input: { status: "all" } }));
 
 	useEffect(() => {
 		if (!chats.data) return;

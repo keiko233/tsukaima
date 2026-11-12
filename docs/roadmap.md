@@ -14,7 +14,7 @@
 - [x] 4. Create `pi-durable` host service with fake model.
 - [x] 5. Define `MessageEnvelope`, `MessagePart`, conversation policy, and activity aggregation.
 - [x] 6. Implement admin HTTP skeleton.
-- [ ] 7. Add authenticated admin WebSocket live updates.
+- [x] 7. Add authenticated admin live updates over SSE.
 
 ## Phase 2 — Channels and chat
 
@@ -29,13 +29,14 @@
 - [x] 1. Implement model registry and OpenAI-compatible/Magpie provider.
 - [x] 2. Implement capability policies and usage accounting.
 - [x] 3. Import/seed persona records through the migration pipeline.
-- [ ] 4. Implement scoped memory storage, retrieval, and extraction.
-- [ ] 5. Add memory admin/review UI.
+- [x] 4. Implement scoped memory storage and retrieval, injected as prompt sections.
+- [ ] 5. Add memory extraction jobs and the memory admin/review UI.
 
 ## Phase 4 — Plugins and WebUI
 
 - [x] 1. Implement plugin manifest, registry, permission checks, and worker runtime.
-- [x] 2. Implement plugin tool/hook/UI bridges.
+- [x] 2. Implement plugin tool/hook bridges and expose plugin tools to the model.
+- [ ] 2b. Consume the plugin UI registry in the WebUI.
 - [x] 3. Implement the plugin host seam and extract the OneBot channel into `plugins/onebot-napcat`.
 - [x] 4. Build IM-style WebUI conversation surface.
 - [ ] 5. Add admin panels for personas, memory, and audit.

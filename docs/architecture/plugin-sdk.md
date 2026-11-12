@@ -117,10 +117,20 @@ context.tools.register({
 Tool rules:
 
 1. Parameter and output schemas are validated.
-2. Tool names are namespaced by plugin.
+2. Author-facing tool names are namespaced `<pluginId>.<tool>`, and `LocalToolBridge` rejects a
+   name outside that namespace.
 3. Tools declare required permission groups.
 4. Tool execution is audited if it changes state.
 5. Tools must return structured errors, not throw raw exceptions to the model.
+
+The model never sees the dotted name. OpenAI-compatible providers only accept
+`^[a-zA-Z0-9_-]{1,64}$`, so `createPluginToolsExtension()` publishes
+`providerSafeToolName("<pluginId>.<tool>")` — the name sanitized and suffixed with a short
+deterministic hash. The extension still invokes the original name, so routing, permission checks,
+and audit records use the author-facing name.
+
+All registered plugin tools are offered to the model by default; there is no per-tool allowlist,
+`deferred` flag, or per-tool timeout yet.
 
 ## Storage
 

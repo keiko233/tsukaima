@@ -36,7 +36,6 @@ export function AppSidebar({ onNavigate }: { onNavigate: () => void }) {
 	const pendingRequests = useQuery(
 		orpc.admin.requests.list.queryOptions({
 			input: { status: "pending" },
-			refetchInterval: 15_000,
 		}),
 	);
 	const pendingCount = pendingRequests.data?.length ?? 0;

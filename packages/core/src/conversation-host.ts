@@ -160,6 +160,12 @@ export interface DurableConversationHostOptions {
 	 * request; conversations that predate the extension are backfilled on their next append.
 	 */
 	readonly contextProvider?: ContextPromptProvider;
+	/**
+	 * Additional extensions (for example plugin tools) selected with every conversation.
+	 * Existing conversations are backfilled on their next append when their stored agent does
+	 * not already select them.
+	 */
+	readonly extensions?: readonly Extension[];
 	readonly model?: ModelPort;
 	/** Observe activity-window opens and closes. Errors never affect message processing. */
 	readonly onActivityEvent?: (event: ActivityWindowEvent) => void;
@@ -200,7 +206,9 @@ export class PiDurableConversationHost {
 	private readonly activityTimers = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
 	private readonly activityFlushes = new Set<string>();
 	private readonly contextExtension: Extension | undefined;
-	private readonly contextEnsured = new Set<string>();
+	private readonly extensions = new Map<string, Extension>();
+	private readonly dynamicExtensions = new Set<string>();
+	private readonly extensionsEnsured = new Set<string>();
 	private closed = false;
 	readonly registry = createRegistry();
 
@@ -211,16 +219,19 @@ export class PiDurableConversationHost {
 			options.contextProvider === undefined
 				? undefined
 				: createContextExtension(options.contextProvider);
-		if (this.contextExtension !== undefined) this.registry.install(this.contextExtension);
+		if (this.contextExtension !== undefined) {
+			this.extensions.set(this.contextExtension.name, this.contextExtension);
+			this.registry.install(this.contextExtension);
+		}
+		if (options.extensions !== undefined) this.installExtensions(options.extensions);
 	}
 
 	async createConversation(): Promise<string> {
 		const harness = await this.openHarness();
+		const extensions = [...this.extensions.values()];
 		const agent: AgentChange = {
 			model: { modelId: this.model.modelId, provider: this.model.providerId },
-			...(this.contextExtension === undefined
-				? {}
-				: { extensions: { add: [this.contextExtension] } }),
+			...(extensions.length === 0 ? {} : { extensions: { add: extensions } }),
 		};
 		const conversation = await harness.createConversation(
 			{
@@ -243,7 +254,7 @@ export class PiDurableConversationHost {
 		const conversationId = Number(input.conversationId) as ConversationId;
 		const conversation = await harness.conversation(conversationId, BACKGROUND_CONTEXT);
 		if (!conversation) throw new Error(`Conversation not found: ${input.conversationId}`);
-		await this.ensureContextExtension(conversation, input.conversationId);
+		await this.ensureExtensions(conversation, input.conversationId);
 		const existingReceipt = await harness.snapshot(
 			messageReceiptDoc,
 			conversationId,
@@ -412,7 +423,7 @@ export class PiDurableConversationHost {
 			const numericId = Number(conversationId) as ConversationId;
 			const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
 			if (!conversation) return;
-			await this.ensureContextExtension(conversation, conversationId);
+			await this.ensureExtensions(conversation, conversationId);
 			const activityId = `${numericId}:activity`;
 			const window = await harness.snapshot(
 				activityWindowDoc,
@@ -511,26 +522,59 @@ export class PiDurableConversationHost {
 	}
 
 	/**
-	 * Make sure one conversation selects the context extension. Conversations created before
-	 * the extension existed resolve it through the default "every installed extension"
-	 * selection; this covers conversations whose stored selection explicitly lists
-	 * extensions, and records the check once per conversation per process. Failures only log:
-	 * prompt context must never block message processing.
+	 * Replace the host-installed dynamic extensions, leaving the context extension in place.
+	 * Idempotent by extension name; existing conversations are checked again on their next
+	 * append so an explicitly stored extension list gains the new extension.
 	 */
-	private async ensureContextExtension(
-		conversation: Conversation,
-		durableId: string,
-	): Promise<void> {
-		const extension = this.contextExtension;
-		if (extension === undefined || this.contextEnsured.has(durableId)) return;
-		try {
-			const agent = await conversation.agent(BACKGROUND_CONTEXT);
-			if (!agent.extensions.some((candidate) => candidate.name === extension.name)) {
-				await conversation.configure({ extensions: { add: [extension] } }, BACKGROUND_CONTEXT);
+	installExtensions(next: readonly Extension[]): void {
+		const incoming = new Map(next.map((extension) => [extension.name, extension]));
+		for (const name of this.dynamicExtensions) {
+			if (incoming.has(name)) continue;
+			const installed = this.extensions.get(name);
+			if (installed !== undefined) {
+				this.registry.uninstall(installed);
+				this.extensions.delete(name);
+				this.clearExtensionChecks(name);
 			}
-			this.contextEnsured.add(durableId);
-		} catch (error) {
-			console.error("Failed to ensure conversation context extension", error);
+		}
+		for (const [name, extension] of incoming) {
+			if (name === this.contextExtension?.name) {
+				throw new Error(`Extension ${name} is reserved by the conversation context`);
+			}
+			this.extensions.set(name, extension);
+			this.registry.install(extension);
+			this.clearExtensionChecks(name);
+		}
+		this.dynamicExtensions.clear();
+		for (const name of incoming.keys()) this.dynamicExtensions.add(name);
+	}
+
+	/**
+	 * Make sure every installed extension is selected by this conversation. New and default
+	 * conversations resolve every installed extension automatically; this covers conversations
+	 * whose stored selection explicitly lists extensions. Each extension is checked once per
+	 * conversation per process, and failures only log: extensions must never block messages.
+	 */
+	private async ensureExtensions(conversation: Conversation, durableId: string): Promise<void> {
+		for (const extension of this.extensions.values()) {
+			const key = `${durableId}\0${extension.name}`;
+			if (this.extensionsEnsured.has(key)) continue;
+			try {
+				const agent = await conversation.agent(BACKGROUND_CONTEXT);
+				if (!agent.extensions.some((candidate) => candidate.name === extension.name)) {
+					await conversation.configure({ extensions: { add: [extension] } }, BACKGROUND_CONTEXT);
+				}
+				this.extensionsEnsured.add(key);
+			} catch (error) {
+				console.error(`Failed to ensure conversation extension ${extension.name}`, error);
+			}
+		}
+	}
+
+	private clearExtensionChecks(name: string): void {
+		const suffix = `\0${name}`;
+		for (const key of this.extensionsEnsured) {
+			if (key.endsWith(suffix)) this.extensionsEnsured.delete(key);
 		}
 	}
 

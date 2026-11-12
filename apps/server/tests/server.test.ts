@@ -1,5 +1,17 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createApp } from "../src/app.ts";
+import { ADMIN_SESSION_COOKIE } from "../src/services/auth.ts";
+
+const directories: string[] = [];
+
+afterEach(async () => {
+	await Promise.all(
+		directories.splice(0).map((directory) => fs.rm(directory, { force: true, recursive: true })),
+	);
+});
 
 describe("server skeleton", () => {
 	test("reports lifecycle state over RPC", async () => {
@@ -16,15 +28,26 @@ describe("server skeleton", () => {
 		await lifecycle.stop();
 	});
 
-	test("streams snapshot and live log entries over SSE", async () => {
-		const { app, lifecycle } = createApp({
-			TSUKAIMA_DATA_DIR: "./.test-data",
+	test("streams snapshot and live log entries over an authenticated SSE connection", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-server-sse-"));
+		directories.push(directory);
+		const { app, auth, lifecycle } = createApp({
+			TSUKAIMA_ADMIN_PASSWORD: "test-admin-password",
+			TSUKAIMA_ADMIN_USERNAME: "admin",
+			TSUKAIMA_DATA_DIR: directory,
 			TSUKAIMA_PORT: "7420",
 			TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 		});
+		await lifecycle.start();
+		const login = await auth.login("admin", "test-admin-password");
+		if (!login.ok) throw new Error("test admin login failed");
+		const cookie = `${ADMIN_SESSION_COOKIE}=${login.token}`;
 		const abort = new AbortController();
 		const response = await app.handle(
-			new Request("http://localhost/events/logs", { signal: abort.signal }),
+			new Request("http://localhost/events/logs", {
+				headers: { cookie },
+				signal: abort.signal,
+			}),
 		);
 		expect(response.headers.get("content-type")).toContain("text/event-stream");
 		const reader = response.body?.getReader();
@@ -54,6 +77,16 @@ describe("server skeleton", () => {
 
 		await reader.cancel();
 		abort.abort();
+		await lifecycle.stop();
+	});
+
+	test("rejects an unauthenticated log stream", async () => {
+		const { app, lifecycle } = createApp({
+			TSUKAIMA_DATA_DIR: "./.test-data",
+			TSUKAIMA_PORT: "7420",
+		});
+		const response = await app.handle(new Request("http://localhost/events/logs"));
+		expect(response.status).toBe(401);
 		await lifecycle.stop();
 	});
 });

@@ -43,10 +43,7 @@ export interface PluginToolRegistry {
 		name: string,
 		input: Record<string, unknown>,
 		context?: ToolInvocationContext,
-	): Promise<
-		| { ok: true; result: ToolResult }
-		| { ok: false; reason: "permission_denied"; permission: PluginPermission }
-	>;
+	): Promise<PluginToolInvocationResult>;
 	register(tool: PluginTool): void;
 	list(): readonly PluginTool[];
 }
@@ -78,6 +75,38 @@ export interface PluginTool {
 		input: Record<string, unknown>,
 		context: ToolInvocationContext,
 	): Promise<ToolResult> | ToolResult;
+}
+
+export type PluginToolInvocationResult =
+	| { ok: true; result: ToolResult }
+	| { ok: false; reason: "permission_denied"; permission: PluginPermission };
+
+/** The subset of the durable tool API a plugin tool adapter needs. */
+export interface PluginToolExecutionApi {
+	readonly conversationId: number;
+}
+
+/**
+ * Structural form of a pi-durable `ToolRegistration`. Kept independent of pi-durable so
+ * the plugin SDK can expose tools without depending on the durable runtime.
+ */
+export interface PluginToolRegistration {
+	name: string;
+	description: string;
+	parameters: Record<string, unknown>;
+	execute(
+		args: unknown,
+		api: PluginToolExecutionApi,
+		context: unknown,
+	): Promise<{
+		readonly output: { readonly type: "text"; readonly text: string }[];
+		readonly isError?: boolean;
+	}>;
+}
+
+export interface PluginToolsExtension {
+	readonly name: string;
+	readonly tools: readonly PluginToolRegistration[];
 }
 
 export interface PluginUiDefinition {

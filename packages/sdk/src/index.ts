@@ -17,7 +17,11 @@ export type {
 	PluginLogger,
 	PluginStorage,
 	PluginTool,
+	PluginToolExecutionApi,
+	PluginToolInvocationResult,
+	PluginToolRegistration,
 	PluginToolRegistry,
+	PluginToolsExtension,
 	PluginUiRegistry,
 	ToolInvocationContext,
 	ToolResult,
@@ -40,7 +44,11 @@ export type {
 } from "./host.ts";
 export {
 	createPluginContext,
+	createPluginToolsExtension,
 	LocalPluginEventBridge,
 	LocalToolBridge,
 	LocalUiBridge,
+	PLUGIN_TOOLS_EXTENSION_NAME,
+	providerSafeToolName,
+	type PluginToolsExtensionOptions,
 } from "./bridges.ts";

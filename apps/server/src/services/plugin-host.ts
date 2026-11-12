@@ -6,6 +6,9 @@ import {
 	type PluginEvents,
 	type PluginManifest,
 	type PluginSettingsApi,
+	type PluginTool,
+	type PluginToolInvocationResult,
+	type ToolInvocationContext,
 } from "@tsukaima/sdk";
 import { PluginRegistry, type InstalledPlugin } from "@tsukaima/plugin-registry";
 import type { Logger } from "../logging.ts";
@@ -83,6 +86,39 @@ export class PluginHost {
 
 	context(pluginId: string): PluginContext | undefined {
 		return this.#contexts.get(pluginId);
+	}
+
+	/**
+	 * Tools registered by started plugins, in startup order. Read on every model request
+	 * through the durable tools extension, so registrations made after startup are visible.
+	 */
+	tools(): readonly PluginTool[] {
+		const tools: PluginTool[] = [];
+		const names = new Set<string>();
+		for (const pluginId of this.#started) {
+			const context = this.#contexts.get(pluginId);
+			if (context === undefined) continue;
+			for (const tool of context.tools.list()) {
+				if (names.has(tool.name)) continue;
+				names.add(tool.name);
+				tools.push(tool);
+			}
+		}
+		return tools;
+	}
+
+	/** Route a model tool call to the plugin that registered it. */
+	async invokeTool(
+		name: string,
+		input: Record<string, unknown>,
+		context: ToolInvocationContext = {},
+	): Promise<PluginToolInvocationResult> {
+		for (const pluginId of this.#started) {
+			const pluginContext = this.#contexts.get(pluginId);
+			if (pluginContext?.tools.list().some((tool) => tool.name === name) !== true) continue;
+			return pluginContext.tools.invoke(name, input, context);
+		}
+		throw new Error(`Unknown plugin tool ${name}`);
 	}
 
 	async start(): Promise<void> {

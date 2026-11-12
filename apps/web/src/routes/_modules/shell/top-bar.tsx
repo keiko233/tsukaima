@@ -68,9 +68,7 @@ export function TopBar({
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
-	const diagnostics = useQuery(
-		orpc.admin.diagnostics.status.queryOptions({ refetchInterval: 10_000 }),
-	);
+	const diagnostics = useQuery(orpc.admin.diagnostics.status.queryOptions());
 	const authStatus = useQuery(orpc.auth.status.queryOptions());
 	const signOut = useMutation(
 		orpc.auth.logout.mutationOptions({

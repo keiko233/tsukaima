@@ -1,6 +1,7 @@
 import { assertPermission, hasPermission, type PluginPermission } from "./permissions.ts";
 import { pluginManifestSchema } from "./manifest.ts";
 import type {
+	AuditEntry,
 	PluginAuditApi,
 	PluginChannelRegistry,
 	PluginDependencyBag,
@@ -17,6 +18,9 @@ import type {
 	PluginLogger,
 	PluginStorage,
 	PluginTool,
+	PluginToolInvocationResult,
+	PluginToolRegistration,
+	PluginToolsExtension,
 	PluginUiDefinition,
 	ToolInvocationContext,
 	ToolResult,
@@ -108,6 +112,176 @@ export class LocalUiBridge {
 	list(): readonly PluginUiDefinition[] {
 		return [...this.#definitions.values()];
 	}
+}
+
+export const PLUGIN_TOOLS_EXTENSION_NAME = "tsukaima-plugin-tools";
+
+/**
+ * OpenAI-compatible providers only accept function names matching `^[a-zA-Z0-9_-]{1,64}$`.
+ * Plugin tools are namespaced `<pluginId>.<tool>`, so the model-facing name is sanitized and
+ * suffixed with a short deterministic hash. The extension still invokes the original name, so
+ * plugin routing, permission checks, and audit records are unchanged.
+ */
+export function providerSafeToolName(toolName: string): string {
+	const suffix = `_${fnv1aHex(toolName)}`;
+	const base = toolName.replace(/[^a-zA-Z0-9_-]/gu, "_") || "tool";
+	return `${base.slice(0, 64 - suffix.length)}${suffix}`;
+}
+
+function fnv1aHex(value: string): string {
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < value.length; index += 1) {
+		hash ^= value.charCodeAt(index);
+		hash = Math.imul(hash, 0x01000193);
+	}
+	return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+export interface PluginToolsExtensionOptions {
+	readonly audit?: (entry: AuditEntry) => Promise<void> | void;
+	/** Called only when auditing or a duplicate name fails; never affects the tool result. */
+	readonly logger?: (message: string, error?: unknown) => void;
+	readonly name?: string;
+}
+
+type PluginToolSource = () => readonly PluginTool[];
+type PluginToolInvoker = (
+	name: string,
+	input: Record<string, unknown>,
+	context?: ToolInvocationContext,
+) => Promise<PluginToolInvocationResult>;
+
+function errorText(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function textOutput(text: string): { readonly type: "text"; readonly text: string }[] {
+	return [{ text, type: "text" }];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function warn(
+	logger: PluginToolsExtensionOptions["logger"],
+	message: string,
+	error?: unknown,
+): void {
+	try {
+		logger?.(message, error);
+	} catch {}
+}
+
+/**
+ * Adapts the plugin tool registry to one pi-durable extension. The tool list is read
+ * lazily on every resolution, so a plugin that registers or removes a tool while the
+ * process runs is reflected on the next model request without reinstalling the extension.
+ */
+export function createPluginToolsExtension(
+	source: PluginToolSource,
+	invoke: PluginToolInvoker,
+	options: PluginToolsExtensionOptions = {},
+): PluginToolsExtension {
+	const registrations = new Map<
+		string,
+		{ readonly tool: PluginTool; readonly registration: PluginToolRegistration }
+	>();
+
+	const audit = async (entry: AuditEntry): Promise<void> => {
+		if (options.audit === undefined) return;
+		try {
+			await options.audit(entry);
+		} catch (error) {
+			warn(options.logger, "plugin tool audit failed", error);
+		}
+	};
+
+	const registrationFor = (tool: PluginTool): PluginToolRegistration => {
+		const existing = registrations.get(tool.name);
+		if (existing?.tool === tool) return existing.registration;
+		const registration: PluginToolRegistration = {
+			description: tool.description,
+			async execute(args, api) {
+				const input = isRecord(args) ? args : {};
+				const conversationId = String(api.conversationId);
+				const invocationContext: ToolInvocationContext = { conversationId };
+				try {
+					const outcome = await invoke(tool.name, input, invocationContext);
+					if (!outcome.ok) {
+						await audit({
+							action: "plugin.tool.invoke",
+							payload: { conversationId, tool: tool.name },
+							reason: `permission_denied:${outcome.permission}`,
+							result: "denied",
+							targetId: tool.name,
+							targetKind: "plugin-tool",
+						});
+						return {
+							isError: true,
+							output: textOutput(`Permission denied for tool ${tool.name}: ${outcome.permission}`),
+						};
+					}
+					await audit({
+						action: "plugin.tool.invoke",
+						payload: { conversationId, tool: tool.name },
+						result: "ok",
+						targetId: tool.name,
+						targetKind: "plugin-tool",
+					});
+					return {
+						output: outcome.result.content.map((part) => ({ text: part.text, type: "text" })),
+					};
+				} catch (error) {
+					const message = errorText(error);
+					await audit({
+						action: "plugin.tool.invoke",
+						payload: { conversationId, tool: tool.name },
+						reason: message,
+						result: "failed",
+						targetId: tool.name,
+						targetKind: "plugin-tool",
+					});
+					return {
+						isError: true,
+						output: textOutput(`Tool ${tool.name} failed: ${message}`),
+					};
+				}
+			},
+			name: providerSafeToolName(tool.name),
+			parameters: tool.parameters,
+		};
+		registrations.set(tool.name, { registration, tool });
+		return registration;
+	};
+
+	const extension: PluginToolsExtension = {
+		name: options.name ?? PLUGIN_TOOLS_EXTENSION_NAME,
+		get tools() {
+			let current: readonly PluginTool[];
+			try {
+				current = source();
+			} catch (error) {
+				warn(options.logger, "plugin tool listing failed", error);
+				return [];
+			}
+			const names = new Set<string>();
+			const tools: PluginToolRegistration[] = [];
+			for (const tool of current) {
+				if (names.has(tool.name)) {
+					warn(options.logger, `duplicate plugin tool name ${tool.name}`);
+					continue;
+				}
+				names.add(tool.name);
+				tools.push(registrationFor(tool));
+			}
+			for (const name of registrations.keys()) {
+				if (!names.has(name)) registrations.delete(name);
+			}
+			return tools;
+		},
+	};
+	return extension;
 }
 
 export class LocalStorageBridge implements PluginStorage {

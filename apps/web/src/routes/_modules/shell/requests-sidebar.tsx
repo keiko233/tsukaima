@@ -72,9 +72,7 @@ export function RequestsSidebar({ search }: { search: string }) {
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [pendingAction, setPendingAction] = useState<"approve" | "reject" | null>(null);
 	const [reason, setReason] = useState("");
-	const requests = useQuery(
-		orpc.admin.requests.list.queryOptions({ input: { status: "all" }, refetchInterval: 10_000 }),
-	);
+	const requests = useQuery(orpc.admin.requests.list.queryOptions({ input: { status: "all" } }));
 	const diagnostics = useQuery(orpc.admin.diagnostics.status.queryOptions());
 	const respond = useMutation(
 		orpc.admin.requests.respond.mutationOptions({

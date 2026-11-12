@@ -444,6 +444,84 @@ export const authStatusOutputSchema = z.object({
 });
 export type AuthStatus = z.infer<typeof authStatusOutputSchema>;
 
+// ─── Live event stream ───────────────────────────────────────────────────────
+
+const liveEventTimestampSchema = z.object({
+	timestamp: z.string().min(1),
+});
+
+export const liveSnapshotEventSchema = liveEventTimestampSchema.extend({
+	lifecycle: z.object({
+		reason: z.string().optional(),
+		stage: z.string().min(1),
+		startedAtMs: z.number().int().nonnegative(),
+		state: z.enum(["starting", "degraded", "ready", "maintenance", "failed"]),
+	}),
+	processedMessages: z.number().int().nonnegative(),
+	type: z.literal("snapshot"),
+});
+export type LiveSnapshotEvent = z.infer<typeof liveSnapshotEventSchema>;
+
+export const liveHeartbeatEventSchema = liveEventTimestampSchema.extend({
+	type: z.literal("heartbeat"),
+});
+export type LiveHeartbeatEvent = z.infer<typeof liveHeartbeatEventSchema>;
+
+export const liveMessageReceivedEventSchema = liveEventTimestampSchema.extend({
+	channelId: z.string().min(1),
+	chatObjectId: z.string().min(1),
+	messageId: z.string().min(1),
+	sessionId: z.string().min(1),
+	type: z.literal("message.received"),
+});
+export type LiveMessageReceivedEvent = z.infer<typeof liveMessageReceivedEventSchema>;
+
+const liveActivityEventBaseSchema = liveEventTimestampSchema.extend({
+	activityId: z.string().min(1),
+	conversationId: z.string().min(1),
+	envelopeCount: z.number().int().nonnegative(),
+});
+
+export const liveActivityOpenedEventSchema = liveActivityEventBaseSchema.extend({
+	type: z.literal("activity.opened"),
+});
+export type LiveActivityOpenedEvent = z.infer<typeof liveActivityOpenedEventSchema>;
+
+export const liveActivityClosedEventSchema = liveActivityEventBaseSchema.extend({
+	type: z.literal("activity.closed"),
+});
+export type LiveActivityClosedEvent = z.infer<typeof liveActivityClosedEventSchema>;
+
+const liveReplyEventBaseSchema = liveEventTimestampSchema.extend({
+	channelId: z.string().min(1).nullable(),
+	chatObjectId: z.string().min(1),
+	entryId: z.string().min(1),
+	sessionId: z.string().min(1),
+	text: z.string(),
+});
+
+export const liveBeforeReplyEventSchema = liveReplyEventBaseSchema.extend({
+	type: z.literal("before.reply"),
+});
+export type LiveBeforeReplyEvent = z.infer<typeof liveBeforeReplyEventSchema>;
+
+export const liveAfterReplyEventSchema = liveReplyEventBaseSchema.extend({
+	deliveryStatus: deliveryStatusSchema,
+	type: z.literal("after.reply"),
+});
+export type LiveAfterReplyEvent = z.infer<typeof liveAfterReplyEventSchema>;
+
+export const liveEventSchema = z.discriminatedUnion("type", [
+	liveSnapshotEventSchema,
+	liveHeartbeatEventSchema,
+	liveMessageReceivedEventSchema,
+	liveActivityOpenedEventSchema,
+	liveActivityClosedEventSchema,
+	liveBeforeReplyEventSchema,
+	liveAfterReplyEventSchema,
+]);
+export type LiveEvent = z.infer<typeof liveEventSchema>;
+
 // ─── Contract ────────────────────────────────────────────────────────────────
 
 export const appContract = oc.router({
