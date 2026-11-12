@@ -269,3 +269,8 @@ Shutdown has a configurable deadline. When it expires:
 - exit nonzero if work could not finish
 
 OneBot shutdown should close the WebSocket before databases close so no outbound action races a closed runtime.
+
+The process owns `SIGINT` and `SIGTERM`, so it must terminate itself: after the graceful
+sequence completes, exit explicitly instead of waiting for the event loop to drain.
+`bun --watch` keeps the loop alive, and a pending reconnect timer can also hold it, so a
+handler that only `await`s cleanup leaves the process running after Ctrl+C.
