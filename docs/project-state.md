@@ -7,7 +7,7 @@ This file is the cross-session handoff record. Update it whenever implementation
 - Project name: `tsukaima-chatbot`.
 - Repository initialized at `<repo-root>` on branch `main`.
 - First commit: `5dc80bc Add Tsukaima Chatbot architecture and DSH migration plan`.
-- Current phase: Phase 1–7 core/library implementation complete; WebUI admin console is scaffolded and wired to live runtime data.
+- Current phase: Phase 1–7 core/library implementation complete; the WebUI now implements the messaging-workspace shell, chat-object/session navigation, local Tsukaima turns, channel sends, directory views, and request inbox.
 - Bun workspace, strict TypeScript config, domain schema/migrations, Pi Durable Bun SQLite adapter, startup lifecycle, Elysia + oRPC API, and React/TanStack WebUI exist.
 - Implemented packages:
   - `packages/contracts`: message, conversation policy, activity window, submission, and admin event schemas.
@@ -20,28 +20,32 @@ This file is the cross-session handoff record. Update it whenever implementation
 - Runtime target is Bun.
 - Runtime settings for log level, OneBot, and OpenAI-compatible/Magpie provider configuration are persisted in the domain database and editable from the WebUI. Secret values are never returned by the API.
 - TanStack file-based routing, Paraglide i18n (`en`, `zh-cn`), TanStack Query data wiring, and beUI components under `apps/web/src` are active.
+- WebUI routes are grouped under `(messaging)` and `(system)`. Route-specific code lives in the matching `_modules` directory; shared shell code lives in `routes/_modules`.
+- `chat_objects` is separate from `conversations`, which now represents Tsukaima sessions. Each external chat object has one explicit receiving session for new messages.
+- Incoming messages are protected by a durable message receipt plus `(chat_object_id, platform_message_id)` uniqueness. Activity windows flush after inactivity and resume after restart.
+- The request inbox persists OneBot friend/group request events separately from chat turns. Decisions are capability- and connection-aware; timeouts remain uncertain.
 
 ## Confirmed decisions
 
-| Topic | Decision |
-| --- | --- |
-| Runtime | Bun |
-| Conversation/task core | `pi-durable` over SQLite with a local Bun SQLite adapter |
-| Domain database | SQLite through Drizzle ORM, separate file from durable storage |
-| HTTP framework | Elysia |
-| RPC | oRPC with Zod schemas |
-| Frontend framework | React |
-| Router | TanStack Router |
-| Server-state | TanStack Query |
-| Forms | TanStack Form |
-| UI | beUI design system through its shadcn-compatible registry |
-| Migration source | Current DSH only; AstrBot is not migrated |
-| Downtime during cutover | Allowed |
+| Topic                     | Decision                                                                                |
+| ------------------------- | --------------------------------------------------------------------------------------- |
+| Runtime                   | Bun                                                                                     |
+| Conversation/task core    | `pi-durable` over SQLite with a local Bun SQLite adapter                                |
+| Domain database           | SQLite through Drizzle ORM, separate file from durable storage                          |
+| HTTP framework            | Elysia                                                                                  |
+| RPC                       | oRPC with Zod schemas                                                                   |
+| Frontend framework        | React                                                                                   |
+| Router                    | TanStack Router                                                                         |
+| Server-state              | TanStack Query                                                                          |
+| Forms                     | TanStack Form                                                                           |
+| UI                        | beUI design system through its shadcn-compatible registry                               |
+| Migration source          | Current DSH only; AstrBot is not migrated                                               |
+| Downtime during cutover   | Allowed                                                                                 |
 | Self-iteration deployment | Local development first; agent creates deployment proposals/artifacts; later GHCR image |
-| WebUI authorization | One administrator |
-| OneBot mode | Tsukaima actively connects to NapCat WebSocket server |
-| LLM-assisted migration | Allowed, especially for conversation compression and memory extraction |
-| Project name | `tsukaima-chatbot` |
+| WebUI authorization       | One administrator                                                                       |
+| OneBot mode               | Tsukaima actively connects to NapCat WebSocket server                                     |
+| LLM-assisted migration    | Allowed, especially for conversation compression and memory extraction                  |
+| Project name              | `tsukaima-chatbot`                                                                        |
 
 ## Design documents already written
 
@@ -58,7 +62,7 @@ This file is the cross-session handoff record. Update it whenever implementation
 - `docs/migration/migration-kit.md`
 - `docs/roadmap.md`
 - `docs/operations/quality.md`
-- ADRs 0001–0005
+- ADRs 0001–0007
 
 This file may fall behind individual documents during rapid edits, but the documents above should always contain the most detailed truth.
 
@@ -83,8 +87,8 @@ These are implementation-level decisions, not blockers for starting scaffolding:
 3. Exact plugin config validation behavior for `configSchema`.
 4. Exact model policy seed values for Magpie and the OpenAI-compatible deployment.
 5. Exact WebUI route/procedure surface.
-7. Exact DSH session format parser behavior for every field type.
-8. Exact self-iteration approval form and audit record shape.
+6. Exact DSH session format parser behavior for every field type.
+7. Exact self-iteration approval form and audit record shape.
 
 ## Implementation status
 
@@ -102,7 +106,8 @@ All existing tests pass:
 bun run check
 ```
 
-Current baseline: lint, formatting, root TypeScript, WebUI TypeScript, and 122 tests across 23 files pass.
+Current baseline: lint, formatting, root TypeScript, WebUI TypeScript, WebUI production
+build, and 129 tests across 25 files pass.
 
 ## Next implementation steps
 
@@ -115,6 +120,13 @@ Do these in order unless a later decision changes the plan:
 5. Add task graph/audit visualization for self-iteration.
 6. Run the real DSH import, verify data, and cut NapCat from DSH to Tsukaima.
 7. Add secret scanning, backup/restore drills, and the production runbook.
+
+## Current WebUI limitations
+
+- Assistant replies to external channel messages are visible in the WebUI but are not yet automatically sent back through OneBot.
+- The chat list preview is backed by indexed domain messages; an assistant-only latest turn may not update the parent preview.
+- Unread state, chat-object pin/archive controls beyond session archive, and group management actions are not implemented.
+- Narrow-screen navigation is implemented, but no Playwright end-to-end suite is present yet.
 
 ## How to resume in a new session
 
