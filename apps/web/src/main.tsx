@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { routeTree } from "./route-tree.gen";
 import { initializeLocale } from "./lib/locale";
 import { initializeTheme } from "./lib/theme";
+import { ToastProvider } from "./lib/toast";
 import "./app.css";
 
 initializeTheme();
@@ -25,7 +26,9 @@ declare module "@tanstack/react-router" {
 createRoot(document.getElementById("root") as HTMLElement).render(
 	<StrictMode>
 		<QueryClientProvider client={queryClient}>
-			<RouterProvider router={router} />
+			<ToastProvider>
+				<RouterProvider router={router} />
+			</ToastProvider>
 		</QueryClientProvider>
 	</StrictMode>,
 );

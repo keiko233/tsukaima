@@ -15,6 +15,7 @@
 	"topbar_sidebar_toggle": "切换侧栏",
 	"topbar_back_to_sidebar": "返回侧栏",
 	"theme_toggle": "切换明暗主题",
+	"toast_dismiss": "关闭通知",
 	"search_chats": "搜索聊天对象和会话",
 	"search_users": "搜索名称、别名或 ID",
 	"search_groups": "搜索群组或 ID",
