@@ -80,6 +80,21 @@ Supports:
 6. Verify compaction.
 7. Verify document watch.
 
+### Startup lifecycle
+
+1. Boot with empty data directories.
+2. Verify durable and domain migrations run automatically.
+3. Verify readiness remains false until channels finish.
+4. Inject durable migration failure.
+5. Verify startup fails and no channel starts.
+6. Inject domain migration failure.
+7. Verify maintenance/failed state.
+8. Inject OneBot connection failure.
+9. Verify configured failed/degraded behavior.
+10. Restart after interrupted boot.
+11. Verify migrations are idempotent.
+12. Verify scheduler recovery does not run before readiness.
+
 ### Conversation ingestion
 
 1. Receive private text.

@@ -9,10 +9,11 @@
 ## Phase 1 — Core skeleton
 
 1. Scaffold Bun monorepo and CI.
-2. Implement `BunSqliteStorage` adapter and storage conformance tests.
-3. Create `pi-durable` host service with fake model.
-4. Define `MessageEnvelope`, `MessagePart`, conversation policy, and activity aggregation.
-5. Implement admin HTTP/WebSocket skeleton.
+2. Implement startup lifecycle with database migration and readiness gates.
+3. Implement `BunSqliteStorage` adapter and storage conformance tests.
+4. Create `pi-durable` host service with fake model.
+5. Define `MessageEnvelope`, `MessagePart`, conversation policy, and activity aggregation.
+6. Implement admin HTTP/WebSocket skeleton.
 
 ## Phase 2 — Channels and chat
 

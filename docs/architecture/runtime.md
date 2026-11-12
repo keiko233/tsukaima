@@ -83,3 +83,5 @@ Do not join across databases in SQL. Resolve cross-database references in applic
 - Provider errors leave the submission failed and recoverable; do not silently drop user messages.
 - Plugin errors are isolated and reported in WebUI.
 - Storage failure is fatal to the server process; the process restarts and resumes durable work.
+
+Database migration is part of application startup. See [startup-lifecycle.md](startup-lifecycle.md).
