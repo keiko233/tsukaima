@@ -15,6 +15,7 @@
 	"topbar_sidebar_toggle": "Toggle sidebar",
 	"topbar_back_to_sidebar": "Back to sidebar",
 	"theme_toggle": "Toggle color theme",
+	"toast_dismiss": "Dismiss notification",
 	"search_chats": "Search chats and sessions",
 	"search_users": "Search names, aliases or IDs",
 	"search_groups": "Search groups or IDs",
