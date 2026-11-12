@@ -2,6 +2,8 @@
 
 The plugin SDK is the typed surface that Tsukaima exposes to first-party and third-party plugins. It is intentionally narrower than the internal runtime API.
 
+Tsukaima does not adopt Cordis, Pi coding-agent extensions, or Chord wholesale as this plugin surface. It borrows lifecycle, validation, reload, worker, and UI-registry concepts. See `plugin-frameworks.md`.
+
 ## Goals
 
 - Make common bot features declarative.
@@ -232,6 +234,8 @@ Not allowed across boundary:
 
 The worker crashes independently. The host restarts the worker and reports the failure to the WebUI.
 
+The worker protocol is Tsukaima-specific. It is intentionally not Cordis Context wire-compatible and not Chord-link-compatible.
+
 ## Plugin package format
 
 ```text
@@ -263,6 +267,8 @@ my-tsukaima-plugin/
 ```
 
 The exact loader format is finalized during implementation.
+
+DSH plugins are migration sources for behavior/configuration, not installable packages. A DSH plugin is reimplemented against this SDK after API review.
 
 ## Security rules
 
