@@ -1,9 +1,9 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, test, type Mock } from "bun:test";
 import {
 	normalizeContext,
 	type Api,
+	type AssistantMessage,
 	type Context,
-	type Mock,
 	type FetchFunction,
 	type Model,
 	type Tool,
@@ -72,7 +72,7 @@ async function expectErrorStream(
 
 describe("OpenAI-compatible provider", () => {
 	test("parses a basic chat response and streams it", async () => {
-		const fetch: FetchMock = mock(async () => textResponse());
+		const fetch = mock(async () => textResponse()) as unknown as FetchMock;
 		const streams = createOpenAICompatibleStreams({
 			apiKey: "test-key",
 			baseUrl: "https://model.example/v1/",
@@ -113,7 +113,7 @@ describe("OpenAI-compatible provider", () => {
 	});
 
 	test("parses tool calls and requests declared tools", async () => {
-		const fetch: FetchMock = mock(async () =>
+		const fetch = mock(async () =>
 			textResponse({
 				choices: [
 					{
@@ -131,7 +131,7 @@ describe("OpenAI-compatible provider", () => {
 					},
 				],
 			}),
-		);
+		) as unknown as FetchMock;
 		const streams = createOpenAICompatibleStreams({
 			apiKey: "test-key",
 			baseUrl: "https://model.example/v1",
@@ -172,13 +172,13 @@ describe("OpenAI-compatible provider", () => {
 	});
 
 	test("preserves HTTP and transport errors as assistant error messages", async () => {
-		const fetch: FetchMock = mock()
+		const fetch = mock()
 			.mockImplementationOnce(async () =>
 				Response.json({ error: { message: "quota exceeded" } }, { status: 429 }),
 			)
 			.mockImplementationOnce(async () => {
 				throw new TypeError("network down");
-			});
+			}) as unknown as FetchMock;
 		const streams = createOpenAICompatibleStreams({
 			apiKey: "test-key",
 			baseUrl: "https://model.example/v1",
@@ -205,7 +205,7 @@ describe("OpenAI-compatible provider", () => {
 
 	test("accounts for input, output, cache-read, and routed usage", () => {
 		const ledger = new ModelUsageLedger();
-		const message = {
+		const message: AssistantMessage = {
 			api: "openai-compatible",
 			content: [],
 			model: "test-model",
@@ -221,7 +221,7 @@ describe("OpenAI-compatible provider", () => {
 				output: 11,
 				totalTokens: 36,
 			},
-		} as const;
+		};
 		const record = ledger.record(message, "basic-chat");
 
 		expect(record).toEqual({
@@ -262,7 +262,7 @@ describe("Model policy router", () => {
 		modelConfigs.map((config) => ({
 			...model,
 			id: config.modelId,
-			maxTokens: config.maxOutputTokens,
+			maxTokens: config.maxOutputTokens ?? model.maxTokens,
 		})),
 	);
 

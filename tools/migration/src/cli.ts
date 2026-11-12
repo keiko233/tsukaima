@@ -1,5 +1,10 @@
 #!/usr/bin/env bun
-import { createPipeline, inspectDshSnapshot, snapshotPaths } from "@tsukaima/migration";
+import {
+	createPipeline,
+	inspectDshSnapshot,
+	type MigrationPlan,
+	snapshotPaths,
+} from "@tsukaima/migration";
 
 interface CliOptions {
 	readonly command: string;
@@ -35,15 +40,23 @@ function parseOptions(argv: readonly string[]): CliOptions {
 
 	const command = help ? "help" : positional[0];
 	if (!command) throw new Error("Usage: bun tools/migration/src/cli.ts <command> [options]");
-	return { command, dryRun, help, planFile, runId, source, target };
+	return {
+		command,
+		dryRun,
+		help,
+		...(planFile === undefined ? {} : { planFile }),
+		...(runId === undefined ? {} : { runId }),
+		source,
+		...(target === undefined ? {} : { target }),
+	};
 }
 
 function writeJson(value: unknown): void {
 	process.stdout.write(`${JSON.stringify(value, null, "\t")}\n`);
 }
 
-async function readPlan(path: string): Promise<unknown> {
-	return JSON.parse(await Bun.file(path).text());
+async function readPlan(path: string): Promise<MigrationPlan> {
+	return JSON.parse(await Bun.file(path).text()) as MigrationPlan;
 }
 
 async function main(): Promise<number> {

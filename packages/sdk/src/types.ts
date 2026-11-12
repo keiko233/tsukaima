@@ -2,8 +2,6 @@ import type { MessageEnvelope, MessagePart } from "@tsukaima/contracts";
 import type { PluginManifest } from "./manifest.ts";
 import type { PluginPermission } from "./permissions.ts";
 
-export type PluginPermission = string;
-
 export interface PluginLogger {
 	debug(message: string, details?: unknown): void;
 	info(message: string, details?: unknown): void;

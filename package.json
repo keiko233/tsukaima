@@ -10,7 +10,7 @@
 	"scripts": {
 		"dev": "bun run --filter '@tsukaima/server' dev",
 		"build": "bun run --filter '*' build",
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsc --noEmit && bun run --filter '@tsukaima/web' typecheck",
 		"lint": "oxlint .",
 		"format": "oxfmt 'apps/**/*.ts' 'packages/**/*.ts' '*.json' '*.ts' '.env.example'",
 		"format:check": "oxfmt --check 'apps/**/*.ts' 'packages/**/*.ts' '*.json' '*.ts' '.env.example'",

@@ -20,10 +20,7 @@ export function createApp(
 	const app = new Elysia({ name: "tsukaima-chatbot" })
 		.get("/healthz", ({ status }) => {
 			const state = lifecycle.state;
-			const statusCode =
-				state.state === "failed" || state.state === "maintenance" || state.state === "stopping"
-					? 503
-					: 200;
+			const statusCode = state.state === "failed" || state.state === "maintenance" ? 503 : 200;
 			return status(statusCode, state);
 		})
 		.get("/readyz", ({ status }) => {

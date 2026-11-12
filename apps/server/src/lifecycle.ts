@@ -4,7 +4,7 @@ import {
 	ModelPolicyRouter,
 	PiDurableConversationHost,
 	createFakeModel,
-	createOpenAICompatibleProvider,
+	createOpenAICompatibleModelPort,
 	type ModelPort,
 	type ModelPolicy,
 } from "@tsukaima/core";
@@ -71,7 +71,7 @@ export class TsukaimaLifecycle {
 	private transition(stage: string, state: LifecycleState["state"] = "starting"): void {
 		this.currentStage = stage;
 		this.currentState = state;
-		this.log(stage);
+		this.log("info", stage);
 	}
 
 	private log(level: TsukaimaConfig["logLevel"], message?: string): void {
@@ -94,13 +94,10 @@ export class TsukaimaLifecycle {
 			this.log("info", "OpenAI-compatible provider not configured; using fake model");
 			return createFakeModel();
 		}
-		const provider = createOpenAICompatibleProvider(
+		return createOpenAICompatibleModelPort(
 			{ apiKey: openAiApiKey, baseUrl: openAiBaseUrl, providerId: "openai-compatible" },
 			[{ capabilities: ["basic-chat", "tool-use"], modelId: openAiModelId }],
 		);
-		const modelId = openAiModelId;
-		const providerId = provider.id;
-		return { models: provider.models, modelId, providerId };
 	}
 
 	async start(): Promise<void> {

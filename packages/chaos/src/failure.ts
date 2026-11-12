@@ -1,4 +1,5 @@
 import type { Context } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
 	CommitResult,
 	Cursor,
@@ -26,8 +27,6 @@ import type {
 	TaskQuery,
 	TaskRecord,
 } from "@earendil-works/pi-durable";
-import { SqliteStorage } from "@tsukaima/durable";
-
 type Operation = () => Promise<unknown>;
 
 export class TransientFailure extends Error {
@@ -59,11 +58,11 @@ export interface TransientStorageOptions {
 const defaultMaxRetries = 3;
 
 export class TransientStorage implements Storage {
-	private readonly inner: SqliteStorage;
+	private readonly inner: Storage;
 	private readonly fail: TransientFailureScheduler | undefined;
 	private readonly maxRetries: number;
 
-	constructor(inner: SqliteStorage, options: TransientStorageOptions = {}) {
+	constructor(inner: Storage, options: TransientStorageOptions = {}) {
 		this.inner = inner;
 		this.fail = options.fail;
 		this.maxRetries = options.maxRetries ?? defaultMaxRetries;
@@ -80,8 +79,8 @@ export class TransientStorage implements Storage {
 		);
 	}
 
-	async mintId<IdKind extends Id<IdKind>>(): Promise<IdKind> {
-		return await this.execute("mintId", async () => await this.inner.mintId<IdKind>());
+	async mintId<I extends Id<string>>(): Promise<I> {
+		return await this.execute("mintId", async () => await this.inner.mintId<I>());
 	}
 
 	async conversation(
@@ -155,7 +154,7 @@ export class TransientStorage implements Storage {
 	async task(
 		id: TaskId,
 		context: Context,
-	): Promise<TaskRecord<unknown, unknown, unknown> | undefined> {
+	): Promise<TaskRecord<JsonValue, JsonValue, JsonValue> | undefined> {
 		return await this.execute("task", async () => await this.inner.task(id, context));
 	}
 
@@ -164,7 +163,7 @@ export class TransientStorage implements Storage {
 		limit: number,
 		cursor: Cursor | undefined,
 		context: Context,
-	): Promise<Page<TaskRecord<unknown, unknown, unknown>, Cursor>> {
+	): Promise<Page<TaskRecord<JsonValue, JsonValue, JsonValue>, Cursor>> {
 		return await this.execute(
 			"scanTasks",
 			async () => await this.inner.scanTasks(query, limit, cursor, context),

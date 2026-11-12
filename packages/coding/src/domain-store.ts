@@ -177,7 +177,7 @@ export class DomainCodingStore {
 	}
 
 	async #update(id: string, value: unknown): Promise<void> {
-		const kind = id.split(":", 1)[0];
+		const kind = id.split(":", 1)[0] ?? "";
 		const recordId = id.slice(kind.length + 1);
 		if (kind === "approval") {
 			this.#approvals.set(recordId, value as ApprovalRequest);
@@ -187,7 +187,7 @@ export class DomainCodingStore {
 	}
 
 	async #find<T>(id: string): Promise<T | null> {
-		const kind = id.split(":", 1)[0];
+		const kind = id.split(":", 1)[0] ?? "";
 		const recordId = id.slice(kind.length + 1);
 		if (kind === "approval") return (this.#approvals.get(recordId) as T | undefined) ?? null;
 		return (this.#proposals.get(recordId) as T | undefined) ?? null;

@@ -1,6 +1,10 @@
 import {
+	createAssistantMessageEventStream,
 	createModels,
 	createProvider,
+	type AssistantMessage,
+	type Model,
+	type Api,
 	type Models,
 	type ProviderStreams,
 } from "@earendil-works/pi-ai";
@@ -15,25 +19,67 @@ export interface FakeModelOptions {
 	readonly responses?: readonly string[];
 }
 
+function responseMessage(model: Model<Api>, text: string): AssistantMessage {
+	return {
+		api: model.api,
+		content: [{ text, type: "text" }],
+		model: model.id,
+		provider: model.provider,
+		role: "assistant",
+		stopReason: "stop",
+		timestamp: Date.now(),
+		usage: {
+			cacheRead: 0,
+			cacheWrite: 0,
+			cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+			input: 0,
+			output: 0,
+			totalTokens: 0,
+		},
+	};
+}
+
 export function createFakeModel(options: FakeModelOptions = {}): ModelPort {
 	const providerId = "fake";
 	const modelId = "fake-deterministic";
 	let index = 0;
 
+	const stream: ProviderStreams["stream"] = (model) => {
+		const output = createAssistantMessageEventStream();
+		const text = options.responses?.[index] ?? "ok";
+		index += 1;
+		const message = responseMessage(model, text);
+		queueMicrotask(() => {
+			output.push({
+				type: "start",
+				partial: { ...message, content: [], stopReason: "pending" },
+			});
+			output.push({
+				type: "text_start",
+				contentIndex: 0,
+				partial: { ...message, content: [] },
+			});
+			output.push({
+				type: "text_delta",
+				contentIndex: 0,
+				delta: text,
+				partial: message,
+			});
+			output.push({
+				type: "text_end",
+				contentIndex: 0,
+				content: text,
+				partial: message,
+			});
+			output.push({ type: "done", message, reason: "stop" });
+			output.end(message);
+		});
+		return output;
+	};
+
 	const streams: ProviderStreams = {
-		async *stream(_model, _context) {
-			const response = options.responses?.[index] ?? "ok";
-			index += 1;
-			yield { type: "text", text: response };
-		},
-		streamSimple(model, context, _streamOptions) {
-			const asyncStream = streams.stream(model, context, options);
-			return {
-				async *[Symbol.asyncIterator]() {
-					yield* asyncStream;
-				},
-			};
-		},
+		stream,
+		streamSimple: stream,
 	};
 
 	const provider = createProvider({
@@ -42,8 +88,9 @@ export function createFakeModel(options: FakeModelOptions = {}): ModelPort {
 		models: [
 			{
 				api: "fake",
+				baseUrl: "fake://local",
 				contextWindow: 128_000,
-				cost: { input: 0, output: 0 },
+				cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
 				id: modelId,
 				input: ["text"],
 				maxTokens: 8_000,

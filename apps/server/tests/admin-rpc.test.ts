@@ -76,7 +76,7 @@ describe("admin RPC", () => {
 			primaryProvider: "fake",
 		});
 		expect(updated).toHaveLength(1);
-		expect((updated as { primary: { modelId: string } }[])[0].primary.modelId).toBe(
+		expect((updated as { primary: { modelId: string } }[])[0]?.primary.modelId).toBe(
 			"fake-deterministic",
 		);
 

@@ -14,8 +14,6 @@ export type {
 	PluginHook,
 	PluginHookName,
 	PluginLogger,
-	PluginManifest,
-	PluginPermission,
 	PluginStorage,
 	PluginTool,
 	PluginToolRegistry,
@@ -23,6 +21,8 @@ export type {
 	ToolInvocationContext,
 	ToolResult,
 } from "./types.ts";
+export type { PluginManifest } from "./manifest.ts";
+export type { PluginPermission } from "./permissions.ts";
 export {
 	createPluginContext,
 	LocalPluginEventBridge,

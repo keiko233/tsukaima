@@ -15,6 +15,7 @@ export {
 	ModelPolicyRouter,
 	ModelUsageLedger,
 	createOpenAICompatibleProvider,
+	createOpenAICompatibleModelPort,
 	createOpenAICompatibleStreams,
 	type ModelCapability,
 	type ModelPolicy,

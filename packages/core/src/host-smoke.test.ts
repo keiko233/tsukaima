@@ -2,7 +2,7 @@ import { describe, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDurableStorage } from "@tsukaima/durable";
+import { BACKGROUND_CONTEXT, openDurableStorage } from "@tsukaima/durable";
 import { PiDurableConversationHost } from "./conversation-host.ts";
 
 const envelope = (id: string, text: string) => ({
@@ -49,7 +49,7 @@ describe("host", () => {
 				whenBusy: "follow-up",
 			});
 			console.log("fourth", fourth);
-			await storage.close();
+			await storage.close(BACKGROUND_CONTEXT);
 			await host.close();
 		} finally {
 			await rm(directory, { force: true, recursive: true });

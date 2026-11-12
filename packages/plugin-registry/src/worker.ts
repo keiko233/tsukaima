@@ -18,7 +18,7 @@ export interface PluginWorkerChannel {
 export class LocalPluginWorker implements PluginWorkerChannel {
 	readonly mode = "worker" as const;
 	readonly #runtime: PluginRuntime;
-	#hostBridge?: ReturnType<PluginRuntime["hostBridge"]>;
+	#hostBridge: ReturnType<PluginRuntime["hostBridge"]> | undefined;
 	#starting = false;
 
 	constructor(runtime: PluginRuntime) {
