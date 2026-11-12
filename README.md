@@ -27,6 +27,9 @@ Design phase. The implementation repository starts with architecture documents, 
 
 - Runtime: Bun.
 - Conversation/task core: `pi-durable` over SQLite, with a Bun SQLite adapter.
+- API: Elysia with oRPC procedures and Zod schemas.
+- Frontend: React + TanStack Router/Query/Form, with beUI as the design system.
+- Domain database: SQLite via Drizzle ORM.
 - Models: `pi-ai` plus Magpie; plugins request capabilities, not concrete providers.
 - Coding core: `pi-coding-agent` capabilities wrapped behind a policy-controlled Self-Iteration Runtime.
 - OneBot mode: Tsukaima actively connects to NapCat's WebSocket server.

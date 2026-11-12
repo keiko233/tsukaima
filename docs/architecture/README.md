@@ -1,5 +1,27 @@
 # Architecture
 
+This document set is the durable design record for Tsukaima. Each file is meant to survive across multiple working sessions without needing the original conversation.
+
+## Document map
+
+| Document | Purpose |
+| --- | --- |
+| [Project state](../project-state.md) | Current phase, completed work, next actions, and context needed to resume |
+| [Runtime and persistence](runtime.md) | Process model, `pi-durable`, SQLite adapter, storage boundaries, media, failure behavior |
+| [Domain model](domain-model.md) | Envelopes, activity windows, conversation resolution, users, memory, persona |
+| [Database design](database.md) | Exact domain tables, durable boundaries, indexes, migrations, and query rules |
+| [API design](api.md) | oRPC namespaces, procedures, context, errors, realtime patterns, and WebUI flows |
+| [Conversation flow](conversation-flow.md) | End-to-end message pipeline, aggregation, policy, model turn, tool execution, and output |
+| [OneBot/NapCat integration](onebot.md) | Event normalization, action facade, reconnect, permissions, and operational edge cases |
+| [Plugins](plugins.md) | Manifest, permissions, worker runtime, lifecycle, and built-in plugin requirements |
+| [Plugin SDK](plugin-sdk.md) | Runtime API, context, RPC boundary, UI bridge, and testing expectations |
+| [Memory](memory.md) | Scopes, schema, retrieval pipeline, extraction policy, and admin review |
+| [Model routing](model-routing.md) | Capability policies, provider registration, selection order, and usage accounting |
+| [Self-iteration](self-iteration.md) | Coding workflow, policy gates, deployment proposals, and rollback |
+| [WebUI](web-ui.md) | Admin console layout and interaction model |
+| [Technology stack](tech-stack.md) | Full library choices, workspace layout, and dependency policy |
+| [Quality gates](../operations/quality.md) | Lint, format, commits, tests, scopes, and dependency review |
+
 The system has five planes:
 
 1. **Channel plane**: adapters normalize IM events into `MessageEnvelope`s and send outbound actions.
@@ -32,6 +54,9 @@ WebUI / Admin APIs
 | --- | --- | --- |
 | Runtime | Bun | Main process, workers, scripts, and toolchain |
 | Durable conversations/tasks | `@earendil-works/pi-durable` | SQLite storage; add Bun SQLite adapter |
+| HTTP/API | Elysia + oRPC | Zod-validated RPC contracts mounted on Elysia |
+| Frontend | React + TanStack + beUI | Router, Query, Form, and oRPC TanStack Query plugin |
+| Domain storage | SQLite + Drizzle ORM | Separate from durable chat/task storage |
 | Model abstraction | `@earendil-works/pi-ai` | Register Magpie and direct providers |
 | Coding capability | `@earendil-works/pi-coding-agent` | Reuse session/tools/resource concepts, do not expose it directly as a bot |
 | MCP | Pi MCP extension or `@earendil-works/pi-mcp` | Optional external integrations |
