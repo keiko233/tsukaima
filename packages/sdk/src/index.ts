@@ -6,6 +6,7 @@ export {
 } from "./permissions.ts";
 export { pluginPermissionSchema } from "./manifest.ts";
 export { PluginRuntime } from "./runtime.ts";
+export type { ElainaPlugin, PluginSetup, PluginTeardown } from "./runtime.ts";
 export { pluginManifestSchema } from "./manifest.ts";
 export type {
 	PluginChannelApi,
