@@ -40,12 +40,18 @@ This file is the cross-session handoff record. Update it whenever implementation
   `apps/server/src/services/context-provider.ts`. Retrieval ranks by keyword overlap, then
   importance, then recency; a 4000-character budget caps the injected text, and any provider error
   degrades to no injection rather than failing the turn. Memory content is never logged.
-- The admin surface is authenticated. `auth.status`/`login`/`logout` are public; every `admin/*`
-  procedure is bound to an `adminBase` guard that returns `UNAUTHENTICATED` without a session.
-  Credentials are argon2id hashes bootstrapped from `TSUKAIMA_ADMIN_USERNAME`/`TSUKAIMA_ADMIN_PASSWORD`
-  into `admin_credentials`; with neither stored nor environment credentials the whole admin surface
-  stays locked. Sessions are in-memory (restart requires a new sign-in) with httpOnly,
-  `SameSite=Lax` cookies. The WebUI gates the shell behind `auth.status` and has a `/login` route.
+- The admin surface uses Better Auth 1.7. Username/password sign-in, logout, session refresh, cookie
+  signing, password hashing, and rate limiting are native Better Auth routes under `/api/auth/*`;
+  only `auth.status` remains on oRPC. Every `admin/*` procedure and both SSE endpoints pass the
+  request headers to `auth.api.getSession` and reject anonymous access with `UNAUTHENTICATED`.
+  Better Auth stores `auth_user`/`auth_account`/`auth_session`/`auth_verification` in the domain
+  database. The first administrator is bootstrapped from
+  `TSUKAIMA_ADMIN_USERNAME`/`TSUKAIMA_ADMIN_PASSWORD`; with no stored user and no environment
+  credential the whole admin surface stays locked. Sessions survive restarts and use
+  `tsukaima.session_token`, `HttpOnly`, `SameSite=Lax`.
+- Audit entries now accept an optional actor. Better Auth session hooks record sign-in/sign-out as
+  `admin:<username>`, the RPC middleware records mutating admin calls with the same actor, and the
+  old supplementary audit shim has been removed.
 - Plugin tools are offered to the model. `PluginHost.tools()` aggregates every started plugin's
   `context.tools`; `createPluginToolsExtension()` adapts them to pi-durable registrations and the
   host installs one extension alongside the persona/memory sections. Permission denial and plugin
@@ -84,6 +90,7 @@ This file is the cross-session handoff record. Update it whenever implementation
 | Downtime during cutover   | Allowed                                                                                 |
 | Self-iteration deployment | Local development first; agent creates deployment proposals/artifacts; later GHCR image |
 | WebUI authorization       | One administrator                                                                       |
+| Authentication            | Better Auth with SQLite-backed users and sessions                                       |
 | OneBot mode               | Tsukaima actively connects to NapCat WebSocket server                                     |
 | LLM-assisted migration    | Allowed, especially for conversation compression and memory extraction                  |
 | Project name              | `tsukaima-chatbot`                                                                        |
@@ -150,26 +157,22 @@ bun run check
 ```
 
 Current baseline: lint, formatting, root TypeScript, WebUI TypeScript, WebUI production
-build, and 176 tests across 36 files pass.
+build, and 178 tests across 36 files pass.
 
 ## Next implementation steps
 
 Do these in order unless a later decision changes the plan:
 
-1. Give `packages/sdk`'s `AuditEntry` an optional `actorId` and thread it through
-   `TsukaimaLifecycle.writeAudit`, replacing the RPC-layer audit shim.
-2. Decide the auth provider question recorded in `docs/architecture/api.md`: adopt a mature library
-   (Better Auth or equivalent) or keep the in-house service deliberately.
-3. Consume the plugin UI registry in the WebUI, and add `task.created`/`task.completed` emission
+1. Consume the plugin UI registry in the WebUI, and add `task.created`/`task.completed` emission
    points if pi-durable exposes a host-level task lifecycle.
-4. Add host hooks for channel connection state and friend/group requests so the SSE heartbeat
+2. Add host hooks for channel connection state and friend/group requests so the SSE heartbeat
    resync is no longer the only source.
-5. Extract the model provider into `plugins/openai-compatible` (phase C of `plugin-decoupling.md`); this needs the `models.registerProvider` host surface.
-6. Add full persona/memory/audit admin services and review UI, plus memory extraction jobs.
-7. Add sticker/meme and search plugins plus plugin-owned database migrations.
-8. Add task graph/audit visualization for self-iteration.
-9. Run the real DSH import, verify data, and cut NapCat from DSH to Tsukaima.
-10. Add secret scanning, backup/restore drills, and the production runbook.
+3. Extract the model provider into `plugins/openai-compatible` (phase C of `plugin-decoupling.md`); this needs the `models.registerProvider` host surface.
+4. Add full persona/memory/audit admin services and review UI, plus memory extraction jobs.
+5. Add sticker/meme and search plugins plus plugin-owned database migrations.
+6. Add task graph/audit visualization for self-iteration.
+7. Run the real DSH import, verify data, and cut NapCat from DSH to Tsukaima.
+8. Add secret scanning, backup/restore drills, and the production runbook.
 
 ## Current known limitations
 
@@ -184,9 +187,11 @@ Do these in order unless a later decision changes the plan:
   column stayed.
 - `remoteModelsInputSchema` and `runtimeSettingsPatchSchema` exist both in `apps/server/src` and
   in `packages/contracts`; one definition should move.
-- Admin authentication is in-house; the auth-library decision is open (see `api.md`). Login
-  throttling is global rather than per-IP, the session cookie has no `Secure` attribute (LAN HTTP),
-  there is no password rotation, and sessions do not survive a restart.
+- Better Auth sign-in throttling intentionally uses one in-process bucket for the single-admin
+  deployment; a trusted-proxy/IP configuration is still needed before exposing the WebUI beyond the
+  LAN. There is no password-rotation UI or multi-admin model yet. Migration `0005` drops the legacy
+  `admin_credentials` table; an existing deployment must have the bootstrap env values available
+  for the first run after upgrade or use a dedicated credential-import tool.
 - Hook payloads are asymmetric: `activity.opened`/`activity.closed` carry durable ids while
   `before.reply`/`after.reply` carry domain ids, and `task.created`/`task.completed` are declared
   with no emission point.

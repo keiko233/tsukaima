@@ -7,7 +7,7 @@ The WebUI and admin tools call Tsukaima through oRPC procedures mounted on Elysi
 | Namespace | Audience | Purpose |
 | --- | --- | --- |
 | `health` | Local monitoring | Process and dependency status |
-| `auth` | Administrator | Session login/logout/status |
+| `auth` | Administrator | `auth.status`; login/logout/session routes are native Better Auth |
 | `conversations` | Administrator | List, inspect, search, and manage conversations |
 | `messages` | Administrator | Read history, send admin messages, inspect activities |
 | `tasks` | Administrator | Inspect durable tasks and task graph |
@@ -28,21 +28,22 @@ Do not expose raw durable storage operations or arbitrary SQL through oRPC.
 ## Context
 
 Every procedure receives an oRPC context. It is deliberately small: the server threads the
-lifecycle handle (the composition root for domain services) plus the auth service and the session
-token parsed from the request cookie.
+lifecycle handle (the composition root for domain services), the Better Auth facade, and the raw
+request headers used to resolve the signed session cookie.
 
 ```ts
 type ApiContext = {
   lifecycle: TsukaimaLifecycle;
   auth: AuthService;
-  sessionToken?: string;
+  headers: Headers;
 };
 ```
 
-`admin/*` procedures are bound to `adminBase = apiBase.use(requireAdmin)`, which rejects a request
-without a valid session with `UNAUTHENTICATED` (HTTP 401) before any handler runs. `health/status`
-and `auth/*` stay public. Domain services are reached through `context.lifecycle` rather than being
-injected individually, so a new service does not change the RPC context signature.
+`admin/*` procedures are bound to `adminBase = apiBase.use(requireAdmin)`, which asks Better Auth to
+validate the request session and rejects a request without one with `UNAUTHENTICATED` (HTTP 401)
+before any handler runs. `health/status` and `auth/status` stay public. Domain services are reached
+through `context.lifecycle` rather than being injected individually, so a new service does not
+change the RPC context signature.
 
 ## Procedure conventions
 
@@ -110,56 +111,63 @@ Returns:
 
 ## Auth
 
-Initial release has one administrator.
+Initial release has one administrator. Better Auth 1.7 is the authentication authority; Tsukaima does
+not implement password hashing, token storage, or session validation itself.
 
-Implemented procedures:
+Native Better Auth routes mounted on Elysia:
 
-- `auth.status` → `{ authenticated, configured, username? }`. `configured: false` means no
-  credential exists yet, so the WebUI shows setup guidance instead of a login form.
-- `auth.login({ username, password })` → sets an httpOnly, `SameSite=Lax` session cookie.
-- `auth.logout()` → clears the cookie and the session.
+| Route | Purpose |
+| --- | --- |
+| `POST /api/auth/sign-in/username` | Username/password sign-in, signed cookie, DB session |
+| `POST /api/auth/sign-out` | Revoke the current session and clear the cookie |
+| `GET/POST /api/auth/get-session` | Session read and sliding refresh |
+
+The only oRPC auth procedure is:
+
+- `auth.status` → `{ authenticated, configured, username? }`. `configured: false` means no Better
+  Auth user exists yet, so the WebUI shows setup guidance instead of a login form. The WebUI uses
+  Better Auth's `get-session` as the runtime session authority and this procedure for setup
+  guidance and API clients.
 
 Behaviour:
 
-- Bootstrap: the `admin_credentials` row is authoritative. On first start, `TSUKAIMA_ADMIN_USERNAME`
-  and `TSUKAIMA_ADMIN_PASSWORD` are hashed with `Bun.password` (argon2id) into that row. Changing the
-  environment later does not rotate the password.
-- Locked by default: with no stored credential and no environment credential, every `admin/*`
-  procedure rejects, `auth.status` reports `configured: false`, and the startup log names the
-  missing variables. There is no "unconfigured means allow" path.
-- Sessions are in-memory with a 7-day TTL and at most 16 concurrent sessions; a restart signs
-  everyone out. Tokens are stored server-side as SHA-256 digests and compared with
-  `timingSafeEqual`.
-- Failed logins back off after 5 attempts (1 s, doubling, 60 s cap) and return
-  `TOO_MANY_REQUESTS` with `retryAfterMs`.
-- Audit rows for admin actions carry `actorId = admin:<username>` (see the audit note below).
-
-### Open decision: auth library
-
-This section originally specified Better Auth with library-provided credential storage. The current
-implementation is a small in-house service (hash, session, cookie, throttle) because the first
-remediation pass avoided adding dependencies while several workstreams were editing the workspace
-in parallel. It is not a rejection of the library: adopting Better Auth (or an equivalent mature
-provider) is still the preferred direction under the project's "prefer mature libraries" policy,
-and should be decided before the surface grows (password rotation, multiple admins, device
-management). Until then the in-house implementation is the single source of truth.
+- Bootstrap: on first start, if `auth_user` is empty, `TSUKAIMA_ADMIN_USERNAME` and
+  `TSUKAIMA_ADMIN_PASSWORD` are passed to Better Auth's server-side `signUpEmail` API with the
+  username plugin. The fixed account email comes from `TSUKAIMA_ADMIN_EMAIL` or
+  `admin@tsukaima.invalid`. Afterwards the database row is authoritative; changing the environment
+  does not rotate the password.
+- Public sign-up is closed. The Elysia auth handler rejects every `/api/auth/sign-up/*` request; only
+  the in-process bootstrap call can create the first account.
+- Locked by default: with no stored user and no environment credential, every `admin/*` procedure
+  rejects, `auth.status` reports `configured: false`, and the startup log names the missing
+  variables. There is no "unconfigured means allow" path.
+- Passwords are hashed and verified by Better Auth (scrypt by default). Sessions live in
+  `auth_session` for 7 days and are refreshed once per day. A restart does not invalidate them.
+- The cookie is `tsukaima.session_token`, `HttpOnly`, `SameSite=Lax`, and `Secure` when the public URL
+  is HTTPS or `TSUKAIMA_AUTH_SECURE_COOKIES=true`.
+- Sign-in is limited to 5 attempts per 60 seconds per Better Auth rate-limit bucket, with an
+  in-process per-instance store. The initial single-admin deployment shares one bucket rather than
+  trusting spoofable `X-Forwarded-For` headers.
+- Audit rows for successful sign-in, sign-out, and mutating admin actions carry
+  `actorId = admin:<username>`. A denied sign-in uses `admin:unknown` because the native Better Auth
+  boundary does not expose the attempted username without reading the request body twice; the
+  payload still records the path and denial result.
 
 ### Audit actors
 
-`TsukaimaLifecycle.writeAudit` has no actor parameter, so the RPC layer writes the actor-bearing rows
-for sign-in, sign-out, denied requests, and the mutating admin procedures. Background services
-(`reply-dispatcher`, channel plugins) still audit with the legacy default. Adding an optional
-`actorId` to the SDK's `AuditEntry` and threading it through `writeAudit` is the root-cause fix and
-is queued as a small follow-up.
+`TsukaimaLifecycle.writeAudit` accepts optional `actorId` and `actorKind` fields from the SDK's
+`AuditEntry`. Better Auth's session hooks and the oRPC admin middleware supply the real administrator
+actor where it is known; background services keep the default WebUI actor unless they have a more
+specific identity.
 
 ## Realtime events
 
 `GET /events/stream` is a server-sent event stream used by the WebUI shell. It is separate from
 oRPC because `EventSource` cannot carry oRPC payloads; mutations stay on oRPC.
 
-Authentication is mandatory. The endpoint reads the same `tsukaima_admin_session` cookie as oRPC and
-returns `401 UNAUTHENTICATED` without a live session; no stream is opened. `GET /events/logs` is
-guarded the same way.
+Authentication is mandatory. The endpoint passes the same Better Auth cookie to
+`auth.api.getSession` and returns `401 UNAUTHENTICATED` without a live session; no stream is opened.
+`GET /events/logs` is guarded the same way.
 
 Events (`event:` name equals the payload's `type`):
 

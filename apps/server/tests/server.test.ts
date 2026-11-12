@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../src/app.ts";
-import { ADMIN_SESSION_COOKIE } from "../src/services/auth.ts";
+import { signIn } from "./test-auth.ts";
 
 const directories: string[] = [];
 
@@ -31,7 +31,7 @@ describe("server skeleton", () => {
 	test("streams snapshot and live log entries over an authenticated SSE connection", async () => {
 		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-server-sse-"));
 		directories.push(directory);
-		const { app, auth, lifecycle } = createApp({
+		const { app, lifecycle } = createApp({
 			TSUKAIMA_ADMIN_PASSWORD: "test-admin-password",
 			TSUKAIMA_ADMIN_USERNAME: "admin",
 			TSUKAIMA_DATA_DIR: directory,
@@ -39,9 +39,7 @@ describe("server skeleton", () => {
 			TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 		});
 		await lifecycle.start();
-		const login = await auth.login("admin", "test-admin-password");
-		if (!login.ok) throw new Error("test admin login failed");
-		const cookie = `${ADMIN_SESSION_COOKIE}=${login.token}`;
+		const cookie = await signIn(app, "admin", "test-admin-password");
 		const abort = new AbortController();
 		const response = await app.handle(
 			new Request("http://localhost/events/logs", {

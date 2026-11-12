@@ -428,15 +428,6 @@ const okSchema = z.object({ ok: z.literal(true) });
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
-export const authLoginInputSchema = z.object({
-	password: z.string().min(1).max(1_024),
-	username: z.string().trim().min(1).max(120),
-});
-export type AuthLoginInput = z.infer<typeof authLoginInputSchema>;
-
-export const authLoginOutputSchema = z.object({ username: z.string() });
-export type AuthLoginOutput = z.infer<typeof authLoginOutputSchema>;
-
 export const authStatusOutputSchema = z.object({
 	authenticated: z.boolean(),
 	configured: z.boolean(),
@@ -573,8 +564,6 @@ export const appContract = oc.router({
 		},
 	},
 	auth: {
-		login: oc.input(authLoginInputSchema).output(authLoginOutputSchema),
-		logout: oc.output(okSchema),
 		status: oc.output(authStatusOutputSchema),
 	},
 	health: {

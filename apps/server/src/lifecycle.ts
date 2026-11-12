@@ -67,6 +67,7 @@ export class TsukaimaLifecycle {
 	private currentState: LifecycleState["state"] = "starting";
 	private currentStage = "initialize";
 	private failureReason: string | undefined;
+	private readonly stopListeners = new Set<() => void>();
 
 	conversationHost: PiDurableConversationHost | undefined;
 	domainDatabase: TsukaimaDatabase | undefined;
@@ -377,8 +378,8 @@ export class TsukaimaLifecycle {
 		if (database === undefined) return;
 		await database.insert(auditLog).values({
 			action: entry.action,
-			actorId: "webui-admin",
-			actorKind: "user",
+			actorId: entry.actorId ?? "webui-admin",
+			actorKind: entry.actorKind ?? "user",
 			id: randomUUID(),
 			occurredAt: new Date().toISOString(),
 			...(entry.payload === undefined ? {} : { payloadJson: JSON.stringify(entry.payload) }),
@@ -389,8 +390,24 @@ export class TsukaimaLifecycle {
 		});
 	}
 
+	/** Registers a synchronous shutdown callback. Used by services that hold the domain DB. */
+	onStop(listener: () => void): () => void {
+		this.stopListeners.add(listener);
+		return () => this.stopListeners.delete(listener);
+	}
+
 	async stop(): Promise<void> {
 		this.transition("stopping", "maintenance");
+		for (const listener of this.stopListeners) {
+			try {
+				listener();
+			} catch (error) {
+				this.runtimeLog.warn("shutdown listener failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+		this.stopListeners.clear();
 		await this.pluginHost.stop();
 		await this.conversationHost?.close();
 		await this.durableStorage?.close(BACKGROUND_CONTEXT);

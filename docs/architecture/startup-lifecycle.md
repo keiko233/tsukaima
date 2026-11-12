@@ -123,6 +123,7 @@ Construct services with opened database handles and the durable runtime:
 - policy service
 - media service
 - audit service
+- Better Auth facade and first-administrator bootstrap
 - plugin service
 - model router
 
@@ -162,7 +163,7 @@ Bind Elysia and mount:
 - `/readyz`
 - `/rpc/*`
 - static WebUI assets
-- auth routes, if separate from RPC
+- Better Auth routes at `/api/auth/*`
 
 `/healthz` may return 200 for a listening process. `/readyz` returns 200 only after channels are ready.
 

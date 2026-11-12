@@ -77,6 +77,9 @@ export interface PluginRequestApi {
 
 export interface AuditEntry {
 	readonly action: string;
+	/** Defaults to the WebUI administrator when omitted. */
+	readonly actorId?: string;
+	readonly actorKind?: "user" | "agent" | "plugin" | "system";
 	readonly payload?: unknown;
 	readonly reason?: string;
 	readonly result: "ok" | "denied" | "failed";

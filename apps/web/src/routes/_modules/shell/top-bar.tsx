@@ -23,6 +23,7 @@ import {
 	MorphPopoverTrigger,
 } from "@/components/motion/popover-morph";
 import { orpc, type DiagnosticsData } from "@/lib/api";
+import { authClient, authSessionQueryKey, authSessionQueryOptions } from "@/lib/auth";
 import { applyTheme, getInitialTheme, type Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -69,15 +70,20 @@ export function TopBar({
 	const queryClient = useQueryClient();
 	const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
 	const diagnostics = useQuery(orpc.admin.diagnostics.status.queryOptions());
-	const authStatus = useQuery(orpc.auth.status.queryOptions());
-	const signOut = useMutation(
-		orpc.auth.logout.mutationOptions({
-			onSuccess: async () => {
-				await queryClient.invalidateQueries({ queryKey: orpc.auth.status.queryKey() });
-				void navigate({ replace: true, to: "/login" });
-			},
-		}),
-	);
+	const session = useQuery(authSessionQueryOptions());
+	const signOut = useMutation({
+		mutationFn: async () => {
+			const { error } = await authClient.signOut();
+			if (error !== null) throw error;
+		},
+		onSuccess: async () => {
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: authSessionQueryKey }),
+				queryClient.invalidateQueries({ queryKey: orpc.auth.status.queryKey() }),
+			]);
+			void navigate({ replace: true, to: "/login" });
+		},
+	});
 	const status = connectionStatus(diagnostics.data);
 
 	const toggleTheme = () => {
@@ -193,9 +199,11 @@ export function TopBar({
 							{m.theme_toggle()}
 						</button>
 						<div className="my-1 h-px bg-border" />
-						{authStatus.data?.username === undefined ? null : (
+						{session.data?.user === undefined ? null : (
 							<div className="truncate px-2.5 pb-1 text-[11px] text-muted-foreground">
-								{m.auth_signed_in_as({ username: authStatus.data.username })}
+								{m.auth_signed_in_as({
+									username: session.data.user.username ?? session.data.user.name,
+								})}
 							</div>
 						)}
 						<button

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { liveEventSchema, type LiveEvent } from "@tsukaima/contracts";
 import type { TsukaimaLifecycle } from "../lifecycle.ts";
 import { encodeSseEvent, type LogBuffer, type Logger } from "../logging.ts";
-import { readSessionToken, type AuthService } from "./auth.ts";
+import type { AuthService } from "./auth.ts";
 import type { HookBus } from "./hook-bus.ts";
 
 export const DEFAULT_EVENT_HEARTBEAT_MS = 15_000;
@@ -70,10 +70,9 @@ export async function eventAuthResponse(
 	auth: AuthService,
 	request: Request,
 ): Promise<Response | undefined> {
-	const token = readSessionToken(request.headers.get("cookie"));
 	try {
-		const status = await auth.status(token);
-		if (status.authenticated) return undefined;
+		const session = await auth.getSession(request.headers);
+		if (session !== undefined) return undefined;
 	} catch {
 		// Authentication failures fail closed.
 	}

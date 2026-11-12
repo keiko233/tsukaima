@@ -10,6 +10,7 @@ import {
 } from "@tsukaima/contracts";
 import type { OneBotTransport } from "@tsukaima/onebot";
 import { createApp } from "../src/app.ts";
+import { signIn } from "./test-auth.ts";
 
 const directories: string[] = [];
 
@@ -31,19 +32,9 @@ const createOneBotTransportSpy = () => {
 
 const TEST_ADMIN = { password: "test-admin-password", username: "admin" };
 
-/** Signs in through the real HTTP surface and returns the session cookie. */
-async function signIn(app: ReturnType<typeof createApp>["app"]): Promise<string> {
-	const response = await app.handle(
-		new Request("http://localhost/rpc/auth/login", {
-			body: JSON.stringify({ json: TEST_ADMIN }),
-			headers: { "content-type": "application/json" },
-			method: "POST",
-		}),
-	);
-	if (response.status !== 200) throw new Error(`sign-in failed: ${response.status}`);
-	const setCookie = response.headers.get("set-cookie");
-	if (setCookie === null) throw new Error("sign-in did not set a session cookie");
-	return setCookie.split(";")[0] ?? "";
+/** Signs in through the real Better Auth HTTP surface and returns the session cookie. */
+async function signInAdmin(app: ReturnType<typeof createApp>["app"]): Promise<string> {
+	return signIn(app, TEST_ADMIN.username, TEST_ADMIN.password);
 }
 
 afterEach(async () => {
@@ -69,7 +60,7 @@ describe("admin RPC", () => {
 		);
 		await lifecycle.start();
 
-		const cookie = await signIn(app);
+		const cookie = await signInAdmin(app);
 		const request = async (procedure: string, input?: unknown) => {
 			const response = await app.handle(
 				new Request(`http://localhost/rpc/${procedure}`, {
@@ -199,7 +190,7 @@ describe("admin RPC", () => {
 		await lifecycle.start();
 
 		try {
-			const cookie = await signIn(app);
+			const cookie = await signInAdmin(app);
 			const response = await app.handle(
 				new Request("http://localhost/rpc/admin/settings/models", {
 					body: JSON.stringify({

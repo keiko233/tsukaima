@@ -3,8 +3,9 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { auditLog } from "@tsukaima/db";
-import { appRouter } from "../src/rpc/index.ts";
 import { createApp } from "../src/app.ts";
+import { appRouter } from "../src/rpc/index.ts";
+import { signIn, signOut } from "./test-auth.ts";
 
 const directories: string[] = [];
 
@@ -51,10 +52,22 @@ async function rpc(
 	};
 }
 
-function sessionCookieFrom(setCookie: string | null): string {
-	const cookie = setCookie ?? "";
-	expect(cookie).toContain("tsukaima_admin_session=");
-	return cookie.split(";")[0] ?? "";
+async function authPost(
+	app: ReturnType<typeof createApp>["app"],
+	path: string,
+	body: unknown,
+	cookie?: string,
+): Promise<Response> {
+	return app.handle(
+		new Request(`http://localhost/api/auth/${path}`, {
+			body: JSON.stringify(body),
+			headers: {
+				"content-type": "application/json",
+				...(cookie === undefined ? {} : { cookie }),
+			},
+			method: "POST",
+		}),
+	);
 }
 
 const adminEnv = (directory: string, password = "correct-horse"): Record<string, string> => ({
@@ -79,7 +92,7 @@ function collectAdminProcedurePaths(router: unknown, prefix = ""): string[] {
 }
 
 describe("admin auth", () => {
-	test("bootstraps from env, signs in, and protects admin procedures", async () => {
+	test("bootstraps from env, signs in through Better Auth, and protects admin procedures", async () => {
 		const directory = await createDirectory("tsukaima-auth-");
 		const { app, lifecycle } = createApp(adminEnv(directory));
 		await lifecycle.start();
@@ -91,29 +104,40 @@ describe("admin auth", () => {
 		expect(denied.status).toBe(401);
 		expect(denied.body.code).toBe("UNAUTHENTICATED");
 
-		const wrongPassword = await rpc(app, "auth/login", {
+		const publicSignup = await authPost(app, "sign-up/email", {
+			email: "intruder@example.com",
+			name: "Intruder",
+			password: "another-password",
+		});
+		expect(publicSignup.status).toBe(404);
+
+		const wrongPassword = await authPost(app, "sign-in/username", {
 			password: "wrong-password",
 			username: "tsukaima",
 		});
 		expect(wrongPassword.status).toBe(401);
-		expect(wrongPassword.body.code).toBe("UNAUTHENTICATED");
-		expect(wrongPassword.cookie).toBeNull();
+		expect(wrongPassword.headers.get("set-cookie")).toBeNull();
 
-		const login = await rpc(app, "auth/login", {
+		const login = await authPost(app, "sign-in/username", {
 			password: "correct-horse",
 			username: "tsukaima",
 		});
 		expect(login.status).toBe(200);
-		expect(login.body).toEqual({ username: "tsukaima" });
-		expect(JSON.stringify(login.body)).not.toContain("correct-horse");
-		const setCookie = login.cookie ?? "";
+		const loginBody = (await login.json()) as {
+			token?: string;
+			user?: { username?: string };
+		};
+		expect(loginBody.user?.username).toBe("tsukaima");
+		expect(JSON.stringify(loginBody)).not.toContain("correct-horse");
+		const setCookie = login.headers.get("set-cookie") ?? "";
+		expect(setCookie).toContain("tsukaima.session_token=");
 		expect(setCookie).toContain("HttpOnly");
 		expect(setCookie).toContain("SameSite=Lax");
 		expect(setCookie).toContain("Path=/");
 		expect(setCookie).toContain("Max-Age=");
 		expect(setCookie).not.toContain("correct-horse");
-		const cookie = sessionCookieFrom(login.cookie);
 
+		const cookie = await signIn(app, "tsukaima", "correct-horse");
 		const after = await rpc(app, "auth/status", {}, cookie);
 		expect(after.body).toEqual({ authenticated: true, configured: true, username: "tsukaima" });
 
@@ -121,8 +145,6 @@ describe("admin auth", () => {
 		expect(allowed.status).toBe(200);
 		expect(allowed.body.state).toBeDefined();
 
-		// Admin-facing actions get a supplementary audit row with the real actor, because
-		// `lifecycle.writeAudit` hardcodes its actorId.
 		const database = lifecycle.domainDatabase;
 		if (database === undefined) throw new Error("domain database not ready");
 		await rpc(app, "admin/chats/createLocal", { sessionTitle: "Audit", title: "Audit" }, cookie);
@@ -137,9 +159,9 @@ describe("admin auth", () => {
 		expect(adminActionRow?.actorId).toBe("admin:tsukaima");
 		expect(adminActionRow?.payloadJson).toContain("admin/chats/createLocal");
 
-		const logout = await rpc(app, "auth/logout", {}, cookie);
+		const logout = await signOut(app, cookie);
 		expect(logout.status).toBe(200);
-		expect(logout.cookie ?? "").toContain("Max-Age=0");
+		expect(logout.headers.get("set-cookie") ?? "").toContain("Max-Age=0");
 
 		const revoked = await rpc(app, "admin/diagnostics/status", {}, cookie);
 		expect(revoked.status).toBe(401);
@@ -161,10 +183,11 @@ describe("admin auth", () => {
 		const status = await rpc(app, "auth/status", {});
 		expect(status.body).toEqual({ authenticated: false, configured: false });
 
-		const login = await rpc(app, "auth/login", { password: "whatever", username: "admin" });
+		const login = await authPost(app, "sign-in/username", {
+			password: "whatever",
+			username: "admin",
+		});
 		expect(login.status).toBe(401);
-		expect(login.body.code).toBe("UNAUTHENTICATED");
-		expect(String(login.body.message)).toContain("not configured");
 
 		// There is intentionally no "unconfigured means allow" fallback.
 		const denied = await rpc(app, "admin/users/list", {});
@@ -187,26 +210,57 @@ describe("admin auth", () => {
 
 		const first = createApp(adminEnv(directory, "first-password"));
 		await first.lifecycle.start();
-		const initial = await rpc(first.app, "auth/login", {
-			password: "first-password",
-			username: "tsukaima",
-		});
-		expect(initial.status).toBe(200);
+		await signIn(first.app, "tsukaima", "first-password");
 		await first.lifecycle.stop();
 
 		const second = createApp(adminEnv(directory, "second-password"));
 		await second.lifecycle.start();
-		const rotated = await rpc(second.app, "auth/login", {
+		const rotated = await authPost(second.app, "sign-in/username", {
 			password: "second-password",
 			username: "tsukaima",
 		});
 		expect(rotated.status).toBe(401);
-		const stored = await rpc(second.app, "auth/login", {
-			password: "first-password",
-			username: "tsukaima",
-		});
-		expect(stored.status).toBe(200);
+		await signIn(second.app, "tsukaima", "first-password");
 		await second.lifecycle.stop();
+	});
+
+	test("keeps a Better Auth session across a server restart", async () => {
+		const directory = await createDirectory("tsukaima-auth-session-persist-");
+
+		const first = createApp(adminEnv(directory));
+		await first.lifecycle.start();
+		const cookie = await signIn(first.app, "tsukaima", "correct-horse");
+		await first.lifecycle.stop();
+
+		const second = createApp(adminEnv(directory));
+		await second.lifecycle.start();
+		const allowed = await rpc(second.app, "admin/diagnostics/status", {}, cookie);
+		expect(allowed.status).toBe(200);
+		await second.lifecycle.stop();
+	});
+
+	test("accepts browser-origin sign-in and sign-out", async () => {
+		const directory = await createDirectory("tsukaima-auth-origin-");
+		const { app, lifecycle } = createApp({
+			...adminEnv(directory),
+			TSUKAIMA_PUBLIC_URL: "http://localhost:7420",
+			TSUKAIMA_WEB_ORIGIN: "http://localhost:7420",
+		});
+		await lifecycle.start();
+
+		const cookie = await signIn(
+			app,
+			"tsukaima",
+			"correct-horse",
+			"http://localhost",
+			"http://localhost:7420",
+		);
+		const logout = await signOut(app, cookie, "http://localhost", "http://localhost:7420");
+		expect(logout.status).toBe(200);
+		const revoked = await rpc(app, "admin/diagnostics/status", {}, cookie);
+		expect(revoked.status).toBe(401);
+
+		await lifecycle.stop();
 	});
 
 	test("locks sign-in after repeated failures", async () => {
@@ -215,20 +269,18 @@ describe("admin auth", () => {
 		await lifecycle.start();
 
 		for (let attempt = 0; attempt < 5; attempt += 1) {
-			const failure = await rpc(app, "auth/login", {
+			const failure = await authPost(app, "sign-in/username", {
 				password: "nope",
 				username: "tsukaima",
 			});
 			expect(failure.status).toBe(401);
 		}
-		const locked = await rpc(app, "auth/login", {
+		const locked = await authPost(app, "sign-in/username", {
 			password: "correct-horse",
 			username: "tsukaima",
 		});
 		expect(locked.status).toBe(429);
-		expect(locked.body.code).toBe("TOO_MANY_REQUESTS");
-		const data = locked.body.data as { retryAfterMs?: number } | undefined;
-		expect(data?.retryAfterMs ?? 0).toBeGreaterThan(0);
+		expect(locked.headers.get("retry-after") ?? locked.headers.get("x-retry-after")).not.toBeNull();
 
 		await lifecycle.stop();
 	});

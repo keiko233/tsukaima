@@ -10,7 +10,7 @@
 	"auth_signed_in_as": "已登录：{username}",
 	"auth_invalid_credentials": "用户名或密码不正确。",
 	"auth_rate_limited": "尝试次数过多，请稍后再试。",
-	"auth_not_configured": "尚未配置管理员凭据。请设置 TSUKAIMA_ADMIN_USERNAME 与 TSUKAIMA_ADMIN_PASSWORD 后重启服务器。",
+	"auth_not_configured": "尚未配置管理员。请设置 TSUKAIMA_ADMIN_USERNAME 与 TSUKAIMA_ADMIN_PASSWORD（密码至少 8 个字符）后重启服务器。",
 	"auth_sign_in_failed": "登录失败，请查看服务器日志。",
 	"nav_conversations": "会话",
 	"nav_policies": "策略",

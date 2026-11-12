@@ -67,23 +67,71 @@ CREATE TABLE meta (
 );
 ```
 
-### admin_credentials
+### Better Auth tables
 
-The single WebUI administrator. Exactly one row is expected; the database row is authoritative over
-the bootstrap environment variables.
+Better Auth owns authentication state in four tables. `auth_user` is the WebUI principal and is
+separate from the bot-domain `users` table. Passwords live in `auth_account.password`; Better Auth
+uses its default scrypt hasher. `auth_session` stores signed-cookie session records and survives
+restarts.
 
 ```sql
-CREATE TABLE admin_credentials (
+CREATE TABLE auth_user (
   id TEXT PRIMARY KEY,
-  username TEXT NOT NULL,
-  password_hash TEXT NOT NULL,   -- Bun.password argon2id
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  name TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  email_verified INTEGER NOT NULL DEFAULT 0,
+  image TEXT,
+  username TEXT UNIQUE,
+  display_username TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE auth_account (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES auth_user(id) ON DELETE CASCADE,
+  password TEXT,
+  access_token TEXT,
+  refresh_token TEXT,
+  id_token TEXT,
+  access_token_expires_at INTEGER,
+  refresh_token_expires_at INTEGER,
+  scope TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE auth_session (
+  id TEXT PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL REFERENCES auth_user(id) ON DELETE CASCADE,
+  expires_at INTEGER NOT NULL,
+  ip_address TEXT,
+  user_agent TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE auth_verification (
+  id TEXT PRIMARY KEY,
+  identifier TEXT NOT NULL,
+  value TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 ```
 
-Admin sessions are intentionally not stored here: they live in process memory, so a restart signs
-the administrator out and no session token ever reaches disk.
+All `*_at` columns use `timestamp_ms`. The physical names are `auth_*`; the Drizzle adapter maps
+Better Auth model names (`user`, `session`, `account`, `verification`) through `authSchema`.
+
+Migration `0005` drops the legacy `admin_credentials` table. Its argon2id hash format is not a
+Better Auth account, so the first run after this change recreates the administrator from
+`TSUKAIMA_ADMIN_USERNAME`/`TSUKAIMA_ADMIN_PASSWORD` when `auth_user` is empty. This is acceptable during
+the pre-deployment phase; a future deployed cutover must keep the bootstrap env values available for
+one start or provide a dedicated credential-import script.
 
 ### identities
 

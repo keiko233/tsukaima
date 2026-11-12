@@ -1,5 +1,9 @@
 # Implementation review — 2026-11-12
 
+> Historical record. The authentication section below describes the in-house service that was
+> later replaced by Better Auth; see [ADR 0008](../adrs/0008-better-auth.md) and the current
+> [API architecture](../architecture/api.md) for the authoritative design.
+
 Scope: the first implementation pass on top of the architecture documents. Reviewed by
 running the project, reading every workspace package, and probing the live server.
 

@@ -1,26 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { Navigate, Outlet, createRootRoute, useRouterState } from "@tanstack/react-router";
 import { orpc } from "@/lib/api";
+import { authSessionQueryOptions } from "@/lib/auth";
 import { useEventStream } from "@/lib/use-event-stream";
 import { AdminShell } from "./_modules/shell/admin-shell";
 
 /**
- * Auth gate for the whole WebUI. The admin shell never renders without a live session: the
- * `auth.status` query decides between the shell and a redirect to `/login`. `/login` itself is
- * rendered bare, and an authenticated visitor on `/login` is bounced back to the app.
+ * Auth gate for the whole WebUI. Better Auth's `getSession` is the authority; the oRPC status
+ * query only supplies the "no administrator configured yet" guidance. `/login` itself is rendered
+ * bare, and an authenticated visitor on `/login` is bounced back to the app.
  */
 function RootLayout() {
-	const status = useQuery(
-		orpc.auth.status.queryOptions({
-			refetchInterval: 30_000,
-			retry: false,
-		}),
-	);
+	const session = useQuery(authSessionQueryOptions());
+	const status = useQuery(orpc.auth.status.queryOptions({ retry: false }));
 	const pathname = useRouterState({ select: (state) => state.location.pathname });
-	const authenticated = status.data?.authenticated === true;
+	const authenticated = session.data !== null && session.data !== undefined;
 	useEventStream(authenticated);
 
-	if (status.isPending) {
+	if (session.isPending || (!authenticated && status.isPending)) {
 		return (
 			<div className="grid h-dvh place-items-center bg-background">
 				<div
