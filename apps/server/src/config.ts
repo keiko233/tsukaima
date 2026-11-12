@@ -6,6 +6,9 @@ const configurationSchema = z.object({
 	logLevel: z.enum(["debug", "info", "warn", "error"]),
 	onebotAccessToken: z.string().min(1).optional(),
 	onebotWsUrl: z.string().url().optional(),
+	openAiApiKey: z.string().min(1).optional(),
+	openAiBaseUrl: z.string().url().optional(),
+	openAiModelId: z.string().min(1).optional(),
 	port: z.number().int().min(1).max(65_535),
 	webOrigin: z.string().url(),
 });
@@ -19,6 +22,9 @@ export function loadConfig(env: Record<string, string | undefined>): TsukaimaCon
 		logLevel: env.TSUKAIMA_LOG_LEVEL ?? "info",
 		onebotAccessToken: env.TSUKAIMA_ONEBOT_ACCESS_TOKEN || undefined,
 		onebotWsUrl: env.TSUKAIMA_ONEBOT_WS_URL || undefined,
+		openAiApiKey: env.TSUKAIMA_OPENAI_API_KEY || undefined,
+		openAiBaseUrl: env.TSUKAIMA_OPENAI_BASE_URL || undefined,
+		openAiModelId: env.TSUKAIMA_OPENAI_MODEL_ID || undefined,
 		port: Number(env.TSUKAIMA_PORT ?? "7420"),
 		webOrigin: env.TSUKAIMA_WEB_ORIGIN ?? "http://127.0.0.1:7421",
 	});
