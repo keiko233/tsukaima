@@ -8,124 +8,124 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as DiagnosticsRouteImport } from './routes/diagnostics'
-import { Route as PluginsRouteImport } from './routes/plugins'
-import { Route as PoliciesRouteImport } from './routes/policies'
-import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as rootRouteImport } from "./routes/__root";
+import { Route as IndexRouteImport } from "./routes/index";
+import { Route as DiagnosticsRouteImport } from "./routes/diagnostics";
+import { Route as PluginsRouteImport } from "./routes/plugins";
+import { Route as PoliciesRouteImport } from "./routes/policies";
+import { Route as SettingsRouteImport } from "./routes/settings";
 
 const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
+	id: "/",
+	path: "/",
+	getParentRoute: () => rootRouteImport,
+} as any);
 const DiagnosticsRoute = DiagnosticsRouteImport.update({
-  id: '/diagnostics',
-  path: '/diagnostics',
-  getParentRoute: () => rootRouteImport,
-} as any)
+	id: "/diagnostics",
+	path: "/diagnostics",
+	getParentRoute: () => rootRouteImport,
+} as any);
 const PluginsRoute = PluginsRouteImport.update({
-  id: '/plugins',
-  path: '/plugins',
-  getParentRoute: () => rootRouteImport,
-} as any)
+	id: "/plugins",
+	path: "/plugins",
+	getParentRoute: () => rootRouteImport,
+} as any);
 const PoliciesRoute = PoliciesRouteImport.update({
-  id: '/policies',
-  path: '/policies',
-  getParentRoute: () => rootRouteImport,
-} as any)
+	id: "/policies",
+	path: "/policies",
+	getParentRoute: () => rootRouteImport,
+} as any);
 const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
+	id: "/settings",
+	path: "/settings",
+	getParentRoute: () => rootRouteImport,
+} as any);
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
-  '/diagnostics': typeof DiagnosticsRoute
-  '/plugins': typeof PluginsRoute
-  '/policies': typeof PoliciesRoute
-  '/settings': typeof SettingsRoute
+	"/": typeof IndexRoute;
+	"/diagnostics": typeof DiagnosticsRoute;
+	"/plugins": typeof PluginsRoute;
+	"/policies": typeof PoliciesRoute;
+	"/settings": typeof SettingsRoute;
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
-  '/diagnostics': typeof DiagnosticsRoute
-  '/plugins': typeof PluginsRoute
-  '/policies': typeof PoliciesRoute
-  '/settings': typeof SettingsRoute
+	"/": typeof IndexRoute;
+	"/diagnostics": typeof DiagnosticsRoute;
+	"/plugins": typeof PluginsRoute;
+	"/policies": typeof PoliciesRoute;
+	"/settings": typeof SettingsRoute;
 }
 export interface FileRoutesById {
-  __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
-  '/diagnostics': typeof DiagnosticsRoute
-  '/plugins': typeof PluginsRoute
-  '/policies': typeof PoliciesRoute
-  '/settings': typeof SettingsRoute
+	__root__: typeof rootRouteImport;
+	"/": typeof IndexRoute;
+	"/diagnostics": typeof DiagnosticsRoute;
+	"/plugins": typeof PluginsRoute;
+	"/policies": typeof PoliciesRoute;
+	"/settings": typeof SettingsRoute;
 }
 export interface FileRouteTypes {
-  fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/diagnostics' | '/plugins' | '/policies' | '/settings'
-  fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/diagnostics' | '/plugins' | '/policies' | '/settings'
-  id: '__root__' | '/' | '/diagnostics' | '/plugins' | '/policies' | '/settings'
-  fileRoutesById: FileRoutesById
+	fileRoutesByFullPath: FileRoutesByFullPath;
+	fullPaths: "/" | "/diagnostics" | "/plugins" | "/policies" | "/settings";
+	fileRoutesByTo: FileRoutesByTo;
+	to: "/" | "/diagnostics" | "/plugins" | "/policies" | "/settings";
+	id: "__root__" | "/" | "/diagnostics" | "/plugins" | "/policies" | "/settings";
+	fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
-  DiagnosticsRoute: typeof DiagnosticsRoute
-  PluginsRoute: typeof PluginsRoute
-  PoliciesRoute: typeof PoliciesRoute
-  SettingsRoute: typeof SettingsRoute
+	IndexRoute: typeof IndexRoute;
+	DiagnosticsRoute: typeof DiagnosticsRoute;
+	PluginsRoute: typeof PluginsRoute;
+	PoliciesRoute: typeof PoliciesRoute;
+	SettingsRoute: typeof SettingsRoute;
 }
 
-declare module '@tanstack/react-router' {
-  interface FileRoutesByPath {
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/diagnostics': {
-      id: '/diagnostics'
-      path: '/diagnostics'
-      fullPath: '/diagnostics'
-      preLoaderRoute: typeof DiagnosticsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/plugins': {
-      id: '/plugins'
-      path: '/plugins'
-      fullPath: '/plugins'
-      preLoaderRoute: typeof PluginsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/policies': {
-      id: '/policies'
-      path: '/policies'
-      fullPath: '/policies'
-      preLoaderRoute: typeof PoliciesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-  }
+declare module "@tanstack/react-router" {
+	interface FileRoutesByPath {
+		"/": {
+			id: "/";
+			path: "/";
+			fullPath: "/";
+			preLoaderRoute: typeof IndexRouteImport;
+			parentRoute: typeof rootRouteImport;
+		};
+		"/diagnostics": {
+			id: "/diagnostics";
+			path: "/diagnostics";
+			fullPath: "/diagnostics";
+			preLoaderRoute: typeof DiagnosticsRouteImport;
+			parentRoute: typeof rootRouteImport;
+		};
+		"/plugins": {
+			id: "/plugins";
+			path: "/plugins";
+			fullPath: "/plugins";
+			preLoaderRoute: typeof PluginsRouteImport;
+			parentRoute: typeof rootRouteImport;
+		};
+		"/policies": {
+			id: "/policies";
+			path: "/policies";
+			fullPath: "/policies";
+			preLoaderRoute: typeof PoliciesRouteImport;
+			parentRoute: typeof rootRouteImport;
+		};
+		"/settings": {
+			id: "/settings";
+			path: "/settings";
+			fullPath: "/settings";
+			preLoaderRoute: typeof SettingsRouteImport;
+			parentRoute: typeof rootRouteImport;
+		};
+	}
 }
 
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
-  DiagnosticsRoute: DiagnosticsRoute,
-  PluginsRoute: PluginsRoute,
-  PoliciesRoute: PoliciesRoute,
-  SettingsRoute: SettingsRoute,
-}
+	IndexRoute: IndexRoute,
+	DiagnosticsRoute: DiagnosticsRoute,
+	PluginsRoute: PluginsRoute,
+	PoliciesRoute: PoliciesRoute,
+	SettingsRoute: SettingsRoute,
+};
 export const routeTree = rootRouteImport
-  ._addFileChildren(rootRouteChildren)
-  ._addFileTypes<FileRouteTypes>()
+	._addFileChildren(rootRouteChildren)
+	._addFileTypes<FileRouteTypes>();
