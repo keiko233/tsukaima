@@ -5,7 +5,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight, MessageCircle, ShieldAlert, Users } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/motion/button";
-import { api } from "@/lib/api";
+import { orpc } from "@/lib/api";
 import { m } from "@/paraglide/messages";
 import { formatTimestamp } from "../lib/format";
 import { Avatar, InlineError, SidebarEmpty } from "./primitives";
@@ -13,16 +13,13 @@ import { Avatar, InlineError, SidebarEmpty } from "./primitives";
 export function GroupsSidebar({ onNavigate, search }: { onNavigate: () => void; search: string }) {
 	const navigate = useNavigate();
 	const [selectedId, setSelectedId] = useState<string | null>(null);
-	const groups = useQuery({
-		queryFn: api.groups.list,
-		queryKey: ["admin", "groups"],
-		refetchInterval: 30_000,
-	});
-	const detail = useQuery({
-		enabled: selectedId !== null,
-		queryFn: () => api.groups.get(selectedId as string),
-		queryKey: ["admin", "groups", selectedId],
-	});
+	const groups = useQuery(orpc.admin.groups.list.queryOptions({ refetchInterval: 30_000 }));
+	const detail = useQuery(
+		orpc.admin.groups.get.queryOptions({
+			enabled: selectedId !== null,
+			input: { groupId: selectedId ?? "" },
+		}),
+	);
 	const query = search.trim().toLowerCase();
 	const filtered = (groups.data ?? []).filter(
 		(group) =>

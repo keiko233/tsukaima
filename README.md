@@ -21,9 +21,13 @@
 
 ## Status
 
-Architecture is captured in the documents below. The repository now contains the Phase 1 review scaffold: a Bun workspace, strict TypeScript configuration, contracts/domain seams, Drizzle schema and startup migrations, durable storage boundary, and a server skeleton with health/readiness lifecycle.
-
-The scaffold intentionally does not connect real models, NapCat, plugins, or the WebUI yet.
+The core implementation is in place: a Bun workspace with strict TypeScript, an
+Elysia + oRPC API, a SQLite/Drizzle domain schema with automatic startup migrations,
+a Pi Durable conversation host over a Bun SQLite adapter, the built-in
+`onebot-napcat` channel plugin, and a React/TanStack + beUI WebUI that covers chat
+objects/sessions, local Elaina turns, channel sends, the request inbox, settings,
+diagnostics, and logging. The DSH-only migration pipeline (inspect, dry-run, import,
+verify, rollback) also exists.
 
 ## Development commands
 

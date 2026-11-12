@@ -13,7 +13,7 @@ import { SelectContent } from "@/components/motion/select";
 import { SelectItem } from "@/components/motion/select";
 import { SelectTrigger } from "@/components/motion/select";
 import { SelectValue } from "@/components/motion/select";
-import { api, type LogLevel } from "@/lib/api";
+import { orpc, type LogLevel } from "@/lib/api";
 import { applyLocale } from "@/lib/locale";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
@@ -29,36 +29,35 @@ const LOCALE_LABELS: Record<Locale, string> = {
 export function SettingsPage() {
 	const toast = useToast();
 	const queryClient = useQueryClient();
-	const settingsQuery = useQuery({
-		queryFn: api.settings.get,
-		queryKey: ["admin", "settings"],
-	});
-	const updateSettings = useMutation({
-		mutationFn: api.settings.update,
-		onError: (error) =>
-			toast.error(m.toast_settings_save_failed(), {
-				description: errorMessage(error),
-			}),
-		onSuccess: async () => {
-			setProviderApiKey("");
-			setOnebotAccessToken("");
-			toast.success(m.toast_settings_saved());
-			await queryClient.invalidateQueries({ queryKey: ["admin"] });
-		},
-	});
-	const fetchModels = useMutation({
-		mutationFn: api.settings.models,
-		onError: (error) =>
-			toast.error(m.toast_models_fetch_failed(), {
-				description: errorMessage(error),
-			}),
-		onSuccess: (result) => {
-			const notify = result.models.length === 0 ? toast.info : toast.success;
-			notify(m.toast_models_loaded(), {
-				description: m.toast_models_loaded_description({ count: result.models.length }),
-			});
-		},
-	});
+	const settingsQuery = useQuery(orpc.admin.settings.get.queryOptions());
+	const updateSettings = useMutation(
+		orpc.admin.settings.update.mutationOptions({
+			onError: (error) =>
+				toast.error(m.toast_settings_save_failed(), {
+					description: errorMessage(error),
+				}),
+			onSuccess: async () => {
+				setProviderApiKey("");
+				setOnebotAccessToken("");
+				toast.success(m.toast_settings_saved());
+				await queryClient.invalidateQueries({ queryKey: orpc.admin.key() });
+			},
+		}),
+	);
+	const fetchModels = useMutation(
+		orpc.admin.settings.models.mutationOptions({
+			onError: (error) =>
+				toast.error(m.toast_models_fetch_failed(), {
+					description: errorMessage(error),
+				}),
+			onSuccess: (result) => {
+				const notify = result.models.length === 0 ? toast.info : toast.success;
+				notify(m.toast_models_loaded(), {
+					description: m.toast_models_loaded_description({ count: result.models.length }),
+				});
+			},
+		}),
+	);
 	const [providerBaseUrl, setProviderBaseUrl] = useState<string | undefined>(undefined);
 	const [providerModelId, setProviderModelId] = useState<string | undefined>(undefined);
 	const [providerApiKey, setProviderApiKey] = useState("");

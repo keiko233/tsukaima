@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import type { PiDurableConversationHost } from "@elaina/core";
-import type { MessageEnvelope, MessagePart } from "@elaina/contracts";
+import { messageEnvelopeSchema, type MessageEnvelope, type MessagePart } from "@elaina/contracts";
 import {
 	chatObjects,
 	conversations,
@@ -33,6 +33,14 @@ export const messageText = (parts: readonly MessagePart[]): string =>
 		.join(" ")
 		.trim();
 
+const safeChannelId = (envelope: unknown): string => {
+	if (typeof envelope === "object" && envelope !== null && "channelId" in envelope) {
+		const value = (envelope as { channelId?: unknown }).channelId;
+		if (typeof value === "string" && value.length > 0) return value;
+	}
+	return "unknown";
+};
+
 /**
  * Channel-agnostic ingestion: identity resolution, chat-object/session resolution, durable
  * append, and domain message persistence. Any channel adapter can drive it with a
@@ -51,26 +59,40 @@ export class ConversationRouter {
 	}
 
 	async ingest(envelope: MessageEnvelope): Promise<ConversationIngestResult> {
-		const ingestionKey = `${envelope.channelId}:${envelope.source.messageId ?? envelope.id}`;
+		const parsed = messageEnvelopeSchema.safeParse(envelope);
+		if (!parsed.success) {
+			const channelId = safeChannelId(envelope);
+			const reason = parsed.error.issues
+				.slice(0, 4)
+				.map((issue) => {
+					const path = issue.path.length === 0 ? "(root)" : issue.path.join(".");
+					return `${path}: ${issue.message}`;
+				})
+				.join("; ");
+			this.#logger.warn("rejected invalid message envelope", { channelId, reason });
+			throw new Error(`Invalid message envelope: ${reason}`);
+		}
+		const message = parsed.data;
+		const ingestionKey = `${message.channelId}:${message.source.messageId ?? message.id}`;
 		if (this.#ingesting.has(ingestionKey)) {
 			throw new Error("Message is already being ingested");
 		}
 		this.#ingesting.add(ingestionKey);
 		const startedAt = performance.now();
 		const messageLog = this.#logger.span("process_message", {
-			channelId: envelope.channelId,
-			messageId: envelope.source.messageId ?? envelope.id,
+			channelId: message.channelId,
+			messageId: message.source.messageId ?? message.id,
 		});
 		messageLog.debug("channel message accepted", {
-			conversationKind: envelope.conversationKey.kind,
+			conversationKind: message.conversationKey.kind,
 		});
 		try {
 			const host = this.#host();
 			if (host === undefined) throw new Error("Conversation host is not ready");
 			const database = this.#requireDatabase();
-			const sender = await this.resolveIdentity(envelope);
-			const target = await this.resolveSession(envelope, sender.displayName);
-			const platformMessageId = envelope.source.messageId ?? envelope.id;
+			const sender = await this.resolveIdentity(message);
+			const target = await this.resolveSession(message, sender.displayName);
+			const platformMessageId = message.source.messageId ?? message.id;
 			const existing = await database
 				.select({ id: messages.id })
 				.from(messages)
@@ -95,11 +117,11 @@ export class ConversationRouter {
 			}
 			const result = await host.append({
 				conversationId: target.durableConversationId,
-				envelope,
+				envelope: message,
 				submittedAtMs: Date.now(),
 			});
 			const occurredAt = new Date(
-				envelope.source.timestampMs > 0 ? envelope.source.timestampMs : Date.now(),
+				message.source.timestampMs > 0 ? message.source.timestampMs : Date.now(),
 			).toISOString();
 			const now = new Date().toISOString();
 			await database
@@ -107,21 +129,21 @@ export class ConversationRouter {
 				.values({
 					activityId: result.activityId,
 					chatObjectId: target.chatObjectId,
-					contentText: messageText(envelope.parts),
+					contentText: messageText(message.parts),
 					conversationId: target.sessionId,
 					direction: "inbound",
 					id: randomUUID(),
 					ingestedAt: now,
-					kind: envelope.channelKind,
+					kind: message.channelKind,
 					occurredAt,
-					partsJson: JSON.stringify(envelope.parts),
+					partsJson: JSON.stringify(message.parts),
 					platformMessageId,
-					rawRefJson: JSON.stringify(envelope),
-					...(envelope.target?.replyToEnvelopeId === undefined
+					rawRefJson: JSON.stringify(message),
+					...(message.target?.replyToEnvelopeId === undefined
 						? {}
-						: { replyToMessageId: envelope.target.replyToEnvelopeId }),
+						: { replyToMessageId: message.target.replyToEnvelopeId }),
 					senderDisplayName: sender.displayName,
-					senderExternalId: envelope.sender.platformId,
+					senderExternalId: message.sender.platformId,
 					senderUserId: sender.userId,
 					updatedAt: now,
 				})
@@ -136,17 +158,17 @@ export class ConversationRouter {
 					.set({ updatedAt: now })
 					.where(eq(conversations.id, target.sessionId)),
 			]);
-			if (envelope.conversationKey.kind === "group") {
+			if (message.conversationKey.kind === "group") {
 				await database
 					.insert(conversationMembers)
 					.values({
 						conversationId: target.sessionId,
 						lastSeenAt: occurredAt,
-						role: envelope.sender.groupRole === "admin" ? "admin" : "member",
+						role: message.sender.groupRole === "admin" ? "admin" : "member",
 						userId: sender.userId,
-						...(envelope.sender.groupRole === undefined
+						...(message.sender.groupRole === undefined
 							? {}
-							: { platformRole: envelope.sender.groupRole }),
+							: { platformRole: message.sender.groupRole }),
 					})
 					.onConflictDoUpdate({
 						set: { lastSeenAt: occurredAt },
@@ -175,65 +197,92 @@ export class ConversationRouter {
 	): Promise<{ displayName: string; userId: string }> {
 		const database = this.#requireDatabase();
 		const displayName = envelope.sender.displayName;
-		const [existing] = await database
-			.select({
-				displayName: users.displayName,
-				userId: users.id,
-			})
-			.from(identities)
-			.innerJoin(users, eq(users.id, identities.canonicalUserId))
-			.where(
-				and(
-					eq(identities.platform, envelope.channelKind),
-					eq(identities.platformAccountId, envelope.channelId),
-					eq(identities.externalId, envelope.sender.platformId),
-					eq(identities.kind, "user"),
-				),
-			)
-			.limit(1);
-		if (existing !== undefined) {
-			if (existing.displayName !== displayName) {
-				await database
-					.update(users)
-					.set({ displayName, updatedAt: new Date().toISOString() })
-					.where(eq(users.id, existing.userId));
-			}
-			return { displayName, userId: existing.userId };
-		}
-		const userId = randomUUID();
+		const platform = envelope.channelKind;
+		const platformAccountId = envelope.channelId;
+		const externalId = envelope.sender.platformId;
+		const kind = envelope.sender.isBot === true ? "bot" : "human";
 		const now = new Date().toISOString();
-		await database.insert(users).values({
-			createdAt: now,
-			displayName,
-			id: userId,
-			kind: envelope.sender.isBot === true ? "bot" : "human",
-			updatedAt: now,
+
+		// A single synchronous transaction over the serialized Bun SQLite connection: no
+		// concurrent ingestion can observe or create a duplicate identity for this key, so we
+		// never return (or leak) an orphan user that a losing insert would have produced.
+		return database.transaction((tx) => {
+			const findIdentity = () =>
+				tx
+					.select({
+						displayName: users.displayName,
+						userId: users.id,
+					})
+					.from(identities)
+					.innerJoin(users, eq(users.id, identities.canonicalUserId))
+					.where(
+						and(
+							eq(identities.platform, platform),
+							eq(identities.platformAccountId, platformAccountId),
+							eq(identities.externalId, externalId),
+							eq(identities.kind, "user"),
+						),
+					)
+					.limit(1)
+					.get();
+			const existing = findIdentity();
+			if (existing !== undefined) {
+				if (existing.displayName !== displayName) {
+					tx.update(users)
+						.set({ displayName, updatedAt: now })
+						.where(eq(users.id, existing.userId))
+						.run();
+				}
+				return { displayName, userId: existing.userId };
+			}
+			const userId = randomUUID();
+			tx.insert(users)
+				.values({
+					createdAt: now,
+					displayName,
+					id: userId,
+					kind,
+					updatedAt: now,
+				})
+				.run();
+			const inserted = tx
+				.insert(identities)
+				.values({
+					canonicalUserId: userId,
+					createdAt: now,
+					displayName,
+					externalId,
+					id: randomUUID(),
+					kind: "user",
+					platform,
+					platformAccountId,
+					updatedAt: now,
+				})
+				.onConflictDoNothing()
+				.returning({ id: identities.id })
+				.get();
+			if (inserted !== undefined) {
+				tx.insert(userAliases)
+					.values({
+						alias: displayName,
+						createdAt: now,
+						id: randomUUID(),
+						source: platform,
+						userId,
+					})
+					.onConflictDoNothing()
+					.run();
+				return { displayName, userId };
+			}
+			// Another connection already inserted this identity: discard our orphan user and adopt
+			// the canonical one. No messages can reference the orphan yet, so the delete is safe.
+			tx.delete(users).where(eq(users.id, userId)).run();
+			const winner = findIdentity();
+			if (winner === undefined) {
+				throw new Error("Failed to resolve identity after insert conflict");
+			}
+			return { displayName: winner.displayName ?? displayName, userId: winner.userId };
 		});
-		await database
-			.insert(identities)
-			.values({
-				canonicalUserId: userId,
-				createdAt: now,
-				displayName,
-				externalId: envelope.sender.platformId,
-				id: randomUUID(),
-				kind: "user",
-				platform: envelope.channelKind,
-				platformAccountId: envelope.channelId,
-				updatedAt: now,
-			})
-			.onConflictDoNothing();
-		await database
-			.insert(userAliases)
-			.values({
-				alias: displayName,
-				createdAt: now,
-				id: randomUUID(),
-				source: envelope.channelKind,
-				userId,
-			})
-			.onConflictDoNothing();
-		return { displayName, userId };
 	}
 
 	async resolveSession(

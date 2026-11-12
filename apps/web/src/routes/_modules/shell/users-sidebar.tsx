@@ -5,7 +5,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight, MessageCircle, Users } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/motion/button";
-import { api } from "@/lib/api";
+import { orpc } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { InlineError, SidebarEmpty, Avatar } from "./primitives";
@@ -33,16 +33,13 @@ function Field({ label, value }: { label: string; value: string }) {
 export function UsersSidebar({ onNavigate, search }: { onNavigate: () => void; search: string }) {
 	const navigate = useNavigate();
 	const [selectedId, setSelectedId] = useState<string | null>(null);
-	const users = useQuery({
-		queryFn: api.users.list,
-		queryKey: ["admin", "users"],
-		refetchInterval: 30_000,
-	});
-	const detail = useQuery({
-		enabled: selectedId !== null,
-		queryFn: () => api.users.get(selectedId as string),
-		queryKey: ["admin", "users", selectedId],
-	});
+	const users = useQuery(orpc.admin.users.list.queryOptions({ refetchInterval: 30_000 }));
+	const detail = useQuery(
+		orpc.admin.users.get.queryOptions({
+			enabled: selectedId !== null,
+			input: { userId: selectedId ?? "" },
+		}),
+	);
 	const query = search.trim().toLowerCase();
 	const filtered = (users.data ?? []).filter((user) => {
 		if (query.length === 0) return true;

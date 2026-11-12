@@ -5,7 +5,7 @@ import { ChevronLeft, ChevronRight, Inbox, UserPlus, UserRoundCheck, Users } fro
 import { useState } from "react";
 import { Button } from "@/components/motion/button";
 import { Input } from "@/components/motion/input";
-import { api, type RequestRow } from "@/lib/api";
+import { orpc, type RequestRow } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -72,35 +72,31 @@ export function RequestsSidebar({ search }: { search: string }) {
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [pendingAction, setPendingAction] = useState<"approve" | "reject" | null>(null);
 	const [reason, setReason] = useState("");
-	const requests = useQuery({
-		queryFn: () => api.requests.list("all"),
-		queryKey: ["admin", "requests", "all"],
-		refetchInterval: 10_000,
-	});
-	const diagnostics = useQuery({
-		queryFn: api.diagnostics.status,
-		queryKey: ["admin", "diagnostics"],
-	});
-	const respond = useMutation({
-		mutationFn: api.requests.respond,
-		onError: (error) =>
-			toast.error(m.toast_request_action_failed(), {
-				description: errorMessage(error),
-			}),
-		onSuccess: async (request) => {
-			if (request.status === "approved") toast.success(m.toast_request_approved());
-			else if (request.status === "rejected") toast.success(m.toast_request_rejected());
-			else if (request.status === "uncertain") toast.info(m.toast_request_uncertain());
-			else {
+	const requests = useQuery(
+		orpc.admin.requests.list.queryOptions({ input: { status: "all" }, refetchInterval: 10_000 }),
+	);
+	const diagnostics = useQuery(orpc.admin.diagnostics.status.queryOptions());
+	const respond = useMutation(
+		orpc.admin.requests.respond.mutationOptions({
+			onError: (error) =>
 				toast.error(m.toast_request_action_failed(), {
-					description: request.errorMessage,
-				});
-			}
-			setPendingAction(null);
-			setReason("");
-			await queryClient.invalidateQueries({ queryKey: ["admin", "requests"] });
-		},
-	});
+					description: errorMessage(error),
+				}),
+			onSuccess: async (request) => {
+				if (request.status === "approved") toast.success(m.toast_request_approved());
+				else if (request.status === "rejected") toast.success(m.toast_request_rejected());
+				else if (request.status === "uncertain") toast.info(m.toast_request_uncertain());
+				else {
+					toast.error(m.toast_request_action_failed(), {
+						description: request.errorMessage,
+					});
+				}
+				setPendingAction(null);
+				setReason("");
+				await queryClient.invalidateQueries({ queryKey: orpc.admin.requests.key() });
+			},
+		}),
+	);
 	const query = search.trim().toLowerCase();
 	const filtered = (requests.data ?? []).filter((request) => {
 		const inView = view === "pending" ? request.status === "pending" : request.status !== "pending";

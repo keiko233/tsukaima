@@ -3,15 +3,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/motion/card";
 import { CardContent } from "@/components/motion/card";
-import { api } from "@/lib/api";
+import { orpc } from "@/lib/api";
 import { m } from "@/paraglide/messages";
 import { SystemPage } from "./page-header";
 
 export function PluginPage() {
-	const pluginsQuery = useQuery({
-		queryFn: api.plugins.list,
-		queryKey: ["admin", "plugins"],
-	});
+	const pluginsQuery = useQuery(orpc.admin.plugins.list.queryOptions());
 
 	if (pluginsQuery.isPending) {
 		return (

@@ -9,7 +9,21 @@ export function shouldCloseActivityWindow(
 	return candidateAtMs - firstMessageAtMs > policy.windowMs;
 }
 
-export { PiDurableConversationHost, type AppendConversationResult } from "./conversation-host.ts";
+export {
+	PiDurableConversationHost,
+	type ActivityWindowEvent,
+	type AppendConversationResult,
+	type ConversationAnswer,
+	type DurableConversationHostOptions,
+} from "./conversation-host.ts";
+export {
+	CONTEXT_EXTENSION_NAME,
+	MEMORY_SECTION_KEY,
+	PERSONA_SECTION_KEY,
+	createContextExtension,
+	type ContextExtensionOptions,
+	type ContextPromptProvider,
+} from "./context.ts";
 export { createFakeModel, type ModelPort } from "./model.ts";
 export {
 	ModelPolicyRouter,

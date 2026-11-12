@@ -1,16 +1,27 @@
 import { Elysia } from "elysia";
 import { RPCHandler } from "@orpc/server/fetch";
+import { ResponseHeadersPlugin } from "@orpc/server/plugins";
 import type { OneBotTransportFactory } from "@elaina/onebot";
 import type { ElainaPlugin } from "@elaina/sdk";
 import { appRouter } from "./rpc/index.ts";
+import type { ElainaApiContext } from "./rpc/base.ts";
 import { loadConfig } from "./config.ts";
 import { ElainaLifecycle } from "./lifecycle.ts";
 import { encodeSseEvent, type LogBuffer } from "./logging.ts";
+import { AuthService, readSessionToken } from "./services/auth.ts";
 
 export interface CreateAppOptions {
 	readonly onebotTransportFactory?: OneBotTransportFactory;
 	/** Overrides the built-in plugin set (tests and future plugin sources). */
 	readonly plugins?: readonly ElainaPlugin[];
+}
+
+/**
+ * The oRPC handler shared by the server and tests. `ResponseHeadersPlugin` is what lets the auth
+ * procedures attach the session cookie (and the cleared cookie on logout) to their responses.
+ */
+export function createRpcHandler(): RPCHandler<ElainaApiContext> {
+	return new RPCHandler(appRouter, { plugins: [new ResponseHeadersPlugin()] });
 }
 
 const LOG_HEARTBEAT_MS = 15_000;
@@ -67,7 +78,16 @@ export function createApp(
 	const config = loadConfig(env);
 	const lifecycle = new ElainaLifecycle(config, { ...options, env });
 	const httpLog = lifecycle.logger.child("elaina::server::http");
-	const handler = new RPCHandler(appRouter);
+	const auth = new AuthService({
+		credential: {
+			password: config.adminPassword,
+			username: config.adminUsername,
+		},
+		database: () => lifecycle.domainDatabase,
+		logger: lifecycle.logger.child("elaina::server::auth"),
+	});
+	auth.start();
+	const handler = createRpcHandler();
 
 	const app = new Elysia({ name: "elaina-chatbot" })
 		.get("/healthz", ({ status }) => {
@@ -86,8 +106,13 @@ export function createApp(
 				const path = new URL(request.url).pathname;
 				const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
 				try {
+					const sessionToken = readSessionToken(request.headers.get("cookie"));
 					const { matched, response } = await handler.handle(request, {
-						context: { lifecycle },
+						context: {
+							auth,
+							lifecycle,
+							...(sessionToken === undefined ? {} : { sessionToken }),
+						},
 						prefix: "/rpc",
 					});
 					const result = matched
@@ -118,5 +143,5 @@ export function createApp(
 			{ parse: "none" },
 		);
 
-	return { app, config, lifecycle };
+	return { app, auth, config, lifecycle };
 }

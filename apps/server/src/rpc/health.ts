@@ -1,15 +1,10 @@
-import { os } from "@orpc/server";
 import { healthResponseSchema } from "@elaina/contracts";
-import type { ElainaLifecycle } from "../lifecycle.ts";
+import { apiBase } from "./base.ts";
 
-export interface ElainaApiContext {
-	readonly lifecycle: ElainaLifecycle;
-}
-
-const lifecycleContext = os.$context<ElainaApiContext>();
+export type { ElainaApiContext } from "./base.ts";
 
 export const healthRouter = {
-	status: lifecycleContext.handler(async ({ context }: { context: ElainaApiContext }) => {
+	status: apiBase.health.status.handler(async ({ context }) => {
 		const { state } = context.lifecycle;
 		return healthResponseSchema.parse({
 			stage: state.stage,

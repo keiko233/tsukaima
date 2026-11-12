@@ -3,10 +3,14 @@ import {
 	createRegistry,
 	defineDocFamily,
 	Harness,
+	type AgentChange,
+	type Conversation,
 	type ConversationId,
 	type EntryRecord,
+	type Extension,
 	type Harness as DurableHarness,
 	type JsonObject,
+	type Submission,
 } from "@earendil-works/pi-durable";
 import {
 	type ActivityAggregationPolicy,
@@ -16,6 +20,7 @@ import {
 	type MessageEnvelope,
 } from "@elaina/contracts";
 import type { SqliteStorage } from "@elaina/durable";
+import { createContextExtension, type ContextPromptProvider } from "./context.ts";
 import { createFakeModel, type ModelPort } from "./model.ts";
 import { shouldCloseActivityWindow } from "./index.ts";
 
@@ -120,10 +125,72 @@ export type AppendConversationResult = {
 	readonly status: string;
 };
 
+/**
+ * One settled assistant answer. Emitted by the host after an input run produced an
+ * assistant entry, so the server can deliver it to the origin channel.
+ */
+export interface ConversationAnswer {
+	/** Durable activity (submission request id) the answer belongs to. */
+	readonly activityId: string;
+	/** Durable conversation the answer was produced in. */
+	readonly conversationId: string;
+	/** Entry id of the assistant entry holding the answer text. */
+	readonly entryId: string;
+	/** Concatenated text blocks of the assistant answer. */
+	readonly text: string;
+}
+
+/**
+ * Activity-window transition for host consumers (the server forwards these to plugin
+ * hooks). Ids use the durable conversation id space, matching `AdminEvent`.
+ */
+export interface ActivityWindowEvent {
+	/** Durable activity id (`<conversationId>:activity`). */
+	readonly activityId: string;
+	/** Durable conversation the activity belongs to. */
+	readonly conversationId: string;
+	/** Envelopes in the window when the event fired. */
+	readonly envelopeCount: number;
+	readonly type: "opened" | "closed";
+}
+
 export interface DurableConversationHostOptions {
+	/**
+	 * Persona and memory prompt sections for every conversation. Sections render before each
+	 * request; conversations that predate the extension are backfilled on their next append.
+	 */
+	readonly contextProvider?: ContextPromptProvider;
 	readonly model?: ModelPort;
+	/** Observe activity-window opens and closes. Errors never affect message processing. */
+	readonly onActivityEvent?: (event: ActivityWindowEvent) => void;
+	/**
+	 * Observe settled assistant answers. Called detached from `append()`/activity flush so a
+	 * slow consumer never blocks ingestion; rejections are caught and logged, never surfaced.
+	 */
+	readonly onAnswer?: (answer: ConversationAnswer) => Promise<void> | void;
 	readonly policy?: ActivityAggregationPolicy;
 	readonly storage: SqliteStorage;
+}
+
+/**
+ * Text of an assistant entry, mirroring what a channel reply needs. `undefined` for other
+ * entry kinds or an answer with no text blocks.
+ */
+function assistantEntryText(entry: EntryRecord): string | undefined {
+	if (entry.kind !== "pi.assistant" || entry.model === undefined) return undefined;
+	const texts: string[] = [];
+	for (const message of entry.model as readonly unknown[]) {
+		if (typeof message !== "object" || message === null) continue;
+		if (!("content" in message) || !Array.isArray(message.content)) continue;
+		for (const block of message.content as readonly unknown[]) {
+			if (typeof block !== "object" || block === null) continue;
+			if (!("type" in block) || block.type !== "text") continue;
+			if (!("text" in block) || typeof block.text !== "string") continue;
+			texts.push(block.text);
+		}
+	}
+	const text = texts.join("\n").trim();
+	return text.length === 0 ? undefined : text;
 }
 
 export class PiDurableConversationHost {
@@ -132,19 +199,33 @@ export class PiDurableConversationHost {
 	private readonly policy: ActivityAggregationPolicy;
 	private readonly activityTimers = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
 	private readonly activityFlushes = new Set<string>();
+	private readonly contextExtension: Extension | undefined;
+	private readonly contextEnsured = new Set<string>();
+	private closed = false;
 	readonly registry = createRegistry();
 
 	constructor(private readonly options: DurableConversationHostOptions) {
 		this.model = options.model ?? createFakeModel();
 		this.policy = options.policy ?? { maxMessages: 20, windowMs: 6_000 };
+		this.contextExtension =
+			options.contextProvider === undefined
+				? undefined
+				: createContextExtension(options.contextProvider);
+		if (this.contextExtension !== undefined) this.registry.install(this.contextExtension);
 	}
 
 	async createConversation(): Promise<string> {
 		const harness = await this.openHarness();
+		const agent: AgentChange = {
+			model: { modelId: this.model.modelId, provider: this.model.providerId },
+			...(this.contextExtension === undefined
+				? {}
+				: { extensions: { add: [this.contextExtension] } }),
+		};
 		const conversation = await harness.createConversation(
 			{
+				agent,
 				ownership: { kind: "ownerless" },
-				agent: { model: { provider: this.model.providerId, modelId: this.model.modelId } },
 			},
 			BACKGROUND_CONTEXT,
 		);
@@ -162,6 +243,7 @@ export class PiDurableConversationHost {
 		const conversationId = Number(input.conversationId) as ConversationId;
 		const conversation = await harness.conversation(conversationId, BACKGROUND_CONTEXT);
 		if (!conversation) throw new Error(`Conversation not found: ${input.conversationId}`);
+		await this.ensureContextExtension(conversation, input.conversationId);
 		const existingReceipt = await harness.snapshot(
 			messageReceiptDoc,
 			conversationId,
@@ -240,10 +322,28 @@ export class PiDurableConversationHost {
 						},
 			);
 		}, BACKGROUND_CONTEXT);
+		if (shouldOpen) {
+			this.emitActivityEvent({
+				activityId,
+				conversationId: input.conversationId,
+				envelopeCount: nextEnvelopes.length,
+				type: "opened",
+			});
+		}
+		if (shouldSubmit) {
+			this.emitActivityEvent({
+				activityId,
+				conversationId: input.conversationId,
+				envelopeCount: nextEnvelopes.length,
+				type: "closed",
+			});
+		}
 		const submission = await harness.submission(submissionId, BACKGROUND_CONTEXT);
 		const record = await submission?.status(BACKGROUND_CONTEXT);
 		if (!shouldSubmit) {
 			this.scheduleActivityFlush(input.conversationId);
+		} else {
+			this.observeAnswer(harness, input.conversationId, submission);
 		}
 		return {
 			activityId,
@@ -251,6 +351,39 @@ export class PiDurableConversationHost {
 			messageId: input.envelope.id,
 			status: record?.status ?? "unknown",
 		};
+	}
+
+	/**
+	 * Watch one input submission to settlement and forward the assistant answer. Runs
+	 * detached: `append()` and the activity flush return without waiting for the model run.
+	 */
+	private observeAnswer(
+		harness: DurableHarness,
+		conversationId: string,
+		submission: Submission | undefined,
+	): void {
+		const onAnswer = this.options.onAnswer;
+		if (onAnswer === undefined || submission === undefined) return;
+		void (async () => {
+			try {
+				const settled = await submission.wait(BACKGROUND_CONTEXT);
+				if (settled.type !== "input" || settled.status !== "done") return;
+				const answerId = settled.answer;
+				const entry = await harness.commit((tx) => tx.entry(answerId), BACKGROUND_CONTEXT);
+				if (entry === undefined) return;
+				const text = assistantEntryText(entry);
+				if (text === undefined) return;
+				await onAnswer({
+					activityId: settled.requestId ?? "",
+					conversationId,
+					entryId: String(answerId),
+					text,
+				});
+			} catch (error) {
+				if (this.closed) return;
+				console.error("Failed to observe conversation answer", error);
+			}
+		})();
 	}
 
 	private scheduleActivityFlush(conversationId: string, delayMs = this.policy.windowMs): void {
@@ -279,6 +412,7 @@ export class PiDurableConversationHost {
 			const numericId = Number(conversationId) as ConversationId;
 			const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
 			if (!conversation) return;
+			await this.ensureContextExtension(conversation, conversationId);
 			const activityId = `${numericId}:activity`;
 			const window = await harness.snapshot(
 				activityWindowDoc,
@@ -292,7 +426,7 @@ export class PiDurableConversationHost {
 			const policy = await this.readPolicy(numericId);
 			if (!policy.enabled) return;
 			const envelopes = window.envelopes;
-			await conversation.commit(async (tx) => {
+			const submissionId = await conversation.commit(async (tx) => {
 				const document = await tx.doc(activityWindowDoc, numericId, activityId, {
 					conversationId: numericId,
 					envelopes,
@@ -316,6 +450,14 @@ export class PiDurableConversationHost {
 					whenBusy: policy.followUpWhenBusy === "follow-up" ? "followUp" : "reject",
 				});
 			}, BACKGROUND_CONTEXT);
+			this.emitActivityEvent({
+				activityId,
+				conversationId,
+				envelopeCount: envelopes.length,
+				type: "closed",
+			});
+			const submission = await harness.submission(submissionId, BACKGROUND_CONTEXT);
+			this.observeAnswer(harness, conversationId, submission);
 		} finally {
 			this.activityFlushes.delete(conversationId);
 		}
@@ -366,6 +508,40 @@ export class PiDurableConversationHost {
 			followUpWhenBusy: document.followUpWhenBusy,
 			steerWhenBusy: document.steerWhenBusy,
 		};
+	}
+
+	/**
+	 * Make sure one conversation selects the context extension. Conversations created before
+	 * the extension existed resolve it through the default "every installed extension"
+	 * selection; this covers conversations whose stored selection explicitly lists
+	 * extensions, and records the check once per conversation per process. Failures only log:
+	 * prompt context must never block message processing.
+	 */
+	private async ensureContextExtension(
+		conversation: Conversation,
+		durableId: string,
+	): Promise<void> {
+		const extension = this.contextExtension;
+		if (extension === undefined || this.contextEnsured.has(durableId)) return;
+		try {
+			const agent = await conversation.agent(BACKGROUND_CONTEXT);
+			if (!agent.extensions.some((candidate) => candidate.name === extension.name)) {
+				await conversation.configure({ extensions: { add: [extension] } }, BACKGROUND_CONTEXT);
+			}
+			this.contextEnsured.add(durableId);
+		} catch (error) {
+			console.error("Failed to ensure conversation context extension", error);
+		}
+	}
+
+	private emitActivityEvent(event: ActivityWindowEvent): void {
+		const callback = this.options.onActivityEvent;
+		if (callback === undefined) return;
+		try {
+			callback(event);
+		} catch (error) {
+			console.error("Activity event callback failed", error);
+		}
 	}
 
 	private envelopeToText(envelope: MessageEnvelope): string {
@@ -427,6 +603,7 @@ export class PiDurableConversationHost {
 	}
 
 	async close(): Promise<void> {
+		this.closed = true;
 		for (const scheduled of this.activityTimers.values()) clearTimeout(scheduled.timer);
 		this.activityTimers.clear();
 		if (this.harness) await this.harness.close(BACKGROUND_CONTEXT);

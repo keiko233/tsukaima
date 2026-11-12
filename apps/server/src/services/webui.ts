@@ -123,57 +123,6 @@ function toMessageSummary(row: MessageRow): MessageSummary {
 	};
 }
 
-function assistantMessagesFromEntries(
-	entries: readonly {
-		id: string | number;
-		kind: string;
-		model?: readonly unknown[];
-	}[],
-): MessageSummary[] {
-	const result: MessageSummary[] = [];
-	for (const entry of entries) {
-		if (entry.kind !== "pi.assistant" || entry.model === undefined) continue;
-		const texts: string[] = [];
-		let timestamp: number | undefined;
-		for (const message of entry.model) {
-			if (typeof message !== "object" || message === null) continue;
-			if ("timestamp" in message && typeof message.timestamp === "number") {
-				timestamp = message.timestamp;
-			}
-			if (!("content" in message) || !Array.isArray(message.content)) continue;
-			for (const block of message.content) {
-				if (
-					typeof block === "object" &&
-					block !== null &&
-					"type" in block &&
-					block.type === "text" &&
-					"text" in block &&
-					typeof block.text === "string"
-				) {
-					texts.push(block.text);
-				}
-			}
-		}
-		const content = texts.join("\n").trim();
-		if (content.length === 0) continue;
-		result.push({
-			contentText: content,
-			direction: "outbound",
-			deliveryStatus: "accepted",
-			id: `durable:${String(entry.id)}`,
-			kind: "assistant",
-			occurredAt: new Date(timestamp ?? Date.now()).toISOString(),
-			parts: [{ text: content, type: "text" }],
-			platformMessageId: null,
-			replyToMessageId: null,
-			senderDisplayName: "Elaina",
-			senderExternalId: "elaina",
-			senderKind: "assistant",
-		});
-	}
-	return result;
-}
-
 function requireDatabase(lifecycle: ElainaLifecycle) {
 	const database = lifecycle.domainDatabase;
 	if (database === undefined) throw new Error("Database is not ready");
@@ -451,12 +400,7 @@ export async function listMessages(
 		.from(messages)
 		.where(eq(messages.conversationId, sessionId))
 		.orderBy(asc(messages.occurredAt));
-	const domain = rows.map(toMessageSummary);
-	const entries = await lifecycle.conversationHost?.listEntries(session.durableConversationId);
-	const durable = assistantMessagesFromEntries(entries ?? []);
-	return [...domain, ...durable].toSorted((left, right) =>
-		left.occurredAt.localeCompare(right.occurredAt),
-	);
+	return rows.map(toMessageSummary);
 }
 
 export async function sendMessage(

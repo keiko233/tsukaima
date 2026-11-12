@@ -1,0 +1,519 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { eq } from "drizzle-orm";
+import type { MessageEnvelope } from "@elaina/contracts";
+import { PiDurableConversationHost, createFakeModel } from "@elaina/core";
+import {
+	conversationMembers,
+	conversations,
+	memories,
+	messages,
+	openDomainDatabase,
+	migrateDomainDatabase,
+	personaBindings,
+	personas,
+	users,
+	type ElainaDatabase,
+} from "@elaina/db";
+import { openDurableStorage } from "@elaina/durable";
+import type { OneBotTransportFactory } from "@elaina/onebot";
+import { createApp } from "../src/app.ts";
+import { createLogger } from "../src/logging.ts";
+import {
+	DrizzleContextProvider,
+	type DrizzleContextProviderOptions,
+} from "../src/services/context-provider.ts";
+
+const directories: string[] = [];
+
+afterEach(async () => {
+	await Promise.all(
+		directories.splice(0).map((directory) => fs.rm(directory, { force: true, recursive: true })),
+	);
+});
+
+const logger = createLogger({ level: "error", target: "elaina::test" });
+
+async function openFixture(): Promise<{ database: ElainaDatabase; directory: string }> {
+	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-context-"));
+	directories.push(directory);
+	const database = await openDomainDatabase(join(directory, "domain.sqlite"));
+	migrateDomainDatabase(database);
+	return { database, directory };
+}
+
+function provider(
+	database: ElainaDatabase | (() => ElainaDatabase | undefined),
+	overrides: Partial<Pick<DrizzleContextProviderOptions, "budgetChars" | "memoryTopK">> = {},
+): DrizzleContextProvider {
+	return new DrizzleContextProvider({
+		database: typeof database === "function" ? database : () => database,
+		logger,
+		...overrides,
+	});
+}
+
+async function insertMemory(
+	database: ElainaDatabase,
+	row: {
+		content?: string;
+		conversationId?: string;
+		expiresAt?: string;
+		id: string;
+		importance?: number;
+		revokedAt?: string;
+		scope: "conversation" | "global" | "persona" | "user";
+		subjectUserId?: string;
+		summary: string;
+	},
+): Promise<void> {
+	await database.insert(memories).values({
+		content: row.content ?? row.summary,
+		createdBy: "migration",
+		id: row.id,
+		kind: "fact",
+		scope: row.scope,
+		summary: row.summary,
+		...(row.conversationId === undefined ? {} : { conversationId: row.conversationId }),
+		...(row.expiresAt === undefined ? {} : { expiresAt: row.expiresAt }),
+		...(row.importance === undefined ? {} : { importance: row.importance }),
+		...(row.revokedAt === undefined ? {} : { revokedAt: row.revokedAt }),
+		...(row.subjectUserId === undefined ? {} : { subjectUserId: row.subjectUserId }),
+	});
+}
+
+async function seedContextFixture(database: ElainaDatabase): Promise<void> {
+	const now = new Date().toISOString();
+	await database.insert(users).values([
+		{ id: "user-member", kind: "human" },
+		{ id: "user-stranger", kind: "human" },
+	]);
+	await database.insert(conversations).values([
+		{
+			durableConversationId: "42",
+			id: "session-main",
+			kind: "private",
+			title: "Main",
+			updatedAt: now,
+		},
+		{
+			durableConversationId: "43",
+			id: "session-other",
+			kind: "private",
+			title: "Other",
+			updatedAt: now,
+		},
+		{
+			durableConversationId: "44",
+			id: "session-free",
+			kind: "private",
+			title: "Free",
+			updatedAt: now,
+		},
+	]);
+	await database.insert(conversationMembers).values({
+		conversationId: "session-main",
+		role: "member",
+		userId: "user-member",
+	});
+	await database.insert(personas).values([
+		{
+			behaviorJson: "{}",
+			id: "persona-conv",
+			isActive: 1,
+			name: "Conversation persona",
+			promptJson: JSON.stringify("PERSONA-CONVERSATION-BINDING"),
+			summary: "conversation-bound persona",
+			version: 1,
+		},
+		{
+			behaviorJson: "{}",
+			id: "persona-global",
+			isActive: 1,
+			name: "Global persona",
+			promptJson: JSON.stringify("PERSONA-GLOBAL-FALLBACK"),
+			summary: "global persona",
+			version: 1,
+		},
+		{
+			behaviorJson: "{}",
+			id: "persona-inactive",
+			isActive: 0,
+			name: "Inactive persona",
+			promptJson: JSON.stringify("PERSONA-INACTIVE"),
+			summary: "inactive persona",
+			version: 1,
+		},
+	]);
+	await database.insert(personaBindings).values([
+		{
+			conversationId: "session-main",
+			id: "binding-conversation",
+			isActive: 1,
+			isGlobal: 0,
+			personaId: "persona-conv",
+		},
+		{
+			id: "binding-global",
+			isActive: 1,
+			isGlobal: 1,
+			personaId: "persona-global",
+		},
+		{
+			conversationId: "session-other",
+			id: "binding-inactive",
+			isActive: 1,
+			isGlobal: 0,
+			personaId: "persona-inactive",
+		},
+	]);
+	await insertMemory(database, {
+		id: "mem-global",
+		scope: "global",
+		summary: "MARKER-GLOBAL stays everywhere",
+	});
+	await insertMemory(database, {
+		conversationId: "session-main",
+		id: "mem-conversation",
+		scope: "conversation",
+		summary: "MARKER-CONVERSATION local fact",
+	});
+	await insertMemory(database, {
+		conversationId: "session-other",
+		id: "mem-other-conversation",
+		scope: "conversation",
+		summary: "MARKER-OTHER-CONVERSATION must not leak",
+	});
+	await insertMemory(database, {
+		conversationId: "session-main",
+		id: "mem-persona",
+		scope: "persona",
+		summary: "MARKER-PERSONA tone note",
+	});
+	await insertMemory(database, {
+		conversationId: "session-other",
+		id: "mem-persona-other",
+		scope: "persona",
+		summary: "MARKER-PERSONA-OTHER must not leak",
+	});
+	await insertMemory(database, {
+		id: "mem-member",
+		scope: "user",
+		subjectUserId: "user-member",
+		summary: "MARKER-MEMBER preference",
+	});
+	await insertMemory(database, {
+		id: "mem-stranger",
+		scope: "user",
+		subjectUserId: "user-stranger",
+		summary: "MARKER-STRANGER must not leak",
+	});
+	await insertMemory(database, {
+		id: "mem-revoked",
+		revokedAt: now,
+		scope: "global",
+		summary: "MARKER-REVOKED must not leak",
+	});
+	await insertMemory(database, {
+		expiresAt: new Date(Date.now() - 60_000).toISOString(),
+		id: "mem-expired",
+		scope: "global",
+		summary: "MARKER-EXPIRED must not leak",
+	});
+	await database.insert(messages).values({
+		contentText: "I love matcha drinks",
+		conversationId: "session-main",
+		direction: "inbound",
+		id: "message-main-1",
+		kind: "onebot-v11",
+		occurredAt: now,
+		senderUserId: "user-member",
+	});
+}
+
+describe("DrizzleContextProvider", () => {
+	test("prefers a conversation persona binding over the global binding", async () => {
+		const { database } = await openFixture();
+		try {
+			await seedContextFixture(database);
+			const context = provider(database);
+			expect(await context.renderPersona("42")).toContain("PERSONA-CONVERSATION-BINDING");
+			// Conversation 43 binds an inactive persona: no active version, no fallback.
+			expect(await context.renderPersona("43")).toBeUndefined();
+			expect(await context.renderPersona("44")).toContain("PERSONA-GLOBAL-FALLBACK");
+		} finally {
+			database.$client.close();
+		}
+	});
+
+	test("selects global, conversation, persona, and member memories only", async () => {
+		const { database } = await openFixture();
+		try {
+			await seedContextFixture(database);
+			const text = await provider(database).renderMemories("42");
+			if (text === undefined) throw new Error("Expected memory text");
+			expect(text).toContain("MARKER-GLOBAL");
+			expect(text).toContain("MARKER-CONVERSATION");
+			expect(text).toContain("MARKER-PERSONA");
+			expect(text).toContain("MARKER-MEMBER");
+			expect(text).not.toContain("MARKER-OTHER-CONVERSATION");
+			expect(text).not.toContain("MARKER-PERSONA-OTHER");
+			expect(text).not.toContain("MARKER-STRANGER");
+			expect(text).not.toContain("MARKER-REVOKED");
+			expect(text).not.toContain("MARKER-EXPIRED");
+		} finally {
+			database.$client.close();
+		}
+	});
+
+	test("ranks keyword matches from recent messages above importance alone", async () => {
+		const { database } = await openFixture();
+		try {
+			await seedContextFixture(database);
+			await insertMemory(database, {
+				id: "mem-keyword",
+				importance: 0.1,
+				scope: "global",
+				summary: "MARKER-KEYWORD loves matcha",
+			});
+			await insertMemory(database, {
+				id: "mem-important",
+				importance: 0.9,
+				scope: "global",
+				summary: "MARKER-IMPORTANT unrelated",
+			});
+			const text = await provider(database, { memoryTopK: 1 }).renderMemories("42");
+			if (text === undefined) throw new Error("Expected memory text");
+			expect(text).toContain("MARKER-KEYWORD");
+			expect(text).not.toContain("MARKER-IMPORTANT");
+		} finally {
+			database.$client.close();
+		}
+	});
+
+	test("keeps persona plus memory inside the character budget", async () => {
+		const { database } = await openFixture();
+		try {
+			await seedContextFixture(database);
+			await database.insert(personas).values({
+				behaviorJson: "{}",
+				id: "persona-long",
+				isActive: 1,
+				name: "Long persona",
+				promptJson: JSON.stringify("P".repeat(400)),
+				summary: "long persona",
+				version: 1,
+			});
+			await database
+				.update(personaBindings)
+				.set({ personaId: "persona-long" })
+				.where(eq(personaBindings.conversationId, "session-main"));
+			const context = provider(database, { budgetChars: 200 });
+			const personaText = await context.renderPersona("42");
+			const memoryText = await context.renderMemories("42");
+			if (personaText === undefined || memoryText === undefined) {
+				throw new Error("Expected persona and memory text");
+			}
+			expect(personaText).toContain("truncated");
+			expect(personaText.length).toBeLessThanOrEqual(80);
+			expect(memoryText).toContain("more not shown");
+			expect(personaText.length + memoryText.length).toBeLessThanOrEqual(200);
+		} finally {
+			database.$client.close();
+		}
+	});
+
+	test("degrades to undefined without a database or when the database fails", async () => {
+		const missing = provider(() => undefined);
+		expect(await missing.renderPersona("42")).toBeUndefined();
+		expect(await missing.renderMemories("42")).toBeUndefined();
+		const broken = provider(() => {
+			throw new Error("database exploded");
+		});
+		expect(await broken.renderPersona("42")).toBeUndefined();
+		expect(await broken.renderMemories("42")).toBeUndefined();
+	});
+});
+
+const envelope = (id: string, text: string): MessageEnvelope => ({
+	channelId: "onebot",
+	channelKind: "onebot-v11",
+	conversationKey: { kind: "private", peerId: "user-1" },
+	id,
+	mentions: [],
+	parts: [{ text, type: "text" }],
+	sender: { displayName: "Tester", id: "user-1", platformId: "user-1" },
+	source: { messageId: id, timestampMs: Date.now() },
+});
+
+async function waitFor<T>(read: () => T | undefined, timeoutMs = 10_000): Promise<T> {
+	const startedAt = Date.now();
+	while (Date.now() - startedAt < timeoutMs) {
+		const value = read();
+		if (value !== undefined) return value;
+		await Bun.sleep(40);
+	}
+	throw new Error("Timed out waiting for condition");
+}
+
+describe("context injection end to end", () => {
+	test("puts persona and memory text into the live model request", async () => {
+		const { database, directory } = await openFixture();
+		const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+		const model = createFakeModel({ responses: ["ok"] });
+		const captured: string[] = [];
+		const originalStream = model.models.streamSimple.bind(model.models);
+		model.models.streamSimple = (target, context, options) => {
+			captured.push(JSON.stringify(context));
+			return originalStream(target, context, options);
+		};
+		const host = new PiDurableConversationHost({
+			contextProvider: provider(database),
+			model,
+			policy: { maxMessages: 20, windowMs: 20 },
+			storage,
+		});
+		try {
+			const durableConversationId = await host.createConversation();
+			await database.insert(conversations).values({
+				durableConversationId,
+				id: "session-e2e",
+				kind: "webui",
+				title: "E2E",
+			});
+			await database.insert(personas).values({
+				behaviorJson: "{}",
+				id: "persona-e2e",
+				isActive: 1,
+				name: "E2E persona",
+				promptJson: JSON.stringify("E2E-PERSONA-MARKER"),
+				summary: "e2e persona",
+				version: 1,
+			});
+			await database.insert(personaBindings).values({
+				conversationId: "session-e2e",
+				id: "binding-e2e",
+				isActive: 1,
+				isGlobal: 0,
+				personaId: "persona-e2e",
+			});
+			await insertMemory(database, {
+				id: "mem-e2e",
+				scope: "global",
+				summary: "E2E-MEMORY-MARKER",
+			});
+			await host.append({
+				conversationId: durableConversationId,
+				envelope: envelope("message-e2e", "hello"),
+				submittedAtMs: Date.now(),
+			});
+			const request = await waitFor(() =>
+				captured.find(
+					(entry) => entry.includes("E2E-PERSONA-MARKER") && entry.includes("E2E-MEMORY-MARKER"),
+				),
+			);
+			expect(request).toContain("E2E-PERSONA-MARKER");
+			expect(request).toContain("E2E-MEMORY-MARKER");
+		} finally {
+			await host.close();
+			database.$client.close();
+		}
+	});
+});
+
+type RecordedAction = {
+	readonly action: string;
+	readonly params: Record<string, unknown>;
+};
+
+/** OneBot transport double that records actions and answers every action with `retcode: 0`. */
+const createOneBotTransportSpy = () => {
+	const actions: RecordedAction[] = [];
+	const connections: Array<{ emitOpen: () => void }> = [];
+	const createTransport: OneBotTransportFactory = () => {
+		const listeners = new Map<string, (value?: unknown) => void>();
+		connections.push({ emitOpen: () => listeners.get("open")?.() });
+		return {
+			close: () => listeners.get("close")?.(),
+			on: (name, listener) => {
+				listeners.set(name, listener as (value?: unknown) => void);
+			},
+			send: (data) => {
+				const parsed = JSON.parse(data) as {
+					action: string;
+					echo: string;
+					params: Record<string, unknown>;
+				};
+				actions.push({ action: parsed.action, params: parsed.params });
+				queueMicrotask(() => {
+					listeners.get("message")?.(
+						JSON.stringify({ data: { message_id: 9001 }, echo: parsed.echo, retcode: 0 }),
+					);
+				});
+			},
+		};
+	};
+	return { actions, connections, createTransport };
+};
+
+describe("activity and reply hooks", () => {
+	test("fires activity.opened, activity.closed, and before.reply around a delivered answer", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-context-hooks-"));
+		directories.push(directory);
+		const onebot = createOneBotTransportSpy();
+		const { lifecycle } = createApp(
+			{
+				ELAINA_DATA_DIR: directory,
+				ELAINA_ONEBOT_WS_URL: "ws://napcat:3001",
+				ELAINA_PORT: "7420",
+				ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			},
+			{ onebotTransportFactory: onebot.createTransport },
+		);
+		await lifecycle.start();
+		try {
+			onebot.connections[0]?.emitOpen();
+			const events: string[] = [];
+			let openedPayload: Record<string, unknown> | undefined;
+			let closedPayload: Record<string, unknown> | undefined;
+			let beforePayload: Record<string, unknown> | undefined;
+			lifecycle.hooks.on("activity.opened", (payload) => {
+				events.push("activity.opened");
+				openedPayload = payload as Record<string, unknown>;
+			});
+			lifecycle.hooks.on("activity.closed", (payload) => {
+				events.push("activity.closed");
+				closedPayload = payload as Record<string, unknown>;
+			});
+			lifecycle.hooks.on("before.reply", (payload) => {
+				events.push("before.reply");
+				beforePayload = payload as Record<string, unknown>;
+			});
+			lifecycle.hooks.on("after.reply", () => {
+				events.push("after.reply");
+			});
+
+			await lifecycle.processEnvelope(envelope("message-hooks", "hi"));
+			await waitFor(() => (events.includes("after.reply") ? true : undefined), 20_000);
+
+			expect(events.indexOf("activity.opened")).toBeGreaterThanOrEqual(0);
+			expect(events.indexOf("activity.opened")).toBeLessThan(events.indexOf("activity.closed"));
+			expect(events).toContain("before.reply");
+			expect(events.indexOf("before.reply")).toBeLessThan(events.indexOf("after.reply"));
+			expect(openedPayload).toMatchObject({
+				activityId: expect.any(String),
+				conversationId: expect.any(String),
+			});
+			expect(closedPayload).toMatchObject({ envelopeCount: 1 });
+			expect(beforePayload).toMatchObject({
+				channelId: "onebot",
+				text: "ok",
+			});
+			expect(typeof beforePayload?.sessionId).toBe("string");
+		} finally {
+			await lifecycle.stop();
+		}
+	}, 25_000);
+});
