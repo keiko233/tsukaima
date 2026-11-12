@@ -16,6 +16,7 @@ export interface ModelPort {
 }
 
 export interface FakeModelOptions {
+	readonly onMessage?: (message: AssistantMessage) => void;
 	readonly responses?: readonly string[];
 }
 
@@ -49,6 +50,7 @@ export function createFakeModel(options: FakeModelOptions = {}): ModelPort {
 		const text = options.responses?.[index] ?? "ok";
 		index += 1;
 		const message = responseMessage(model, text);
+		options.onMessage?.(message);
 		queueMicrotask(() => {
 			output.push({
 				type: "start",

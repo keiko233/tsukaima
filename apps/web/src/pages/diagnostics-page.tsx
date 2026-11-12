@@ -59,6 +59,15 @@ export function DiagnosticsPage() {
 						<span>
 							{m.diagnostics_log_level_label()} {diagnostics.logLevel}
 						</span>
+						<span>
+							{m.diagnostics_usage_input_label()} {diagnostics.usageTotals.inputTokens}
+						</span>
+						<span>
+							{m.diagnostics_usage_output_label()} {diagnostics.usageTotals.outputTokens}
+						</span>
+						<span>
+							{m.diagnostics_usage_records_label()} {diagnostics.usage.length}
+						</span>
 						{diagnostics.onebotRestartRequired ? (
 							<span className="text-destructive">{m.settings_restart_hint()}</span>
 						) : null}

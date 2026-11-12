@@ -29,6 +29,8 @@ export const adminRouter = {
 				processedMessages: lifecycle.processedMessageCount,
 				routingPolicies: lifecycle.routingPolicies,
 				state: lifecycle.state,
+				usage: lifecycle.modelUsageLedger.records,
+				usageTotals: lifecycle.modelUsageLedger.totals,
 			};
 		}),
 	},

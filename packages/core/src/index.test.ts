@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { openDurableStorage } from "@tsukaima/durable";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -44,8 +45,22 @@ describe("PiDurableConversationHost", () => {
 	});
 
 	test("uses the deterministic fake model", async () => {
-		const model = createFakeModel({ responses: ["deterministic reply"] });
+		const messages: unknown[] = [];
+		const model = createFakeModel({
+			onMessage: (message) => messages.push(message),
+			responses: ["deterministic reply"],
+		});
 		expect(model.providerId).toBe("fake");
 		expect(model.models.getModels("fake").length).toBeGreaterThan(0);
+		const selected = model.models.getModel("fake", "fake-deterministic");
+		if (selected === undefined) throw new Error("Fake model was not registered");
+		const response = await model.models.completeSimple(
+			selected,
+			normalizeContext({
+				messages: [{ content: "hello", role: "user", timestamp: 1 }],
+			}),
+		);
+		expect(response.content).toEqual([{ text: "deterministic reply", type: "text" }]);
+		expect(messages).toHaveLength(1);
 	});
 });
