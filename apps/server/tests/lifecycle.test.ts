@@ -123,27 +123,20 @@ describe("server lifecycle with fake model", () => {
 			);
 			await lifecycle.start();
 			expect(urls).toEqual(["ws://env.example:3001"]);
-			expect(lifecycle.onebotConfigured).toBe(true);
+			expect(lifecycle.channels.get("onebot")?.diagnostics().configured).toBe(true);
 			connections[0]?.emitOpen();
-			expect(lifecycle.onebotDiagnostics?.connected).toBe(true);
+			expect(lifecycle.channels.get("onebot")?.diagnostics().connected).toBe(true);
 
-			await lifecycle.applyRuntimeSettings({
-				logLevel: "debug",
-				onebotWsUrl: "ws://override.example:3001",
-			});
+			await lifecycle.updatePluginConfig("onebot-napcat", { wsUrl: "ws://override.example:3001" });
 			expect(urls).toEqual(["ws://env.example:3001", "ws://override.example:3001"]);
 			expect(connections[0]?.closeCount).toBe(1);
-			expect(lifecycle.onebotConfigured).toBe(true);
-			expect(lifecycle.onebotRestartRequired).toBe(false);
-			expect(lifecycle.onebotDiagnostics?.state).toBe("connecting");
+			expect(lifecycle.channels.get("onebot")?.diagnostics().restartRequired).toBe(false);
+			expect(lifecycle.channels.get("onebot")?.diagnostics().state).toBe("connecting");
 
 			connections[1]?.emitOpen();
-			await lifecycle.applyRuntimeSettings({
-				logLevel: "debug",
-				onebotWsUrl: "ws://override.example:3001",
-			});
+			await lifecycle.updatePluginConfig("onebot-napcat", { wsUrl: "ws://override.example:3001" });
 			expect(urls).toHaveLength(2);
-			expect(lifecycle.onebotDiagnostics?.connected).toBe(true);
+			expect(lifecycle.channels.get("onebot")?.diagnostics().connected).toBe(true);
 
 			await lifecycle.stop();
 		} finally {

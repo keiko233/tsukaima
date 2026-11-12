@@ -4,6 +4,7 @@
 	"workspaces": [
 		"apps/*",
 		"packages/*",
+		"plugins/*",
 		"tools/*"
 	],
 	"type": "module",
@@ -12,8 +13,8 @@
 		"build": "bun run --filter '*' build",
 		"typecheck": "tsc --noEmit && bun run --filter '@elaina/web' typecheck",
 		"lint": "oxlint .",
-		"format": "oxfmt 'apps/**/*.ts' 'packages/**/*.ts' '*.json' '*.ts' '.env.example'",
-		"format:check": "oxfmt --check 'apps/**/*.ts' 'packages/**/*.ts' '*.json' '*.ts' '.env.example'",
+		"format": "oxfmt 'apps/**/*.ts' 'packages/**/*.ts' 'plugins/**/*.ts' 'plugins/**/*.json' '*.json' '*.ts' '.env.example'",
+		"format:check": "oxfmt --check 'apps/**/*.ts' 'packages/**/*.ts' 'plugins/**/*.ts' 'plugins/**/*.json' '*.json' '*.ts' '.env.example'",
 		"test": "bun test",
 		"check": "bun run lint && bun run format:check && bun run typecheck && bun run test"
 	},

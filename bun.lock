@@ -15,6 +15,7 @@
       "name": "@elaina/server",
       "version": "0.1.0",
       "dependencies": {
+        "@elaina-plugin/onebot-napcat": "workspace:*",
         "@elaina/contracts": "workspace:*",
         "@elaina/core": "workspace:*",
         "@elaina/db": "workspace:*",
@@ -148,6 +149,16 @@
         "zod": "4.6.7",
       },
     },
+    "plugins/onebot-napcat": {
+      "name": "@elaina-plugin/onebot-napcat",
+      "version": "0.1.0",
+      "dependencies": {
+        "@elaina/contracts": "workspace:*",
+        "@elaina/onebot": "workspace:*",
+        "@elaina/sdk": "workspace:*",
+        "zod": "4.6.7",
+      },
+    },
     "tools/migration": {
       "name": "@elaina/migration-cli",
       "version": "0.1.0",
@@ -273,6 +284,8 @@
     "@earendil-works/pi-schema": ["@earendil-works/pi-schema@1.5.2", "", {}, "sha512-hJoyCXWUhsSrXY5wJo2Q4kHXUsR51pNhkJHAMkWRwVMLDRtMDPkKNaa+JlVRVqTw1hjdSxcVVaFLSDbKlaTXEQ=="],
 
     "@earendil-works/pi-telemetry": ["@earendil-works/pi-telemetry@1.5.2", "", {}, "sha512-m+cumjIqNh1aMISi/9ttcG3ZOwIdriPbz/eMyWmRMJCGa/WcgY1RX4lrb7HvsHhSfI/JUeBESA4nOCr8C3y5ow=="],
+
+    "@elaina-plugin/onebot-napcat": ["@elaina-plugin/onebot-napcat@workspace:plugins/onebot-napcat"],
 
     "@elaina/chaos": ["@elaina/chaos@workspace:packages/chaos"],
 

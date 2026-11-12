@@ -120,14 +120,14 @@ describe("admin RPC", () => {
 		expect(JSON.stringify(updatedSettings)).not.toContain("provider-secret");
 		expect(lifecycle.logLevel).toBe("debug");
 		expect(onebot.urls).toEqual(["ws://127.0.0.1:3001"]);
-		expect(lifecycle.onebotRestartRequired).toBe(false);
+		expect(lifecycle.channels.get("onebot")?.diagnostics().restartRequired).toBe(false);
 		expect(lifecycle.providerRestartRequired).toBe(true);
-		expect(lifecycle.onebotDiagnostics?.state).toBe("connecting");
+		expect(lifecycle.channels.get("onebot")?.diagnostics().state).toBe("connecting");
 
 		await request("admin/settings/update", { onebotWsUrl: "ws://127.0.0.1:3100" });
 		expect(onebot.urls).toEqual(["ws://127.0.0.1:3001", "ws://127.0.0.1:3100"]);
-		expect(lifecycle.onebotRestartRequired).toBe(false);
-		expect(lifecycle.onebotDiagnostics?.state).toBe("connecting");
+		expect(lifecycle.channels.get("onebot")?.diagnostics().restartRequired).toBe(false);
+		expect(lifecycle.channels.get("onebot")?.diagnostics().state).toBe("connecting");
 
 		const updated = await request("admin/modelPolicies/set", {
 			capability: "basic-chat",

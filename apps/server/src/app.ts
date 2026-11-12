@@ -1,6 +1,7 @@
 import { Elysia } from "elysia";
 import { RPCHandler } from "@orpc/server/fetch";
 import type { OneBotTransportFactory } from "@elaina/onebot";
+import type { ElainaPlugin } from "@elaina/sdk";
 import { appRouter } from "./rpc/index.ts";
 import { loadConfig } from "./config.ts";
 import { ElainaLifecycle } from "./lifecycle.ts";
@@ -8,6 +9,8 @@ import { encodeSseEvent, type LogBuffer } from "./logging.ts";
 
 export interface CreateAppOptions {
 	readonly onebotTransportFactory?: OneBotTransportFactory;
+	/** Overrides the built-in plugin set (tests and future plugin sources). */
+	readonly plugins?: readonly ElainaPlugin[];
 }
 
 const LOG_HEARTBEAT_MS = 15_000;
@@ -62,7 +65,7 @@ export function createApp(
 	options?: CreateAppOptions,
 ) {
 	const config = loadConfig(env);
-	const lifecycle = new ElainaLifecycle(config, options);
+	const lifecycle = new ElainaLifecycle(config, { ...options, env });
 	const httpLog = lifecycle.logger.child("elaina::server::http");
 	const handler = new RPCHandler(appRouter);
 

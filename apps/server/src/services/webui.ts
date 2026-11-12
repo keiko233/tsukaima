@@ -15,6 +15,11 @@ import type { ElainaLifecycle } from "../lifecycle.ts";
 
 type ChatKind = "private" | "group" | "webui" | "task" | "plugin";
 
+const messageKinds = ["onebot-v11", "webui", "system", "plugin"] as const;
+
+const toMessageKind = (channelKind: string | undefined): (typeof messageKinds)[number] =>
+	messageKinds.find((candidate) => candidate === channelKind) ?? "plugin";
+
 export interface SessionSummary {
 	createdAt: string;
 	id: string;
@@ -476,13 +481,15 @@ export async function sendMessage(
 		if (session.chat.kind !== "private" && session.chat.kind !== "group") {
 			throw new Error("This chat has no external channel");
 		}
-		if (session.chat.platformConversationId === null) {
+		const platformConversationId = session.chat.platformConversationId;
+		const channelId = session.chat.channelId;
+		if (platformConversationId === null) {
 			throw new Error("External chat has no destination id");
 		}
-		const channel = lifecycle.onebotChannel;
-		if (channel === undefined || !channel.diagnostics.connected) {
-			throw new Error("OneBot channel is not connected");
+		if (channelId === null) {
+			throw new Error("External chat has no channel");
 		}
+		const channelKind = lifecycle.channels.get(channelId)?.kind;
 		await database.insert(messages).values({
 			chatObjectId: session.chat.id,
 			contentText: text,
@@ -491,7 +498,7 @@ export async function sendMessage(
 			deliveryStatus: "pending",
 			id,
 			ingestedAt: now,
-			kind: "onebot-v11",
+			kind: toMessageKind(channelKind),
 			occurredAt: now,
 			partsJson: JSON.stringify([{ text, type: "text" }]),
 			senderDisplayName: "WebUI admin",
@@ -500,17 +507,13 @@ export async function sendMessage(
 		});
 		try {
 			const parts: MessagePart[] = [{ text, type: "text" }];
-			const result =
-				session.chat.kind === "group"
-					? await channel.sendGroup(session.chat.platformConversationId, parts)
-					: await channel.sendPrivate(session.chat.platformConversationId, parts);
-			const platformMessageId =
-				typeof result === "object" &&
-				result !== null &&
-				"message_id" in result &&
-				(result.message_id === "string" || typeof result.message_id === "number")
-					? String(result.message_id)
-					: null;
+			const result = await lifecycle.channels.send(
+				channelId,
+				session.chat.kind,
+				platformConversationId,
+				parts,
+			);
+			const platformMessageId = result.platformMessageId ?? null;
 			await database
 				.update(messages)
 				.set({ deliveryStatus: "sent", platformMessageId, updatedAt: new Date().toISOString() })

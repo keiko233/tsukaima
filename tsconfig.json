@@ -23,6 +23,6 @@
 			"@elaina/durable": ["./packages/durable/src/index.ts"]
 		}
 	},
-	"include": ["apps/**/*.ts", "packages/**/*.ts", "tools/**/*.ts"],
+	"include": ["apps/**/*.ts", "packages/**/*.ts", "plugins/**/*.ts", "tools/**/*.ts"],
 	"exclude": ["node_modules", "dist", ".turbo", "coverage", "apps/web"]
 }

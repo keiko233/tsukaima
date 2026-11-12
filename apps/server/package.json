@@ -9,6 +9,7 @@
 		"build": "bun build src/main.ts --target bun --outdir ./dist"
 	},
 	"dependencies": {
+		"@elaina-plugin/onebot-napcat": "workspace:*",
 		"@elaina/contracts": "workspace:*",
 		"@elaina/core": "workspace:*",
 		"@elaina/db": "workspace:*",

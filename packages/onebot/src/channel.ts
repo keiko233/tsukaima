@@ -55,6 +55,7 @@ export class OneBotChannel {
 	private nextEchoId = 0;
 	private pending = new Map<string, PendingAction>();
 	private reconnecting = false;
+	private stateHandler: ((state: OneBotChannelDiagnostics["state"]) => void) | undefined;
 	private stopped = false;
 	private transport: OneBotTransport | undefined;
 	private transportFactory: OneBotTransportFactory;
@@ -107,6 +108,10 @@ export class OneBotChannel {
 		return this.pending.size;
 	}
 
+	onStateChange(handler: (state: OneBotChannelDiagnostics["state"]) => void): void {
+		this.stateHandler = handler;
+	}
+
 	onMessage(handler: (envelope: MessageEnvelope) => void): void {
 		this.messageHandler = handler;
 	}
@@ -157,7 +162,7 @@ export class OneBotChannel {
 		this.stopped = true;
 		this.transport?.close();
 		this.failPending(closeError());
-		this.connectionState = "closed";
+		this.transition("closed");
 	}
 
 	private action(action: string, params: Record<string, unknown>): Promise<unknown> {
@@ -179,12 +184,12 @@ export class OneBotChannel {
 	}
 
 	private async connect(): Promise<void> {
-		this.connectionState = "connecting";
+		this.transition("connecting");
 		const transport = this.transportFactory(this.config.url, headersFor(this.config.accessToken));
 		this.transport = transport;
 		transport.on("open", () => {
 			this.attempts = 0;
-			this.connectionState = "open";
+			this.transition("open");
 		});
 		transport.on("message", (data) => {
 			this.handleMessage(data);
@@ -196,11 +201,17 @@ export class OneBotChannel {
 			this.transport = undefined;
 			this.failPending(closeError());
 			if (!this.stopped) {
-				this.connectionState = "reconnecting";
+				this.transition("reconnecting");
 				this.lastErrorClass = "disconnect";
 				void this.reconnect();
 			}
 		});
+	}
+
+	private transition(state: OneBotChannelDiagnostics["state"]): void {
+		if (this.connectionState === state) return;
+		this.connectionState = state;
+		this.stateHandler?.(state);
 	}
 
 	private failPending(error: Error): void {

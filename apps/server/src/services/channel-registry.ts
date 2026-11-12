@@ -1,9 +1,16 @@
 import type { ChannelAdapter, ChannelDiagnostics, SendResult } from "@elaina/sdk";
-import type { MessagePart } from "@elaina/contracts";
+import type { ChannelRequest, MessageEnvelope, MessagePart } from "@elaina/contracts";
 
 export interface ChannelStatus extends ChannelDiagnostics {
 	readonly id: string;
 	readonly kind: string;
+}
+
+export interface ChannelRegistryOptions {
+	/** Host-owned ingestion pipeline for inbound messages. */
+	readonly onEnvelope?: (channelId: string, envelope: MessageEnvelope) => void;
+	/** Host-owned inbox for friend/group requests. */
+	readonly onRequest?: (channelId: string, request: ChannelRequest) => void;
 }
 
 /**
@@ -12,6 +19,11 @@ export interface ChannelStatus extends ChannelDiagnostics {
  */
 export class ChannelRegistry {
 	readonly #adapters = new Map<string, ChannelAdapter>();
+	readonly #options: ChannelRegistryOptions;
+
+	constructor(options: ChannelRegistryOptions = {}) {
+		this.#options = options;
+	}
 
 	get size(): number {
 		return this.#adapters.size;
@@ -22,6 +34,13 @@ export class ChannelRegistry {
 			throw new Error(`Channel ${adapter.id} is already registered`);
 		}
 		this.#adapters.set(adapter.id, adapter);
+		const { onEnvelope, onRequest } = this.#options;
+		if (onEnvelope !== undefined) {
+			adapter.onEnvelope((envelope) => onEnvelope(adapter.id, envelope));
+		}
+		if (onRequest !== undefined && adapter.onRequest !== undefined) {
+			adapter.onRequest((request) => onRequest(adapter.id, request));
+		}
 		return () => {
 			this.#adapters.delete(adapter.id);
 		};
