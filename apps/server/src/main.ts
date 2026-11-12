@@ -2,23 +2,19 @@ import { createApp } from "./app.ts";
 
 const { app, config, lifecycle } = createApp();
 await app.listen({ hostname: config.host, port: config.port });
-console.log(
-	JSON.stringify({
-		level: "info",
-		message: `server listening on http://${config.host}:${config.port}`,
-		stage: "listening",
-		timestamp: new Date().toISOString(),
-	}),
-);
+lifecycle.logger.info("server listening", {
+	host: config.host,
+	port: config.port,
+});
 
 try {
 	await lifecycle.start();
 } catch (error) {
 	lifecycle.fail(error instanceof Error ? error.message : String(error));
-	console.error(error);
 }
 
 const shutdown = async () => {
+	lifecycle.logger.info("shutdown requested");
 	await lifecycle.stop();
 	await app.stop(true);
 };

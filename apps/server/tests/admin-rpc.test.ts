@@ -44,6 +44,13 @@ describe("admin RPC", () => {
 		expect((diagnostics as { state: { state: string } }).state.state).toBe("ready");
 		expect((diagnostics as { processedMessages: number }).processedMessages).toBe(0);
 		expect((diagnostics as { routingPolicies: unknown[] }).routingPolicies.length).toBe(1);
+		const logs = (await request("admin/diagnostics/logs")) as {
+			capacity: number;
+			entries: Array<{ text: string }>;
+		};
+		expect(logs.capacity).toBeGreaterThan(0);
+		expect(logs.entries.length).toBeGreaterThan(0);
+		expect(logs.entries.every((entry) => entry.text.includes("elaina::server"))).toBe(true);
 
 		const conversations = await request("admin/conversations/list");
 		expect(Array.isArray(conversations)).toBe(true);
@@ -103,6 +110,12 @@ describe("admin RPC", () => {
 		expect((updated as { primary: { modelId: string } }[])[0]?.primary.modelId).toBe(
 			"fake-deterministic",
 		);
+		const cleared = (await request("admin/diagnostics/clearLogs")) as { cleared: number };
+		expect(cleared.cleared).toBeGreaterThan(0);
+		const clearedLogs = (await request("admin/diagnostics/logs")) as {
+			entries: Array<{ message: string }>;
+		};
+		expect(clearedLogs.entries.at(-1)?.message).toBe("log buffer cleared");
 
 		await lifecycle.stop();
 		expect(app).toBeDefined();

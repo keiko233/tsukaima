@@ -19,6 +19,7 @@ This file is the cross-session handoff record. Update it whenever implementation
   - `packages/chaos`: transient storage failure injection, restart drill, rate limiting, idempotent ingestion, and abuse guards.
 - Runtime target is Bun.
 - Runtime settings for log level, OneBot, and OpenAI-compatible/Magpie provider configuration are persisted in the domain database and editable from the WebUI. Secret values are never returned by the API.
+- Runtime logging uses structured records rendered in Rust `tracing` style, with a bounded in-memory buffer, SSE delivery, and a Shiki ANSI-rendered diagnostics viewer.
 - TanStack file-based routing, Paraglide i18n (`en`, `zh-cn`), TanStack Query data wiring, and beUI components under `apps/web/src` are active.
 - WebUI routes are grouped under `(messaging)` and `(system)`. Route-specific code lives in the matching `_modules` directory; shared shell code lives in `routes/_modules`.
 - `chat_objects` is separate from `conversations`, which now represents Elaina sessions. Each external chat object has one explicit receiving session for new messages.
@@ -58,6 +59,7 @@ This file is the cross-session handoff record. Update it whenever implementation
 - `docs/architecture/web-ui.md`
 - `docs/architecture/model-routing.md`
 - `docs/architecture/tech-stack.md`
+- `docs/architecture/logging.md`
 - `docs/migration/dsh.md`
 - `docs/migration/migration-kit.md`
 - `docs/roadmap.md`
@@ -107,13 +109,13 @@ bun run check
 ```
 
 Current baseline: lint, formatting, root TypeScript, WebUI TypeScript, WebUI production
-build, and 129 tests across 25 files pass.
+build, and 137 tests across 27 files pass.
 
 ## Next implementation steps
 
 Do these in order unless a later decision changes the plan:
 
-1. Add authenticated admin sessions and live WebSocket updates for conversations, activities, and diagnostics.
+1. Add authenticated admin sessions and live WebSocket updates for conversations, activities, and diagnostics beyond the new log stream.
 2. Add full persona/memory/audit admin services and review UI.
 3. Add production memory extraction/retrieval jobs and persona seeding operations.
 4. Add sticker/meme and search plugins plus plugin worker supervision in the server lifecycle.

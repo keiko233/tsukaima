@@ -1,6 +1,30 @@
 const RPC_URL = import.meta.env.VITE_RPC_URL ?? "/rpc";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
+export type LogValue = string | number | boolean | null | LogValue[] | { [key: string]: LogValue };
+
+export interface LogSpan {
+	readonly fields: Record<string, LogValue>;
+	readonly name: string;
+}
+
+export interface LogEntry {
+	readonly ansi: string;
+	readonly fields: Record<string, LogValue>;
+	readonly id: number;
+	readonly level: LogLevel;
+	readonly message: string;
+	readonly span: LogSpan | null;
+	readonly target: string;
+	readonly text: string;
+	readonly timestamp: string;
+}
+
+export interface LogSnapshot {
+	readonly capacity: number;
+	readonly dropped: number;
+	readonly entries: readonly LogEntry[];
+}
 
 export interface ConversationRow {
 	readonly channelId: string | null;
@@ -291,6 +315,8 @@ export const api = {
 		list: () => rpcCall<readonly ConversationRow[]>("admin/conversations/list"),
 	},
 	diagnostics: {
+		clearLogs: () => rpcCall<{ cleared: number }>("admin/diagnostics/clearLogs"),
+		logs: () => rpcCall<LogSnapshot>("admin/diagnostics/logs"),
 		status: () => rpcCall<DiagnosticsData>("admin/diagnostics/status"),
 	},
 	modelPolicies: {

@@ -115,6 +115,7 @@ export function AdminShell({ children }: { readonly children?: ReactNode }) {
 	const sidebarVisible = mobile ? mobilePane === "sidebar" : sidebarOpen;
 	const contentVisible = mobile ? mobilePane === "content" : true;
 	const chatRoute = isChatRoute(pathname);
+	const fullBleedRoute = pathname === "/diagnostics";
 
 	return (
 		<ShellNavigationContext.Provider value={{ mobile, showContent, showSidebar }}>
@@ -159,7 +160,13 @@ export function AdminShell({ children }: { readonly children?: ReactNode }) {
 							(children ?? <Outlet />)
 						) : (
 							<div className="min-h-0 flex-1 overflow-y-auto">
-								<div className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-6 sm:py-7">
+								<div
+									className={cn(
+										fullBleedRoute
+											? "flex h-full min-h-0 w-full flex-col px-4 py-5 sm:px-6 sm:py-4"
+											: "mx-auto w-full max-w-5xl px-4 py-5 sm:px-6 sm:py-7",
+									)}
+								>
 									{children ?? <Outlet />}
 								</div>
 							</div>

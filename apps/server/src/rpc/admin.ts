@@ -58,6 +58,34 @@ export const adminRouter = {
 		}),
 	},
 	diagnostics: {
+		clearLogs: os.$context<ElainaApiContext>().handler(async ({ context }) => {
+			const cleared = context.lifecycle.logs.clear();
+			context.lifecycle.logger.info("log buffer cleared", { cleared });
+			return { cleared };
+		}),
+		logs: os
+			.$context<ElainaApiContext>()
+			.input(
+				z
+					.object({
+						afterId: z.number().int().nonnegative().optional(),
+						level: z.enum(["debug", "info", "warn", "error"]).optional(),
+						limit: z.number().int().positive().max(10_000).optional(),
+					})
+					.optional(),
+			)
+			.handler(async ({ context, input }) => {
+				const logs = context.lifecycle.logs;
+				return {
+					capacity: logs.capacity,
+					dropped: logs.dropped,
+					entries: logs.list({
+						...(input?.afterId === undefined ? {} : { afterId: input.afterId }),
+						...(input?.level === undefined ? {} : { level: input.level }),
+						...(input?.limit === undefined ? {} : { limit: input.limit }),
+					}),
+				};
+			}),
 		status: os.$context<ElainaApiContext>().handler(async ({ context }) => {
 			const lifecycle = context.lifecycle;
 			const onebot = lifecycle.onebotDiagnostics;
@@ -229,15 +257,13 @@ export const adminRouter = {
 				try {
 					return await sendMessage(context.lifecycle, input);
 				} catch (error) {
-					console.error(
-						JSON.stringify({
-							level: "error",
-							message: error instanceof Error ? error.message : String(error),
-							stack: error instanceof Error ? error.stack : undefined,
-							stage: "session-send",
-							timestamp: new Date().toISOString(),
-						}),
-					);
+					context.lifecycle.logger
+						.child("elaina::server::rpc")
+						.error("session message send failed", {
+							error: error instanceof Error ? error.message : String(error),
+							sessionId: input.sessionId,
+							target: input.target,
+						});
 					throw error;
 				}
 			}),

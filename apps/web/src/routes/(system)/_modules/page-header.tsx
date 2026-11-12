@@ -15,11 +15,22 @@ export function SystemPage({
 	children,
 	title,
 	description,
+	fill = false,
 }: {
 	children: ReactNode;
 	description: string;
+	fill?: boolean;
 	title: string;
 }) {
+	if (fill) {
+		return (
+			<div className="flex min-h-0 flex-1 flex-col">
+				<SystemPageHeader description={description} title={title} />
+				<div className="flex min-h-0 flex-1 flex-col">{children}</div>
+			</div>
+		);
+	}
+
 	return (
 		<div>
 			<SystemPageHeader description={description} title={title} />
