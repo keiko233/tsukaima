@@ -7,10 +7,12 @@ import { Card } from "@/components/motion/card";
 import { CardContent } from "@/components/motion/card";
 import { Input } from "@/components/motion/input";
 import { api } from "@/lib/api";
+import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { SystemPage } from "./page-header";
 
 export function PolicyPage() {
+	const toast = useToast();
 	const [capability, setCapability] = useState("basic-chat");
 	const [primaryProvider, setPrimaryProvider] = useState("openai-compatible");
 	const [primaryModel, setPrimaryModel] = useState("");
@@ -22,7 +24,12 @@ export function PolicyPage() {
 	});
 	const savePolicy = useMutation({
 		mutationFn: api.modelPolicies.set,
+		onError: (error) =>
+			toast.error(m.toast_policy_save_failed(), {
+				description: errorMessage(error),
+			}),
 		onSuccess: async () => {
+			toast.success(m.toast_policy_saved());
 			await queryClient.invalidateQueries({ queryKey: ["admin"] });
 		},
 	});
@@ -73,12 +80,6 @@ export function PolicyPage() {
 					>
 						{m.policy_save()}
 					</Button>
-					{savePolicy.isSuccess ? (
-						<div className="text-xs text-muted-foreground">{m.policy_saved()}</div>
-					) : null}
-					{savePolicy.isError ? (
-						<div className="text-xs text-destructive">{savePolicy.error.message}</div>
-					) : null}
 				</CardContent>
 			</Card>
 		</SystemPage>
