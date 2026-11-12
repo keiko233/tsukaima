@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	ModelPolicyRouter,
+	ModelUsageLedger,
 	PiDurableConversationHost,
 	createFakeModel,
 	createOpenAICompatibleModelPort,
@@ -40,6 +41,7 @@ export class ElainaLifecycle {
 	durableStorage: SqliteStorage | undefined;
 	lastProcessingError: Error | undefined;
 	logLevel: ElainaConfig["logLevel"];
+	readonly modelUsageLedger = new ModelUsageLedger();
 	modelRouter: ModelPolicyRouter | undefined;
 	onebotChannel: OneBotChannel | undefined;
 	onebotRestartRequired = false;
@@ -92,10 +94,21 @@ export class ElainaLifecycle {
 		const { openAiApiKey, openAiBaseUrl, openAiModelId } = this.config;
 		if (openAiBaseUrl === undefined || openAiApiKey === undefined || openAiModelId === undefined) {
 			this.log("info", "OpenAI-compatible provider not configured; using fake model");
-			return createFakeModel();
+			return createFakeModel({
+				onMessage: (message) => {
+					this.modelUsageLedger.record(message, "basic-chat");
+				},
+			});
 		}
 		return createOpenAICompatibleModelPort(
-			{ apiKey: openAiApiKey, baseUrl: openAiBaseUrl, providerId: "openai-compatible" },
+			{
+				apiKey: openAiApiKey,
+				baseUrl: openAiBaseUrl,
+				onMessage: (message) => {
+					this.modelUsageLedger.record(message, "basic-chat");
+				},
+				providerId: "openai-compatible",
+			},
 			[{ capabilities: ["basic-chat", "tool-use"], modelId: openAiModelId }],
 		);
 	}

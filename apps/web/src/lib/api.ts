@@ -49,6 +49,17 @@ export interface DiagnosticsData {
 		readonly startedAtMs: number;
 		readonly state: "starting" | "degraded" | "ready" | "maintenance" | "failed";
 	};
+	readonly usage: readonly {
+		readonly capability: string;
+		readonly inputTokens: number;
+		readonly modelId: string;
+		readonly outputTokens: number;
+		readonly providerId: string;
+	}[];
+	readonly usageTotals: {
+		readonly inputTokens: number;
+		readonly outputTokens: number;
+	};
 }
 
 export interface PublicRuntimeSettings {

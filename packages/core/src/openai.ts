@@ -25,6 +25,7 @@ export interface OpenAICompatibleConfig {
 	readonly apiKey: string;
 	readonly providerId?: string;
 	readonly fetch?: FetchFunction;
+	readonly onMessage?: (message: AssistantMessage) => void;
 }
 
 export interface OpenAICompatibleModelConfig {
@@ -368,6 +369,7 @@ export function createOpenAICompatibleStreams(config: OpenAICompatibleConfig): P
 		queueMicrotask(async () => {
 			try {
 				const message = await execute(requestModel, requestContext, requestOptions);
+				config.onMessage?.(message);
 				output.push({ type: "start", partial: { ...message, content: [], stopReason: "pending" } });
 				for (const [index, block] of message.content.entries()) {
 					if (block.type === "text") {
@@ -420,6 +422,7 @@ export function createOpenAICompatibleStreams(config: OpenAICompatibleConfig): P
 					requestModel,
 					error instanceof Error ? error : new Error(String(error)),
 				);
+				config.onMessage?.(message);
 				output.push({ type: "error", reason: "error", error: message });
 				output.end(message);
 			}
