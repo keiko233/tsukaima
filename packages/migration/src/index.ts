@@ -4,8 +4,10 @@ export {
 	type DshSettings,
 	inspectDshSnapshot,
 	type SnapshotInventory,
+	type SnapshotPathSource,
 	type SnapshotSource,
 } from "./dsh-inspect.ts";
+export { snapshotPaths } from "./dsh-inspect.ts";
 export { FakeCompressor, type Compressor, type CompressionResult } from "./compressor.ts";
 export {
 	buildMigrationPlan,

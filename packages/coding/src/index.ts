@@ -42,3 +42,5 @@ export type {
 
 export { NoopReloadController } from "./reload.ts";
 export type { ReloadContext, ReloadController, ReloadResult } from "./reload.ts";
+
+export { DomainCodingStore } from "./domain-store.ts";
