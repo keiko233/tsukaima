@@ -50,5 +50,6 @@ bun run dev
 - Migration source: current DSH only.
 - Deployment: local development first; later distribution is a GHCR image. During development, deployment artifacts are generated for manual confirmation.
 - WebUI authorization: single administrator.
+- WebUI authentication: Better Auth 1.7 over SQLite with native `/api/auth/*` routes.
 
 Read [docs/architecture/README.md](docs/architecture/README.md) first. Migration-specific requirements are in [docs/migration/dsh.md](docs/migration/dsh.md).

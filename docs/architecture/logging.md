@@ -40,4 +40,5 @@ The WebUI uses the ANSI line, so the same output is colored in the browser as in
 - Realtime: `GET /events/logs` is a server-sent event stream. It sends a `snapshot` event, then `log` events, with periodic `heartbeat` events for idle connections.
 - WebUI: the Diagnostics page consumes the RPC snapshot and SSE stream, filters entries locally, and renders ANSI with Shiki's `ansi` language.
 
-The stream is LAN-admin-only under the current deployment model and must receive authentication when admin authentication is added.
+The stream is LAN-admin-only under the current deployment model. It requires a live Better Auth
+administrator session, resolved from the same request cookie as the rest of the WebUI.

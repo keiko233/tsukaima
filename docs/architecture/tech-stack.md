@@ -40,6 +40,7 @@ The layout is a target, not a rigid rule. Small helper packages can be merged if
 - HTTP/WebSocket framework: `elysia`.
 - RPC layer: `oRPC`.
 - Schema/validation: `zod`.
+- Authentication routes: Better Auth mounted at `/api/auth/*`; `auth.status` remains an oRPC procedure.
 - Mounting: oRPC Fetch adapter on an Elysia wildcard route, with Elysia body parsing disabled for RPC routes.
 - Contracts: oRPC routers are the single source of API types; do not manually mirror types in the client.
 - Errors: typed oRPC errors with stable codes for UI display.

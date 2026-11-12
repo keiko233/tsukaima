@@ -13,6 +13,14 @@ try {
 	lifecycle.fail(error instanceof Error ? error.message : String(error));
 }
 
+try {
+	await auth.ensureInitialized();
+} catch (error) {
+	lifecycle.logger.error("admin authentication failed to initialize", {
+		error: error instanceof Error ? error.message : String(error),
+	});
+}
+
 let shuttingDown = false;
 
 const shutdown = async () => {

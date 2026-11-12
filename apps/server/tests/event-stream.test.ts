@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LiveEvent, MessageEnvelope } from "@elaina/contracts";
 import { createApp } from "../src/app.ts";
+import { signIn as signInViaBetterAuth } from "./test-auth.ts";
 
 const directories: string[] = [];
 
@@ -40,19 +41,7 @@ const envelope = (id: string, text: string): MessageEnvelope => ({
 type App = ReturnType<typeof createApp>["app"];
 
 async function signIn(app: App): Promise<string> {
-	const response = await app.handle(
-		new Request("http://localhost/rpc/auth/login", {
-			body: JSON.stringify({
-				json: { password: "correct-horse", username: "elaina" },
-			}),
-			headers: { "content-type": "application/json" },
-			method: "POST",
-		}),
-	);
-	expect(response.status).toBe(200);
-	const setCookie = response.headers.get("set-cookie") ?? "";
-	expect(setCookie).toContain("elaina_admin_session=");
-	return setCookie.split(";")[0] ?? "";
+	return signInViaBetterAuth(app, "elaina", "correct-horse");
 }
 
 interface SseFrame {

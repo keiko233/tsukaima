@@ -7,7 +7,7 @@ import { appRouter } from "./rpc/index.ts";
 import type { ElainaApiContext } from "./rpc/base.ts";
 import { loadConfig } from "./config.ts";
 import { ElainaLifecycle } from "./lifecycle.ts";
-import { AuthService, readSessionToken } from "./services/auth.ts";
+import { AuthService } from "./services/auth.ts";
 import {
 	createLiveEventStream,
 	createLogEventStream,
@@ -40,14 +40,21 @@ export function createApp(
 	const lifecycle = new ElainaLifecycle(config, { ...options, env });
 	const httpLog = lifecycle.logger.child("elaina::server::http");
 	const auth = new AuthService({
+		audit: (entry) => lifecycle.writeAudit(entry),
+		baseUrl: config.publicUrl,
 		credential: {
+			email: config.adminEmail,
 			password: config.adminPassword,
 			username: config.adminUsername,
 		},
 		database: () => lifecycle.domainDatabase,
 		logger: lifecycle.logger.child("elaina::server::auth"),
+		secret: config.authSecret,
+		secureCookies: config.secureCookies,
+		trustedOrigins: config.webOrigin === undefined ? [] : [config.webOrigin],
 	});
 	auth.start();
+	lifecycle.onStop(() => auth.stop());
 	const handler = createRpcHandler();
 	const requireAuthForEvents = options?.requireAuthForEvents ?? true;
 	const eventStreamOptions = {
@@ -78,6 +85,9 @@ export function createApp(
 			}
 			return createLiveEventStream(lifecycle, request, eventStreamOptions);
 		})
+		.all("/api/auth/*", async ({ request }: { request: Request }) => auth.handle(request), {
+			parse: "none",
+		})
 		.all(
 			"/rpc/*",
 			async ({ request }: { request: Request }) => {
@@ -85,12 +95,11 @@ export function createApp(
 				const path = new URL(request.url).pathname;
 				const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
 				try {
-					const sessionToken = readSessionToken(request.headers.get("cookie"));
 					const { matched, response } = await handler.handle(request, {
 						context: {
 							auth,
+							headers: request.headers,
 							lifecycle,
-							...(sessionToken === undefined ? {} : { sessionToken }),
 						},
 						prefix: "/rpc",
 					});

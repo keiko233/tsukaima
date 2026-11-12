@@ -31,6 +31,10 @@ export default defineConfig({
 		host: "127.0.0.1",
 		port: 7421,
 		proxy: {
+			"/api": {
+				changeOrigin: true,
+				target: "http://127.0.0.1:7420",
+			},
 			"/rpc": {
 				changeOrigin: true,
 				target: "http://127.0.0.1:7420",

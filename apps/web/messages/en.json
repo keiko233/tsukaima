@@ -10,7 +10,7 @@
 	"auth_signed_in_as": "Signed in as {username}",
 	"auth_invalid_credentials": "Invalid username or password.",
 	"auth_rate_limited": "Too many attempts. Try again shortly.",
-	"auth_not_configured": "No admin credentials are configured. Set ELAINA_ADMIN_USERNAME and ELAINA_ADMIN_PASSWORD, then restart the server.",
+	"auth_not_configured": "No administrator is configured yet. Set ELAINA_ADMIN_USERNAME and ELAINA_ADMIN_PASSWORD (at least 8 characters), then restart the server.",
 	"auth_sign_in_failed": "Sign-in failed. Check the server logs.",
 	"nav_conversations": "Conversations",
 	"nav_policies": "Policies",
