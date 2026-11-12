@@ -1,36 +1,134 @@
 # WebUI
 
-The WebUI is IM-first. It is the administrator console and diagnostic surface, not a separate agent product.
+The WebUI is an IM-first administrator workspace. It uses the existing beUI-derived
+components, Tailwind theme tokens, TanStack Router, and TanStack Query.
+
+## Routing and module layout
+
+TanStack Router generates `src/route-tree.gen.ts`. Routes are organized by pathless
+route groups:
+
+```text
+routes/
+  (messaging)/
+    index.tsx
+    chat.$sessionId.tsx
+    _modules/
+  (system)/
+    diagnostics.tsx
+    plugins.tsx
+    policies.tsx
+    settings.tsx
+    _modules/
+  _modules/
+    shell/
+    ui/
+    lib/
+    hooks/
+```
+
+- `(messaging)` owns the empty content state and deep-linkable chat session route.
+- `(system)` owns plugins, settings, model policies, and diagnostics.
+- Components, hooks, and helpers used by only one route group live under that group's
+  `_modules` directory. Shared shell modules live under `routes/_modules`.
+- `_modules` is ignored by the router generator and must not contain route files.
+
+The root route owns the global shell and the nested `Outlet`.
 
 ## Layout
 
-- Left: conversation list, grouped by channel and type.
-- Center: message stream with multi-sender bubbles, images, stickers, replies, recalls, tool cards, and task cards.
-- Right: context panel with persona, memory, model route, active tasks, plugin panels, and channel details.
-- Top: search, filters, channel status, and account health.
-- Admin route: plugins, permissions, personas, memory review, deployment proposals, migration reports.
+- A 56 px global top bar spans the full window and contains the Elaina identity,
+  connection state, plugins, settings, the overflow menu, and the theme toggle.
+- The sidebar sits below the top bar and is independently resizable from 280–420 px.
+  Its right border is a straight one-pixel separator.
+- The content region is the router outlet. Panel boundaries are not rounded; controls
+  inside them keep beUI's rounded style.
+- On narrow screens the top bar remains, while sidebar and content render as a
+  single-column pair with an explicit Back action.
 
-## Message behavior
+## Sidebar
 
-- Show raw activity members even when they are aggregated into one model turn.
-- Mark aggregated ranges.
-- Preserve replies, mentions, recalls, and stickers.
-- Render durable task progress from the conversation view.
-- Tool calls are first-class cards, not hidden logs.
-- Plugin UI embeds into side panels and message cards through a typed bridge.
+Underline tabs switch between Chats, Users, Groups, and Requests. Each panel remains
+mounted so search text and scroll position survive tab switches. The Requests tab shows
+the pending request count.
 
-## API
+### Chats
 
-Bun HTTP/WebSocket API provides:
+The Chats panel organizes stable chat objects above their Elaina sessions.
 
-- authenticated admin session
-- conversation list/stream/history
-- durable watch streams
-- task graph and task details
-- memory search/review
-- plugin registry and manifests
-- policy edit and audit
-- migration dry-run/report
-- deployment proposals
+- Expanding a chat object reveals its sessions without changing the content route.
+- Selecting a child navigates to `/chat/$sessionId`.
+- Session actions support open, rename, archive/restore, create another session, and
+  designate a receiving session.
+- A receiving badge identifies the session used for subsequent external messages. The
+  selected browser session and receiving session are separate states.
+- Drag-and-drop between chat objects is intentionally not supported.
+- Creating a local chat creates a WebUI chat object and session only. It does not create
+  an external QQ chat.
 
-There is one administrator in the first release. All state-changing routes require auth and audit. The WebUI never exposes raw secrets.
+### Users, Groups, and Requests
+
+Selecting a row opens a sidebar-local detail view with a Back action. These views do
+not navigate the content outlet.
+
+- Users show canonical identities, aliases, trust/notes, linked private chats, and shared
+  groups. Opening a linked chat is an explicit navigation action.
+- Groups show known members, sessions, and profile identifiers. Group management is
+  shown as unavailable until a real permission-aware action surface exists.
+- Requests show pending or processed events with requester, target group, comment, and
+  state. Approve/reject is enabled only while the channel is connected. Confirmation
+  names the external target, and timeouts remain visibly uncertain.
+
+## Chat content
+
+The session header identifies the chat object, session, channel, receiving state, and
+channel connection state. Archived sessions are read-only.
+
+The transcript renders persisted inbound/outbound messages and durable assistant
+entries. Text, image, and sticker metadata are shown with explicit fallbacks for
+unsupported content. Delivery state is shown for self-authored messages.
+
+The composer offers only capabilities that currently exist:
+
+- **Talk to Elaina** appends a WebUI envelope to the selected session and starts an
+  Elaina turn.
+- **Send to channel** is available for external private/group sessions only while the
+  OneBot WebSocket is connected. It sends directly to the external target without
+  asking Elaina to reply.
+
+Drafts are stored per session in local storage. A failed or uncertain external send is
+not retried automatically.
+
+## Data and RPC
+
+The WebUI uses real domain data and durable transcript entries:
+
+- `admin/chats/*` for chat objects and local chat creation.
+- `admin/sessions/*` for session metadata, transcript reads, messages, and session
+  lifecycle.
+- `admin/users/*` and `admin/groups/*` for directory views.
+- `admin/requests/*` for request review and decisions.
+- `admin/diagnostics/status` for the real transport state and runtime diagnostics.
+
+No unread, unconfigured, or unsupported action is represented as working. Missing
+transport capabilities are disabled with an explanation.
+
+## Message routing
+
+See ADR 0007. New external messages go only to the active receiving session of their
+chat object. The receiving designation affects future messages only. Deduplication uses
+both a durable receipt and `(chat_object_id, platform_message_id)`.
+
+Activity windows flush after six seconds of inactivity. Windows that were collecting at
+shutdown are resumed after restart, so a single external message can still produce a
+turn without waiting for another message.
+
+## Known limitations
+
+- Model responses generated from external channel messages are visible in the WebUI but
+  are not yet automatically sent back through OneBot.
+- Chat-list previews use indexed domain messages. An assistant-only latest turn may not
+  appear as the parent preview until another indexed message arrives.
+- OneBot implementations differ in group-management and request behavior. The UI only
+  advertises friend/group request decisions exposed by the current channel facade.
+- There is no unread-count schema yet, so the UI does not invent one.

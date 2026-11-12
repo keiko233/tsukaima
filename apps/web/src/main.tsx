@@ -2,8 +2,11 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { routeTree } from "./routeTree.gen";
+import { routeTree } from "./route-tree.gen";
+import { initializeTheme } from "./lib/theme";
 import "./app.css";
+
+initializeTheme();
 
 const queryClient = new QueryClient({
 	defaultOptions: { queries: { retry: false, staleTime: 10_000 } },

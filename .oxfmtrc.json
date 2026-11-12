@@ -1,4 +1,5 @@
 {
 	"indentStyle": "tab",
-	"lineWidth": 100
+	"lineWidth": 100,
+	"ignorePatterns": ["apps/web/src/route-tree.gen.ts"]
 }

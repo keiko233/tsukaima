@@ -14,6 +14,155 @@ export interface ConversationRow {
 	readonly updatedAt: string;
 }
 
+export type ChatKind = "private" | "group" | "webui" | "task" | "plugin";
+export type DeliveryStatus = "received" | "pending" | "accepted" | "sent" | "failed" | "uncertain";
+
+export interface MessagePart {
+	readonly sha256?: string;
+	readonly text?: string;
+	readonly type: "text" | "image" | "sticker";
+}
+
+export interface MessageSummary {
+	readonly contentText: string;
+	readonly deliveryStatus: DeliveryStatus;
+	readonly direction: "inbound" | "outbound" | "system";
+	readonly id: string;
+	readonly kind: string;
+	readonly occurredAt: string;
+	readonly parts: readonly MessagePart[];
+	readonly platformMessageId: string | null;
+	readonly replyToMessageId: string | null;
+	readonly senderDisplayName: string;
+	readonly senderExternalId: string | null;
+	readonly senderKind: "human" | "bot" | "assistant" | "system";
+}
+
+export interface SessionSummary {
+	readonly createdAt: string;
+	readonly id: string;
+	readonly isReceiving: boolean;
+	readonly kind: string;
+	readonly latestMessage: MessageSummary | null;
+	readonly status: string;
+	readonly title: string;
+	readonly updatedAt: string;
+}
+
+export interface ChatSummary {
+	readonly channelId: string | null;
+	readonly createdAt: string;
+	readonly id: string;
+	readonly kind: ChatKind;
+	readonly pinned: boolean;
+	readonly platformConversationId: string | null;
+	readonly sessions: readonly SessionSummary[];
+	readonly status: string;
+	readonly title: string;
+	readonly updatedAt: string;
+}
+
+export interface SessionDetail {
+	readonly channelId: string | null;
+	readonly chat: {
+		readonly id: string;
+		readonly kind: ChatKind;
+		readonly platformConversationId: string | null;
+		readonly status: string;
+		readonly title: string;
+	};
+	readonly createdAt: string;
+	readonly id: string;
+	readonly isReceiving: boolean;
+	readonly kind: string;
+	readonly status: string;
+	readonly title: string;
+	readonly updatedAt: string;
+}
+
+export interface UserSummary {
+	readonly displayName: string;
+	readonly id: string;
+	readonly identities: readonly {
+		readonly displayName: string | null;
+		readonly externalId: string;
+		readonly id: string;
+		readonly platform: string;
+		readonly platformAccountId: string;
+	}[];
+	readonly kind: "human" | "bot" | "system";
+	readonly notes: string | null;
+	readonly preferredName: string | null;
+	readonly trustLevel: string;
+}
+
+export interface UserDetail extends UserSummary {
+	readonly aliases: readonly string[];
+	readonly chats: readonly {
+		readonly id: string;
+		readonly kind: ChatKind;
+		readonly platformConversationId: string | null;
+		readonly sessions: readonly {
+			readonly id: string;
+			readonly isReceiving: number;
+			readonly status: string;
+			readonly title: string | null;
+		}[];
+		readonly title: string;
+	}[];
+	readonly groups: readonly {
+		readonly id: string;
+		readonly title: string;
+	}[];
+}
+
+export interface GroupSummary {
+	readonly channelId: string | null;
+	readonly createdAt: string;
+	readonly id: string;
+	readonly memberCount: number;
+	readonly platformConversationId: string | null;
+	readonly sessionCount: number;
+	readonly status: string;
+	readonly title: string;
+	readonly updatedAt: string;
+}
+
+export interface GroupDetail extends GroupSummary {
+	readonly members: readonly {
+		readonly displayName: string;
+		readonly platformRole: string | null;
+		readonly role: string;
+		readonly userId: string;
+	}[];
+	readonly sessions: readonly {
+		readonly id: string;
+		readonly isReceiving: number;
+		readonly status: string;
+		readonly title: string | null;
+	}[];
+}
+
+export interface RequestRow {
+	readonly accountId: string;
+	readonly channelId: string;
+	readonly comment: string | null;
+	readonly createdAt: string;
+	readonly errorMessage: string | null;
+	readonly flag: string;
+	readonly groupExternalId: string | null;
+	readonly id: string;
+	readonly kind: "friend" | "group-add" | "group-invite";
+	readonly requesterDisplayName: string | null;
+	readonly requesterExternalId: string;
+	readonly resolutionAction: "approve" | "reject" | null;
+	readonly resolutionReason: string | null;
+	readonly resolvedAt: string | null;
+	readonly status: "pending" | "approved" | "rejected" | "failed" | "uncertain";
+	readonly subType: string | null;
+	readonly updatedAt: string;
+}
+
 export interface PluginRow {
 	readonly apiVersion: string;
 	readonly enabled: number;
@@ -34,9 +183,22 @@ export interface ModelPolicyRow {
 }
 
 export interface DiagnosticsData {
+	readonly channels: readonly {
+		readonly connected: boolean;
+		readonly eventCount: number;
+		readonly id: string;
+		readonly kind: string;
+		readonly lastErrorClass: string | null;
+		readonly reconnectAttempts: number;
+		readonly state: "connecting" | "open" | "closed" | "reconnecting";
+	}[];
 	readonly lastError?: string;
 	readonly logLevel: LogLevel;
+	readonly onebotConfigured: boolean;
 	readonly onebotConnected: boolean;
+	readonly onebotLastErrorClass: string | null;
+	readonly onebotReconnectAttempts: number;
+	readonly onebotState: "connecting" | "open" | "closed" | "reconnecting";
 	readonly onebotRestartRequired: boolean;
 	readonly processedMessages: number;
 	readonly providerRestartRequired: boolean;
@@ -109,6 +271,12 @@ async function rpcCall<T>(procedure: string, input?: unknown): Promise<T> {
 }
 
 export const api = {
+	chats: {
+		createLocal: (input: { sessionTitle: string; title: string }) =>
+			rpcCall<{ chatId: string; sessionId: string }>("admin/chats/createLocal", input),
+		list: (input: { status?: "active" | "archived" | "all" } = {}) =>
+			rpcCall<readonly ChatSummary[]>("admin/chats/list", input),
+	},
 	conversations: {
 		list: () => rpcCall<readonly ConversationRow[]>("admin/conversations/list"),
 	},
@@ -123,9 +291,37 @@ export const api = {
 	plugins: {
 		list: () => rpcCall<readonly PluginRow[]>("admin/plugins/list"),
 	},
+	groups: {
+		get: (groupId: string) => rpcCall<GroupDetail | null>("admin/groups/get", { groupId }),
+		list: () => rpcCall<readonly GroupSummary[]>("admin/groups/list"),
+	},
+	requests: {
+		get: (requestId: string) => rpcCall<RequestRow | null>("admin/requests/get", { requestId }),
+		list: (status: "all" | "pending" | "processed" = "all") =>
+			rpcCall<readonly RequestRow[]>("admin/requests/list", { status }),
+		respond: (input: { action: "approve" | "reject"; reason?: string; requestId: string }) =>
+			rpcCall<RequestRow>("admin/requests/respond", input),
+	},
+	sessions: {
+		create: (input: { chatObjectId: string; title: string }) =>
+			rpcCall<{ id: string }>("admin/sessions/create", input),
+		get: (sessionId: string) => rpcCall<SessionDetail | null>("admin/sessions/get", { sessionId }),
+		messages: (sessionId: string) =>
+			rpcCall<readonly MessageSummary[]>("admin/sessions/messages", { sessionId }),
+		send: (input: { sessionId: string; target: "channel" | "elaina"; text: string }) =>
+			rpcCall<MessageSummary>("admin/sessions/send", input),
+		setReceiving: (sessionId: string) =>
+			rpcCall<{ ok: true }>("admin/sessions/setReceiving", { sessionId }),
+		update: (input: { sessionId: string; status?: "active" | "archived"; title?: string }) =>
+			rpcCall<{ ok: true }>("admin/sessions/update", input),
+	},
 	settings: {
 		get: () => rpcCall<PublicRuntimeSettings>("admin/settings/get"),
 		update: (input: RuntimeSettingsPatch) =>
 			rpcCall<PublicRuntimeSettings>("admin/settings/update", input),
+	},
+	users: {
+		get: (userId: string) => rpcCall<UserDetail | null>("admin/users/get", { userId }),
+		list: () => rpcCall<readonly UserSummary[]>("admin/users/list"),
 	},
 };
