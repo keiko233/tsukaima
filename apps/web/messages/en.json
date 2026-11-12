@@ -1,0 +1,14 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"app_title": "Elaina Admin",
+	"nav_conversations": "Conversations",
+	"nav_policies": "Policies",
+	"nav_plugins": "Plugins",
+	"nav_diagnostics": "Diagnostics",
+	"conversation_system_message": "Fake runtime is wired to the conversation host.",
+	"policy_capability_label": "Capability",
+	"policy_capability_placeholder": "basic-chat",
+	"policy_save": "Save policy",
+	"plugins_empty": "No plugins installed yet.",
+	"diagnostics_state_label": "Runtime state"
+}

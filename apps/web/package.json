@@ -1,0 +1,46 @@
+{
+	"name": "@elaina/web",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "vite --host 127.0.0.1 --port 7421",
+		"build": "vite build",
+		"preview": "vite preview --host 127.0.0.1 --port 7421",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit",
+		"check:i18n": "inlang check --project ./project.inlang",
+		"lint:i18n": "oxlint --config ./.oxlintrc.paraglide.json ."
+	},
+	"dependencies": {
+		"@elaina/contracts": "workspace:*",
+		"@inlang/paraglide-js": "^3.2.2",
+		"@orpc/client": "1.16.2",
+		"@orpc/contract": "1.16.2",
+		"@orpc/react": "1.16.2",
+		"@orpc/server": "1.16.2",
+		"@orpc/tanstack-query": "1.16.2",
+		"@tanstack/react-query": "^5.107.1",
+		"@tanstack/react-router": "^1.170.46",
+		"class-variance-authority": "^0.7.1",
+		"clsx": "^2.1.1",
+		"lucide-react": "^1.72.0",
+		"motion": "^12.23.12",
+		"react": "^19.3.1",
+		"react-dom": "^19.3.1",
+		"shiki": "^4.6.0",
+		"tailwind-merge": "^3.7.0"
+	},
+	"devDependencies": {
+		"@inlang/cli": "^3.4.0",
+		"@tailwindcss/vite": "^4.3.5",
+		"@tanstack/router-plugin": "^1.169.0",
+		"@types/react": "^19.3.0",
+		"@types/react-dom": "^19.3.0",
+		"@vitejs/plugin-react": "^6.3.0",
+		"oxlint": "^1.88.0",
+		"tailwindcss": "^4.3.5",
+		"typescript": "^5.9.3",
+		"vite": "^8.3.8"
+	}
+}
