@@ -29,13 +29,29 @@ export function createApp(
 		.all(
 			"/rpc/*",
 			async ({ request }: { request: Request }) => {
-				const { matched, response } = await handler.handle(request, {
-					context: { lifecycle },
-					prefix: "/rpc",
-				});
-				return matched
-					? (response ?? new Response("No RPC response", { status: 500 }))
-					: new Response("Not found", { status: 404 });
+				try {
+					const { matched, response } = await handler.handle(request, {
+						context: { lifecycle },
+						prefix: "/rpc",
+					});
+					return matched
+						? (response ?? new Response("No RPC response", { status: 500 }))
+						: new Response("Not found", { status: 404 });
+				} catch (error) {
+					console.error(
+						JSON.stringify({
+							level: "error",
+							message: error instanceof Error ? error.message : String(error),
+							path: new URL(request.url).pathname,
+							stage: "rpc",
+							timestamp: new Date().toISOString(),
+						}),
+					);
+					return new Response(JSON.stringify({ message: "Internal server error" }), {
+						headers: { "content-type": "application/json" },
+						status: 500,
+					});
+				}
 			},
 			{ parse: "none" },
 		);

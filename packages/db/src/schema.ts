@@ -7,6 +7,7 @@ import {
 	sqliteTable,
 	text,
 	unique,
+	uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
 const now = sql`CURRENT_TIMESTAMP`;
@@ -70,13 +71,43 @@ export const userAliases = sqliteTable(
 	(table) => [unique("user_aliases_user_alias_unique").on(table.userId, table.alias)],
 );
 
+export const chatObjects = sqliteTable(
+	"chat_objects",
+	{
+		channelId: text("channel_id"),
+		createdAt: text("created_at").notNull().default(now),
+		id: text("id").primaryKey(),
+		kind: text("kind", { enum: ["private", "group", "webui", "task", "plugin"] }).notNull(),
+		muted: integer("muted").notNull().default(0),
+		pinned: integer("pinned").notNull().default(0),
+		platformConversationId: text("platform_conversation_id"),
+		status: text("status", { enum: ["active", "archived"] })
+			.notNull()
+			.default("active"),
+		title: text("title").notNull(),
+		updatedAt: text("updated_at").notNull().default(now),
+	},
+	(table) => [
+		unique("chat_objects_channel_platform_unique").on(
+			table.channelId,
+			table.kind,
+			table.platformConversationId,
+		),
+		index("chat_objects_recent_idx").on(table.status, table.pinned, table.updatedAt),
+	],
+);
+
 export const conversations = sqliteTable(
 	"conversations",
 	{
+		chatObjectId: text("chat_object_id").references(() => chatObjects.id, {
+			onDelete: "cascade",
+		}),
 		channelId: text("channel_id"),
 		createdAt: text("created_at").notNull().default(now),
 		durableConversationId: text("durable_conversation_id").notNull(),
 		id: text("id").primaryKey(),
+		isReceiving: integer("is_receiving").notNull().default(0),
 		kind: text("kind", { enum: ["private", "group", "webui", "task", "plugin"] }).notNull(),
 		platformConversationId: text("platform_conversation_id"),
 		status: text("status").notNull().default("active"),
@@ -84,10 +115,10 @@ export const conversations = sqliteTable(
 		updatedAt: text("updated_at").notNull().default(now),
 	},
 	(table) => [
-		unique("conversations_channel_platform_unique").on(
-			table.channelId,
-			table.platformConversationId,
-		),
+		index("conversations_chat_idx").on(table.chatObjectId, table.status, table.updatedAt),
+		uniqueIndex("conversations_one_receiving_unique")
+			.on(table.chatObjectId)
+			.where(sql`${table.isReceiving} = 1`),
 		index("conversations_channel_idx").on(table.channelId, table.kind, table.status),
 	],
 );
@@ -113,9 +144,18 @@ export const messages = sqliteTable(
 	"messages",
 	{
 		activityId: text("activity_id"),
+		chatObjectId: text("chat_object_id").references(() => chatObjects.id, {
+			onDelete: "cascade",
+		}),
+		contentText: text("content_text"),
 		conversationId: text("conversation_id")
 			.notNull()
 			.references(() => conversations.id, { onDelete: "cascade" }),
+		deliveryStatus: text("delivery_status", {
+			enum: ["received", "pending", "accepted", "sent", "failed", "uncertain"],
+		})
+			.notNull()
+			.default("received"),
 		direction: text("direction", { enum: ["inbound", "outbound", "system"] }).notNull(),
 		durableEntryId: text("durable_entry_id"),
 		id: text("id").primaryKey(),
@@ -123,17 +163,61 @@ export const messages = sqliteTable(
 		isAggregated: integer("is_aggregated").notNull().default(0),
 		kind: text("kind").notNull(),
 		occurredAt: text("occurred_at").notNull(),
+		partsJson: text("parts_json"),
 		platformMessageId: text("platform_message_id"),
 		rawRefJson: text("raw_ref_json"),
+		replyToMessageId: text("reply_to_message_id"),
+		senderDisplayName: text("sender_display_name"),
+		senderExternalId: text("sender_external_id"),
 		senderUserId: text("sender_user_id").references(() => users.id, { onDelete: "set null" }),
+		updatedAt: text("updated_at").notNull().default(now),
 	},
 	(table) => [
 		unique("messages_conversation_platform_unique").on(
 			table.conversationId,
 			table.platformMessageId,
 		),
+		uniqueIndex("messages_chat_platform_unique").on(table.chatObjectId, table.platformMessageId),
+		uniqueIndex("messages_durable_entry_unique").on(table.conversationId, table.durableEntryId),
 		index("messages_conversation_time_idx").on(table.conversationId, table.occurredAt),
 		index("messages_sender_idx").on(table.senderUserId),
+	],
+);
+
+export const requests = sqliteTable(
+	"requests",
+	{
+		accountId: text("account_id").notNull(),
+		channelId: text("channel_id").notNull(),
+		comment: text("comment"),
+		createdAt: text("created_at").notNull().default(now),
+		errorMessage: text("error_message"),
+		flag: text("flag").notNull(),
+		groupExternalId: text("group_external_id"),
+		id: text("id").primaryKey(),
+		kind: text("kind", {
+			enum: ["friend", "group-add", "group-invite"],
+		}).notNull(),
+		rawJson: text("raw_json"),
+		requesterDisplayName: text("requester_display_name"),
+		requesterExternalId: text("requester_external_id").notNull(),
+		resolutionAction: text("resolution_action", {
+			enum: ["approve", "reject"],
+		}),
+		resolutionReason: text("resolution_reason"),
+		resolvedAt: text("resolved_at"),
+		status: text("status", {
+			enum: ["pending", "approved", "rejected", "failed", "uncertain"],
+		})
+			.notNull()
+			.default("pending"),
+		subType: text("sub_type"),
+		updatedAt: text("updated_at").notNull().default(now),
+	},
+	(table) => [
+		unique("requests_channel_flag_unique").on(table.channelId, table.flag),
+		index("requests_status_time_idx").on(table.status, table.createdAt),
+		index("requests_group_idx").on(table.groupExternalId),
 	],
 );
 

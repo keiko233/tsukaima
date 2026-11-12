@@ -5,6 +5,10 @@ export type OneBotEvent = {
 	self_id: number | string;
 	post_type: "message" | "notice" | "request" | "meta_event";
 	message_type?: "private" | "group";
+	request_type?: "friend" | "group";
+	sub_type?: string;
+	flag?: string;
+	comment?: string;
 	user_id?: number | string;
 	group_id?: number | string;
 	message_id?: number | string;
@@ -15,6 +19,13 @@ export type OneBotEvent = {
 		role?: "owner" | "admin" | "member";
 	};
 	message?: readonly OneBotSegment[];
+};
+
+export type OneBotRequestEvent = OneBotEvent & {
+	post_type: "request";
+	flag: string;
+	request_type: "friend" | "group";
+	user_id: number | string;
 };
 
 export type OneBotSegment = {
@@ -57,6 +68,7 @@ export type OneBotTransportFactory = (
 ) => OneBotTransport;
 
 export type OneBotChannelDiagnostics = {
+	connected: boolean;
 	eventCount: number;
 	lastErrorClass: "connect" | "disconnect" | "action-timeout" | "unknown" | undefined;
 	reconnectAttempts: number;

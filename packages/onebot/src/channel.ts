@@ -1,6 +1,6 @@
-import type { MessageEnvelope, MessagePart } from "@tsukaima/contracts";
+import type { ChannelRequest, MessageEnvelope, MessagePart } from "@tsukaima/contracts";
 import type { WebSocket as BunWebSocket, WebSocketOptions } from "bun";
-import { normalizeOneBotEvent } from "./normalize.ts";
+import { normalizeOneBotEvent, normalizeOneBotRequest } from "./normalize.ts";
 import type {
 	OneBotChannelDiagnostics,
 	OneBotConfig,
@@ -57,6 +57,7 @@ export class OneBotChannel {
 	private eventCount = 0;
 	private lastErrorClass: OneBotChannelDiagnostics["lastErrorClass"];
 	private messageHandler: ((envelope: MessageEnvelope) => void) | undefined;
+	private requestHandler: ((request: ChannelRequest) => void) | undefined;
 	private nextEchoId = 0;
 	private pending = new Map<string, PendingAction>();
 	private reconnecting = false;
@@ -100,6 +101,7 @@ export class OneBotChannel {
 
 	get diagnostics(): OneBotChannelDiagnostics {
 		return {
+			connected: this.connectionState === "open" && !this.stopped,
 			eventCount: this.eventCount,
 			lastErrorClass: this.lastErrorClass,
 			reconnectAttempts: this.attempts,
@@ -115,12 +117,38 @@ export class OneBotChannel {
 		this.messageHandler = handler;
 	}
 
+	onRequest(handler: (request: ChannelRequest) => void): void {
+		this.requestHandler = handler;
+	}
+
 	async sendGroup(groupId: string, parts: readonly MessagePart[]): Promise<unknown> {
 		return this.action("send_group_msg", { group_id: groupId, message: toSegments(parts) });
 	}
 
 	async sendPrivate(userId: string, parts: readonly MessagePart[]): Promise<unknown> {
 		return this.action("send_private_msg", { message: toSegments(parts), user_id: userId });
+	}
+
+	async setFriendAddRequest(flag: string, approve: boolean, remark?: string): Promise<unknown> {
+		return this.action("set_friend_add_request", {
+			approve,
+			flag,
+			...(remark === undefined ? {} : { remark }),
+		});
+	}
+
+	async setGroupAddRequest(
+		flag: string,
+		subType: string | undefined,
+		approve: boolean,
+		reason?: string,
+	): Promise<unknown> {
+		return this.action("set_group_add_request", {
+			approve,
+			flag,
+			...(reason === undefined ? {} : { reason }),
+			...(subType === undefined ? {} : { sub_type: subType }),
+		});
 	}
 
 	async start(): Promise<void> {
@@ -200,6 +228,19 @@ export class OneBotChannel {
 	private handleMessage(data: string): void {
 		const parsed: unknown = JSON.parse(data);
 		if (this.handleResponse(parsed)) {
+			return;
+		}
+		if (
+			typeof parsed === "object" &&
+			parsed !== null &&
+			"post_type" in parsed &&
+			parsed.post_type === "request"
+		) {
+			const request = normalizeOneBotRequest(parsed as OneBotEvent, this.config);
+			if (request !== undefined) {
+				this.eventCount += 1;
+				this.requestHandler?.(request);
+			}
 			return;
 		}
 		const envelope = normalizeOneBotEvent(parsed as OneBotEvent, this.config);

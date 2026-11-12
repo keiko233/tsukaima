@@ -40,15 +40,15 @@ It contains, conceptually:
 
 Expected durable documents added by Tsukaima:
 
-| Document kind | Scope | Purpose |
-| --- | --- | --- |
-| `tsukaima.chat.meta` | conversation | Canonical conversation ID, display name, channel source, policy hints |
-| `tsukaima.chat.policy` | conversation | Response mode, quiet hours, rate limits, tool policy |
-| `tsukaima.activity` | conversation | Aggregated message activity and member envelope IDs |
-| `tsukaima.channel.send` | conversation | Outbound action records and delivery state |
-| `tsukaima.media` | conversation | References to blob hashes and canonical media IDs |
-| `tsukaima.plugin.state` | conversation | Plugin-owned conversation state |
-| `tsukaima.iteration` | conversation | Coding task metadata and approval state |
+| Document kind         | Scope        | Purpose                                                               |
+| --------------------- | ------------ | --------------------------------------------------------------------- |
+| `tsukaima.chat.meta`    | conversation | Canonical conversation ID, display name, channel source, policy hints |
+| `tsukaima.chat.policy`  | conversation | Response mode, quiet hours, rate limits, tool policy                  |
+| `tsukaima.activity`     | conversation | Aggregated message activity and member envelope IDs                   |
+| `tsukaima.channel.send` | conversation | Outbound action records and delivery state                            |
+| `tsukaima.media`        | conversation | References to blob hashes and canonical media IDs                     |
+| `tsukaima.plugin.state` | conversation | Plugin-owned conversation state                                       |
+| `tsukaima.iteration`    | conversation | Coding task metadata and approval state                               |
 
 The exact serialization shape is defined in implementation. Every document must be versioned.
 
@@ -127,26 +127,58 @@ CREATE TABLE user_aliases (
 );
 ```
 
+### chat_objects
+
+Stable communication scope. A chat object can contain many Tsukaima sessions. External
+objects are scoped by channel and platform conversation ID; local WebUI chat objects
+have no external identifiers.
+
+```sql
+CREATE TABLE chat_objects (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('private', 'group', 'webui', 'task', 'plugin')),
+  channel_id TEXT,
+  platform_conversation_id TEXT,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+  pinned INTEGER NOT NULL DEFAULT 0,
+  muted INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (channel_id, kind, platform_conversation_id)
+);
+```
+
 ### conversations
 
-Domain-side metadata for a durable conversation.
+Domain-side metadata for one Tsukaima session and its durable conversation. `conversations`
+is retained as the session table so existing durable IDs remain stable.
 
 ```sql
 CREATE TABLE conversations (
   id TEXT PRIMARY KEY,
+  chat_object_id TEXT NOT NULL REFERENCES chat_objects(id) ON DELETE CASCADE,
   durable_conversation_id TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('private', 'group', 'webui', 'task', 'plugin')),
   channel_id TEXT,
   platform_conversation_id TEXT,
   title TEXT,
-  status TEXT NOT NULL DEFAULT 'active',
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+  is_receiving INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE (channel_id, platform_conversation_id)
+  updated_at TEXT NOT NULL
 );
+
+CREATE UNIQUE INDEX conversations_one_receiving_unique
+  ON conversations (chat_object_id)
+  WHERE is_receiving = 1;
 ```
 
-`task` and `plugin` conversations may have no `channel_id`.
+At most one active session per external chat object is designated as the receiving
+session for new external messages. A new session does not imply a new external chat.
+Changing the receiving session does not move prior messages.
+
+`task` and `plugin` sessions may have no `channel_id`.
 
 ### conversation_members
 
@@ -171,22 +203,68 @@ Canonical message index. Raw durable conversation history remains in durable SQL
 ```sql
 CREATE TABLE messages (
   id TEXT PRIMARY KEY,
+  chat_object_id TEXT NOT NULL REFERENCES chat_objects(id) ON DELETE CASCADE,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   durable_entry_id TEXT,
   sender_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   platform_message_id TEXT,
   direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound', 'system')),
   kind TEXT NOT NULL,
+  content_text TEXT,
+  parts_json TEXT,
+  sender_display_name TEXT,
+  sender_external_id TEXT,
+  reply_to_message_id TEXT,
+  delivery_status TEXT NOT NULL DEFAULT 'received'
+    CHECK (delivery_status IN ('received', 'pending', 'accepted', 'sent', 'failed', 'uncertain')),
   occurred_at TEXT NOT NULL,
   ingested_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
   is_aggregated INTEGER NOT NULL DEFAULT 0,
   activity_id TEXT,
   raw_ref_json TEXT,
-  UNIQUE (conversation_id, platform_message_id)
+  UNIQUE (chat_object_id, platform_message_id)
 );
 ```
 
 `platform_message_id` may be null for system-generated messages. The unique index is partial in Drizzle where possible.
+
+Durability is two-phase in practice: the durable message receipt and activity admission
+are committed together, then the domain message row is indexed. A duplicate at either
+layer returns the existing message instead of appending another turn.
+
+### requests
+
+Friend, group join, and group invitation events. Requests are not model turns.
+
+```sql
+CREATE TABLE requests (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  flag TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('friend', 'group-add', 'group-invite')),
+  sub_type TEXT,
+  requester_external_id TEXT NOT NULL,
+  requester_display_name TEXT,
+  group_external_id TEXT,
+  comment TEXT,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'approved', 'rejected', 'failed', 'uncertain')),
+  resolution_action TEXT CHECK (resolution_action IN ('approve', 'reject')),
+  resolution_reason TEXT,
+  error_message TEXT,
+  raw_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  resolved_at TEXT,
+  UNIQUE (channel_id, flag)
+);
+```
+
+`flag` is preserved for OneBot correlation. Before a remote decision is attempted, the
+row moves to `uncertain`; that makes a crash during the request identify the outcome as
+unknown rather than inviting a duplicate retry.
 
 ### activities
 

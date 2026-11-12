@@ -15,6 +15,13 @@
 			"when": 1794483958746,
 			"tag": "0001_short_scarlet_spider",
 			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "6",
+			"when": 1794485027144,
+			"tag": "0002_redundant_corsair",
+			"breakpoints": true
 		}
 	]
 }

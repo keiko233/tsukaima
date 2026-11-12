@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import type { MessageEnvelope } from "@tsukaima/contracts";
+import type { ChannelRequest, MessageEnvelope } from "@tsukaima/contracts";
 import { OneBotChannel } from "./channel.ts";
-import { normalizeOneBotEvent } from "./normalize.ts";
+import { normalizeOneBotEvent, normalizeOneBotRequest } from "./normalize.ts";
 import type { OneBotConfig, OneBotTransport, OneBotTransportFactory } from "./types.ts";
 
 const privateEvent = {
@@ -76,6 +76,7 @@ const createChannel = async () => {
 	const headers: Record<string, string>[] = [];
 	const sent: unknown[] = [];
 	const envelopes: MessageEnvelope[] = [];
+	const requests: ChannelRequest[] = [];
 	const transportFactory: OneBotTransportFactory = (url, connectionHeaders) => {
 		expect(url).toBe("ws://napcat.test");
 		const socket = new FakeWebSocket();
@@ -93,9 +94,10 @@ const createChannel = async () => {
 	};
 	const channel = new OneBotChannel(config(), transportFactory);
 	channel.onMessage((envelope) => envelopes.push(envelope));
+	channel.onRequest((request) => requests.push(request));
 	await channel.start();
 	sockets[0]?.emit("open", []);
-	return { channel, envelopes, headers, sent, sockets };
+	return { channel, envelopes, headers, requests, sent, sockets };
 };
 
 test("rejects non-websocket urls", () => {
@@ -245,4 +247,52 @@ test("accepts inbound events through the channel", async () => {
 	expect(envelopes).toHaveLength(2);
 	expect(envelopes[0]?.parts).toContainEqual({ sha256: "sticker.png", type: "sticker" });
 	expect(envelopes[1]?.conversationKey).toEqual({ groupId: "555", kind: "group", peerId: "10001" });
+});
+
+test("normalizes and dispatches OneBot requests", async () => {
+	const requestEvent = {
+		comment: "please add me",
+		flag: "friend-request-1",
+		post_type: "request",
+		request_type: "friend",
+		self_id: 99,
+		time: 789,
+		user_id: 10_001,
+	} as const;
+	expect(
+		normalizeOneBotRequest(requestEvent, { botAccountId: "99", channelId: "onebot-test" }),
+	).toEqual({
+		accountId: "99",
+		channelId: "onebot-test",
+		comment: "please add me",
+		flag: "friend-request-1",
+		kind: "friend",
+		raw: requestEvent,
+		receivedAtMs: 789_000,
+		requesterId: "10001",
+	});
+
+	const { requests, sockets } = await createChannel();
+	sockets[0]?.emit("message", [JSON.stringify(requestEvent)]);
+	expect(requests).toHaveLength(1);
+	expect(requests[0]?.flag).toBe("friend-request-1");
+});
+
+test("passes request decisions through the transport", async () => {
+	const { channel, sent, sockets } = await createChannel();
+	const friend = channel.setFriendAddRequest("flag-1", true, "welcome");
+	const group = channel.setGroupAddRequest("flag-2", "add", false, "declined");
+	expect(sent[0]).toEqual({
+		action: "set_friend_add_request",
+		echo: "echo-0",
+		params: { approve: true, flag: "flag-1", remark: "welcome" },
+	});
+	expect(sent[1]).toEqual({
+		action: "set_group_add_request",
+		echo: "echo-1",
+		params: { approve: false, flag: "flag-2", reason: "declined", sub_type: "add" },
+	});
+	sockets[0]?.respond({ echo: "echo-0", retcode: 0 });
+	sockets[0]?.respond({ echo: "echo-1", retcode: 0 });
+	await Promise.all([friend, group]);
 });

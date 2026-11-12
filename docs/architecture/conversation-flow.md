@@ -73,38 +73,52 @@ For groups, also resolve the group identity as an identity of `kind = 'group'` a
 
 Conversation keys:
 
-| Kind | Key |
-| --- | --- |
+| Kind    | Key                                 |
+| ------- | ----------------------------------- |
 | private | `(channelId, kind=private, peerId)` |
-| group | `(channelId, kind=group, groupId)` |
-| webui | explicit admin conversation |
-| task | created by task/plugin |
-| plugin | created by plugin |
+| group   | `(channelId, kind=group, groupId)`  |
+| webui   | explicit admin conversation         |
+| task    | created by task/plugin              |
+| plugin  | created by plugin                   |
 
 Resolution:
 
-1. Find `conversations` by `(channel_id, platform_conversation_id)`.
-2. If absent, create a domain conversation row.
-3. Ensure the corresponding durable conversation exists.
-4. Store `durable_conversation_id` in the domain row.
-5. Return a `ResolvedConversation` object.
+1. Find or create a `chat_objects` row by `(channel_id, kind, platform_conversation_id)`.
+2. Find the chat object's active receiving session (`is_receiving = 1`).
+3. If none exists, create one Tsukaima session and its durable conversation. Existing
+   sessions are never moved automatically.
+4. Admit the message through the receiving session's durable conversation.
+5. Index the domain message under both the chat object and the receiving session.
 
-Do not create a new durable conversation for each message.
+Do not create a new durable conversation for each message. Creating another session
+under the chat object must not create another QQ chat or group. Changing the receiving
+session affects only subsequent external events; prior messages stay in their original
+session.
+
+Duplicate protection is applied before and during admission:
+
+- A process-local ingestion lock coalesces concurrent copies of one channel message.
+- A durable receipt is committed atomically with activity admission.
+- The domain message unique key is `(chat_object_id, platform_message_id)`.
+
+After admission, the activity window owns aggregation. It is flushed after the configured
+inactivity period even when no further message arrives, and collecting windows are
+resumed after restart.
 
 ## 5. Policy check
 
 Before durable ingest or reply, apply conversation policy:
 
-| Policy | Default |
-| --- | --- |
-| enabled | true for imported/known conversations |
-| response mode | `auto`, `mention-only`, `manual`, `disabled` |
-| private allowlist | administrator-defined |
-| group allowlist | administrator-defined |
-| quiet hours | disabled by default |
-| rate limit | conservative defaults |
-| tool policy | conversation-level allow/deny |
-| plugin policy | per-conversation enabled set |
+| Policy            | Default                                      |
+| ----------------- | -------------------------------------------- |
+| enabled           | true for imported/known conversations        |
+| response mode     | `auto`, `mention-only`, `manual`, `disabled` |
+| private allowlist | administrator-defined                        |
+| group allowlist   | administrator-defined                        |
+| quiet hours       | disabled by default                          |
+| rate limit        | conservative defaults                        |
+| tool policy       | conversation-level allow/deny                |
+| plugin policy     | per-conversation enabled set                 |
 
 Policy violations do not delete the raw message. The message is durably ingested as `ignored` or `suppressed` so history remains explainable.
 
@@ -228,16 +242,16 @@ Tools are durable tasks where supported.
 
 Tool policy:
 
-| Class | Default |
-| --- | --- |
-| read-only | allowed |
-| memory read | allowed with scope policy |
-| memory write | explicit tool call, audited |
-| channel send | allowed for assistant output |
-| channel interaction | policy-controlled |
-| group management | admin/policy controlled |
-| coding execute | coding tasks only |
-| deployment | proposal only |
+| Class               | Default                      |
+| ------------------- | ---------------------------- |
+| read-only           | allowed                      |
+| memory read         | allowed with scope policy    |
+| memory write        | explicit tool call, audited  |
+| channel send        | allowed for assistant output |
+| channel interaction | policy-controlled            |
+| group management    | admin/policy controlled      |
+| coding execute      | coding tasks only            |
+| deployment          | proposal only                |
 
 Tool calls should produce model-visible results and UI-visible cards.
 
@@ -284,17 +298,17 @@ Never delete raw durable history during compaction.
 
 ## 15. Error paths
 
-| Failure | Behavior |
-| --- | --- |
+| Failure                | Behavior                                                             |
+| ---------------------- | -------------------------------------------------------------------- |
 | WebSocket disconnected | Reconnect with backoff; events missed while offline are not invented |
-| Duplicate event | Discard with diagnostic |
-| Normalization failure | Persist raw diagnostic if possible; do not process |
-| Identity failure | Do not create duplicate identities; queue for admin review |
-| Policy denial | Store suppressed message; no reply |
-| Durable write failure | Fail request; process restarts and resumes |
-| Model failure | Submission fails visibly; can be retried or continued |
-| Tool failure | Return tool error to model/UI; do not crash conversation |
-| Send failure | Record failed outbound action; expose manual retry |
+| Duplicate event        | Discard with diagnostic                                              |
+| Normalization failure  | Persist raw diagnostic if possible; do not process                   |
+| Identity failure       | Do not create duplicate identities; queue for admin review           |
+| Policy denial          | Store suppressed message; no reply                                   |
+| Durable write failure  | Fail request; process restarts and resumes                           |
+| Model failure          | Submission fails visibly; can be retried or continued                |
+| Tool failure           | Return tool error to model/UI; do not crash conversation             |
+| Send failure           | Record failed outbound action; expose manual retry                   |
 
 ## 16. Observability
 

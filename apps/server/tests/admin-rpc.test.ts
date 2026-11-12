@@ -48,6 +48,21 @@ describe("admin RPC", () => {
 		const conversations = await request("admin/conversations/list");
 		expect(Array.isArray(conversations)).toBe(true);
 
+		const createdChat = (await request("admin/chats/createLocal", {
+			sessionTitle: "Main",
+			title: "Local chat",
+		})) as { chatId: string; sessionId: string };
+		const chats = (await request("admin/chats/list", {
+			status: "active",
+		})) as Array<{ id: string; sessions: Array<{ id: string; isReceiving: boolean }> }>;
+		expect(chats).toHaveLength(1);
+		expect(chats[0]?.id).toBe(createdChat.chatId);
+		expect(chats[0]?.sessions[0]?.isReceiving).toBe(true);
+		const session = (await request("admin/sessions/get", {
+			sessionId: createdChat.sessionId,
+		})) as { id: string; title: string } | null;
+		expect(session).toEqual(expect.objectContaining({ id: createdChat.sessionId, title: "Main" }));
+
 		const plugins = await request("admin/plugins/list");
 		expect(Array.isArray(plugins)).toBe(true);
 
