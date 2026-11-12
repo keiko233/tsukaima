@@ -44,6 +44,82 @@ export const messageEnvelopeSchema = z.object({
 
 export type MessageEnvelope = z.infer<typeof messageEnvelopeSchema>;
 
+export const activityAggregationPolicySchema = z.object({
+	maxMessages: z.number().int().min(1),
+	windowMs: z.number().int().min(3_000).max(10_000),
+});
+
+export type ActivityAggregationPolicy = z.infer<typeof activityAggregationPolicySchema>;
+
+export const defaultActivityAggregationPolicy: ActivityAggregationPolicy = {
+	maxMessages: 20,
+	windowMs: 6_000,
+};
+
+export const conversationPolicySchema = z.object({
+	enabled: z.boolean().default(true),
+	followUpWhenBusy: z.enum(["follow-up", "reject"]).default("follow-up"),
+	steerWhenBusy: z.enum(["steer", "follow-up", "reject"]).default("steer"),
+});
+
+export type ConversationPolicy = z.infer<typeof conversationPolicySchema>;
+
+export const defaultConversationPolicy: ConversationPolicy = {
+	enabled: true,
+	followUpWhenBusy: "follow-up",
+	steerWhenBusy: "steer",
+};
+
+export const activityWindowSchema = z.object({
+	activityId: z.string().min(1),
+	conversationId: z.string().min(1),
+	envelopes: z.array(messageEnvelopeSchema),
+	openedAtMs: z.number().int().nonnegative(),
+});
+
+export type ActivityWindow = z.infer<typeof activityWindowSchema>;
+
+export const submissionSchema = z.object({
+	activityId: z.string().min(1),
+	context: z.string(),
+	whenBusy: z.enum(["steer", "follow-up"]),
+});
+
+export type Submission = z.infer<typeof submissionSchema>;
+
+export const adminEventSchema = z.discriminatedUnion("type", [
+	z.object({
+		conversationId: z.string().min(1),
+		messageId: z.string().min(1),
+		type: z.literal("message.appended"),
+	}),
+	z.object({
+		activityId: z.string().min(1),
+		conversationId: z.string().min(1),
+		type: z.literal("activity.opened"),
+	}),
+	z.object({
+		activityId: z.string().min(1),
+		conversationId: z.string().min(1),
+		type: z.literal("activity.closed"),
+	}),
+	z.object({
+		submissionId: z.string().min(1),
+		type: z.literal("submission.created"),
+	}),
+	z.object({
+		submissionId: z.string().min(1),
+		type: z.literal("submission.settled"),
+	}),
+]);
+
+export type AdminEvent = z.infer<typeof adminEventSchema>;
+
+export const durableDocumentKinds = {
+	activityPolicy: "elaina.conversationPolicy",
+	activityWindow: "elaina.activityWindow",
+} as const;
+
 export const healthStateSchema = z.enum(["starting", "degraded", "ready", "maintenance", "failed"]);
 
 export const healthResponseSchema = z.object({

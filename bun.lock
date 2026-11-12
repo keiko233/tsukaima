@@ -39,7 +39,11 @@
       "name": "@elaina/core",
       "version": "0.1.0",
       "dependencies": {
+        "@earendil-works/chord": "1.5.2",
+        "@earendil-works/pi-ai": "1.5.2",
+        "@earendil-works/pi-durable": "1.5.2",
         "@elaina/contracts": "workspace:*",
+        "@elaina/durable": "workspace:*",
         "zod": "4.6.7",
       },
     },
@@ -64,6 +68,10 @@
     "packages/migration": {
       "name": "@elaina/migration",
       "version": "0.1.0",
+      "dependencies": {
+        "@elaina/db": "workspace:*",
+        "drizzle-orm": "0.45.4",
+      },
     },
     "packages/onebot": {
       "name": "@elaina/onebot",
