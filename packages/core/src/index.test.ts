@@ -63,4 +63,32 @@ describe("PiDurableConversationHost", () => {
 		expect(response.content).toEqual([{ text: "deterministic reply", type: "text" }]);
 		expect(messages).toHaveLength(1);
 	});
+
+	test("flushes a collecting activity after the inactivity window", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "elaina-core-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const host = new PiDurableConversationHost({
+				policy: { maxMessages: 20, windowMs: 30 },
+				storage,
+			});
+			const conversationId = await host.createConversation();
+			const now = Date.now();
+			await host.append({
+				conversationId,
+				envelope: {
+					...envelope("message-flush", "hello after idle"),
+					source: { messageId: "message-flush", timestampMs: now },
+				},
+				submittedAtMs: now,
+			});
+			await Bun.sleep(150);
+			const entries = await host.listEntries(conversationId);
+			expect(entries.some((entry) => entry.kind === "pi.assistant")).toBe(true);
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
 });

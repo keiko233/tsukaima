@@ -44,6 +44,38 @@ export const messageEnvelopeSchema = z.object({
 
 export type MessageEnvelope = z.infer<typeof messageEnvelopeSchema>;
 
+export const channelRequestSchema = z.object({
+	accountId: z.string().min(1),
+	channelId: z.string().min(1),
+	comment: z.string().optional(),
+	flag: z.string().min(1),
+	groupId: z.string().min(1).optional(),
+	kind: z.enum(["friend", "group-add", "group-invite"]),
+	raw: z.unknown().optional(),
+	receivedAtMs: z.number().int().nonnegative(),
+	requesterDisplayName: z.string().min(1).optional(),
+	requesterId: z.string().min(1),
+	subType: z.string().optional(),
+});
+
+export type ChannelRequest = z.infer<typeof channelRequestSchema>;
+
+export const channelMessageSchema = z.object({
+	channelId: z.string().min(1),
+	deliveryStatus: z.enum(["received", "pending", "accepted", "sent", "failed", "uncertain"]),
+	direction: z.enum(["inbound", "outbound", "system"]),
+	id: z.string().min(1),
+	occurredAt: z.string().min(1),
+	parts: z.array(messagePartSchema),
+	replyToMessageId: z.string().min(1).optional(),
+	senderDisplayName: z.string().min(1),
+	senderExternalId: z.string().min(1).optional(),
+	senderKind: z.enum(["human", "bot", "assistant", "system"]),
+	text: z.string(),
+});
+
+export type ChannelMessage = z.infer<typeof channelMessageSchema>;
+
 export const activityAggregationPolicySchema = z.object({
 	maxMessages: z.number().int().min(1),
 	windowMs: z.number().int().min(3_000).max(10_000),

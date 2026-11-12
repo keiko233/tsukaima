@@ -1,0 +1,836 @@
+import { randomUUID } from "node:crypto";
+import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
+import type { MessagePart } from "@elaina/contracts";
+import {
+	chatObjects,
+	conversationMembers,
+	conversations,
+	identities,
+	messages,
+	requests,
+	userAliases,
+	users,
+} from "@elaina/db";
+import type { ElainaLifecycle } from "../lifecycle.ts";
+
+type ChatKind = "private" | "group" | "webui" | "task" | "plugin";
+
+export interface SessionSummary {
+	createdAt: string;
+	id: string;
+	isReceiving: boolean;
+	kind: string;
+	latestMessage: MessageSummary | null;
+	status: string;
+	title: string;
+	updatedAt: string;
+}
+
+export interface ChatSummary {
+	channelId: string | null;
+	createdAt: string;
+	id: string;
+	kind: ChatKind;
+	pinned: boolean;
+	platformConversationId: string | null;
+	sessions: SessionSummary[];
+	status: string;
+	title: string;
+	updatedAt: string;
+}
+
+export interface MessageSummary {
+	contentText: string;
+	direction: "inbound" | "outbound" | "system";
+	deliveryStatus: "received" | "pending" | "accepted" | "sent" | "failed" | "uncertain";
+	id: string;
+	kind: string;
+	occurredAt: string;
+	parts: MessagePart[];
+	platformMessageId: string | null;
+	replyToMessageId: string | null;
+	senderDisplayName: string;
+	senderExternalId: string | null;
+	senderKind: "human" | "bot" | "assistant" | "system";
+}
+
+export interface SessionDetail {
+	channelId: string | null;
+	chat: {
+		id: string;
+		kind: ChatKind;
+		platformConversationId: string | null;
+		status: string;
+		title: string;
+	};
+	createdAt: string;
+	id: string;
+	isReceiving: boolean;
+	kind: string;
+	status: string;
+	title: string;
+	updatedAt: string;
+}
+
+type MessageRow = typeof messages.$inferSelect;
+type RequestRow = typeof requests.$inferSelect;
+
+function parseParts(value: string | null): MessagePart[] {
+	if (value === null) return [];
+	try {
+		const parsed: unknown = JSON.parse(value);
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter(
+			(part): part is MessagePart =>
+				typeof part === "object" &&
+				part !== null &&
+				"type" in part &&
+				(part.type === "text" || part.type === "image" || part.type === "sticker"),
+		);
+	} catch {
+		return [];
+	}
+}
+
+function toMessageSummary(row: MessageRow): MessageSummary {
+	const isWebui =
+		row.kind === "webui" || row.direction === "outbound" || row.senderExternalId === "webui-admin";
+	const isBot = row.kind === "assistant";
+	return {
+		contentText: row.contentText ?? "",
+		direction: row.direction,
+		deliveryStatus: row.deliveryStatus,
+		id: row.id,
+		kind: row.kind,
+		occurredAt: row.occurredAt,
+		parts: parseParts(row.partsJson),
+		platformMessageId: row.platformMessageId,
+		replyToMessageId: row.replyToMessageId,
+		senderDisplayName: row.senderDisplayName ?? (isWebui ? "WebUI" : "Unknown"),
+		senderExternalId: row.senderExternalId,
+		senderKind: isBot
+			? "assistant"
+			: row.senderExternalId === "webui-admin"
+				? "system"
+				: row.senderExternalId === "elaina"
+					? "assistant"
+					: "human",
+	};
+}
+
+function assistantMessagesFromEntries(
+	entries: readonly {
+		id: string | number;
+		kind: string;
+		model?: readonly unknown[];
+	}[],
+): MessageSummary[] {
+	const result: MessageSummary[] = [];
+	for (const entry of entries) {
+		if (entry.kind !== "pi.assistant" || entry.model === undefined) continue;
+		const texts: string[] = [];
+		let timestamp: number | undefined;
+		for (const message of entry.model) {
+			if (typeof message !== "object" || message === null) continue;
+			if ("timestamp" in message && typeof message.timestamp === "number") {
+				timestamp = message.timestamp;
+			}
+			if (!("content" in message) || !Array.isArray(message.content)) continue;
+			for (const block of message.content) {
+				if (
+					typeof block === "object" &&
+					block !== null &&
+					"type" in block &&
+					block.type === "text" &&
+					"text" in block &&
+					typeof block.text === "string"
+				) {
+					texts.push(block.text);
+				}
+			}
+		}
+		const content = texts.join("\n").trim();
+		if (content.length === 0) continue;
+		result.push({
+			contentText: content,
+			direction: "outbound",
+			deliveryStatus: "accepted",
+			id: `durable:${String(entry.id)}`,
+			kind: "assistant",
+			occurredAt: new Date(timestamp ?? Date.now()).toISOString(),
+			parts: [{ text: content, type: "text" }],
+			platformMessageId: null,
+			replyToMessageId: null,
+			senderDisplayName: "Elaina",
+			senderExternalId: "elaina",
+			senderKind: "assistant",
+		});
+	}
+	return result;
+}
+
+function requireDatabase(lifecycle: ElainaLifecycle) {
+	const database = lifecycle.domainDatabase;
+	if (database === undefined) throw new Error("Database is not ready");
+	return database;
+}
+
+export async function listChats(
+	lifecycle: ElainaLifecycle,
+	options: { status?: "active" | "archived" | "all" } = {},
+): Promise<ChatSummary[]> {
+	const database = requireDatabase(lifecycle);
+	const status = options.status ?? "active";
+	const objectRows = await database
+		.select()
+		.from(chatObjects)
+		.where(
+			status === "all"
+				? undefined
+				: eq(chatObjects.status, status === "archived" ? "archived" : "active"),
+		)
+		.orderBy(desc(chatObjects.pinned), desc(chatObjects.updatedAt));
+	const ids = objectRows.map((row) => row.id);
+	const sessionRows =
+		ids.length === 0
+			? []
+			: await database
+					.select()
+					.from(conversations)
+					.where(inArray(conversations.chatObjectId, ids))
+					.orderBy(desc(conversations.updatedAt));
+	const sessionIds = sessionRows.map((row) => row.id);
+	const messageRows =
+		sessionIds.length === 0
+			? []
+			: await database
+					.select()
+					.from(messages)
+					.where(inArray(messages.conversationId, sessionIds))
+					.orderBy(desc(messages.occurredAt));
+	const latestBySession = new Map<string, MessageSummary>();
+	for (const row of messageRows) {
+		if (!latestBySession.has(row.conversationId)) {
+			latestBySession.set(row.conversationId, toMessageSummary(row));
+		}
+	}
+	return objectRows.map((object) => ({
+		channelId: object.channelId,
+		createdAt: object.createdAt,
+		id: object.id,
+		kind: object.kind,
+		pinned: object.pinned === 1,
+		platformConversationId: object.platformConversationId,
+		sessions: sessionRows
+			.filter((session) => session.chatObjectId === object.id)
+			.map((session) => ({
+				createdAt: session.createdAt,
+				id: session.id,
+				isReceiving: session.isReceiving === 1,
+				kind: session.kind,
+				latestMessage: latestBySession.get(session.id) ?? null,
+				status: session.status,
+				title: session.title ?? session.id,
+				updatedAt: session.updatedAt,
+			})),
+		status: object.status,
+		title: object.title,
+		updatedAt: object.updatedAt,
+	}));
+}
+
+export async function getSession(
+	lifecycle: ElainaLifecycle,
+	sessionId: string,
+): Promise<SessionDetail | null> {
+	const database = requireDatabase(lifecycle);
+	const [row] = await database
+		.select({
+			chat: {
+				id: chatObjects.id,
+				kind: chatObjects.kind,
+				platformConversationId: chatObjects.platformConversationId,
+				status: chatObjects.status,
+				title: chatObjects.title,
+			},
+			chatChannelId: chatObjects.channelId,
+			session: {
+				createdAt: conversations.createdAt,
+				id: conversations.id,
+				isReceiving: conversations.isReceiving,
+				kind: conversations.kind,
+				status: conversations.status,
+				title: conversations.title,
+				updatedAt: conversations.updatedAt,
+			},
+		})
+		.from(conversations)
+		.innerJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
+		.where(eq(conversations.id, sessionId))
+		.limit(1);
+	if (row === undefined) return null;
+	return {
+		channelId: row.chatChannelId,
+		chat: row.chat,
+		createdAt: row.session.createdAt,
+		id: row.session.id,
+		isReceiving: row.session.isReceiving === 1,
+		kind: row.session.kind,
+		status: row.session.status,
+		title: row.session.title ?? row.session.id,
+		updatedAt: row.session.updatedAt,
+	};
+}
+
+export async function createLocalChat(
+	lifecycle: ElainaLifecycle,
+	input: { sessionTitle: string; title: string },
+): Promise<{ chatId: string; sessionId: string }> {
+	const database = requireDatabase(lifecycle);
+	const host = lifecycle.conversationHost;
+	if (host === undefined) throw new Error("Conversation host is not ready");
+	const chatId = randomUUID();
+	const sessionId = randomUUID();
+	const durableConversationId = await host.createConversation();
+	const now = new Date().toISOString();
+	await database.insert(chatObjects).values({
+		createdAt: now,
+		id: chatId,
+		kind: "webui",
+		title: input.title.trim(),
+		updatedAt: now,
+	});
+	await database.insert(conversations).values({
+		chatObjectId: chatId,
+		createdAt: now,
+		durableConversationId,
+		id: sessionId,
+		isReceiving: 1,
+		kind: "webui",
+		title: input.sessionTitle.trim(),
+		updatedAt: now,
+	});
+	await lifecycle.writeAudit({
+		action: "chat.create",
+		payload: { chatId, sessionId },
+		result: "ok",
+		targetId: chatId,
+		targetKind: "chat",
+	});
+	return { chatId, sessionId };
+}
+
+export async function createSession(
+	lifecycle: ElainaLifecycle,
+	chatObjectId: string,
+	title: string,
+): Promise<{ id: string }> {
+	const database = requireDatabase(lifecycle);
+	const host = lifecycle.conversationHost;
+	if (host === undefined) throw new Error("Conversation host is not ready");
+	const [chat] = await database
+		.select()
+		.from(chatObjects)
+		.where(eq(chatObjects.id, chatObjectId))
+		.limit(1);
+	if (chat === undefined) throw new Error("Chat object not found");
+	if (chat.status !== "active") throw new Error("Chat object is archived");
+	const durableConversationId = await host.createConversation();
+	const id = randomUUID();
+	const now = new Date().toISOString();
+	await database.insert(conversations).values({
+		channelId: chat.channelId,
+		chatObjectId: chat.id,
+		createdAt: now,
+		durableConversationId,
+		id,
+		isReceiving: 0,
+		kind: chat.kind,
+		platformConversationId: chat.platformConversationId,
+		title: title.trim(),
+		updatedAt: now,
+	});
+	await database.update(chatObjects).set({ updatedAt: now }).where(eq(chatObjects.id, chat.id));
+	await lifecycle.writeAudit({
+		action: "session.create",
+		payload: { chatObjectId },
+		result: "ok",
+		targetId: id,
+		targetKind: "session",
+	});
+	return { id };
+}
+
+export async function updateSession(
+	lifecycle: ElainaLifecycle,
+	sessionId: string,
+	patch: { status?: "active" | "archived"; title?: string },
+): Promise<void> {
+	const database = requireDatabase(lifecycle);
+	const [session] = await database
+		.select()
+		.from(conversations)
+		.where(eq(conversations.id, sessionId))
+		.limit(1);
+	if (session === undefined) throw new Error("Session not found");
+	if (patch.status === "archived" && session.isReceiving === 1) {
+		throw new Error("Choose another receiving session before archiving this one");
+	}
+	if (session.chatObjectId === null) throw new Error("Session has no chat object");
+	const title = patch.title?.trim();
+	if (title !== undefined && title.length === 0) throw new Error("Session title is required");
+	const now = new Date().toISOString();
+	await database
+		.update(conversations)
+		.set({
+			...(!(patch.status === undefined) ? { status: patch.status } : {}),
+			...(!(title === undefined) ? { title } : {}),
+			updatedAt: now,
+		})
+		.where(eq(conversations.id, sessionId));
+	await database
+		.update(chatObjects)
+		.set({ updatedAt: now })
+		.where(eq(chatObjects.id, session.chatObjectId));
+	await lifecycle.writeAudit({
+		action: patch.status === undefined ? "session.rename" : `session.${patch.status}`,
+		payload: patch,
+		result: "ok",
+		targetId: sessionId,
+		targetKind: "session",
+	});
+}
+
+export async function setReceivingSession(
+	lifecycle: ElainaLifecycle,
+	sessionId: string,
+): Promise<void> {
+	const database = requireDatabase(lifecycle);
+	const [session] = await database
+		.select()
+		.from(conversations)
+		.where(eq(conversations.id, sessionId))
+		.limit(1);
+	if (session === undefined) throw new Error("Session not found");
+	if (session.status !== "active") throw new Error("Only active sessions can receive messages");
+	if (session.chatObjectId === null) throw new Error("Session has no chat object");
+	await database
+		.update(conversations)
+		.set({ isReceiving: 0 })
+		.where(eq(conversations.chatObjectId, session.chatObjectId));
+	await database
+		.update(conversations)
+		.set({ isReceiving: 1 })
+		.where(eq(conversations.id, sessionId));
+	await lifecycle.writeAudit({
+		action: "session.set-receiving",
+		result: "ok",
+		targetId: sessionId,
+		targetKind: "session",
+	});
+}
+
+export async function listMessages(
+	lifecycle: ElainaLifecycle,
+	sessionId: string,
+): Promise<MessageSummary[]> {
+	const database = requireDatabase(lifecycle);
+	const [session] = await database
+		.select()
+		.from(conversations)
+		.where(eq(conversations.id, sessionId))
+		.limit(1);
+	if (session === undefined) throw new Error("Session not found");
+	const rows = await database
+		.select()
+		.from(messages)
+		.where(eq(messages.conversationId, sessionId))
+		.orderBy(asc(messages.occurredAt));
+	const domain = rows.map(toMessageSummary);
+	const entries = await lifecycle.conversationHost?.listEntries(session.durableConversationId);
+	const durable = assistantMessagesFromEntries(entries ?? []);
+	return [...domain, ...durable].toSorted((left, right) =>
+		left.occurredAt.localeCompare(right.occurredAt),
+	);
+}
+
+export async function sendMessage(
+	lifecycle: ElainaLifecycle,
+	input: { sessionId: string; target: "channel" | "elaina"; text: string },
+): Promise<MessageSummary> {
+	const database = requireDatabase(lifecycle);
+	const [session] = await database
+		.select({ chat: chatObjects, session: conversations })
+		.from(conversations)
+		.innerJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
+		.where(eq(conversations.id, input.sessionId))
+		.limit(1);
+	if (session === undefined) throw new Error("Session not found");
+	if (session.session.status !== "active") throw new Error("Session is archived");
+	if (session.chat.status !== "active") throw new Error("Chat object is archived");
+	const text = input.text.trim();
+	if (text.length === 0) throw new Error("Message is empty");
+	const id = randomUUID();
+	const now = new Date().toISOString();
+	if (input.target === "channel") {
+		if (session.chat.kind !== "private" && session.chat.kind !== "group") {
+			throw new Error("This chat has no external channel");
+		}
+		if (session.chat.platformConversationId === null) {
+			throw new Error("External chat has no destination id");
+		}
+		const channel = lifecycle.onebotChannel;
+		if (channel === undefined || !channel.diagnostics.connected) {
+			throw new Error("OneBot channel is not connected");
+		}
+		await database.insert(messages).values({
+			chatObjectId: session.chat.id,
+			contentText: text,
+			conversationId: session.session.id,
+			direction: "outbound",
+			deliveryStatus: "pending",
+			id,
+			ingestedAt: now,
+			kind: "onebot-v11",
+			occurredAt: now,
+			partsJson: JSON.stringify([{ text, type: "text" }]),
+			senderDisplayName: "WebUI admin",
+			senderExternalId: "webui-admin",
+			updatedAt: now,
+		});
+		try {
+			const parts: MessagePart[] = [{ text, type: "text" }];
+			const result =
+				session.chat.kind === "group"
+					? await channel.sendGroup(session.chat.platformConversationId, parts)
+					: await channel.sendPrivate(session.chat.platformConversationId, parts);
+			const platformMessageId =
+				typeof result === "object" &&
+				result !== null &&
+				"message_id" in result &&
+				(result.message_id === "string" || typeof result.message_id === "number")
+					? String(result.message_id)
+					: null;
+			await database
+				.update(messages)
+				.set({ deliveryStatus: "sent", platformMessageId, updatedAt: new Date().toISOString() })
+				.where(eq(messages.id, id));
+			await lifecycle.writeAudit({
+				action: "message.send-channel",
+				payload: {
+					chatKind: session.chat.kind,
+					platformConversationId: session.chat.platformConversationId,
+				},
+				result: "ok",
+				targetId: session.session.id,
+				targetKind: "session",
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const deliveryStatus = /timeout/i.test(message) ? "uncertain" : "failed";
+			await database
+				.update(messages)
+				.set({ deliveryStatus, updatedAt: new Date().toISOString() })
+				.where(eq(messages.id, id));
+			await lifecycle.writeAudit({
+				action: "message.send-channel",
+				payload: {
+					chatKind: session.chat.kind,
+					platformConversationId: session.chat.platformConversationId,
+				},
+				reason: message,
+				result: "failed",
+				targetId: session.session.id,
+				targetKind: "session",
+			});
+		}
+		const [saved] = await database.select().from(messages).where(eq(messages.id, id)).limit(1);
+		if (saved === undefined) throw new Error("Failed to persist outbound message");
+		return toMessageSummary(saved);
+	}
+
+	const host = lifecycle.conversationHost;
+	if (host === undefined) throw new Error("Conversation host is not ready");
+	await database.insert(messages).values({
+		chatObjectId: session.chat.id,
+		contentText: text,
+		conversationId: session.session.id,
+		direction: "inbound",
+		deliveryStatus: "pending",
+		id,
+		ingestedAt: now,
+		kind: "webui",
+		occurredAt: now,
+		partsJson: JSON.stringify([{ text, type: "text" }]),
+		senderDisplayName: "WebUI admin",
+		senderExternalId: "webui-admin",
+		updatedAt: now,
+	});
+	try {
+		await host.append({
+			conversationId: session.session.durableConversationId,
+			envelope: {
+				channelId: "webui",
+				channelKind: "webui",
+				conversationKey: { kind: "webui" },
+				id: id,
+				mentions: [],
+				parts: [{ text, type: "text" }],
+				sender: {
+					displayName: "WebUI admin",
+					id: "webui-admin",
+					platformId: "webui-admin",
+				},
+				source: { messageId: id, timestampMs: Date.now() },
+			},
+			forceSubmit: true,
+			submittedAtMs: Date.now(),
+		});
+		await database
+			.update(messages)
+			.set({ deliveryStatus: "accepted", updatedAt: new Date().toISOString() })
+			.where(eq(messages.id, id));
+	} catch (error) {
+		await database
+			.update(messages)
+			.set({ deliveryStatus: "failed", updatedAt: new Date().toISOString() })
+			.where(eq(messages.id, id));
+		throw error;
+	}
+	await database
+		.update(conversations)
+		.set({ updatedAt: new Date().toISOString() })
+		.where(eq(conversations.id, session.session.id));
+	await database
+		.update(chatObjects)
+		.set({ updatedAt: new Date().toISOString() })
+		.where(eq(chatObjects.id, session.chat.id));
+	const [saved] = await database.select().from(messages).where(eq(messages.id, id)).limit(1);
+	if (saved === undefined) throw new Error("Failed to persist message");
+	return toMessageSummary(saved);
+}
+
+export async function listUsers(lifecycle: ElainaLifecycle): Promise<
+	Array<{
+		displayName: string;
+		identities: Array<{
+			displayName: string | null;
+			externalId: string;
+			id: string;
+			platform: string;
+			platformAccountId: string;
+		}>;
+		id: string;
+		kind: "human" | "bot" | "system";
+		notes: string | null;
+		preferredName: string | null;
+		trustLevel: string;
+	}>
+> {
+	const database = requireDatabase(lifecycle);
+	const userRows = await database.select().from(users).orderBy(users.displayName);
+	const identityRows =
+		userRows.length === 0
+			? []
+			: await database
+					.select()
+					.from(identities)
+					.where(
+						inArray(
+							identities.canonicalUserId,
+							userRows.map((row) => row.id),
+						),
+					);
+	return userRows.map((user) => ({
+		displayName: user.displayName ?? user.preferredName ?? user.id,
+		identities: identityRows
+			.filter((identity) => identity.canonicalUserId === user.id)
+			.map((identity) => ({
+				displayName: identity.displayName,
+				externalId: identity.externalId,
+				id: identity.id,
+				platform: identity.platform,
+				platformAccountId: identity.platformAccountId,
+			})),
+		id: user.id,
+		kind: user.kind,
+		notes: user.notes,
+		preferredName: user.preferredName,
+		trustLevel: user.trustLevel,
+	}));
+}
+
+export async function getUser(lifecycle: ElainaLifecycle, userId: string) {
+	const knownUsers = await listUsers(lifecycle);
+	const user = knownUsers.find((entry) => entry.id === userId);
+	if (user === undefined) return null;
+	const database = requireDatabase(lifecycle);
+	const aliases = await database.select().from(userAliases).where(eq(userAliases.userId, userId));
+	const externalIds = user.identities.map((identity) => identity.externalId);
+	const chats =
+		externalIds.length === 0
+			? []
+			: await database
+					.select()
+					.from(chatObjects)
+					.where(
+						and(
+							eq(chatObjects.kind, "private"),
+							inArray(chatObjects.platformConversationId, externalIds),
+						),
+					);
+	const chatIds = chats.map((chat) => chat.id);
+	const sessions =
+		chatIds.length === 0
+			? []
+			: await database
+					.select()
+					.from(conversations)
+					.where(inArray(conversations.chatObjectId, chatIds));
+	const groups = await database
+		.select({
+			chat: chatObjects,
+			member: conversationMembers,
+		})
+		.from(conversationMembers)
+		.innerJoin(conversations, eq(conversations.id, conversationMembers.conversationId))
+		.innerJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
+		.where(and(eq(conversationMembers.userId, userId), eq(chatObjects.kind, "group")));
+	return {
+		...user,
+		aliases: aliases.map((alias) => alias.alias),
+		chats: chats.map((chat) => ({
+			...chat,
+			sessions: sessions.filter((session) => session.chatObjectId === chat.id),
+		})),
+		groups: [...new Map(groups.map((row) => [row.chat.id, row.chat])).values()],
+	};
+}
+
+export async function listGroups(lifecycle: ElainaLifecycle) {
+	const database = requireDatabase(lifecycle);
+	const groups = await database
+		.select()
+		.from(chatObjects)
+		.where(eq(chatObjects.kind, "group"))
+		.orderBy(desc(chatObjects.updatedAt));
+	const chatIds = groups.map((group) => group.id);
+	const sessions =
+		chatIds.length === 0
+			? []
+			: await database
+					.select()
+					.from(conversations)
+					.where(inArray(conversations.chatObjectId, chatIds));
+	const sessionIds = sessions.map((session) => session.id);
+	const members =
+		sessionIds.length === 0
+			? []
+			: await database
+					.select({
+						conversationId: conversationMembers.conversationId,
+						userId: conversationMembers.userId,
+					})
+					.from(conversationMembers)
+					.where(inArray(conversationMembers.conversationId, sessionIds));
+	return groups.map((group) => {
+		const groupSessions = sessions.filter((session) => session.chatObjectId === group.id);
+		const memberCount = new Set(
+			members
+				.filter((member) => groupSessions.some((session) => session.id === member.conversationId))
+				.map((member) => member.userId),
+		).size;
+		return {
+			channelId: group.channelId,
+			createdAt: group.createdAt,
+			id: group.id,
+			memberCount,
+			platformConversationId: group.platformConversationId,
+			sessionCount: groupSessions.length,
+			status: group.status,
+			title: group.title,
+			updatedAt: group.updatedAt,
+		};
+	});
+}
+
+export async function getGroup(lifecycle: ElainaLifecycle, groupId: string) {
+	const groups = await listGroups(lifecycle);
+	const group = groups.find((entry) => entry.id === groupId);
+	if (group === undefined) return null;
+	const database = requireDatabase(lifecycle);
+	const sessions = await database
+		.select()
+		.from(conversations)
+		.where(eq(conversations.chatObjectId, groupId))
+		.orderBy(desc(conversations.updatedAt));
+	const sessionIds = sessions.map((session) => session.id);
+	const memberRows =
+		sessionIds.length === 0
+			? []
+			: await database
+					.select({
+						displayName: users.displayName,
+						platformRole: conversationMembers.platformRole,
+						role: conversationMembers.role,
+						userId: users.id,
+					})
+					.from(conversationMembers)
+					.innerJoin(users, eq(users.id, conversationMembers.userId))
+					.where(inArray(conversationMembers.conversationId, sessionIds));
+	const members = [
+		...new Map(
+			memberRows.map((member) => [
+				member.userId,
+				{
+					...member,
+					displayName: member.displayName ?? member.userId,
+				},
+			]),
+		).values(),
+	];
+	return { ...group, members, sessions };
+}
+
+export async function listRequests(
+	lifecycle: ElainaLifecycle,
+	options: { status?: "all" | "pending" | "processed" } = {},
+): Promise<RequestRow[]> {
+	const database = requireDatabase(lifecycle);
+	const status = options.status ?? "all";
+	return database
+		.select()
+		.from(requests)
+		.where(
+			status === "all"
+				? undefined
+				: status === "pending"
+					? eq(requests.status, "pending")
+					: or(
+							eq(requests.status, "approved"),
+							eq(requests.status, "rejected"),
+							eq(requests.status, "failed"),
+							eq(requests.status, "uncertain"),
+						),
+		)
+		.orderBy(desc(requests.createdAt));
+}
+
+export async function getRequest(
+	lifecycle: ElainaLifecycle,
+	requestId: string,
+): Promise<RequestRow | null> {
+	const database = requireDatabase(lifecycle);
+	const [row] = await database.select().from(requests).where(eq(requests.id, requestId)).limit(1);
+	return row ?? null;
+}
+
+export async function respondToRequest(
+	lifecycle: ElainaLifecycle,
+	input: { action: "approve" | "reject"; reason?: string; requestId: string },
+): Promise<RequestRow> {
+	await lifecycle.resolveChannelRequest(input.requestId, input.action, input.reason);
+	const request = await getRequest(lifecycle, input.requestId);
+	if (request === null) throw new Error("Request not found");
+	return request;
+}

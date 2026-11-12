@@ -1,4 +1,4 @@
-import type { MessageEnvelope, MessagePart } from "@elaina/contracts";
+import type { ChannelRequest, MessageEnvelope, MessagePart } from "@elaina/contracts";
 import type { OneBotEvent, OneBotSegment } from "./types.ts";
 
 const mediaHashPattern = /^[0-9a-f]{64}$/i;
@@ -125,5 +125,37 @@ export const normalizeOneBotEvent = (
 			typeof replyId !== "string" && typeof replyId !== "number"
 				? undefined
 				: { replyToEnvelopeId: String(replyId) },
+	};
+};
+
+export const normalizeOneBotRequest = (
+	event: OneBotEvent,
+	config: { botAccountId: string; channelId: string },
+): ChannelRequest | undefined => {
+	if (event.post_type !== "request" || event.flag === undefined) return undefined;
+	if (event.request_type !== "friend" && event.request_type !== "group") return undefined;
+	const requesterId = asString(event.user_id);
+	if (requesterId === undefined) return undefined;
+	const groupId = asString(event.group_id);
+	if (event.request_type === "group" && groupId === undefined) return undefined;
+	const subType = asString(event.sub_type);
+	const kind =
+		event.request_type === "friend"
+			? "friend"
+			: subType === "invite"
+				? "group-invite"
+				: "group-add";
+	const accountId = asString(event.self_id) ?? config.botAccountId;
+	return {
+		accountId,
+		channelId: config.channelId,
+		...(event.comment === undefined ? {} : { comment: event.comment }),
+		flag: event.flag,
+		...(groupId === undefined ? {} : { groupId }),
+		kind,
+		raw: event,
+		receivedAtMs: Number.isSafeInteger(event.time) && event.time >= 0 ? event.time * 1_000 : 0,
+		requesterId,
+		...(subType === undefined ? {} : { subType }),
 	};
 };
