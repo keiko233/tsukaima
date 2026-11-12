@@ -87,6 +87,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 					onDismiss={stack.dismissToast}
 					labels={{ dismiss: m.toast_dismiss() }}
 					placement="fixed"
+					position="bottom-center"
 					portal={false}
 					maxVisible={5}
 				/>
