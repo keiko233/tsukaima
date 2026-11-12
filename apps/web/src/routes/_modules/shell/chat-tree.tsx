@@ -23,6 +23,7 @@ import {
 	MorphPopoverTrigger,
 } from "@/components/motion/popover-morph";
 import { api, type ChatSummary, type SessionSummary } from "@/lib/api";
+import { errorMessage, useToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { formatTimestamp, previewText } from "../lib/format";
@@ -122,6 +123,7 @@ export function ChatTree({
 	onNavigate: () => void;
 	search: string;
 }) {
+	const toast = useToast();
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -135,7 +137,6 @@ export function ChatTree({
 	const [newSessionTitle, setNewSessionTitle] = useState("");
 	const [renameSession, setRenameSession] = useState<SessionSummary | null>(null);
 	const [renameTitle, setRenameTitle] = useState("");
-	const [actionError, setActionError] = useState<string | null>(null);
 
 	const chats = useQuery({
 		queryFn: () => api.chats.list({ status: "all" }),
@@ -165,12 +166,13 @@ export function ChatTree({
 
 	const createChat = useMutation({
 		mutationFn: api.chats.createLocal,
-		onError: (error) => setActionError(error.message),
+		onError: (error) =>
+			toast.error(m.toast_chat_create_failed(), { description: errorMessage(error) }),
 		onSuccess: async ({ sessionId }) => {
-			setActionError(null);
 			setNewChatOpen(false);
 			setNewChatTitle("");
 			setNewChatSessionTitle("");
+			toast.success(m.toast_chat_created());
 			await invalidate();
 			onNavigate();
 			await navigate({ params: { sessionId }, to: "/chat/$sessionId" });
@@ -178,11 +180,12 @@ export function ChatTree({
 	});
 	const createSession = useMutation({
 		mutationFn: api.sessions.create,
-		onError: (error) => setActionError(error.message),
+		onError: (error) =>
+			toast.error(m.toast_session_create_failed(), { description: errorMessage(error) }),
 		onSuccess: async ({ id }) => {
-			setActionError(null);
 			setNewSessionChat(null);
 			setNewSessionTitle("");
+			toast.success(m.toast_session_created());
 			await invalidate();
 			onNavigate();
 			await navigate({ params: { sessionId: id }, to: "/chat/$sessionId" });
@@ -190,18 +193,22 @@ export function ChatTree({
 	});
 	const updateSession = useMutation({
 		mutationFn: api.sessions.update,
-		onError: (error) => setActionError(error.message),
-		onSuccess: async () => {
-			setActionError(null);
+		onError: (error) =>
+			toast.error(m.toast_session_update_failed(), { description: errorMessage(error) }),
+		onSuccess: async (_, variables) => {
 			setRenameSession(null);
+			if (variables.title !== undefined) toast.success(m.toast_session_renamed());
+			else if (variables.status === "archived") toast.success(m.toast_session_archived());
+			else if (variables.status === "active") toast.success(m.toast_session_restored());
 			await invalidate();
 		},
 	});
 	const setReceiving = useMutation({
 		mutationFn: api.sessions.setReceiving,
-		onError: (error) => setActionError(error.message),
+		onError: (error) =>
+			toast.error(m.toast_receiving_update_failed(), { description: errorMessage(error) }),
 		onSuccess: async () => {
-			setActionError(null);
+			toast.success(m.toast_receiving_updated());
 			await invalidate();
 		},
 	});
@@ -319,7 +326,6 @@ export function ChatTree({
 					{m.new_chat()}
 				</Button>
 			</div>
-			{actionError ? <InlineError message={actionError} retryLabel={m.retry()} /> : null}
 			<div
 				role="tree"
 				aria-label={m.tab_chats()}
