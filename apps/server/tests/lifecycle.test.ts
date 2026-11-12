@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import { createApp } from "../src/app.ts";
 import type { MessageEnvelope } from "@tsukaima/contracts";
+import { conversations } from "@tsukaima/db";
 
 const envelope = (id: string, text: string): MessageEnvelope => ({
 	channelId: "onebot-test",
@@ -60,6 +62,17 @@ describe("server lifecycle with fake model", () => {
 			expect(result.messageId).toBe("msg-1");
 			lifecycle.processedMessageCount += 1;
 			expect(lifecycle.processedMessageCount).toBe(1);
+
+			await lifecycle.processEnvelope(envelope("onebot-1", "first"));
+			await lifecycle.processEnvelope(envelope("onebot-2", "second"));
+			expect(lifecycle.processedMessageCount).toBe(3);
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("Domain database not initialized");
+			const conversationRows = await database
+				.select()
+				.from(conversations)
+				.where(eq(conversations.channelId, "onebot-test"));
+			expect(conversationRows).toHaveLength(1);
 
 			const readyzAfter = await app.handle(new Request("http://localhost/readyz"));
 			expect(readyzAfter.status).toBe(204);
