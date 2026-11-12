@@ -395,3 +395,56 @@ export const migrationRuns = sqliteTable("migration_runs", {
 		enum: ["dry_run", "running", "completed", "failed", "rolled_back"],
 	}).notNull(),
 });
+
+export const codingApprovals = sqliteTable(
+	"coding_approvals",
+	{
+		action: text("action").notNull(),
+		createdAtMs: integer("created_at_ms").notNull(),
+		expiresAtMs: integer("expires_at_ms").notNull(),
+		id: text("id").primaryKey(),
+		note: text("note"),
+		proposalId: text("proposal_id"),
+		requestedBy: text("requested_by").notNull(),
+		resolvedAtMs: integer("resolved_at_ms"),
+		resolvedBy: text("resolved_by"),
+		status: text("status", { enum: ["approved", "expired", "pending", "rejected"] }).notNull(),
+		taskId: text("task_id").notNull(),
+	},
+	(table) => [
+		index("coding_approvals_status_idx").on(table.status, table.expiresAtMs),
+		index("coding_approvals_task_idx").on(table.taskId),
+	],
+);
+
+export const codingProposals = sqliteTable(
+	"coding_proposals",
+	{
+		createdAtMs: integer("created_at_ms").notNull(),
+		diff: text("diff").notNull(),
+		id: text("id").primaryKey(),
+		riskAssessment: text("risk_assessment").notNull(),
+		rollbackNotes: text("rollback_notes").notNull(),
+		status: text("status", {
+			enum: [
+				"approved",
+				"cancelled",
+				"deployed",
+				"deploying",
+				"draft",
+				"failed",
+				"pending_approval",
+				"rejected",
+				"rolled_back",
+			],
+		}).notNull(),
+		taskId: text("task_id").notNull(),
+		testResultJson: text("test_result_json"),
+		title: text("title").notNull(),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+	},
+	(table) => [
+		index("coding_proposals_task_idx").on(table.taskId, table.updatedAtMs),
+		index("coding_proposals_status_idx").on(table.status),
+	],
+);
