@@ -46,8 +46,13 @@ export class TsukaimaLifecycle {
 	onebotChannel: OneBotChannel | undefined;
 	onebotRestartRequired = false;
 	processedMessageCount = 0;
+	providerRestartRequired = false;
 	routingPolicies: readonly ModelPolicy[] = [];
 	private activeOneBotSettings: Pick<RuntimeSettings, "onebotAccessToken" | "onebotWsUrl"> = {};
+	private activeProviderSettings: Pick<
+		RuntimeSettings,
+		"openAiApiKey" | "openAiBaseUrl" | "openAiModelId"
+	> = {};
 
 	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
 		this.config = config;
@@ -90,8 +95,10 @@ export class TsukaimaLifecycle {
 		else console.log(JSON.stringify(payload));
 	}
 
-	private createModelPort(): ModelPort {
-		const { openAiApiKey, openAiBaseUrl, openAiModelId } = this.config;
+	private createModelPort(settings: RuntimeSettings): ModelPort {
+		const openAiApiKey = settings.openAiApiKey ?? this.config.openAiApiKey;
+		const openAiBaseUrl = settings.openAiBaseUrl ?? this.config.openAiBaseUrl;
+		const openAiModelId = settings.openAiModelId ?? this.config.openAiModelId;
 		if (openAiBaseUrl === undefined || openAiApiKey === undefined || openAiModelId === undefined) {
 			this.log("info", "OpenAI-compatible provider not configured; using fake model");
 			return createFakeModel({
@@ -126,7 +133,15 @@ export class TsukaimaLifecycle {
 		this.logLevel = settings.logLevel;
 
 		this.transition("domain-services");
-		const model = this.createModelPort();
+		const model = this.createModelPort(settings);
+		const activeOpenAiApiKey = settings.openAiApiKey ?? this.config.openAiApiKey;
+		const activeOpenAiBaseUrl = settings.openAiBaseUrl ?? this.config.openAiBaseUrl;
+		const activeOpenAiModelId = settings.openAiModelId ?? this.config.openAiModelId;
+		this.activeProviderSettings = {
+			...(activeOpenAiApiKey === undefined ? {} : { openAiApiKey: activeOpenAiApiKey }),
+			...(activeOpenAiBaseUrl === undefined ? {} : { openAiBaseUrl: activeOpenAiBaseUrl }),
+			...(activeOpenAiModelId === undefined ? {} : { openAiModelId: activeOpenAiModelId }),
+		};
 		this.conversationHost = new PiDurableConversationHost({
 			model,
 			storage: this.durableStorage,
@@ -158,6 +173,10 @@ export class TsukaimaLifecycle {
 		this.onebotRestartRequired =
 			settings.onebotWsUrl !== this.activeOneBotSettings.onebotWsUrl ||
 			settings.onebotAccessToken !== this.activeOneBotSettings.onebotAccessToken;
+		this.providerRestartRequired =
+			settings.openAiApiKey !== this.activeProviderSettings.openAiApiKey ||
+			settings.openAiBaseUrl !== this.activeProviderSettings.openAiBaseUrl ||
+			settings.openAiModelId !== this.activeProviderSettings.openAiModelId;
 	}
 
 	private async replaceOneBotChannel(settings: RuntimeSettings): Promise<void> {

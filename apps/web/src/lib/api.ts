@@ -39,6 +39,7 @@ export interface DiagnosticsData {
 	readonly onebotConnected: boolean;
 	readonly onebotRestartRequired: boolean;
 	readonly processedMessages: number;
+	readonly providerRestartRequired: boolean;
 	readonly routingPolicies: readonly {
 		readonly capability: string;
 		readonly primary: { readonly modelId: string; readonly providerId: string };
@@ -64,12 +65,18 @@ export interface DiagnosticsData {
 
 export interface PublicRuntimeSettings {
 	readonly logLevel: LogLevel;
+	readonly openAiApiKeySet: boolean;
+	readonly openAiBaseUrl?: string;
+	readonly openAiModelId?: string;
 	readonly onebotAccessTokenSet: boolean;
 	readonly onebotWsUrl?: string;
 }
 
 export interface RuntimeSettingsPatch {
 	readonly logLevel?: LogLevel;
+	readonly openAiApiKey?: string | null;
+	readonly openAiBaseUrl?: string | null;
+	readonly openAiModelId?: string | null;
 	readonly onebotAccessToken?: string | null;
 	readonly onebotWsUrl?: string | null;
 }

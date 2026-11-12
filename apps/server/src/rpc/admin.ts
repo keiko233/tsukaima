@@ -27,6 +27,7 @@ export const adminRouter = {
 				onebotConnected: lifecycle.onebotChannel !== undefined,
 				onebotRestartRequired: lifecycle.onebotRestartRequired,
 				processedMessages: lifecycle.processedMessageCount,
+				providerRestartRequired: lifecycle.providerRestartRequired,
 				routingPolicies: lifecycle.routingPolicies,
 				state: lifecycle.state,
 				usage: lifecycle.modelUsageLedger.records,
