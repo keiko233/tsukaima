@@ -9,8 +9,6 @@ export const runtimeSettingsSchema = z.object({
 	openAiApiKey: z.string().min(1).optional(),
 	openAiBaseUrl: z.string().url().optional(),
 	openAiModelId: z.string().min(1).optional(),
-	onebotAccessToken: z.string().min(1).optional(),
-	onebotWsUrl: z.string().url().optional(),
 });
 
 export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>;
@@ -21,6 +19,7 @@ export const runtimeSettingsPatchSchema = z
 		openAiApiKey: z.union([z.string().min(1), z.null()]).optional(),
 		openAiBaseUrl: z.union([z.string().url(), z.literal(""), z.null()]).optional(),
 		openAiModelId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
+		// Legacy wire aliases for the onebot-napcat plugin config.
 		onebotAccessToken: z.union([z.string().min(1), z.null()]).optional(),
 		onebotWsUrl: z.union([z.string().url(), z.literal(""), z.null()]).optional(),
 	})
@@ -42,8 +41,6 @@ export interface PublicRuntimeSettings {
 	readonly openAiApiKeySet: boolean;
 	readonly openAiBaseUrl?: string;
 	readonly openAiModelId?: string;
-	readonly onebotAccessTokenSet: boolean;
-	readonly onebotWsUrl?: string;
 }
 
 const SETTINGS_KEY = "runtime-settings";
@@ -53,8 +50,6 @@ type SettingsValue = {
 	openAiApiKey?: string;
 	openAiBaseUrl?: string;
 	openAiModelId?: string;
-	onebotAccessToken?: string;
-	onebotWsUrl?: string;
 };
 
 function normalize(input: RuntimeSettings): SettingsValue {
@@ -63,10 +58,6 @@ function normalize(input: RuntimeSettings): SettingsValue {
 		...(input.openAiApiKey === undefined ? {} : { openAiApiKey: input.openAiApiKey }),
 		...(input.openAiBaseUrl === undefined ? {} : { openAiBaseUrl: input.openAiBaseUrl }),
 		...(input.openAiModelId === undefined ? {} : { openAiModelId: input.openAiModelId }),
-		...(input.onebotAccessToken === undefined
-			? {}
-			: { onebotAccessToken: input.onebotAccessToken }),
-		...(input.onebotWsUrl === undefined ? {} : { onebotWsUrl: input.onebotWsUrl }),
 	};
 }
 
@@ -112,8 +103,6 @@ export function publicRuntimeSettings(settings: RuntimeSettings): PublicRuntimeS
 		openAiApiKeySet: settings.openAiApiKey !== undefined,
 		...(settings.openAiBaseUrl === undefined ? {} : { openAiBaseUrl: settings.openAiBaseUrl }),
 		...(settings.openAiModelId === undefined ? {} : { openAiModelId: settings.openAiModelId }),
-		onebotAccessTokenSet: settings.onebotAccessToken !== undefined,
-		...(settings.onebotWsUrl === undefined ? {} : { onebotWsUrl: settings.onebotWsUrl }),
 	};
 }
 
@@ -135,18 +124,8 @@ export async function patchRuntimeSettings(
 		patch.openAiModelId === null || patch.openAiModelId === ""
 			? undefined
 			: (patch.openAiModelId ?? current.openAiModelId);
-	const onebotAccessToken =
-		patch.onebotAccessToken === null
-			? undefined
-			: (patch.onebotAccessToken ?? current.onebotAccessToken);
-	const onebotWsUrl =
-		patch.onebotWsUrl === null || patch.onebotWsUrl === ""
-			? undefined
-			: (patch.onebotWsUrl ?? current.onebotWsUrl);
 	if (openAiApiKey !== undefined) next.openAiApiKey = openAiApiKey;
 	if (openAiBaseUrl !== undefined) next.openAiBaseUrl = openAiBaseUrl;
 	if (openAiModelId !== undefined) next.openAiModelId = openAiModelId;
-	if (onebotAccessToken !== undefined) next.onebotAccessToken = onebotAccessToken;
-	if (onebotWsUrl !== undefined) next.onebotWsUrl = onebotWsUrl;
 	return writeRuntimeSettings(database, next);
 }

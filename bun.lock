@@ -15,6 +15,7 @@
       "name": "@tsukaima/server",
       "version": "0.1.0",
       "dependencies": {
+        "@tsukaima-plugin/onebot-napcat": "workspace:*",
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/core": "workspace:*",
         "@tsukaima/db": "workspace:*",
@@ -148,6 +149,16 @@
         "zod": "4.6.7",
       },
     },
+    "plugins/onebot-napcat": {
+      "name": "@tsukaima-plugin/onebot-napcat",
+      "version": "0.1.0",
+      "dependencies": {
+        "@tsukaima/contracts": "workspace:*",
+        "@tsukaima/onebot": "workspace:*",
+        "@tsukaima/sdk": "workspace:*",
+        "zod": "4.6.7",
+      },
+    },
     "tools/migration": {
       "name": "@tsukaima/migration-cli",
       "version": "0.1.0",
@@ -273,6 +284,8 @@
     "@earendil-works/pi-schema": ["@earendil-works/pi-schema@1.5.2", "", {}, "sha512-hJoyCXWUhsSrXY5wJo2Q4kHXUsR51pNhkJHAMkWRwVMLDRtMDPkKNaa+JlVRVqTw1hjdSxcVVaFLSDbKlaTXEQ=="],
 
     "@earendil-works/pi-telemetry": ["@earendil-works/pi-telemetry@1.5.2", "", {}, "sha512-m+cumjIqNh1aMISi/9ttcG3ZOwIdriPbz/eMyWmRMJCGa/WcgY1RX4lrb7HvsHhSfI/JUeBESA4nOCr8C3y5ow=="],
+
+    "@tsukaima-plugin/onebot-napcat": ["@tsukaima-plugin/onebot-napcat@workspace:plugins/onebot-napcat"],
 
     "@tsukaima/chaos": ["@tsukaima/chaos@workspace:packages/chaos"],
 

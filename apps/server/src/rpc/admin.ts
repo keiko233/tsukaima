@@ -1,6 +1,7 @@
 import { os } from "@orpc/server";
 import { z } from "zod";
-import { conversations, modelPolicies, plugins } from "@tsukaima/db";
+import { conversations, modelPolicies } from "@tsukaima/db";
+import type { ChannelDiagnostics } from "@tsukaima/sdk";
 import type { TsukaimaApiContext } from "./health.ts";
 import {
 	createLocalChat,
@@ -26,6 +27,7 @@ import {
 	runtimeSettingsPatchSchema,
 } from "../runtime-settings.ts";
 import { listRemoteModels, remoteModelsInputSchema } from "../remote-models.ts";
+import { ONEBOT_DEFAULT_CHANNEL_ID, ONEBOT_PLUGIN_ID } from "../plugins/builtin.ts";
 
 export const adminRouter = {
 	chats: {
@@ -88,32 +90,28 @@ export const adminRouter = {
 			}),
 		status: os.$context<TsukaimaApiContext>().handler(async ({ context }) => {
 			const lifecycle = context.lifecycle;
-			const onebot = lifecycle.onebotDiagnostics;
+			const onebot = await oneBotChannelDiagnostics(context);
 			return {
 				...(lifecycle.lastProcessingError === undefined
 					? {}
 					: { lastError: lifecycle.lastProcessingError.message }),
-				channels:
-					onebot === undefined
-						? []
-						: [
-								{
-									connected: onebot.connected,
-									eventCount: onebot.eventCount,
-									id: "onebot",
-									kind: "onebot-v11",
-									lastErrorClass: onebot.lastErrorClass ?? null,
-									reconnectAttempts: onebot.reconnectAttempts,
-									state: onebot.state,
-								},
-							],
+				channels: lifecycle.channels.statuses().map((status) => ({
+					connected: status.connected,
+					eventCount: status.eventCount ?? 0,
+					id: status.id,
+					kind: status.kind,
+					lastErrorClass: status.lastErrorClass ?? null,
+					reconnectAttempts: status.reconnectAttempts ?? 0,
+					restartRequired: status.restartRequired ?? false,
+					state: status.state,
+				})),
 				logLevel: lifecycle.logLevel,
-				onebotConfigured: lifecycle.onebotConfigured,
+				onebotConfigured: onebot?.configured ?? false,
 				onebotConnected: onebot?.connected ?? false,
 				onebotLastErrorClass: onebot?.lastErrorClass ?? null,
 				onebotReconnectAttempts: onebot?.reconnectAttempts ?? 0,
 				onebotState: onebot?.state ?? "closed",
-				onebotRestartRequired: lifecycle.onebotRestartRequired,
+				onebotRestartRequired: onebot?.restartRequired ?? false,
 				processedMessages: lifecycle.processedMessageCount,
 				providerRestartRequired: lifecycle.providerRestartRequired,
 				routingPolicies: lifecycle.routingPolicies,
@@ -182,10 +180,9 @@ export const adminRouter = {
 			}),
 	},
 	plugins: {
-		list: os.$context<TsukaimaApiContext>().handler(async ({ context }) => {
-			const database = context.lifecycle.domainDatabase;
-			return database?.select().from(plugins) ?? [];
-		}),
+		list: os
+			.$context<TsukaimaApiContext>()
+			.handler(async ({ context }) => context.lifecycle.pluginHost.list()),
 	},
 	requests: {
 		get: os
@@ -294,7 +291,12 @@ export const adminRouter = {
 	settings: {
 		get: os.$context<TsukaimaApiContext>().handler(async ({ context }) => {
 			const settings = await readRuntimeSettings(context.lifecycle.domainDatabase);
-			return publicRuntimeSettings(settings);
+			const onebot = await context.lifecycle.pluginConfigView(ONEBOT_PLUGIN_ID);
+			return {
+				...publicRuntimeSettings(settings),
+				onebotAccessTokenSet: onebot.secretsSet.includes("accessToken"),
+				...(typeof onebot.config.wsUrl === "string" ? { onebotWsUrl: onebot.config.wsUrl } : {}),
+			};
 		}),
 		models: os
 			.$context<TsukaimaApiContext>()
@@ -315,9 +317,22 @@ export const adminRouter = {
 			.handler(async ({ context, input }) => {
 				const database = context.lifecycle.domainDatabase;
 				if (database === undefined) throw new Error("Database not ready");
+				const pluginPatch: Record<string, unknown> = {};
+				if (Object.hasOwn(input, "onebotWsUrl")) pluginPatch.wsUrl = input.onebotWsUrl;
+				if (Object.hasOwn(input, "onebotAccessToken")) {
+					pluginPatch.accessToken = input.onebotAccessToken;
+				}
+				if (Object.keys(pluginPatch).length > 0) {
+					await context.lifecycle.updatePluginConfig(ONEBOT_PLUGIN_ID, pluginPatch);
+				}
 				const settings = await patchRuntimeSettings(database, input);
 				await context.lifecycle.applyRuntimeSettings(settings);
-				return publicRuntimeSettings(settings);
+				const onebot = await context.lifecycle.pluginConfigView(ONEBOT_PLUGIN_ID);
+				return {
+					...publicRuntimeSettings(settings),
+					onebotAccessTokenSet: onebot.secretsSet.includes("accessToken"),
+					...(typeof onebot.config.wsUrl === "string" ? { onebotWsUrl: onebot.config.wsUrl } : {}),
+				};
 			}),
 	},
 	users: {
@@ -330,3 +345,16 @@ export const adminRouter = {
 			.handler(async ({ context }) => listUsers(context.lifecycle)),
 	},
 };
+
+/**
+ * Legacy WebUI contract: the diagnostics screen still reads `onebot*` fields. The data comes
+ * from the channel registry, located through the onebot-napcat plugin's own config.
+ */
+async function oneBotChannelDiagnostics(
+	context: TsukaimaApiContext,
+): Promise<ChannelDiagnostics | undefined> {
+	const config = await context.lifecycle.pluginConfig(ONEBOT_PLUGIN_ID);
+	const channelId =
+		typeof config.channelId === "string" ? config.channelId : ONEBOT_DEFAULT_CHANNEL_ID;
+	return context.lifecycle.channels.get(channelId)?.diagnostics();
+}

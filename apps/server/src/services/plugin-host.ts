@@ -8,7 +8,6 @@ import {
 	type PluginSettingsApi,
 } from "@tsukaima/sdk";
 import { PluginRegistry, type InstalledPlugin } from "@tsukaima/plugin-registry";
-import type { TsukaimaDatabase } from "@tsukaima/db";
 import type { Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 import type { HookBus } from "./hook-bus.ts";
@@ -19,8 +18,6 @@ export interface PluginHostOptions {
 	readonly audit: (entry: AuditEntry) => Promise<void>;
 	readonly bindings?: ReadonlyMap<string, unknown>;
 	readonly channels: ChannelRegistry;
-	readonly database: () => TsukaimaDatabase | undefined;
-	readonly env: Record<string, string | undefined>;
 	readonly hooks: HookBus;
 	readonly logger: Logger;
 	readonly plugins: readonly TsukaimaPlugin[];

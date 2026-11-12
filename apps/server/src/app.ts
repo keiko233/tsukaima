@@ -1,6 +1,7 @@
 import { Elysia } from "elysia";
 import { RPCHandler } from "@orpc/server/fetch";
 import type { OneBotTransportFactory } from "@tsukaima/onebot";
+import type { TsukaimaPlugin } from "@tsukaima/sdk";
 import { appRouter } from "./rpc/index.ts";
 import { loadConfig } from "./config.ts";
 import { TsukaimaLifecycle } from "./lifecycle.ts";
@@ -8,6 +9,8 @@ import { encodeSseEvent, type LogBuffer } from "./logging.ts";
 
 export interface CreateAppOptions {
 	readonly onebotTransportFactory?: OneBotTransportFactory;
+	/** Overrides the built-in plugin set (tests and future plugin sources). */
+	readonly plugins?: readonly TsukaimaPlugin[];
 }
 
 const LOG_HEARTBEAT_MS = 15_000;
@@ -62,7 +65,7 @@ export function createApp(
 	options?: CreateAppOptions,
 ) {
 	const config = loadConfig(env);
-	const lifecycle = new TsukaimaLifecycle(config, options);
+	const lifecycle = new TsukaimaLifecycle(config, { ...options, env });
 	const httpLog = lifecycle.logger.child("tsukaima::server::http");
 	const handler = new RPCHandler(appRouter);
 

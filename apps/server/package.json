@@ -9,6 +9,7 @@
 		"build": "bun build src/main.ts --target bun --outdir ./dist"
 	},
 	"dependencies": {
+		"@tsukaima-plugin/onebot-napcat": "workspace:*",
 		"@tsukaima/contracts": "workspace:*",
 		"@tsukaima/core": "workspace:*",
 		"@tsukaima/db": "workspace:*",

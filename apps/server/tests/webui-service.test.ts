@@ -160,7 +160,7 @@ describe("WebUI chat and session service", () => {
 			const request = requests[0];
 			if (request === undefined) throw new Error("Request was not persisted");
 			await expect(lifecycle.resolveChannelRequest(request.id, "approve")).rejects.toThrow(
-				"OneBot channel is not connected",
+				"Channel onebot-test is not registered",
 			);
 		} finally {
 			await lifecycle.stop();

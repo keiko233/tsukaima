@@ -1,0 +1,30 @@
+{
+	"name": "onebot-napcat",
+	"version": "0.1.0",
+	"apiVersion": "1",
+	"kind": "builtin",
+	"permissions": ["channel.send", "channel.interact", "conversation.read", "audit.write"],
+	"hooks": [{ "name": "channel.connected" }, { "name": "channel.disconnected" }],
+	"configSchema": {
+		"type": "object",
+		"properties": {
+			"wsUrl": { "type": "string" },
+			"accessToken": { "type": "string" },
+			"channelId": { "type": "string" },
+			"botAccountId": { "type": "string" },
+			"reconnect": {
+				"type": "object",
+				"properties": {
+					"initialDelayMs": { "type": "number" },
+					"maxDelayMs": { "type": "number" },
+					"jitterRatio": { "type": "number" }
+				}
+			}
+		}
+	},
+	"configEnv": {
+		"wsUrl": "TSUKAIMA_ONEBOT_WS_URL",
+		"accessToken": "TSUKAIMA_ONEBOT_ACCESS_TOKEN"
+	},
+	"secretKeys": ["accessToken"]
+}

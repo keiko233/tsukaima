@@ -11,7 +11,7 @@ export interface PluginConfigView {
 }
 
 export interface PluginSettingsStoreOptions {
-	readonly database?: TsukaimaDatabase;
+	readonly database: () => TsukaimaDatabase | undefined;
 	readonly env: Record<string, string | undefined>;
 }
 
@@ -28,7 +28,7 @@ function isEmpty(value: unknown): boolean {
  * manifest's `configEnv` map. Clearing a stored value falls back to the environment again.
  */
 export class PluginSettingsStore {
-	readonly #database: TsukaimaDatabase | undefined;
+	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #env: Record<string, string | undefined>;
 	readonly #manifests = new Map<string, PluginManifest>();
 	readonly #listeners = new Map<string, Set<(value: PluginConfigValue) => Promise<void> | void>>();
@@ -104,7 +104,7 @@ export class PluginSettingsStore {
 	}
 
 	async #readStored(pluginId: string): Promise<PluginConfigValue> {
-		const database = this.#database;
+		const database = this.#database();
 		if (database === undefined) return {};
 		const rows = await database
 			.select()
@@ -124,7 +124,7 @@ export class PluginSettingsStore {
 	}
 
 	async #writeStored(pluginId: string, value: PluginConfigValue): Promise<void> {
-		const database = this.#database;
+		const database = this.#database();
 		if (database === undefined) return;
 		const key = `${SETTINGS_PREFIX}${pluginId}`;
 		if (Object.keys(value).length === 0) {
