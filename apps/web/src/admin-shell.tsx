@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link, useRouterState } from "@tanstack/react-router";
+import { useRouterState } from "@tanstack/react-router";
 import { ChatApp } from "@/components/agents/chat-app";
 import { AnimatedSidebar } from "@/components/motion/animated-sidebar";
 import { AnimatedSidebarContent } from "@/components/motion/animated-sidebar";
