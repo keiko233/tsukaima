@@ -51,6 +51,25 @@ describe("admin RPC", () => {
 		const plugins = await request("admin/plugins/list");
 		expect(Array.isArray(plugins)).toBe(true);
 
+		const initialSettings = await request("admin/settings/get");
+		expect(initialSettings).toEqual({
+			logLevel: "info",
+			onebotAccessTokenSet: false,
+		});
+		const updatedSettings = await request("admin/settings/update", {
+			logLevel: "debug",
+			onebotAccessToken: "test-token",
+			onebotWsUrl: "ws://127.0.0.1:3001",
+		});
+		expect(updatedSettings).toEqual({
+			logLevel: "debug",
+			onebotAccessTokenSet: true,
+			onebotWsUrl: "ws://127.0.0.1:3001",
+		});
+		expect(JSON.stringify(updatedSettings)).not.toContain("test-token");
+		expect(lifecycle.logLevel).toBe("debug");
+		expect(lifecycle.onebotRestartRequired).toBe(true);
+
 		const updated = await request("admin/modelPolicies/set", {
 			capability: "basic-chat",
 			primaryModel: "fake-deterministic",

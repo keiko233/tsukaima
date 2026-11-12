@@ -2,6 +2,14 @@ import { createApp } from "./app.ts";
 
 const { app, config, lifecycle } = createApp();
 await app.listen({ hostname: config.host, port: config.port });
+console.log(
+	JSON.stringify({
+		level: "info",
+		message: `server listening on http://${config.host}:${config.port}`,
+		stage: "listening",
+		timestamp: new Date().toISOString(),
+	}),
+);
 
 try {
 	await lifecycle.start();
