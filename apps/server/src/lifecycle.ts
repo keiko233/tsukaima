@@ -1,9 +1,17 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { PiDurableConversationHost, ModelPolicyRouter, createFakeModel } from "@tsukaima/core";
+import type { ModelPolicy } from "@tsukaima/core";
 import { type TsukaimaDatabase, migrateDomainDatabase, openDomainDatabase } from "@tsukaima/db";
 import { BACKGROUND_CONTEXT, openDurableStorage } from "@tsukaima/durable";
 import type { SqliteStorage } from "@tsukaima/durable";
+import { OneBotChannel } from "@tsukaima/onebot";
+import type { OneBotTransportFactory } from "@tsukaima/onebot";
 import type { TsukaimaConfig } from "./config.ts";
+
+export interface LifecycleOptions {
+	readonly onebotTransportFactory?: OneBotTransportFactory;
+}
 
 export interface LifecycleState {
 	readonly state: "starting" | "degraded" | "ready" | "maintenance" | "failed";
@@ -18,12 +26,22 @@ export class TsukaimaLifecycle {
 	private currentState: LifecycleState["state"] = "starting";
 	private currentStage = "initialize";
 	private failureReason: string | undefined;
+	private onebotTransportFactory: OneBotTransportFactory | undefined;
 
-	durableStorage?: SqliteStorage;
-	domainDatabase?: TsukaimaDatabase;
+	conversationHost: PiDurableConversationHost | undefined;
+	domainDatabase: TsukaimaDatabase | undefined;
+	durableStorage: SqliteStorage | undefined;
+	lastProcessingError: Error | undefined;
+	modelRouter: ModelPolicyRouter | undefined;
+	onebotChannel: OneBotChannel | undefined;
+	processedMessageCount = 0;
+	routingPolicies: readonly ModelPolicy[] = [];
 
-	constructor(config: TsukaimaConfig) {
+	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
 		this.config = config;
+		if (options?.onebotTransportFactory !== undefined) {
+			this.onebotTransportFactory = options.onebotTransportFactory;
+		}
 	}
 
 	get state(): LifecycleState {
@@ -53,7 +71,57 @@ export class TsukaimaLifecycle {
 		this.domainDatabase = await openDomainDatabase(join(this.config.dataDir, "domain.sqlite"));
 		migrateDomainDatabase(this.domainDatabase);
 		this.transition("domain-services");
+
+		const model = createFakeModel();
+		this.conversationHost = new PiDurableConversationHost({
+			model,
+			storage: this.durableStorage,
+		});
+		const models = model.models.getModels(model.providerId);
+		this.modelRouter = new ModelPolicyRouter(models);
+		this.routingPolicies = [
+			{
+				capability: "basic-chat",
+				primary: { modelId: model.modelId, providerId: model.providerId },
+			},
+		];
+
 		this.transition("channel-adapters");
+		if (this.config.onebotWsUrl) {
+			try {
+				this.onebotChannel = new OneBotChannel(
+					{
+						botAccountId: "tsukaima-server",
+						channelId: "onebot",
+						reconnect: { initialDelayMs: 1_000, jitterRatio: 0.1, maxDelayMs: 30_000 },
+						url: this.config.onebotWsUrl,
+						...(this.config.onebotAccessToken !== undefined
+							? { accessToken: this.config.onebotAccessToken }
+							: {}),
+					},
+					this.onebotTransportFactory,
+				);
+				this.onebotChannel.onMessage(async (envelope) => {
+					try {
+						if (this.conversationHost === undefined) return;
+						const conversationId = await this.conversationHost.createConversation();
+						await this.conversationHost.append({
+							conversationId,
+							envelope,
+							submittedAtMs: Date.now(),
+						});
+						this.processedMessageCount += 1;
+					} catch (error) {
+						this.lastProcessingError = error instanceof Error ? error : new Error(String(error));
+						console.error("Failed to process OneBot message:", error);
+					}
+				});
+				await this.onebotChannel.start();
+			} catch (error) {
+				console.error("OneBot channel failed to initialize:", error);
+			}
+		}
+
 		this.transition("ready", "ready");
 	}
 
@@ -64,7 +132,9 @@ export class TsukaimaLifecycle {
 	}
 
 	async stop(): Promise<void> {
-		this.transition("stopping");
+		this.transition("stopping", "maintenance");
+		this.onebotChannel?.stop();
+		await this.conversationHost?.close();
 		await this.durableStorage?.close(BACKGROUND_CONTEXT);
 		this.domainDatabase?.$client.close();
 	}

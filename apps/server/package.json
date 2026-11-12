@@ -13,6 +13,7 @@
 		"@tsukaima/core": "workspace:*",
 		"@tsukaima/db": "workspace:*",
 		"@tsukaima/durable": "workspace:*",
+		"@tsukaima/onebot": "workspace:*",
 		"@orpc/server": "1.16.2",
 		"elysia": "1.4.32",
 		"zod": "4.6.7"
