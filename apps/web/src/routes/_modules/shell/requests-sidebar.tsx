@@ -6,6 +6,7 @@ import { useState } from "react";
 import { Button } from "@/components/motion/button";
 import { Input } from "@/components/motion/input";
 import { api, type RequestRow } from "@/lib/api";
+import { errorMessage, useToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { formatDateTime } from "../lib/format";
@@ -65,12 +66,12 @@ function requestIcon(kind: RequestRow["kind"]) {
 }
 
 export function RequestsSidebar({ search }: { search: string }) {
+	const toast = useToast();
 	const queryClient = useQueryClient();
 	const [view, setView] = useState<"pending" | "processed">("pending");
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [pendingAction, setPendingAction] = useState<"approve" | "reject" | null>(null);
 	const [reason, setReason] = useState("");
-	const [actionError, setActionError] = useState<string | null>(null);
 	const requests = useQuery({
 		queryFn: () => api.requests.list("all"),
 		queryKey: ["admin", "requests", "all"],
@@ -82,9 +83,19 @@ export function RequestsSidebar({ search }: { search: string }) {
 	});
 	const respond = useMutation({
 		mutationFn: api.requests.respond,
-		onError: (error) => setActionError(error.message),
-		onSuccess: async () => {
-			setActionError(null);
+		onError: (error) =>
+			toast.error(m.toast_request_action_failed(), {
+				description: errorMessage(error),
+			}),
+		onSuccess: async (request) => {
+			if (request.status === "approved") toast.success(m.toast_request_approved());
+			else if (request.status === "rejected") toast.success(m.toast_request_rejected());
+			else if (request.status === "uncertain") toast.info(m.toast_request_uncertain());
+			else {
+				toast.error(m.toast_request_action_failed(), {
+					description: request.errorMessage,
+				});
+			}
 			setPendingAction(null);
 			setReason("");
 			await queryClient.invalidateQueries({ queryKey: ["admin", "requests"] });
@@ -177,7 +188,6 @@ export function RequestsSidebar({ search }: { search: string }) {
 										size="sm"
 										className="flex-1"
 										onClick={() => {
-											setActionError(null);
 											setPendingAction("approve");
 										}}
 									>
@@ -188,7 +198,6 @@ export function RequestsSidebar({ search }: { search: string }) {
 										variant="outline"
 										className="flex-1"
 										onClick={() => {
-											setActionError(null);
 											setPendingAction("reject");
 										}}
 									>
@@ -227,7 +236,6 @@ export function RequestsSidebar({ search }: { search: string }) {
 						) : null}
 					</div>
 					<Input label={m.request_reason()} value={reason} onChange={setReason} maxLength={300} />
-					{actionError ? <p className="mt-2 text-xs text-destructive">{actionError}</p> : null}
 					<ModalActions>
 						<Button variant="ghost" size="sm" onClick={() => setPendingAction(null)}>
 							{m.cancel()}
@@ -305,7 +313,6 @@ export function RequestsSidebar({ search }: { search: string }) {
 								type="button"
 								onClick={() => {
 									setSelectedId(request.id);
-									setActionError(null);
 								}}
 								className="flex min-h-14 w-full items-start gap-2.5 rounded-xl px-2 py-2 text-left outline-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
 							>
