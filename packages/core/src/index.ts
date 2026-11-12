@@ -11,3 +11,17 @@ export function shouldCloseActivityWindow(
 
 export { PiDurableConversationHost } from "./conversation-host.ts";
 export { createFakeModel, type ModelPort } from "./model.ts";
+export {
+	ModelPolicyRouter,
+	ModelUsageLedger,
+	createOpenAICompatibleProvider,
+	createOpenAICompatibleStreams,
+	type ModelCapability,
+	type ModelPolicy,
+	type ModelRef,
+	type ModelUsageRecord,
+	type OpenAICompatibleConfig,
+	type OpenAICompatibleModelConfig,
+	type RoutedModel,
+	type RouteModelRequest,
+} from "./openai.ts";
