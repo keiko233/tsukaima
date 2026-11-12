@@ -3,10 +3,27 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RPCHandler } from "@orpc/server/fetch";
+import type { OneBotTransport } from "@elaina/onebot";
 import { appRouter } from "../src/rpc/index.ts";
 import { createApp } from "../src/app.ts";
 
 const directories: string[] = [];
+
+const createOneBotTransportSpy = () => {
+	const urls: string[] = [];
+	const createTransport = (url: string): OneBotTransport => {
+		urls.push(url);
+		const listeners = new Map<string, () => void>();
+		return {
+			close: () => listeners.get("close")?.(),
+			on: (name, listener) => {
+				listeners.set(name, listener as () => void);
+			},
+			send: () => {},
+		};
+	};
+	return { createTransport, urls };
+};
 
 afterEach(async () => {
 	await Promise.all(
@@ -18,11 +35,15 @@ describe("admin RPC", () => {
 	test("exposes diagnostics, conversations, plugins, and model policies", async () => {
 		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-admin-"));
 		directories.push(directory);
-		const { app, lifecycle } = createApp({
-			ELAINA_DATA_DIR: directory,
-			ELAINA_PORT: "7420",
-			ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
-		});
+		const onebot = createOneBotTransportSpy();
+		const { app, lifecycle } = createApp(
+			{
+				ELAINA_DATA_DIR: directory,
+				ELAINA_PORT: "7420",
+				ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			},
+			{ onebotTransportFactory: onebot.createTransport },
+		);
 		await lifecycle.start();
 
 		const handler = new RPCHandler(appRouter);
@@ -98,8 +119,15 @@ describe("admin RPC", () => {
 		expect(JSON.stringify(updatedSettings)).not.toContain("test-token");
 		expect(JSON.stringify(updatedSettings)).not.toContain("provider-secret");
 		expect(lifecycle.logLevel).toBe("debug");
-		expect(lifecycle.onebotRestartRequired).toBe(true);
+		expect(onebot.urls).toEqual(["ws://127.0.0.1:3001"]);
+		expect(lifecycle.onebotRestartRequired).toBe(false);
 		expect(lifecycle.providerRestartRequired).toBe(true);
+		expect(lifecycle.onebotDiagnostics?.state).toBe("connecting");
+
+		await request("admin/settings/update", { onebotWsUrl: "ws://127.0.0.1:3100" });
+		expect(onebot.urls).toEqual(["ws://127.0.0.1:3001", "ws://127.0.0.1:3100"]);
+		expect(lifecycle.onebotRestartRequired).toBe(false);
+		expect(lifecycle.onebotDiagnostics?.state).toBe("connecting");
 
 		const updated = await request("admin/modelPolicies/set", {
 			capability: "basic-chat",
