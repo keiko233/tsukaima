@@ -7,7 +7,11 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
+		"@earendil-works/chord": "1.5.2",
 		"@tsukaima/contracts": "workspace:*",
+		"@earendil-works/pi-ai": "1.5.2",
+		"@earendil-works/pi-durable": "1.5.2",
+		"@tsukaima/durable": "workspace:*",
 		"zod": "4.6.7"
 	}
 }

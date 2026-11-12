@@ -39,7 +39,11 @@
       "name": "@tsukaima/core",
       "version": "0.1.0",
       "dependencies": {
+        "@earendil-works/chord": "1.5.2",
+        "@earendil-works/pi-ai": "1.5.2",
+        "@earendil-works/pi-durable": "1.5.2",
         "@tsukaima/contracts": "workspace:*",
+        "@tsukaima/durable": "workspace:*",
         "zod": "4.6.7",
       },
     },
@@ -64,6 +68,10 @@
     "packages/migration": {
       "name": "@tsukaima/migration",
       "version": "0.1.0",
+      "dependencies": {
+        "@tsukaima/db": "workspace:*",
+        "drizzle-orm": "0.45.4",
+      },
     },
     "packages/onebot": {
       "name": "@tsukaima/onebot",
