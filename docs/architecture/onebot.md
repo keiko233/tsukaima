@@ -17,7 +17,23 @@ WebSocket is the primary event channel. HTTP may be used for API calls when usef
 
 ### Configuration
 
-Configuration is loaded from mounted secrets and validated with Zod.
+The channel is provided by the built-in `onebot-napcat` plugin
+(`plugins/onebot-napcat`). Its configuration is stored per plugin in the domain `meta`
+table under `plugin-config:onebot-napcat` and validated against the plugin's `configSchema`.
+Any key can fall back to an environment variable through the manifest's `configEnv` map:
+
+| Config key | Environment fallback | Secret |
+| --- | --- | --- |
+| `wsUrl` | `ELAINA_ONEBOT_WS_URL` | no |
+| `accessToken` | `ELAINA_ONEBOT_ACCESS_TOKEN` | yes |
+| `channelId` | - | no (defaults to `onebot`) |
+| `botAccountId` | - | no (defaults to `elaina-server`) |
+| `reconnect` | - | no |
+
+Clearing a stored value falls back to the environment value, matching provider settings.
+Secret keys are never returned by the settings API.
+
+The plugin builds this into the protocol config:
 
 ```ts
 type OneBotConfig = {
@@ -51,9 +67,10 @@ The access token exists only in the secret store. It must not be logged or inclu
 
 Do not reconnect infinitely with no telemetry. Emit structured disconnect events.
 
-The WebSocket URL and access token resolve from runtime settings first, then from
-`ELAINA_ONEBOT_WS_URL` and `ELAINA_ONEBOT_ACCESS_TOKEN`. Clearing the runtime value falls
-back to the environment value, matching provider settings.
+The plugin subscribes to its own settings, so changing `wsUrl` or `accessToken` stops the
+current channel and starts a replacement without a process restart. Saving unchanged
+connection settings does not touch the live connection. `channel.connected` and
+`channel.disconnected` hooks fire on connection-state transitions.
 
 ### Deduplication
 

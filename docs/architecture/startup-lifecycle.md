@@ -21,16 +21,15 @@ Elaina performs migrations and dependency preparation as part of application sta
 5. Verify blob storage
 6. Load model policies and initialize model router
 7. Initialize durable Harness/runtime
-8. Load plugin manifests and registry state
-9. Start plugin workers (enabled only)
-10. Initialize domain services
-11. Start scheduler and background task recovery
-12. Bind HTTP/WebSocket server
-13. Start channel adapters
-14. Mark process healthy
+8. Initialize domain services
+9. Load plugin manifests and start enabled plugins (this starts channel adapters)
+10. Start scheduler and background task recovery
+11. Bind HTTP/WebSocket server
+12. Mark process healthy
 ```
 
-Stage 12 binds the listener, but readiness is false until stage 13 succeeds. Health checks should distinguish `listening` from `ready`.
+Readiness is false until the plugin stage succeeds; a plugin failure is logged and does not
+abort startup unless the plugin is marked critical.
 
 ## Stage details
 
@@ -113,29 +112,7 @@ Initialize the `pi-durable` Harness after durable storage is ready.
 - verify conversation document definitions
 - do not call `resume()` before scheduler is intentionally started
 
-### 8. Plugin registry
-
-1. Scan configured plugin directories.
-2. Parse manifests with Zod.
-3. Compare with domain plugin registry.
-4. Register known enabled plugins.
-5. Do not execute plugin code during manifest validation.
-
-Missing plugin files for an enabled plugin mark that plugin failed; startup continues unless the plugin is marked critical.
-
-### 9. Plugin workers
-
-For enabled plugins:
-
-1. Start host-mode plugin in the main process.
-2. Start worker-mode plugin in a plugin worker.
-3. Apply permission grants.
-4. Wait for `setup()` completion within a timeout.
-5. Record plugin status.
-
-A non-critical plugin failure does not fail startup. A critical plugin failure must fail startup according to registry policy.
-
-### 10. Domain services
+### 8. Domain services
 
 Construct services with opened database handles and the durable runtime:
 
@@ -151,7 +128,24 @@ Construct services with opened database handles and the durable runtime:
 
 Services must not perform ad-hoc migrations.
 
-### 11. Scheduler and recovery
+### 9. Plugins
+
+Built-in plugins come from the server composition root
+(`apps/server/src/plugins/builtin.ts`); installed third-party plugins come from configured
+plugin directories.
+
+1. Parse and validate each manifest with Zod.
+2. Install into the domain plugin registry with granted permissions and a run mode.
+3. Build each plugin's `PluginContext` from host services (channels, settings, requests,
+   audit, hooks, logger).
+4. Run `setup(context)` in the host process (or a worker for worker-mode plugins) and wait
+   for completion.
+5. Record plugin status and let plugins register channels, tools, hooks, and UI.
+
+A non-critical plugin failure is logged and does not fail startup. A critical plugin failure
+must fail startup according to registry policy.
+
+### 10. Scheduler and recovery
 
 Start the durable task scheduler and call recovery/resume for work interrupted by a previous process.
 
@@ -160,7 +154,7 @@ Start the durable task scheduler and call recovery/resume for work interrupted b
 - mark crashed runs according to durable semantics
 - emit recovery diagnostics
 
-### 12. HTTP/WebSocket
+### 11. HTTP/WebSocket
 
 Bind Elysia and mount:
 
@@ -172,12 +166,16 @@ Bind Elysia and mount:
 
 `/healthz` may return 200 for a listening process. `/readyz` returns 200 only after channels are ready.
 
-### 13. Channels
+### 12. Channels (via plugins)
 
-Start channel adapters in order:
+Channel adapters are started by built-in plugins during stage 9, not by the lifecycle
+directly. A plugin registers its adapter into the host `ChannelRegistry`, which owns the
+inbound ingestion pipeline; the lifecycle only iterates registered adapters for diagnostics.
+
+Current adapters:
 
 1. fake channel in tests/dev, if enabled
-2. OneBot/NapCat outbound WebSocket, if configured
+2. OneBot/NapCat outbound WebSocket, if configured (`onebot-napcat` plugin)
 
 OneBot readiness requires:
 

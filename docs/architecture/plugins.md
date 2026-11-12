@@ -20,6 +20,13 @@ type PluginManifest = {
 };
 ```
 
+Manifests also declare two host-integration fields:
+
+| Field | Purpose |
+| --- | --- |
+| `configEnv` | Config key -> environment variable name, used as a fallback when the stored value is empty |
+| `secretKeys` | Config keys whose values are never returned by an API |
+
 Plugin types:
 
 - `tool`: registers callable tools.
@@ -60,9 +67,28 @@ Permissions are declared, reviewed in admin UI, and audited. A plugin cannot sil
 
 ## Built-in plugins
 
-Initial first-party set:
+Built-in plugins live in their own workspace packages under `plugins/*` and are loaded
+through a single server composition root (`apps/server/src/plugins/builtin.ts`). They run in
+the host process but go through the same registry, permission checks, settings store, and
+`setup(context)` lifecycle as third-party plugins.
 
-- `onebot-napcat`: outbound WS, envelope normalization, OneBot API facade.
+```text
+plugins/onebot-napcat/
+  package.json          @elaina-plugin/onebot-napcat
+  elaina.plugin.json    declarative descriptor (kept in sync with the TS manifest by a test)
+  src/manifest.ts       PluginManifest source of truth
+  src/index.ts          export const plugin: ElainaPlugin
+  src/*.test.ts
+```
+
+Implemented:
+
+- `onebot-napcat`: outbound WS, envelope normalization, OneBot API facade, request
+  resolution. Owns its channel registration, settings, and diagnostics. See
+  [onebot.md](onebot.md).
+
+Planned first-party set:
+
 - `memory`: scoped memory retrieval, extraction, and recall tools.
 - `persona`: persona loading, versioning, and prompt sections.
 - `model-router`: capability policies and usage reporting.

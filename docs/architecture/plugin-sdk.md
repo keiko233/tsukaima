@@ -38,6 +38,11 @@ type PluginContext = {
   tools: PluginToolRegistry;
   ui: PluginUiRegistry;
   channel?: PluginChannelApi;
+  channels?: PluginChannelRegistry;
+  settings?: PluginSettingsApi;
+  requests?: PluginRequestApi;
+  audit?: PluginAuditApi;
+  dependencies?: PluginDependencyBag;
   memory?: PluginMemoryApi;
   persona?: PluginPersonaApi;
   model?: PluginModelApi;
@@ -46,6 +51,22 @@ type PluginContext = {
 ```
 
 Each optional API is present only if the corresponding permission is granted.
+
+Implemented host surfaces:
+
+- `channels.register(adapter)` — a channel plugin owns a transport and registers it. The host
+  wires inbound envelopes and requests into its own ingestion pipeline, so adapters never
+  touch the durable store directly. See `ChannelAdapter` in `packages/sdk/src/host.ts`.
+- `settings.get()` / `settings.onChange()` — per-plugin config, stored under
+  `plugin-config:<pluginId>` in the domain `meta` table, with `manifest.configEnv` fallbacks.
+  Writing a patch validates it against `manifest.configSchema` and notifies the plugin, which
+  is how a channel restarts on a settings change.
+- `requests.persist(request)` — durable friend/group request inbox.
+- `audit.record(entry)` — host audit trail.
+- `dependencies.get(key)` — host bindings injected for built-in plugins (for example a
+  WebSocket transport factory). Third-party plugins never receive these.
+
+Not implemented yet: `models.registerProvider`, `rpc.register`, `memory`, `persona`, `tasks`.
 
 ## Hooks
 

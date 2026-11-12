@@ -36,9 +36,10 @@
 
 - [x] 1. Implement plugin manifest, registry, permission checks, and worker runtime.
 - [x] 2. Implement plugin tool/hook/UI bridges.
-- [x] 3. Build IM-style WebUI conversation surface.
-- [ ] 4. Add admin panels for personas, memory, and audit.
-- [ ] 5. Implement sticker/meme and search plugins.
+- [x] 3. Implement the plugin host seam and extract the OneBot channel into `plugins/onebot-napcat`.
+- [x] 4. Build IM-style WebUI conversation surface.
+- [ ] 5. Add admin panels for personas, memory, and audit.
+- [ ] 6. Implement sticker/meme and search plugins.
 
 ## Phase 5 — Self-iteration
 
