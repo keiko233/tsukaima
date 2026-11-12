@@ -8,6 +8,13 @@
 			"when": 1794456701704,
 			"tag": "0000_robust_jack_flag",
 			"breakpoints": true
+		},
+		{
+			"idx": 1,
+			"version": "6",
+			"when": 1794483958746,
+			"tag": "0001_short_scarlet_spider",
+			"breakpoints": true
 		}
 	]
 }

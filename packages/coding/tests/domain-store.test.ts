@@ -28,6 +28,7 @@ describe("DomainCodingStore", () => {
 		await store.reject(request.id, "admin");
 		expect((await store.get(request.id))?.status).toBe("rejected");
 		await expect(store.approve(request.id, "admin")).rejects.toThrow(ApprovalError);
+		await store.close();
 	});
 
 	test("persists proposals with valid transitions", async () => {
@@ -45,5 +46,34 @@ describe("DomainCodingStore", () => {
 		await store.transition(proposal.id, "pending_approval");
 		await store.transition(proposal.id, "approved");
 		await expect(store.transition(proposal.id, "pending_approval")).rejects.toThrow(ProposalError);
+		await store.close();
+	});
+
+	test("persists approvals and proposals across store instances", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-coding-"));
+		directories.push(directory);
+		const path = join(directory, "domain.sqlite");
+		const first = new DomainCodingStore(path);
+		const request = await first.create({
+			action: "restart",
+			expiresAtMs: Date.now() + 60_000,
+			requestedBy: "agent",
+			taskId: "task-2",
+		});
+		const proposal = await first.create({
+			diff: "diff",
+			riskAssessment: "low",
+			rollbackNotes: "revert",
+			taskId: "task-2",
+			title: "Persistent proposal",
+		});
+		await first.close();
+
+		const second = new DomainCodingStore(path);
+		expect((await second.get(request.id))?.status).toBe("pending");
+		expect((await second.getProposal(proposal.id))?.title).toBe("Persistent proposal");
+		expect(await second.listPending()).toHaveLength(1);
+		expect(await second.list("task-2")).toHaveLength(1);
+		await second.close();
 	});
 });
