@@ -13,10 +13,16 @@ import { SelectItem } from "@/components/motion/select";
 import { SelectTrigger } from "@/components/motion/select";
 import { SelectValue } from "@/components/motion/select";
 import { api, type LogLevel } from "@/lib/api";
+import { applyLocale } from "@/lib/locale";
 import { m } from "@/paraglide/messages";
+import { getLocale, locales, toLocale, type Locale } from "@/paraglide/runtime";
 import { SystemPage } from "./page-header";
 
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
+const LOCALE_LABELS: Record<Locale, string> = {
+	en: "English",
+	"zh-cn": "简体中文",
+};
 
 export function SettingsPage() {
 	const queryClient = useQueryClient();
@@ -37,6 +43,7 @@ export function SettingsPage() {
 	const [providerApiKey, setProviderApiKey] = useState("");
 	const [onebotWsUrl, setOnebotWsUrl] = useState<string | undefined>(undefined);
 	const [onebotAccessToken, setOnebotAccessToken] = useState("");
+	const [locale, setLocaleState] = useState<Locale>(() => getLocale());
 
 	if (settingsQuery.isError) {
 		return <Card className="p-4">{settingsQuery.error.message}</Card>;
@@ -46,10 +53,42 @@ export function SettingsPage() {
 	const currentProviderBaseUrl = providerBaseUrl ?? settings?.openAiBaseUrl ?? "";
 	const currentProviderModelId = providerModelId ?? settings?.openAiModelId ?? "";
 	const currentUrl = onebotWsUrl ?? settings?.onebotWsUrl ?? "";
+	const changeLocale = (value: string) => {
+		const next = toLocale(value);
+		if (next === undefined || next === locale) return;
+		setLocaleState(next);
+		applyLocale(next);
+	};
 
 	return (
 		<SystemPage description={m.settings_page_description()} title={m.nav_settings()}>
 			<div className="space-y-4">
+				<Card size="compact">
+					<CardHeader>
+						<CardTitle as="h2">{m.settings_interface_title()}</CardTitle>
+					</CardHeader>
+					<CardContent className="space-y-2">
+						<div className="space-y-1.5">
+							<div className="px-1 text-sm font-medium text-foreground">
+								{m.settings_language_label()}
+							</div>
+							<Select value={locale} onValueChange={changeLocale}>
+								<SelectTrigger className="w-full">
+									<span className="sr-only">{m.settings_language_label()}: </span>
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									{locales.map((value) => (
+										<SelectItem key={value} value={value}>
+											{LOCALE_LABELS[value]}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+						<p className="text-xs text-muted-foreground">{m.settings_language_hint()}</p>
+					</CardContent>
+				</Card>
 				<Card size="compact">
 					<CardHeader>
 						<CardTitle as="h2">{m.settings_title()}</CardTitle>

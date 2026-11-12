@@ -113,6 +113,15 @@ The WebUI uses real domain data and durable transcript entries:
 No unread, unconfigured, or unsupported action is represented as working. Missing
 transport capabilities are disabled with an explanation.
 
+## Localization
+
+Paraglide compiles the `en` and `zh-cn` message files under `apps/web/messages`. The
+Settings page exposes the available interface languages and stores the choice in the
+browser's local storage. Changing it reloads the document so every route and shell
+component resolves messages in the selected locale. The startup locale is also written
+to the document's `lang` attribute. This is a browser preference and does not modify
+the server-side runtime settings shared by the deployment.
+
 ## Message routing
 
 See ADR 0007. New external messages go only to the active receiving session of their
