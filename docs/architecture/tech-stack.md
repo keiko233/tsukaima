@@ -152,8 +152,8 @@ Expected scripts:
 {
   "scripts": {
     "lint": "oxlint .",
-    "format": "oxfmt .",
-    "format:check": "oxfmt --check .",
+    "format": "oxfmt 'apps/**/*.ts' 'packages/**/*.ts' '*.json' '*.ts' '.env.example'",
+    "format:check": "oxfmt --check 'apps/**/*.ts' 'packages/**/*.ts' '*.json' '*.ts' '.env.example'",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "check": "bun run lint && bun run format:check && bun run typecheck && bun run test",
@@ -166,7 +166,7 @@ Expected scripts:
 
 ```json
 {
-  "*.{ts,tsx,js,jsx,json,md,yaml,yml}": [
+  "*.{ts,tsx,js,jsx,json,yaml,yml}": [
     "oxfmt --write",
     "oxlint --fix"
   ]
