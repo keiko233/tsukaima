@@ -8,6 +8,7 @@ This document set is the durable design record for Tsukaima. Each file is meant 
 | --- | --- |
 | [Project state](../project-state.md) | Current phase, completed work, next actions, and context needed to resume |
 | [Runtime and persistence](runtime.md) | Process model, `pi-durable`, SQLite adapter, storage boundaries, media, failure behavior |
+| [Startup lifecycle](startup-lifecycle.md) | Boot stages, database migrations, service readiness, and shutdown |
 | [Domain model](domain-model.md) | Envelopes, activity windows, conversation resolution, users, memory, persona |
 | [Database design](database.md) | Exact domain tables, durable boundaries, indexes, migrations, and query rules |
 | [API design](api.md) | oRPC namespaces, procedures, context, errors, realtime patterns, and WebUI flows |

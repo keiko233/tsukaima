@@ -113,6 +113,16 @@ Use Drizzle for explicit domain schema and queries. Use `pi-durable` APIs for co
 - Audit: append-only records in SQLite for sends, administrative changes, memory edits, plugin permission changes, and deployment proposals.
 - Health endpoints expose process, database, channel, model gateway, and plugin-worker status.
 
+## Startup and migrations
+
+- Application startup owns all required migrations.
+- `pi-durable` migrations run when durable storage opens.
+- Drizzle migrations run on `domain.sqlite` before services initialize.
+- The HTTP listener can bind before channels start, but `/readyz` becomes healthy only after required migrations, services, plugins, scheduler, and channels are ready.
+- Do not rely on a manual migration command in production. A separate CLI may exist for development and maintenance.
+
+See [startup-lifecycle.md](startup-lifecycle.md).
+
 ## Testing
 
 Primary test runner: Bun test.

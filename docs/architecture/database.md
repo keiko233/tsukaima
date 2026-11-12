@@ -490,6 +490,13 @@ CREATE INDEX migration_source_idx ON migration_records(source_system, source_id)
 - Add seed migrations only for non-secret configuration, not user data.
 - Before destructive migrations, create a database backup.
 - Migration ledger records are not deletable except through the explicit rollback workflow.
+- The application startup path runs domain migrations automatically before the server becomes ready.
+- Durable migrations run when `pi-durable` storage is opened during startup.
+- A migration failure fails startup and prevents traffic.
+- Use a startup lock to prevent two instances from migrating simultaneously.
+- Destructive migrations require a backup and an explicit maintenance-mode confirmation unless marked safe.
+
+See [startup-lifecycle.md](startup-lifecycle.md) for the exact boot order.
 
 ## Transaction rules
 
