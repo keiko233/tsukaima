@@ -1,13 +1,20 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { PiDurableConversationHost, ModelPolicyRouter, createFakeModel } from "@elaina/core";
-import type { ModelPolicy } from "@elaina/core";
+import {
+	ModelPolicyRouter,
+	PiDurableConversationHost,
+	createFakeModel,
+	createOpenAICompatibleProvider,
+	type ModelPort,
+	type ModelPolicy,
+} from "@elaina/core";
 import { type ElainaDatabase, migrateDomainDatabase, openDomainDatabase } from "@elaina/db";
 import { BACKGROUND_CONTEXT, openDurableStorage } from "@elaina/durable";
 import type { SqliteStorage } from "@elaina/durable";
 import { OneBotChannel } from "@elaina/onebot";
 import type { OneBotTransportFactory } from "@elaina/onebot";
-import type { ElainaConfig } from "./config.ts";
+import { loadConfig, type ElainaConfig } from "./config.ts";
+import { readRuntimeSettings } from "./runtime-settings.ts";
 
 export interface LifecycleOptions {
 	readonly onebotTransportFactory?: OneBotTransportFactory;
@@ -32,6 +39,7 @@ export class ElainaLifecycle {
 	domainDatabase: ElainaDatabase | undefined;
 	durableStorage: SqliteStorage | undefined;
 	lastProcessingError: Error | undefined;
+	logLevel: ElainaConfig["logLevel"];
 	modelRouter: ModelPolicyRouter | undefined;
 	onebotChannel: OneBotChannel | undefined;
 	processedMessageCount = 0;
@@ -39,6 +47,7 @@ export class ElainaLifecycle {
 
 	constructor(config: ElainaConfig, options?: LifecycleOptions) {
 		this.config = config;
+		this.logLevel = config.logLevel;
 		if (options?.onebotTransportFactory !== undefined) {
 			this.onebotTransportFactory = options.onebotTransportFactory;
 		}
@@ -60,6 +69,36 @@ export class ElainaLifecycle {
 	private transition(stage: string, state: LifecycleState["state"] = "starting"): void {
 		this.currentStage = stage;
 		this.currentState = state;
+		this.log(stage);
+	}
+
+	private log(level: ElainaConfig["logLevel"], message?: string): void {
+		const priority = { debug: 0, error: 3, info: 1, warn: 2 } as const;
+		if (priority[level] < priority[this.logLevel]) return;
+		const payload = {
+			level,
+			message: message ?? this.currentStage,
+			stage: this.currentStage,
+			timestamp: new Date().toISOString(),
+		};
+		if (level === "error") console.error(JSON.stringify(payload));
+		else if (level === "warn") console.warn(JSON.stringify(payload));
+		else console.log(JSON.stringify(payload));
+	}
+
+	private createModelPort(): ModelPort {
+		const { openAiApiKey, openAiBaseUrl, openAiModelId } = this.config;
+		if (openAiBaseUrl === undefined || openAiApiKey === undefined || openAiModelId === undefined) {
+			this.log("info", "OpenAI-compatible provider not configured; using fake model");
+			return createFakeModel();
+		}
+		const provider = createOpenAICompatibleProvider(
+			{ apiKey: openAiApiKey, baseUrl: openAiBaseUrl, providerId: "openai-compatible" },
+			[{ capabilities: ["basic-chat", "tool-use"], modelId: openAiModelId }],
+		);
+		const modelId = openAiModelId;
+		const providerId = provider.id;
+		return { models: provider.models, modelId, providerId };
 	}
 
 	async start(): Promise<void> {
@@ -70,9 +109,12 @@ export class ElainaLifecycle {
 		this.transition("domain-database");
 		this.domainDatabase = await openDomainDatabase(join(this.config.dataDir, "domain.sqlite"));
 		migrateDomainDatabase(this.domainDatabase);
-		this.transition("domain-services");
+		this.transition("load-settings");
+		const settings = await readRuntimeSettings(this.domainDatabase);
+		this.logLevel = settings.logLevel;
 
-		const model = createFakeModel();
+		this.transition("domain-services");
+		const model = this.createModelPort();
 		this.conversationHost = new PiDurableConversationHost({
 			model,
 			storage: this.durableStorage,
@@ -87,16 +129,16 @@ export class ElainaLifecycle {
 		];
 
 		this.transition("channel-adapters");
-		if (this.config.onebotWsUrl) {
+		if (settings.onebotWsUrl !== undefined) {
 			try {
 				this.onebotChannel = new OneBotChannel(
 					{
 						botAccountId: "elaina-server",
 						channelId: "onebot",
 						reconnect: { initialDelayMs: 1_000, jitterRatio: 0.1, maxDelayMs: 30_000 },
-						url: this.config.onebotWsUrl,
-						...(this.config.onebotAccessToken !== undefined
-							? { accessToken: this.config.onebotAccessToken }
+						url: settings.onebotWsUrl,
+						...(settings.onebotAccessToken !== undefined
+							? { accessToken: settings.onebotAccessToken }
 							: {}),
 					},
 					this.onebotTransportFactory,
@@ -113,12 +155,15 @@ export class ElainaLifecycle {
 						this.processedMessageCount += 1;
 					} catch (error) {
 						this.lastProcessingError = error instanceof Error ? error : new Error(String(error));
-						console.error("Failed to process OneBot message:", error);
+						this.log("error", "Failed to process OneBot message");
 					}
 				});
 				await this.onebotChannel.start();
 			} catch (error) {
-				console.error("OneBot channel failed to initialize:", error);
+				this.log(
+					"error",
+					`OneBot channel failed to initialize: ${error instanceof Error ? error.message : String(error)}`,
+				);
 			}
 		}
 
@@ -129,6 +174,7 @@ export class ElainaLifecycle {
 		this.failureReason = reason;
 		this.currentState = "failed";
 		this.currentStage = "failed";
+		this.log("error", reason);
 	}
 
 	async stop(): Promise<void> {
@@ -139,3 +185,5 @@ export class ElainaLifecycle {
 		this.domainDatabase?.$client.close();
 	}
 }
+
+export { loadConfig };

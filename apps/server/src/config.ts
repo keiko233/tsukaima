@@ -6,6 +6,9 @@ const configurationSchema = z.object({
 	logLevel: z.enum(["debug", "info", "warn", "error"]),
 	onebotAccessToken: z.string().min(1).optional(),
 	onebotWsUrl: z.string().url().optional(),
+	openAiApiKey: z.string().min(1).optional(),
+	openAiBaseUrl: z.string().url().optional(),
+	openAiModelId: z.string().min(1).optional(),
 	port: z.number().int().min(1).max(65_535),
 	webOrigin: z.string().url(),
 });
@@ -19,6 +22,9 @@ export function loadConfig(env: Record<string, string | undefined>): ElainaConfi
 		logLevel: env.ELAINA_LOG_LEVEL ?? "info",
 		onebotAccessToken: env.ELAINA_ONEBOT_ACCESS_TOKEN || undefined,
 		onebotWsUrl: env.ELAINA_ONEBOT_WS_URL || undefined,
+		openAiApiKey: env.ELAINA_OPENAI_API_KEY || undefined,
+		openAiBaseUrl: env.ELAINA_OPENAI_BASE_URL || undefined,
+		openAiModelId: env.ELAINA_OPENAI_MODEL_ID || undefined,
 		port: Number(env.ELAINA_PORT ?? "7420"),
 		webOrigin: env.ELAINA_WEB_ORIGIN ?? "http://127.0.0.1:7421",
 	});

@@ -2,6 +2,11 @@ import { os } from "@orpc/server";
 import { z } from "zod";
 import { conversations, modelPolicies, plugins } from "@elaina/db";
 import type { ElainaApiContext } from "./health.ts";
+import {
+	readRuntimeSettings,
+	runtimeSettingsSchema,
+	writeRuntimeSettings,
+} from "../runtime-settings.ts";
 
 export const adminRouter = {
 	conversations: {
@@ -17,6 +22,7 @@ export const adminRouter = {
 				...(lifecycle.lastProcessingError === undefined
 					? {}
 					: { lastError: lifecycle.lastProcessingError.message }),
+				logLevel: lifecycle.logLevel,
 				onebotConnected: lifecycle.onebotChannel !== undefined,
 				processedMessages: lifecycle.processedMessageCount,
 				routingPolicies: lifecycle.routingPolicies,
@@ -78,5 +84,18 @@ export const adminRouter = {
 			const database = context.lifecycle.domainDatabase;
 			return database?.select().from(plugins) ?? [];
 		}),
+	},
+	settings: {
+		get: os.$context<ElainaApiContext>().handler(async ({ context }) => {
+			return readRuntimeSettings(context.lifecycle.domainDatabase);
+		}),
+		update: os
+			.$context<ElainaApiContext>()
+			.input(runtimeSettingsSchema)
+			.handler(async ({ context, input }) => {
+				const database = context.lifecycle.domainDatabase;
+				if (database === undefined) throw new Error("Database not ready");
+				return writeRuntimeSettings(database, input);
+			}),
 	},
 };
