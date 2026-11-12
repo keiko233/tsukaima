@@ -27,7 +27,9 @@ const contentType = (part: MessagePart) => {
 		case "image":
 			return { data: { file: part.sha256 }, type: "image" } as const;
 		case "sticker":
-			return { data: { file: part.sha256 }, type: "face" } as const;
+			// Our sticker store only holds file/blob references, so a sticker goes out as an
+			// image segment. A OneBot `face` segment is an emoji ID, not a file.
+			return { data: { file: part.sha256 }, type: "image" } as const;
 		case "text":
 			return { data: { text: part.text }, type: "text" } as const;
 	}
@@ -223,7 +225,13 @@ export class OneBotChannel {
 	}
 
 	private handleMessage(data: string): void {
-		const parsed: unknown = JSON.parse(data);
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(data);
+		} catch {
+			this.lastErrorClass = "unknown";
+			return;
+		}
 		if (this.handleResponse(parsed)) {
 			return;
 		}
@@ -290,14 +298,23 @@ export class OneBotChannel {
 			return;
 		}
 		this.reconnecting = true;
+		let failed = false;
 		try {
 			this.attempts += 1;
 			await sleep(this.reconnectDelay());
 			if (!this.stopped) {
-				await this.connect();
+				try {
+					await this.connect();
+				} catch {
+					failed = true;
+					this.lastErrorClass = "connect";
+				}
 			}
 		} finally {
 			this.reconnecting = false;
+		}
+		if (failed && !this.stopped) {
+			void this.reconnect();
 		}
 	}
 }

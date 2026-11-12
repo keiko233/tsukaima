@@ -1,7 +1,6 @@
 import { Elysia } from "elysia";
 import { RPCHandler } from "@orpc/server/fetch";
 import { ResponseHeadersPlugin } from "@orpc/server/plugins";
-import type { OneBotTransportFactory } from "@elaina/onebot";
 import type { ElainaPlugin } from "@elaina/sdk";
 import { appRouter } from "./rpc/index.ts";
 import type { ElainaApiContext } from "./rpc/base.ts";
@@ -17,7 +16,8 @@ import {
 export interface CreateAppOptions {
 	/** Test seam; production should keep SSE authenticated. */
 	readonly eventHeartbeatMs?: number;
-	readonly onebotTransportFactory?: OneBotTransportFactory;
+	/** Opaque host bindings consumed by built-in plugins in tests or embedders. */
+	readonly pluginBindings?: ReadonlyMap<string, unknown>;
 	/** Overrides the built-in plugin set (tests and future plugin sources). */
 	readonly plugins?: readonly ElainaPlugin[];
 	/** Disable only in isolated tests; production must keep event streams authenticated. */

@@ -108,7 +108,10 @@ export function RequestsSidebar({ search }: { search: string }) {
 		);
 	});
 	const selected = requests.data?.find((request) => request.id === selectedId) ?? null;
-	const connected = diagnostics.data?.onebotConnected ?? false;
+	const connected =
+		diagnostics.data?.channels.some(
+			(channel) => channel.kind === "onebot-v11" && channel.connected,
+		) ?? false;
 
 	if (selected !== null) {
 		return (

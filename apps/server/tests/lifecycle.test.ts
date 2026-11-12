@@ -6,7 +6,10 @@ import { eq } from "drizzle-orm";
 import { createApp } from "../src/app.ts";
 import type { MessageEnvelope } from "@elaina/contracts";
 import { conversations } from "@elaina/db";
-import type { OneBotTransportFactory } from "@elaina/onebot";
+import {
+	ONEBOT_TRANSPORT_FACTORY_BINDING,
+	type OneBotTransportFactory,
+} from "@elaina-plugin/onebot-napcat";
 
 const envelope = (id: string, text: string): MessageEnvelope => ({
 	channelId: "onebot-test",
@@ -119,7 +122,9 @@ describe("server lifecycle with fake model", () => {
 					ELAINA_PORT: "7420",
 					ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
 				},
-				{ onebotTransportFactory: transportFactory },
+				{
+					pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, transportFactory]]),
+				},
 			);
 			await lifecycle.start();
 			expect(urls).toEqual(["ws://env.example:3001"]);

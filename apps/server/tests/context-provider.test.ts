@@ -18,7 +18,10 @@ import {
 	type ElainaDatabase,
 } from "@elaina/db";
 import { openDurableStorage } from "@elaina/durable";
-import type { OneBotTransportFactory } from "@elaina/onebot";
+import {
+	ONEBOT_TRANSPORT_FACTORY_BINDING,
+	type OneBotTransportFactory,
+} from "@elaina-plugin/onebot-napcat";
 import { createApp } from "../src/app.ts";
 import { createLogger } from "../src/logging.ts";
 import {
@@ -470,7 +473,9 @@ describe("activity and reply hooks", () => {
 				ELAINA_PORT: "7420",
 				ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
 			},
-			{ onebotTransportFactory: onebot.createTransport },
+			{
+				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, onebot.createTransport]]),
+			},
 		);
 		await lifecycle.start();
 		try {

@@ -8,7 +8,6 @@
 	},
 	"dependencies": {
 		"@elaina/contracts": "workspace:*",
-		"@elaina/onebot": "workspace:*",
 		"@elaina/sdk": "workspace:*",
 		"zod": "4.6.7"
 	}

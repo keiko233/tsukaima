@@ -18,7 +18,7 @@ This file is the cross-session handoff record. Update it whenever implementation
     input/output schema and every client-facing type has exactly one definition. The WebUI derives
     its client, query keys, and types from it; no hand-written wire types remain.
   - `packages/core`: durable conversation host, activity aggregation, steering/follow-up submission, deterministic fake model, OpenAI-compatible provider, capability routing, and usage accounting.
-  - `packages/onebot`: outbound WebSocket channel, NapCat event normalization, private/group send actions, access-token headers, reconnect backoff, and action timeouts.
+  - `plugins/onebot-napcat/src/protocol`: outbound WebSocket channel, NapCat event normalization, private/group send actions, access-token headers, reconnect backoff, and action timeouts. The former `packages/onebot` workspace was folded into the plugin, so the protocol implementation ships only with its only consumer.
   - `packages/coding`: self-iteration runner, worktree policy, test/build/diff tools, DB-backed approval/proposal stores, and local reload controller.
   - `packages/migration`: DSH snapshot inspection, session/persona/memory/sticker/settings normalization, compression hook, dry-run/import/verify/rollback pipeline.
   - `packages/sdk` and `packages/plugin-registry`: plugin manifest validation, permissions, tool/hook/UI bridges, runtime context, channel/settings/requests/audit host surfaces, install/uninstall registry, and real Bun Worker isolation.
@@ -173,6 +173,9 @@ Do these in order unless a later decision changes the plan:
 6. Add task graph/audit visualization for self-iteration.
 7. Run the real DSH import, verify data, and cut NapCat from DSH to Elaina.
 8. Add secret scanning, backup/restore drills, and the production runbook.
+
+The full built-in plugin inventory and migration order are tracked in
+`docs/architecture/builtin-plugin-migration.md`.
 
 ## Current known limitations
 

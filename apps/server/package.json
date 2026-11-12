@@ -15,7 +15,6 @@
 		"@elaina/core": "workspace:*",
 		"@elaina/db": "workspace:*",
 		"@elaina/durable": "workspace:*",
-		"@elaina/onebot": "workspace:*",
 		"@elaina/plugin-registry": "workspace:*",
 		"@elaina/sdk": "workspace:*",
 		"@orpc/server": "1.16.2",

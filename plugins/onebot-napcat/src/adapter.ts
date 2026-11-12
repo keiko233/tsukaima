@@ -1,6 +1,4 @@
 import type { ChannelRequest, MessageEnvelope, MessagePart } from "@elaina/contracts";
-import { OneBotChannel } from "@elaina/onebot";
-import type { OneBotConfig, OneBotTransportFactory } from "@elaina/onebot";
 import type {
 	ChannelAdapter,
 	ChannelCapability,
@@ -10,6 +8,8 @@ import type {
 	PluginLogger,
 	SendResult,
 } from "@elaina/sdk";
+import { OneBotChannel } from "./protocol/channel.ts";
+import type { OneBotConfig, OneBotTransportFactory } from "./protocol/types.ts";
 
 export const ONEBOT_CHANNEL_KIND = "onebot-v11";
 

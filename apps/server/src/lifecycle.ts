@@ -19,13 +19,12 @@ import {
 	openDomainDatabase,
 } from "@elaina/db";
 import { BACKGROUND_CONTEXT, openDurableStorage, type SqliteStorage } from "@elaina/durable";
-import type { OneBotTransportFactory } from "@elaina/onebot";
 import { createPluginToolsExtension, type AuditEntry, type ElainaPlugin } from "@elaina/sdk";
 import type { ChannelRequest, MessageEnvelope } from "@elaina/contracts";
 import { loadConfig, type ElainaConfig } from "./config.ts";
 import { createLogger, LogBuffer, type Logger } from "./logging.ts";
 import { readRuntimeSettings, type RuntimeSettings } from "./runtime-settings.ts";
-import { ONEBOT_TRANSPORT_FACTORY_BINDING, builtinPlugins } from "./plugins/builtin.ts";
+import { builtinPlugins } from "./plugins/builtin.ts";
 import { ChannelRegistry } from "./services/channel-registry.ts";
 import { ConversationRouter } from "./services/conversation-router.ts";
 import { DrizzleContextProvider } from "./services/context-provider.ts";
@@ -41,7 +40,8 @@ export interface LifecycleOptions {
 	readonly logger?: Logger;
 	/** Test or embedding override for the model catalog and provider. */
 	readonly model?: ModelPort;
-	readonly onebotTransportFactory?: OneBotTransportFactory;
+	/** Opaque host bindings consumed by built-in plugins in tests or embedders. */
+	readonly pluginBindings?: ReadonlyMap<string, unknown>;
 	/** Overrides the built-in plugin set (tests and future plugin sources). */
 	readonly plugins?: readonly ElainaPlugin[];
 }
@@ -135,13 +135,9 @@ export class ElainaLifecycle {
 			hooks: this.hooks,
 			logger: this.runtimeLog,
 		});
-		const bindings = new Map<string, unknown>();
-		if (options?.onebotTransportFactory !== undefined) {
-			bindings.set(ONEBOT_TRANSPORT_FACTORY_BINDING, options.onebotTransportFactory);
-		}
 		this.pluginHost = new PluginHost({
 			audit: (entry) => this.writeAudit(entry),
-			bindings,
+			...(options?.pluginBindings === undefined ? {} : { bindings: options.pluginBindings }),
 			channels: this.channels,
 			hooks: this.hooks,
 			logger: this.logger,

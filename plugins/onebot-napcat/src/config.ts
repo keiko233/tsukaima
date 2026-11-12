@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { OneBotConfig } from "@elaina/onebot";
+import type { OneBotConfig } from "./protocol/types.ts";
 
 /**
  * Channel instance id. Envelopes and `chat_objects` rows are keyed by this value, so it

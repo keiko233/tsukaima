@@ -80,6 +80,21 @@ export class PluginHost {
 		}));
 	}
 
+	/**
+	 * Public, secret-free configuration for every started plugin, keyed by plugin id.
+	 * Settings screens use this instead of importing a specific plugin's constants.
+	 */
+	async configViews(): Promise<
+		{ config: Record<string, unknown>; id: string; secretsSet: string[] }[]
+	> {
+		const views = [];
+		for (const pluginId of this.#started) {
+			const view = await this.settings.publicView(pluginId);
+			views.push({ config: view.config, id: pluginId, secretsSet: [...view.secretsSet] });
+		}
+		return views;
+	}
+
 	plugin(pluginId: string): ElainaPlugin | undefined {
 		return this.#plugins.get(pluginId);
 	}

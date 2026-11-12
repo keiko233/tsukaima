@@ -48,6 +48,22 @@ type StoredConversationPolicy = {
 	steerWhenBusy: "steer" | "follow-up" | "reject";
 };
 
+/**
+ * One durable conversation has one activity document, but every submitted window is a
+ * distinct input. `pi-durable` deduplicates submissions by `requestId`, so the request id
+ * must change per window while the activity id stays stable for receipts and the UI.
+ */
+const ACTIVITY_REQUEST_SEPARATOR = "#";
+
+export function activitySubmissionRequestId(activityId: string, envelopeId: string): string {
+	return `${activityId}${ACTIVITY_REQUEST_SEPARATOR}${envelopeId}`;
+}
+
+export function activityIdFromSubmissionRequestId(requestId: string): string {
+	const separator = requestId.lastIndexOf(ACTIVITY_REQUEST_SEPARATOR);
+	return separator < 0 ? requestId : requestId.slice(0, separator);
+}
+
 type MessageReceiptDocument = JsonObject & {
 	activityId: string;
 	acceptedAtMs: number;
@@ -167,6 +183,8 @@ export interface DurableConversationHostOptions {
 	 */
 	readonly extensions?: readonly Extension[];
 	readonly model?: ModelPort;
+	/** Convenience for tests: deterministic fake-model replies, ignored when `model` is set. */
+	readonly responses?: readonly string[];
 	/** Observe activity-window opens and closes. Errors never affect message processing. */
 	readonly onActivityEvent?: (event: ActivityWindowEvent) => void;
 	/**
@@ -213,7 +231,9 @@ export class PiDurableConversationHost {
 	readonly registry = createRegistry();
 
 	constructor(private readonly options: DurableConversationHostOptions) {
-		this.model = options.model ?? createFakeModel();
+		this.model =
+			options.model ??
+			createFakeModel(options.responses === undefined ? {} : { responses: options.responses });
 		this.policy = options.policy ?? { maxMessages: 20, windowMs: 6_000 };
 		this.contextExtension =
 			options.contextProvider === undefined
@@ -323,7 +343,7 @@ export class PiDurableConversationHost {
 							type: "input",
 							content: this.envelopeToText(input.envelope),
 							entry,
-							requestId: activityId,
+							requestId: activitySubmissionRequestId(activityId, input.envelope.id),
 							whenBusy: whenBusy === "follow-up" ? "followUp" : whenBusy,
 						}
 					: {
@@ -385,7 +405,7 @@ export class PiDurableConversationHost {
 				const text = assistantEntryText(entry);
 				if (text === undefined) return;
 				await onAnswer({
-					activityId: settled.requestId ?? "",
+					activityId: activityIdFromSubmissionRequestId(settled.requestId ?? ""),
 					conversationId,
 					entryId: String(answerId),
 					text,
@@ -456,7 +476,7 @@ export class PiDurableConversationHost {
 				return conversation.submit(tx, {
 					content: this.envelopesToText(envelopes),
 					entry,
-					requestId: activityId,
+					requestId: activitySubmissionRequestId(activityId, envelopes[0]?.id ?? "window"),
 					type: "input",
 					whenBusy: policy.followUpWhenBusy === "follow-up" ? "followUp" : "reject",
 				});

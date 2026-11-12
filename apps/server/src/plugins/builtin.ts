@@ -1,7 +1,6 @@
 import {
 	ONEBOT_DEFAULT_CHANNEL_ID,
 	ONEBOT_PLUGIN_ID,
-	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	oneBotNapCatPlugin,
 } from "@elaina-plugin/onebot-napcat";
 import type { ElainaPlugin } from "@elaina/sdk";
@@ -12,4 +11,4 @@ import type { ElainaPlugin } from "@elaina/sdk";
  */
 export const builtinPlugins: readonly ElainaPlugin[] = [oneBotNapCatPlugin];
 
-export { ONEBOT_DEFAULT_CHANNEL_ID, ONEBOT_PLUGIN_ID, ONEBOT_TRANSPORT_FACTORY_BINDING };
+export { ONEBOT_DEFAULT_CHANNEL_ID, ONEBOT_PLUGIN_ID };

@@ -196,7 +196,7 @@ test("passes private and group send payloads through the transport", async () =>
 			group_id: "555",
 			message: [
 				{ data: { file: "image-hash" }, type: "image" },
-				{ data: { file: "face-hash" }, type: "face" },
+				{ data: { file: "face-hash" }, type: "image" },
 			],
 		},
 	});
@@ -247,6 +247,13 @@ test("accepts inbound events through the channel", async () => {
 	expect(envelopes).toHaveLength(2);
 	expect(envelopes[0]?.parts).toContainEqual({ sha256: "sticker.png", type: "sticker" });
 	expect(envelopes[1]?.conversationKey).toEqual({ groupId: "555", kind: "group", peerId: "10001" });
+});
+
+test("ignores a malformed frame without throwing", async () => {
+	const { envelopes, sockets } = await createChannel();
+	expect(() => sockets[0]?.emit("message", ["{not json"])).not.toThrow();
+	sockets[0]?.emit("message", [JSON.stringify(privateEvent)]);
+	expect(envelopes).toHaveLength(1);
 });
 
 test("normalizes and dispatches OneBot requests", async () => {

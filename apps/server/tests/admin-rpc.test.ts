@@ -8,7 +8,10 @@ import {
 	type DiagnosticsData,
 	logSnapshotSchema,
 } from "@elaina/contracts";
-import type { OneBotTransport } from "@elaina/onebot";
+import {
+	ONEBOT_TRANSPORT_FACTORY_BINDING,
+	type OneBotTransport,
+} from "@elaina-plugin/onebot-napcat";
 import { createApp } from "../src/app.ts";
 import { signIn } from "./test-auth.ts";
 
@@ -56,7 +59,9 @@ describe("admin RPC", () => {
 				ELAINA_PORT: "7420",
 				ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
 			},
-			{ onebotTransportFactory: onebot.createTransport },
+			{
+				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, onebot.createTransport]]),
+			},
 		);
 		await lifecycle.start();
 
@@ -112,36 +117,46 @@ describe("admin RPC", () => {
 		expect(initialSettings).toEqual({
 			logLevel: "info",
 			openAiApiKeySet: false,
-			onebotAccessTokenSet: false,
+			plugins: [{ config: {}, id: "onebot-napcat", secretsSet: [] }],
 		});
 		const updatedSettings = await request("admin/settings/update", {
 			logLevel: "debug",
 			openAiApiKey: "provider-secret",
 			openAiBaseUrl: "https://magpie.example/v1",
 			openAiModelId: "magpie-chat",
-			onebotAccessToken: "test-token",
-			onebotWsUrl: "ws://127.0.0.1:3001",
 		});
 		expect(updatedSettings).toEqual({
 			logLevel: "debug",
 			openAiApiKeySet: true,
 			openAiBaseUrl: "https://magpie.example/v1",
 			openAiModelId: "magpie-chat",
-			onebotAccessTokenSet: true,
-			onebotWsUrl: "ws://127.0.0.1:3001",
+			plugins: [{ config: {}, id: "onebot-napcat", secretsSet: [] }],
 		});
-		expect(JSON.stringify(updatedSettings)).not.toContain("test-token");
 		expect(JSON.stringify(updatedSettings)).not.toContain("provider-secret");
 		expect(lifecycle.logLevel).toBe("debug");
+		expect(lifecycle.providerRestartRequired).toBe(true);
+
+		await lifecycle.updatePluginConfig("onebot-napcat", {
+			accessToken: "test-token",
+			wsUrl: "ws://127.0.0.1:3001",
+		});
 		expect(onebot.urls).toEqual(["ws://127.0.0.1:3001"]);
 		expect(lifecycle.channels.get("onebot")?.diagnostics().restartRequired).toBe(false);
-		expect(lifecycle.providerRestartRequired).toBe(true);
 		expect(lifecycle.channels.get("onebot")?.diagnostics().state).toBe("connecting");
+		const configuredSettings = (await request("admin/settings/get")) as {
+			plugins: Array<{ config: Record<string, unknown>; id: string; secretsSet: string[] }>;
+		};
+		expect(configuredSettings.plugins).toEqual([
+			{
+				config: { wsUrl: "ws://127.0.0.1:3001" },
+				id: "onebot-napcat",
+				secretsSet: ["accessToken"],
+			},
+		]);
+		expect(JSON.stringify(configuredSettings)).not.toContain("test-token");
 
-		await request("admin/settings/update", { onebotWsUrl: "ws://127.0.0.1:3100" });
+		await lifecycle.updatePluginConfig("onebot-napcat", { wsUrl: "ws://127.0.0.1:3100" });
 		expect(onebot.urls).toEqual(["ws://127.0.0.1:3001", "ws://127.0.0.1:3100"]);
-		expect(lifecycle.channels.get("onebot")?.diagnostics().restartRequired).toBe(false);
-		expect(lifecycle.channels.get("onebot")?.diagnostics().state).toBe("connecting");
 
 		const updated = await request("admin/modelPolicies/set", {
 			capability: "basic-chat",
