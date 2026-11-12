@@ -266,36 +266,13 @@ CREATE TABLE requests (
 row moves to `uncertain`; that makes a crash during the request identify the outcome as
 unknown rather than inviting a duplicate retry.
 
-### activities
+### Activity state lives in the durable database
 
-One aggregated bot turn input.
-
-```sql
-CREATE TABLE activities (
-  id TEXT PRIMARY KEY,
-  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  trigger_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE RESTRICT,
-  status TEXT NOT NULL CHECK (status IN ('collecting', 'processing', 'completed', 'cancelled')),
-  opened_at TEXT NOT NULL,
-  closed_at TEXT,
-  model_context_json TEXT,
-  summary TEXT,
-  UNIQUE (conversation_id, trigger_message_id)
-);
-```
-
-### activity_messages
-
-Membership of raw messages in an activity.
-
-```sql
-CREATE TABLE activity_messages (
-  activity_id TEXT NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
-  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  position INTEGER NOT NULL,
-  PRIMARY KEY (activity_id, message_id)
-);
-```
+There are no `activities` or `activity_messages` tables. Activity windows and message receipts are
+durable documents (`elaina.activityWindow`, `elaina.messageReceipt`) scoped to the conversation,
+because they must be replayed and recovered with the conversation itself. The domain database keeps
+only `messages.activity_id`, the durable activity a message was aggregated into, for display and
+correlation.
 
 ### personas
 
@@ -389,19 +366,9 @@ CREATE TABLE memories (
 
 See `memory.md` for retrieval policy.
 
-### memory_links
-
-Deduplicated many-to-many links between memories and entities.
-
-```sql
-CREATE TABLE memory_links (
-  memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-  target_kind TEXT NOT NULL CHECK (target_kind IN ('user', 'conversation', 'persona', 'project', 'media')),
-  target_id TEXT NOT NULL,
-  relation TEXT NOT NULL,
-  PRIMARY KEY (memory_id, target_kind, target_id, relation)
-);
-```
+Memories reference their entities directly (`subject_user_id`, `conversation_id`, `project_id`,
+scope) rather than through a link table; retrieval queries those columns through
+`memories_scope_idx`.
 
 ### plugins
 
@@ -424,20 +391,10 @@ CREATE TABLE plugins (
 );
 ```
 
-### plugin_grants
-
-Effective permission grants per plugin.
-
-```sql
-CREATE TABLE plugin_grants (
-  plugin_id TEXT NOT NULL REFERENCES plugins(id) ON DELETE CASCADE,
-  permission TEXT NOT NULL,
-  granted INTEGER NOT NULL DEFAULT 0,
-  granted_by TEXT,
-  granted_at TEXT,
-  PRIMARY KEY (plugin_id, permission)
-);
-```
+There is no `plugin_grants` table. A plugin's grants are the permissions declared in its manifest
+and installed into the in-process registry; the registry rejects a grant that the manifest does not
+declare, so a separate grant table would only duplicate that check. Persisting per-plugin grants is
+revisited when third-party plugins can be installed and enabled independently.
 
 ### policies
 

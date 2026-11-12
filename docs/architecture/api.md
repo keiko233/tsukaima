@@ -27,34 +27,22 @@ Do not expose raw durable storage operations or arbitrary SQL through oRPC.
 
 ## Context
 
-Every procedure receives an oRPC context:
+Every procedure receives an oRPC context. It is deliberately small: the server threads the
+lifecycle handle (the composition root for domain services) plus the auth service and the session
+token parsed from the request cookie.
 
 ```ts
 type ApiContext = {
-  requestId: string;
-  auth: {
-    isAuthenticated: boolean;
-    userId?: string;
-    roles: string[];
-  };
-  db: DomainDb;
-  durable: DurableHost;
-  services: {
-    conversations: ConversationService;
-    users: UserService;
-    memory: MemoryService;
-    personas: PersonaService;
-    plugins: PluginRegistry;
-    models: ModelRouter;
-    onebot?: OneBotService;
-    coding?: CodingService;
-    migration?: MigrationService;
-  };
-  audit: AuditLogger;
+  lifecycle: ElainaLifecycle;
+  auth: AuthService;
+  sessionToken?: string;
 };
 ```
 
-The server creates the base context per request. Procedures may narrow it with guards.
+`admin/*` procedures are bound to `adminBase = apiBase.use(requireAdmin)`, which rejects a request
+without a valid session with `UNAUTHENTICATED` (HTTP 401) before any handler runs. `health/status`
+and `auth/*` stay public. Domain services are reached through `context.lifecycle` rather than being
+injected individually, so a new service does not change the RPC context signature.
 
 ## Procedure conventions
 
@@ -124,14 +112,45 @@ Returns:
 
 Initial release has one administrator.
 
-Procedures:
+Implemented procedures:
 
-- `auth.status.query()`
-- `auth.login.mutation({ username, password })`
-- `auth.logout.mutation()`
-- `auth.session.query()`
+- `auth.status` → `{ authenticated, configured, username? }`. `configured: false` means no
+  credential exists yet, so the WebUI shows setup guidance instead of a login form.
+- `auth.login({ username, password })` → sets an httpOnly, `SameSite=Lax` session cookie.
+- `auth.logout()` → clears the cookie and the session.
 
-Sessions are cookie-based and stored through Better Auth. Password or credential storage must not be implemented in application code unless a suitable provider is unavailable.
+Behaviour:
+
+- Bootstrap: the `admin_credentials` row is authoritative. On first start, `ELAINA_ADMIN_USERNAME`
+  and `ELAINA_ADMIN_PASSWORD` are hashed with `Bun.password` (argon2id) into that row. Changing the
+  environment later does not rotate the password.
+- Locked by default: with no stored credential and no environment credential, every `admin/*`
+  procedure rejects, `auth.status` reports `configured: false`, and the startup log names the
+  missing variables. There is no "unconfigured means allow" path.
+- Sessions are in-memory with a 7-day TTL and at most 16 concurrent sessions; a restart signs
+  everyone out. Tokens are stored server-side as SHA-256 digests and compared with
+  `timingSafeEqual`.
+- Failed logins back off after 5 attempts (1 s, doubling, 60 s cap) and return
+  `TOO_MANY_REQUESTS` with `retryAfterMs`.
+- Audit rows for admin actions carry `actorId = admin:<username>` (see the audit note below).
+
+### Open decision: auth library
+
+This section originally specified Better Auth with library-provided credential storage. The current
+implementation is a small in-house service (hash, session, cookie, throttle) because the first
+remediation pass avoided adding dependencies while several workstreams were editing the workspace
+in parallel. It is not a rejection of the library: adopting Better Auth (or an equivalent mature
+provider) is still the preferred direction under the project's "prefer mature libraries" policy,
+and should be decided before the surface grows (password rotation, multiple admins, device
+management). Until then the in-house implementation is the single source of truth.
+
+### Audit actors
+
+`ElainaLifecycle.writeAudit` has no actor parameter, so the RPC layer writes the actor-bearing rows
+for sign-in, sign-out, denied requests, and the mutating admin procedures. Background services
+(`reply-dispatcher`, channel plugins) still audit with the legacy default. Adding an optional
+`actorId` to the SDK's `AuditEntry` and threading it through `writeAudit` is the root-cause fix and
+is queued as a small follow-up.
 
 ## Conversations
 

@@ -7,10 +7,15 @@ This file is the cross-session handoff record. Update it whenever implementation
 - Project name: `elaina-chatbot`.
 - Repository initialized at `/home/keiko/Code/elaina-chatbot` on branch `main`.
 - First commit: `5dc80bc Add Elaina Chatbot architecture and DSH migration plan`.
-- Current phase: Phase 1–7 core/library implementation complete; the WebUI now implements the messaging-workspace shell, chat-object/session navigation, local Elaina turns, channel sends, directory views, and request inbox.
+- Current phase: Phase 1–7 core/library implementation complete; the closed reply loop, the oRPC
+  contract layer, the ingest boundary, persona/memory injection, and admin authentication are in
+  place. Remaining work is realtime push, plugin tool bridging, and the DSH cutover itself.
 - Bun workspace, strict TypeScript config, domain schema/migrations, Pi Durable Bun SQLite adapter, startup lifecycle, Elysia + oRPC API, and React/TanStack WebUI exist.
 - Implemented packages:
   - `packages/contracts`: message, conversation policy, activity window, submission, and admin event schemas.
+  - `packages/contracts`: additionally owns the oRPC `appContract` (`api.ts`), so every RPC
+    input/output schema and every client-facing type has exactly one definition. The WebUI derives
+    its client, query keys, and types from it; no hand-written wire types remain.
   - `packages/core`: durable conversation host, activity aggregation, steering/follow-up submission, deterministic fake model, OpenAI-compatible provider, capability routing, and usage accounting.
   - `packages/onebot`: outbound WebSocket channel, NapCat event normalization, private/group send actions, access-token headers, reconnect backoff, and action timeouts.
   - `packages/coding`: self-iteration runner, worktree policy, test/build/diff tools, DB-backed approval/proposal stores, and local reload controller.
@@ -21,6 +26,25 @@ This file is the cross-session handoff record. Update it whenever implementation
 - Runtime target is Bun.
 - Runtime settings for log level and OpenAI-compatible/Magpie provider configuration are persisted in the domain database and editable from the WebUI. Secret values are never returned by the API.
 - Built-in plugins are loaded from `apps/server/src/plugins/builtin.ts`; the OneBot channel is now a plugin, not lifecycle code. `ElainaLifecycle` no longer holds channel, request, or identity-resolution logic.
+- Assistant answers are delivered back to their origin channel by `apps/server/src/services/reply-dispatcher.ts`.
+  The durable host observes the settled submission (`onAnswer`), the dispatcher claims the outbound
+  row through the `(conversationId, durableEntryId)` unique index before sending, so delivery is
+  at-most-once across restarts, and it emits `after.reply`. Local `webui` chats persist the same
+  outbound rows without a channel send.
+- Inbound envelopes are validated with `messageEnvelopeSchema` before anything is persisted, and
+  identity resolution runs in a single synchronous transaction, so concurrent messages from a new
+  user cannot create a duplicate user or a racing canonical identity.
+- Persona and memory are injected into every model request as pi-durable prompt sections
+  (`elaina-persona`, `elaina-memory`) rendered per conversation from the domain database by
+  `apps/server/src/services/context-provider.ts`. Retrieval ranks by keyword overlap, then
+  importance, then recency; a 4000-character budget caps the injected text, and any provider error
+  degrades to no injection rather than failing the turn. Memory content is never logged.
+- The admin surface is authenticated. `auth.status`/`login`/`logout` are public; every `admin/*`
+  procedure is bound to an `adminBase` guard that returns `UNAUTHENTICATED` without a session.
+  Credentials are argon2id hashes bootstrapped from `ELAINA_ADMIN_USERNAME`/`ELAINA_ADMIN_PASSWORD`
+  into `admin_credentials`; with neither stored nor environment credentials the whole admin surface
+  stays locked. Sessions are in-memory (restart requires a new sign-in) with httpOnly,
+  `SameSite=Lax` cookies. The WebUI gates the shell behind `auth.status` and has a `/login` route.
 - Plugin configuration lives in the domain `meta` table under `plugin-config:<pluginId>` with `manifest.configEnv` fallbacks. `/admin/settings` keeps its `onebot*` fields as a legacy alias mapped onto the `onebot-napcat` plugin config, so the WebUI contract is unchanged.
 - OneBot settings apply live through the plugin's `settings.onChange`: changing the WebSocket URL or access token restarts the channel and reconnects without a server restart. Provider settings still require a restart.
 - Runtime logging uses structured records rendered in Rust `tracing` style, with a bounded in-memory buffer, SSE delivery, and a Shiki ANSI-rendered diagnostics viewer.
@@ -68,6 +92,7 @@ This file is the cross-session handoff record. Update it whenever implementation
 - `docs/migration/migration-kit.md`
 - `docs/roadmap.md`
 - `docs/operations/quality.md`
+- `docs/reviews/implementation-review-2026-11-12.md`
 - ADRs 0001–0007
 
 This file may fall behind individual documents during rapid edits, but the documents above should always contain the most detailed truth.
@@ -113,26 +138,48 @@ bun run check
 ```
 
 Current baseline: lint, formatting, root TypeScript, WebUI TypeScript, WebUI production
-build, and 145 tests across 29 files pass.
+build, and 166 tests across 34 files pass.
 
 ## Next implementation steps
 
 Do these in order unless a later decision changes the plan:
 
-1. Add authenticated admin sessions and live WebSocket updates for conversations, activities, and diagnostics beyond the new log stream.
-2. Extract the model provider into `plugins/openai-compatible` (phase C of `plugin-decoupling.md`); this needs the `models.registerProvider` host surface.
-3. Add full persona/memory/audit admin services and review UI.
-4. Add production memory extraction/retrieval jobs and persona seeding operations.
-5. Add sticker/meme and search plugins plus plugin-owned database migrations.
-6. Add task graph/audit visualization for self-iteration.
-7. Run the real DSH import, verify data, and cut NapCat from DSH to Elaina.
-8. Add secret scanning, backup/restore drills, and the production runbook.
+1. Add live WebSocket/SSE updates for conversations, activities, and diagnostics beyond the log
+   stream, so the WebUI stops polling.
+2. Bridge plugin tools into the model run and give `task.created`/`task.completed` real emission
+   points, or document the deliberate reduction to channel/admin extension points.
+3. Give `packages/sdk`'s `AuditEntry` an optional `actorId` and thread it through
+   `ElainaLifecycle.writeAudit`, replacing the RPC-layer audit shim.
+4. Decide the auth provider question recorded in `docs/architecture/api.md`: adopt a mature library
+   (Better Auth or equivalent) or keep the in-house service deliberately.
+5. Extract the model provider into `plugins/openai-compatible` (phase C of `plugin-decoupling.md`); this needs the `models.registerProvider` host surface.
+6. Add full persona/memory/audit admin services and review UI, plus memory extraction jobs.
+7. Add sticker/meme and search plugins plus plugin-owned database migrations.
+8. Add task graph/audit visualization for self-iteration.
+9. Run the real DSH import, verify data, and cut NapCat from DSH to Elaina.
+10. Add secret scanning, backup/restore drills, and the production runbook.
 
-## Current WebUI limitations
+## Current known limitations
 
-- Assistant replies to external channel messages are visible in the WebUI but are not yet automatically sent back through OneBot.
-- The chat list preview is backed by indexed domain messages; an assistant-only latest turn may not update the parent preview.
-- Unread state, chat-object pin/archive controls beyond session archive, and group management actions are not implemented.
+- One inbound message is answered only when its activity window flushes, so a single DM waits
+  roughly `policy.windowMs` (6 s) before the model run starts. Tune the default or add an
+  immediate first-message path.
+- Reply delivery is at-most-once: a crash between claiming the outbound row and a successful send
+  leaves a permanent `pending` row with no reconciliation job yet.
+- Replies are sent as one text part; there is no platform length chunking, and answers with no
+  text blocks (tool-only) produce no reply.
+- `messages.activity_id` is a dangling column: the `activities` tables were dropped while the
+  column stayed.
+- `remoteModelsInputSchema` and `runtimeSettingsPatchSchema` exist both in `apps/server/src` and
+  in `packages/contracts`; one definition should move.
+- Admin authentication is in-house; the auth-library decision is open (see `api.md`). Login
+  throttling is global rather than per-IP, the session cookie has no `Secure` attribute (LAN HTTP),
+  there is no password rotation, and sessions do not survive a restart.
+- Hook payloads are asymmetric: `activity.opened`/`activity.closed` carry durable ids while
+  `before.reply`/`after.reply` carry domain ids, and `task.created`/`task.completed` are declared
+  with no emission point.
+- Unread state, chat-object pin/archive controls beyond session archive, and group management
+  actions are not implemented.
 - Narrow-screen navigation is implemented, but no Playwright end-to-end suite is present yet.
 
 ## How to resume in a new session
