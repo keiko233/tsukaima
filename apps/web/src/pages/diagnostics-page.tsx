@@ -68,7 +68,7 @@ export function DiagnosticsPage() {
 						<span>
 							{m.diagnostics_usage_records_label()} {diagnostics.usage.length}
 						</span>
-						{diagnostics.onebotRestartRequired ? (
+						{diagnostics.onebotRestartRequired || diagnostics.providerRestartRequired ? (
 							<span className="text-destructive">{m.settings_restart_hint()}</span>
 						) : null}
 						{diagnostics.lastError !== undefined ? (

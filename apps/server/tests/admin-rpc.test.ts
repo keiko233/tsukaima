@@ -54,21 +54,30 @@ describe("admin RPC", () => {
 		const initialSettings = await request("admin/settings/get");
 		expect(initialSettings).toEqual({
 			logLevel: "info",
+			openAiApiKeySet: false,
 			onebotAccessTokenSet: false,
 		});
 		const updatedSettings = await request("admin/settings/update", {
 			logLevel: "debug",
+			openAiApiKey: "provider-secret",
+			openAiBaseUrl: "https://magpie.example/v1",
+			openAiModelId: "magpie-chat",
 			onebotAccessToken: "test-token",
 			onebotWsUrl: "ws://127.0.0.1:3001",
 		});
 		expect(updatedSettings).toEqual({
 			logLevel: "debug",
+			openAiApiKeySet: true,
+			openAiBaseUrl: "https://magpie.example/v1",
+			openAiModelId: "magpie-chat",
 			onebotAccessTokenSet: true,
 			onebotWsUrl: "ws://127.0.0.1:3001",
 		});
 		expect(JSON.stringify(updatedSettings)).not.toContain("test-token");
+		expect(JSON.stringify(updatedSettings)).not.toContain("provider-secret");
 		expect(lifecycle.logLevel).toBe("debug");
 		expect(lifecycle.onebotRestartRequired).toBe(true);
+		expect(lifecycle.providerRestartRequired).toBe(true);
 
 		const updated = await request("admin/modelPolicies/set", {
 			capability: "basic-chat",

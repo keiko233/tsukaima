@@ -26,10 +26,14 @@ export function SettingsPage() {
 	const updateSettings = useMutation({
 		mutationFn: api.settings.update,
 		onSuccess: async () => {
+			setProviderApiKey("");
 			setOnebotAccessToken("");
 			await queryClient.invalidateQueries({ queryKey: ["admin"] });
 		},
 	});
+	const [providerBaseUrl, setProviderBaseUrl] = useState<string | undefined>(undefined);
+	const [providerModelId, setProviderModelId] = useState<string | undefined>(undefined);
+	const [providerApiKey, setProviderApiKey] = useState("");
 	const [onebotWsUrl, setOnebotWsUrl] = useState<string | undefined>(undefined);
 	const [onebotAccessToken, setOnebotAccessToken] = useState("");
 
@@ -38,6 +42,8 @@ export function SettingsPage() {
 	}
 
 	const settings = settingsQuery.data;
+	const currentProviderBaseUrl = providerBaseUrl ?? settings?.openAiBaseUrl ?? "";
+	const currentProviderModelId = providerModelId ?? settings?.openAiModelId ?? "";
 	const currentUrl = onebotWsUrl ?? settings?.onebotWsUrl ?? "";
 
 	return (
@@ -65,6 +71,31 @@ export function SettingsPage() {
 						</SelectContent>
 					</Select>
 					<Input
+						label={m.settings_provider_base_url_label()}
+						placeholder="https://magpie.example/v1"
+						value={currentProviderBaseUrl}
+						onChange={setProviderBaseUrl}
+					/>
+					<Input
+						label={m.settings_provider_model_label()}
+						placeholder="magpie-chat"
+						value={currentProviderModelId}
+						onChange={setProviderModelId}
+					/>
+					<Input
+						label={m.settings_provider_key_label()}
+						placeholder={
+							settings?.openAiApiKeySet
+								? m.settings_provider_key_placeholder()
+								: m.settings_provider_key_unset()
+						}
+						type="password"
+						value={providerApiKey}
+						onChange={setProviderApiKey}
+					/>
+					<p className="text-xs text-muted-foreground">{m.settings_provider_hint()}</p>
+					<div className="border-t border-border" />
+					<Input
 						label={m.settings_onebot_url_label()}
 						placeholder="ws://127.0.0.1:3001"
 						value={currentUrl}
@@ -87,6 +118,11 @@ export function SettingsPage() {
 							disabled={updateSettings.isPending}
 							onClick={() =>
 								updateSettings.mutate({
+									openAiBaseUrl: currentProviderBaseUrl.trim(),
+									openAiModelId: currentProviderModelId.trim(),
+									...(providerApiKey.trim().length > 0
+										? { openAiApiKey: providerApiKey.trim() }
+										: {}),
 									onebotWsUrl: currentUrl.trim(),
 									...(onebotAccessToken.trim().length > 0
 										? { onebotAccessToken: onebotAccessToken.trim() }
@@ -103,6 +139,15 @@ export function SettingsPage() {
 								onClick={() => updateSettings.mutate({ onebotAccessToken: null })}
 							>
 								{m.settings_clear_token()}
+							</Button>
+						) : null}
+						{settings?.openAiApiKeySet ? (
+							<Button
+								variant="outline"
+								disabled={updateSettings.isPending}
+								onClick={() => updateSettings.mutate({ openAiApiKey: null })}
+							>
+								{m.settings_clear_provider_key()}
 							</Button>
 						) : null}
 					</div>
