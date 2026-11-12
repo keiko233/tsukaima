@@ -13,7 +13,7 @@ import { Avatar, InlineError, SidebarEmpty } from "./primitives";
 export function GroupsSidebar({ onNavigate, search }: { onNavigate: () => void; search: string }) {
 	const navigate = useNavigate();
 	const [selectedId, setSelectedId] = useState<string | null>(null);
-	const groups = useQuery(orpc.admin.groups.list.queryOptions({ refetchInterval: 30_000 }));
+	const groups = useQuery(orpc.admin.groups.list.queryOptions());
 	const detail = useQuery(
 		orpc.admin.groups.get.queryOptions({
 			enabled: selectedId !== null,

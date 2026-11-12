@@ -160,6 +160,34 @@ Integration verification for this round:
 - With no credential configured, the same call sequence reported `configured: false` and refused
   login, and the startup log named the missing variables.
 
+### Third remediation round (plugin tools and realtime)
+
+Findings 5 and 6 are resolved (finding 5's UI half remains):
+
+- `PluginHost.tools()` aggregates the tools every started plugin registered, and
+  `createPluginToolsExtension()` adapts them to pi-durable `ToolRegistration`s. The host installs
+  one extension alongside the persona/memory sections, including for conversations created before
+  the extension existed. Permission denial and plugin failures become `isError` tool results, so
+  the model loop continues, and every invocation writes a `plugin.tool.invoke` audit row.
+- Provider safety: OpenAI-compatible APIs reject `.` in function names, so the model sees
+  `providerSafeToolName("<pluginId>.<tool>")` — sanitized plus a short deterministic hash — while
+  routing and audit keep the author-facing name. `task.created`/`task.completed` still have no host
+  emission point; pi-durable creates internal `pi.tool` tasks but exposes no host lifecycle hook.
+- Realtime: `GET /events/stream` publishes `snapshot`, `heartbeat`, `message.received`,
+  `activity.opened`, `activity.closed`, `before.reply`, and `after.reply` from the existing hook bus.
+  It requires the admin session cookie, as does `/events/logs`; both reject anonymous callers with
+  401. The WebUI holds one `EventSource`, validates frames against `liveEventSchema`, and
+  invalidates TanStack Query keys instead of polling. All per-widget `refetchInterval` timers were
+  removed except the 30 s `auth.status` gate.
+
+Integration verification for this round:
+
+- `bun run check` → 176 tests across 36 files, 0 failures; the WebUI build passes.
+- Live server: `/events/stream` and `/events/logs` both returned 401 without a cookie, then
+  streamed their `snapshot` frame with the login cookie.
+- The `event-stream` test also asserts an unauthenticated request is rejected and that a real
+  `message.received` reaches a subscribed client.
+
 ## Method
 
 Findings were confirmed by reading the code rather than by inference: the missing outbound call

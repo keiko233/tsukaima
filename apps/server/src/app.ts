@@ -7,13 +7,21 @@ import { appRouter } from "./rpc/index.ts";
 import type { ElainaApiContext } from "./rpc/base.ts";
 import { loadConfig } from "./config.ts";
 import { ElainaLifecycle } from "./lifecycle.ts";
-import { encodeSseEvent, type LogBuffer } from "./logging.ts";
 import { AuthService, readSessionToken } from "./services/auth.ts";
+import {
+	createLiveEventStream,
+	createLogEventStream,
+	eventAuthResponse,
+} from "./services/event-stream.ts";
 
 export interface CreateAppOptions {
+	/** Test seam; production should keep SSE authenticated. */
+	readonly eventHeartbeatMs?: number;
 	readonly onebotTransportFactory?: OneBotTransportFactory;
 	/** Overrides the built-in plugin set (tests and future plugin sources). */
 	readonly plugins?: readonly ElainaPlugin[];
+	/** Disable only in isolated tests; production must keep event streams authenticated. */
+	readonly requireAuthForEvents?: boolean;
 }
 
 /**
@@ -22,53 +30,6 @@ export interface CreateAppOptions {
  */
 export function createRpcHandler(): RPCHandler<ElainaApiContext> {
 	return new RPCHandler(appRouter, { plugins: [new ResponseHeadersPlugin()] });
-}
-
-const LOG_HEARTBEAT_MS = 15_000;
-
-function createLogEventStream(logs: LogBuffer, request: Request): Response {
-	const encoder = new TextEncoder();
-	let cleanup: (() => void) | undefined;
-	const body = new ReadableStream<Uint8Array>({
-		start(controller) {
-			let closed = false;
-			const send = (event: string, data: unknown) => {
-				if (closed) return;
-				try {
-					controller.enqueue(encoder.encode(encodeSseEvent(event, data)));
-				} catch {
-					cleanup?.();
-				}
-			};
-			const close = () => {
-				if (closed) return;
-				closed = true;
-				unsubscribe();
-				clearInterval(heartbeat);
-				request.signal.removeEventListener("abort", close);
-				try {
-					controller.close();
-				} catch {}
-			};
-			const heartbeat = setInterval(() => send("heartbeat", {}), LOG_HEARTBEAT_MS);
-			heartbeat.unref?.();
-			const unsubscribe = logs.subscribe((entry) => send("log", entry));
-			cleanup = close;
-			request.signal.addEventListener("abort", close, { once: true });
-			send("snapshot", logs.snapshot());
-		},
-		cancel() {
-			cleanup?.();
-		},
-	});
-	return new Response(body, {
-		headers: {
-			"cache-control": "no-cache, no-transform",
-			connection: "keep-alive",
-			"content-type": "text/event-stream; charset=utf-8",
-			"x-accel-buffering": "no",
-		},
-	});
 }
 
 export function createApp(
@@ -88,6 +49,11 @@ export function createApp(
 	});
 	auth.start();
 	const handler = createRpcHandler();
+	const requireAuthForEvents = options?.requireAuthForEvents ?? true;
+	const eventStreamOptions = {
+		...(options?.eventHeartbeatMs === undefined ? {} : { heartbeatMs: options.eventHeartbeatMs }),
+		logger: lifecycle.logger,
+	};
 
 	const app = new Elysia({ name: "elaina-chatbot" })
 		.get("/healthz", ({ status }) => {
@@ -98,7 +64,20 @@ export function createApp(
 		.get("/readyz", ({ status }) => {
 			return status(lifecycle.ready ? 204 : 503, undefined);
 		})
-		.get("/events/logs", ({ request }) => createLogEventStream(lifecycle.logs, request))
+		.get("/events/logs", async ({ request }) => {
+			if (requireAuthForEvents) {
+				const denied = await eventAuthResponse(auth, request);
+				if (denied !== undefined) return denied;
+			}
+			return createLogEventStream(lifecycle.logs, request, eventStreamOptions);
+		})
+		.get("/events/stream", async ({ request }) => {
+			if (requireAuthForEvents) {
+				const denied = await eventAuthResponse(auth, request);
+				if (denied !== undefined) return denied;
+			}
+			return createLiveEventStream(lifecycle, request, eventStreamOptions);
+		})
 		.all(
 			"/rpc/*",
 			async ({ request }: { request: Request }) => {

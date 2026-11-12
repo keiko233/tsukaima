@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Navigate, Outlet, createRootRoute, useRouterState } from "@tanstack/react-router";
 import { orpc } from "@/lib/api";
+import { useEventStream } from "@/lib/use-event-stream";
 import { AdminShell } from "./_modules/shell/admin-shell";
 
 /**
@@ -16,6 +17,8 @@ function RootLayout() {
 		}),
 	);
 	const pathname = useRouterState({ select: (state) => state.location.pathname });
+	const authenticated = status.data?.authenticated === true;
+	useEventStream(authenticated);
 
 	if (status.isPending) {
 		return (
@@ -28,7 +31,6 @@ function RootLayout() {
 		);
 	}
 
-	const authenticated = status.data?.authenticated === true;
 	if (!authenticated && pathname !== "/login") return <Navigate replace to="/login" />;
 	if (authenticated && pathname === "/login") return <Navigate replace to="/" />;
 

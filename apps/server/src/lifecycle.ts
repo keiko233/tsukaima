@@ -20,7 +20,7 @@ import {
 } from "@elaina/db";
 import { BACKGROUND_CONTEXT, openDurableStorage, type SqliteStorage } from "@elaina/durable";
 import type { OneBotTransportFactory } from "@elaina/onebot";
-import type { AuditEntry, ElainaPlugin } from "@elaina/sdk";
+import { createPluginToolsExtension, type AuditEntry, type ElainaPlugin } from "@elaina/sdk";
 import type { ChannelRequest, MessageEnvelope } from "@elaina/contracts";
 import { loadConfig, type ElainaConfig } from "./config.ts";
 import { createLogger, LogBuffer, type Logger } from "./logging.ts";
@@ -39,6 +39,8 @@ export interface LifecycleOptions {
 	/** Process environment, used for plugin `configEnv` fallbacks. */
 	readonly env?: Record<string, string | undefined>;
 	readonly logger?: Logger;
+	/** Test or embedding override for the model catalog and provider. */
+	readonly model?: ModelPort;
 	readonly onebotTransportFactory?: OneBotTransportFactory;
 	/** Overrides the built-in plugin set (tests and future plugin sources). */
 	readonly plugins?: readonly ElainaPlugin[];
@@ -79,6 +81,7 @@ export class ElainaLifecycle {
 	providerRestartRequired = false;
 	routingPolicies: readonly ModelPolicy[] = [];
 	private readonly runtimeLog: Logger;
+	private readonly modelOverride: ModelPort | undefined;
 	private activeProviderSettings: Pick<
 		RuntimeSettings,
 		"openAiApiKey" | "openAiBaseUrl" | "openAiModelId"
@@ -95,6 +98,7 @@ export class ElainaLifecycle {
 			});
 		this.logs = this.logger.buffer;
 		this.runtimeLog = this.logger.child("elaina::server::lifecycle");
+		this.modelOverride = options?.model;
 		this.hooks = new HookBus(this.logger);
 		this.channels = new ChannelRegistry({
 			onEnvelope: (channelId, envelope) => {
@@ -174,6 +178,7 @@ export class ElainaLifecycle {
 	}
 
 	private createModelPort(settings: RuntimeSettings): ModelPort {
+		if (this.modelOverride !== undefined) return this.modelOverride;
 		const openAiApiKey = settings.openAiApiKey ?? this.config.openAiApiKey;
 		const openAiBaseUrl = settings.openAiBaseUrl ?? this.config.openAiBaseUrl;
 		const openAiModelId = settings.openAiModelId ?? this.config.openAiModelId;
@@ -248,8 +253,34 @@ export class ElainaLifecycle {
 			},
 		];
 
+		const conversationHost = this.conversationHost;
+		const pluginTools =
+			conversationHost === undefined
+				? undefined
+				: createPluginToolsExtension(
+						() => this.pluginHost.tools(),
+						(name, input, context) => this.pluginHost.invokeTool(name, input, context),
+						{
+							audit: (entry) => this.writeAudit(entry),
+							logger: (message, error) => {
+								this.runtimeLog.warn(message, {
+									error: error instanceof Error ? error.message : String(error),
+								});
+							},
+						},
+					);
+		if (conversationHost !== undefined && pluginTools !== undefined) {
+			// Install before plugins connect so inbound messages always resolve the extension;
+			// the tool getter sees registrations as soon as each plugin's setup completes.
+			conversationHost.installExtensions([pluginTools]);
+		}
 		this.transition("plugins");
 		await this.pluginHost.start();
+		if (conversationHost !== undefined && pluginTools !== undefined) {
+			// Reinstall after startup to reset per-conversation checks for sessions that received
+			// a message while the extension still had no tools.
+			conversationHost.installExtensions([pluginTools]);
+		}
 
 		this.transition("ready", "ready");
 	}

@@ -7,9 +7,10 @@ This file is the cross-session handoff record. Update it whenever implementation
 - Project name: `elaina-chatbot`.
 - Repository initialized at `/home/keiko/Code/elaina-chatbot` on branch `main`.
 - First commit: `5dc80bc Add Elaina Chatbot architecture and DSH migration plan`.
-- Current phase: Phase 1–7 core/library implementation complete; the closed reply loop, the oRPC
-  contract layer, the ingest boundary, persona/memory injection, and admin authentication are in
-  place. Remaining work is realtime push, plugin tool bridging, and the DSH cutover itself.
+- Current phase: Phase 1–7 core/library implementation complete. The closed reply loop, the oRPC
+  contract layer, the ingest boundary, persona/memory injection, admin authentication, plugin tool
+  bridging, and live WebUI updates are in place. Remaining work is the DSH cutover, the
+  memory/audit review surfaces, and the self-iteration UI.
 - Bun workspace, strict TypeScript config, domain schema/migrations, Pi Durable Bun SQLite adapter, startup lifecycle, Elysia + oRPC API, and React/TanStack WebUI exist.
 - Implemented packages:
   - `packages/contracts`: message, conversation policy, activity window, submission, and admin event schemas.
@@ -45,6 +46,17 @@ This file is the cross-session handoff record. Update it whenever implementation
   into `admin_credentials`; with neither stored nor environment credentials the whole admin surface
   stays locked. Sessions are in-memory (restart requires a new sign-in) with httpOnly,
   `SameSite=Lax` cookies. The WebUI gates the shell behind `auth.status` and has a `/login` route.
+- Plugin tools are offered to the model. `PluginHost.tools()` aggregates every started plugin's
+  `context.tools`; `createPluginToolsExtension()` adapts them to pi-durable registrations and the
+  host installs one extension alongside the persona/memory sections. Permission denial and plugin
+  errors become `isError` tool results instead of throwing, and every invocation writes an audit
+  row. The model-facing name is `providerSafeToolName()` because OpenAI-compatible providers reject
+  the `.` in the author-facing `<pluginId>.<tool>` name; routing and audit keep the original name.
+- Live updates use `GET /events/stream` (SSE) and require the admin session cookie exactly like
+  oRPC. It publishes `snapshot`, `heartbeat`, `message.received`, `activity.opened`,
+  `activity.closed`, `before.reply`, and `after.reply`. The WebUI keeps one `EventSource`, validates
+  each frame with `liveEventSchema`, and invalidates the affected TanStack Query keys instead of
+  polling. `GET /events/logs` is authenticated the same way.
 - Plugin configuration lives in the domain `meta` table under `plugin-config:<pluginId>` with `manifest.configEnv` fallbacks. `/admin/settings` keeps its `onebot*` fields as a legacy alias mapped onto the `onebot-napcat` plugin config, so the WebUI contract is unchanged.
 - OneBot settings apply live through the plugin's `settings.onChange`: changing the WebSocket URL or access token restarts the channel and reconnects without a server restart. Provider settings still require a restart.
 - Runtime logging uses structured records rendered in Rust `tracing` style, with a bounded in-memory buffer, SSE delivery, and a Shiki ANSI-rendered diagnostics viewer.
@@ -138,20 +150,20 @@ bun run check
 ```
 
 Current baseline: lint, formatting, root TypeScript, WebUI TypeScript, WebUI production
-build, and 166 tests across 34 files pass.
+build, and 176 tests across 36 files pass.
 
 ## Next implementation steps
 
 Do these in order unless a later decision changes the plan:
 
-1. Add live WebSocket/SSE updates for conversations, activities, and diagnostics beyond the log
-   stream, so the WebUI stops polling.
-2. Bridge plugin tools into the model run and give `task.created`/`task.completed` real emission
-   points, or document the deliberate reduction to channel/admin extension points.
-3. Give `packages/sdk`'s `AuditEntry` an optional `actorId` and thread it through
+1. Give `packages/sdk`'s `AuditEntry` an optional `actorId` and thread it through
    `ElainaLifecycle.writeAudit`, replacing the RPC-layer audit shim.
-4. Decide the auth provider question recorded in `docs/architecture/api.md`: adopt a mature library
+2. Decide the auth provider question recorded in `docs/architecture/api.md`: adopt a mature library
    (Better Auth or equivalent) or keep the in-house service deliberately.
+3. Consume the plugin UI registry in the WebUI, and add `task.created`/`task.completed` emission
+   points if pi-durable exposes a host-level task lifecycle.
+4. Add host hooks for channel connection state and friend/group requests so the SSE heartbeat
+   resync is no longer the only source.
 5. Extract the model provider into `plugins/openai-compatible` (phase C of `plugin-decoupling.md`); this needs the `models.registerProvider` host surface.
 6. Add full persona/memory/audit admin services and review UI, plus memory extraction jobs.
 7. Add sticker/meme and search plugins plus plugin-owned database migrations.
@@ -178,6 +190,11 @@ Do these in order unless a later decision changes the plan:
 - Hook payloads are asymmetric: `activity.opened`/`activity.closed` carry durable ids while
   `before.reply`/`after.reply` carry domain ids, and `task.created`/`task.completed` are declared
   with no emission point.
+- SSE has no `Last-Event-ID` replay; a reconnect relies on the fresh `snapshot` followed by
+  re-query, and a logout does not tear down an already-open stream (it is authorised at connect
+  time).
+- All plugin tools are visible to the model with no per-tool allowlist, `deferred` flag, or timeout,
+  the tool name the model sees is a hashed provider-safe alias, and plugin UI is not rendered yet.
 - Unread state, chat-object pin/archive controls beyond session archive, and group management
   actions are not implemented.
 - Narrow-screen navigation is implemented, but no Playwright end-to-end suite is present yet.

@@ -39,15 +39,9 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 	const toast = useToast();
 	const queryClient = useQueryClient();
 	const { mobile, showSidebar } = useShellNavigation();
-	const session = useQuery(
-		orpc.admin.sessions.get.queryOptions({ input: { sessionId }, refetchInterval: 5_000 }),
-	);
-	const messages = useQuery(
-		orpc.admin.sessions.messages.queryOptions({ input: { sessionId }, refetchInterval: 3_000 }),
-	);
-	const diagnostics = useQuery(
-		orpc.admin.diagnostics.status.queryOptions({ refetchInterval: 10_000 }),
-	);
+	const session = useQuery(orpc.admin.sessions.get.queryOptions({ input: { sessionId } }));
+	const messages = useQuery(orpc.admin.sessions.messages.queryOptions({ input: { sessionId } }));
+	const diagnostics = useQuery(orpc.admin.diagnostics.status.queryOptions());
 	const send = useMutation(
 		orpc.admin.sessions.send.mutationOptions({
 			onError: (error) =>

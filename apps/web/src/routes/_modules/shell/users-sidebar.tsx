@@ -33,7 +33,7 @@ function Field({ label, value }: { label: string; value: string }) {
 export function UsersSidebar({ onNavigate, search }: { onNavigate: () => void; search: string }) {
 	const navigate = useNavigate();
 	const [selectedId, setSelectedId] = useState<string | null>(null);
-	const users = useQuery(orpc.admin.users.list.queryOptions({ refetchInterval: 30_000 }));
+	const users = useQuery(orpc.admin.users.list.queryOptions());
 	const detail = useQuery(
 		orpc.admin.users.get.queryOptions({
 			enabled: selectedId !== null,

@@ -152,6 +152,39 @@ for sign-in, sign-out, denied requests, and the mutating admin procedures. Backg
 `actorId` to the SDK's `AuditEntry` and threading it through `writeAudit` is the root-cause fix and
 is queued as a small follow-up.
 
+## Realtime events
+
+`GET /events/stream` is a server-sent event stream used by the WebUI shell. It is separate from
+oRPC because `EventSource` cannot carry oRPC payloads; mutations stay on oRPC.
+
+Authentication is mandatory. The endpoint reads the same `elaina_admin_session` cookie as oRPC and
+returns `401 UNAUTHENTICATED` without a live session; no stream is opened. `GET /events/logs` is
+guarded the same way.
+
+Events (`event:` name equals the payload's `type`):
+
+| Event | Payload |
+| --- | --- |
+| `snapshot` | `{ timestamp, lifecycle: { state, stage, startedAtMs, reason? }, processedMessages }` |
+| `heartbeat` | `{ timestamp }` |
+| `message.received` | `{ timestamp, channelId, chatObjectId, sessionId, messageId }` |
+| `activity.opened` / `activity.closed` | `{ timestamp, activityId, conversationId, envelopeCount }` |
+| `before.reply` | `{ timestamp, channelId \| null, chatObjectId, sessionId, entryId, text }` |
+| `after.reply` | Same as `before.reply` plus `deliveryStatus` |
+
+Contract: `liveEventSchema` in `packages/contracts`. The WebUI validates every frame and only then
+invalidates the affected TanStack Query keys.
+
+Operational properties:
+
+- A fresh `snapshot` is sent on every (re)connection, so a reconnecting client re-queries everything
+  it missed. There is no `Last-Event-ID` replay; event-level compensation is not implemented.
+- A heartbeat is sent every 15 seconds by default. The WebUI uses it as a low-frequency resync for
+  data with no host hook yet (OneBot connection state, friend/group requests).
+- Each stream is bounded: a subscriber that stops reading is closed rather than buffered.
+- The stream is authorised at connect time; a logout invalidates new connections but does not tear
+  down an already-open stream. Re-validating the session on heartbeat is a planned hardening step.
+
 ## Conversations
 
 Core procedures:
@@ -215,15 +248,10 @@ messages.activity.get.query({ activityId: string });
 messages.activity.list.query({ conversationId: string; cursor?: string; limit?: number });
 ```
 
-For live updates:
-
-```ts
-messages.stream.live({
-  conversationId: string;
-});
-```
-
-The stream emits durable view changes, including assistant streaming state, tool calls, and outbound delivery status.
+For live updates the WebUI subscribes to the server-sent event stream described under
+[Realtime events](#realtime-events). A per-conversation oRPC stream that carries assistant
+streaming tokens, tool cards, and delivery transitions is the next step; today the SSE channel
+publishes lifecycle-level events and the WebUI re-queries the affected procedures.
 
 ## Tasks
 
@@ -439,7 +467,7 @@ Deployment remains outside oRPC until a host-side deployer exists. oRPC only exp
 
 1. Fetch conversation metadata and policy.
 2. Fetch recent messages with cursor pagination.
-3. Subscribe to `messages.stream.live`.
+3. Subscribe to `/events/stream` (see [Realtime events](#realtime-events)).
 4. Render raw messages, aggregated activities, assistant turns, tool cards, and outbound actions.
 5. Admin actions are separate buttons with confirmation.
 

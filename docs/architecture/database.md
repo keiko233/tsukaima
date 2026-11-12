@@ -67,6 +67,24 @@ CREATE TABLE meta (
 );
 ```
 
+### admin_credentials
+
+The single WebUI administrator. Exactly one row is expected; the database row is authoritative over
+the bootstrap environment variables.
+
+```sql
+CREATE TABLE admin_credentials (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  password_hash TEXT NOT NULL,   -- Bun.password argon2id
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+Admin sessions are intentionally not stored here: they live in process memory, so a restart signs
+the administrator out and no session token ever reaches disk.
+
 ### identities
 
 One row per platform identity.
