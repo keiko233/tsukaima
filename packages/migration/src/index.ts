@@ -6,11 +6,7 @@ export {
 	type SnapshotInventory,
 	type SnapshotSource,
 } from "./dsh-inspect.ts";
-export {
-	FakeCompressor,
-	type Compressor,
-	type CompressionResult,
-} from "./compressor.ts";
+export { FakeCompressor, type Compressor, type CompressionResult } from "./compressor.ts";
 export {
 	buildMigrationPlan,
 	type MigrationPlan,

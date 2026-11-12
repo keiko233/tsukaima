@@ -1,7 +1,4 @@
-import {
-	messageEnvelopeSchema,
-	type MessageEnvelope,
-} from "@elaina/contracts";
+import { messageEnvelopeSchema, type MessageEnvelope } from "@elaina/contracts";
 
 export class InvalidEnvelopeError extends Error {
 	constructor(message = "Invalid message envelope") {

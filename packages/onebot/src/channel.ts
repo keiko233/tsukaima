@@ -41,7 +41,8 @@ const headersFor = (accessToken: string | undefined): Record<string, string> => 
 	return accessToken === undefined ? {} : { Authorization: `Bearer ${accessToken}` };
 };
 
-const isWebSocketUrl = (value: string): boolean => value.startsWith("ws://") || value.startsWith("wss://");
+const isWebSocketUrl = (value: string): boolean =>
+	value.startsWith("ws://") || value.startsWith("wss://");
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -64,34 +65,36 @@ export class OneBotChannel {
 
 	constructor(config: OneBotConfig, transportFactory?: OneBotTransportFactory) {
 		this.config = config;
-		this.transportFactory = transportFactory ?? ((url, headers) => {
-			const options: WebSocketOptions = { headers };
-			const socket: BunWebSocket = new WebSocket(url, options);
-			const listeners: Partial<Record<keyof OneBotTransportEvents, unknown>> = {};
-			socket.addEventListener("open", () => {
-				const listener = listeners.open;
-				if (typeof listener === "function") listener();
+		this.transportFactory =
+			transportFactory ??
+			((url, headers) => {
+				const options: WebSocketOptions = { headers };
+				const socket: BunWebSocket = new WebSocket(url, options);
+				const listeners: Partial<Record<keyof OneBotTransportEvents, unknown>> = {};
+				socket.addEventListener("open", () => {
+					const listener = listeners.open;
+					if (typeof listener === "function") listener();
+				});
+				socket.addEventListener("message", (event) => {
+					const listener = listeners.message;
+					if (typeof listener === "function") listener(String(event.data));
+				});
+				socket.addEventListener("close", () => {
+					const listener = listeners.close;
+					if (typeof listener === "function") listener();
+				});
+				socket.addEventListener("error", (event) => {
+					const listener = listeners.error;
+					if (typeof listener === "function") listener(event);
+				});
+				return {
+					close: () => socket.close(),
+					on: (name, listener) => {
+						listeners[name] = listener;
+					},
+					send: (data) => socket.send(data),
+				};
 			});
-			socket.addEventListener("message", (event) => {
-				const listener = listeners.message;
-				if (typeof listener === "function") listener(String(event.data));
-			});
-			socket.addEventListener("close", () => {
-				const listener = listeners.close;
-				if (typeof listener === "function") listener();
-			});
-			socket.addEventListener("error", (event) => {
-				const listener = listeners.error;
-				if (typeof listener === "function") listener(event);
-			});
-			return {
-				close: () => socket.close(),
-				on: (name, listener) => {
-					listeners[name] = listener;
-				},
-				send: (data) => socket.send(data),
-			};
-		});
 	}
 
 	get diagnostics(): OneBotChannelDiagnostics {
@@ -207,7 +210,12 @@ export class OneBotChannel {
 	}
 
 	private handleResponse(parsed: unknown): boolean {
-		if (typeof parsed !== "object" || parsed === null || !("echo" in parsed) || !("retcode" in parsed)) {
+		if (
+			typeof parsed !== "object" ||
+			parsed === null ||
+			!("echo" in parsed) ||
+			!("retcode" in parsed)
+		) {
 			return false;
 		}
 		const response = parsed as { data?: unknown; echo: unknown; retcode: unknown };

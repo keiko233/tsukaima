@@ -24,9 +24,10 @@ export class FakeCompressor implements Compressor {
 			.filter((sentence) => sentence.trim().length > 0)
 			.slice(0, 3)
 			.join(" ");
-		const summary = sentences.length > input.maxChars
-			? `${sentences.slice(0, input.maxChars)}…`
-			: sentences || `Conversation ${input.conversationId}`;
+		const summary =
+			sentences.length > input.maxChars
+				? `${sentences.slice(0, input.maxChars)}…`
+				: sentences || `Conversation ${input.conversationId}`;
 		return {
 			conversationId: input.conversationId,
 			summary,

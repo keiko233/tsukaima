@@ -93,7 +93,9 @@ async function loadSnapshotFiles(source: SnapshotSource): Promise<{
 export async function inspectDshSnapshot(source: SnapshotSource): Promise<SnapshotInventory> {
 	const { files, textFiles } = await loadSnapshotFiles(source);
 	const pathGroups = (pattern: RegExp): string[] =>
-		[...textFiles.keys()].filter((path) => pattern.test(path)).toSorted((a, b) => a.localeCompare(b));
+		[...textFiles.keys()]
+			.filter((path) => pattern.test(path))
+			.toSorted((a, b) => a.localeCompare(b));
 	const sessions = pathGroups(/(^|\/)sessions?\/|\.jsonl$/i);
 	const personas = pathGroups(/personas?\.json$|personas?\//i);
 	const memory = pathGroups(/memor(y|ies)\.json$|memor(y|ies)\//i);

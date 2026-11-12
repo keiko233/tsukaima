@@ -74,15 +74,24 @@ export class TransientStorage implements Storage {
 		receive: (index: number, seq: Seq) => void,
 		context: Context,
 	): Promise<CommitResult> {
-		return await this.execute("commit", async () => await this.inner.commit(batches, receive, context));
+		return await this.execute(
+			"commit",
+			async () => await this.inner.commit(batches, receive, context),
+		);
 	}
 
 	async mintId<IdKind extends Id<IdKind>>(): Promise<IdKind> {
 		return await this.execute("mintId", async () => await this.inner.mintId<IdKind>());
 	}
 
-	async conversation(id: ConversationId, context: Context): Promise<ConversationRecord | undefined> {
-		return await this.execute("conversation", async () => await this.inner.conversation(id, context));
+	async conversation(
+		id: ConversationId,
+		context: Context,
+	): Promise<ConversationRecord | undefined> {
+		return await this.execute(
+			"conversation",
+			async () => await this.inner.conversation(id, context),
+		);
 	}
 
 	async scanConversations(
@@ -98,7 +107,11 @@ export class TransientStorage implements Storage {
 	}
 
 	async entry(id: EntryId, context: Context): Promise<StoredEntry | undefined>;
-	async entry(conversationId: ConversationId, id: EntryId, context: Context): Promise<StoredEntry | undefined>;
+	async entry(
+		conversationId: ConversationId,
+		id: EntryId,
+		context: Context,
+	): Promise<StoredEntry | undefined>;
 	async entry(
 		conversationIdOrId: EntryId | ConversationId,
 		idOrContext: EntryId | Context,
@@ -106,10 +119,7 @@ export class TransientStorage implements Storage {
 	): Promise<StoredEntry | undefined> {
 		return await this.execute("entry", async () => {
 			if (context === undefined) {
-				return await this.inner.entry(
-					conversationIdOrId as EntryId,
-					idOrContext as Context,
-				);
+				return await this.inner.entry(conversationIdOrId as EntryId, idOrContext as Context);
 			}
 			return await this.inner.entry(
 				conversationIdOrId as ConversationId,
@@ -126,8 +136,7 @@ export class TransientStorage implements Storage {
 	): Promise<(EntryRecord & { readonly head: EntryId }) | undefined> {
 		return await this.execute(
 			"findLatestHeadMarker",
-			async () =>
-				await this.inner.findLatestHeadMarker(conversationId, atOrBeforeEntryId, context),
+			async () => await this.inner.findLatestHeadMarker(conversationId, atOrBeforeEntryId, context),
 		);
 	}
 
@@ -250,5 +259,3 @@ export interface StoredEntry {
 	readonly entry: EntryRecord;
 	readonly commitSeq: Seq;
 }
-
-

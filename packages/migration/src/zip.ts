@@ -20,10 +20,7 @@ function readUint16(data: Uint8Array, offset: number): number {
 
 function readUint32(data: Uint8Array, offset: number): number {
 	return (
-		data[offset]! |
-		(data[offset + 1]! << 8) |
-		(data[offset + 2]! << 16) |
-		(data[offset + 3]! << 24)
+		data[offset]! | (data[offset + 1]! << 8) | (data[offset + 2]! << 16) | (data[offset + 3]! << 24)
 	);
 }
 
@@ -68,12 +65,14 @@ export async function readZip(path: string): Promise<Record<string, string>> {
 		}
 		const localNameLength = readUint16(data, localOffset + 26);
 		const localExtraLength = readUint16(data, localOffset + 28);
-		files[name] = textDecoder.decode(readEntry(data, {
-			method,
-			compressedSize,
-			offset: localOffset + 30 + localNameLength + localExtraLength,
-			name,
-		}));
+		files[name] = textDecoder.decode(
+			readEntry(data, {
+				method,
+				compressedSize,
+				offset: localOffset + 30 + localNameLength + localExtraLength,
+				name,
+			}),
+		);
 		offset += 46 + nameLength + extraLength + commentLength;
 	}
 	return files;

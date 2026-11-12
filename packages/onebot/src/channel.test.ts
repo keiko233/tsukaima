@@ -149,14 +149,24 @@ test("normalizes private messages and rejects invalid events", () => {
 		source: { messageId: "100", timestampMs: 123_000 },
 		target: { replyToEnvelopeId: "source-message" },
 	});
-	expect(normalizeOneBotEvent({ ...privateEvent, post_type: "notice" }, {
-		botAccountId: "99",
-		channelId: "onebot",
-	})).toBeUndefined();
-	expect(normalizeOneBotEvent({
-		...privateEvent,
-		message: [{ data: { id: "source-message" }, type: "reply" }],
-	}, { botAccountId: "99", channelId: "onebot" })).toBeUndefined();
+	expect(
+		normalizeOneBotEvent(
+			{ ...privateEvent, post_type: "notice" },
+			{
+				botAccountId: "99",
+				channelId: "onebot",
+			},
+		),
+	).toBeUndefined();
+	expect(
+		normalizeOneBotEvent(
+			{
+				...privateEvent,
+				message: [{ data: { id: "source-message" }, type: "reply" }],
+			},
+			{ botAccountId: "99", channelId: "onebot" },
+		),
+	).toBeUndefined();
 });
 
 test("normalizes group messages", () => {

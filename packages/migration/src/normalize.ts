@@ -1,8 +1,4 @@
-import {
-	DSH_SOURCE,
-	inspectDshSnapshot,
-	type SnapshotSource,
-} from "./dsh-inspect.ts";
+import { DSH_SOURCE, inspectDshSnapshot, type SnapshotSource } from "./dsh-inspect.ts";
 import { sha256String, stableStringify } from "./fs.ts";
 import { readZip } from "./zip.ts";
 import { promises as fs } from "node:fs";
@@ -237,17 +233,19 @@ function collectSecretPaths(value: unknown, path = "$"): string[] {
 
 function settingsRecords(sourceId: string, category: string, value: unknown): NormalizedSetting[] {
 	const secretsDetected = collectSecretPaths(value);
-	return [{
-		sourceSystem: DSH_SOURCE,
-		sourceId,
-		sourceHash: sha256String(stableStringify(value)),
-		canonicalId: canonicalId("setting", sourceId),
-		category,
-		target: category,
-		valueJson: JSON.stringify(value),
-		secretsDetected,
-		requiresManualDecision: secretsDetected.length > 0 || category === "unknown",
-	}];
+	return [
+		{
+			sourceSystem: DSH_SOURCE,
+			sourceId,
+			sourceHash: sha256String(stableStringify(value)),
+			canonicalId: canonicalId("setting", sourceId),
+			category,
+			target: category,
+			valueJson: JSON.stringify(value),
+			secretsDetected,
+			requiresManualDecision: secretsDetected.length > 0 || category === "unknown",
+		},
+	];
 }
 
 async function readTextSource(source: SnapshotSource, path: string): Promise<string> {
@@ -267,7 +265,10 @@ async function readTextSource(source: SnapshotSource, path: string): Promise<str
 
 function parseSessions(sourceId: string, path: string, content: string): DshSession[] {
 	if (path.endsWith(".jsonl")) {
-		return content.split("\n").filter(Boolean).map((line) => JSON.parse(line) as DshSession);
+		return content
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as DshSession);
 	}
 	const parsed = JSON.parse(content) as unknown;
 	if (Array.isArray(parsed)) {
@@ -279,7 +280,10 @@ function parseSessions(sourceId: string, path: string, content: string): DshSess
 	return [];
 }
 
-function normalizeSession(session: DshSession, sourceId: string): {
+function normalizeSession(
+	session: DshSession,
+	sourceId: string,
+): {
 	user: NormalizedUser;
 	conversation: NormalizedConversation;
 	messages: NormalizedMessage[];
@@ -319,15 +323,18 @@ function normalizeSession(session: DshSession, sourceId: string): {
 		const role = entry.role?.toLowerCase() ?? "system";
 		const userSourceId = role === "assistant" || role === "tool" ? "assistant" : `user:${role}`;
 		const userId = canonicalId("user", userSourceId);
-		const sender: NormalizedUser = role === "assistant" || role === "tool" ? bot : {
-			sourceSystem: DSH_SOURCE,
-			sourceId: userSourceId,
-			sourceHash: sha256String(userSourceId),
-			canonicalId: userId,
-			displayName: role,
-			kind: role === "system" ? "system" : "human",
-			isAdmin: false,
-		};
+		const sender: NormalizedUser =
+			role === "assistant" || role === "tool"
+				? bot
+				: {
+						sourceSystem: DSH_SOURCE,
+						sourceId: userSourceId,
+						sourceHash: sha256String(userSourceId),
+						canonicalId: userId,
+						displayName: role,
+						kind: role === "system" ? "system" : "human",
+						isAdmin: false,
+					};
 		members.add(sender.canonicalId);
 		const platformMessageId = entry.id ?? `${sourceId}:${index}`;
 		messages.push({
@@ -371,19 +378,18 @@ function normalizePersonaRecord(
 		promptJson: JSON.stringify(prompt),
 		behaviorJson: JSON.stringify(behavior),
 		boundConversationIds: Array.isArray(value.conversationIds)
-			? value.conversationIds.filter((id): id is string => typeof id === "string")
-				.map((id) => canonicalId("conversation", id))
+			? value.conversationIds
+					.filter((id): id is string => typeof id === "string")
+					.map((id) => canonicalId("conversation", id))
 			: [],
 	};
 }
 
-function normalizeMemoryRecord(
-	sourceId: string,
-	value: Record<string, unknown>,
-): NormalizedMemory {
-	const conversationId = typeof value.conversationId === "string"
-		? canonicalId("conversation", value.conversationId)
-		: "";
+function normalizeMemoryRecord(sourceId: string, value: Record<string, unknown>): NormalizedMemory {
+	const conversationId =
+		typeof value.conversationId === "string"
+			? canonicalId("conversation", value.conversationId)
+			: "";
 	const createdAt = timestamp(value.createdAt as string | number | undefined, defaultTime);
 	return {
 		sourceSystem: DSH_SOURCE,
@@ -392,7 +398,8 @@ function normalizeMemoryRecord(
 		canonicalId: canonicalId("memory", sourceId),
 		scope: conversationId ? "conversation" : "global",
 		content: contentText(value.content ?? value.text ?? value),
-		summary: typeof value.summary === "string" ? value.summary : contentText(value.content ?? value.text),
+		summary:
+			typeof value.summary === "string" ? value.summary : contentText(value.content ?? value.text),
 		kind: typeof value.kind === "string" ? value.kind : "fact",
 		confidence: typeof value.confidence === "number" ? value.confidence : 1,
 		importance: typeof value.importance === "number" ? value.importance : 0.5,
@@ -433,7 +440,8 @@ export function countRecords(database: NormalizedDatabase): RecordCounts {
 
 function estimateBytes(database: NormalizedDatabase): number {
 	return Object.values(database).reduce(
-		(total, records) => total + records.reduce((sum, record) => sum + stableStringify(record).length, 0),
+		(total, records) =>
+			total + records.reduce((sum, record) => sum + stableStringify(record).length, 0),
 		0,
 	);
 }
@@ -474,9 +482,11 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 			} else {
 				const parsed = JSON.parse(content) as unknown;
 				if (Array.isArray(parsed)) {
-					records.push(...parsed.filter((record): record is Record<string, unknown> =>
-						Boolean(record && typeof record === "object")
-					));
+					records.push(
+						...parsed.filter((record): record is Record<string, unknown> =>
+							Boolean(record && typeof record === "object"),
+						),
+					);
 				} else if (parsed && typeof parsed === "object") {
 					records.push(parsed as Record<string, unknown>);
 				}
@@ -529,14 +539,14 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 		const category = /napcat/i.test(sourceId)
 			? "onebot-napcat"
 			: /memory/i.test(sourceId)
-			? "memory"
-			: /meme|sticker/i.test(sourceId)
-			? "sticker"
-			: /search/i.test(sourceId)
-			? "search"
-			: /model/i.test(sourceId)
-			? "model_policy"
-			: "unknown";
+				? "memory"
+				: /meme|sticker/i.test(sourceId)
+					? "sticker"
+					: /search/i.test(sourceId)
+						? "search"
+						: /model/i.test(sourceId)
+							? "model_policy"
+							: "unknown";
 		for (const setting of settingsRecords(sourceId, category, value)) {
 			settings.set(setting.canonicalId, setting);
 		}
@@ -554,7 +564,11 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 	};
 	return {
 		database,
-		plan: { ...countRecords(database), warnings: inventory.warnings, estimatedBytes: estimateBytes(database) },
+		plan: {
+			...countRecords(database),
+			warnings: inventory.warnings,
+			estimatedBytes: estimateBytes(database),
+		},
 		warnings: inventory.warnings,
 	};
 }

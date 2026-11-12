@@ -20,13 +20,15 @@ interface RunnerOverrides {
 }
 
 function createRunner(overrides?: RunnerOverrides): CodingRunner {
-	const config: Parameters<typeof CodingRunner.prototype.exec>[0] extends never ? never : {
-		allowedCommands: readonly string[];
-		env?: Readonly<Record<string, string>>;
-		maxOutputBytes: number;
-		timeoutMs: number;
-		worktreePath: string;
-	} = {
+	const config: Parameters<typeof CodingRunner.prototype.exec>[0] extends never
+		? never
+		: {
+				allowedCommands: readonly string[];
+				env?: Readonly<Record<string, string>>;
+				maxOutputBytes: number;
+				timeoutMs: number;
+				worktreePath: string;
+			} = {
 		allowedCommands: overrides?.allowedCommands ?? ["echo", "printenv", "seq", "sleep", "git"],
 		maxOutputBytes: overrides?.maxOutputBytes ?? 65536,
 		timeoutMs: overrides?.timeoutMs ?? 5000,
@@ -41,7 +43,9 @@ function createRunner(overrides?: RunnerOverrides): CodingRunner {
 describe("CodingRunner", () => {
 	test("rejects command not in allowlist", async () => {
 		const runner = createRunner();
-		await expect(runner.exec("curl", ["http://localhost:3000"])).rejects.toThrow(CommandRejectedError);
+		await expect(runner.exec("curl", ["http://localhost:3000"])).rejects.toThrow(
+			CommandRejectedError,
+		);
 	});
 
 	test("rejects command with path separator", async () => {

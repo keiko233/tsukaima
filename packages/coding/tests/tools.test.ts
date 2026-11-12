@@ -71,9 +71,24 @@ describe("parseDiffOutput", () => {
 		const nameStatus = "A\tnew.ts\nM\texisting.ts\nD\tremoved.ts\n";
 		const result = parseDiffOutput(numstat, nameStatus, "raw diff content");
 		expect(result.files).toHaveLength(3);
-		expect(result.files[0]).toEqual({ deletions: 0, insertions: 3, path: "new.ts", status: "added" });
-		expect(result.files[1]).toEqual({ deletions: 1, insertions: 1, path: "existing.ts", status: "modified" });
-		expect(result.files[2]).toEqual({ deletions: 5, insertions: 0, path: "removed.ts", status: "deleted" });
+		expect(result.files[0]).toEqual({
+			deletions: 0,
+			insertions: 3,
+			path: "new.ts",
+			status: "added",
+		});
+		expect(result.files[1]).toEqual({
+			deletions: 1,
+			insertions: 1,
+			path: "existing.ts",
+			status: "modified",
+		});
+		expect(result.files[2]).toEqual({
+			deletions: 5,
+			insertions: 0,
+			path: "removed.ts",
+			status: "deleted",
+		});
 		expect(result.totalInsertions).toBe(4);
 		expect(result.totalDeletions).toBe(6);
 		expect(result.raw).toBe("raw diff content");
