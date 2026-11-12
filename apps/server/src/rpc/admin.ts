@@ -25,6 +25,7 @@ import {
 	readRuntimeSettings,
 	runtimeSettingsPatchSchema,
 } from "../runtime-settings.ts";
+import { listRemoteModels, remoteModelsInputSchema } from "../remote-models.ts";
 
 export const adminRouter = {
 	chats: {
@@ -269,6 +270,19 @@ export const adminRouter = {
 			const settings = await readRuntimeSettings(context.lifecycle.domainDatabase);
 			return publicRuntimeSettings(settings);
 		}),
+		models: os
+			.$context<TsukaimaApiContext>()
+			.input(remoteModelsInputSchema)
+			.handler(async ({ context, input }) => {
+				const settings = await readRuntimeSettings(context.lifecycle.domainDatabase);
+				const baseUrl =
+					input.baseUrl ?? settings.openAiBaseUrl ?? context.lifecycle.config.openAiBaseUrl;
+				const apiKey =
+					input.apiKey ?? settings.openAiApiKey ?? context.lifecycle.config.openAiApiKey;
+				if (baseUrl === undefined) throw new Error("Model base URL is not configured");
+				if (apiKey === undefined) throw new Error("Provider API key is not configured");
+				return listRemoteModels({ apiKey, baseUrl });
+			}),
 		update: os
 			.$context<TsukaimaApiContext>()
 			.input(runtimeSettingsPatchSchema)
