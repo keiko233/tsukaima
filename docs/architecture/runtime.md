@@ -49,7 +49,7 @@ The adapter is conformance-tested against a fake model and fake channel before p
 
 ## Domain database
 
-PostgreSQL stores domain tables:
+Domain data uses SQLite with Drizzle ORM in a separate database file from durable conversation storage:
 
 - identities and aliases
 - user/profile/relationship facts
@@ -59,12 +59,21 @@ PostgreSQL stores domain tables:
 - policy, audit, deployment, and migration records
 - media index
 
-Durable chat entries remain in SQLite. Domain records that are useful outside one chat (people, facts, plugin registry, audit) belong in PostgreSQL. IDs reference, but do not duplicate, durable conversation/entry IDs.
+Durable chat entries remain in `durable.sqlite`. Domain records that are useful outside one chat (people, facts, plugin registry, audit) live in `domain.sqlite`. IDs reference, but do not duplicate, durable conversation/entry IDs.
+
+The domain database uses:
+
+- `drizzle-orm` with the Bun SQLite driver
+- `drizzle-kit` migrations
+- typed query builders and transaction helpers
+- explicit foreign keys to canonical IDs and source IDs
+
+Do not join across databases in SQL. Resolve cross-database references in application services.
 
 ## Media storage
 
 - Original attachments are stored in a content-addressed blob directory.
-- PostgreSQL stores SHA-256, MIME type, size, dimensions/duration where available, source URL, and expiry metadata.
+- SQLite stores SHA-256, MIME type, size, dimensions/duration where available, source URL, and expiry metadata.
 - QQ media is downloaded through controlled channel APIs, not raw guessed URLs.
 - Never embed large blobs in SQLite.
 

@@ -1,0 +1,288 @@
+# Plugin SDK
+
+The plugin SDK is the typed surface that Elaina exposes to first-party and third-party plugins. It is intentionally narrower than the internal runtime API.
+
+## Goals
+
+- Make common bot features declarative.
+- Prevent plugins from bypassing policy, permissions, and audit.
+- Make plugin state durable and inspectable.
+- Allow UI contribution without direct database access.
+- Keep the host resilient when a plugin crashes.
+
+## Plugin lifecycle
+
+1. Load manifest.
+2. Validate manifest and config.
+3. Resolve permissions.
+4. Start in host or worker.
+5. Call `setup(context)`.
+6. Subscribe to hooks and register tools/UI.
+7. Run until disabled or replaced.
+8. On disable/reload, call `teardown(context)`.
+
+A plugin must not start background resources in module scope. Start them in `setup` and stop them in `teardown`.
+
+## Runtime context
+
+```ts
+type PluginContext = {
+  pluginId: string;
+  manifest: PluginManifest;
+  config: PluginConfig;
+  logger: PluginLogger;
+  storage: PluginStorage;
+  events: PluginEvents;
+  tools: PluginToolRegistry;
+  ui: PluginUiRegistry;
+  channel?: PluginChannelApi;
+  memory?: PluginMemoryApi;
+  persona?: PluginPersonaApi;
+  model?: PluginModelApi;
+  tasks?: PluginTaskApi;
+};
+```
+
+Each optional API is present only if the corresponding permission is granted.
+
+## Hooks
+
+Plugins register hooks through typed names:
+
+```ts
+context.events.on("message.received", handler);
+context.events.on("activity.opened", handler);
+context.events.on("activity.closed", handler);
+context.events.on("before.agent", handler);
+context.events.on("before.reply", handler);
+context.events.on("after.reply", handler);
+context.events.on("task.created", handler);
+context.events.on("task.completed", handler);
+context.events.on("channel.connected", handler);
+context.events.on("channel.disconnected", handler);
+```
+
+Hook handlers may:
+
+- observe data
+- add context
+- modify safe fields
+- request suppression
+- schedule a task
+
+They may not directly mutate durable history.
+
+## Tools
+
+Tools are declared in the manifest or registered dynamically.
+
+```ts
+context.tools.register({
+  name: "my_plugin_lookup",
+  description: "Look up plugin-specific data",
+  parameters: z.object({
+    query: z.string(),
+  }),
+  async execute(input, toolContext) {
+    return {
+      content: [{ type: "text", text: "..." }],
+    };
+  },
+});
+```
+
+Tool rules:
+
+1. Parameter and output schemas are validated.
+2. Tool names are namespaced by plugin.
+3. Tools declare required permission groups.
+4. Tool execution is audited if it changes state.
+5. Tools must return structured errors, not throw raw exceptions to the model.
+
+## Storage
+
+Plugins use scoped storage, not raw SQLite.
+
+```ts
+await context.storage.conversation.get(conversationId, "state");
+await context.storage.conversation.set(conversationId, "state", value);
+await context.storage.global.get("state");
+await context.storage.global.set("state", value);
+```
+
+Storage values are versioned JSON. The host validates against the plugin's declared schema where available.
+
+## Channel API
+
+The channel API is permission-gated.
+
+```ts
+await context.channel?.send(conversationId, parts);
+await context.channel?.sendPrivate(peerId, parts);
+await context.channel?.sendGroup(groupId, parts);
+await context.channel?.poke(conversationId, targetId);
+await context.channel?.react(conversationId, messageId, reactionId);
+await context.channel?.recall(conversationId, messageId);
+await context.channel?.raw(action, params);
+```
+
+`raw` is available only with explicit permission and is audited. Credential APIs are not exposed.
+
+## Memory API
+
+```ts
+await context.memory?.retrieve({
+  query,
+  scope,
+  userId,
+  conversationId,
+  limit,
+});
+
+await context.memory?.propose({
+  scope,
+  subjectUserId,
+  conversationId,
+  content,
+  summary,
+  kind,
+});
+```
+
+Plugin writes are proposals by default. They become memories only after host-side extraction or admin approval, depending on plugin trust.
+
+## Persona API
+
+```ts
+context.persona?.current(conversationId);
+context.persona?.instructions(conversationId);
+```
+
+Plugins generally do not mutate personas. A trusted plugin may propose a persona change, which is audited.
+
+## Model API
+
+```ts
+const result = await context.model?.call({
+  capability: "summarize",
+  messages,
+  tools,
+  maxOutputTokens,
+});
+```
+
+Plugins do not choose a provider directly. They request a capability.
+
+## Task API
+
+```ts
+const taskId = await context.tasks?.create({
+  kind: "my_plugin.refresh",
+  input,
+  schedule,
+  background: true,
+});
+```
+
+Tasks must be durable and resumable. Plugins should not use raw timers for work that must survive restarts.
+
+## UI bridge
+
+Plugins can contribute:
+
+- side panel
+- conversation action
+- message card
+- settings form
+- approval card
+
+UI declarations are data, not arbitrary JavaScript injected into the host page.
+
+```ts
+context.ui.register({
+  kind: "panel",
+  id: "my-plugin.review",
+  title: "Review",
+  component: "ReviewPanel",
+  data: {
+    procedure: "pluginUi.myPlugin.getReview",
+  },
+});
+```
+
+The WebUI renders the component using its own beUI implementation and calls the plugin's exposed oRPC namespace.
+
+## Worker boundary
+
+Third-party plugins run in a worker by default.
+
+Allowed across boundary:
+
+- typed RPC calls
+- serialized events
+- streamed task progress
+- UI declarations
+
+Not allowed across boundary:
+
+- direct SQLite access
+- direct file access outside plugin data
+- raw secrets
+- direct durable conversation mutation
+
+The worker crashes independently. The host restarts the worker and reports the failure to the WebUI.
+
+## Plugin package format
+
+```text
+my-elaina-plugin/
+  package.json
+  elaina.plugin.json
+  dist/index.js
+  README.md
+```
+
+`elaina.plugin.json`:
+
+```json
+{
+  "name": "my-elaina-plugin",
+  "version": "0.1.0",
+  "apiVersion": "1",
+  "kind": "third-party",
+  "permissions": [
+    "conversation.read",
+    "channel.send",
+    "memory.read"
+  ],
+  "tools": ["dist/tools.js"],
+  "hooks": ["dist/hooks.js"],
+  "ui": ["dist/ui.js"],
+  "configSchema": "./config.schema.json"
+}
+```
+
+The exact loader format is finalized during implementation.
+
+## Security rules
+
+1. Deny by default.
+2. Require explicit grant for destructive or outbound actions.
+3. Audit every permission change and state-changing tool call.
+4. Never pass secrets to a plugin unless it declares `secrets.read.<name>` and the admin grants it.
+5. Validate every cross-boundary payload.
+6. Timeout plugin calls.
+7. Never allow plugin UI to execute arbitrary host code.
+
+## Testing requirements
+
+Every plugin should ship:
+
+1. Manifest validation tests.
+2. Tool input/output tests.
+3. Hook behavior tests with fake conversations.
+4. Permission denial tests.
+5. Storage serialization tests.
+6. Restart recovery tests if it uses tasks.
+
+Built-in plugins follow the same rules, even if they run in the host process.
