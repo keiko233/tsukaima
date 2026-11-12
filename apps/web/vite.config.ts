@@ -25,6 +25,12 @@ export default defineConfig({
 	server: {
 		host: "127.0.0.1",
 		port: 7421,
+		proxy: {
+			"/rpc": {
+				changeOrigin: true,
+				target: "http://127.0.0.1:7420",
+			},
+		},
 		strictPort: true,
 	},
 });
