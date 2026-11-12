@@ -7,7 +7,12 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
 	plugins: [
-		tanstackRouter({ target: "react", autoCodeSplitting: true }),
+		tanstackRouter({
+			target: "react",
+			autoCodeSplitting: true,
+			generatedRouteTree: `src/route-tree.gen.ts`,
+			routeFileIgnorePattern: "_modules",
+		}),
 		paraglideVitePlugin({
 			project: "./project.inlang",
 			outdir: "./src/paraglide",
