@@ -16,11 +16,6 @@ type PendingAction = {
 	timer: ReturnType<typeof setTimeout>;
 };
 
-type ConnectionResult = {
-	reject: (error: unknown) => void;
-	resolve: () => void;
-};
-
 const DEFAULT_ACTION_TIMEOUT_MS = 5_000;
 
 const actionTimeoutError = (action: string): Error => new Error(`OneBot action timeout: ${action}`);
@@ -52,7 +47,6 @@ const toSegments = (parts: readonly MessagePart[]) => parts.map((part) => conten
 export class OneBotChannel {
 	private attempts = 0;
 	private config: OneBotConfig;
-	private connectionResult: ConnectionResult | undefined;
 	private connectionState: OneBotChannelDiagnostics["state"] = "closed";
 	private eventCount = 0;
 	private lastErrorClass: OneBotChannelDiagnostics["lastErrorClass"];
@@ -186,17 +180,11 @@ export class OneBotChannel {
 
 	private async connect(): Promise<void> {
 		this.connectionState = "connecting";
-		const connectionResult = new Promise<void>((resolve, reject) => {
-			this.connectionResult = { reject, resolve };
-		});
-		void connectionResult;
 		const transport = this.transportFactory(this.config.url, headersFor(this.config.accessToken));
 		this.transport = transport;
 		transport.on("open", () => {
 			this.attempts = 0;
 			this.connectionState = "open";
-			this.connectionResult?.resolve();
-			this.connectionResult = undefined;
 		});
 		transport.on("message", (data) => {
 			this.handleMessage(data);
@@ -207,8 +195,6 @@ export class OneBotChannel {
 		transport.on("close", () => {
 			this.transport = undefined;
 			this.failPending(closeError());
-			this.connectionResult?.reject(closeError());
-			this.connectionResult = undefined;
 			if (!this.stopped) {
 				this.connectionState = "reconnecting";
 				this.lastErrorClass = "disconnect";

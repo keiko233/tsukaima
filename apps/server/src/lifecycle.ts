@@ -213,9 +213,13 @@ export class TsukaimaLifecycle {
 
 	async applyRuntimeSettings(settings: RuntimeSettings): Promise<void> {
 		this.setLogLevel(settings.logLevel);
-		this.onebotRestartRequired =
-			settings.onebotWsUrl !== this.activeOneBotSettings.onebotWsUrl ||
-			settings.onebotAccessToken !== this.activeOneBotSettings.onebotAccessToken;
+		const onebot = this.resolveOneBotSettings(settings);
+		if (
+			onebot.url !== this.activeOneBotSettings.onebotWsUrl ||
+			onebot.accessToken !== this.activeOneBotSettings.onebotAccessToken
+		) {
+			await this.replaceOneBotChannel(settings);
+		}
 		this.providerRestartRequired =
 			settings.openAiApiKey !== this.activeProviderSettings.openAiApiKey ||
 			settings.openAiBaseUrl !== this.activeProviderSettings.openAiBaseUrl ||
@@ -227,30 +231,35 @@ export class TsukaimaLifecycle {
 		});
 	}
 
+	private resolveOneBotSettings(settings: RuntimeSettings): {
+		accessToken: string | undefined;
+		url: string | undefined;
+	} {
+		return {
+			accessToken: settings.onebotAccessToken ?? this.config.onebotAccessToken,
+			url: settings.onebotWsUrl ?? this.config.onebotWsUrl,
+		};
+	}
+
 	private async replaceOneBotChannel(settings: RuntimeSettings): Promise<void> {
+		const onebot = this.resolveOneBotSettings(settings);
 		this.onebotChannel?.stop();
 		this.onebotChannel = undefined;
-		this.activeOneBotSettings = {
-			...(settings.onebotAccessToken === undefined
-				? {}
-				: { onebotAccessToken: settings.onebotAccessToken }),
-			...(settings.onebotWsUrl === undefined ? {} : { onebotWsUrl: settings.onebotWsUrl }),
-		};
-		if (settings.onebotWsUrl === undefined) {
+		if (onebot.url === undefined) {
+			this.activeOneBotSettings = {};
+			this.onebotRestartRequired = false;
 			this.runtimeLog.debug("OneBot channel is not configured");
 			return;
 		}
 		try {
-			this.runtimeLog.info("starting OneBot channel");
+			this.runtimeLog.info("starting OneBot channel", { url: onebot.url });
 			const channel = new OneBotChannel(
 				{
 					botAccountId: "tsukaima-server",
 					channelId: "onebot",
 					reconnect: { initialDelayMs: 1_000, jitterRatio: 0.1, maxDelayMs: 30_000 },
-					url: settings.onebotWsUrl,
-					...(settings.onebotAccessToken !== undefined
-						? { accessToken: settings.onebotAccessToken }
-						: {}),
+					url: onebot.url,
+					...(onebot.accessToken !== undefined ? { accessToken: onebot.accessToken } : {}),
 				},
 				this.onebotTransportFactory,
 			);
@@ -262,11 +271,16 @@ export class TsukaimaLifecycle {
 			});
 			await channel.start();
 			this.onebotChannel = channel;
+			this.activeOneBotSettings = {
+				...(onebot.accessToken === undefined ? {} : { onebotAccessToken: onebot.accessToken }),
+				onebotWsUrl: onebot.url,
+			};
 			this.onebotRestartRequired = false;
 			this.runtimeLog.info("OneBot channel started", {
 				state: channel.diagnostics.state,
 			});
 		} catch (error) {
+			this.activeOneBotSettings = {};
 			this.onebotRestartRequired = true;
 			this.runtimeLog.error("OneBot channel failed to initialize", {
 				error: error instanceof Error ? error.message : String(error),

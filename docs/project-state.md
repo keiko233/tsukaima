@@ -19,6 +19,7 @@ This file is the cross-session handoff record. Update it whenever implementation
   - `packages/chaos`: transient storage failure injection, restart drill, rate limiting, idempotent ingestion, and abuse guards.
 - Runtime target is Bun.
 - Runtime settings for log level, OneBot, and OpenAI-compatible/Magpie provider configuration are persisted in the domain database and editable from the WebUI. Secret values are never returned by the API.
+- OneBot settings resolve from runtime settings with environment fallback and apply live: changing the WebSocket URL or access token restarts the channel and reconnects without a server restart. Provider settings still require a restart.
 - Runtime logging uses structured records rendered in Rust `tracing` style, with a bounded in-memory buffer, SSE delivery, and a Shiki ANSI-rendered diagnostics viewer.
 - TanStack file-based routing, Paraglide i18n (`en`, `zh-cn`), TanStack Query data wiring, and beUI components under `apps/web/src` are active.
 - WebUI routes are grouped under `(messaging)` and `(system)`. Route-specific code lives in the matching `_modules` directory; shared shell code lives in `routes/_modules`.

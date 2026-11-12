@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { createApp } from "../src/app.ts";
 import type { MessageEnvelope } from "@tsukaima/contracts";
 import { conversations } from "@tsukaima/db";
+import type { OneBotTransportFactory } from "@tsukaima/onebot";
 
 const envelope = (id: string, text: string): MessageEnvelope => ({
 	channelId: "onebot-test",
@@ -82,6 +83,69 @@ describe("server lifecycle with fake model", () => {
 			expect(stopResponse.status).toBe(503);
 			const stopBody = (await stopResponse.json()) as { state: string };
 			expect(stopBody.state).toBe("maintenance");
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("connects with the environment OneBot url and reconnects after a settings change", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-server-onebot-"));
+		const urls: string[] = [];
+		const connections: Array<{ closeCount: number; emitOpen: () => void }> = [];
+		const transportFactory: OneBotTransportFactory = (url) => {
+			urls.push(url);
+			const listeners = new Map<string, () => void>();
+			const connection = {
+				closeCount: 0,
+				emitOpen: () => listeners.get("open")?.(),
+			};
+			connections.push(connection);
+			return {
+				close: () => {
+					connection.closeCount += 1;
+					listeners.get("close")?.();
+				},
+				on: (name, listener) => {
+					listeners.set(name, listener as () => void);
+				},
+				send: () => {},
+			};
+		};
+		try {
+			const { lifecycle } = createApp(
+				{
+					TSUKAIMA_DATA_DIR: directory,
+					TSUKAIMA_ONEBOT_WS_URL: "ws://env.example:3001",
+					TSUKAIMA_PORT: "7420",
+					TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
+				},
+				{ onebotTransportFactory: transportFactory },
+			);
+			await lifecycle.start();
+			expect(urls).toEqual(["ws://env.example:3001"]);
+			expect(lifecycle.onebotConfigured).toBe(true);
+			connections[0]?.emitOpen();
+			expect(lifecycle.onebotDiagnostics?.connected).toBe(true);
+
+			await lifecycle.applyRuntimeSettings({
+				logLevel: "debug",
+				onebotWsUrl: "ws://override.example:3001",
+			});
+			expect(urls).toEqual(["ws://env.example:3001", "ws://override.example:3001"]);
+			expect(connections[0]?.closeCount).toBe(1);
+			expect(lifecycle.onebotConfigured).toBe(true);
+			expect(lifecycle.onebotRestartRequired).toBe(false);
+			expect(lifecycle.onebotDiagnostics?.state).toBe("connecting");
+
+			connections[1]?.emitOpen();
+			await lifecycle.applyRuntimeSettings({
+				logLevel: "debug",
+				onebotWsUrl: "ws://override.example:3001",
+			});
+			expect(urls).toHaveLength(2);
+			expect(lifecycle.onebotDiagnostics?.connected).toBe(true);
+
+			await lifecycle.stop();
 		} finally {
 			await rm(directory, { force: true, recursive: true });
 		}

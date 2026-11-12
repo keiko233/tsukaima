@@ -45,8 +45,15 @@ The access token exists only in the secret store. It must not be logged or inclu
 3. Cap delay at configured maximum.
 4. Reset backoff after a successful connection.
 5. Expose status through health API.
+6. When the channel URL or access token changes at runtime, stop the current channel and
+   start a replacement with the new settings; no process restart is required. Saving
+   unchanged settings does not touch the live connection.
 
 Do not reconnect infinitely with no telemetry. Emit structured disconnect events.
+
+The WebSocket URL and access token resolve from runtime settings first, then from
+`TSUKAIMA_ONEBOT_WS_URL` and `TSUKAIMA_ONEBOT_ACCESS_TOKEN`. Clearing the runtime value falls
+back to the environment value, matching provider settings.
 
 ### Deduplication
 
