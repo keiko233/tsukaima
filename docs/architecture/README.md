@@ -16,6 +16,7 @@ This document set is the durable design record for Elaina. Each file is meant to
 | [OneBot/NapCat integration](onebot.md) | Event normalization, action facade, reconnect, permissions, and operational edge cases |
 | [Plugins](plugins.md) | Manifest, permissions, worker runtime, lifecycle, and built-in plugin requirements |
 | [Plugin SDK](plugin-sdk.md) | Runtime API, context, RPC boundary, UI bridge, and testing expectations |
+| [Plugin framework comparison](plugin-frameworks.md) | Cordis, Pi extensions, Chord, and the chosen Elaina plugin design |
 | [Memory](memory.md) | Scopes, schema, retrieval pipeline, extraction policy, and admin review |
 | [Model routing](model-routing.md) | Capability policies, provider registration, selection order, and usage accounting |
 | [Self-iteration](self-iteration.md) | Coding workflow, policy gates, deployment proposals, and rollback |

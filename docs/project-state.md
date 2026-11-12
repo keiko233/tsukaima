@@ -53,6 +53,18 @@ This file is the cross-session handoff record. Update it whenever implementation
 
 This file may fall behind individual documents during rapid edits, but the documents above should always contain the most detailed truth.
 
+## Plugin framework evaluation
+
+The current plugin design is a small Elaina SDK informed by Cordis, Pi coding-agent extensions, and Pi Chord. It is documented in `docs/architecture/plugin-frameworks.md`.
+
+Current position:
+
+- Do not adopt Cordis RC as a core dependency.
+- Do not treat DSH plugins as Cordis-compatible packages.
+- Use Pi concepts for the coding/self-iteration plane.
+- Use Chord only as a design reference for versioned API packages, workers, reload, and UI registries.
+- Keep bot plugin APIs in the Elaina SDK with explicit permissions and policy.
+
 ## What has not been decided yet
 
 These are implementation-level decisions, not blockers for starting scaffolding:
