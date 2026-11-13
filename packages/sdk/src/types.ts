@@ -63,11 +63,35 @@ export interface PluginUiRegistry {
 	setStatus(status: PluginStatusInput | null): void;
 }
 
+export type PluginModelInputModality = "text" | "image" | "audio" | "video" | "file";
+
+export type PluginModelReasoningLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface PluginModelReasoning {
+	readonly levels: readonly PluginModelReasoningLevel[];
+	readonly default?: PluginModelReasoningLevel;
+}
+
 export interface PluginModelDescriptor {
 	readonly id: string;
+	readonly name?: string;
 	readonly capabilities: readonly string[];
+	readonly input?: readonly PluginModelInputModality[];
+	readonly reasoning?: PluginModelReasoning;
 	readonly contextWindow?: number;
 	readonly maxOutputTokens?: number;
+}
+
+export interface PluginModelInfo extends PluginModelDescriptor {
+	readonly providerId: string;
+	/** Present when the model registry is hosted by Tsukaima. */
+	readonly pluginId?: string;
+}
+
+export interface PluginModelQuery {
+	readonly providerId?: string;
+	readonly capability?: string;
+	readonly input?: PluginModelInputModality;
 }
 
 export interface PluginModelPort {
@@ -81,6 +105,8 @@ export interface PluginModelProvider {
 	readonly id: string;
 	/** False when the plugin has no usable credentials yet; the host then falls back. */
 	isConfigured?(): boolean | Promise<boolean>;
+	/** Enabled models currently offered by this provider. Disabled models must be omitted. */
+	listModels?(): readonly PluginModelDescriptor[] | Promise<readonly PluginModelDescriptor[]>;
 	createPort(options?: {
 		readonly onMessage?: (message: unknown) => void;
 	}): PluginModelPort | Promise<PluginModelPort>;
@@ -90,6 +116,8 @@ export interface PluginModelRegistry {
 	registerProvider(provider: PluginModelProvider): () => void;
 	getProvider(id: string): PluginModelProvider | undefined;
 	listProviders(): readonly PluginModelProvider[];
+	/** Enabled models from every registered provider, optionally filtered by capability or input. */
+	listModels(query?: PluginModelQuery): Promise<readonly PluginModelInfo[]>;
 }
 
 export type PluginRpcHandler = (input: unknown) => Promise<unknown> | unknown;

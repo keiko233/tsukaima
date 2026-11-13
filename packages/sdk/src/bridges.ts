@@ -16,7 +16,10 @@ import type {
 	PluginEvents,
 	PluginHookName,
 	PluginLogger,
+	PluginModelDescriptor,
+	PluginModelInfo,
 	PluginModelProvider,
+	PluginModelQuery,
 	PluginModelRegistry,
 	PluginRpcHandler,
 	PluginRpcRegistry,
@@ -197,6 +200,41 @@ export class LocalModelRegistry implements PluginModelRegistry {
 	listProviders(): readonly PluginModelProvider[] {
 		return [...this.#providers.values()];
 	}
+
+	async listModels(query: PluginModelQuery = {}): Promise<readonly PluginModelInfo[]> {
+		return collectPluginModels(this.#providers.values(), query);
+	}
+}
+
+/**
+ * Builds a stable, secret-free catalog from provider descriptors. A broken provider must not
+ * prevent unrelated models from being discovered by another plugin.
+ */
+export async function collectPluginModels(
+	providers: Iterable<PluginModelProvider>,
+	query: PluginModelQuery = {},
+): Promise<readonly PluginModelInfo[]> {
+	const models: PluginModelInfo[] = [];
+	for (const provider of providers) {
+		if (query.providerId !== undefined && provider.id !== query.providerId) continue;
+		let descriptors: readonly PluginModelDescriptor[];
+		try {
+			descriptors = (await provider.listModels?.()) ?? [];
+		} catch {
+			continue;
+		}
+		const seen = new Set<string>();
+		for (const descriptor of descriptors) {
+			if (descriptor.id.trim().length === 0 || seen.has(descriptor.id)) continue;
+			seen.add(descriptor.id);
+			if (query.capability !== undefined && !descriptor.capabilities.includes(query.capability)) {
+				continue;
+			}
+			if (query.input !== undefined && !descriptor.input?.includes(query.input)) continue;
+			models.push({ ...descriptor, providerId: provider.id });
+		}
+	}
+	return models;
 }
 
 export class LocalRpcBridge implements PluginRpcRegistry {
