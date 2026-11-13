@@ -18,6 +18,7 @@
         "@better-auth/drizzle-adapter": "1.7.22",
         "@elaina-plugin/onebot-napcat": "workspace:*",
         "@elaina-plugin/openai-compatible": "workspace:*",
+        "@elaina-plugin/proactive-scheduler": "workspace:*",
         "@elaina-plugin/search-fetch": "workspace:*",
         "@elaina-plugin/sticker-meme": "workspace:*",
         "@elaina/contracts": "workspace:*",
@@ -226,6 +227,24 @@
         "react-dom": "^19.3.1",
       },
     },
+    "plugins/proactive-scheduler": {
+      "name": "@elaina-plugin/proactive-scheduler",
+      "version": "0.1.0",
+      "dependencies": {
+        "@elaina/contracts": "workspace:*",
+        "@elaina/sdk": "workspace:*",
+        "@elaina/ui": "workspace:*",
+        "@inlang/paraglide-js": "^3.2.2",
+        "lucide-react": "^1.72.0",
+        "zod": "4.6.7",
+      },
+      "devDependencies": {
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "react": "^19.3.1",
+        "react-dom": "^19.3.1",
+      },
+    },
     "plugins/search-fetch": {
       "name": "@elaina-plugin/search-fetch",
       "version": "0.1.0",
@@ -408,6 +427,8 @@
     "@elaina-plugin/onebot-napcat": ["@elaina-plugin/onebot-napcat@workspace:plugins/onebot-napcat"],
 
     "@elaina-plugin/openai-compatible": ["@elaina-plugin/openai-compatible@workspace:plugins/openai-compatible"],
+
+    "@elaina-plugin/proactive-scheduler": ["@elaina-plugin/proactive-scheduler@workspace:plugins/proactive-scheduler"],
 
     "@elaina-plugin/search-fetch": ["@elaina-plugin/search-fetch@workspace:plugins/search-fetch"],
 

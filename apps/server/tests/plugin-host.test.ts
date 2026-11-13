@@ -130,6 +130,7 @@ describe("plugin host", () => {
 				"openai-compatible",
 				"onebot-napcat",
 				"memory",
+				"proactive-scheduler",
 				"search-fetch",
 				"sticker-meme",
 				"fake-channel",

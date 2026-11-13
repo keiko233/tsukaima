@@ -29,6 +29,7 @@ import type { PluginStatusSnapshot } from "@elaina/contracts";
 import type { Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 import type { HookBus } from "./hook-bus.ts";
+import type { PluginConversationService } from "./plugin-conversation-service.ts";
 import type { PluginSettingsStore } from "./plugin-settings.ts";
 import type { PluginStatusStore } from "./plugin-status.ts";
 import type { PluginStorageStore } from "./plugin-storage.ts";
@@ -45,6 +46,7 @@ export interface PluginHostOptions {
 	readonly audit: (entry: AuditEntry) => Promise<void>;
 	readonly bindings?: ReadonlyMap<string, unknown>;
 	readonly channels: ChannelRegistry;
+	readonly conversations?: PluginConversationService;
 	readonly hooks: HookBus;
 	readonly logger: Logger;
 	readonly plugins: readonly ElainaPlugin[];
@@ -109,6 +111,7 @@ export class PluginHost {
 	readonly #hooks: HookBus;
 	readonly #logger: Logger;
 	readonly #options: PluginHostOptions;
+	readonly #conversations: PluginConversationService | undefined;
 	readonly #plugins = new Map<string, ElainaPlugin>();
 	readonly #modelProviders = new Map<string, PluginModelProvider>();
 	readonly #modelProviderOwners = new Map<string, string>();
@@ -131,6 +134,7 @@ export class PluginHost {
 		this.#options = options;
 		this.#audit = options.audit;
 		this.#bindings = options.bindings ?? new Map();
+		this.#conversations = options.conversations;
 		this.#hooks = options.hooks;
 		this.#logger = options.logger.child("elaina::server::plugins");
 		this.#requests = options.requests;
@@ -856,10 +860,12 @@ export class PluginHost {
 				? createPluginMediaBridge(this.#media, pluginId, manifest.permissions)
 				: undefined;
 		const tasks = this.#tasks?.apiFor(pluginId, manifest.permissions);
+		const conversations = this.#conversations?.forPlugin(pluginId, manifest.permissions);
 		return createPluginContext({
 			channels: this.channels,
 			storage,
 			...(tasks === undefined ? {} : { tasks }),
+			...(conversations === undefined ? {} : { conversations }),
 			...(migrations === undefined ? {} : { migrations }),
 			...(scopedDatabase === undefined ? {} : { database: scopedDatabase }),
 			...(media === undefined ? {} : { media }),

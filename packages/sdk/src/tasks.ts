@@ -2,10 +2,14 @@ import { randomUUID } from "node:crypto";
 import { assertPermission, hasPermission, type PluginPermission } from "./permissions.ts";
 import type {
 	PluginTask,
+	PluginTaskCancelQuery,
 	PluginTaskCreateInput,
+	PluginTaskExecutionResult,
+	PluginTaskHandler,
 	PluginTaskListQuery,
 	PluginTaskPermissions,
 	PluginTaskStatus,
+	PluginTaskUpdateInput,
 	PluginTaskWatchEvent,
 	PluginTasksApi,
 } from "./types.ts";
@@ -49,6 +53,7 @@ export class LocalTaskBridge implements PluginTasksApi {
 	readonly #grantedPermissions: readonly PluginPermission[];
 	readonly #tasks = new Map<string, PluginTask>();
 	readonly #listeners = new Map<string, Set<(event: PluginTaskWatchEvent) => void>>();
+	readonly #handlers = new Map<string, PluginTaskHandler>();
 	readonly #now: () => number;
 
 	constructor(options: LocalTaskBridgeOptions) {
@@ -133,6 +138,68 @@ export class LocalTaskBridge implements PluginTasksApi {
 			listeners.delete(listener);
 			if (listeners.size === 0) this.#listeners.delete(taskId);
 		};
+	}
+
+	registerHandler(kind: string, handler: PluginTaskHandler): () => void {
+		assertPermission(this.#grantedPermissions, "tasks.create", this.#pluginId);
+		const name = kind.trim();
+		if (name.length === 0) throw new Error("Task kind must not be empty");
+		this.#handlers.set(name, handler);
+		return () => {
+			if (this.#handlers.get(name) === handler) this.#handlers.delete(name);
+		};
+	}
+
+	async update(taskId: string, input: PluginTaskUpdateInput): Promise<PluginTask | undefined> {
+		assertPermission(this.#grantedPermissions, "tasks.create", this.#pluginId);
+		const existing = this.#tasks.get(taskId);
+		if (existing === undefined || existing.pluginId !== this.#pluginId) return undefined;
+		const { intervalMs: _previousInterval, ...base } = existing;
+		let task: PluginTask = {
+			...base,
+			...(!("payload" in input) ? {} : { payload: input.payload }),
+			...(input.nextRunAtMs === undefined ? {} : { nextRunAtMs: input.nextRunAtMs }),
+			...(input.maxAttempts === undefined
+				? {}
+				: { maxAttempts: Math.max(1, Math.floor(input.maxAttempts)) }),
+			...(input.intervalMs === undefined || input.intervalMs === null
+				? {}
+				: { intervalMs: input.intervalMs }),
+			status: existing.status,
+			updatedAtMs: this.#now(),
+		};
+		this.#tasks.set(task.id, task);
+		this.#emit({ task, type: "updated" });
+		return task;
+	}
+
+	async cancelMany(query: PluginTaskCancelQuery): Promise<readonly PluginTask[]> {
+		assertPermission(this.#grantedPermissions, "tasks.cancel", this.#pluginId);
+		const statuses =
+			query.status === undefined
+				? undefined
+				: new Set(Array.isArray(query.status) ? query.status : [query.status]);
+		const matches = [...this.#tasks.values()].filter(
+			(task) =>
+				task.pluginId === this.#pluginId &&
+				(query.conversationId === undefined || task.conversationId === query.conversationId) &&
+				(query.dedupeKey === undefined || task.dedupeKey === query.dedupeKey) &&
+				(query.kind === undefined || task.kind === query.kind) &&
+				(statuses === undefined || statuses.has(task.status)),
+		);
+		const cancelled: PluginTask[] = [];
+		for (const task of matches) {
+			const next = await this.cancel(task.id);
+			if (next !== undefined) cancelled.push(next);
+		}
+		return cancelled;
+	}
+
+	/** Run one registered handler immediately. Local test/embedding seam. */
+	async run(taskId: string): Promise<PluginTaskExecutionResult | void> {
+		const task = this.#tasks.get(taskId);
+		if (task === undefined || task.pluginId !== this.#pluginId) return;
+		return await this.#handlers.get(task.kind)?.(task);
 	}
 
 	#taskPermissions(requested: readonly PluginPermission[] | undefined): PluginTaskPermissions {

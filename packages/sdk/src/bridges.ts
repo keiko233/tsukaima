@@ -20,6 +20,7 @@ import type {
 	PluginChannelApi,
 	PluginConfig,
 	PluginContext,
+	PluginConversationsApi,
 	PluginEvents,
 	PluginHookName,
 	PluginLogger,
@@ -750,6 +751,7 @@ export interface PluginContextOptions {
 	conversation?: {
 		read(): Promise<readonly MessageEnvelope[]>;
 	};
+	conversations?: PluginConversationsApi;
 	channel?: PluginChannelApi;
 	channels?: PluginChannelRegistry;
 	events?: PluginEvents;
@@ -800,6 +802,7 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 		logger,
 		storage,
 		conversation: options.conversation ?? { read: async () => [] },
+		...(options.conversations ? { conversations: options.conversations } : {}),
 		events,
 		...(options.media ? { media: options.media } : {}),
 		tools,

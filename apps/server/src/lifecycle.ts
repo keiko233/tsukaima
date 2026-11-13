@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
+	ConversationExecutionLock,
 	ModelPolicyRouter,
 	ModelUsageLedger,
 	PiDurableConversationHost,
@@ -37,6 +38,7 @@ import {
 } from "./services/memory-service.ts";
 import { MediaService } from "./services/media-service.ts";
 import { HookBus } from "./services/hook-bus.ts";
+import { PluginConversationService } from "./services/plugin-conversation-service.ts";
 import { PluginHost } from "./services/plugin-host.ts";
 import { PluginSettingsStore } from "./services/plugin-settings.ts";
 import { PluginStatusStore } from "./services/plugin-status.ts";
@@ -87,6 +89,9 @@ export class ElainaLifecycle {
 	readonly pluginStatuses: PluginStatusStore;
 	readonly pluginStorage: PluginStorageStore;
 	readonly pluginTasks: PluginTaskService;
+	readonly pluginConversations: PluginConversationService;
+	/** One lock shared by inbound turns, outbound pacing, tasks, and background turns. */
+	readonly executionLock: ConversationExecutionLock;
 	readonly memory: MemoryService;
 	private readonly plugins: readonly ElainaPlugin[];
 	readonly media: MediaService;
@@ -127,6 +132,7 @@ export class ElainaLifecycle {
 		this.plugins = options?.plugins ?? builtinPlugins;
 		this.runtimeLog = this.logger.child("elaina::server::lifecycle");
 		this.modelOverride = options?.model;
+		this.executionLock = new ConversationExecutionLock();
 		this.hooks = new HookBus(this.logger);
 		this.channels = new ChannelRegistry({
 			onEnvelope: (channelId, envelope) => {
@@ -183,6 +189,7 @@ export class ElainaLifecycle {
 		this.pluginTasks = new PluginTaskService({
 			database: () => this.domainDatabase,
 			hooks: this.hooks,
+			lock: this.executionLock,
 			logger: this.runtimeLog,
 		});
 		this.memory = new MemoryService({
@@ -208,6 +215,7 @@ export class ElainaLifecycle {
 			channels: this.channels,
 			database: () => this.domainDatabase,
 			hooks: this.hooks,
+			lock: this.executionLock,
 			logger: this.runtimeLog,
 			pacing: this.conversationPacing,
 			policy: this.conversationPolicy,
@@ -227,12 +235,23 @@ export class ElainaLifecycle {
 				? {}
 				: { splitMaxChars: options.reply.splitMaxChars }),
 		});
+		this.pluginConversations = new PluginConversationService({
+			audit: (entry) => this.writeAudit(entry),
+			channels: this.channels,
+			database: () => this.domainDatabase,
+			host: () => this.conversationHost,
+			lock: this.executionLock,
+			logger: this.runtimeLog,
+			policy: this.conversationPolicy,
+			replyDispatcher: this.replyDispatcher,
+		});
 		const pluginBindings = new Map(options?.pluginBindings ?? []);
 		pluginBindings.set(MEMORY_SERVICE_BINDING, this.memory);
 		this.pluginHost = new PluginHost({
 			audit: (entry) => this.writeAudit(entry),
 			bindings: pluginBindings,
 			channels: this.channels,
+			conversations: this.pluginConversations,
 			database: () => this.domainDatabase,
 			hooks: this.hooks,
 			logger: this.logger,
@@ -358,9 +377,12 @@ export class ElainaLifecycle {
 		this.activeProviderId = model.providerId;
 		this.conversationHost = new PiDurableConversationHost({
 			contextProvider: this.contextProvider,
+			executionLock: this.executionLock,
 			model,
 			onActivityEvent: (event) => this.forwardActivityEvent(event),
-			onAnswer: (answer) => this.replyDispatcher.handleAnswer(answer),
+			onAnswer: async (answer) => {
+				await this.replyDispatcher.handleAnswer(answer);
+			},
 			storage: this.durableStorage,
 		});
 		const persistedSessions = await this.domainDatabase

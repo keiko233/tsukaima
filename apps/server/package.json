@@ -12,6 +12,7 @@
 		"@better-auth/drizzle-adapter": "1.7.22",
 		"@elaina-plugin/onebot-napcat": "workspace:*",
 		"@elaina-plugin/openai-compatible": "workspace:*",
+		"@elaina-plugin/proactive-scheduler": "workspace:*",
 		"@elaina-plugin/search-fetch": "workspace:*",
 		"@elaina-plugin/sticker-meme": "workspace:*",
 		"@elaina/contracts": "workspace:*",

@@ -46,6 +46,8 @@ export {
 	type ActivityWindowEvent,
 	type AppendConversationInput,
 	type AppendConversationResult,
+	type BackgroundTurnInput,
+	type BackgroundTurnResult,
 	type ConversationAnswer,
 	type DurableConversationHostOptions,
 } from "./conversation-host.ts";
