@@ -145,9 +145,15 @@ Behaviour:
   `auth_session` for 7 days and are refreshed once per day. A restart does not invalidate them.
 - The cookie is `tsukaima.session_token`, `HttpOnly`, `SameSite=Lax`, and `Secure` when the public URL
   is HTTPS or `TSUKAIMA_AUTH_SECURE_COOKIES=true`.
-- Sign-in is limited to 5 attempts per 60 seconds per Better Auth rate-limit bucket, with an
-  in-process per-instance store. The initial single-admin deployment shares one bucket rather than
-  trusting spoofable `X-Forwarded-For` headers.
+- Sign-in is limited to 5 attempts per 60 seconds per client IP, with an in-process per-instance
+  store. A direct Bun connection uses the socket peer address injected by the auth route; a
+  spoofed `X-Forwarded-For` cannot change that bucket. Behind a reverse proxy, set
+  `TSUKAIMA_TRUSTED_PROXIES` to the proxy IP/CIDR list so Better Auth may walk the forwarded chain
+  from the right; unlisted proxies are never trusted.
+- Browser origins are checked against `TSUKAIMA_PUBLIC_URL`, `TSUKAIMA_WEB_ORIGIN`, and the
+  comma-separated `TSUKAIMA_TRUSTED_ORIGINS`. In non-production mode the Vite origins
+  `http://127.0.0.1:7421` and `http://localhost:7421` are trusted by default; production requires
+  an explicit list.
 - Audit rows for successful sign-in, sign-out, and mutating admin actions carry
   `actorId = admin:<username>`. A denied sign-in uses `admin:unknown` because the native Better Auth
   boundary does not expose the attempted username without reading the request body twice; the

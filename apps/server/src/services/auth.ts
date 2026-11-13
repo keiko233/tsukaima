@@ -28,6 +28,7 @@ export interface AuthServiceOptions {
 	readonly secret?: string | undefined;
 	readonly secureCookies: boolean;
 	readonly trustedOrigins?: readonly string[] | undefined;
+	readonly trustedProxies?: readonly string[] | undefined;
 }
 
 export interface AdminSession {
@@ -57,6 +58,7 @@ interface BetterAuthFactoryOptions {
 	readonly secret?: string | undefined;
 	readonly secureCookies: boolean;
 	readonly trustedOrigins: readonly string[];
+	readonly trustedProxies: readonly string[];
 }
 
 /**
@@ -94,9 +96,16 @@ function createBetterAuth(options: BetterAuthFactoryOptions) {
 		advanced: {
 			cookiePrefix: BETTER_AUTH_COOKIE_PREFIX,
 			ipAddress: {
-				// The initial deployment is single-admin. A shared counter avoids trusting spoofable
-				// X-Forwarded-For values; a trusted proxy configuration can replace this later.
-				ipAddressHeaders: [],
+				// Direct connections use the loopback address injected by AuthService.handle().
+				// A reverse proxy must be explicitly listed in TSUKAIMA_TRUSTED_PROXIES before its
+				// X-Forwarded-For chain is trusted.
+				ipAddressHeaders:
+					options.trustedProxies.length > 0
+						? ["x-forwarded-for", "x-tsukaima-client-ip"]
+						: ["x-tsukaima-client-ip"],
+				...(options.trustedProxies.length === 0
+					? {}
+					: { trustedProxies: [...options.trustedProxies] }),
 			},
 			useSecureCookies: options.secureCookies,
 		},
@@ -181,6 +190,18 @@ function notFound(): Response {
 }
 
 /**
+ * Adds the socket peer address for direct requests. The header is host-controlled, so a client
+ * cannot use it to choose a rate-limit bucket. When a configured reverse proxy supplies
+ * X-Forwarded-For, Better Auth strips that chain from the trusted proxy outward.
+ */
+function withClientAddress(request: Request, clientAddress: string | undefined): Request {
+	if (clientAddress === undefined) return request;
+	const headers = new Headers(request.headers);
+	headers.set("x-tsukaima-client-ip", clientAddress);
+	return new Request(request, { headers });
+}
+
+/**
  * Facade over Better Auth.
  *
  * Better Auth owns password hashing, credential and session rows, cookie signing, session
@@ -197,6 +218,7 @@ export class AuthService {
 	readonly #secret: string | undefined;
 	readonly #secureCookies: boolean;
 	readonly #trustedOrigins: readonly string[];
+	readonly #trustedProxies: readonly string[];
 	#auth: BetterAuthInstance | undefined;
 	#initialization: Promise<BetterAuthInstance> | undefined;
 	#started = false;
@@ -213,6 +235,7 @@ export class AuthService {
 		this.#trustedOrigins = (options.trustedOrigins ?? []).map((origin) =>
 			origin.replace(/\/+$/, ""),
 		);
+		this.#trustedProxies = options.trustedProxies ?? [];
 	}
 
 	/** Starts the first-admin bootstrap in the background. Idempotent. */
@@ -240,7 +263,7 @@ export class AuthService {
 	 * Handles Better Auth's native HTTP routes. Public sign-up is disabled even though the
 	 * server-side `signUpEmail` API remains available for the one-time bootstrap.
 	 */
-	async handle(request: Request): Promise<Response> {
+	async handle(request: Request, clientAddress?: string): Promise<Response> {
 		const database = this.#database();
 		if (database === undefined) return authUnavailable("Authentication is not ready");
 
@@ -248,9 +271,10 @@ export class AuthService {
 		if (url.pathname.startsWith("/api/auth/sign-up")) return notFound();
 
 		const auth = await this.#ensureAuth();
+		const forwarded = withClientAddress(request, clientAddress);
 		let response: Response;
 		try {
-			response = await auth.handler(request);
+			response = await auth.handler(forwarded);
 		} catch (error) {
 			this.#logger.error("Better Auth request failed", {
 				error: error instanceof Error ? error.message : String(error),
@@ -353,6 +377,7 @@ export class AuthService {
 			secret: this.#secret,
 			secureCookies: this.#secureCookies,
 			trustedOrigins: this.#trustedOrigins,
+			trustedProxies: this.#trustedProxies,
 		});
 
 		this.#auth = auth;

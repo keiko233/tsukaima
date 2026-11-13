@@ -194,9 +194,9 @@ The full built-in plugin inventory and migration order are tracked in
   column stayed.
 - `remoteModelsInputSchema` and `runtimeSettingsPatchSchema` exist both in `apps/server/src` and
   in `packages/contracts`; one definition should move.
-- Better Auth sign-in throttling intentionally uses one in-process bucket for the single-admin
-  deployment; a trusted-proxy/IP configuration is still needed before exposing the WebUI beyond the
-  LAN. There is no password-rotation UI or multi-admin model yet. Migration `0005` drops the legacy
+- Better Auth sign-in throttling is per client IP. Direct connections use Bun's socket peer
+  address; reverse proxies must be listed in `TSUKAIMA_TRUSTED_PROXIES` before their forwarded chain
+  is trusted. There is no password-rotation UI or multi-admin model yet. Migration `0005` drops the legacy
   `admin_credentials` table; an existing deployment must have the bootstrap env values available
   for the first run after upgrade or use a dedicated credential-import tool.
 - Hook payloads are asymmetric: `activity.opened`/`activity.closed` carry durable ids while

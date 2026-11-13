@@ -283,6 +283,43 @@ describe("admin auth", () => {
 		await lifecycle.stop();
 	});
 
+	test("accepts the default Vite origin in development", async () => {
+		const directory = await createDirectory("tsukaima-auth-vite-origin-");
+		const { app, lifecycle } = createApp(adminEnv(directory));
+		await lifecycle.start();
+
+		const cookie = await signIn(
+			app,
+			"tsukaima",
+			"correct-horse",
+			"http://localhost",
+			"http://127.0.0.1:7421",
+		);
+		expect(cookie).toContain("tsukaima.session_token=");
+
+		await lifecycle.stop();
+	});
+
+	test("accepts additional origins from TSUKAIMA_TRUSTED_ORIGINS", async () => {
+		const directory = await createDirectory("tsukaima-auth-extra-origin-");
+		const { app, lifecycle } = createApp({
+			...adminEnv(directory),
+			TSUKAIMA_TRUSTED_ORIGINS: "http://app.example.test:7420",
+		});
+		await lifecycle.start();
+
+		const cookie = await signIn(
+			app,
+			"tsukaima",
+			"correct-horse",
+			"http://localhost",
+			"http://app.example.test:7420",
+		);
+		expect(cookie).toContain("tsukaima.session_token=");
+
+		await lifecycle.stop();
+	});
+
 	test("locks sign-in after repeated failures", async () => {
 		const directory = await createDirectory("tsukaima-auth-lockout-");
 		const { app, lifecycle } = createApp(adminEnv(directory));
@@ -301,6 +338,36 @@ describe("admin auth", () => {
 		});
 		expect(locked.status).toBe(429);
 		expect(locked.headers.get("retry-after") ?? locked.headers.get("x-retry-after")).not.toBeNull();
+
+		await lifecycle.stop();
+	});
+
+	test("rate limits per client address without trusting spoofed forwarded headers", async () => {
+		const directory = await createDirectory("tsukaima-auth-ip-");
+		const { auth, lifecycle } = createApp(adminEnv(directory));
+		await lifecycle.start();
+
+		const attempt = (address: string, forwarded?: string) => {
+			const headers = new Headers({ "content-type": "application/json" });
+			if (forwarded !== undefined) headers.set("x-forwarded-for", forwarded);
+			return auth.handle(
+				new Request("http://localhost/api/auth/sign-in/username", {
+					body: JSON.stringify({ password: "nope", username: "tsukaima" }),
+					headers,
+					method: "POST",
+				}),
+				address,
+			);
+		};
+
+		// A spoofed forwarded header cannot move the bucket while no proxy is trusted.
+		for (let index = 0; index < 5; index += 1) {
+			expect((await attempt("10.0.0.5", `198.51.100.${index + 1}`)).status).toBe(401);
+		}
+		expect((await attempt("10.0.0.5", "198.51.100.99")).status).toBe(429);
+
+		// Another direct client has its own bucket.
+		expect((await attempt("192.0.2.10")).status).toBe(401);
 
 		await lifecycle.stop();
 	});
