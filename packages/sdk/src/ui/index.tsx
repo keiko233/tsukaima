@@ -28,7 +28,13 @@ export type {
 	PluginUiModule,
 	ResolvedPluginUi,
 } from "./define.ts";
-export { Button, ButtonLink } from "@elaina/ui/components/motion/button";
+export { Button, ButtonLink, IconButton } from "@elaina/ui/components/motion/button";
+export type {
+	ButtonProps,
+	ButtonSize,
+	ButtonVariant,
+	IconButtonProps,
+} from "@elaina/ui/components/motion/button";
 export { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@elaina/ui/components/motion/card";
 export { Checkbox } from "@elaina/ui/components/motion/checkbox";
 export { Input } from "@elaina/ui/components/motion/input";

@@ -1,6 +1,7 @@
 export {
 	Button,
 	ButtonLink,
+	IconButton,
 	MagneticButton,
 	MetallicButton,
 	StatefulButton,
@@ -10,6 +11,7 @@ export type {
 	ButtonProps,
 	ButtonSize,
 	ButtonVariant,
+	IconButtonProps,
 	MagneticButtonProps,
 	MetallicButtonProps,
 	StatefulButtonProps,
