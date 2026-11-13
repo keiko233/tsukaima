@@ -93,6 +93,10 @@ export interface ReplyDispatcherOptions {
 	readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 
+interface DeliveryPlanItem {
+	readonly parts: readonly MessagePart[];
+}
+
 export interface ReconcilePendingResult {
 	readonly confirmed: number;
 	readonly skipped: number;
@@ -223,19 +227,49 @@ export class ReplyDispatcher {
 			channelId: session.channelId,
 			chatKind: session.chatKind,
 			chatObjectId: session.chatId,
+			conversationId: answer.conversationId,
 			entryId: answer.entryId,
 			parts: [{ text: lurk.text, type: "text" }],
 			sessionId: session.sessionId,
 			text: lurk.text,
 		});
+		const hasMedia = transformed.parts.some((part) => part.type !== "text");
 		const prepared = prepareOutboundText(transformed.text, policy.pacing);
-		const nonTextParts = transformed.parts.filter((part) => part.type !== "text");
-		if (prepared.units.length === 0 && nonTextParts.length === 0) return;
-		const text = prepared.text;
-		const parts: MessagePart[] = [
-			...(text.length > 0 ? [{ text, type: "text" as const }] : []),
-			...nonTextParts,
-		];
+		let text: string;
+		let parts: MessagePart[];
+		let plan: DeliveryPlanItem[];
+		if (hasMedia) {
+			// Media-bearing transforms keep their exact text/media order. Each text part is
+			// normalized independently so delivery still yields paced newline units.
+			const normalizedParts: MessagePart[] = [];
+			plan = [];
+			for (const part of transformed.parts) {
+				if (part.type !== "text") {
+					normalizedParts.push(part);
+					plan.push({ parts: [part] });
+					continue;
+				}
+				const partOutput = prepareOutboundText(part.text, policy.pacing);
+				if (partOutput.text.length > 0) {
+					normalizedParts.push({ text: partOutput.text, type: "text" });
+				}
+				for (const unit of partOutput.units) {
+					plan.push({ parts: [{ text: unit, type: "text" }] });
+				}
+			}
+			if (normalizedParts.length === 0) return;
+			parts = normalizedParts;
+			text = normalizedParts
+				.filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
+				.map((part) => part.text)
+				.join("\n")
+				.trim();
+		} else {
+			if (prepared.units.length === 0) return;
+			text = prepared.text;
+			parts = text.length > 0 ? [{ text, type: "text" }] : [];
+			plan = prepared.units.map((unit) => ({ parts: [{ text: unit, type: "text" as const }] }));
+		}
 		if (prepared.overflowCount > 0) {
 			await this.#audit({
 				action: "message.output-overflow",
@@ -313,6 +347,7 @@ export class ReplyDispatcher {
 					conversationId: answer.conversationId,
 					id,
 					parts,
+					plan,
 					platformConversationId: session.platformConversationId,
 					policy,
 					sessionId: session.sessionId,
@@ -334,6 +369,7 @@ export class ReplyDispatcher {
 		readonly channelId: string | null;
 		readonly chatKind: ChatKind;
 		readonly chatObjectId: string;
+		readonly conversationId: string;
 		readonly entryId: string;
 		readonly parts: readonly MessagePart[];
 		readonly sessionId: string;
@@ -346,6 +382,7 @@ export class ReplyDispatcher {
 				channelId: input.channelId,
 				chatKind: input.chatKind,
 				chatObjectId: input.chatObjectId,
+				conversationId: input.conversationId,
 				entryId: input.entryId,
 				parts: current.parts,
 				sessionId: input.sessionId,
@@ -561,6 +598,7 @@ export class ReplyDispatcher {
 			conversationId: string;
 			id: string;
 			parts: readonly MessagePart[];
+			plan: readonly DeliveryPlanItem[];
 			platformConversationId: string | null;
 			policy: ConversationPolicy;
 			sessionId: string;
@@ -606,26 +644,18 @@ export class ReplyDispatcher {
 					}
 					sentCount += 1;
 				};
-				for (const [unitIndex, unit] of target.units.entries()) {
-					const chunks = splitMessageParts([{ text: unit, type: "text" }], this.#splitMaxChars);
+				for (const [itemIndex, item] of target.plan.entries()) {
+					const chunks = splitMessageParts(item.parts, this.#splitMaxChars).filter(
+						(chunk) => chunk.length > 0,
+					);
 					for (const [chunkIndex, chunk] of chunks.entries()) {
 						await sendChunk(chunk);
 						if (
 							target.policy.pacing.sendIntervalMs > 0 &&
-							(unitIndex < target.units.length - 1 || chunkIndex < chunks.length - 1)
+							(itemIndex < target.plan.length - 1 || chunkIndex < chunks.length - 1)
 						) {
 							await this.#sleep(target.policy.pacing.sendIntervalMs, controller.signal);
 						}
-					}
-				}
-				const mediaParts = target.parts.filter((part) => part.type !== "text");
-				const mediaChunks = splitMessageParts(mediaParts, this.#splitMaxChars).filter((chunk) =>
-					chunk.some((part) => part.type !== "text"),
-				);
-				for (const [index, chunk] of mediaChunks.entries()) {
-					await sendChunk(chunk);
-					if (target.policy.pacing.sendIntervalMs > 0 && index < mediaChunks.length - 1) {
-						await this.#sleep(target.policy.pacing.sendIntervalMs, controller.signal);
 					}
 				}
 				await database

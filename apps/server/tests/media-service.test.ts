@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { media, migrateDomainDatabase, openDomainDatabase, type ElainaDatabase } from "@elaina/db";
 import { createLogger } from "../src/logging.ts";
 import { MediaService } from "../src/services/media-service.ts";
+import { createPluginMediaBridge } from "../src/services/plugin-media.ts";
 
 const directories: string[] = [];
 const logger = createLogger({ level: "error", target: "elaina::test" });
@@ -99,6 +100,33 @@ describe("MediaService", () => {
 		const { database, service } = await openFixture();
 		try {
 			expect(() => service.blobPath("../escape")).toThrow("Invalid media sha256");
+		} finally {
+			database.$client.close();
+		}
+	});
+
+	test("plugin media bridge enforces read/write grants and hides source URLs", async () => {
+		const { database, service } = await openFixture();
+		try {
+			const reader = createPluginMediaBridge(service, "sticker-meme", ["media.read"]);
+			await expect(reader.store({ bytes: new Uint8Array([1]), kind: "sticker" })).rejects.toThrow(
+				"media.write",
+			);
+			const writer = createPluginMediaBridge(service, "sticker-meme", [
+				"media.read",
+				"media.write",
+			]);
+			const stored = await writer.store({
+				bytes: new Uint8Array([1, 2, 3]),
+				kind: "sticker",
+				mimeType: "image/png",
+				source: "channel",
+			});
+			expect(stored).toMatchObject({ kind: "sticker", mimeType: "image/png" });
+			expect(JSON.stringify(stored)).not.toContain("sourceUrl");
+			expect(await writer.findById(stored.id)).toEqual(stored);
+			expect(await writer.findBySha(stored.sha256)).toEqual(stored);
+			expect(await writer.readBytes(stored.id)).toEqual(new Uint8Array([1, 2, 3]));
 		} finally {
 			database.$client.close();
 		}

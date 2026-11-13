@@ -1,0 +1,569 @@
+import { Database } from "bun:sqlite";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import type { PluginMediaApi, PluginMediaSource } from "@elaina/sdk";
+import {
+	decodeBase64,
+	encodeBase64,
+	readDirectoryFiles,
+	readZipEntries,
+	type ImportFile,
+} from "./archive.ts";
+import {
+	fileExtension,
+	inferMimeType,
+	normalizeLabels,
+	normalizeText,
+	parseJson,
+	recordValue,
+	safeRelativePath,
+	sha256Bytes,
+	stableId,
+	textList,
+	type StickerPackSource,
+	type StickerReviewStatus,
+} from "./domain.ts";
+import { StickerRepository } from "./repository.ts";
+
+export interface StickerImportReport {
+	readonly deduped: number;
+	readonly dryRun: boolean;
+	readonly items: number;
+	readonly missingMedia: number;
+	readonly packIds: readonly string[];
+	readonly packs: number;
+	readonly warnings: readonly string[];
+}
+
+export interface StickerExportResult {
+	readonly files: readonly ImportFile[];
+	readonly manifest: {
+		readonly format: "elaina-sticker-pack";
+		readonly packs: readonly {
+			readonly id: string;
+			readonly items: readonly {
+				readonly description: string;
+				readonly emotions: readonly string[];
+				readonly enabled: boolean;
+				readonly file: string;
+				readonly height?: number;
+				readonly id: string;
+				readonly keywords: readonly string[];
+				readonly mimeType: string;
+				readonly name: string;
+				readonly score: number;
+				readonly width?: number;
+			}[];
+			readonly name: string;
+			readonly personaIds: readonly string[];
+			readonly source: StickerPackSource;
+			readonly tags: readonly string[];
+		}[];
+		readonly version: 1;
+	};
+	readonly warnings: readonly string[];
+}
+
+interface ManifestItem {
+	readonly id?: string;
+	readonly name: string;
+	readonly description: string;
+	readonly keywords: readonly string[];
+	readonly emotions: readonly string[];
+	readonly mimeType: string;
+	readonly file?: string;
+	readonly hash?: string;
+	readonly width?: number;
+	readonly height?: number;
+	readonly enabled: boolean;
+	readonly reviewStatus?: StickerReviewStatus;
+	readonly score: number;
+}
+
+interface ManifestPack {
+	readonly id?: string;
+	readonly name: string;
+	readonly source: StickerPackSource;
+	readonly tags: readonly string[];
+	readonly personaIds: readonly string[];
+	readonly items: readonly ManifestItem[];
+}
+
+interface ParsedManifest {
+	readonly packs: readonly ManifestPack[];
+	readonly warnings: readonly string[];
+}
+
+const REVIEW_STATUSES: readonly StickerReviewStatus[] = ["approved", "pending", "rejected"];
+
+function asSource(value: unknown): StickerPackSource | undefined {
+	return value === "builtin" || value === "imported" || value === "generated" || value === "learned"
+		? value
+		: undefined;
+}
+
+function asReviewStatus(value: unknown): StickerReviewStatus | undefined {
+	return REVIEW_STATUSES.find((status) => status === value);
+}
+
+function asNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function itemFromRecord(
+	value: unknown,
+	index: number,
+	warnings: string[],
+): ManifestItem | undefined {
+	const record = recordValue(value);
+	const file = normalizeText(record.file ?? record.path ?? record.fileName ?? record.file_name);
+	const name = normalizeText(
+		record.name ?? record.caption ?? record.label,
+		file.split("/").at(-1) ?? "",
+	);
+	if (name.length === 0) {
+		warnings.push(`item ${index + 1} has no name or file`);
+		return undefined;
+	}
+	const safeFile = file.length === 0 ? undefined : safeRelativePath(file);
+	if (file.length > 0 && safeFile === undefined) {
+		warnings.push(`item ${index + 1} has an unsafe file path`);
+	}
+	const keywordResult = normalizeLabels(textList(record.keywords ?? record.tags));
+	const emotionResult = normalizeLabels(textList(record.emotions ?? record.emotion ?? record.mood));
+	if (keywordResult.invalid.length > 0) warnings.push(`item ${index + 1} dropped invalid keywords`);
+	if (emotionResult.invalid.length > 0) warnings.push(`item ${index + 1} dropped invalid emotions`);
+	const hash = normalizeText(record.hash ?? record.sha256);
+	const id = normalizeText(record.id);
+	const height = asNumber(record.height);
+	const width = asNumber(record.width);
+	const reviewStatus = asReviewStatus(record.reviewStatus ?? record.review_status);
+	return {
+		description: normalizeText(record.description ?? record.caption),
+		emotions: emotionResult.values,
+		enabled: record.enabled !== false,
+		...(safeFile === undefined ? {} : { file: safeFile }),
+		...(hash.length === 0 ? {} : { hash }),
+		...(height === undefined ? {} : { height }),
+		...(id.length === 0 ? {} : { id }),
+		keywords: keywordResult.values,
+		mimeType: normalizeText(
+			record.mimeType ?? record.mime_type,
+			safeFile === undefined ? "image/png" : inferMimeType(safeFile),
+		),
+		name,
+		...(reviewStatus === undefined ? {} : { reviewStatus }),
+		score: Math.max(0, asNumber(record.score) ?? 1),
+		...(width === undefined ? {} : { width }),
+	};
+}
+
+function packFromRecord(
+	value: unknown,
+	fallbackName: string,
+	warnings: string[],
+): ManifestPack | undefined {
+	const record = recordValue(value);
+	const rawItems = Array.isArray(record.items)
+		? record.items
+		: Array.isArray(record.memes)
+			? record.memes
+			: Array.isArray(record.stickers)
+				? record.stickers
+				: [];
+	const tags = normalizeLabels(textList(record.tags));
+	const personas = normalizeLabels(textList(record.personaIds ?? record.personas));
+	if (tags.invalid.length > 0) warnings.push("pack dropped invalid tags");
+	if (personas.invalid.length > 0) warnings.push("pack dropped invalid persona ids");
+	const items = rawItems.flatMap((item, index): ManifestItem[] => {
+		const parsed = itemFromRecord(item, index, warnings);
+		return parsed === undefined ? [] : [parsed];
+	});
+	const name = normalizeText(record.name, fallbackName);
+	if (name.length === 0) {
+		warnings.push("pack has no name");
+		return undefined;
+	}
+	return {
+		...(normalizeText(record.id).length === 0 ? {} : { id: normalizeText(record.id) }),
+		items,
+		name,
+		personaIds: personas.values,
+		source: asSource(record.source) ?? "imported",
+		tags: tags.values,
+	};
+}
+
+export function parsePackManifest(
+	manifest: unknown,
+	fallbackName = "Imported pack",
+): ParsedManifest {
+	const warnings: string[] = [];
+	const record = recordValue(manifest);
+	const packs = Array.isArray(record.packs)
+		? record.packs.flatMap((pack) => {
+				const parsed = packFromRecord(pack, fallbackName, warnings);
+				return parsed === undefined ? [] : [parsed];
+			})
+		: (() => {
+				const parsed = packFromRecord(record, fallbackName, warnings);
+				return parsed === undefined ? [] : [parsed];
+			})();
+	if (packs.length === 0) warnings.push("manifest does not contain a usable pack");
+	return { packs, warnings };
+}
+
+function findFile(files: readonly ImportFile[], path: string | undefined): ImportFile | undefined {
+	if (path === undefined) return undefined;
+	const exact = files.find((file) => file.path === path);
+	if (exact !== undefined) return exact;
+	const base = path.split("/").at(-1);
+	const matches = files.filter((file) => file.path.split("/").at(-1) === base);
+	return matches.length === 1 ? matches[0] : undefined;
+}
+
+function fallbackItemId(packId: string, item: ManifestItem): string {
+	return stableId(
+		"item",
+		`${packId}:${item.id ?? item.name}:${item.file ?? ""}:${item.hash ?? ""}`,
+	);
+}
+
+export interface StickerImportServiceOptions {
+	readonly media: PluginMediaApi;
+	readonly repository: StickerRepository;
+}
+
+/** Directory, ZIP/bundle, and DSH meme-pack imports plus portable exports. */
+export class StickerImportService {
+	readonly #media: PluginMediaApi;
+	readonly #repository: StickerRepository;
+
+	constructor(options: StickerImportServiceOptions) {
+		this.#media = options.media;
+		this.#repository = options.repository;
+	}
+
+	async importBundle(input: {
+		readonly files: readonly ImportFile[];
+		readonly manifest: unknown;
+		readonly dryRun?: boolean;
+		readonly fallbackName?: string;
+		readonly source?: PluginMediaSource;
+	}): Promise<StickerImportReport> {
+		const parsed = parsePackManifest(input.manifest, input.fallbackName ?? "Imported pack");
+		return await this.importPacks(parsed.packs, input.files, {
+			dryRun: input.dryRun === true,
+			source: input.source ?? "webui",
+			warnings: parsed.warnings,
+		});
+	}
+
+	async importZip(input: {
+		readonly bytes: Uint8Array;
+		readonly dryRun?: boolean;
+		readonly source?: PluginMediaSource;
+	}): Promise<StickerImportReport> {
+		const files = readZipEntries(input.bytes);
+		const manifestFile =
+			files.find((file) => file.path === "manifest.json") ??
+			files.find((file) => file.path.endsWith("/manifest.json"));
+		if (manifestFile === undefined) throw new Error("ZIP archive has no manifest.json");
+		const manifest = parseJson<unknown>(new TextDecoder().decode(manifestFile.bytes), undefined);
+		if (manifest === undefined) throw new Error("ZIP manifest.json is invalid");
+		const prefix = manifestFile.path.slice(0, -"manifest.json".length);
+		const relativeFiles =
+			prefix.length === 0
+				? files
+				: files.map((file) => ({
+						bytes: file.bytes,
+						path: file.path.startsWith(prefix) ? file.path.slice(prefix.length) : file.path,
+					}));
+		return await this.importBundle({
+			dryRun: input.dryRun === true,
+			files: relativeFiles,
+			manifest,
+			source: input.source ?? "webui",
+		});
+	}
+
+	async importDirectory(input: {
+		readonly directory: string;
+		readonly dryRun?: boolean;
+		readonly source?: PluginMediaSource;
+	}): Promise<StickerImportReport> {
+		const files = await readDirectoryFiles(input.directory);
+		const manifestFile = findFile(files, "manifest.json");
+		if (manifestFile === undefined) throw new Error("Directory has no manifest.json");
+		const manifest = parseJson<unknown>(new TextDecoder().decode(manifestFile.bytes), undefined);
+		if (manifest === undefined) throw new Error("Directory manifest.json is invalid");
+		return await this.importBundle({
+			dryRun: input.dryRun === true,
+			files,
+			manifest,
+			source: input.source ?? "webui",
+		});
+	}
+
+	/**
+	 * Import the DSH layout (`meme-packs/<pack>/manifest.json` plus optional `index.db` with
+	 * a `memes` table). Plain image fixtures without SQLite are accepted as well.
+	 */
+	async importDshDirectory(input: {
+		readonly directory: string;
+		readonly dryRun?: boolean;
+	}): Promise<StickerImportReport> {
+		const allFiles = await readDirectoryFiles(input.directory);
+		const manifests = allFiles.filter((file) => /(?:^|\/)manifest\.json$/u.test(file.path));
+		const reports: StickerImportReport[] = [];
+		if (manifests.length === 0) {
+			const fallback = await this.importBundle({
+				dryRun: input.dryRun === true,
+				files: allFiles,
+				manifest: {
+					items: allFiles.filter((file) => /\.(?:gif|jpe?g|png|webp)$/iu.test(file.path)),
+					name: "DSH meme pack",
+				},
+				source: "migration",
+			});
+			return fallback;
+		}
+		for (const manifestFile of manifests) {
+			const prefix = manifestFile.path.slice(0, -"manifest.json".length);
+			const files = allFiles
+				.filter((file) => file.path.startsWith(prefix))
+				.map((file) => ({ bytes: file.bytes, path: file.path.slice(prefix.length) }));
+			const manifest = recordValue(
+				parseJson<unknown>(new TextDecoder().decode(manifestFile.bytes), {}),
+			);
+			const sqlitePath = join(input.directory, prefix, "index.db");
+			const memes = existsSync(sqlitePath) ? readDshMemes(sqlitePath) : [];
+			const items = memes.length > 0 ? memes : (manifest.items ?? manifest.memes ?? []);
+			const fallbackName =
+				normalizeText(manifest.name) || prefix.split("/").filter(Boolean).at(-1) || "DSH meme pack";
+			const report = await this.importBundle({
+				dryRun: input.dryRun === true,
+				fallbackName,
+				files,
+				manifest: { ...manifest, items },
+				source: "migration",
+			});
+			reports.push(report);
+		}
+		return mergeReports(reports);
+	}
+
+	async exportPacks(packId?: string): Promise<StickerExportResult> {
+		const allPacks = await this.#repository.listPacks();
+		const packs = packId === undefined ? allPacks : allPacks.filter((pack) => pack.id === packId);
+		const files: ImportFile[] = [];
+		const warnings: string[] = [];
+		const exportedPacks: StickerExportResult["manifest"]["packs"][number][] = [];
+		const mediaPaths = new Map<string, string>();
+		for (const pack of packs) {
+			const items = await this.#repository.listItems(pack.id);
+			const exportedItems: StickerExportResult["manifest"]["packs"][number]["items"][number][] = [];
+			for (const item of items) {
+				if (item.mediaId.length === 0) {
+					warnings.push(`item ${item.id} has no media and was skipped`);
+					continue;
+				}
+				let path = mediaPaths.get(item.mediaId);
+				if (path === undefined) {
+					try {
+						const bytes = await this.#media.readBytes(item.mediaId);
+						path = `items/${item.mediaId.slice(0, 16)}.${fileExtension(item.mimeType, item.hash)}`;
+						files.push({ bytes, path });
+						mediaPaths.set(item.mediaId, path);
+					} catch {
+						warnings.push(`item ${item.id} media is unavailable and was skipped`);
+						continue;
+					}
+				}
+				exportedItems.push({
+					description: item.description,
+					emotions: [...item.emotions],
+					enabled: item.enabled,
+					file: path,
+					...(item.height === null ? {} : { height: item.height }),
+					id: item.id,
+					keywords: [...item.keywords],
+					mimeType: item.mimeType,
+					name: item.name,
+					score: item.score,
+					...(item.width === null ? {} : { width: item.width }),
+				});
+			}
+			exportedPacks.push({
+				id: pack.id,
+				items: exportedItems,
+				name: pack.name,
+				personaIds: [...pack.personaIds],
+				source: pack.source,
+				tags: [...pack.tags],
+			});
+		}
+		return {
+			files,
+			manifest: { format: "elaina-sticker-pack", packs: exportedPacks, version: 1 },
+			warnings,
+		};
+	}
+
+	private async importPacks(
+		packs: readonly ManifestPack[],
+		files: readonly ImportFile[],
+		options: {
+			readonly dryRun: boolean;
+			readonly source: PluginMediaSource;
+			readonly warnings: readonly string[];
+		},
+	): Promise<StickerImportReport> {
+		const warnings = [...options.warnings];
+		const packIds: string[] = [];
+		let items = 0;
+		let deduped = 0;
+		let missingMedia = 0;
+		for (const manifestPack of packs) {
+			const pack = options.dryRun
+				? {
+						id: manifestPack.id ?? stableId("pack", manifestPack.name),
+						name: manifestPack.name,
+						source: manifestPack.source,
+					}
+				: await this.#repository.savePack({
+						...(manifestPack.id === undefined ? {} : { id: manifestPack.id }),
+						name: manifestPack.name,
+						personaIds: manifestPack.personaIds,
+						source: manifestPack.source,
+						tags: manifestPack.tags,
+					});
+			packIds.push(pack.id);
+			for (const manifestItem of manifestPack.items) {
+				items += 1;
+				const file = findFile(files, manifestItem.file);
+				if (file === undefined) {
+					missingMedia += 1;
+					warnings.push(`item ${manifestItem.name} has no matching media file`);
+					if (!options.dryRun) {
+						await this.#repository.upsertItem({
+							description: manifestItem.description,
+							emotions: manifestItem.emotions,
+							enabled: false,
+							hash: manifestItem.hash ?? fallbackItemId(pack.id, manifestItem),
+							...(manifestItem.id === undefined ? {} : { id: manifestItem.id }),
+							keywords: manifestItem.keywords,
+							mimeType: manifestItem.mimeType,
+							name: manifestItem.name,
+							packId: pack.id,
+							reviewStatus: manifestItem.reviewStatus ?? defaultReviewStatus(manifestPack.source),
+							score: manifestItem.score,
+						});
+					}
+					continue;
+				}
+				const hash = sha256Bytes(file.bytes);
+				const existing = await this.#media.findBySha(hash);
+				if (existing !== undefined) deduped += 1;
+				if (options.dryRun) continue;
+				const stored =
+					existing ??
+					(await this.#media.store({
+						bytes: file.bytes,
+						...(manifestItem.height === undefined ? {} : { height: manifestItem.height }),
+						kind: "sticker",
+						mimeType: manifestItem.mimeType,
+						source: options.source,
+						...(manifestItem.width === undefined ? {} : { width: manifestItem.width }),
+					}));
+				await this.#repository.upsertItem({
+					description: manifestItem.description,
+					emotions: manifestItem.emotions,
+					enabled: manifestItem.enabled,
+					hash,
+					height: manifestItem.height ?? stored.height,
+					...(manifestItem.id === undefined ? {} : { id: manifestItem.id }),
+					keywords: manifestItem.keywords,
+					mediaId: stored.id,
+					mimeType: manifestItem.mimeType || stored.mimeType,
+					name: manifestItem.name,
+					packId: pack.id,
+					reviewStatus: manifestItem.reviewStatus ?? defaultReviewStatus(manifestPack.source),
+					score: manifestItem.score,
+					width: manifestItem.width ?? stored.width,
+				});
+			}
+		}
+		return {
+			deduped,
+			dryRun: options.dryRun,
+			items,
+			missingMedia,
+			packIds,
+			packs: packs.length,
+			warnings,
+		};
+	}
+}
+
+function defaultReviewStatus(source: StickerPackSource): StickerReviewStatus {
+	return source === "learned" || source === "generated" ? "pending" : "approved";
+}
+
+function readDshMemes(path: string): unknown[] {
+	let database: Database | undefined;
+	try {
+		database = new Database(path, { readonly: true });
+		const rows = database.query("SELECT * FROM memes").all() as Record<string, unknown>[];
+		return rows.map((row) => {
+			const file = normalizeText(row.path ?? row.file ?? row.file_name);
+			const keywords = textList(
+				typeof row.keywords === "string"
+					? parseJson<unknown>(row.keywords, row.keywords)
+					: row.keywords,
+			);
+			return {
+				caption: normalizeText(row.caption ?? row.description),
+				emotions: textList(row.tag ?? row.emotion),
+				file,
+				keywords,
+				name: normalizeText(row.caption ?? row.name, file.split("/").at(-1) ?? "meme"),
+				path: file,
+			};
+		});
+	} catch {
+		return [];
+	} finally {
+		database?.close();
+	}
+}
+
+function mergeReports(reports: readonly StickerImportReport[]): StickerImportReport {
+	return {
+		deduped: reports.reduce((total, report) => total + report.deduped, 0),
+		dryRun: reports.every((report) => report.dryRun),
+		items: reports.reduce((total, report) => total + report.items, 0),
+		missingMedia: reports.reduce((total, report) => total + report.missingMedia, 0),
+		packIds: reports.flatMap((report) => report.packIds),
+		packs: reports.reduce((total, report) => total + report.packs, 0),
+		warnings: reports.flatMap((report) => report.warnings),
+	};
+}
+
+/** Used by tests/admin helpers to turn a serialized bundle into import files. */
+export function filesFromBundle(
+	files: readonly { readonly dataBase64?: string; readonly path: string }[],
+): ImportFile[] {
+	return files.flatMap((file) => {
+		const path = safeRelativePath(file.path);
+		if (path === undefined || file.dataBase64 === undefined) return [];
+		return [{ bytes: decodeBase64(file.dataBase64), path }];
+	});
+}
+
+export function bundleFilesResponse(files: readonly ImportFile[]): {
+	readonly dataBase64: string;
+	readonly path: string;
+}[] {
+	return files.map((file) => ({ dataBase64: encodeBase64(file.bytes), path: file.path }));
+}

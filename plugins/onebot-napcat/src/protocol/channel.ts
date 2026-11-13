@@ -297,9 +297,10 @@ export class OneBotChannel {
 		parts: readonly MessagePart[],
 		options?: SendOptions,
 	): Promise<unknown> {
+		const segments = this.outboundSegments(parts, options);
 		return this.action("send_group_msg", {
 			group_id: groupId,
-			message: this.outboundSegments(parts, options),
+			message: segments instanceof Promise ? await segments : segments,
 		});
 	}
 
@@ -308,8 +309,9 @@ export class OneBotChannel {
 		parts: readonly MessagePart[],
 		options?: SendOptions,
 	): Promise<unknown> {
+		const segments = this.outboundSegments(parts, options);
 		return this.action("send_private_msg", {
-			message: this.outboundSegments(parts, options),
+			message: segments instanceof Promise ? await segments : segments,
 			user_id: userId,
 		});
 	}
@@ -538,10 +540,47 @@ export class OneBotChannel {
 		this.transition("closed");
 	}
 
-	private outboundSegments(parts: readonly MessagePart[], options?: SendOptions): OneBotSegment[] {
-		const segments = toSegments(parts);
-		if (options?.replyToPlatformMessageId === undefined) return segments;
-		return [{ data: { id: options.replyToPlatformMessageId }, type: "reply" }, ...segments];
+	private outboundSegments(
+		parts: readonly MessagePart[],
+		options?: SendOptions,
+	): OneBotSegment[] | Promise<OneBotSegment[]> {
+		const withReply = (segments: OneBotSegment[]): OneBotSegment[] =>
+			options?.replyToPlatformMessageId === undefined
+				? segments
+				: [{ data: { id: options.replyToPlatformMessageId }, type: "reply" }, ...segments];
+		const needsResolution =
+			this.config.resolveMedia !== undefined &&
+			parts.some(
+				(part) =>
+					part.type !== "text" &&
+					part.type !== "channel-native" &&
+					part.channelRef === undefined &&
+					part.sourceUrl === undefined,
+			);
+		if (!needsResolution) return withReply(toSegments(parts));
+		return Promise.all(parts.map((part) => this.resolveOutboundPart(part))).then((resolved) =>
+			withReply(toSegments(resolved)),
+		);
+	}
+
+	/**
+	 * Prefer an attached platform reference, then ask the host media bridge for content-
+	 * addressed bytes. A local media part that cannot be resolved degrades to safe text; its
+	 * id or hash is never sent to NapCat as if it were a file path.
+	 */
+	private async resolveOutboundPart(part: MessagePart): Promise<MessagePart> {
+		if (part.type === "text" || part.type === "channel-native") return part;
+		if (part.channelRef !== undefined || part.sourceUrl !== undefined) return part;
+		if (this.config.resolveMedia !== undefined) {
+			try {
+				const file = await this.config.resolveMedia(part);
+				if (file !== undefined && file.length > 0) return { ...part, channelRef: file };
+			} catch {
+				// Fall through to the safe text downgrade below.
+			}
+		}
+		const label = part.type === "sticker" ? "sticker" : part.type;
+		return { text: `[${label} unavailable]`, type: "text" };
 	}
 
 	private async startReverse(): Promise<void> {

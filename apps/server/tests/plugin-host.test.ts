@@ -130,6 +130,7 @@ describe("plugin host", () => {
 				"openai-compatible",
 				"onebot-napcat",
 				"memory",
+				"sticker-meme",
 				"fake-channel",
 			]);
 			expect(plugins[1]).toEqual(

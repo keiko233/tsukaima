@@ -1,0 +1,27 @@
+{
+	"name": "@elaina-plugin/sticker-meme",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"dependencies": {
+		"@elaina/contracts": "workspace:*",
+		"@elaina/sdk": "workspace:*",
+		"@elaina/ui": "workspace:*",
+		"@inlang/paraglide-js": "^3.2.2",
+		"lucide-react": "^1.72.0",
+		"zod": "4.6.7"
+	},
+	"devDependencies": {
+		"@types/react": "^19.3.0",
+		"@types/react-dom": "^19.3.0",
+		"react": "^19.3.1",
+		"react-dom": "^19.3.1"
+	},
+	"elaina": {
+		"id": "sticker-meme",
+		"ui": "./src/ui.tsx"
+	}
+}

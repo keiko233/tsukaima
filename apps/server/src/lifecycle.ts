@@ -237,6 +237,7 @@ export class ElainaLifecycle {
 			hooks: this.hooks,
 			logger: this.logger,
 			migrations: this.pluginMigrations,
+			media: this.media,
 			plugins: this.plugins,
 			requests: this.requestService,
 			settings: this.pluginSettings,

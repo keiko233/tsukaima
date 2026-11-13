@@ -78,6 +78,7 @@ export const oneBotNapCatManifest: PluginManifest = pluginManifestSchema.parse({
 		"channel.raw",
 		"conversation.read",
 		"audit.write",
+		"media.read",
 	],
 	secretKeys: ["accessToken"],
 	version: "0.2.0",

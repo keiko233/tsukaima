@@ -1,5 +1,6 @@
 import { oneBotNapCatPlugin } from "@elaina-plugin/onebot-napcat";
 import { openAiCompatiblePlugin } from "@elaina-plugin/openai-compatible";
+import { stickerMemePlugin } from "@elaina-plugin/sticker-meme";
 import type { ElainaPlugin } from "@elaina/sdk";
 import { memoryPlugin } from "./memory.ts";
 
@@ -11,4 +12,5 @@ export const builtinPlugins: readonly ElainaPlugin[] = [
 	openAiCompatiblePlugin,
 	oneBotNapCatPlugin,
 	memoryPlugin,
+	stickerMemePlugin,
 ];

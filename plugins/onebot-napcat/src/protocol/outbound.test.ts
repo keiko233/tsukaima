@@ -148,4 +148,32 @@ describe("OneBot outbound serialization", () => {
 			{ platformMessageId: "m-1", senderId: "1", text: "history", timestampMs: 10_000 },
 		]);
 	});
+
+	test("resolves content-addressed media bytes and downgrades unresolved local parts", async () => {
+		const transport = new FakeTransport();
+		const factory: OneBotTransportFactory = () => transport;
+		const channel = new OneBotChannel(
+			{
+				...config,
+				resolveMedia: async (part) =>
+					"mediaId" in part && part.mediaId === "media-real" ? "base64://cmVhbA==" : undefined,
+			},
+			factory,
+		);
+		await channel.start();
+		await channel.sendPrivate("10001", [
+			{ mediaId: "media-real", sha256: "hash", type: "sticker" },
+			{ mediaId: "media-missing", sha256: "other", type: "image" },
+		]);
+		expect(transport.sent.at(-1)).toMatchObject({
+			action: "send_private_msg",
+			params: {
+				message: [
+					{ data: { file: "base64://cmVhbA==" }, type: "image" },
+					{ data: { text: "[image unavailable]" }, type: "text" },
+				],
+				user_id: "10001",
+			},
+		});
+	});
 });

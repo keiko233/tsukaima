@@ -33,6 +33,7 @@ import type {
 	PluginModelInfo,
 	PluginModelProvider,
 	PluginModelQuery,
+	PluginMediaApi,
 	PluginModelRegistry,
 	PluginRpcHandler,
 	PluginRpcRegistry,
@@ -752,6 +753,7 @@ export interface PluginContextOptions {
 	channel?: PluginChannelApi;
 	channels?: PluginChannelRegistry;
 	events?: PluginEvents;
+	media?: PluginMediaApi;
 	models?: PluginModelRegistry;
 	rpc?: PluginRpcRegistry;
 	settings?: PluginSettingsApi;
@@ -799,6 +801,7 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 		storage,
 		conversation: options.conversation ?? { read: async () => [] },
 		events,
+		...(options.media ? { media: options.media } : {}),
 		tools,
 		ui,
 		models,
