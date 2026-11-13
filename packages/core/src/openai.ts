@@ -30,13 +30,28 @@ export interface OpenAICompatibleConfig {
 
 export interface OpenAICompatibleModelConfig {
 	readonly modelId: string;
+	readonly name?: string;
 	readonly capabilities?: readonly ModelCapability[];
 	readonly contextWindow?: number;
 	readonly maxOutputTokens?: number;
 	readonly inputCostPerMillion?: number;
 	readonly outputCostPerMillion?: number;
+	readonly inputModalities?: readonly OpenAICompatibleInputModality[];
+	readonly supportsReasoning?: boolean;
+	readonly reasoningLevels?: readonly OpenAICompatibleReasoningLevel[];
+	readonly defaultReasoningLevel?: OpenAICompatibleReasoningLevel;
 	readonly supportsTools?: boolean;
 }
+
+export type OpenAICompatibleInputModality = "text" | "image";
+
+export type OpenAICompatibleReasoningLevel =
+	| "minimal"
+	| "low"
+	| "medium"
+	| "high"
+	| "xhigh"
+	| "max";
 
 export type ModelCapability =
 	| "basic-chat"
@@ -55,13 +70,17 @@ interface OpenAIRequest {
 	readonly model: string;
 	readonly messages: readonly OpenAIMessage[];
 	readonly max_completion_tokens?: number;
+	readonly reasoning_effort?: OpenAICompatibleReasoningLevel;
 	readonly tools?: readonly OpenAITool[];
 	readonly tool_choice?: "auto" | "none";
 }
 
 type OpenAIMessage =
 	| { readonly role: "system"; readonly content: string }
-	| { readonly role: "user"; readonly content: string }
+	| {
+			readonly role: "user";
+			readonly content: string | readonly OpenAIUserContentPart[];
+	  }
 	| {
 			readonly role: "assistant";
 			readonly content: string | null;
@@ -72,6 +91,10 @@ type OpenAIMessage =
 			}[];
 	  }
 	| { readonly role: "tool"; readonly content: string; readonly tool_call_id: string };
+
+type OpenAIUserContentPart =
+	| { readonly type: "text"; readonly text: string }
+	| { readonly type: "image_url"; readonly image_url: { readonly url: string } };
 
 interface OpenAITool {
 	readonly type: "function";
@@ -86,6 +109,8 @@ interface OpenAIResponse {
 	readonly choices?: readonly {
 		readonly message?: {
 			readonly content?: string | null;
+			readonly reasoning?: string | null;
+			readonly reasoning_content?: string | null;
 			readonly tool_calls?: readonly {
 				readonly id?: string;
 				readonly type?: string;
@@ -100,6 +125,7 @@ interface OpenAIResponse {
 		readonly prompt_tokens?: number;
 		readonly completion_tokens?: number;
 		readonly prompt_tokens_details?: { readonly cached_tokens?: number };
+		readonly completion_tokens_details?: { readonly reasoning_tokens?: number };
 	};
 }
 
@@ -220,25 +246,35 @@ function buildAssistantMessage(model: Model<Api>, payload: OpenAIResponse): Assi
 	const promptTokens = payload.usage?.prompt_tokens ?? 0;
 	const cacheRead = payload.usage?.prompt_tokens_details?.cached_tokens ?? 0;
 	const outputTokens = payload.usage?.completion_tokens ?? 0;
+	const reasoningTokens = payload.usage?.completion_tokens_details?.reasoning_tokens;
+	const reasoning =
+		typeof message?.reasoning_content === "string" && message.reasoning_content.length > 0
+			? message.reasoning_content
+			: typeof message?.reasoning === "string" && message.reasoning.length > 0
+				? message.reasoning
+				: undefined;
+	const messageUsage = usage(promptTokens, outputTokens, cacheRead);
 	const stopReason: "toolUse" | "length" | "stop" =
 		toolCalls.length > 0 ? "toolUse" : finishReason === "length" ? "length" : "stop";
 	return {
 		api: model.api,
-		content,
+		content: [
+			...(reasoning === undefined ? [] : [{ type: "thinking" as const, thinking: reasoning }]),
+			...content,
+		],
 		model: model.id,
 		provider: model.provider,
 		role: "assistant",
 		stopReason,
 		timestamp: Date.now(),
-		usage: usage(promptTokens, outputTokens, cacheRead),
+		usage:
+			reasoningTokens === undefined
+				? messageUsage
+				: { ...messageUsage, reasoning: reasoningTokens },
 		...(payload.id === undefined ? {} : { responseId: payload.id }),
 		...(payload.model === undefined ? {} : { responseModel: payload.model }),
 		...(finishReason === undefined ? {} : { rawStopReason: finishReason }),
 	};
-}
-
-function contentToText(content: string | Parameters<typeof contentText>[0]): string {
-	return contentText(content);
 }
 
 function messageToOpenAI(
@@ -250,10 +286,28 @@ function messageToOpenAI(
 		return text.length > 0 ? { role: "system", content: text } : undefined;
 	}
 	if (message.role === "user") {
-		return { role: "user", content: contentToText(message.content) };
+		if (typeof message.content === "string") {
+			return { role: "user", content: message.content };
+		}
+		const parts: OpenAIUserContentPart[] = message.content.map((block) =>
+			block.type === "text"
+				? { type: "text", text: block.text }
+				: {
+						type: "image_url",
+						image_url: { url: `data:${block.mimeType};base64,${block.data}` },
+					},
+		);
+		return {
+			role: "user",
+			content: parts.every((part) => part.type === "text")
+				? parts.map((part) => (part.type === "text" ? part.text : "")).join("")
+				: parts,
+		};
 	}
 	if (message.role === "assistant") {
-		const text = contentText(message.content.filter((block) => block.type !== "toolCall"));
+		const text = contentText(
+			message.content.filter((block) => block.type !== "toolCall" && block.type !== "thinking"),
+		);
 		const toolCalls = message.content.flatMap((block) => {
 			if (block.type !== "toolCall") return [];
 			return [
@@ -288,16 +342,21 @@ function openAITools(tools: readonly Tool[]): OpenAITool[] {
 	}));
 }
 
-export function createOpenAICompatibleStreams(config: OpenAICompatibleConfig): ProviderStreams {
+export function createOpenAICompatibleStreams(
+	config: OpenAICompatibleConfig,
+	modelConfigs: readonly OpenAICompatibleModelConfig[] = [],
+): ProviderStreams {
 	const baseUrl = normalizeBaseUrl(config.baseUrl);
 	const apiKey = assertNonEmpty(config.apiKey, "API key");
 	const fetchImplementation = config.fetch ?? (fetch as FetchFunction);
+	const configs = new Map(modelConfigs.map((modelConfig) => [modelConfig.modelId, modelConfig]));
 
 	const execute = async (
 		model: Model<Api>,
 		context: TranscriptContext,
 		options?: SimpleStreamOptions,
 	): Promise<AssistantMessage> => {
+		const modelConfig = configs.get(model.id);
 		const url = `${baseUrl}/chat/completions`;
 		const messages: OpenAIMessage[] = [];
 		for (const [index, message] of context.messages.entries()) {
@@ -305,7 +364,7 @@ export function createOpenAICompatibleStreams(config: OpenAICompatibleConfig): P
 			if (converted) messages.push(converted);
 		}
 		const declaredTools = getCurrentTools(context.messages);
-		const supportsTools = true;
+		const supportsTools = modelConfig?.supportsTools ?? true;
 		const requestedTools = options?.toolChoice === "none" ? [] : declaredTools;
 		const tools = supportsTools ? openAITools(requestedTools) : [];
 		const maxOutputTokens = Math.min(
@@ -316,10 +375,15 @@ export function createOpenAICompatibleStreams(config: OpenAICompatibleConfig): P
 			throw new Error(`Model has no output token limit: ${model.id}`);
 		}
 		const apiKeyFromOptions = options?.apiKey ?? apiKey;
+		const reasoningEffort =
+			model.reasoning === true
+				? (options?.reasoning ?? modelConfig?.defaultReasoningLevel)
+				: undefined;
 		const request: OpenAIRequest = {
 			model: model.id,
 			messages,
 			max_completion_tokens: maxOutputTokens,
+			...(reasoningEffort === undefined ? {} : { reasoning_effort: reasoningEffort }),
 			...(tools.length > 0 ? { tools, tool_choice: options?.toolChoice ?? "auto" } : {}),
 		};
 		let response: Response;
@@ -372,6 +436,25 @@ export function createOpenAICompatibleStreams(config: OpenAICompatibleConfig): P
 				config.onMessage?.(message);
 				output.push({ type: "start", partial: { ...message, content: [], stopReason: "pending" } });
 				for (const [index, block] of message.content.entries()) {
+					if (block.type === "thinking") {
+						output.push({
+							type: "thinking_start",
+							contentIndex: index,
+							partial: { ...message, content: [] },
+						});
+						output.push({
+							type: "thinking_delta",
+							contentIndex: index,
+							delta: block.thinking,
+							partial: message,
+						});
+						output.push({
+							type: "thinking_end",
+							contentIndex: index,
+							content: block.thinking,
+							partial: message,
+						});
+					}
 					if (block.type === "text") {
 						output.push({
 							type: "text_start",
@@ -453,14 +536,17 @@ export function createOpenAICompatibleProvider(
 			output: (modelConfig.outputCostPerMillion ?? 0) / 1_000_000,
 		},
 		id: assertNonEmpty(modelConfig.modelId, "Model ID"),
-		input: ["text" as const],
+		input:
+			modelConfig.inputModalities?.includes("image") === true
+				? (["text", "image"] satisfies ("text" | "image")[])
+				: (["text"] satisfies ("text" | "image")[]),
 		maxTokens: modelConfig.maxOutputTokens ?? 4_096,
-		name: modelConfig.modelId,
+		name: modelConfig.name ?? modelConfig.modelId,
 		provider: providerId,
-		reasoning: false,
+		reasoning: modelConfig.supportsReasoning ?? false,
 	}));
 	return createProvider({
-		api: createOpenAICompatibleStreams(providerConfig),
+		api: createOpenAICompatibleStreams(providerConfig, modelConfigs),
 		auth: {
 			apiKey: {
 				name: "OpenAI-compatible API key",
