@@ -3,63 +3,29 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
-	Activity,
 	ChevronDown,
-	Circle,
 	LogOut,
 	Moon,
 	PanelLeft,
 	Puzzle,
 	Settings,
-	SlidersHorizontal,
 	Sparkles,
 	Sun,
+	Terminal,
 } from "lucide-react";
-import { useState } from "react";
-import { Button } from "@elaina/ui/components/motion/button";
+import { useEffect, useState } from "react";
+import { Button, IconButton } from "@elaina/ui/components/motion/button";
 import {
 	MorphPopover,
 	MorphPopoverContent,
 	MorphPopoverTrigger,
 } from "@elaina/ui/components/motion/popover-morph";
-import { orpc, type DiagnosticsData } from "@/lib/api";
+import { orpc } from "@/lib/api";
 import { authClient, authSessionQueryKey, authSessionQueryOptions } from "@/lib/auth";
 import { applyTheme, getInitialTheme, type Theme } from "@/lib/theme";
 import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
-
-type ConnectionTone = "success" | "warning" | "danger" | "muted";
-
-function connectionStatus(data: DiagnosticsData | undefined): {
-	label: () => string;
-	tone: ConnectionTone;
-} {
-	if (data === undefined) return { label: m.connect_connecting, tone: "muted" };
-	const channel = data.channels[0];
-	if (channel === undefined) return { label: m.connect_unconfigured, tone: "muted" };
-	const state = channel.state;
-	if (!channel.configured) {
-		return channel.restartRequired
-			? { label: m.connect_disconnected, tone: "danger" }
-			: { label: m.connect_unconfigured, tone: "muted" };
-	}
-	if (state === "open" && channel.connected) {
-		return { label: m.connect_connected, tone: "success" };
-	}
-	if (state === "connecting") return { label: m.connect_connecting, tone: "warning" };
-	if (state === "reconnecting") return { label: m.connect_reconnecting, tone: "warning" };
-	if (channel.lastErrorClass !== null) {
-		return { label: m.connect_error, tone: "danger" };
-	}
-	return { label: m.connect_disconnected, tone: "danger" };
-}
-
-const toneClass: Record<ConnectionTone, string> = {
-	danger: "text-destructive",
-	muted: "text-muted-foreground",
-	success: "text-(--color-success)",
-	warning: "text-warning",
-};
+import { LogPanel } from "./log-panel";
 
 export function TopBar({
 	mobile,
@@ -71,7 +37,7 @@ export function TopBar({
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
-	const diagnostics = useQuery(orpc.admin.diagnostics.status.queryOptions());
+	const [logsOpen, setLogsOpen] = useState(false);
 	const session = useQuery(authSessionQueryOptions());
 	const signOut = useMutation({
 		mutationFn: async () => {
@@ -86,25 +52,32 @@ export function TopBar({
 			void navigate({ replace: true, to: "/login" });
 		},
 	});
-	const status = connectionStatus(diagnostics.data);
-
 	const toggleTheme = () => {
 		const next = theme === "dark" ? "light" : "dark";
 		setTheme(next);
 		applyTheme(next);
 	};
 
+	useEffect(() => {
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (!(event.ctrlKey || event.metaKey) || event.key !== "`") return;
+			event.preventDefault();
+			setLogsOpen((value) => !value);
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, []);
+
 	return (
-		<header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-3 sm:px-4">
-			<Button
-				variant="ghost"
-				size="icon"
-				onClick={onToggleSidebar}
-				aria-label={mobile ? m.topbar_sidebar_toggle() : m.topbar_sidebar_toggle()}
-				className="size-9 rounded-lg"
-			>
-				<PanelLeft className="size-4" />
-			</Button>
+		<>
+			<header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-3 sm:px-4">
+				<IconButton
+					label={mobile ? m.topbar_sidebar_toggle() : m.topbar_sidebar_toggle()}
+					className="size-9 rounded-lg"
+					onClick={onToggleSidebar}
+				>
+					<PanelLeft className="size-4" />
+				</IconButton>
 			<div className="flex min-w-0 items-center gap-2.5">
 				<span className="grid size-8 place-items-center rounded-xl bg-primary text-primary-foreground">
 					<Sparkles className="size-4" />
@@ -115,48 +88,29 @@ export function TopBar({
 				</div>
 			</div>
 
-			<div className="ml-auto flex items-center gap-1">
-				<span
-					className={cn(
-						"mr-1 hidden h-8 items-center gap-1.5 rounded-full border border-border px-3 text-xs font-medium sm:inline-flex",
-						toneClass[status.tone],
-					)}
-					title={status.label()}
-				>
-					<Circle className="size-2 fill-current" />
-					<span className="max-w-28 truncate">{status.label()}</span>
-				</span>
-				<span
-					role="status"
-					aria-label={status.label()}
-					title={status.label()}
-					className={cn(
-						"inline-flex size-8 items-center justify-center text-[10px] font-medium sm:hidden",
-						toneClass[status.tone],
-					)}
-				>
-					<Circle className="size-2.5 fill-current" />
-				</span>
-				<Button
-					variant="ghost"
-					size="icon"
-					onClick={() => void navigate({ to: "/plugins" })}
-					aria-label={m.nav_plugins()}
-					title={m.nav_plugins()}
-					className="size-9 rounded-lg"
-				>
-					<Puzzle className="size-4" />
-				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					onClick={() => void navigate({ to: "/settings" })}
-					aria-label={m.nav_settings()}
-					title={m.nav_settings()}
-					className="size-9 rounded-lg"
-				>
-					<Settings className="size-4" />
-				</Button>
+				<div className="ml-auto flex items-center gap-1">
+					<IconButton
+						label={m.logs_title()}
+						title={`${m.logs_title()} (${m.logs_shortcut()})`}
+						className={cn("size-9 rounded-lg", logsOpen && "bg-muted text-foreground")}
+						onClick={() => setLogsOpen((value) => !value)}
+					>
+						<Terminal className="size-4" />
+					</IconButton>
+					<IconButton
+						label={m.nav_plugins()}
+						className="size-9 rounded-lg"
+						onClick={() => void navigate({ to: "/plugins" })}
+					>
+						<Puzzle className="size-4" />
+					</IconButton>
+					<IconButton
+						label={m.nav_settings()}
+						className="size-9 rounded-lg"
+						onClick={() => void navigate({ to: "/settings" })}
+					>
+						<Settings className="size-4" />
+					</IconButton>
 				<MorphPopover>
 					<MorphPopoverTrigger>
 						<Button
@@ -171,35 +125,15 @@ export function TopBar({
 						</Button>
 					</MorphPopoverTrigger>
 					<MorphPopoverContent align="end" sideOffset={8} radius={12} className="w-56 p-1.5">
-						<button
-							type="button"
-							onClick={() => void navigate({ to: "/policies" })}
-							className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-						>
-							<SlidersHorizontal className="size-4 text-muted-foreground" />
-							{m.nav_policies()}
-						</button>
-						<button
-							type="button"
-							onClick={() => void navigate({ to: "/diagnostics" })}
-							className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-						>
-							<Activity className="size-4 text-muted-foreground" />
-							{m.nav_diagnostics()}
-						</button>
-						<div className="my-1 h-px bg-border" />
-						<button
-							type="button"
+						<Button
+							className="h-auto justify-start rounded-lg px-2.5 py-2"
+							fullWidth
+							leadingIcon={theme === "dark" ? <Sun /> : <Moon />}
 							onClick={toggleTheme}
-							className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+							variant="ghost"
 						>
-							{theme === "dark" ? (
-								<Sun className="size-4 text-muted-foreground" />
-							) : (
-								<Moon className="size-4 text-muted-foreground" />
-							)}
 							{m.theme_toggle()}
-						</button>
+						</Button>
 						<div className="my-1 h-px bg-border" />
 						{session.data?.user === undefined ? null : (
 							<div className="truncate px-2.5 pb-1 text-[11px] text-muted-foreground">
@@ -208,18 +142,21 @@ export function TopBar({
 								})}
 							</div>
 						)}
-						<button
-							type="button"
+						<Button
+							className="h-auto justify-start rounded-lg px-2.5 py-2"
 							disabled={signOut.isPending}
+							fullWidth
+							leadingIcon={<LogOut />}
 							onClick={() => signOut.mutate()}
-							className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+							variant="ghost"
 						>
-							<LogOut className="size-4 text-muted-foreground" />
 							{m.auth_sign_out()}
-						</button>
+						</Button>
 					</MorphPopoverContent>
 				</MorphPopover>
-			</div>
-		</header>
+				</div>
+			</header>
+			<LogPanel open={logsOpen} onClose={() => setLogsOpen(false)} />
+		</>
 	);
 }
