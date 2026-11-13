@@ -1,4 +1,9 @@
-import type { MessageEnvelope, MessagePart } from "@elaina/contracts";
+import type {
+	MessageEnvelope,
+	MessagePart,
+	PluginStatusInput,
+	PluginStatusSnapshot,
+} from "@elaina/contracts";
 import type {
 	PluginAuditApi,
 	PluginChannelRegistry,
@@ -51,6 +56,11 @@ export interface PluginToolRegistry {
 export interface PluginUiRegistry {
 	register(definition: PluginUiDefinition): void;
 	list(): readonly PluginUiDefinition[];
+	/**
+	 * Publish a health/status snapshot for the plugin page. The host validates and stamps it.
+	 * A null value clears the current status.
+	 */
+	setStatus(status: PluginStatusInput | null): void;
 }
 
 export interface PluginModelDescriptor {
@@ -152,6 +162,8 @@ export interface PluginUiDefinition {
 	component: string;
 	data: Record<string, unknown>;
 }
+
+export type PluginStatusListener = (status: PluginStatusSnapshot | null) => void;
 
 export type PluginHookName =
 	| "message.received"

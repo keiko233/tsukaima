@@ -3,13 +3,19 @@
 	"version": "0.1.0",
 	"apiVersion": "1",
 	"kind": "builtin",
-	"permissions": ["model.call", "settings"],
+	"permissions": ["ui.panel", "model.call", "settings"],
 	"configSchema": {
 		"type": "object",
 		"properties": {
-			"baseUrl": { "type": "string" },
-			"apiKey": { "type": "string" },
-			"modelId": { "type": "string" }
+			"baseUrl": {
+				"type": "string"
+			},
+			"apiKey": {
+				"type": "string"
+			},
+			"modelId": {
+				"type": "string"
+			}
 		}
 	},
 	"configEnv": {
@@ -24,7 +30,9 @@
 			"id": "openai-compatible.settings",
 			"title": "OpenAI-compatible provider",
 			"component": "plugin-config-form",
-			"data": { "restartRequired": true }
+			"data": {
+				"restartRequired": true
+			}
 		}
 	]
 }

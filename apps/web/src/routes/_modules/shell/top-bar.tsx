@@ -16,16 +16,16 @@ import {
 	Sun,
 } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@/components/motion/button";
+import { Button } from "@elaina/ui/components/motion/button";
 import {
 	MorphPopover,
 	MorphPopoverContent,
 	MorphPopoverTrigger,
-} from "@/components/motion/popover-morph";
+} from "@elaina/ui/components/motion/popover-morph";
 import { orpc, type DiagnosticsData } from "@/lib/api";
 import { authClient, authSessionQueryKey, authSessionQueryOptions } from "@/lib/auth";
 import { applyTheme, getInitialTheme, type Theme } from "@/lib/theme";
-import { cn } from "@/lib/utils";
+import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 
 type ConnectionTone = "success" | "warning" | "danger" | "muted";

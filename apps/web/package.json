@@ -4,16 +4,19 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"dev": "vite --host 127.0.0.1 --port 7421",
-		"build": "vite build",
+		"dev": "bun run scripts/compile-plugin-i18n.ts && vite --host 127.0.0.1 --port 7421",
+		"build": "bun run scripts/compile-plugin-i18n.ts && vite build",
 		"preview": "vite preview --host 127.0.0.1 --port 7421",
 		"test": "bun test",
 		"typecheck": "tsc --noEmit",
 		"check:i18n": "inlang check --project ./project.inlang",
-		"lint:i18n": "oxlint --config ./.oxlintrc.paraglide.json ."
+		"lint:i18n": "oxlint --config ./.oxlintrc.paraglide.json .",
+		"i18n:plugins": "bun run scripts/compile-plugin-i18n.ts"
 	},
 	"dependencies": {
 		"@elaina/contracts": "workspace:*",
+		"@elaina/sdk": "workspace:*",
+		"@elaina/ui": "workspace:*",
 		"@inlang/paraglide-js": "^3.2.2",
 		"@orpc/client": "1.16.2",
 		"@orpc/contract": "1.16.2",

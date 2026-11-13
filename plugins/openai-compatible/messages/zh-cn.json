@@ -1,0 +1,18 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"plugin_name": "OpenAI 兼容 Provider",
+	"plugin_description": "注册一个 OpenAI 兼容的聊天模型 Provider。",
+	"panel_provider": "Provider",
+	"panel_settings": "设置",
+	"provider_title": "模型 Provider",
+	"provider_hint": "宿主会在插件准备完成后解析该 Provider。修改模型 ID 后，新会话生效。",
+	"model": "模型",
+	"base_url": "Base URL",
+	"configured": "已配置",
+	"not_configured": "未配置",
+	"save": "保存",
+	"configured_placeholder": "已配置；输入新值以替换",
+	"unset_placeholder": "未配置",
+	"status_configured": "Provider 已配置",
+	"status_unconfigured": "Provider 凭据不完整"
+}

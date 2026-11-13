@@ -12,7 +12,7 @@ import {
 	type PointerEvent,
 	type ReactNode,
 } from "react";
-import { cn } from "@/lib/utils";
+import { cn } from "@elaina/ui/lib/utils";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { AppSidebar } from "./app-sidebar";
 import { TopBar } from "./top-bar";
@@ -115,6 +115,7 @@ export function AdminShell({ children }: { readonly children?: ReactNode }) {
 	const sidebarVisible = mobile ? mobilePane === "sidebar" : sidebarOpen;
 	const contentVisible = mobile ? mobilePane === "content" : true;
 	const chatRoute = isChatRoute(pathname);
+	const pluginRoute = pathname === "/plugins" || pathname.startsWith("/plugins/");
 	const fullBleedRoute = pathname === "/diagnostics";
 
 	return (
@@ -156,7 +157,7 @@ export function AdminShell({ children }: { readonly children?: ReactNode }) {
 							!contentVisible && "hidden",
 						)}
 					>
-						{chatRoute ? (
+						{chatRoute || pluginRoute ? (
 							(children ?? <Outlet />)
 						) : (
 							<div className="min-h-0 flex-1 overflow-y-auto">

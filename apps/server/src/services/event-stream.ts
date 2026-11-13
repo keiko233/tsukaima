@@ -176,6 +176,14 @@ export function createLiveEventStream(
 	return createSseResponse(request, (send) => {
 		const hooks: HookBus = lifecycle.hooks;
 		const disposers = [
+			lifecycle.pluginStatuses.subscribe((pluginId, status) => {
+				publish(send, logger, {
+					pluginId,
+					status,
+					timestamp: timestamp(),
+					type: "plugin.status",
+				});
+			}),
 			hooks.on("message.received", (payload) => {
 				const parsed = messageReceivedHookSchema.safeParse(payload);
 				if (!parsed.success) {
@@ -256,6 +264,14 @@ export function createLiveEventStream(
 			timestamp: timestamp(),
 			type: "snapshot",
 		});
+		for (const [pluginId, status] of lifecycle.pluginStatuses.list()) {
+			publish(send, logger, {
+				pluginId,
+				status,
+				timestamp: timestamp(),
+				type: "plugin.status",
+			});
+		}
 		return () => {
 			for (const dispose of disposers) dispose();
 			clearInterval(heartbeat);

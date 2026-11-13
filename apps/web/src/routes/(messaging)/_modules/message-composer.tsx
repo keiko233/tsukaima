@@ -2,10 +2,10 @@
 
 import { MessageCircle, Send } from "lucide-react";
 import { useEffect, useState } from "react";
-import { PromptInput } from "@/components/agents/prompt-input";
-import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/motion/select";
+import { PromptInput } from "@elaina/ui/components/agents/prompt-input";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@elaina/ui/components/motion/select";
 import type { MessageSummary } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 
 type DeliveryTarget = "channel" | "elaina";

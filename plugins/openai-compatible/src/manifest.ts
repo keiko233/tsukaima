@@ -20,7 +20,7 @@ export const openAiCompatibleManifest: PluginManifest = pluginManifestSchema.par
 	},
 	kind: "builtin",
 	name: OPENAI_COMPATIBLE_PLUGIN_ID,
-	permissions: ["model.call", "settings"],
+	permissions: ["ui.panel", "model.call", "settings"],
 	secretKeys: ["apiKey"],
 	ui: [
 		{

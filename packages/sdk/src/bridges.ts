@@ -29,6 +29,8 @@ import type {
 	ToolInvocationContext,
 	ToolResult,
 } from "./types.ts";
+import { pluginStatusInputSchema } from "@elaina/contracts";
+import type { PluginStatusSnapshot } from "@elaina/contracts";
 
 export class LocalPluginEventBridge {
 	readonly #handlers = new Map<PluginHookName, Set<(payload: unknown) => Promise<void> | void>>();
@@ -108,13 +110,72 @@ export class LocalToolBridge {
 
 export class LocalUiBridge {
 	readonly #definitions = new Map<string, PluginUiDefinition>();
+	readonly #onStatus: ((status: PluginStatusSnapshot | null) => void) | undefined;
+	readonly #pluginId: string;
+	readonly #grantedPermissions: readonly string[];
+	#status: PluginStatusSnapshot | null = null;
+
+	constructor(
+		options: {
+			readonly onStatus?: (status: PluginStatusSnapshot | null) => void;
+			readonly pluginId?: string;
+			readonly grantedPermissions?: readonly string[];
+		} = {},
+	) {
+		this.#onStatus = options.onStatus;
+		this.#pluginId = options.pluginId ?? "plugin";
+		this.#grantedPermissions = options.grantedPermissions ?? ["ui.panel"];
+	}
 
 	register(definition: PluginUiDefinition): void {
+		assertPermission(this.#grantedPermissions, "ui.panel", this.#pluginId);
 		this.#definitions.set(definition.id, definition);
 	}
 
 	list(): readonly PluginUiDefinition[] {
 		return [...this.#definitions.values()];
+	}
+
+	setStatus(input: unknown): void {
+		if (!hasPermission(this.#grantedPermissions, "ui.panel")) {
+			console.warn(
+				`elaina: plugin ${this.#pluginId} is not granted permission ui.panel; status dropped`,
+			);
+			return;
+		}
+		if (input === null) {
+			this.#status = null;
+			this.#onStatus?.(null);
+			return;
+		}
+		const parsed = pluginStatusInputSchema.safeParse(input);
+		if (!parsed.success) {
+			console.warn("elaina: dropped invalid plugin status", parsed.error.message);
+			return;
+		}
+		const metrics = parsed.data.metrics;
+		const details = parsed.data.details;
+		if (
+			(metrics !== undefined && Object.keys(metrics).length > 32) ||
+			(details !== undefined && Object.keys(details).length > 32)
+		) {
+			console.warn("elaina: dropped plugin status with too many fields");
+			return;
+		}
+		const status: PluginStatusSnapshot = {
+			...parsed.data,
+			updatedAt: new Date().toISOString(),
+		};
+		if (JSON.stringify(status).length > 8192) {
+			console.warn("elaina: dropped oversized plugin status");
+			return;
+		}
+		this.#status = status;
+		this.#onStatus?.(status);
+	}
+
+	currentStatus(): PluginStatusSnapshot | null {
+		return this.#status;
 	}
 }
 
@@ -390,6 +451,7 @@ export interface PluginContextOptions {
 	requests?: PluginRequestApi;
 	audit?: PluginAuditApi;
 	dependencies?: PluginDependencyBag;
+	onStatus?: (status: PluginStatusSnapshot | null) => void;
 }
 
 export function createPluginContext(options: PluginContextOptions = {}): PluginContext {
@@ -406,7 +468,11 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 			version: "0.0.0",
 		});
 	const tools = new LocalToolBridge(pluginId, options.grantedPermissions ?? manifest.permissions);
-	const ui = new LocalUiBridge();
+	const ui = new LocalUiBridge({
+		grantedPermissions: options.grantedPermissions ?? manifest.permissions,
+		pluginId,
+		...(options.onStatus === undefined ? {} : { onStatus: options.onStatus }),
+	});
 	const models = options.models ?? new LocalModelRegistry();
 	const rpc = options.rpc ?? new LocalRpcBridge();
 	return {

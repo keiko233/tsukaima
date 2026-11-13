@@ -30,6 +30,7 @@ import { DrizzleContextProvider } from "./services/context-provider.ts";
 import { HookBus } from "./services/hook-bus.ts";
 import { PluginHost } from "./services/plugin-host.ts";
 import { PluginSettingsStore } from "./services/plugin-settings.ts";
+import { PluginStatusStore } from "./services/plugin-status.ts";
 import { ReplyDispatcher } from "./services/reply-dispatcher.ts";
 import { RequestService } from "./services/request-service.ts";
 
@@ -61,6 +62,7 @@ export class ElainaLifecycle {
 	readonly hooks: HookBus;
 	readonly pluginHost: PluginHost;
 	readonly pluginSettings: PluginSettingsStore;
+	readonly pluginStatuses: PluginStatusStore;
 	readonly replyDispatcher: ReplyDispatcher;
 	readonly requestService: RequestService;
 	private currentState: LifecycleState["state"] = "starting";
@@ -124,6 +126,7 @@ export class ElainaLifecycle {
 			database: () => this.domainDatabase,
 			env: options?.env ?? {},
 		});
+		this.pluginStatuses = new PluginStatusStore();
 		this.replyDispatcher = new ReplyDispatcher({
 			audit: (entry) => this.writeAudit(entry),
 			channels: this.channels,
@@ -140,6 +143,7 @@ export class ElainaLifecycle {
 			plugins: options?.plugins ?? builtinPlugins,
 			requests: this.requestService,
 			settings: this.pluginSettings,
+			statuses: this.pluginStatuses,
 		});
 	}
 
@@ -311,6 +315,10 @@ export class ElainaLifecycle {
 	/** Apply configuration for a built-in plugin; plugins react through `settings.onChange`. */
 	async updatePluginConfig(pluginId: string, patch: Record<string, unknown>): Promise<void> {
 		await this.pluginHost.applySettings(pluginId, patch);
+	}
+
+	async setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
+		await this.pluginHost.setEnabled(pluginId, enabled);
 	}
 
 	async pluginConfig(pluginId: string): Promise<Record<string, unknown>> {

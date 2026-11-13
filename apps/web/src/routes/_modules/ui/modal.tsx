@@ -2,7 +2,7 @@
 
 import { X } from "lucide-react";
 import { useEffect, useId, useRef, type ReactNode } from "react";
-import { cn } from "@/lib/utils";
+import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 
 export interface ModalProps {

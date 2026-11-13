@@ -4,9 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight, MessageCircle, Users } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@/components/motion/button";
+import { Button } from "@elaina/ui/components/motion/button";
 import { orpc } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { InlineError, SidebarEmpty, Avatar } from "./primitives";
 

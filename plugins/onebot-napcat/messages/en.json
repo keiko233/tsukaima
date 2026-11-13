@@ -1,0 +1,21 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"plugin_name": "OneBot / NapCat",
+	"plugin_description": "Connects Elaina to a NapCat OneBot v11 WebSocket.",
+	"panel_connection": "Connection",
+	"panel_settings": "Settings",
+	"connection_title": "Channel status",
+	"connection_hint": "The adapter reconnects automatically; a configuration change restarts the connection.",
+	"events": "Events",
+	"reconnects": "Reconnects",
+	"endpoint": "Endpoint",
+	"reconnect": "Reconnect now",
+	"reconnect_started": "Reconnect started",
+	"reconnect_failed": "Reconnect failed",
+	"status_connected": "Connected to NapCat",
+	"status_disconnected": "Disconnected from NapCat",
+	"status_unconfigured": "WebSocket URL is not configured",
+	"save": "Save",
+	"configured": "Configured; enter a new value to replace it",
+	"unset": "Not configured"
+}

@@ -2,8 +2,8 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Button } from "@/components/motion/button";
-import { Input } from "@/components/motion/input";
+import { Button } from "@elaina/ui/components/motion/button";
+import { Input } from "@elaina/ui/components/motion/input";
 import { orpc, type PluginRow } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";

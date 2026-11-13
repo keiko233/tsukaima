@@ -208,6 +208,36 @@ export type UserDetail = z.infer<typeof userDetailSchema>;
 
 // ─── Plugins ─────────────────────────────────────────────────────────────────
 
+export const pluginStatusLevelSchema = z.enum(["ok", "warning", "error", "unknown"]);
+export type PluginStatusLevel = z.infer<typeof pluginStatusLevelSchema>;
+
+const pluginStatusScalarSchema = z.union([z.string().max(2048), z.number(), z.boolean()]);
+
+export const pluginStatusInputSchema = z.object({
+	level: pluginStatusLevelSchema,
+	code: z.string().max(256).optional(),
+	summary: z.string().max(2048).optional(),
+	message: z.string().max(8192).optional(),
+	progress: z
+		.object({
+			current: z.number().nonnegative(),
+			total: z.number().positive().optional(),
+			label: z.string().max(512).optional(),
+		})
+		.optional(),
+	metrics: z.record(z.string().max(128), pluginStatusScalarSchema).optional(),
+	details: z
+		.record(z.string().max(128), z.union([z.string().max(2048), z.number(), z.boolean(), z.null()]))
+		.optional(),
+	staleAfterMs: z.number().int().positive().max(86_400_000).optional(),
+});
+export type PluginStatusInput = z.infer<typeof pluginStatusInputSchema>;
+
+export const pluginStatusSnapshotSchema = pluginStatusInputSchema.extend({
+	updatedAt: z.string().min(1),
+});
+export type PluginStatusSnapshot = z.infer<typeof pluginStatusSnapshotSchema>;
+
 export const pluginRowSchema = z.object({
 	apiVersion: z.string(),
 	config: z.record(z.string(), z.unknown()),
@@ -217,9 +247,13 @@ export const pluginRowSchema = z.object({
 	kind: z.enum(["builtin", "first-party", "third-party"]),
 	modelProviders: z.array(z.string()).readonly(),
 	name: z.string(),
+	permissions: z.array(z.string()).readonly(),
 	runMode: z.enum(["host", "worker"]),
+	rpcMethods: z.array(z.string()).readonly(),
 	secretKeys: z.array(z.string()).readonly(),
 	secretsSet: z.array(z.string()).readonly(),
+	status: pluginStatusSnapshotSchema.nullable(),
+	tools: z.array(z.string()).readonly(),
 	ui: z
 		.array(
 			z.object({
@@ -246,9 +280,15 @@ export const pluginConfigUpdateInputSchema = z.object({
 	pluginId: z.string().min(1),
 });
 
+export const pluginEnabledUpdateInputSchema = z.object({
+	enabled: z.boolean(),
+	pluginId: z.string().min(1),
+});
+
 export const pluginRpcInputSchema = z.object({
 	input: z.unknown().optional(),
 	method: z.string().min(1),
+	pluginId: z.string().min(1).optional(),
 });
 
 // ─── Diagnostics ─────────────────────────────────────────────────────────────
@@ -505,6 +545,13 @@ export const liveAfterReplyEventSchema = liveReplyEventBaseSchema.extend({
 });
 export type LiveAfterReplyEvent = z.infer<typeof liveAfterReplyEventSchema>;
 
+export const livePluginStatusEventSchema = liveEventTimestampSchema.extend({
+	pluginId: z.string().min(1),
+	status: pluginStatusSnapshotSchema.nullable(),
+	type: z.literal("plugin.status"),
+});
+export type LivePluginStatusEvent = z.infer<typeof livePluginStatusEventSchema>;
+
 export const liveEventSchema = z.discriminatedUnion("type", [
 	liveSnapshotEventSchema,
 	liveHeartbeatEventSchema,
@@ -513,6 +560,7 @@ export const liveEventSchema = z.discriminatedUnion("type", [
 	liveActivityClosedEventSchema,
 	liveBeforeReplyEventSchema,
 	liveAfterReplyEventSchema,
+	livePluginStatusEventSchema,
 ]);
 export type LiveEvent = z.infer<typeof liveEventSchema>;
 
@@ -549,6 +597,10 @@ export const appContract = oc.router({
 		plugins: {
 			list: oc.output(z.array(pluginRowSchema)),
 			rpc: oc.input(pluginRpcInputSchema).output(z.unknown()).meta({ audit: true }),
+			setEnabled: oc
+				.input(pluginEnabledUpdateInputSchema)
+				.output(pluginRowSchema)
+				.meta({ audit: true }),
 			updateConfig: oc
 				.input(pluginConfigUpdateInputSchema)
 				.output(

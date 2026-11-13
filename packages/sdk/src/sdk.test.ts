@@ -104,6 +104,38 @@ describe("plugin sdk", () => {
 		expect(ui.list()).toEqual([definition]);
 	});
 
+	test("requires ui.panel for UI registration and status", () => {
+		const denied = new LocalUiBridge({ grantedPermissions: [], pluginId: "sample" });
+		expect(() =>
+			denied.register({
+				component: "ReviewPanel",
+				data: {},
+				id: "sample.review",
+				kind: "panel",
+				title: "Review",
+			}),
+		).toThrow(PermissionDeniedError);
+		denied.setStatus({ level: "ok" });
+		expect(denied.currentStatus()).toBeNull();
+
+		const statuses: unknown[] = [];
+		const allowed = new LocalUiBridge({
+			grantedPermissions: ["ui.panel"],
+			onStatus: (status) => statuses.push(status),
+			pluginId: "sample",
+		});
+		allowed.setStatus({ level: "ok", metrics: { events: 3 }, summary: "Connected" });
+		expect(allowed.currentStatus()).toEqual(
+			expect.objectContaining({ level: "ok", summary: "Connected" }),
+		);
+		expect(statuses).toHaveLength(1);
+		allowed.setStatus({ level: "not-a-level" } as never);
+		expect(statuses).toHaveLength(1);
+		allowed.setStatus(null);
+		expect(allowed.currentStatus()).toBeNull();
+		expect(statuses).toHaveLength(2);
+	});
+
 	test("adapts plugin tools to durable registrations with audit", async () => {
 		const audits: AuditEntry[] = [];
 		const invocations: Array<{

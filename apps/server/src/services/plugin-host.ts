@@ -14,10 +14,12 @@ import {
 	type ToolInvocationContext,
 } from "@elaina/sdk";
 import { PluginRegistry, type InstalledPlugin } from "@elaina/plugin-registry";
+import type { PluginStatusSnapshot } from "@elaina/contracts";
 import type { Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 import type { HookBus } from "./hook-bus.ts";
 import type { PluginSettingsStore } from "./plugin-settings.ts";
+import type { PluginStatusStore } from "./plugin-status.ts";
 import type { RequestService } from "./request-service.ts";
 
 export interface PluginHostOptions {
@@ -29,6 +31,7 @@ export interface PluginHostOptions {
 	readonly plugins: readonly ElainaPlugin[];
 	readonly requests: RequestService;
 	readonly settings: PluginSettingsStore;
+	readonly statuses: PluginStatusStore;
 }
 
 export interface PluginHostEntry {
@@ -41,9 +44,13 @@ export interface PluginHostEntry {
 	readonly kind: PluginManifest["kind"];
 	readonly modelProviders: readonly string[];
 	readonly name: string;
+	readonly permissions: readonly string[];
 	readonly runMode: InstalledPlugin["runMode"];
+	readonly rpcMethods: readonly string[];
 	readonly secretKeys: readonly string[];
 	readonly secretsSet: readonly string[];
+	readonly status: PluginStatusSnapshot | null;
+	readonly tools: readonly string[];
 	readonly ui: readonly {
 		readonly component: string;
 		readonly data: Record<string, unknown>;
@@ -75,6 +82,8 @@ export class PluginHost {
 	readonly #rpcHandlers = new Map<string, PluginRpcHandler>();
 	readonly #requests: RequestService;
 	readonly #started: string[] = [];
+	readonly #statuses: PluginStatusStore;
+	readonly #rpcOwners = new Map<string, string>();
 
 	constructor(options: PluginHostOptions) {
 		this.#options = options;
@@ -85,6 +94,7 @@ export class PluginHost {
 		this.#requests = options.requests;
 		this.channels = options.channels;
 		this.settings = options.settings;
+		this.#statuses = options.statuses;
 	}
 
 	async list(): Promise<readonly PluginHostEntry[]> {
@@ -105,9 +115,17 @@ export class PluginHost {
 					.filter(([, owner]) => owner === installed.manifest.name)
 					.map(([providerId]) => providerId),
 				name: installed.manifest.name,
+				permissions: installed.manifest.permissions,
 				runMode: installed.runMode,
+				rpcMethods: [...this.#rpcOwners.entries()]
+					.filter(([, owner]) => owner === installed.manifest.name)
+					.map(([method]) => method),
 				secretKeys: installed.manifest.secretKeys,
 				secretsSet: [...view.secretsSet],
+				status: this.#statuses.get(installed.manifest.name) ?? null,
+				tools: this.tools()
+					.filter((tool) => tool.name.startsWith(`${installed.manifest.name}.`))
+					.map((tool) => tool.name),
 				ui: ui.map((definition) => ({
 					component: definition.component,
 					data: definition.data,
@@ -174,7 +192,10 @@ export class PluginHost {
 	}
 
 	/** Invoke a WebUI-visible plugin RPC method. Methods are namespaced by plugin id. */
-	async invokeRpc(method: string, input: unknown): Promise<unknown> {
+	async invokeRpc(method: string, input: unknown, pluginId?: string): Promise<unknown> {
+		if (pluginId !== undefined && !method.startsWith(`${pluginId}.`)) {
+			throw new Error(`Plugin RPC method ${method} does not belong to ${pluginId}`);
+		}
 		const handler = this.#rpcHandlers.get(method);
 		if (handler === undefined) throw new Error(`Unknown plugin RPC method: ${method}`);
 		return handler(input);
@@ -225,14 +246,16 @@ export class PluginHost {
 			this.#plugins.set(manifest.name, plugin);
 			if (this.#prepared.has(manifest.name)) continue;
 			if (this.#registry.get(manifest.name) === undefined) {
+				const enabled = await this.settings.isEnabled(manifest.name);
 				this.#registry.install(manifest, {
-					enabled: true,
+					enabled,
 					grantedPermissions: manifest.permissions,
 					runMode: "host",
 				});
 			}
 			const context = this.#createContext(manifest);
 			this.#contexts.set(manifest.name, context);
+			if (this.#registry.get(manifest.name)?.enabled === false) continue;
 			try {
 				await plugin.prepare?.(context);
 				this.#prepared.add(manifest.name);
@@ -248,6 +271,7 @@ export class PluginHost {
 	async start(): Promise<void> {
 		await this.prepare();
 		for (const plugin of this.#options.plugins) {
+			if (this.#registry.get(plugin.manifest.name)?.enabled === false) continue;
 			await this.#startPlugin(plugin);
 		}
 	}
@@ -268,12 +292,37 @@ export class PluginHost {
 		}
 		this.#started.length = 0;
 		this.#rpcHandlers.clear();
+		this.#rpcOwners.clear();
 		this.#modelProviders.clear();
 		this.#modelProviderOwners.clear();
 	}
 
 	async applySettings(pluginId: string, patch: Record<string, unknown>): Promise<unknown> {
 		return this.settings.write(pluginId, patch);
+	}
+
+	/** Persist an enable/disable choice and start or stop the plugin immediately. */
+	async setEnabled(pluginId: string, enabled: boolean): Promise<void> {
+		const installed = this.#registry.get(pluginId);
+		if (installed === undefined) throw new Error(`Unknown plugin ${pluginId}`);
+		await this.settings.setEnabled(pluginId, enabled);
+		this.#registry.setEnabled(pluginId, enabled);
+		if (!enabled) {
+			await this.#stopPlugin(pluginId);
+			return;
+		}
+		const plugin = this.#plugins.get(pluginId);
+		if (plugin !== undefined && !this.#started.includes(pluginId)) {
+			// `prepare` owns host surfaces such as model providers. Re-run it after a
+			// disable/enable cycle so those surfaces are registered again.
+			if (!this.#prepared.has(pluginId)) {
+				const context = this.#contexts.get(pluginId) ?? this.#createContext(plugin.manifest);
+				this.#contexts.set(pluginId, context);
+				await plugin.prepare?.(context);
+				this.#prepared.add(pluginId);
+			}
+			await this.#startPlugin(plugin);
+		}
 	}
 
 	async #startPlugin(plugin: ElainaPlugin): Promise<void> {
@@ -292,6 +341,34 @@ export class PluginHost {
 				pluginId,
 			});
 		}
+	}
+
+	async #stopPlugin(pluginId: string): Promise<void> {
+		const context = this.#contexts.get(pluginId);
+		const plugin = this.#plugins.get(pluginId);
+		if (context === undefined || plugin === undefined) return;
+		try {
+			await plugin.teardown?.(context);
+		} catch (error) {
+			this.#logger.warn("plugin teardown failed", {
+				error: error instanceof Error ? error.message : String(error),
+				pluginId,
+			});
+		}
+		const index = this.#started.indexOf(pluginId);
+		if (index !== -1) this.#started.splice(index, 1);
+		for (const [method, owner] of this.#rpcOwners) {
+			if (owner !== pluginId) continue;
+			this.#rpcHandlers.delete(method);
+			this.#rpcOwners.delete(method);
+		}
+		for (const [providerId, owner] of this.#modelProviderOwners) {
+			if (owner !== pluginId) continue;
+			this.#modelProviders.delete(providerId);
+			this.#modelProviderOwners.delete(providerId);
+		}
+		this.#statuses.clear(pluginId);
+		this.#prepared.delete(pluginId);
 	}
 
 	#createContext(manifest: PluginManifest): PluginContext {
@@ -327,8 +404,10 @@ export class PluginHost {
 					throw new Error(`Plugin RPC method ${name} is already registered`);
 				}
 				this.#rpcHandlers.set(name, handler);
+				this.#rpcOwners.set(name, pluginId);
 				return () => {
 					this.#rpcHandlers.delete(name);
+					this.#rpcOwners.delete(name);
 				};
 			},
 		};
@@ -343,6 +422,9 @@ export class PluginHost {
 			manifest,
 			models,
 			pluginId,
+			onStatus: (status) => {
+				this.#statuses.set(pluginId, status);
+			},
 			rpc,
 			requests: { persist: async (request) => this.#requests.persist(request) },
 			settings,

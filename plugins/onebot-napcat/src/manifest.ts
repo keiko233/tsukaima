@@ -29,7 +29,7 @@ export const oneBotNapCatManifest: PluginManifest = pluginManifestSchema.parse({
 	hooks: [{ name: "channel.connected" }, { name: "channel.disconnected" }],
 	kind: "builtin",
 	name: ONEBOT_PLUGIN_ID,
-	permissions: ["channel.send", "channel.interact", "conversation.read", "audit.write"],
+	permissions: ["ui.panel", "channel.send", "channel.interact", "conversation.read", "audit.write"],
 	secretKeys: ["accessToken"],
 	version: "0.1.0",
 });

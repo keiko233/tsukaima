@@ -2,6 +2,7 @@
 
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { liveEventSchema, type LiveEvent } from "@elaina/contracts";
+import type { PluginRow } from "@elaina/contracts";
 import { useEffect } from "react";
 import { orpc } from "./api";
 import { runtimeUrl } from "./runtime-url";
@@ -16,6 +17,7 @@ const EVENT_TYPES = [
 	"activity.closed",
 	"before.reply",
 	"after.reply",
+	"plugin.status",
 ] as const;
 
 function refreshConversation(queryClient: QueryClient, sessionId?: string): void {
@@ -78,6 +80,18 @@ function applyLiveEvent(queryClient: QueryClient, event: LiveEvent): void {
 		case "after.reply":
 			refreshConversation(queryClient, event.sessionId);
 			return;
+		case "plugin.status": {
+			const rows = queryClient.getQueryData<PluginRow[]>(orpc.admin.plugins.list.queryKey());
+			if (rows === undefined) {
+				void queryClient.invalidateQueries({ queryKey: orpc.admin.plugins.key() });
+				return;
+			}
+			queryClient.setQueryData(
+				orpc.admin.plugins.list.queryKey(),
+				rows.map((row) => (row.id === event.pluginId ? { ...row, status: event.status } : row)),
+			);
+			return;
+		}
 	}
 }
 

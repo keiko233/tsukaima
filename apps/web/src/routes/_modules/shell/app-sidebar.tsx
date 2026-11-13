@@ -3,11 +3,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@/components/motion/button";
-import { Input } from "@/components/motion/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/motion/tabs";
+import { Button } from "@elaina/ui/components/motion/button";
+import { Input } from "@elaina/ui/components/motion/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@elaina/ui/components/motion/tabs";
 import { orpc } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { ChatTree } from "./chat-tree";
 import { GroupsSidebar } from "./groups-sidebar";
