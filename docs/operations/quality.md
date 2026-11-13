@@ -6,13 +6,18 @@ All code changes pass:
 2. `bun run format:check`
 3. `bun run typecheck`
 4. `bun run test`
+5. `bun run check:secrets`
+6. `bun run test:e2e`
 
 Git requirements:
 
 - Conventional Commits enforced by `commitlint`.
 - `lint-staged` formats and lints staged files before commit.
 - Husky manages local hooks.
-- CI runs the complete `bun run check` pipeline.
+- CI runs secret scanning, the WebUI i18n/build checks, the complete `bun run check` pipeline, and
+  a separate Playwright Chromium E2E job.
+- `bun test` only collects `*.test.ts`/`*_test_*`/`*.spec.ts` files outside `e2e/`; `bunfig.toml`
+  ignores `e2e/**`, and Playwright owns `e2e/*.spec.ts`.
 - Generated files should be formatted, but should not be manually edited.
 
 Recommended commit scopes:

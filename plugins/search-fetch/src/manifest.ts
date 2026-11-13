@@ -1,4 +1,4 @@
-import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk";
+import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk/manifest";
 
 export const SEARCH_FETCH_PLUGIN_ID = "search-fetch";
 export const SEARCH_FETCH_RPC_PREFIX = `${SEARCH_FETCH_PLUGIN_ID}.`;

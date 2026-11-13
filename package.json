@@ -13,12 +13,16 @@
 		"build": "bun run --filter '*' build",
 		"typecheck": "tsc --noEmit && bun run --filter '@elaina/ui' typecheck && bun run --filter '@elaina/sdk' typecheck && bun run --filter '@elaina/web' typecheck",
 		"lint": "oxlint .",
-		"format": "oxfmt 'apps/**/*.ts' 'packages/**/*.ts' 'plugins/**/*.ts' 'plugins/**/*.json' '*.json' '*.ts' '.env.example'",
-		"format:check": "oxfmt --check 'apps/**/*.ts' 'packages/**/*.ts' 'plugins/**/*.ts' 'plugins/**/*.json' '*.json' '*.ts' '.env.example'",
+		"format": "oxfmt 'apps/**/*.ts' 'packages/**/*.ts' 'plugins/**/*.ts' 'plugins/**/*.json' 'tools/**/*.ts' 'tools/**/*.json' 'e2e/**/*.ts' 'playwright.config.ts' '*.json' '*.ts' '.env.example'",
+		"format:check": "oxfmt --check 'apps/**/*.ts' 'packages/**/*.ts' 'plugins/**/*.ts' 'plugins/**/*.json' 'tools/**/*.ts' 'tools/**/*.json' 'e2e/**/*.ts' 'playwright.config.ts' '*.json' '*.ts' '.env.example'",
 		"test": "bun test",
-		"check": "bun run lint && bun run format:check && bun run typecheck && bun run test"
+		"check": "bun run lint && bun run format:check && bun run typecheck && bun run test",
+		"check:secrets": "bun tools/ops/secret-scan.ts",
+		"ops:backup-drill": "bun tools/ops/backup-drill.ts",
+		"test:e2e": "playwright test"
 	},
 	"devDependencies": {
+		"@playwright/test": "^1.65.0",
 		"@types/bun": "1.4.4",
 		"oxfmt": "0.78.0",
 		"oxlint": "1.93.0",

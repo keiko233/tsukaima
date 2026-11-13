@@ -1,27 +1,14 @@
 import { eq } from "drizzle-orm";
 import { type ElainaDatabase, meta } from "@elaina/db";
-import { z } from "zod";
+import {
+	runtimeSettingsPatchSchema,
+	runtimeSettingsSchema,
+	type RuntimeSettings,
+	type RuntimeSettingsPatch,
+} from "@elaina/contracts";
 
-const logLevelSchema = z.enum(["debug", "info", "warn", "error"]);
-
-export const runtimeSettingsSchema = z.object({
-	logLevel: logLevelSchema,
-	/** Plugin id that owns the active model provider. */
-	modelProviderId: z.string().min(1).optional(),
-});
-
-export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>;
-
-export const runtimeSettingsPatchSchema = z
-	.object({
-		logLevel: logLevelSchema.optional(),
-		modelProviderId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
-	})
-	.refine((input) => input.logLevel !== undefined || input.modelProviderId !== undefined, {
-		message: "At least one setting must be provided",
-	});
-
-export type RuntimeSettingsPatch = z.infer<typeof runtimeSettingsPatchSchema>;
+export { runtimeSettingsPatchSchema, runtimeSettingsSchema };
+export type { RuntimeSettings, RuntimeSettingsPatch };
 
 export interface PublicRuntimeSettings {
 	readonly logLevel: RuntimeSettings["logLevel"];

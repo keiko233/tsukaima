@@ -33,7 +33,6 @@ import type { ConversationPacingTracker } from "./conversation-pacing.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
 
 export interface ConversationIngestResult {
-	readonly activityId: string;
 	readonly chatObjectId: string;
 	readonly classification: TriggerDecision;
 	readonly duplicated: boolean;
@@ -172,7 +171,6 @@ export class ConversationRouter {
 					sessionId: target.sessionId,
 				});
 				return {
-					activityId: "",
 					chatObjectId: target.chatObjectId,
 					classification: "direct",
 					duplicated: true,
@@ -214,7 +212,6 @@ export class ConversationRouter {
 					sessionId: target.sessionId,
 				});
 				return {
-					activityId: "",
 					chatObjectId: target.chatObjectId,
 					classification: "ignored",
 					duplicated: false,
@@ -224,7 +221,6 @@ export class ConversationRouter {
 			}
 
 			const sender = await this.resolveIdentity(message);
-			let activityId = "";
 			if (trigger.classification !== "ambient") {
 				this.#onInboundTrigger?.(target.durableConversationId);
 				await this.#policy?.ensureHostPolicy(target.sessionId, target.durableConversationId);
@@ -238,7 +234,7 @@ export class ConversationRouter {
 				}
 				const cooldownMs =
 					this.#pacing?.remainingCooldownMs(target.durableConversationId, policy) ?? 0;
-				const result = await host.append({
+				await host.append({
 					classification: trigger.classification,
 					collectOnly: cooldownMs > 0,
 					conversationId: target.durableConversationId,
@@ -250,13 +246,11 @@ export class ConversationRouter {
 						...(message.sender.isBot === undefined ? {} : { senderIsBot: message.sender.isBot }),
 					}),
 				});
-				activityId = result.activityId;
 				if (cooldownMs > 0) {
 					host.scheduleActivityFlushAfter(target.durableConversationId, cooldownMs);
 				}
 			}
 			await this.#persistInbound(database, {
-				activityId: activityId === "" ? null : activityId,
 				classification: trigger.classification,
 				envelope: message,
 				sender,
@@ -269,7 +263,6 @@ export class ConversationRouter {
 				sessionId: target.sessionId,
 			});
 			return {
-				activityId,
 				chatObjectId: target.chatObjectId,
 				classification: trigger.classification,
 				duplicated: false,
@@ -353,7 +346,6 @@ export class ConversationRouter {
 	async #persistInbound(
 		database: ElainaDatabase,
 		input: {
-			activityId: string | null;
 			classification: "ambient" | "direct" | "soft";
 			envelope: MessageEnvelope;
 			sender: { displayName: string; userId: string };
@@ -368,7 +360,6 @@ export class ConversationRouter {
 		await database
 			.insert(messages)
 			.values({
-				activityId: input.activityId,
 				chatObjectId: input.target.chatObjectId,
 				contentText: messageText(message.parts),
 				conversationId: input.target.sessionId,

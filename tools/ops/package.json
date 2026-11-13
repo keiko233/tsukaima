@@ -1,0 +1,17 @@
+{
+	"name": "@elaina/ops",
+	"version": "0.1.0",
+	"private": true,
+	"bin": {
+		"elaina-backup-drill": "./backup-drill.ts",
+		"elaina-secret-scan": "./secret-scan.ts"
+	},
+	"type": "module",
+	"scripts": {
+		"backup-drill": "bun backup-drill.ts",
+		"check:secrets": "bun secret-scan.ts"
+	},
+	"dependencies": {
+		"@elaina/migration": "workspace:*"
+	}
+}

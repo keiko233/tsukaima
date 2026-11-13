@@ -5,6 +5,9 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
+const serverTarget =
+	process.env.ELAINA_SERVER_URL ?? `http://127.0.0.1:${process.env.ELAINA_SERVER_PORT ?? "7420"}`;
+
 export default defineConfig({
 	clearScreen: false,
 	plugins: [
@@ -34,15 +37,15 @@ export default defineConfig({
 		proxy: {
 			"/api": {
 				changeOrigin: true,
-				target: "http://127.0.0.1:7420",
+				target: serverTarget,
 			},
 			"/rpc": {
 				changeOrigin: true,
-				target: "http://127.0.0.1:7420",
+				target: serverTarget,
 			},
 			"/events": {
 				changeOrigin: true,
-				target: "http://127.0.0.1:7420",
+				target: serverTarget,
 			},
 		},
 		strictPort: true,

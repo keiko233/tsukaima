@@ -286,7 +286,7 @@ export const adminRouter = {
 		}),
 	},
 	personas: {
-		bind: adminBase.admin.personas.bind.handler(async ({ context, input }) => {
+		bindPersona: adminBase.admin.personas.bindPersona.handler(async ({ context, input }) => {
 			const binding = await context.lifecycle.conversationPolicy.bindPersona({
 				personaId: input.personaId,
 				scope: input.scope,

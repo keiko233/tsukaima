@@ -20,7 +20,22 @@ import { useEffect, useState } from "react";
 import type { ProactivePolicy } from "./domain.ts";
 import { i18n } from "./i18n.ts";
 import { PROACTIVE_SCHEDULER_PLUGIN_ID } from "./manifest.ts";
-import type { SimulationRow } from "./service.ts";
+
+/** Browser-safe view of the dry-run simulation rows returned by plugin RPC. */
+interface GateRow {
+	readonly gate: string;
+	readonly status: string;
+	readonly reason?: string;
+	readonly detail?: string;
+}
+
+interface SimulationRow {
+	readonly conversationId: string;
+	readonly eligible: boolean;
+	readonly reason?: string;
+	readonly gates: readonly GateRow[];
+	readonly dryRun: true;
+}
 
 interface ScheduledTaskRow {
 	readonly attempts: number;

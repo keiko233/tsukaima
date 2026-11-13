@@ -18,9 +18,44 @@ import {
 } from "@elaina/sdk/ui";
 import { Download, RefreshCw, Save, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { StickerItem, StickerPack } from "./domain.ts";
 import { i18n } from "./i18n.ts";
 import { STICKER_MEME_PLUGIN_ID } from "./manifest.ts";
+
+/** Browser-safe view of the fields this panel receives over plugin RPC. */
+interface StickerPack {
+	readonly id: string;
+	readonly name: string;
+	readonly source: string;
+	readonly enabled: boolean;
+	readonly tags: readonly string[];
+	readonly personaIds: readonly string[];
+	readonly metadata: Record<string, unknown>;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+interface StickerItem {
+	readonly id: string;
+	readonly packId: string;
+	readonly name: string;
+	readonly description: string;
+	readonly keywords: readonly string[];
+	readonly emotions: readonly string[];
+	readonly mimeType: string;
+	readonly mediaId: string;
+	readonly hash: string;
+	readonly width: number | null;
+	readonly height: number | null;
+	readonly enabled: boolean;
+	readonly reviewStatus: string;
+	readonly score: number;
+	readonly useCount: number;
+	readonly lastUsedAt: string | null;
+	readonly sourceConversationId: string | null;
+	readonly revokedAt: string | null;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
 
 interface PackRow extends StickerPack {
 	readonly itemCount: number;

@@ -239,7 +239,6 @@ export const conversationMembers = sqliteTable(
 export const messages = sqliteTable(
 	"messages",
 	{
-		activityId: text("activity_id"),
 		chatObjectId: text("chat_object_id").references(() => chatObjects.id, {
 			onDelete: "cascade",
 		}),

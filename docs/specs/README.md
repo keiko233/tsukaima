@@ -44,8 +44,14 @@ boundary, required behavior, contract changes, migration concerns, and acceptanc
 
 ## Release readiness (post-Phase 9)
 
-Before production cutover, close the remaining cross-cutting operational items tracked in `docs/project-state.md`:
+The cross-cutting operational items are complete; current status stays in `docs/project-state.md`:
 
-- Clean up legacy schema/contract drift (`messages.activity_id`, duplicated RPC input schemas).
-- Add Playwright WebUI end-to-end coverage across messaging, policies, approvals, and plugin panels.
-- Add CI secret scanning, scheduled SQLite + blob backup/restore drills, and the production runbook.
+- Legacy schema/contract drift is removed: `messages.activity_id` is dropped (migration
+  `0011_black_dust.sql`) and every RPC input schema, including `runtimeSettingsSchema` /
+  `runtimeSettingsPatchSchema`, has a single definition in `packages/contracts`.
+- `bun run test:e2e` runs a Playwright Chromium suite (`e2e/*.spec.ts`) against an isolated server +
+  WebUI stack, covering sign-in/session persistence, local messaging, conversation policy revisions,
+  and every built-in plugin panel.
+- `bun run check:secrets` scans tracked files offline, `bun run ops:backup-drill` runs SQLite + blob
+  backup/restore drills (schedulable through `@elaina/server`), and `docs/operations/runbook.md`
+  documents production operation.

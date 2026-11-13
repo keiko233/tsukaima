@@ -5,6 +5,8 @@ const configurationSchema = z.object({
 	adminPassword: z.string().min(1).optional(),
 	adminUsername: z.string().min(1).optional(),
 	authSecret: z.string().min(32).optional(),
+	backupDrillIntervalMs: z.number().int().positive().optional(),
+	backupDrillRoot: z.string().min(1).optional(),
 	dataDir: z.string().min(1),
 	host: z.string().min(1),
 	logLevel: z.enum(["debug", "info", "warn", "error"]),
@@ -33,11 +35,28 @@ export function loadConfig(env: Record<string, string | undefined>): ElainaConfi
 		.split(",")
 		.map((proxy) => proxy.trim())
 		.filter((proxy) => proxy.length > 0);
+	const rawDrillInterval = env.ELAINA_BACKUP_DRILL_INTERVAL_MS?.trim() ?? "";
+	const parsedDrillInterval = rawDrillInterval === "" ? undefined : Number(rawDrillInterval);
+	if (
+		parsedDrillInterval !== undefined &&
+		(!Number.isFinite(parsedDrillInterval) || parsedDrillInterval < 0)
+	) {
+		throw new Error(
+			"ELAINA_BACKUP_DRILL_INTERVAL_MS must be a non-negative number of milliseconds",
+		);
+	}
+	// Zero disables the scheduler, matching the documented "unset or 0" behavior.
+	const backupDrillIntervalMs =
+		parsedDrillInterval === undefined || parsedDrillInterval === 0
+			? undefined
+			: parsedDrillInterval;
 	const config = configurationSchema.parse({
 		adminEmail: env.ELAINA_ADMIN_EMAIL || undefined,
 		adminPassword: env.ELAINA_ADMIN_PASSWORD || undefined,
 		adminUsername: env.ELAINA_ADMIN_USERNAME || undefined,
 		authSecret: env.ELAINA_AUTH_SECRET || env.BETTER_AUTH_SECRET || undefined,
+		...(backupDrillIntervalMs === undefined ? {} : { backupDrillIntervalMs }),
+		backupDrillRoot: env.ELAINA_BACKUP_DRILL_ROOT || undefined,
 		dataDir: env.ELAINA_DATA_DIR ?? "./data",
 		host: env.ELAINA_HOST ?? "127.0.0.1",
 		logLevel: env.ELAINA_LOG_LEVEL ?? "info",

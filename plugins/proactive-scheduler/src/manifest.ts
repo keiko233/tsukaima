@@ -1,4 +1,4 @@
-import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk";
+import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk/manifest";
 
 export const PROACTIVE_SCHEDULER_PLUGIN_ID = "proactive-scheduler";
 export const PROACTIVE_SCHEDULER_RPC_PREFIX = `${PROACTIVE_SCHEDULER_PLUGIN_ID}.`;

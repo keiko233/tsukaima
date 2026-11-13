@@ -1,4 +1,4 @@
-import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk";
+import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk/manifest";
 
 export const OPENAI_COMPATIBLE_PLUGIN_ID = "openai-compatible";
 export const OPENAI_COMPATIBLE_PROVIDER_ID = "openai-compatible";

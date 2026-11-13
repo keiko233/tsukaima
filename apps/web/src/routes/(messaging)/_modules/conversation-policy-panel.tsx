@@ -131,7 +131,7 @@ export function ConversationPolicyPanel({
 		}),
 	);
 	const bind = useMutation(
-		orpc.admin.personas.bind.mutationOptions({
+		orpc.admin.personas.bindPersona.mutationOptions({
 			onError: (error) => toast.error(m.policy_bind_failed(), { description: errorMessage(error) }),
 			onSuccess: async () => {
 				toast.success(m.policy_bind_success());

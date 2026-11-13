@@ -1,4 +1,4 @@
-import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk";
+import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk/manifest";
 
 export const ONEBOT_PLUGIN_ID = "onebot-napcat";
 
