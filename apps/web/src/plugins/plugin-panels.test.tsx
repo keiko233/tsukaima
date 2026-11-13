@@ -4,9 +4,11 @@ import type { PluginI18n } from "@tsukaima/sdk/i18n";
 import { PluginPanelProvider, type PluginSummary } from "@tsukaima/sdk/ui";
 import oneBotUi from "../../../../plugins/onebot-napcat/src/ui.tsx";
 import openAiUi from "../../../../plugins/openai-compatible/src/ui.tsx";
+import searchUi from "../../../../plugins/search-fetch/src/ui.tsx";
 import stickerUi from "../../../../plugins/sticker-meme/src/ui.tsx";
 import { i18n as oneBotI18n } from "../../../../plugins/onebot-napcat/src/i18n.ts";
 import { i18n as openAiI18n } from "../../../../plugins/openai-compatible/src/i18n.ts";
+import { i18n as searchI18n } from "../../../../plugins/search-fetch/src/i18n.ts";
 import { i18n as stickerI18n } from "../../../../plugins/sticker-meme/src/i18n.ts";
 import type { PluginUiModuleDefinition } from "@tsukaima/sdk/ui";
 
@@ -92,6 +94,27 @@ describe("built-in plugin panels", () => {
 		expect(html).toContain("Models");
 		expect(html).toContain("Discover models");
 		expect(html.indexOf("onebot-napcat")).toBe(-1);
+	});
+
+	test("renders the search-fetch panel in en and zh-cn", () => {
+		const searchPlugin: PluginSummary = {
+			...plugin,
+			config: {},
+			id: "search-fetch",
+			name: "search-fetch",
+			permissions: ["ui.panel", "tools", "network.search", "network.fetch"],
+			secretKeys: ["braveApiKey", "serperApiKey", "tavilyApiKey"],
+		};
+		const html = renderPanel(searchUi, searchI18n.bind("en"), searchPlugin);
+		expect(html).toContain("Search and fetch");
+		expect(html).toContain("Providers");
+		expect(html).toContain("Routing policy");
+		expect(html).toContain("Test query");
+		const zh = renderPanel(searchUi, searchI18n.bind("zh-cn"), searchPlugin);
+		expect(zh).toContain("搜索与抓取");
+		expect(zh).toContain("提供商");
+		expect(zh).toContain("路由策略");
+		expect(zh).toContain("测试查询");
 	});
 
 	test("renders the sticker-meme library panel in en and zh-cn", () => {

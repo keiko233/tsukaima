@@ -98,6 +98,7 @@ describe("admin RPC", () => {
 				(entry) =>
 					entry.text.includes("tsukaima::server") ||
 					entry.text.includes("openai-compatible") ||
+					entry.text.includes("search-fetch") ||
 					entry.text.includes("sticker-meme"),
 			),
 		).toBe(true);
@@ -128,6 +129,7 @@ describe("admin RPC", () => {
 				{ config: {}, id: "openai-compatible", secretsSet: [] },
 				{ config: {}, id: "onebot-napcat", secretsSet: [] },
 				{ config: {}, id: "memory", secretsSet: [] },
+				{ config: {}, id: "search-fetch", secretsSet: [] },
 				{ config: {}, id: "sticker-meme", secretsSet: [] },
 			],
 		});
@@ -138,6 +140,7 @@ describe("admin RPC", () => {
 				{ config: {}, id: "openai-compatible", secretsSet: [] },
 				{ config: {}, id: "onebot-napcat", secretsSet: [] },
 				{ config: {}, id: "memory", secretsSet: [] },
+				{ config: {}, id: "search-fetch", secretsSet: [] },
 				{ config: {}, id: "sticker-meme", secretsSet: [] },
 			],
 		});

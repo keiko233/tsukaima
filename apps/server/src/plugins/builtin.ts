@@ -1,5 +1,6 @@
 import { oneBotNapCatPlugin } from "@tsukaima-plugin/onebot-napcat";
 import { openAiCompatiblePlugin } from "@tsukaima-plugin/openai-compatible";
+import { searchFetchPlugin } from "@tsukaima-plugin/search-fetch";
 import { stickerMemePlugin } from "@tsukaima-plugin/sticker-meme";
 import type { TsukaimaPlugin } from "@tsukaima/sdk";
 import { memoryPlugin } from "./memory.ts";
@@ -12,5 +13,6 @@ export const builtinPlugins: readonly TsukaimaPlugin[] = [
 	openAiCompatiblePlugin,
 	oneBotNapCatPlugin,
 	memoryPlugin,
+	searchFetchPlugin,
 	stickerMemePlugin,
 ];
