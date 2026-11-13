@@ -1,9 +1,14 @@
 import { oneBotNapCatPlugin } from "@tsukaima-plugin/onebot-napcat";
 import { openAiCompatiblePlugin } from "@tsukaima-plugin/openai-compatible";
 import type { TsukaimaPlugin } from "@tsukaima/sdk";
+import { memoryPlugin } from "./memory.ts";
 
 /**
  * Composition root for built-in plugins. This is the only server file that imports plugin
  * packages, so the app core depends on one place instead of scattered plugin code.
  */
-export const builtinPlugins: readonly TsukaimaPlugin[] = [openAiCompatiblePlugin, oneBotNapCatPlugin];
+export const builtinPlugins: readonly TsukaimaPlugin[] = [
+	openAiCompatiblePlugin,
+	oneBotNapCatPlugin,
+	memoryPlugin,
+];

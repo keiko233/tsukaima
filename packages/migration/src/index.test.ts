@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { memories, openDomainDatabase } from "@tsukaima/db";
 import { createPipeline, inspectDshSnapshot, normalizeSnapshot } from "./index.ts";
 
 const testRoot = join(import.meta.dir, "../../../.test-data/migration-kit");
@@ -111,6 +112,18 @@ describe("DSH migration kit", () => {
 		const imported = await pipeline.import(source, { dryRunPlan: plan });
 		expect(imported.messages).toBe(2);
 		expect(imported.memories).toBe(2);
+		const importedDatabase = await openDomainDatabase(join(testRoot, "domain.sqlite"));
+		try {
+			const memoryRows = await importedDatabase.select().from(memories);
+			expect(memoryRows).toHaveLength(2);
+			expect(memoryRows.every((row) => row.status === "active")).toBe(true);
+			expect(memoryRows.every((row) => row.pinned === 0)).toBe(true);
+			expect(memoryRows.every((row) => row.extractionPromptVersion === "dsh-migration-v1")).toBe(
+				true,
+			);
+		} finally {
+			importedDatabase.$client.close();
+		}
 		const verified = await pipeline.verify(source);
 		expect(verified.ok).toBe(true);
 

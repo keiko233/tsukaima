@@ -125,6 +125,7 @@ describe("admin RPC", () => {
 			plugins: [
 				{ config: {}, id: "openai-compatible", secretsSet: [] },
 				{ config: {}, id: "onebot-napcat", secretsSet: [] },
+				{ config: {}, id: "memory", secretsSet: [] },
 			],
 		});
 		const updatedSettings = await request("admin/settings/update", { logLevel: "debug" });
@@ -133,6 +134,7 @@ describe("admin RPC", () => {
 			plugins: [
 				{ config: {}, id: "openai-compatible", secretsSet: [] },
 				{ config: {}, id: "onebot-napcat", secretsSet: [] },
+				{ config: {}, id: "memory", secretsSet: [] },
 			],
 		});
 		expect(lifecycle.logLevel).toBe("debug");

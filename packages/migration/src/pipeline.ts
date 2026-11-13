@@ -134,6 +134,11 @@ function memoryRow(memory: NormalizedDatabase["memories"][number]): {
 	updatedAt: string;
 	createdBy: "migration";
 	visibility: string;
+	status: "active";
+	pinned: 0;
+	extractionModel: string;
+	extractionPromptVersion: string;
+	evidenceJson: string;
 } {
 	return {
 		id: memory.canonicalId,
@@ -148,6 +153,11 @@ function memoryRow(memory: NormalizedDatabase["memories"][number]): {
 		updatedAt: memory.updatedAt,
 		createdBy: "migration",
 		visibility: "private",
+		status: "active",
+		pinned: 0,
+		extractionModel: "migration",
+		extractionPromptVersion: "dsh-migration-v1",
+		evidenceJson: JSON.stringify({ sourceId: memory.sourceId, sourceSystem: memory.sourceSystem }),
 	};
 }
 
@@ -406,6 +416,14 @@ export function createPipeline(target: string): MigrationPipeline {
 							updatedAt: new Date().toISOString(),
 							createdBy: "migration",
 							visibility: "private",
+							status: "active",
+							pinned: 0,
+							extractionModel: "migration",
+							extractionPromptVersion: "dsh-migration-v1",
+							evidenceJson: JSON.stringify({
+								compactor: "migration",
+								sourceRange: compression.sourceRange,
+							}),
 						});
 						await transaction.insert(migrationRecords).values({
 							id: `${DSH_SOURCE}:memories:${memoryId}`,

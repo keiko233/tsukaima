@@ -1,4 +1,4 @@
-import { conversations, modelPolicies } from "@tsukaima/db";
+import { conversations, modelPolicies, type memories } from "@tsukaima/db";
 import { adminBase, type TsukaimaApiContext } from "./base.ts";
 import {
 	createLocalChat,
@@ -22,6 +22,28 @@ import {
 	publicRuntimeSettings,
 	readRuntimeSettings,
 } from "../runtime-settings.ts";
+
+type MemoryDbRow = typeof memories.$inferSelect;
+
+/** Contract view: SQLite stores `pinned` as 0/1, the wire surface uses a boolean. */
+function toMemoryRow(row: MemoryDbRow) {
+	return { ...row, pinned: row.pinned === 1 };
+}
+
+async function auditMemory(
+	context: TsukaimaApiContext,
+	action: string,
+	memory: { id: string; kind: string; scope: string; status: string },
+): Promise<void> {
+	await context.lifecycle.writeAudit({
+		action,
+		actorKind: "user",
+		payload: { kind: memory.kind, memoryId: memory.id, scope: memory.scope, status: memory.status },
+		result: "ok",
+		targetId: memory.id,
+		targetKind: "memory",
+	});
+}
 
 type LifecycleModelPolicy = TsukaimaApiContext["lifecycle"]["routingPolicies"][number];
 
@@ -112,6 +134,117 @@ export const adminRouter = {
 			getGroup(context.lifecycle, input.groupId),
 		),
 		list: adminBase.admin.groups.list.handler(async ({ context }) => listGroups(context.lifecycle)),
+	},
+	memory: {
+		approve: adminBase.admin.memory.approve.handler(async ({ context, input }) => {
+			const memory = await context.lifecycle.memory.approve(input.id);
+			await auditMemory(context, "memory.approve", memory);
+			return toMemoryRow(memory);
+		}),
+		compact: adminBase.admin.memory.compact.handler(async ({ context, input }) => {
+			const result = await context.lifecycle.memory.compactSession({
+				conversationId: input.conversationId,
+				...(input.throughMessageId === undefined
+					? {}
+					: { throughMessageId: input.throughMessageId }),
+			});
+			if (result.memory !== undefined) {
+				await auditMemory(context, "memory.compact", result.memory);
+			}
+			return {
+				created: result.created,
+				memory: result.memory === undefined ? null : toMemoryRow(result.memory),
+			};
+		}),
+		create: adminBase.admin.memory.create.handler(async ({ context, input }) => {
+			const result = await context.lifecycle.memory.create({
+				confidence: input.confidence,
+				content: input.content,
+				conversationId: input.conversationId,
+				createdBy: input.createdBy,
+				dedupeKey: input.dedupeKey,
+				evidenceJson: input.evidenceJson,
+				expiresAt: input.expiresAt,
+				importance: input.importance,
+				kind: input.kind,
+				pinned: input.pinned,
+				projectId: input.projectId,
+				scope: input.scope,
+				status: input.status,
+				subjectUserId: input.subjectUserId,
+				summary: input.summary,
+				supersedes: input.supersedes,
+				visibility: input.visibility,
+			});
+			await auditMemory(context, "memory.create", result.memory);
+			return toMemoryRow(result.memory);
+		}),
+		expire: adminBase.admin.memory.expire.handler(async ({ context }) => {
+			const expired = await context.lifecycle.memory.expireDue();
+			await context.lifecycle.writeAudit({
+				action: "memory.expire",
+				actorKind: "user",
+				payload: { expired },
+				result: "ok",
+				targetKind: "memory",
+			});
+			return { expired };
+		}),
+		get: adminBase.admin.memory.get.handler(async ({ context, input }) => {
+			const memory = await context.lifecycle.memory.get(input.id);
+			return memory === undefined ? null : toMemoryRow(memory);
+		}),
+		list: adminBase.admin.memory.list.handler(async ({ context, input }) => {
+			const rows = await context.lifecycle.memory.list(input ?? {});
+			return rows.map(toMemoryRow);
+		}),
+		pin: adminBase.admin.memory.pin.handler(async ({ context, input }) => {
+			const memory = await context.lifecycle.memory.pin(input.id, input.pinned);
+			await auditMemory(context, input.pinned ? "memory.pin" : "memory.unpin", memory);
+			return toMemoryRow(memory);
+		}),
+		reject: adminBase.admin.memory.reject.handler(async ({ context, input }) => {
+			const memory = await context.lifecycle.memory.reject(input.id);
+			await auditMemory(context, "memory.reject", memory);
+			return toMemoryRow(memory);
+		}),
+		revoke: adminBase.admin.memory.revoke.handler(async ({ context, input }) => {
+			const memory = await context.lifecycle.memory.revoke(input.id);
+			await auditMemory(context, "memory.revoke", memory);
+			return toMemoryRow(memory);
+		}),
+		search: adminBase.admin.memory.search.handler(async ({ context, input }) => {
+			const ranked = await context.lifecycle.memory.recordSearch(
+				input.conversationId,
+				input.query,
+				input.limit ?? 10,
+			);
+			return ranked.map((entry) => ({
+				lexical: entry.lexical,
+				memory: toMemoryRow(entry.memory),
+				recency: entry.recency,
+				score: entry.score,
+				vector: entry.vector,
+			}));
+		}),
+		update: adminBase.admin.memory.update.handler(async ({ context, input }) => {
+			const memory = await context.lifecycle.memory.update({
+				confidence: input.confidence,
+				content: input.content,
+				dedupeKey: input.dedupeKey,
+				expiresAt: input.expiresAt,
+				id: input.id,
+				importance: input.importance,
+				kind: input.kind,
+				pinned: input.pinned,
+				status: input.status,
+				summary: input.summary,
+				supersedes: input.supersedes,
+				visibility: input.visibility,
+			});
+			await auditMemory(context, "memory.update", memory);
+			return toMemoryRow(memory);
+		}),
 	},
 	modelPolicies: {
 		list: adminBase.admin.modelPolicies.list.handler(async ({ context }) => {
