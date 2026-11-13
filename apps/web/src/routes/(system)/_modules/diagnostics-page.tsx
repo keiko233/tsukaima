@@ -22,6 +22,7 @@ import {
 } from "@/components/motion/select";
 import { Switch } from "@/components/motion/switch";
 import { orpc, type LogEntry, type LogLevel, type LogSnapshot } from "@/lib/api";
+import { runtimeUrl } from "@/lib/runtime-url";
 import { errorMessage, useToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -29,7 +30,7 @@ import { LogTerminal } from "./log-terminal";
 import { SystemPage } from "./page-header";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
-const LOG_STREAM_URL = import.meta.env.VITE_LOG_STREAM_URL ?? "/events/logs";
+const LOG_STREAM_URL = runtimeUrl("/events/logs");
 
 type LogFilter = "all" | LogLevel;
 type LogStreamState = "connecting" | "live" | "reconnecting";
@@ -159,9 +160,7 @@ export function DiagnosticsPage() {
 								<dd className="mt-1 truncate font-medium">{diagnostics.state.stage}</dd>
 							</div>
 							<div className="min-w-0">
-								<dt className="text-xs text-muted-foreground">
-									{m.diagnostics_channels_label()}
-								</dt>
+								<dt className="text-xs text-muted-foreground">{m.diagnostics_channels_label()}</dt>
 								<dd className="mt-1 font-medium">
 									{diagnostics.channels
 										.map((channel) => `${channel.id}: ${channel.connected ? "true" : "false"}`)
