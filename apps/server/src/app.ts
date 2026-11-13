@@ -4,7 +4,7 @@ import { ResponseHeadersPlugin } from "@orpc/server/plugins";
 import type { ElainaPlugin } from "@elaina/sdk";
 import { appRouter } from "./rpc/index.ts";
 import type { ElainaApiContext } from "./rpc/base.ts";
-import { loadConfig } from "./config.ts";
+import { loadConfig, type ElainaConfig } from "./config.ts";
 import { ElainaLifecycle, type LifecycleOptions } from "./lifecycle.ts";
 import { AuthService } from "./services/auth.ts";
 import {
@@ -12,6 +12,18 @@ import {
 	createLogEventStream,
 	eventAuthResponse,
 } from "./services/event-stream.ts";
+
+/**
+ * Bind exclusively so a duplicate or hung process holding the port fails fast
+ * with `EADDRINUSE` instead of sharing `SO_REUSEPORT` traffic on Linux.
+ */
+export function listenOptions(config: Pick<ElainaConfig, "host" | "port">) {
+	return {
+		hostname: config.host,
+		port: config.port,
+		reusePort: false,
+	} as const;
+}
 
 export interface CreateAppOptions {
 	/** Optional scheduled backup/restore drill; disabled unless an interval is configured. */

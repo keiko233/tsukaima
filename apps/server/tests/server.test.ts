@@ -1,11 +1,29 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApp } from "../src/app.ts";
+import { createApp, listenOptions } from "../src/app.ts";
 import { signIn } from "./test-auth.ts";
 
 const directories: string[] = [];
+
+async function allocatePort(): Promise<number> {
+	return new Promise((resolve, reject) => {
+		const probe = createServer();
+		probe.once("error", reject);
+		probe.listen(0, "127.0.0.1", () => {
+			const address = probe.address();
+			if (address === null || typeof address === "string") {
+				probe.close();
+				reject(new Error("Expected numeric ephemeral port"));
+				return;
+			}
+			const { port } = address;
+			probe.close(() => resolve(port));
+		});
+	});
+}
 
 afterEach(async () => {
 	await Promise.all(
@@ -86,5 +104,30 @@ describe("server skeleton", () => {
 		const response = await app.handle(new Request("http://localhost/events/logs"));
 		expect(response.status).toBe(401);
 		await lifecycle.stop();
+	});
+
+	test("binds exclusively so a duplicate listener rejects with EADDRINUSE", async () => {
+		const port = await allocatePort();
+		const firstDir = await fs.mkdtemp(join(tmpdir(), "elaina-bind-first-"));
+		const secondDir = await fs.mkdtemp(join(tmpdir(), "elaina-bind-second-"));
+		directories.push(firstDir, secondDir);
+		const first = createApp({
+			ELAINA_DATA_DIR: firstDir,
+			ELAINA_HOST: "127.0.0.1",
+			ELAINA_PORT: String(port),
+		});
+		first.app.listen(listenOptions(first.config));
+		const second = createApp({
+			ELAINA_DATA_DIR: secondDir,
+			ELAINA_HOST: "127.0.0.1",
+			ELAINA_PORT: String(port),
+		});
+		try {
+			expect(() => second.app.listen(listenOptions(second.config))).toThrow();
+		} finally {
+			await second.lifecycle.stop();
+			await first.app.stop(true);
+			await first.lifecycle.stop();
+		}
 	});
 });
