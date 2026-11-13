@@ -87,7 +87,8 @@ Implemented:
   resolution. Owns its channel registration, settings, and diagnostics. See
   [onebot.md](onebot.md).
 - `openai-compatible`: OpenAI-compatible/Magpie model-provider factory. Owns its API key, base
-  URL, and model id; the host only selects the provider id.
+  URL, discovered model catalog, per-model enablement/capabilities, and the provider status. The
+  host only selects the provider id; other plugins query enabled models through the SDK catalog.
 
 Planned first-party set:
 

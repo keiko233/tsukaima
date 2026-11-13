@@ -2,6 +2,7 @@ import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk";
 
 export const OPENAI_COMPATIBLE_PLUGIN_ID = "openai-compatible";
 export const OPENAI_COMPATIBLE_PROVIDER_ID = "openai-compatible";
+export const OPENAI_COMPATIBLE_DISCOVER_RPC = "openai-compatible.models.discover";
 
 export const openAiCompatibleManifest: PluginManifest = pluginManifestSchema.parse({
 	apiVersion: "1",
@@ -14,7 +15,30 @@ export const openAiCompatibleManifest: PluginManifest = pluginManifestSchema.par
 		properties: {
 			apiKey: { type: "string" },
 			baseUrl: { type: "string" },
-			modelId: { type: "string" },
+			modelId: {
+				description: "Legacy single-model configuration; migrated when models are saved.",
+				type: "string",
+			},
+			models: {
+				items: {
+					properties: {
+						capabilities: { items: { type: "string" }, type: "array" },
+						contextWindow: { type: "integer" },
+						defaultReasoningLevel: { type: "string" },
+						enabled: { type: "boolean" },
+						id: { type: "string" },
+						maxOutputTokens: { type: "integer" },
+						name: { type: "string" },
+						reasoningLevels: { items: { type: "string" }, type: "array" },
+						supportsAudio: { type: "boolean" },
+						supportsImage: { type: "boolean" },
+						supportsReasoning: { type: "boolean" },
+						supportsTools: { type: "boolean" },
+					},
+					type: "object",
+				},
+				type: "array",
+			},
 		},
 		type: "object",
 	},
@@ -22,14 +46,5 @@ export const openAiCompatibleManifest: PluginManifest = pluginManifestSchema.par
 	name: OPENAI_COMPATIBLE_PLUGIN_ID,
 	permissions: ["ui.panel", "model.call", "settings"],
 	secretKeys: ["apiKey"],
-	ui: [
-		{
-			component: "plugin-config-form",
-			data: { restartRequired: true },
-			id: "openai-compatible.settings",
-			kind: "settings-form",
-			title: "OpenAI-compatible provider",
-		},
-	],
 	version: "0.1.0",
 });
