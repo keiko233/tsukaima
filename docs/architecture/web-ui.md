@@ -109,7 +109,8 @@ The WebUI uses real domain data and durable transcript entries:
 - `admin/users/*` and `admin/groups/*` for directory views.
 - `admin/requests/*` for request review and decisions.
 - `admin/diagnostics/status` for the real transport state and runtime diagnostics.
-- `admin/settings/models` for server-side discovery through an OpenAI-compatible
+- Plugin RPC (through `admin/plugins/rpc`) for server-side model discovery through an
+  OpenAI-compatible provider plugin. The host-level `admin/settings/models` endpoint was removed.
   provider's `/models` endpoint. The browser never receives the provider API key.
 
 No unread, unconfigured, or unsupported action is represented as working. Missing

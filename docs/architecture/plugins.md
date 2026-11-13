@@ -86,12 +86,15 @@ Implemented:
 - `onebot-napcat`: outbound WS, envelope normalization, OneBot API facade, request
   resolution. Owns its channel registration, settings, and diagnostics. See
   [onebot.md](onebot.md).
+- `openai-compatible`: OpenAI-compatible/Magpie model-provider factory. Owns its API key, base
+  URL, and model id; the host only selects the provider id.
 
 Planned first-party set:
 
 - `memory`: scoped memory retrieval, extraction, and recall tools.
 - `persona`: persona loading, versioning, and prompt sections.
-- `model-router`: capability policies and usage reporting.
+- `model-router`: capability policies and usage reporting beyond the single chat policy the host
+  currently seeds.
 - `sticker-meme`: sticker packs, semantic tagging, auto-selection, and learning hooks.
 - `search`: web/search abstraction with pluggable providers.
 - `proactive`: scheduled, idle, and event-driven outbound campaigns.

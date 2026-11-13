@@ -34,29 +34,22 @@ package. `packages/onebot` no longer exists.
 
 ## 3. What still looks like a built-in plugin but is not
 
-### 3.1 `openai-compatible` model provider
+### 3.1 `openai-compatible` model provider — moved
 
-Current location:
+Current location after phase C:
 
-- `apps/server/src/lifecycle.ts` `createModelPort()`
-- `apps/server/src/remote-models.ts`
-- `apps/server/src/runtime-settings.ts`
-- `apps/server/src/rpc/admin.ts` `settings.models`
-- `packages/core/src/openai.ts`
+- `plugins/openai-compatible`: manifest, config schema, provider factory, and `isConfigured()`.
+- `packages/core/src/openai.ts`: the reusable OpenAI-compatible transport and model router; it is
+  a library, not host wiring.
+- `apps/server/src/lifecycle.ts`: resolves the configured provider from the plugin host and falls
+  back to the fake model. It contains no provider credentials.
 
-Current behavior: the lifecycle decides between the fake model and an OpenAI-compatible model,
-builds the model port, and exposes provider settings. This is a built-in feature with no plugin
-identity.
+Remaining work:
 
-Target:
-
-- `plugins/openai-compatible`
-- manifest with `model.call` and `settings` permissions
-- `context.models.registerProvider()` host surface
-- plugin-owned settings form
-- server falls back to the fake model when the plugin is disabled or unconfigured
-
-This requires a new host surface because `PluginContext` has no model-provider registration yet.
+- Move model discovery (`GET /models`) into a plugin RPC method and expose it through the plugin
+  settings form. The host no longer has `settings.models`.
+- Add per-model metadata (context window, cost, tool support) to plugin config instead of assuming
+  one chat model.
 
 ### 3.2 `memory`
 
@@ -215,8 +208,8 @@ screens may be contributed by plugins, but core admin authorization and audit st
 | `tools.register/list/invoke` | memory, search, sticker, self-iteration | done |
 | `events.on/emit` | all hook plugins | done |
 | `ui.register/list` | all UI plugins | registry exists, WebUI not consuming |
-| `models.registerProvider` | `openai-compatible` | missing |
-| `rpc.register` | self-iteration, memory review, plugin panels | missing |
+| `models.registerProvider` | `openai-compatible` | done |
+| `rpc.register` | self-iteration, memory review, plugin panels | done (host bridge; WebUI calls `admin/plugins/rpc`) |
 | `tasks.create` | proactive, self-iteration | missing |
 | `storage.conversation/global` | memory, sticker, plugins | bridge exists but host wiring is limited |
 | plugin-owned migrations | any plugin with tables | missing |
@@ -226,9 +219,9 @@ screens may be contributed by plugins, but core admin authorization and audit st
 Recommended order, each step keeping `bun run check` green:
 
 1. **Finish OneBot decoupling** — remove the last `onebot*` fields from settings/diagnostics
-   contracts and make the WebUI read generic channel/plugin config. Done in this change.
-2. **Plugin UI registry consumption** — render plugin settings forms and panels; otherwise a
-   model-provider plugin has nowhere to put its configuration.
+   contracts and make the WebUI read generic channel/plugin config. Done.
+2. **Plugin UI registry consumption** — generic manifest metadata and JSON-schema config forms are
+   rendered. Named panels/approval cards still need a host component registry.
 3. **`models.registerProvider` + `plugins/openai-compatible`** — the second real built-in plugin.
 4. **Plugin RPC registration** — needed before self-iteration and memory review can be plugins.
 5. **`plugins/memory` and `plugins/persona`** — preserve prompt section names and behavior.

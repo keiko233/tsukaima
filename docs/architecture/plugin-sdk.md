@@ -17,11 +17,14 @@ Tsukaima does not adopt Cordis, Pi coding-agent extensions, or Chord wholesale a
 1. Load manifest.
 2. Validate manifest and config.
 3. Resolve permissions.
-4. Start in host or worker.
-5. Call `setup(context)`.
-6. Subscribe to hooks and register tools/UI.
-7. Run until disabled or replaced.
-8. On disable/reload, call `teardown(context)`.
+4. Create the plugin context.
+5. Call optional `prepare(context)` for host-surface registration that must exist before the
+   conversation host is built (model providers, RPC).
+6. Start in host or worker.
+7. Call `setup(context)`.
+8. Subscribe to hooks and register tools/UI/channels.
+9. Run until disabled or replaced.
+10. On disable/reload, call `teardown(context)`.
 
 A plugin must not start background resources in module scope. Start them in `setup` and stop them in `teardown`.
 
@@ -37,6 +40,8 @@ type PluginContext = {
   events: PluginEvents;
   tools: PluginToolRegistry;
   ui: PluginUiRegistry;
+  models: PluginModelRegistry;
+  rpc: PluginRpcRegistry;
   channel?: PluginChannelApi;
   channels?: PluginChannelRegistry;
   settings?: PluginSettingsApi;
@@ -45,7 +50,6 @@ type PluginContext = {
   dependencies?: PluginDependencyBag;
   memory?: PluginMemoryApi;
   persona?: PluginPersonaApi;
-  model?: PluginModelApi;
   tasks?: PluginTaskApi;
 };
 ```
@@ -66,7 +70,17 @@ Implemented host surfaces:
 - `dependencies.get(key)` — host bindings injected for built-in plugins (for example a
   WebSocket transport factory). Third-party plugins never receive these.
 
-Not implemented yet: `models.registerProvider`, `rpc.register`, `memory`, `persona`, `tasks`.
+Implemented: `models.registerProvider`, `rpc.register`, and generic plugin UI aggregation.
+Not implemented yet: `memory`, `persona`, `tasks`.
+
+`models.registerProvider()` accepts an id, an optional `isConfigured()` check, and a `createPort()`
+factory. The host calls the factory after plugin preparation, so a model plugin can own its config
+and credentials. A provider that is absent, unconfigured, or throws is replaced by the host's
+deterministic fake model instead of failing startup.
+
+`rpc.register(method, handler)` namespaces the method as `<pluginId>.<method>`. The authenticated
+WebUI invokes it through `admin/plugins/rpc`; the host does not expose a generic arbitrary-function
+bridge outside that audited procedure.
 
 ## Hooks
 
@@ -244,6 +258,12 @@ context.ui.register({
 ```
 
 The WebUI renders the component using its own beUI implementation and calls the plugin's exposed oRPC namespace.
+
+Current host rendering is deliberately generic: the plugin page shows manifest metadata and
+declared UI entries, and the settings page renders a JSON-schema-driven config form for every
+plugin with a `configSchema`. The WebUI does not import plugin React components, so a plugin cannot
+execute arbitrary page code. Richer named components can be added later by extending the host's
+component registry rather than by loading remote modules.
 
 ## Worker boundary
 

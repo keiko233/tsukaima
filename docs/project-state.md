@@ -23,6 +23,7 @@ This file is the cross-session handoff record. Update it whenever implementation
   - `packages/migration`: DSH snapshot inspection, session/persona/memory/sticker/settings normalization, compression hook, dry-run/import/verify/rollback pipeline.
   - `packages/sdk` and `packages/plugin-registry`: plugin manifest validation, permissions, tool/hook/UI bridges, runtime context, channel/settings/requests/audit host surfaces, install/uninstall registry, and real Bun Worker isolation.
   - `plugins/onebot-napcat`: built-in channel plugin that owns the OneBot channel lifecycle, settings, diagnostics, and request resolution.
+  - `plugins/openai-compatible`: built-in model-provider plugin. It registers a provider factory with the host; its API key, base URL, and model id live in plugin config and environment fallbacks, not in host runtime settings.
   - `packages/chaos`: transient storage failure injection, restart drill, rate limiting, idempotent ingestion, and abuse guards.
 - Runtime target is Bun.
 - Runtime settings for log level and OpenAI-compatible/Magpie provider configuration are persisted in the domain database and editable from the WebUI. Secret values are never returned by the API.
@@ -63,7 +64,10 @@ This file is the cross-session handoff record. Update it whenever implementation
   `activity.closed`, `before.reply`, and `after.reply`. The WebUI keeps one `EventSource`, validates
   each frame with `liveEventSchema`, and invalidates the affected TanStack Query keys instead of
   polling. `GET /events/logs` is authenticated the same way.
-- Plugin configuration lives in the domain `meta` table under `plugin-config:<pluginId>` with `manifest.configEnv` fallbacks. `/admin/settings` keeps its `onebot*` fields as a legacy alias mapped onto the `onebot-napcat` plugin config, so the WebUI contract is unchanged.
+- Plugin configuration lives in the domain `meta` table under `plugin-config:<pluginId>` with `manifest.configEnv` fallbacks. `/admin/settings` exposes only host settings (`logLevel`, active `modelProviderId`) plus generic plugin config views; the former `onebot*` and `openAi*` wire aliases are gone.
+- `adminBase` authenticates every admin procedure and audits only procedures whose contract metadata says `audit: true`. Mutations are declared in `packages/contracts/src/api.ts`; successful and failed calls both produce an `admin.rpc` row, and adding a new mutation cannot silently bypass audit by forgetting a path list.
+- Plugin host surfaces now include `models.registerProvider`, `rpc.register`, and `ui.register` aggregation. The model provider factory can report `isConfigured()`; the lifecycle falls back to the deterministic fake model when the provider is absent, unconfigured, or fails to build.
+- `TsukaimaPlugin.prepare(context)` runs before the conversation host is built, so model providers and other host-surface registrations exist before model selection. `setup(context)` still runs later for channel adapters and runtime work.
 - OneBot settings apply live through the plugin's `settings.onChange`: changing the WebSocket URL or access token restarts the channel and reconnects without a server restart. Provider settings still require a restart.
 - Runtime logging uses structured records rendered in Rust `tracing` style, with a bounded in-memory buffer, SSE delivery, and a Shiki ANSI-rendered diagnostics viewer.
 - TanStack file-based routing, Paraglide i18n (`en`, `zh-cn`), TanStack Query data wiring, and beUI components under `apps/web/src` are active.
@@ -157,7 +161,7 @@ bun run check
 ```
 
 Current baseline: lint, formatting, root TypeScript, WebUI TypeScript, WebUI production
-build, and 178 tests across 36 files pass.
+build, and 179 tests across 36 files pass.
 
 ## Next implementation steps
 
@@ -167,7 +171,7 @@ Do these in order unless a later decision changes the plan:
    points if pi-durable exposes a host-level task lifecycle.
 2. Add host hooks for channel connection state and friend/group requests so the SSE heartbeat
    resync is no longer the only source.
-3. Extract the model provider into `plugins/openai-compatible` (phase C of `plugin-decoupling.md`); this needs the `models.registerProvider` host surface.
+3. Move the remaining model-provider configuration UI (model discovery and model-id validation) into the plugin's own RPC/UI contribution. The provider itself is already extracted.
 4. Add full persona/memory/audit admin services and review UI, plus memory extraction jobs.
 5. Add sticker/meme and search plugins plus plugin-owned database migrations.
 6. Add task graph/audit visualization for self-iteration.
@@ -202,7 +206,9 @@ The full built-in plugin inventory and migration order are tracked in
   re-query, and a logout does not tear down an already-open stream (it is authorised at connect
   time).
 - All plugin tools are visible to the model with no per-tool allowlist, `deferred` flag, or timeout,
-  the tool name the model sees is a hashed provider-safe alias, and plugin UI is not rendered yet.
+  and the tool name the model sees is a hashed provider-safe alias.
+- Plugin UI rendering is still generic: manifest metadata and JSON-schema config forms are rendered,
+  but named components such as approval cards and review panels need a host component registry.
 - Unread state, chat-object pin/archive controls beyond session archive, and group management
   actions are not implemented.
 - Narrow-screen navigation is implemented, but no Playwright end-to-end suite is present yet.
