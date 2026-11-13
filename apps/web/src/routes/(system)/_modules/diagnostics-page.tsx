@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Radio, Search, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import {
 	Card,
@@ -21,42 +21,27 @@ import {
 	SelectValue,
 } from "@tsukaima/ui/components/motion/select";
 import { Switch } from "@tsukaima/ui/components/motion/switch";
-import { orpc, type LogEntry, type LogLevel, type LogSnapshot } from "@/lib/api";
-import { runtimeUrl } from "@/lib/runtime-url";
+import { orpc, type LogLevel } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
+import { useLogStream } from "@/lib/use-log-stream";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { LogTerminal } from "./log-terminal";
 import { SystemPage } from "./page-header";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
-const LOG_STREAM_URL = runtimeUrl("/events/logs");
 
 type LogFilter = "all" | LogLevel;
-type LogStreamState = "connecting" | "live" | "reconnecting";
-
-function parseStreamData<T>(event: Event): T | null {
-	try {
-		return JSON.parse((event as MessageEvent<string>).data) as T;
-	} catch {
-		return null;
-	}
-}
 
 export function DiagnosticsPage() {
 	const toast = useToast();
 	const queryClient = useQueryClient();
 	const diagnosticsQuery = useQuery(orpc.admin.diagnostics.status.queryOptions());
 	const settingsQuery = useQuery(orpc.admin.settings.get.queryOptions());
-	const logsQuery = useQuery(orpc.admin.diagnostics.logs.queryOptions());
-	const [entries, setEntries] = useState<LogEntry[]>([]);
-	const [capacity, setCapacity] = useState(2_000);
 	const [filterLevel, setFilterLevel] = useState<LogFilter>("all");
 	const [follow, setFollow] = useState(true);
 	const [search, setSearch] = useState("");
-	const [streamState, setStreamState] = useState<LogStreamState>("connecting");
-	const receivedSnapshot = useRef(false);
-	const capacityRef = useRef(capacity);
+	const { capacity, clearLocal, entries, streamState } = useLogStream();
 
 	const updateSettings = useMutation(
 		orpc.admin.settings.update.mutationOptions({
@@ -77,51 +62,13 @@ export function DiagnosticsPage() {
 					description: errorMessage(error),
 				}),
 			onSuccess: ({ cleared }) => {
-				const emptySnapshot: LogSnapshot = { capacity, dropped: 0, entries: [] };
-				setEntries([]);
-				queryClient.setQueryData(orpc.admin.diagnostics.logs.queryKey(), emptySnapshot);
+				clearLocal();
 				toast.success(m.toast_logs_cleared(), {
 					description: m.toast_logs_cleared_description({ count: cleared }),
 				});
 			},
 		}),
 	);
-
-	useEffect(() => {
-		const snapshot = logsQuery.data;
-		if (snapshot === undefined || receivedSnapshot.current) return;
-		capacityRef.current = snapshot.capacity;
-		setCapacity(snapshot.capacity);
-		setEntries([...snapshot.entries]);
-	}, [logsQuery.data]);
-
-	useEffect(() => {
-		const source = new EventSource(LOG_STREAM_URL, { withCredentials: true });
-		const handleSnapshot = (event: Event) => {
-			const snapshot = parseStreamData<LogSnapshot>(event);
-			if (snapshot === null) return;
-			receivedSnapshot.current = true;
-			capacityRef.current = snapshot.capacity;
-			setCapacity(snapshot.capacity);
-			setEntries([...snapshot.entries]);
-			setStreamState("live");
-		};
-		const handleLog = (event: Event) => {
-			const entry = parseStreamData<LogEntry>(event);
-			if (entry === null) return;
-			setEntries((previous) => {
-				if (previous.some((item) => item.id === entry.id)) return previous;
-				return [...previous, entry].slice(-Math.max(1, capacityRef.current));
-			});
-		};
-		source.addEventListener("open", () => setStreamState("live"));
-		source.addEventListener("snapshot", handleSnapshot);
-		source.addEventListener("log", handleLog);
-		source.addEventListener("error", () => setStreamState("reconnecting"));
-		return () => {
-			source.close();
-		};
-	}, []);
 
 	const filteredEntries = useMemo(() => {
 		const query = search.trim().toLowerCase();

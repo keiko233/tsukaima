@@ -38,7 +38,10 @@ The root route owns the global shell and the nested `Outlet`.
 ## Layout
 
 - A 56 px global top bar spans the full window and contains the Tsukaima identity,
-  connection state, plugins, settings, the overflow menu, and the theme toggle.
+  a terminal-style log toggle, plugins, settings, and the overflow menu. Channel state
+  lives in the plugin page and diagnostics, not in the global bar.
+- The log toggle opens a bottom dock with the live ANSI stream, search, level filter,
+  follow, clear, and close controls. The dock is resizable and remembers its height.
 - The sidebar sits below the top bar and is independently resizable from 280–420 px.
   Its right border is a straight one-pixel separator.
 - The content region is the router outlet. Panel boundaries are not rounded; controls

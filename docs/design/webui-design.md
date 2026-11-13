@@ -57,8 +57,10 @@ Treat this as provisional rather than an approved requirement. While implementin
 A single horizontal bar sits above both sidebar and content. At a 1440 px desktop viewport, start with approximately 56 px height; adjust to existing beUI tokens and real content. Use one horizontal separator below it.
 
 - Left: Tsukaima identity and, where appropriate, a sidebar toggle.
-- Right: channel connection status, Plugins, Settings, and an overflow/menu for system destinations such as model policies and diagnostics.
-- The connection indicator reflects actual channel state, with text or an accessible label in addition to color. Account for unconfigured, connecting, connected, reconnecting, disconnected and error states as available. Multiple accounts should not be incorrectly collapsed into one unqualified green status.
+- Right: Logs, Plugins, Settings, and an overflow/menu for theme and account actions.
+- Logs open a resizable terminal-style bottom dock with the live ANSI stream, level
+  filter, search, follow, and clear actions.
+- Channel connection state belongs to the owning plugin page and the diagnostics route, not to a global top-bar indicator.
 - System destinations are accessible independently of the sidebar tab and use the router's content outlet. Retain a clear way back to the last chat.
 - A top-bar item opens a real route, menu or action. Do not present decorative controls as operational features.
 
