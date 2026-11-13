@@ -1,0 +1,32 @@
+{
+	"name": "proactive-scheduler",
+	"version": "0.1.0",
+	"apiVersion": "1",
+	"kind": "builtin",
+	"permissions": [
+		"ui.panel",
+		"tools",
+		"audit.write",
+		"storage.global",
+		"tasks.create",
+		"tasks.get",
+		"tasks.list",
+		"tasks.cancel",
+		"tasks.watch",
+		"conversation.read",
+		"channel.send"
+	],
+	"tools": [],
+	"hooks": [{ "name": "message.received" }, { "name": "after.reply" }],
+	"ui": [],
+	"migrations": [],
+	"configSchema": {
+		"properties": {
+			"tickIntervalMs": { "type": "integer" },
+			"maxPromptChars": { "type": "integer" }
+		},
+		"type": "object"
+	},
+	"configEnv": {},
+	"secretKeys": []
+}

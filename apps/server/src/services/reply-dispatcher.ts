@@ -9,6 +9,7 @@ import {
 import {
 	boundedReplyDelayMs,
 	type ConversationAnswer,
+	type ConversationExecutionLock,
 	extractLurkMarker,
 	prepareOutboundText,
 	withConversationLock,
@@ -91,10 +92,18 @@ export interface ReplyDispatcherOptions {
 	/** Test seams for deterministic pacing. */
 	readonly random?: () => number;
 	readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+	/** Shared conversation execution lock; defaults to the host-wide lock. */
+	readonly lock?: ConversationExecutionLock;
 }
 
 interface DeliveryPlanItem {
 	readonly parts: readonly MessagePart[];
+}
+
+export interface ReplyDeliveryOutcome {
+	readonly deliveryStatus: "sent" | "failed" | "uncertain" | "skipped" | "suppressed";
+	readonly reason?: string;
+	readonly text?: string;
 }
 
 export interface ReconcilePendingResult {
@@ -125,6 +134,7 @@ export class ReplyDispatcher {
 	readonly #pacing: ConversationPacingTracker | undefined;
 	readonly #random: () => number;
 	readonly #sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+	readonly #lock: ConversationExecutionLock | undefined;
 	readonly #pendingOutput = new Map<string, AbortController>();
 	#reconcileTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -143,6 +153,7 @@ export class ReplyDispatcher {
 		this.#policy = options.policy;
 		this.#pacing = options.pacing;
 		this.#random = options.random ?? Math.random;
+		this.#lock = options.lock;
 		this.#sleep =
 			options.sleep ??
 			((ms, signal) =>
@@ -169,9 +180,9 @@ export class ReplyDispatcher {
 		return true;
 	}
 
-	async handleAnswer(answer: ConversationAnswer): Promise<void> {
+	async handleAnswer(answer: ConversationAnswer): Promise<ReplyDeliveryOutcome | undefined> {
 		const database = this.#database();
-		if (database === undefined) return;
+		if (database === undefined) return undefined;
 		const [session] = await database
 			.select({
 				chatId: chatObjects.id,
@@ -190,7 +201,7 @@ export class ReplyDispatcher {
 				conversationId: answer.conversationId,
 				entryId: answer.entryId,
 			});
-			return;
+			return { deliveryStatus: "skipped", reason: "no_domain_session" };
 		}
 
 		const lurk = extractLurkMarker(answer.text);
@@ -212,7 +223,7 @@ export class ReplyDispatcher {
 				conversationId: answer.conversationId,
 				entryId: answer.entryId,
 			});
-			return;
+			return { deliveryStatus: "suppressed", reason: "lurk", text: lurk.text };
 		}
 
 		let policy: ConversationPolicy = defaultConversationPolicy;
@@ -257,7 +268,9 @@ export class ReplyDispatcher {
 					plan.push({ parts: [{ text: unit, type: "text" }] });
 				}
 			}
-			if (normalizedParts.length === 0) return;
+			if (normalizedParts.length === 0) {
+				return { deliveryStatus: "skipped", reason: "empty_output" };
+			}
 			parts = normalizedParts;
 			text = normalizedParts
 				.filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
@@ -265,7 +278,9 @@ export class ReplyDispatcher {
 				.join("\n")
 				.trim();
 		} else {
-			if (prepared.units.length === 0) return;
+			if (prepared.units.length === 0) {
+				return { deliveryStatus: "skipped", reason: "empty_output" };
+			}
 			text = prepared.text;
 			parts = text.length > 0 ? [{ text, type: "text" }] : [];
 			plan = prepared.units.map((unit) => ({ parts: [{ text: unit, type: "text" as const }] }));
@@ -318,7 +333,7 @@ export class ReplyDispatcher {
 				entryId: answer.entryId,
 				sessionId: session.sessionId,
 			});
-			return;
+			return { deliveryStatus: "skipped", reason: "duplicate" };
 		}
 		await Promise.all([
 			database
@@ -363,6 +378,7 @@ export class ReplyDispatcher {
 			sessionId: session.sessionId,
 			text,
 		});
+		return { deliveryStatus, text };
 	}
 
 	async #transformReply(input: {
@@ -612,122 +628,131 @@ export class ReplyDispatcher {
 				platformConversationId,
 			});
 		}
-		return withConversationLock(target.conversationId, async () => {
-			const controller = new AbortController();
-			this.#pendingOutput.set(target.conversationId, controller);
-			const replyTo = this.#replyAsQuote
-				? await this.#quoteTarget(database, target.sessionId, target.chatKind)
-				: undefined;
-			let firstPlatformMessageId: string | null = null;
-			let sentCount = 0;
-			try {
-				if (target.policy.pacing.typingEnabled) {
-					await this.#channels.sendTyping(channelId, target.chatKind, platformConversationId, true);
-				}
-				const delayMs = boundedReplyDelayMs(target.policy.pacing, this.#random);
-				if (delayMs > 0) await this.#sleep(delayMs, controller.signal);
-				let replyTargetSent = false;
-				const sendChunk = async (chunk: readonly MessagePart[]) => {
-					if (controller.signal.aborted) throw new OutputCancelledError();
-					const result = await this.#channels.send(
-						channelId,
-						target.chatKind,
-						platformConversationId,
-						chunk,
-						replyTo !== undefined && !replyTargetSent
-							? { replyToPlatformMessageId: replyTo }
-							: undefined,
-					);
-					replyTargetSent = true;
-					if (firstPlatformMessageId === null && result.platformMessageId !== undefined) {
-						firstPlatformMessageId = result.platformMessageId;
+		return withConversationLock(
+			target.conversationId,
+			async () => {
+				const controller = new AbortController();
+				this.#pendingOutput.set(target.conversationId, controller);
+				const replyTo = this.#replyAsQuote
+					? await this.#quoteTarget(database, target.sessionId, target.chatKind)
+					: undefined;
+				let firstPlatformMessageId: string | null = null;
+				let sentCount = 0;
+				try {
+					if (target.policy.pacing.typingEnabled) {
+						await this.#channels.sendTyping(
+							channelId,
+							target.chatKind,
+							platformConversationId,
+							true,
+						);
 					}
-					sentCount += 1;
-				};
-				for (const [itemIndex, item] of target.plan.entries()) {
-					const chunks = splitMessageParts(item.parts, this.#splitMaxChars).filter(
-						(chunk) => chunk.length > 0,
-					);
-					for (const [chunkIndex, chunk] of chunks.entries()) {
-						await sendChunk(chunk);
-						if (
-							target.policy.pacing.sendIntervalMs > 0 &&
-							(itemIndex < target.plan.length - 1 || chunkIndex < chunks.length - 1)
-						) {
-							await this.#sleep(target.policy.pacing.sendIntervalMs, controller.signal);
+					const delayMs = boundedReplyDelayMs(target.policy.pacing, this.#random);
+					if (delayMs > 0) await this.#sleep(delayMs, controller.signal);
+					let replyTargetSent = false;
+					const sendChunk = async (chunk: readonly MessagePart[]) => {
+						if (controller.signal.aborted) throw new OutputCancelledError();
+						const result = await this.#channels.send(
+							channelId,
+							target.chatKind,
+							platformConversationId,
+							chunk,
+							replyTo !== undefined && !replyTargetSent
+								? { replyToPlatformMessageId: replyTo }
+								: undefined,
+						);
+						replyTargetSent = true;
+						if (firstPlatformMessageId === null && result.platformMessageId !== undefined) {
+							firstPlatformMessageId = result.platformMessageId;
+						}
+						sentCount += 1;
+					};
+					for (const [itemIndex, item] of target.plan.entries()) {
+						const chunks = splitMessageParts(item.parts, this.#splitMaxChars).filter(
+							(chunk) => chunk.length > 0,
+						);
+						for (const [chunkIndex, chunk] of chunks.entries()) {
+							await sendChunk(chunk);
+							if (
+								target.policy.pacing.sendIntervalMs > 0 &&
+								(itemIndex < target.plan.length - 1 || chunkIndex < chunks.length - 1)
+							) {
+								await this.#sleep(target.policy.pacing.sendIntervalMs, controller.signal);
+							}
 						}
 					}
-				}
-				await database
-					.update(messages)
-					.set({
-						deliveryStatus: "sent",
-						platformMessageId: firstPlatformMessageId,
-						updatedAt: new Date().toISOString(),
-					})
-					.where(eq(messages.id, target.id));
-				await this.#audit({
-					action: "message.send-reply",
-					payload: {
-						chatKind: target.chatKind,
-						platformConversationId,
-						sentCount,
-						unitCount: target.units.length,
-					},
-					result: "ok",
-					targetId: target.sessionId,
-					targetKind: "session",
-				});
-				return "sent";
-			} catch (error) {
-				if (error instanceof OutputCancelledError) {
-					const deliveryStatus = sentCount === 0 ? "failed" : "uncertain";
 					await database
 						.update(messages)
 						.set({
-							deliveryStatus,
+							deliveryStatus: "sent",
 							platformMessageId: firstPlatformMessageId,
 							updatedAt: new Date().toISOString(),
 						})
 						.where(eq(messages.id, target.id));
 					await this.#audit({
-						action: "message.cancel-output",
+						action: "message.send-reply",
 						payload: {
 							chatKind: target.chatKind,
 							platformConversationId,
-							remainingUnits: target.units.length,
 							sentCount,
+							unitCount: target.units.length,
 						},
-						reason: "superseded by new inbound activity",
 						result: "ok",
 						targetId: target.sessionId,
 						targetKind: "session",
 					});
-					this.#logger.info("assistant reply delivery cancelled", {
-						sentCount,
-						sessionId: target.sessionId,
-					});
-					return deliveryStatus;
-				}
-				const message = error instanceof Error ? error.message : String(error);
-				return this.#fail(database, target.id, target.sessionId, message, {
-					chatKind: target.chatKind,
-					platformConversationId,
-				});
-			} finally {
-				if (target.policy.pacing.typingEnabled) {
-					await this.#channels.sendTyping(
-						channelId,
-						target.chatKind,
+					return "sent";
+				} catch (error) {
+					if (error instanceof OutputCancelledError) {
+						const deliveryStatus = sentCount === 0 ? "failed" : "uncertain";
+						await database
+							.update(messages)
+							.set({
+								deliveryStatus,
+								platformMessageId: firstPlatformMessageId,
+								updatedAt: new Date().toISOString(),
+							})
+							.where(eq(messages.id, target.id));
+						await this.#audit({
+							action: "message.cancel-output",
+							payload: {
+								chatKind: target.chatKind,
+								platformConversationId,
+								remainingUnits: target.units.length,
+								sentCount,
+							},
+							reason: "superseded by new inbound activity",
+							result: "ok",
+							targetId: target.sessionId,
+							targetKind: "session",
+						});
+						this.#logger.info("assistant reply delivery cancelled", {
+							sentCount,
+							sessionId: target.sessionId,
+						});
+						return deliveryStatus;
+					}
+					const message = error instanceof Error ? error.message : String(error);
+					return this.#fail(database, target.id, target.sessionId, message, {
+						chatKind: target.chatKind,
 						platformConversationId,
-						false,
-					);
+					});
+				} finally {
+					if (target.policy.pacing.typingEnabled) {
+						await this.#channels.sendTyping(
+							channelId,
+							target.chatKind,
+							platformConversationId,
+							false,
+						);
+					}
+					if (this.#pendingOutput.get(target.conversationId) === controller) {
+						this.#pendingOutput.delete(target.conversationId);
+					}
 				}
-				if (this.#pendingOutput.get(target.conversationId) === controller) {
-					this.#pendingOutput.delete(target.conversationId);
-				}
-			}
-		});
+			},
+			this.#lock,
+		);
 	}
 
 	async #quoteTarget(

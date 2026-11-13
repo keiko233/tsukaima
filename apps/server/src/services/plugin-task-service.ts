@@ -6,9 +6,13 @@ import {
 	hasPermission,
 	type PluginPermission,
 	type PluginTask,
+	type PluginTaskCancelQuery,
 	type PluginTaskCreateInput,
+	type PluginTaskExecutionResult,
+	type PluginTaskHandler,
 	type PluginTaskListQuery,
 	type PluginTaskStatus,
+	type PluginTaskUpdateInput,
 	type PluginTaskWatchEvent,
 	type PluginTasksApi,
 } from "@tsukaima/sdk";
@@ -24,17 +28,6 @@ const DEFAULT_TASK_PERMISSIONS: readonly PluginPermission[] = [
 	"tasks.cancel",
 	"tasks.watch",
 ];
-
-export interface PluginTaskExecutionResult {
-	readonly outcome?: unknown;
-	readonly logs?: readonly string[];
-	/** A repeatable task may ask to stop after this run. */
-	readonly stop?: boolean;
-}
-
-export type PluginTaskHandler = (
-	task: PluginTask,
-) => Promise<PluginTaskExecutionResult | void> | PluginTaskExecutionResult | void;
 
 export interface PluginTaskServiceOptions {
 	readonly database: TsukaimaDatabase | (() => TsukaimaDatabase | undefined);
@@ -145,9 +138,13 @@ export class PluginTaskService {
 	apiFor(pluginId: string, grantedPermissions: readonly PluginPermission[]): PluginTasksApi {
 		return {
 			cancel: async (taskId) => await this.cancel(pluginId, taskId, grantedPermissions),
+			cancelMany: async (query) => await this.cancelMany(pluginId, query, grantedPermissions),
 			create: async (input) => await this.create(pluginId, input, grantedPermissions),
 			get: async (taskId) => await this.get(pluginId, taskId, grantedPermissions),
 			list: async (query) => await this.list(pluginId, query, grantedPermissions),
+			registerHandler: (kind, handler) => this.registerHandler(pluginId, kind, handler),
+			update: async (taskId, input) =>
+				await this.update(pluginId, taskId, input, grantedPermissions),
 			watch: (taskId, listener) => this.watch(pluginId, taskId, listener, grantedPermissions),
 		};
 	}
@@ -268,6 +265,69 @@ export class PluginTaskService {
 		this.#emit(task.id, { task, type: "cancelled" });
 		await this.#hooks?.emit("task.completed", task);
 		return task;
+	}
+
+	async update(
+		pluginId: string,
+		taskId: string,
+		input: PluginTaskUpdateInput,
+		grantedPermissions: readonly PluginPermission[] = DEFAULT_TASK_PERMISSIONS,
+	): Promise<PluginTask | undefined> {
+		this.#assert(grantedPermissions, "tasks.create", pluginId);
+		const database = this.#requireDatabase();
+		const [row] = await database
+			.update(pluginTasks)
+			.set({
+				...(input.payload === undefined ? {} : { payloadJson: JSON.stringify(input.payload) }),
+				...(input.nextRunAtMs === undefined ? {} : { nextRunAtMs: input.nextRunAtMs }),
+				...(input.maxAttempts === undefined ? {} : { maxAttempts: Math.max(1, input.maxAttempts) }),
+				...(input.intervalMs === undefined ? {} : { intervalMs: input.intervalMs }),
+				updatedAtMs: this.#now(),
+			})
+			.where(and(eq(pluginTasks.id, taskId), eq(pluginTasks.pluginId, pluginId)))
+			.returning();
+		if (row === undefined) return undefined;
+		const task = taskFromRow(row);
+		this.#emit(task.id, { task, type: "updated" });
+		return task;
+	}
+
+	async cancelMany(
+		pluginId: string,
+		query: PluginTaskCancelQuery,
+		grantedPermissions: readonly PluginPermission[] = DEFAULT_TASK_PERMISSIONS,
+	): Promise<readonly PluginTask[]> {
+		this.#assert(grantedPermissions, "tasks.cancel", pluginId);
+		const database = this.#requireDatabase();
+		const statuses =
+			query.status === undefined
+				? undefined
+				: Array.isArray(query.status)
+					? query.status
+					: [query.status];
+		const rows = await database
+			.select()
+			.from(pluginTasks)
+			.where(
+				and(
+					eq(pluginTasks.pluginId, pluginId),
+					...(query.conversationId === undefined
+						? []
+						: [eq(pluginTasks.conversationId, query.conversationId)]),
+					...(query.dedupeKey === undefined ? [] : [eq(pluginTasks.dedupeKey, query.dedupeKey)]),
+					...(query.kind === undefined ? [] : [eq(pluginTasks.kind, query.kind)]),
+					...(statuses === undefined
+						? []
+						: [inArray(pluginTasks.status, statuses as PluginTaskStatus[])]),
+				),
+			);
+		const cancelled: PluginTask[] = [];
+		for (const row of rows) {
+			if (row.status === "cancelled" || row.status === "completed") continue;
+			const task = await this.cancel(pluginId, row.id, grantedPermissions);
+			if (task !== undefined) cancelled.push(task);
+		}
+		return cancelled;
 	}
 
 	watch(

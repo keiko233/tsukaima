@@ -1,4 +1,5 @@
 import type {
+	ConversationPolicy,
 	MessageEnvelope,
 	MessagePart,
 	PluginStatusInput,
@@ -285,12 +286,112 @@ export interface PluginTaskWatchEvent {
 	readonly task: PluginTask;
 }
 
+export interface PluginTaskExecutionResult {
+	readonly outcome?: unknown;
+	readonly logs?: readonly string[];
+	/** A repeatable task may ask to stop after this run. */
+	readonly stop?: boolean;
+}
+
+export type PluginTaskHandler = (
+	task: PluginTask,
+) => Promise<PluginTaskExecutionResult | void> | PluginTaskExecutionResult | void;
+
+export interface PluginTaskUpdateInput {
+	readonly payload?: unknown;
+	readonly nextRunAtMs?: number;
+	readonly intervalMs?: number | null;
+	readonly maxAttempts?: number;
+}
+
+export interface PluginTaskCancelQuery {
+	readonly conversationId?: string;
+	readonly dedupeKey?: string;
+	readonly kind?: string;
+	readonly status?: PluginTaskStatus | readonly PluginTaskStatus[];
+}
+
 export interface PluginTasksApi {
 	create(input: PluginTaskCreateInput): Promise<PluginTask>;
 	get(taskId: string): Promise<PluginTask | undefined>;
 	list(query?: PluginTaskListQuery): Promise<readonly PluginTask[]>;
 	cancel(taskId: string): Promise<PluginTask | undefined>;
 	watch(taskId: string, listener: (event: PluginTaskWatchEvent) => void): () => void;
+	/** Register the durable handler for one task kind owned by this plugin. */
+	registerHandler(kind: string, handler: PluginTaskHandler): () => void;
+	/** Update scheduler metadata without resetting claim/attempt state. */
+	update(taskId: string, input: PluginTaskUpdateInput): Promise<PluginTask | undefined>;
+	/** Cancel every task matching the query (conversation/dedupe scoped). */
+	cancelMany(query: PluginTaskCancelQuery): Promise<readonly PluginTask[]>;
+}
+
+/**
+ * Secret-free conversation metadata. Conversation history itself stays behind
+ * `recentMessages()` and is never included in logs.
+ */
+export interface PluginConversationSummary {
+	readonly id: string;
+	readonly durableConversationId: string;
+	readonly chatObjectId: string | null;
+	readonly channelId: string | null;
+	readonly kind: "private" | "group" | "webui" | "task" | "plugin";
+	readonly title: string;
+	readonly updatedAt: string;
+	readonly status: string;
+	/** Chat-object mute flag, so proactive candidates can exclude muted chats. */
+	readonly muted?: boolean;
+}
+
+/** Bounded message metadata plus a short text preview for compact operational context. */
+export interface PluginConversationMessage {
+	readonly id: string;
+	readonly direction: "inbound" | "outbound" | "system";
+	readonly kind: string;
+	readonly senderDisplayName: string | null;
+	readonly textPreview: string;
+	readonly occurredAt: string;
+	readonly deliveryStatus: string | null;
+}
+
+export interface PluginBackgroundTurnInput {
+	readonly conversationId: string;
+	readonly kind: "scheduled" | "proactive";
+	readonly prompt: string;
+	/** Compact operational context appended to the prompt (never logged by the host). */
+	readonly context?: string;
+	/** Optional plugin task reference for audit correlation. */
+	readonly taskId?: string;
+}
+
+export type PluginBackgroundDeliveryStatus =
+	| "sent"
+	| "failed"
+	| "uncertain"
+	| "skipped"
+	| "suppressed";
+
+export interface PluginBackgroundTurnResult {
+	readonly delivered: boolean;
+	readonly deliveryStatus: PluginBackgroundDeliveryStatus;
+	/** Output marker that was consumed and never delivered (`skip`, `lurk`, `schedule-later`). */
+	readonly marker?: "skip" | "lurk" | "schedule-later";
+	readonly skippedReason?: string;
+	/** Cleaned assistant text after marker removal. Never logged by the host. */
+	readonly text?: string;
+	/** Delay requested by `TSUKAIMA_SCHEDULE_LATER` when present. */
+	readonly scheduleLaterMs?: number;
+}
+
+/** Permission-checked conversation surface exposed to plugins. */
+export interface PluginConversationsApi {
+	list(): Promise<readonly PluginConversationSummary[]>;
+	get(conversationId: string): Promise<PluginConversationSummary | undefined>;
+	getPolicy(conversationId: string): Promise<ConversationPolicy>;
+	recentMessages(
+		conversationId: string,
+		limit?: number,
+	): Promise<readonly PluginConversationMessage[]>;
+	submitBackgroundTurn(input: PluginBackgroundTurnInput): Promise<PluginBackgroundTurnResult>;
 }
 
 export interface PluginMigrationDescriptor {
@@ -481,6 +582,8 @@ export interface PluginContext {
 	audit?: PluginAuditApi;
 	/** Durable host scheduler tasks. Present when the plugin has `tasks.*` permission. */
 	tasks?: PluginTasksApi;
+	/** Permission-checked conversation metadata and durable background turns. */
+	conversations?: PluginConversationsApi;
 	/** Host-owned plugin migration records and rollback for `host`-mode plugins. */
 	migrations?: PluginMigrationsApi;
 	/** Namespaced database handle for `host`-mode plugins that own tables. */

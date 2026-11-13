@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
 	createRegistry,
@@ -190,6 +191,28 @@ export interface ActivityWindowEvent {
 	/** Envelopes in the window when the event fired. */
 	readonly envelopeCount: number;
 	readonly type: "opened" | "closed";
+}
+
+/**
+ * One durable background/proactive turn. The caller owns marker handling and delivery so the
+ * host stays policy-neutral; this method only produces an assistant answer in the same durable
+ * conversation (persona, memory, and tool extensions still render normally).
+ */
+export interface BackgroundTurnInput {
+	readonly conversationId: string;
+	readonly kind: "scheduled" | "proactive";
+	readonly prompt: string;
+	/** Compact operational context placed before the prompt; never logged by the host. */
+	readonly context?: string;
+	/** Stable request id for idempotent retries. */
+	readonly requestId?: string;
+}
+
+export interface BackgroundTurnResult {
+	readonly activityId: string;
+	readonly entryId: string;
+	readonly requestId: string;
+	readonly text: string;
 }
 
 export interface DurableConversationHostOptions {
@@ -609,6 +632,61 @@ export class PiDurableConversationHost {
 			this.trackSubmission(conversationId, String(submissionId));
 			this.observeAnswer(harness, conversationId, submission, String(submissionId));
 		}
+	}
+
+	async submitBackgroundTurn(input: BackgroundTurnInput): Promise<BackgroundTurnResult> {
+		return withConversationLock(
+			input.conversationId,
+			() => this.submitBackgroundTurnLocked(input),
+			this.executionLock,
+		);
+	}
+
+	private async submitBackgroundTurnLocked(
+		input: BackgroundTurnInput,
+	): Promise<BackgroundTurnResult> {
+		const harness = await this.openHarness();
+		const numericId = Number(input.conversationId) as ConversationId;
+		const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
+		if (!conversation) throw new Error(`Conversation not found: ${input.conversationId}`);
+		await this.ensureExtensions(conversation, input.conversationId);
+		const policy = await this.readPolicy(numericId);
+		if (!policy.enabled) throw new Error(`Conversation disabled: ${input.conversationId}`);
+		const activityId = `${numericId}:background`;
+		const requestId = input.requestId ?? `${activityId}:${randomUUID()}`;
+		const content = [input.context?.trim(), input.prompt.trim()]
+			.filter((value): value is string => value !== undefined && value.length > 0)
+			.join("\n\n");
+		if (content.length === 0) throw new Error("Background turn prompt must not be empty");
+		const submissionId = await conversation.commit(
+			(tx) =>
+				conversation.submit(tx, {
+					content,
+					entry: {
+						kind: durableDocumentKinds.activityWindow,
+						data: {
+							activityId,
+							backgroundKind: input.kind,
+							requestId,
+						},
+					},
+					requestId,
+					type: "input",
+				}),
+			BACKGROUND_CONTEXT,
+		);
+		const submission = await harness.submission(submissionId, BACKGROUND_CONTEXT);
+		const settled = await submission?.wait(BACKGROUND_CONTEXT);
+		if (settled === undefined || settled.type !== "input" || settled.status !== "done") {
+			throw new Error("Background turn did not settle successfully");
+		}
+		const entry = await harness.commit((tx) => tx.entry(settled.answer), BACKGROUND_CONTEXT);
+		return {
+			activityId,
+			entryId: String(settled.answer),
+			requestId,
+			text: entry === undefined ? "" : (assistantEntryText(entry) ?? ""),
+		};
 	}
 
 	async listEntries(conversationId: string, limit = 500): Promise<EntryRecord[]> {

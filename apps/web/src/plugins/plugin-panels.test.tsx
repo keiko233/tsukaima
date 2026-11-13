@@ -4,10 +4,12 @@ import type { PluginI18n } from "@tsukaima/sdk/i18n";
 import { PluginPanelProvider, type PluginSummary } from "@tsukaima/sdk/ui";
 import oneBotUi from "../../../../plugins/onebot-napcat/src/ui.tsx";
 import openAiUi from "../../../../plugins/openai-compatible/src/ui.tsx";
+import proactiveUi from "../../../../plugins/proactive-scheduler/src/ui.tsx";
 import searchUi from "../../../../plugins/search-fetch/src/ui.tsx";
 import stickerUi from "../../../../plugins/sticker-meme/src/ui.tsx";
 import { i18n as oneBotI18n } from "../../../../plugins/onebot-napcat/src/i18n.ts";
 import { i18n as openAiI18n } from "../../../../plugins/openai-compatible/src/i18n.ts";
+import { i18n as proactiveI18n } from "../../../../plugins/proactive-scheduler/src/i18n.ts";
 import { i18n as searchI18n } from "../../../../plugins/search-fetch/src/i18n.ts";
 import { i18n as stickerI18n } from "../../../../plugins/sticker-meme/src/i18n.ts";
 import type { PluginUiModuleDefinition } from "@tsukaima/sdk/ui";
@@ -115,6 +117,23 @@ describe("built-in plugin panels", () => {
 		expect(zh).toContain("提供商");
 		expect(zh).toContain("路由策略");
 		expect(zh).toContain("测试查询");
+	});
+
+	test("renders the proactive-scheduler panel in en and zh-cn", () => {
+		const proactivePlugin: PluginSummary = {
+			...plugin,
+			id: "proactive-scheduler",
+			name: "proactive-scheduler",
+			permissions: ["ui.panel", "tools", "tasks.create", "conversation.read", "channel.send"],
+		};
+		const html = renderPanel(proactiveUi, proactiveI18n.bind("en"), proactivePlugin);
+		expect(html).toContain("Proactive scheduler");
+		expect(html).toContain("Scheduled tasks");
+		expect(html).toContain("Dry-run simulation");
+		const zh = renderPanel(proactiveUi, proactiveI18n.bind("zh-cn"), proactivePlugin);
+		expect(zh).toContain("主动消息调度");
+		expect(zh).toContain("已排期任务");
+		expect(zh).toContain("试运行");
 	});
 
 	test("renders the sticker-meme library panel in en and zh-cn", () => {
