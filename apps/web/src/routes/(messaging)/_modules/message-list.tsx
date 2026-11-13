@@ -1,6 +1,14 @@
 "use client";
 
-import { Image as ImageIcon, Smile, StickyNote } from "lucide-react";
+import {
+	File as FileIcon,
+	FileAudio,
+	FileText,
+	Image as ImageIcon,
+	Smile,
+	StickyNote,
+	Video,
+} from "lucide-react";
 import {
 	Message,
 	MessageAvatar,
@@ -47,6 +55,46 @@ function senderName(message: MessageSummary): string {
 	return message.senderDisplayName;
 }
 
+function PartIcon({ type }: { type: MessageSummary["parts"][number]["type"] }) {
+	switch (type) {
+		case "image":
+			return <ImageIcon className="size-3.5" />;
+		case "sticker":
+			return <Smile className="size-3.5" />;
+		case "audio":
+			return <FileAudio className="size-3.5" />;
+		case "video":
+			return <Video className="size-3.5" />;
+		case "file":
+			return <FileText className="size-3.5" />;
+		case "channel-native":
+			return <FileIcon className="size-3.5" />;
+		default:
+			return <StickyNote className="size-3.5" />;
+	}
+}
+
+function partLabel(part: MessageSummary["parts"][number]): string {
+	switch (part.type) {
+		case "image":
+			return part.previewText ? `${m.message_image()} · ${part.previewText}` : m.message_image();
+		case "sticker":
+			return part.previewText ? `${m.message_sticker()} · ${part.previewText}` : m.message_sticker();
+		case "audio":
+			return part.transcript?.trim()
+				? `Voice · ${part.transcript.trim()}`
+				: (part.previewText ?? "Voice message");
+		case "video":
+			return part.previewText ?? "Video";
+		case "file":
+			return `File · ${part.fileName}`;
+		case "channel-native":
+			return part.summary?.trim() ? part.summary : `[${part.nativeType}]`;
+		default:
+			return "";
+	}
+}
+
 function MessageBody({ message }: { message: MessageSummary }) {
 	const textParts = message.parts.filter((part) => part.type === "text" && part.text);
 	const mediaParts = message.parts.filter((part) => part.type !== "text");
@@ -64,12 +112,8 @@ function MessageBody({ message }: { message: MessageSummary }) {
 							key={`${part.type}-${index}`}
 							className="inline-flex items-center gap-1 rounded-lg bg-background/60 px-2 py-1 text-[11px] text-muted-foreground"
 						>
-							{part.type === "image" ? (
-								<ImageIcon className="size-3.5" />
-							) : (
-								<Smile className="size-3.5" />
-							)}
-							{part.type === "image" ? m.message_image() : m.message_sticker()}
+							<PartIcon type={part.type} />
+							{partLabel(part)}
 						</span>
 					))}
 				</div>

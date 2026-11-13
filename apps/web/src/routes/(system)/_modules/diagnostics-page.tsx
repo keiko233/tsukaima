@@ -110,7 +110,10 @@ export function DiagnosticsPage() {
 								<dt className="text-xs text-muted-foreground">{m.diagnostics_channels_label()}</dt>
 								<dd className="mt-1 font-medium">
 									{diagnostics.channels
-										.map((channel) => `${channel.id}: ${channel.connected ? "true" : "false"}`)
+										.map(
+											(channel) =>
+												`${channel.id}${channel.mode === undefined ? "" : ` (${channel.mode})`}: ${channel.connected ? "true" : "false"}`,
+										)
 										.join(", ") || "false"}
 								</dd>
 							</div>

@@ -20,6 +20,14 @@ export interface CreateAppOptions {
 	readonly pluginBindings?: ReadonlyMap<string, unknown>;
 	/** Overrides the built-in plugin set (tests and future plugin sources). */
 	readonly plugins?: readonly ElainaPlugin[];
+	/** Reply chunking, quote behavior, and pending-delivery reconciliation timing. */
+	readonly reply?: {
+		readonly pendingGraceMs?: number;
+		readonly reconcileIntervalMs?: number;
+		readonly reconcileLookbackMs?: number;
+		readonly replyAsQuote?: boolean;
+		readonly splitMaxChars?: number;
+	};
 	/** Disable only in isolated tests; production must keep event streams authenticated. */
 	readonly requireAuthForEvents?: boolean;
 }

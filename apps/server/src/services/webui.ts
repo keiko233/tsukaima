@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
-import type { MessagePart } from "@elaina/contracts";
+import { messagePartSchema, type MessagePart } from "@elaina/contracts";
 import {
 	chatObjects,
 	conversationMembers,
@@ -83,13 +83,10 @@ function parseParts(value: string | null): MessagePart[] {
 	try {
 		const parsed: unknown = JSON.parse(value);
 		if (!Array.isArray(parsed)) return [];
-		return parsed.filter(
-			(part): part is MessagePart =>
-				typeof part === "object" &&
-				part !== null &&
-				"type" in part &&
-				(part.type === "text" || part.type === "image" || part.type === "sticker"),
-		);
+		return parsed.flatMap((part) => {
+			const result = messagePartSchema.safeParse(part);
+			return result.success ? [result.data] : [];
+		});
 	} catch {
 		return [];
 	}

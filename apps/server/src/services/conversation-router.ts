@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import type { PiDurableConversationHost } from "@elaina/core";
-import { messageEnvelopeSchema, type MessageEnvelope, type MessagePart } from "@elaina/contracts";
+import {
+	channelNoticeSchema,
+	messageEnvelopeSchema,
+	messagePartsText,
+	type ChannelNotice,
+	type MessageEnvelope,
+} from "@elaina/contracts";
 import {
 	chatObjects,
 	conversations,
@@ -27,11 +33,16 @@ export interface ConversationRouterOptions {
 	readonly logger: Logger;
 }
 
-export const messageText = (parts: readonly MessagePart[]): string =>
-	parts
-		.map((part) => (part.type === "text" ? part.text : `[${part.type}]`))
-		.join(" ")
-		.trim();
+export const messageText = messagePartsText;
+
+const noticeSummary = (notice: ChannelNotice): string => {
+	const actor = notice.actorDisplayName ?? notice.actorId ?? "unknown";
+	const target = notice.targetUserId ?? notice.targetMessageId;
+	const self = notice.isSelfTarget === true ? " (bot)" : "";
+	return target === undefined
+		? `[${notice.noticeType}] ${actor}${self}`
+		: `[${notice.noticeType}] ${actor} -> ${target}${self}`;
+};
 
 const safeChannelId = (envelope: unknown): string => {
 	if (typeof envelope === "object" && envelope !== null && "channelId" in envelope) {
@@ -190,6 +201,101 @@ export class ConversationRouter {
 		} finally {
 			this.#ingesting.delete(ingestionKey);
 		}
+	}
+
+	/**
+	 * Persist a platform notice as a system/notice row on the resolved session. Notices never
+	 * call the conversation host and never trigger a model turn; Phase 2 supplies wake policy
+	 * on top of the persisted `isSelfTarget` fact.
+	 */
+	async ingestNotice(notice: ChannelNotice): Promise<{
+		readonly duplicated: boolean;
+		readonly persisted: boolean;
+		readonly sessionId?: string;
+	}> {
+		const parsed = channelNoticeSchema.safeParse(notice);
+		if (!parsed.success) throw new Error("Invalid channel notice");
+		const value = parsed.data;
+		if (value.noticeType === "typing" && value.details?.persist !== true) {
+			return { duplicated: false, persisted: false };
+		}
+		const database = this.#requireDatabase();
+		const actorId = value.actorId;
+		const displayName = value.actorDisplayName ?? actorId ?? "system";
+		const envelope: MessageEnvelope = {
+			channelId: value.channelId,
+			channelKind: value.channelKind,
+			conversationKey: value.conversationKey,
+			id: value.id,
+			mentions: [],
+			parts: [
+				{
+					nativeType: `notice:${value.noticeType}`,
+					type: "channel-native",
+					summary: noticeSummary(value),
+					...(value.isSelfTarget === undefined
+						? {}
+						: { safeFields: { isSelfTarget: value.isSelfTarget } }),
+				},
+			],
+			sender: {
+				displayName,
+				id: actorId ?? "system",
+				isBot: false,
+				platformId: actorId ?? "system",
+			},
+			source: { messageId: value.id, timestampMs: value.occurredAtMs },
+		};
+		const sender = actorId === undefined ? undefined : await this.resolveIdentity(envelope);
+		const target = await this.resolveSession(envelope, sender?.displayName ?? displayName);
+		const existing = await database
+			.select({ id: messages.id })
+			.from(messages)
+			.where(
+				and(
+					eq(messages.chatObjectId, target.chatObjectId),
+					eq(messages.platformMessageId, value.id),
+				),
+			)
+			.limit(1);
+		if (existing.length > 0) {
+			return { duplicated: true, persisted: true, sessionId: target.sessionId };
+		}
+		const occurredAt = new Date(
+			value.occurredAtMs > 0 ? value.occurredAtMs : Date.now(),
+		).toISOString();
+		const now = new Date().toISOString();
+		await database
+			.insert(messages)
+			.values({
+				chatObjectId: target.chatObjectId,
+				contentText: noticeSummary(value),
+				conversationId: target.sessionId,
+				direction: "system",
+				id: randomUUID(),
+				ingestedAt: now,
+				kind: "notice",
+				occurredAt,
+				partsJson: JSON.stringify(envelope.parts),
+				platformMessageId: value.id,
+				rawRefJson: JSON.stringify(value),
+				senderDisplayName: sender?.displayName ?? displayName,
+				senderExternalId: actorId ?? "system",
+				...(sender === undefined ? {} : { senderUserId: sender.userId }),
+				updatedAt: now,
+			})
+			.onConflictDoNothing();
+		await Promise.all([
+			database
+				.update(chatObjects)
+				.set({ updatedAt: now })
+				.where(eq(chatObjects.id, target.chatObjectId)),
+			database
+				.update(conversations)
+				.set({ updatedAt: now })
+				.where(eq(conversations.id, target.sessionId)),
+		]);
+		return { duplicated: false, persisted: true, sessionId: target.sessionId };
 	}
 
 	async resolveIdentity(

@@ -19,7 +19,7 @@ import {
 } from "@elaina/db";
 import { BACKGROUND_CONTEXT, openDurableStorage, type SqliteStorage } from "@elaina/durable";
 import { createPluginToolsExtension, type AuditEntry, type ElainaPlugin } from "@elaina/sdk";
-import type { ChannelRequest, MessageEnvelope } from "@elaina/contracts";
+import type { ChannelNotice, ChannelRequest, MessageEnvelope } from "@elaina/contracts";
 import { loadConfig, type ElainaConfig } from "./config.ts";
 import { createLogger, LogBuffer, type Logger } from "./logging.ts";
 import { readRuntimeSettings, type RuntimeSettings } from "./runtime-settings.ts";
@@ -27,6 +27,7 @@ import { builtinPlugins } from "./plugins/builtin.ts";
 import { ChannelRegistry } from "./services/channel-registry.ts";
 import { ConversationRouter } from "./services/conversation-router.ts";
 import { DrizzleContextProvider } from "./services/context-provider.ts";
+import { MediaService } from "./services/media-service.ts";
 import { HookBus } from "./services/hook-bus.ts";
 import { PluginHost } from "./services/plugin-host.ts";
 import { PluginSettingsStore } from "./services/plugin-settings.ts";
@@ -44,6 +45,14 @@ export interface LifecycleOptions {
 	readonly pluginBindings?: ReadonlyMap<string, unknown>;
 	/** Overrides the built-in plugin set (tests and future plugin sources). */
 	readonly plugins?: readonly ElainaPlugin[];
+	/** Reply chunking, quote behavior, and pending-delivery reconciliation timing. */
+	readonly reply?: {
+		readonly pendingGraceMs?: number;
+		readonly reconcileIntervalMs?: number;
+		readonly reconcileLookbackMs?: number;
+		readonly replyAsQuote?: boolean;
+		readonly splitMaxChars?: number;
+	};
 }
 
 export interface LifecycleState {
@@ -63,6 +72,7 @@ export class ElainaLifecycle {
 	readonly pluginHost: PluginHost;
 	readonly pluginSettings: PluginSettingsStore;
 	readonly pluginStatuses: PluginStatusStore;
+	readonly media: MediaService;
 	readonly replyDispatcher: ReplyDispatcher;
 	readonly requestService: RequestService;
 	private currentState: LifecycleState["state"] = "starting";
@@ -103,9 +113,17 @@ export class ElainaLifecycle {
 			onEnvelope: (channelId, envelope) => {
 				void this.handleChannelEnvelope(channelId, envelope).catch(() => undefined);
 			},
+			onNotice: (channelId, notice) => {
+				void this.handleChannelNotice(channelId, notice).catch(() => undefined);
+			},
 			onRequest: (channelId, request) => {
 				void this.handleChannelRequest(channelId, request).catch(() => undefined);
 			},
+		});
+		this.media = new MediaService({
+			blobsDir: join(config.dataDir, "blobs"),
+			database: () => this.domainDatabase,
+			logger: this.runtimeLog,
 		});
 		this.conversationRouter = new ConversationRouter({
 			database: () => this.domainDatabase,
@@ -133,6 +151,21 @@ export class ElainaLifecycle {
 			database: () => this.domainDatabase,
 			hooks: this.hooks,
 			logger: this.runtimeLog,
+			...(options?.reply?.pendingGraceMs === undefined
+				? {}
+				: { pendingGraceMs: options.reply.pendingGraceMs }),
+			...(options?.reply?.reconcileIntervalMs === undefined
+				? {}
+				: { reconcileIntervalMs: options.reply.reconcileIntervalMs }),
+			...(options?.reply?.reconcileLookbackMs === undefined
+				? {}
+				: { reconcileLookbackMs: options.reply.reconcileLookbackMs }),
+			...(options?.reply?.replyAsQuote === undefined
+				? {}
+				: { replyAsQuote: options.reply.replyAsQuote }),
+			...(options?.reply?.splitMaxChars === undefined
+				? {}
+				: { splitMaxChars: options.reply.splitMaxChars }),
 		});
 		this.pluginHost = new PluginHost({
 			audit: (entry) => this.writeAudit(entry),
@@ -291,6 +324,14 @@ export class ElainaLifecycle {
 			conversationHost.installExtensions([pluginTools]);
 		}
 
+		try {
+			await this.replyDispatcher.reconcilePendingDeliveries();
+		} catch (error) {
+			this.runtimeLog.warn("startup pending-delivery reconciliation failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+		this.replyDispatcher.startPendingReconciliation();
 		this.transition("ready", "ready");
 	}
 
@@ -359,6 +400,31 @@ export class ElainaLifecycle {
 		});
 	}
 
+	private async handleChannelNotice(channelId: string, notice: ChannelNotice): Promise<void> {
+		try {
+			const result = await this.conversationRouter.ingestNotice(notice);
+			if (notice.noticeType === "poke" && notice.isSelfTarget === true && !result.duplicated) {
+				this.runtimeLog.info("poke at bot received", {
+					channelId,
+					conversationKey: notice.conversationKey,
+					senderId: notice.actorId,
+				});
+				await this.writeAudit({
+					action: "channel.poke-at-bot",
+					actorId: notice.actorId ?? "unknown",
+					actorKind: "user",
+					payload: { noticeId: notice.id, sessionId: result.sessionId },
+					result: "ok",
+					...(notice.actorId === undefined ? {} : { targetId: notice.actorId }),
+					targetKind: "channel-user",
+				});
+			}
+		} catch (error) {
+			this.lastProcessingError = error instanceof Error ? error : new Error(String(error));
+			throw error;
+		}
+	}
+
 	private async handleChannelRequest(_channelId: string, request: ChannelRequest): Promise<void> {
 		try {
 			await this.requestService.persist(request);
@@ -374,6 +440,10 @@ export class ElainaLifecycle {
 
 	async processRequest(request: ChannelRequest): Promise<void> {
 		await this.handleChannelRequest(request.channelId, request);
+	}
+
+	async processNotice(notice: ChannelNotice): Promise<void> {
+		await this.handleChannelNotice(notice.channelId, notice);
 	}
 
 	async resolveChannelRequest(
@@ -419,6 +489,7 @@ export class ElainaLifecycle {
 			}
 		}
 		this.stopListeners.clear();
+		this.replyDispatcher.stopPendingReconciliation();
 		await this.pluginHost.stop();
 		await this.conversationHost?.close();
 		await this.durableStorage?.close(BACKGROUND_CONTEXT);

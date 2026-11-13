@@ -1,4 +1,9 @@
-import type { ChannelRequest, MessageEnvelope, MessagePart } from "@elaina/contracts";
+import type {
+	ChannelNotice,
+	ChannelRequest,
+	MessageEnvelope,
+	MessagePart,
+} from "@elaina/contracts";
 
 /**
  * Capabilities a channel adapter can offer. Plugins that call channel verbs should check
@@ -24,6 +29,11 @@ export interface ChannelDiagnostics {
 	readonly configured?: boolean;
 	/** The adapter failed to start and will not retry until its settings change. */
 	readonly restartRequired?: boolean;
+	/** Transport mode when the adapter supports more than one (for example forward/reverse). */
+	readonly mode?: string;
+	/** Reverse-mode peer diagnostics; undefined for outbound transports. */
+	readonly remoteAddress?: string;
+	readonly origin?: string;
 }
 
 export interface OutboundTarget {
@@ -34,6 +44,24 @@ export interface OutboundTarget {
 
 export interface SendResult {
 	readonly platformMessageId?: string;
+}
+
+export interface SendOptions {
+	/** Prepend a platform reply segment quoting this message when supported. */
+	readonly replyToPlatformMessageId?: string;
+}
+
+export interface ChannelHistoryItem {
+	readonly platformMessageId: string;
+	readonly parts?: readonly MessagePart[];
+	readonly senderId?: string;
+	readonly text?: string;
+	readonly timestampMs?: number;
+}
+
+export interface ChannelHistoryOptions {
+	readonly limit?: number;
+	readonly sinceMs?: number;
 }
 
 export interface ChannelRequestDecision {
@@ -53,9 +81,21 @@ export interface ChannelAdapter {
 	diagnostics(): ChannelDiagnostics;
 	start(): Promise<void>;
 	stop(): Promise<void>;
-	send(target: OutboundTarget, parts: readonly MessagePart[]): Promise<SendResult>;
+	send(
+		target: OutboundTarget,
+		parts: readonly MessagePart[],
+		options?: SendOptions,
+	): Promise<SendResult>;
 	onEnvelope(handler: (envelope: MessageEnvelope) => void): void;
+	/** Dedicated notice channel; notices never masquerade as message envelopes. */
+	onNotice?(handler: (notice: ChannelNotice) => void): void;
 	onRequest?(handler: (request: ChannelRequest) => void): void;
+	/** Used by pending-delivery reconciliation; optional for read-only transports. */
+	lookupMessage?(platformMessageId: string): Promise<ChannelHistoryItem | undefined>;
+	readHistory?(
+		target: OutboundTarget,
+		options?: ChannelHistoryOptions,
+	): Promise<readonly ChannelHistoryItem[]>;
 	resolveRequest?(request: ChannelRequest, decision: ChannelRequestDecision): Promise<void>;
 }
 

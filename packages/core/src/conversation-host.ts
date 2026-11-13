@@ -17,6 +17,9 @@ import {
 	type ConversationPolicy,
 	defaultConversationPolicy,
 	durableDocumentKinds,
+	messagePartSchema,
+	messagePartText,
+	messagePartsText,
 	type MessageEnvelope,
 } from "@elaina/contracts";
 import type { SqliteStorage } from "@elaina/durable";
@@ -609,12 +612,7 @@ export class PiDurableConversationHost {
 	}
 
 	private envelopeToText(envelope: MessageEnvelope): string {
-		return envelope.parts
-			.map((part) => {
-				if (part.type === "text") return part.text;
-				return `[${part.type}]`;
-			})
-			.join(" ");
+		return messagePartsText(envelope.parts);
 	}
 
 	private envelopesToText(envelopes: readonly StoredEnvelope[]): string {
@@ -623,16 +621,8 @@ export class PiDurableConversationHost {
 				const parts = Array.isArray(envelope.parts) ? envelope.parts : [];
 				const content = parts
 					.map((part) => {
-						if (
-							typeof part === "object" &&
-							part !== null &&
-							"type" in part &&
-							part.type === "text" &&
-							"text" in part &&
-							typeof part.text === "string"
-						) {
-							return part.text;
-						}
+						const parsed = messagePartSchema.safeParse(part);
+						if (parsed.success) return messagePartText(parsed.data);
 						return typeof part === "object" && part !== null && "type" in part
 							? `[${String(part.type)}]`
 							: "";

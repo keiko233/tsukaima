@@ -236,7 +236,8 @@ describe("plugin host", () => {
 			expect(oneBot?.status).toEqual(
 				expect.objectContaining({ code: "status_unconfigured", level: "unknown" }),
 			);
-			expect(oneBot?.rpcMethods).toEqual(["onebot-napcat.reconnect"]);
+			expect(oneBot?.rpcMethods).toContain("onebot-napcat.reconnect");
+			expect(oneBot?.rpcMethods.length).toBeGreaterThan(1);
 			expect(oneBot?.permissions).toContain("ui.panel");
 
 			await lifecycle.setPluginEnabled("onebot-napcat", false);
@@ -254,7 +255,7 @@ describe("plugin host", () => {
 				(plugin) => plugin.id === "onebot-napcat",
 			);
 			expect(enabled?.enabled).toBe(1);
-			expect(enabled?.rpcMethods).toEqual(["onebot-napcat.reconnect"]);
+			expect(enabled?.rpcMethods).toContain("onebot-napcat.reconnect");
 			expect(enabled?.status).not.toBeNull();
 		}));
 
