@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
 export default defineConfig({
+	clearScreen: false,
 	plugins: [
 		tanstackRouter({
 			target: "react",
