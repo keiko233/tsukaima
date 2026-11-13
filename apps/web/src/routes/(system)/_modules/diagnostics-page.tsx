@@ -159,10 +159,11 @@ export function DiagnosticsPage() {
 								<dd className="mt-1 truncate font-medium">{diagnostics.state.stage}</dd>
 							</div>
 							<div className="min-w-0">
-								<dt className="text-xs text-muted-foreground">{m.diagnostics_onebot_label()}</dt>
+								<dt className="text-xs text-muted-foreground">
+									{m.diagnostics_channels_label()}
+								</dt>
 								<dd className="mt-1 font-medium">
 									{diagnostics.channels
-										.filter((channel) => channel.kind === "onebot-v11")
 										.map((channel) => `${channel.id}: ${channel.connected ? "true" : "false"}`)
 										.join(", ") || "false"}
 								</dd>

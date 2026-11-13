@@ -78,7 +78,7 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 		detail.chat.platformConversationId !== null;
 	const channelConnected =
 		diagnostics.data?.channels.some(
-			(channel) => channel.kind === "onebot-v11" && channel.connected,
+			(channel) => channel.id === detail?.channelId && channel.connected,
 		) ?? false;
 	const archived = detail?.status === "archived";
 

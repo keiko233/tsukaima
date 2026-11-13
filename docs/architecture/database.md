@@ -511,7 +511,7 @@ CREATE TABLE media (
   height INTEGER,
   duration_ms INTEGER,
   kind TEXT NOT NULL CHECK (kind IN ('image', 'sticker', 'audio', 'video', 'file')),
-  source TEXT NOT NULL CHECK (source IN ('onebot', 'webui', 'migration', 'generated')),
+  source TEXT NOT NULL CHECK (source IN ('channel', 'webui', 'migration', 'generated')),
   source_url TEXT,
   created_at TEXT NOT NULL,
   expires_at TEXT,
