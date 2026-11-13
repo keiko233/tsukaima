@@ -42,12 +42,15 @@ describe("plugin i18n", () => {
 			baseLocale: "en",
 			locales: ["en", "zh-cn"],
 			messages: {
+				farewell: ({ name }: { name: string }) =>
+					getLocale() === "zh-cn" ? `再见 ${name}` : `Bye ${name}`,
 				greeting: () => (getLocale() === "zh-cn" ? "你好" : "Hello"),
 			},
 			runtime: runtime as never,
 		});
 		expect(source.bind("zh-cn").t("greeting")).toBe("你好");
 		expect(source.bind("en").t("greeting")).toBe("Hello");
+		expect(source.bind("zh-cn").t("farewell", { name: "Tsukaima" })).toBe("再见 Tsukaima");
 	});
 });
 
