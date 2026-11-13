@@ -36,8 +36,9 @@
 
 - [x] 1. Implement plugin manifest, registry, permission checks, and worker runtime.
 - [x] 2. Implement plugin tool/hook bridges and expose plugin tools to the model.
-- [ ] 2b. Consume the plugin UI registry in the WebUI.
+- [x] 2b. Consume the plugin UI registry in the WebUI (generic config forms and plugin metadata).
 - [x] 3. Implement the plugin host seam and extract the OneBot channel into `plugins/onebot-napcat`.
+- [x] 3b. Extract the model provider into `plugins/openai-compatible` with a host provider registry.
 - [x] 4. Build IM-style WebUI conversation surface.
 - [ ] 5. Add admin panels for personas, memory, and audit.
 - [ ] 6. Implement sticker/meme and search plugins.

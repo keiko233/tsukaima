@@ -104,9 +104,14 @@ Until then, plugin definitions remain declarative and versioned:
 ```ts
 type ElainaPlugin = {
   manifest: PluginManifest;
+  prepare?(context: PluginContext): Promise<void>;
   setup(context: PluginContext): Promise<void>;
   teardown?(context: PluginContext): Promise<void>;
 };
 ```
 
 and UI/route/tool contributions remain data validated by the host.
+
+`prepare` was added after the initial comparison so a model-provider plugin can register its
+factory before the conversation host and model catalog are built. It does not change the decision
+to keep Cordis/Chord out of the runtime.

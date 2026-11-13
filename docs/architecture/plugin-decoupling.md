@@ -285,11 +285,14 @@ Phase B shipped with these deviations from the sketch above:
 - `plugins.rpc.register` and `plugins.models.registerProvider` were **not** added yet; no
   implemented plugin needs them. They belong to Phases C–D.
 
-### Phase C — Extract `plugins/openai-compatible`
+### Phase C — Extract `plugins/openai-compatible` (done)
 
-1. Move `createModelPort` + `remote-models.ts` into a model-provider plugin.
-2. Add the models section to the WebUI settings as a plugin `settings-form`.
-3. Acceptance: with the plugin disabled, the server falls back to the fake model.
+1. Moved provider construction and config validation into `plugins/openai-compatible`.
+2. Added `models.registerProvider` and plugin `isConfigured()` so the host can choose a provider
+   without knowing its credentials.
+3. The server falls back to the deterministic fake model when the plugin is disabled,
+   unconfigured, or throws.
+4. Remaining: model discovery and richer per-model config belong in the plugin's own RPC/UI.
 
 ### Phase D — Register the remaining feature libraries
 
