@@ -279,6 +279,7 @@ export class PiDurableConversationHost {
 	private readonly extensions = new Map<string, Extension>();
 	private readonly dynamicExtensions = new Set<string>();
 	private readonly extensionsEnsured = new Set<string>();
+	private readonly modelToolsSignatures = new Map<string, string>();
 	private closed = false;
 	readonly registry = createRegistry();
 
@@ -741,6 +742,38 @@ export class PiDurableConversationHost {
 					const document = await tx.doc(conversationPolicyDoc, numericId, "policy", seed);
 					document.policyJson = JSON.stringify(parsed);
 				}, BACKGROUND_CONTEXT);
+			},
+			this.executionLock,
+		);
+	}
+
+	/**
+	 * Per-conversation model-tool filter. Used to remove coding tools from normal IM
+	 * conversations without weakening the plugin-level policy decision.
+	 */
+	async updateModelTools(
+		conversationId: string,
+		options: { readonly remove: readonly string[] },
+	): Promise<void> {
+		const signature = [...options.remove].toSorted().join("\0");
+		if (this.modelToolsSignatures.get(conversationId) === signature) return;
+		await withConversationLock(
+			conversationId,
+			async () => {
+				const harness = await this.openHarness();
+				const numericId = Number(conversationId) as ConversationId;
+				const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
+				if (conversation === undefined) {
+					throw new Error(`Conversation not found: ${conversationId}`);
+				}
+				const removeNames = new Set(options.remove);
+				const registrations = this.registry
+					.snapshot()
+					.tools()
+					.filter(({ tool }) => removeNames.has(tool.name))
+					.map(({ tool }) => tool);
+				await conversation.configure({ modelTools: { remove: registrations } }, BACKGROUND_CONTEXT);
+				this.modelToolsSignatures.set(conversationId, signature);
 			},
 			this.executionLock,
 		);

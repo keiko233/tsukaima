@@ -12,6 +12,11 @@ import {
 	type ModelPolicy,
 } from "@tsukaima/core";
 import {
+	DomainCodingStore,
+	NoopReloadController,
+	SELF_ITERATION_HOST_BINDING,
+} from "@tsukaima/coding";
+import {
 	auditLog,
 	conversations,
 	type TsukaimaDatabase,
@@ -157,6 +162,13 @@ export class TsukaimaLifecycle {
 			logger: this.runtimeLog,
 		});
 		this.conversationRouter = new ConversationRouter({
+			applyModelToolPolicy: async (durableConversationId, policy) => {
+				const codingTools = this.pluginHost.modelToolNames("self-iteration");
+				if (codingTools.length === 0) return;
+				await this.conversationHost?.updateModelTools(durableConversationId, {
+					remove: policy.capabilities.includes("coding") ? [] : codingTools,
+				});
+			},
 			audit: (entry) => this.writeAudit(entry),
 			database: () => this.domainDatabase,
 			host: () => this.conversationHost,
@@ -247,10 +259,21 @@ export class TsukaimaLifecycle {
 		});
 		const pluginBindings = new Map(options?.pluginBindings ?? []);
 		pluginBindings.set(MEMORY_SERVICE_BINDING, this.memory);
+		if (!pluginBindings.has(SELF_ITERATION_HOST_BINDING)) {
+			pluginBindings.set(SELF_ITERATION_HOST_BINDING, {
+				healthCheck: async () => ({ checkedAtMs: Date.now(), ok: this.ready }),
+				reload: new NoopReloadController(),
+				repositoryRoot: process.cwd(),
+				store: new DomainCodingStore(() => this.domainDatabase),
+				worktreeRoot: join(config.dataDir, "worktrees"),
+			});
+		}
 		this.pluginHost = new PluginHost({
 			audit: (entry) => this.writeAudit(entry),
 			bindings: pluginBindings,
 			channels: this.channels,
+			conversationCapabilities: (conversationId) =>
+				this.conversationPolicy.capabilitiesForDurableConversation(conversationId),
 			conversations: this.pluginConversations,
 			database: () => this.domainDatabase,
 			hooks: this.hooks,

@@ -144,6 +144,7 @@ export function mergeConversationPolicy(
 			? {}
 			: { memoryMaxWritesPerActivity: patch.memoryMaxWritesPerActivity }),
 		...(patch.version === undefined ? {} : { version: patch.version }),
+		...(patch.capabilities === undefined ? {} : { capabilities: patch.capabilities }),
 		pacing,
 		trigger,
 	});
@@ -237,6 +238,36 @@ export class ConversationPolicyService {
 		if (conversationId === undefined) return base;
 		const conversation = await this.conversationRevision(conversationId);
 		return conversation?.policy ?? base;
+	}
+
+	/** Explicit capability grants for a domain conversation id. */
+	async capabilities(conversationId?: string): Promise<readonly string[]> {
+		const policy = await this.effectivePolicy(conversationId);
+		return policy.capabilities;
+	}
+
+	/**
+	 * Resolve capabilities from the durable conversation id the model/tool runtime uses.
+	 * Unknown conversations deliberately get no capabilities.
+	 */
+	async capabilitiesForDurableConversation(
+		durableConversationId: string,
+	): Promise<readonly string[]> {
+		const database = this.#db();
+		const [row] = await database
+			.select({ id: conversations.id })
+			.from(conversations)
+			.where(eq(conversations.durableConversationId, durableConversationId))
+			.limit(1);
+		if (row === undefined) {
+			const [direct] = await database
+				.select({ id: conversations.id })
+				.from(conversations)
+				.where(eq(conversations.id, durableConversationId))
+				.limit(1);
+			return direct === undefined ? [] : this.capabilities(direct.id);
+		}
+		return this.capabilities(row.id);
 	}
 
 	async view(

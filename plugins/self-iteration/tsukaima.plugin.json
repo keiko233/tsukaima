@@ -1,0 +1,30 @@
+{
+	"name": "self-iteration",
+	"version": "0.1.0",
+	"apiVersion": "1",
+	"kind": "builtin",
+	"permissions": [
+		"tools.register",
+		"rpc.register",
+		"ui.panel",
+		"ui.approval-card",
+		"coding.read",
+		"coding.execute",
+		"storage.global",
+		"audit.write",
+		"tasks.create"
+	],
+	"tools": [],
+	"hooks": [],
+	"ui": [],
+	"migrations": [],
+	"configSchema": {
+		"properties": {
+			"repositoryRoot": { "type": "string" },
+			"worktreeRoot": { "type": "string" }
+		},
+		"type": "object"
+	},
+	"configEnv": {},
+	"secretKeys": []
+}

@@ -6,6 +6,7 @@ import {
 	type PiDurableConversationHost,
 	type ResolvedReplyTarget,
 } from "@tsukaima/core";
+import type { ConversationPolicy } from "@tsukaima/contracts";
 import {
 	channelNoticeSchema,
 	conversationPolicySchema,
@@ -41,6 +42,11 @@ export interface ConversationIngestResult {
 }
 
 export interface ConversationRouterOptions {
+	/** Apply conversation-scoped model tool visibility before a turn is submitted. */
+	readonly applyModelToolPolicy?: (
+		durableConversationId: string,
+		policy: ConversationPolicy,
+	) => Promise<void> | void;
 	readonly audit?: (entry: AuditEntry) => Promise<void>;
 	readonly database: () => TsukaimaDatabase | undefined;
 	readonly host: () => PiDurableConversationHost | undefined;
@@ -77,6 +83,7 @@ const safeChannelId = (envelope: unknown): string => {
  * `MessageEnvelope`.
  */
 export class ConversationRouter {
+	readonly #applyModelToolPolicy: ConversationRouterOptions["applyModelToolPolicy"];
 	readonly #audit: ConversationRouterOptions["audit"];
 	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #host: () => PiDurableConversationHost | undefined;
@@ -95,6 +102,7 @@ export class ConversationRouter {
 	};
 
 	constructor(options: ConversationRouterOptions) {
+		this.#applyModelToolPolicy = options.applyModelToolPolicy;
 		this.#audit = options.audit;
 		this.#database = options.database;
 		this.#host = options.host;
@@ -220,6 +228,14 @@ export class ConversationRouter {
 			if (trigger.classification !== "ambient") {
 				this.#onInboundTrigger?.(target.durableConversationId);
 				await this.#policy?.ensureHostPolicy(target.sessionId, target.durableConversationId);
+				try {
+					await this.#applyModelToolPolicy?.(target.durableConversationId, policy);
+				} catch (error) {
+					messageLog.warn("conversation model tool policy failed", {
+						error: error instanceof Error ? error.message : String(error),
+						sessionId: target.sessionId,
+					});
+				}
 				const cooldownMs =
 					this.#pacing?.remainingCooldownMs(target.durableConversationId, policy) ?? 0;
 				const result = await host.append({

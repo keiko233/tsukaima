@@ -77,6 +77,11 @@ export type ConversationPacingPolicy = z.infer<typeof conversationPacingPolicySc
 export const conversationPolicySchema = z
 	.object({
 		version: z.number().int().min(1).default(1),
+		/**
+		 * Explicit conversation capabilities (`coding`, ...). Coding tools require this to be
+		 * granted; normal QQ/OneBot conversations never receive it by default.
+		 */
+		capabilities: z.array(z.string().min(1)).default([]),
 		enabled: z.boolean().default(true),
 		followUpWhenBusy: z.enum(["follow-up", "reject"]).default("follow-up"),
 		steerWhenBusy: z.enum(["steer", "follow-up", "reject"]).default("steer"),
@@ -122,6 +127,7 @@ export type ConversationPolicy = z.infer<typeof conversationPolicySchema>;
 
 export const defaultConversationPolicy: ConversationPolicy = {
 	version: 1,
+	capabilities: [],
 	enabled: true,
 	followUpWhenBusy: "follow-up",
 	steerWhenBusy: "steer",
@@ -199,6 +205,7 @@ const pacingPolicyPatchSchema = z
 export const conversationPolicyPatchSchema = z
 	.object({
 		version: z.number().int().min(1).optional(),
+		capabilities: z.array(z.string().min(1)).optional(),
 		enabled: z.boolean().optional(),
 		followUpWhenBusy: z.enum(["follow-up", "reject"]).optional(),
 		steerWhenBusy: z.enum(["steer", "follow-up", "reject"]).optional(),

@@ -20,7 +20,9 @@
         "@tsukaima-plugin/openai-compatible": "workspace:*",
         "@tsukaima-plugin/proactive-scheduler": "workspace:*",
         "@tsukaima-plugin/search-fetch": "workspace:*",
+        "@tsukaima-plugin/self-iteration": "workspace:*",
         "@tsukaima-plugin/sticker-meme": "workspace:*",
+        "@tsukaima/coding": "workspace:*",
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/core": "workspace:*",
         "@tsukaima/db": "workspace:*",
@@ -262,6 +264,25 @@
         "react-dom": "^19.3.1",
       },
     },
+    "plugins/self-iteration": {
+      "name": "@tsukaima-plugin/self-iteration",
+      "version": "0.1.0",
+      "dependencies": {
+        "@tsukaima/coding": "workspace:*",
+        "@tsukaima/contracts": "workspace:*",
+        "@tsukaima/sdk": "workspace:*",
+        "@tsukaima/ui": "workspace:*",
+        "@inlang/paraglide-js": "^3.2.2",
+        "lucide-react": "^1.72.0",
+        "zod": "4.6.7",
+      },
+      "devDependencies": {
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "react": "^19.3.1",
+        "react-dom": "^19.3.1",
+      },
+    },
     "plugins/sticker-meme": {
       "name": "@tsukaima-plugin/sticker-meme",
       "version": "0.1.0",
@@ -431,6 +452,8 @@
     "@tsukaima-plugin/proactive-scheduler": ["@tsukaima-plugin/proactive-scheduler@workspace:plugins/proactive-scheduler"],
 
     "@tsukaima-plugin/search-fetch": ["@tsukaima-plugin/search-fetch@workspace:plugins/search-fetch"],
+
+    "@tsukaima-plugin/self-iteration": ["@tsukaima-plugin/self-iteration@workspace:plugins/self-iteration"],
 
     "@tsukaima-plugin/sticker-meme": ["@tsukaima-plugin/sticker-meme@workspace:plugins/sticker-meme"],
 
