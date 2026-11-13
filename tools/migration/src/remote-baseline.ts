@@ -748,7 +748,7 @@ function inspectHumanProfiles(source, destination) {
 function inspectSessions() {
 	const root = path.join(HOME, 'sessions');
 	const sessionFiles = walk(root, []).filter(
-		(file) => /\.jsonl$/i.test(file) || /\.jsonl\.zstd$/i.test(file),
+		(file) => /\.jsonl$/i.test(file) || /\.jsonl\.zst(?:d)?$/i.test(file),
 	);
 	const workspaces = new Set();
 	for (const file of sessionFiles) {
@@ -758,7 +758,7 @@ function inspectSessions() {
 		}
 	}
 	const samples = sessionFiles
-		.filter((file) => /session\.v4\.jsonl(?:\.zstd)?$/i.test(file))
+		.filter((file) => /session\.v4\.jsonl(?:\.zst(?:d)?)?$/i.test(file))
 		.sort()
 		.slice(0, 25);
 	const recordTypes = new Set();

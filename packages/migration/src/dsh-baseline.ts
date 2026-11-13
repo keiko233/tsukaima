@@ -1023,7 +1023,7 @@ async function readSchedules(files: readonly BaselineFile[]): Promise<DshSchedul
 }
 
 async function readSessionContent(file: BaselineFile): Promise<string> {
-	if (file.path.toLowerCase().endsWith(".zstd")) {
+	if (/\.zst(?:d)?$/i.test(file.path)) {
 		const compressed = await fs.readFile(file.absolutePath);
 		return new TextDecoder().decode(Bun.zstdDecompressSync(compressed));
 	}
@@ -1059,7 +1059,7 @@ async function readSessions(files: readonly BaselineFile[]): Promise<DshSessionI
 	}
 	const sessionFiles = findFiles(
 		files,
-		/(?:^|\/)sessions\/[^/]+\/[^/]+\/session\.v4\.jsonl(?:\.zstd)?$/i,
+		/(?:^|\/)sessions\/[^/]+\/[^/]+\/session\.v4\.jsonl(?:\.zst(?:d)?)?$/i,
 	);
 	const recordTypes = new Set<string>();
 	const sessionFields = new Set<string>();
@@ -1069,7 +1069,7 @@ async function readSessions(files: readonly BaselineFile[]): Promise<DshSessionI
 	let sessionRecordCount = 0;
 	let compressedFileCount = 0;
 	for (const file of sessionFiles) {
-		if (file.path.toLowerCase().endsWith(".zstd")) {
+		if (/\.zst(?:d)?$/i.test(file.path)) {
 			compressedFileCount += 1;
 		}
 		const workspace = /(?:^|\/)sessions\/([^/]+)\//.exec(file.path)?.[1];

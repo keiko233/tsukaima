@@ -96,7 +96,12 @@ export async function inspectDshSnapshot(source: SnapshotSource): Promise<Snapsh
 		[...textFiles.keys()]
 			.filter((path) => pattern.test(path))
 			.toSorted((a, b) => a.localeCompare(b));
-	const sessions = pathGroups(/(^|\/)sessions?\/|\.jsonl$/i);
+	const sessions = [
+		...new Set([
+			...pathGroups(/(^|\/)sessions?\/|\.jsonl$/i),
+			...files.filter((file) => /\.jsonl\.zst(?:d)?$/i.test(file.path)).map((file) => file.path),
+		]),
+	].toSorted((left, right) => left.localeCompare(right));
 	const personas = pathGroups(/personas?\.json$|personas?\//i);
 	const memory = pathGroups(/memor(y|ies)\.json$|memor(y|ies)\//i);
 	const stickers = pathGroups(/stickers?\.json$|stickers?|memes?\//i);

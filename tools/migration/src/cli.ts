@@ -1,21 +1,30 @@
 #!/usr/bin/env bun
 import {
+	captureSnapshot,
 	createPipeline,
 	type DshBaselineTargetInput,
 	extractDshBaseline,
 	inspectDshSnapshot,
 	type MigrationPlan,
+	type PipelineOptions,
 	resolveDshBaselineTarget,
+	resolveSnapshotTarget,
+	runRemoteSnapshot,
 	snapshotPaths,
 } from "@tsukaima/migration";
 import { runRemoteDshBaseline } from "./remote-baseline.ts";
 
 interface CliOptions {
+	readonly backupDir?: string;
 	readonly command: string;
-	readonly dryRun: boolean;
 	readonly container?: string;
+	readonly dryRun: boolean;
+	readonly durablePath?: string;
+	readonly excludes: readonly string[];
 	readonly help: boolean;
 	readonly host?: string;
+	readonly mediaDir?: string;
+	readonly output?: string;
 	readonly planFile?: string;
 	readonly project?: string;
 	readonly runId?: string;
@@ -26,10 +35,15 @@ interface CliOptions {
 function parseOptions(argv: readonly string[]): CliOptions {
 	const positional: string[] = [];
 	const source: string[] = [];
+	const excludes: string[] = [];
+	let backupDir: string | undefined;
 	let container: string | undefined;
 	let dryRun = false;
+	let durablePath: string | undefined;
 	let help = false;
 	let host: string | undefined;
+	let mediaDir: string | undefined;
+	let output: string | undefined;
 	let planFile: string | undefined;
 	let project: string | undefined;
 	let runId: string | undefined;
@@ -47,6 +61,11 @@ function parseOptions(argv: readonly string[]): CliOptions {
 		else if (argument === "--host") host = argv[++index];
 		else if (argument === "--project") project = argv[++index];
 		else if (argument === "--container") container = argv[++index];
+		else if (argument === "--output") output = argv[++index];
+		else if (argument === "--exclude") excludes.push(argv[++index] ?? "");
+		else if (argument === "--backup-dir") backupDir = argv[++index];
+		else if (argument === "--durable") durablePath = argv[++index];
+		else if (argument === "--media-dir") mediaDir = argv[++index];
 		else if (!argument.startsWith("--")) positional.push(argument);
 		else throw new Error(`Unknown option: ${argument}`);
 	}
@@ -54,11 +73,16 @@ function parseOptions(argv: readonly string[]): CliOptions {
 	const command = help ? "help" : positional[0];
 	if (!command) throw new Error("Usage: bun tools/migration/src/cli.ts <command> [options]");
 	return {
+		...(backupDir === undefined ? {} : { backupDir }),
 		command,
 		...(container === undefined ? {} : { container }),
 		dryRun,
+		...(durablePath === undefined ? {} : { durablePath }),
+		excludes,
 		help,
 		...(host === undefined ? {} : { host }),
+		...(mediaDir === undefined ? {} : { mediaDir }),
+		...(output === undefined ? {} : { output }),
 		...(planFile === undefined ? {} : { planFile }),
 		...(project === undefined ? {} : { project }),
 		...(runId === undefined ? {} : { runId }),
@@ -75,6 +99,14 @@ function auditTargetInput(options: CliOptions): DshBaselineTargetInput {
 	};
 }
 
+function pipelineOptions(options: CliOptions): PipelineOptions {
+	return {
+		...(options.backupDir === undefined ? {} : { backupDir: options.backupDir }),
+		...(options.durablePath === undefined ? {} : { durablePath: options.durablePath }),
+		...(options.mediaDir === undefined ? {} : { mediaDir: options.mediaDir }),
+	};
+}
+
 function writeJson(value: unknown): void {
 	process.stdout.write(`${JSON.stringify(value, null, "\t")}\n`);
 }
@@ -87,7 +119,16 @@ async function main(): Promise<number> {
 	const options = parseOptions(process.argv.slice(2));
 	if (options.help) {
 		writeJson({
-			commands: ["inspect", "normalize", "dry-run", "import", "verify", "rollback", "baseline"],
+			commands: [
+				"snapshot",
+				"inspect",
+				"normalize",
+				"dry-run",
+				"import",
+				"verify",
+				"rollback",
+				"baseline",
+			],
 			defaults: { dryRun: true },
 			usage: "bun tools/migration/src/cli.ts <command> [options]",
 		});
@@ -111,10 +152,54 @@ async function main(): Promise<number> {
 		}
 		writeJson(
 			await runRemoteDshBaseline({
+				container: target.container,
 				host: target.host,
 				project: target.project,
-				container: target.container,
 			}),
+		);
+		return 0;
+	}
+	if (options.command === "snapshot") {
+		if (!options.output) throw new Error("snapshot requires --output <dir>");
+		const target = resolveSnapshotTarget(auditTargetInput(options));
+		if (options.source.length > 0) {
+			writeJson(
+				await captureSnapshot({
+					dryRun: options.dryRun,
+					excludes: options.excludes,
+					output: options.output,
+					sources: source,
+					target: auditTargetInput(options),
+				}),
+			);
+			return 0;
+		}
+		if (!target.host || !target.project) {
+			throw new Error(
+				"snapshot requires --source <dir...> or --host/--project (or DSH_SNAPSHOT_* / DSH_AUDIT_* env)",
+			);
+		}
+		if (options.dryRun) {
+			writeJson(
+				await captureSnapshot({
+					dryRun: true,
+					excludes: options.excludes,
+					output: options.output,
+					sources: [],
+					target: auditTargetInput(options),
+				}),
+			);
+			return 0;
+		}
+		writeJson(
+			await runRemoteSnapshot(
+				{ container: target.container, host: target.host, project: target.project },
+				{
+					dryRun: false,
+					excludes: options.excludes,
+					output: options.output,
+				},
+			),
 		);
 		return 0;
 	}
@@ -123,14 +208,19 @@ async function main(): Promise<number> {
 		return 0;
 	}
 	if (options.command === "normalize" || options.command === "dry-run" || options.dryRun) {
-		writeJson(await createPipeline(`sqlite:${options.target ?? ":memory:"}`).dryRun(source));
+		writeJson(
+			await createPipeline(
+				`sqlite:${options.target ?? ":memory:"}`,
+				pipelineOptions(options),
+			).dryRun(source),
+		);
 		return 0;
 	}
 	if (options.command === "import" && !options.dryRun) {
 		if (!options.target) throw new Error("import requires --target");
 		if (!options.planFile) throw new Error("import requires --plan");
 		writeJson(
-			await createPipeline(options.target).import(source, {
+			await createPipeline(options.target, pipelineOptions(options)).import(source, {
 				dryRunPlan: await readPlan(options.planFile),
 			}),
 		);
@@ -138,13 +228,15 @@ async function main(): Promise<number> {
 	}
 	if (options.command === "verify") {
 		if (!options.target) throw new Error("verify requires --target");
-		writeJson(await createPipeline(options.target).verify(source));
+		writeJson(await createPipeline(options.target, pipelineOptions(options)).verify(source));
 		return 0;
 	}
 	if (options.command === "rollback") {
 		if (!options.target) throw new Error("rollback requires --target");
 		if (!options.runId) throw new Error("rollback requires --run-id");
-		writeJson(await createPipeline(options.target).rollback(options.runId));
+		writeJson(
+			await createPipeline(options.target, pipelineOptions(options)).rollback(options.runId),
+		);
 		return 0;
 	}
 	throw new Error(`Unknown command: ${options.command}`);

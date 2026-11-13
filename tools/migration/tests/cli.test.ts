@@ -148,3 +148,66 @@ describe("migration CLI", () => {
 		});
 	});
 });
+
+describe("migration snapshot CLI", () => {
+	test("captures a local snapshot offline with manifest, files, and redaction", async () => {
+		const directory = await fs.mkdtemp(join(root, "tests/cli-snapshot-"));
+		const source = join(directory, "source");
+		const output = join(directory, "snapshot");
+		try {
+			await fs.mkdir(join(source, "home/.dsh/profiles/web"), { recursive: true });
+			await fs.writeFile(
+				join(source, "home/.dsh/profiles/web/cordis.patch.yml"),
+				[
+					"plugins:",
+					"  dsh-napcat:",
+					"    config:",
+					"      accessToken: SYNTHETIC-CLI-SECRET",
+				].join("\n"),
+			);
+			const result = Bun.spawnSync(
+				["bun", "run", cli, "snapshot", "--source", source, "--output", output],
+				{ cwd: root, env: auditEnvironment() },
+			);
+			expect(result.exitCode).toBe(0);
+			const captured = JSON.parse(result.stdout.toString()) as {
+				manifest: { files: { capturedPath: string; sha256: string }[] };
+			};
+			expect(captured.manifest.files).toHaveLength(1);
+			const content = await fs.readFile(
+				join(output, captured.manifest.files[0]!.capturedPath),
+				"utf8",
+			);
+			expect(content).not.toContain("SYNTHETIC-CLI-SECRET");
+			expect(content).toContain("[REDACTED]");
+		} finally {
+			await fs.rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("snapshot --dry-run with a remote target does not attempt SSH", async () => {
+		const directory = await fs.mkdtemp(join(root, "tests/cli-snapshot-dry-"));
+		try {
+			const result = Bun.spawnSync(
+				[
+					"bun",
+					"run",
+					cli,
+					"snapshot",
+					"--host",
+					"synthetic-ssh-host",
+					"--project",
+					"/synthetic/project",
+					"--output",
+					join(directory, "snapshot"),
+					"--dry-run",
+				],
+				{ cwd: root, env: auditEnvironment() },
+			);
+			expect(result.exitCode).toBe(0);
+			expect(JSON.parse(result.stdout.toString()).manifest.dryRun).toBe(true);
+		} finally {
+			await fs.rm(directory, { force: true, recursive: true });
+		}
+	});
+});
