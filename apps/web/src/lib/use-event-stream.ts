@@ -4,8 +4,9 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { liveEventSchema, type LiveEvent } from "@elaina/contracts";
 import { useEffect } from "react";
 import { orpc } from "./api";
+import { runtimeUrl } from "./runtime-url";
 
-const EVENT_STREAM_URL = import.meta.env.VITE_EVENT_STREAM_URL ?? "/events/stream";
+const EVENT_STREAM_URL = runtimeUrl("/events/stream");
 
 const EVENT_TYPES = [
 	"snapshot",

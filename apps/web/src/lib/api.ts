@@ -3,6 +3,7 @@ import { RPCLink } from "@orpc/client/fetch";
 import type { ContractRouterClient } from "@orpc/contract";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import type { AppContract } from "@elaina/contracts";
+import { runtimeUrl } from "./runtime-url";
 
 /**
  * The WebUI talks to the server exclusively through the oRPC contract in `@elaina/contracts`.
@@ -32,7 +33,7 @@ export type {
 	UserSummary,
 } from "@elaina/contracts";
 
-const RPC_URL = import.meta.env.VITE_RPC_URL ?? "/rpc";
+const RPC_URL = runtimeUrl("/rpc");
 
 export const client: ContractRouterClient<AppContract> = createORPCClient(
 	new RPCLink({
