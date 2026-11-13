@@ -96,7 +96,9 @@ describe("admin RPC", () => {
 		expect(
 			logs.entries.every(
 				(entry) =>
-					entry.text.includes("tsukaima::server") || entry.text.includes("openai-compatible"),
+					entry.text.includes("tsukaima::server") ||
+					entry.text.includes("openai-compatible") ||
+					entry.text.includes("sticker-meme"),
 			),
 		).toBe(true);
 
@@ -126,6 +128,7 @@ describe("admin RPC", () => {
 				{ config: {}, id: "openai-compatible", secretsSet: [] },
 				{ config: {}, id: "onebot-napcat", secretsSet: [] },
 				{ config: {}, id: "memory", secretsSet: [] },
+				{ config: {}, id: "sticker-meme", secretsSet: [] },
 			],
 		});
 		const updatedSettings = await request("admin/settings/update", { logLevel: "debug" });
@@ -135,6 +138,7 @@ describe("admin RPC", () => {
 				{ config: {}, id: "openai-compatible", secretsSet: [] },
 				{ config: {}, id: "onebot-napcat", secretsSet: [] },
 				{ config: {}, id: "memory", secretsSet: [] },
+				{ config: {}, id: "sticker-meme", secretsSet: [] },
 			],
 		});
 		expect(lifecycle.logLevel).toBe("debug");

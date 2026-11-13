@@ -36,6 +36,8 @@ import type { PluginTaskService } from "./plugin-task-service.ts";
 import type { RequestService } from "./request-service.ts";
 import type { MigrationRegistry } from "@tsukaima/plugin-registry";
 import { createScopedPluginDatabase } from "./plugin-scoped-database.ts";
+import { createPluginMediaBridge } from "./plugin-media.ts";
+import type { MediaService } from "./media-service.ts";
 import { pluginInstallStates, type TsukaimaDatabase } from "@tsukaima/db";
 import { eq } from "drizzle-orm";
 
@@ -50,6 +52,7 @@ export interface PluginHostOptions {
 	readonly settings: PluginSettingsStore;
 	readonly statuses: PluginStatusStore;
 	readonly database?: () => TsukaimaDatabase | undefined;
+	readonly media?: MediaService;
 	readonly migrations?: MigrationRegistry;
 	readonly storage?: PluginStorageStore;
 	readonly tasks?: PluginTaskService;
@@ -117,6 +120,7 @@ export class PluginHost {
 	readonly #statuses: PluginStatusStore;
 	readonly #rpcOwners = new Map<string, string>();
 	readonly #database: (() => TsukaimaDatabase | undefined) | undefined;
+	readonly #media: MediaService | undefined;
 	readonly #migrations: MigrationRegistry | undefined;
 	readonly #storage: PluginStorageStore | undefined;
 	readonly #tasks: PluginTaskService | undefined;
@@ -134,6 +138,7 @@ export class PluginHost {
 		this.settings = options.settings;
 		this.#statuses = options.statuses;
 		this.#database = options.database;
+		this.#media = options.media;
 		this.#migrations = options.migrations;
 		this.#storage = options.storage;
 		this.#tasks = options.tasks;
@@ -844,6 +849,12 @@ export class PluginHost {
 			runMode === "host" && database !== undefined && manifest.migrations.length > 0
 				? createScopedPluginDatabase(database, pluginId)
 				: undefined;
+		const media =
+			this.#media !== undefined &&
+			(hasPermission(manifest.permissions, "media.read") ||
+				hasPermission(manifest.permissions, "media.write"))
+				? createPluginMediaBridge(this.#media, pluginId, manifest.permissions)
+				: undefined;
 		const tasks = this.#tasks?.apiFor(pluginId, manifest.permissions);
 		return createPluginContext({
 			channels: this.channels,
@@ -851,6 +862,7 @@ export class PluginHost {
 			...(tasks === undefined ? {} : { tasks }),
 			...(migrations === undefined ? {} : { migrations }),
 			...(scopedDatabase === undefined ? {} : { database: scopedDatabase }),
+			...(media === undefined ? {} : { media }),
 			dependencies: {
 				get: <T = unknown>(key: string): T | undefined => this.#bindings.get(key) as T | undefined,
 			},

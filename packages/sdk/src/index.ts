@@ -27,11 +27,17 @@ export type { TsukaimaPlugin, PluginPrepare, PluginSetup, PluginTeardown } from 
 export { pluginManifestSchema } from "./manifest.ts";
 export type {
 	PluginChannelApi,
+	PluginConfig,
 	PluginContext,
 	PluginEvents,
 	PluginHook,
 	PluginHookName,
 	PluginLogger,
+	PluginMediaApi,
+	PluginMediaKind,
+	PluginMediaRecord,
+	PluginMediaSource,
+	PluginMediaStoreInput,
 	PluginModelDescriptor,
 	PluginModelInfo,
 	PluginModelInputModality,

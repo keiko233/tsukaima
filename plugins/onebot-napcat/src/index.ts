@@ -138,11 +138,28 @@ function configWithHooks(context: PluginContext, config: OneBotConfig): OneBotCo
 	const extractVideoFrames = context.dependencies?.get<OneBotVideoFrameExtractor>(
 		ONEBOT_VIDEO_FRAME_EXTRACTOR_BINDING,
 	);
+	const media = context.media;
 	const pttEnabled = config.pttToText !== false;
 	return {
 		...config,
 		...(audioTranscribe === undefined || !pttEnabled ? {} : { audioTranscribe }),
 		...(extractVideoFrames === undefined ? {} : { extractVideoFrames }),
+		...(media === undefined
+			? {}
+			: {
+					resolveMedia: async (part) => {
+						if (part.type === "text" || part.type === "channel-native") return undefined;
+						const stored =
+							part.mediaId === undefined
+								? part.sha256 === undefined
+									? undefined
+									: await media.findBySha(part.sha256)
+								: await media.findById(part.mediaId);
+						if (stored === undefined) return undefined;
+						const bytes = await media.readBytes(stored.id);
+						return `base64://${Buffer.from(bytes).toString("base64")}`;
+					},
+				}),
 	};
 }
 

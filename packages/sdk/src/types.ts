@@ -38,6 +38,49 @@ export interface PluginConfig {
 	get<T = SerializedValue>(key: string): Promise<T | undefined>;
 }
 
+export type PluginMediaKind = "image" | "sticker" | "audio" | "video" | "file";
+
+export type PluginMediaSource = "channel" | "webui" | "migration" | "generated";
+
+export interface PluginMediaStoreInput {
+	readonly bytes: Uint8Array;
+	readonly durationMs?: number;
+	readonly expiresAt?: string;
+	readonly height?: number;
+	readonly kind: PluginMediaKind;
+	readonly metadata?: unknown;
+	readonly mimeType?: string;
+	readonly source?: PluginMediaSource;
+	readonly width?: number;
+}
+
+/**
+ * Secret-free view of one canonical `media` row. Filesystem paths and remote source URLs are
+ * deliberately omitted so plugin code and model-visible text cannot leak them.
+ */
+export interface PluginMediaRecord {
+	readonly createdAt: string;
+	readonly durationMs: number | null;
+	readonly expiresAt: string | null;
+	readonly height: number | null;
+	readonly id: string;
+	readonly kind: PluginMediaKind;
+	readonly mimeType: string;
+	readonly sha256: string;
+	readonly sizeBytes: number;
+	readonly source: PluginMediaSource;
+	readonly width: number | null;
+}
+
+/** Content-addressed media access. The host enforces `media.read` / `media.write`. */
+export interface PluginMediaApi {
+	store(input: PluginMediaStoreInput): Promise<PluginMediaRecord>;
+	findById(mediaId: string): Promise<PluginMediaRecord | undefined>;
+	findBySha(sha256: string): Promise<PluginMediaRecord | undefined>;
+	/** Read bytes by canonical media id. Throws when the blob is missing. */
+	readBytes(mediaId: string): Promise<Uint8Array>;
+}
+
 export interface PluginEvents {
 	emit(name: PluginHookName, payload: unknown): Promise<void>;
 	on(name: PluginHookName, handler: (payload: unknown) => unknown | Promise<unknown>): () => void;
@@ -419,6 +462,8 @@ export interface PluginContext {
 		read(): Promise<readonly MessageEnvelope[]>;
 	};
 	events: PluginEvents;
+	/** Canonical media store, present when the plugin declares a media permission. */
+	media?: PluginMediaApi;
 	tools: PluginToolRegistry;
 	ui: PluginUiRegistry;
 	/** Model providers contributed by this plugin. */

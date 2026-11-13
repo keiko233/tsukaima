@@ -18,6 +18,7 @@
         "@better-auth/drizzle-adapter": "1.7.22",
         "@tsukaima-plugin/onebot-napcat": "workspace:*",
         "@tsukaima-plugin/openai-compatible": "workspace:*",
+        "@tsukaima-plugin/sticker-meme": "workspace:*",
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/core": "workspace:*",
         "@tsukaima/db": "workspace:*",
@@ -224,6 +225,24 @@
         "react-dom": "^19.3.1",
       },
     },
+    "plugins/sticker-meme": {
+      "name": "@tsukaima-plugin/sticker-meme",
+      "version": "0.1.0",
+      "dependencies": {
+        "@tsukaima/contracts": "workspace:*",
+        "@tsukaima/sdk": "workspace:*",
+        "@tsukaima/ui": "workspace:*",
+        "@inlang/paraglide-js": "^3.2.2",
+        "lucide-react": "^1.72.0",
+        "zod": "4.6.7",
+      },
+      "devDependencies": {
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "react": "^19.3.1",
+        "react-dom": "^19.3.1",
+      },
+    },
     "tools/migration": {
       "name": "@tsukaima/migration-cli",
       "version": "0.1.0",
@@ -371,6 +390,8 @@
     "@tsukaima-plugin/onebot-napcat": ["@tsukaima-plugin/onebot-napcat@workspace:plugins/onebot-napcat"],
 
     "@tsukaima-plugin/openai-compatible": ["@tsukaima-plugin/openai-compatible@workspace:plugins/openai-compatible"],
+
+    "@tsukaima-plugin/sticker-meme": ["@tsukaima-plugin/sticker-meme@workspace:plugins/sticker-meme"],
 
     "@tsukaima/chaos": ["@tsukaima/chaos@workspace:packages/chaos"],
 

@@ -145,7 +145,16 @@ export function assertPluginSqlNamespaced(sql: string, pluginId: string): void {
 		/\b(?:insert\s+into|update|delete\s+from|from|join|references)\s+([`"[]?[A-Za-z0-9_.-]+[`"\]]?)/giu;
 	for (const match of sql.matchAll(writes)) {
 		const name = unquoteIdentifier(match[1] ?? "");
-		if (name.startsWith(prefix) || /^(?:select|where|as)$/iu.test(name)) continue;
+		// DML continuation keywords (`UPDATE ... SET`, `INSERT ... VALUES`, `RETURNING`, ...)
+		// are syntax, not target objects, and must not be mistaken for table references.
+		if (
+			name.startsWith(prefix) ||
+			/^(?:as|conflict|default|do|else|end|from|into|null|on|returning|select|set|then|values|when|where)$/iu.test(
+				name,
+			)
+		) {
+			continue;
+		}
 		throw new MigrationRegistryError(
 			`Plugin ${pluginId} migration may only reference ${prefix}* objects (saw ${name})`,
 		);

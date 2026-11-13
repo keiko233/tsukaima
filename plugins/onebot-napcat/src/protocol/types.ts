@@ -1,4 +1,4 @@
-import type { ChannelNotice, MessageEnvelope } from "@tsukaima/contracts";
+import type { ChannelNotice, MessageEnvelope, MessagePart } from "@tsukaima/contracts";
 
 export type OneBotEvent = {
 	time: number;
@@ -126,6 +126,8 @@ export type OneBotConfig = {
 	audioTranscribeTimeoutMs?: number;
 	audioTranscribeMinIntervalMs?: number;
 	extractVideoFrames?: OneBotVideoFrameExtractor;
+	/** Resolve canonical media bytes into a NapCat-consumable file reference. */
+	resolveMedia?: (part: MessagePart) => Promise<string | undefined>;
 };
 
 export type OneBotTransportEvents = {

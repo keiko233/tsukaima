@@ -12,6 +12,7 @@
 		"@better-auth/drizzle-adapter": "1.7.22",
 		"@tsukaima-plugin/onebot-napcat": "workspace:*",
 		"@tsukaima-plugin/openai-compatible": "workspace:*",
+		"@tsukaima-plugin/sticker-meme": "workspace:*",
 		"@tsukaima/contracts": "workspace:*",
 		"@tsukaima/core": "workspace:*",
 		"@tsukaima/db": "workspace:*",

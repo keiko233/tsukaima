@@ -10,7 +10,8 @@
 		"channel.manage",
 		"channel.raw",
 		"conversation.read",
-		"audit.write"
+		"audit.write",
+		"media.read"
 	],
 	"hooks": [
 		{

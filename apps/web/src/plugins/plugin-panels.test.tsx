@@ -4,8 +4,10 @@ import type { PluginI18n } from "@tsukaima/sdk/i18n";
 import { PluginPanelProvider, type PluginSummary } from "@tsukaima/sdk/ui";
 import oneBotUi from "../../../../plugins/onebot-napcat/src/ui.tsx";
 import openAiUi from "../../../../plugins/openai-compatible/src/ui.tsx";
+import stickerUi from "../../../../plugins/sticker-meme/src/ui.tsx";
 import { i18n as oneBotI18n } from "../../../../plugins/onebot-napcat/src/i18n.ts";
 import { i18n as openAiI18n } from "../../../../plugins/openai-compatible/src/i18n.ts";
+import { i18n as stickerI18n } from "../../../../plugins/sticker-meme/src/i18n.ts";
 import type { PluginUiModuleDefinition } from "@tsukaima/sdk/ui";
 
 const plugin: PluginSummary = {
@@ -90,5 +92,20 @@ describe("built-in plugin panels", () => {
 		expect(html).toContain("Models");
 		expect(html).toContain("Discover models");
 		expect(html.indexOf("onebot-napcat")).toBe(-1);
+	});
+
+	test("renders the sticker-meme library panel in en and zh-cn", () => {
+		const stickerPlugin: PluginSummary = {
+			...plugin,
+			id: "sticker-meme",
+			name: "sticker-meme",
+			permissions: ["ui.panel", "media.read", "media.write"],
+		};
+		const html = renderPanel(stickerUi, stickerI18n.bind("en"), stickerPlugin);
+		expect(html).toContain("Sticker library");
+		expect(html).toContain("No sticker packs yet");
+		const zh = renderPanel(stickerUi, stickerI18n.bind("zh-cn"), stickerPlugin);
+		expect(zh).toContain("表情包素材库");
+		expect(zh).toContain("还没有表情包");
 	});
 });
