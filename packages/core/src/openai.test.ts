@@ -203,6 +203,119 @@ describe("OpenAI-compatible provider", () => {
 		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 
+	test("sends reasoning effort and preserves reasoning content", async () => {
+		const fetch = mock(async () =>
+			textResponse({
+				choices: [
+					{
+						finish_reason: "stop",
+						message: {
+							content: "Final answer",
+							reasoning_content: "Considered the options.",
+						},
+					},
+				],
+				usage: {
+					completion_tokens: 14,
+					completion_tokens_details: { reasoning_tokens: 4 },
+					prompt_tokens: 19,
+				},
+			}),
+		) as unknown as FetchMock;
+		const reasoningModel: TestModel = {
+			...model,
+			reasoning: true,
+		};
+		const streams = createOpenAICompatibleStreams(
+			{
+				apiKey: "test-key",
+				baseUrl: "https://model.example/v1",
+				fetch: fetch as unknown as FetchFunction,
+			},
+			[
+				{
+					defaultReasoningLevel: "high",
+					modelId: reasoningModel.id,
+					reasoningLevels: ["low", "medium", "high"],
+					supportsReasoning: true,
+				},
+			],
+		);
+		const events = [];
+		for await (const event of streams.stream(
+			reasoningModel,
+			normalizeContext({ messages: [{ content: "think", role: "user", timestamp: 1 }] }),
+		)) {
+			events.push(event);
+		}
+
+		const request = (fetch.mock.calls[0] as [string, RequestInit])[1];
+		expect(JSON.parse(request.body as string).reasoning_effort).toBe("high");
+		expect(events.map((event) => event.type)).toEqual([
+			"start",
+			"thinking_start",
+			"thinking_delta",
+			"thinking_end",
+			"text_start",
+			"text_delta",
+			"text_end",
+			"done",
+		]);
+		expect(events.at(-1)).toMatchObject({
+			message: {
+				content: [
+					{ thinking: "Considered the options.", type: "thinking" },
+					{ text: "Final answer", type: "text" },
+				],
+				usage: { reasoning: 4 },
+			},
+		});
+	});
+
+	test("supports image input and omits tools when the model declares no tool use", async () => {
+		const fetch = mock(async () => textResponse()) as unknown as FetchMock;
+		const streams = createOpenAICompatibleStreams(
+			{
+				apiKey: "test-key",
+				baseUrl: "https://model.example/v1",
+				fetch: fetch as unknown as FetchFunction,
+			},
+			[{ inputModalities: ["text", "image"], modelId: model.id, supportsTools: false }],
+		);
+		const context = normalizeContext({
+			messages: [
+				{
+					content: [
+						{ text: "What is this?", type: "text" },
+						{ data: "aW1hZ2U=", mimeType: "image/png", type: "image" },
+					],
+					role: "user",
+					timestamp: 1,
+				},
+			],
+			tools: [tool],
+		} satisfies Context);
+		for await (const event of streams.stream(model, context)) {
+			void event;
+		}
+
+		const request = (fetch.mock.calls[0] as [string, RequestInit])[1];
+		const body = JSON.parse(request.body as string);
+		expect(body.tools).toBeUndefined();
+		expect(body.messages).toEqual([
+			{
+				content: [
+					{ text: "What is this?", type: "text" },
+					{
+						image_url: { url: "data:image/png;base64,aW1hZ2U=" },
+						type: "image_url",
+					},
+				],
+				role: "user",
+			},
+		]);
+	});
+
 	test("accounts for input, output, cache-read, and routed usage", () => {
 		const ledger = new ModelUsageLedger();
 		const message: AssistantMessage = {
