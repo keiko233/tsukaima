@@ -81,7 +81,14 @@ describe("built-in plugin panels", () => {
 	});
 
 	test("renders the openai-compatible provider panel", () => {
-		const html = renderPanel(openAiUi, openAiI18n.bind("en"));
-		expect(html).toContain("Model provider");
+		const html = renderPanel(openAiUi, openAiI18n.bind("en"), {
+			...plugin,
+			id: "openai-compatible",
+			name: "openai-compatible",
+			secretKeys: ["apiKey"],
+		});
+		expect(html).toContain("Models");
+		expect(html).toContain("Discover models");
+		expect(html.indexOf("onebot-napcat")).toBe(-1);
 	});
 });

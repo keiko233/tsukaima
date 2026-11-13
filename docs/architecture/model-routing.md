@@ -5,6 +5,9 @@
 - Primary gateway: Magpie at `http://magpie:3425/v1`.
 - Direct providers may be registered through `pi-ai` for provider-native features or fallback.
 - Credentials live only in runtime secrets or provider-managed auth files.
+- Provider plugins publish only enabled models through `context.models.listModels()`. Descriptors
+  include capability tags, input modalities (`text`, `image`, `audio`, ...), context/output limits,
+  and optional reasoning levels/defaults.
 
 ## Capability policies
 

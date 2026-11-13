@@ -621,7 +621,8 @@ together.
 3. **SDK UI kit.** Add `@elaina/sdk/ui`, the Vite registry plugin, Tailwind sources, React
    dedupe, and the panel context/error boundary.
 4. **First panels.** Add `onebot-napcat/src/ui.tsx` (connection status, metrics, reconnect
-   action) and `openai-compatible/src/ui.tsx` (provider config, model id, configured state).
+   action) and `openai-compatible/src/ui.tsx` (connection settings, model discovery, multi-model
+   enablement, capability metadata, and reasoning defaults).
 5. **Plugin i18n.** Add `@elaina/sdk/i18n`, the Paraglide binding, per-plugin inlang projects,
    and localized panel chrome for both built-ins.
 6. **Third-party declarative UI.** Extend the manifest UI schema with layout primitives

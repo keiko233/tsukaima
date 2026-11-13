@@ -23,10 +23,10 @@ This file is the cross-session handoff record. Update it whenever implementation
   - `packages/migration`: DSH snapshot inspection, session/persona/memory/sticker/settings normalization, compression hook, dry-run/import/verify/rollback pipeline.
   - `packages/sdk` and `packages/plugin-registry`: plugin manifest validation, permissions, tool/hook/UI bridges, runtime context, channel/settings/requests/audit host surfaces, install/uninstall registry, and real Bun Worker isolation.
   - `plugins/onebot-napcat`: built-in channel plugin that owns the OneBot channel lifecycle, settings, diagnostics, and request resolution.
-  - `plugins/openai-compatible`: built-in model-provider plugin. It registers a provider factory with the host; its API key, base URL, and model id live in plugin config and environment fallbacks, not in host runtime settings.
+  - `plugins/openai-compatible`: built-in model-provider plugin. It registers a provider factory with the host; its API key, base URL, discovered multi-model catalog, enablement, and capability metadata live in plugin config and environment fallbacks, not in host runtime settings.
   - `packages/chaos`: transient storage failure injection, restart drill, rate limiting, idempotent ingestion, and abuse guards.
 - Runtime target is Bun.
-- Runtime settings for log level and OpenAI-compatible/Magpie provider configuration are persisted in the domain database and editable from the WebUI. Secret values are never returned by the API.
+- Runtime settings are limited to interface/log level concerns. Provider and channel configuration are owned by their plugins; secret values are never returned by the API.
 - Built-in plugins are loaded from `apps/server/src/plugins/builtin.ts`; the OneBot channel is now a plugin, not lifecycle code. `ElainaLifecycle` no longer holds channel, request, or identity-resolution logic.
 - Assistant answers are delivered back to their origin channel by `apps/server/src/services/reply-dispatcher.ts`.
   The durable host observes the settled submission (`onAnswer`), the dispatcher claims the outbound

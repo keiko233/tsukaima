@@ -209,16 +209,41 @@ Plugins generally do not mutate personas. A trusted plugin may propose a persona
 
 ## Model API
 
+Model-provider plugins register a descriptor-bearing provider. Only enabled models are published;
+the descriptor carries capability tags, input modalities, context limits, and reasoning support.
+
 ```ts
-const result = await context.model?.call({
-  capability: "summarize",
-  messages,
-  tools,
-  maxOutputTokens,
+context.models.registerProvider({
+  id: "my-provider",
+  isConfigured: async () => true,
+  listModels: async () => [
+    {
+      id: "vision-reasoner",
+      capabilities: ["basic-chat", "tool-use", "vision", "reasoning"],
+      input: ["text", "image"],
+      reasoning: { levels: ["low", "medium", "high"], default: "medium" },
+      contextWindow: 200_000,
+      maxOutputTokens: 16_384,
+    },
+  ],
+  createPort: async () => port,
 });
 ```
 
-Plugins do not choose a provider directly. They request a capability.
+Other plugins consume the same catalog without knowing which plugin owns a provider:
+
+```ts
+const models = await context.models.listModels({
+  capability: "vision",
+  input: "image",
+});
+
+const codingModels = await context.models.listModels({ input: "text" });
+```
+
+`listModels` is asynchronous so providers can resolve current settings. A provider whose catalog
+is temporarily unavailable is skipped without hiding models from other providers. Results include
+`providerId` and, for host-managed providers, `pluginId`.
 
 ## Task API
 

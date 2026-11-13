@@ -14,7 +14,58 @@
 				"type": "string"
 			},
 			"modelId": {
-				"type": "string"
+				"type": "string",
+				"description": "Legacy single-model configuration; migrated when models are saved."
+			},
+			"models": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"id": {
+							"type": "string"
+						},
+						"name": {
+							"type": "string"
+						},
+						"enabled": {
+							"type": "boolean"
+						},
+						"supportsTools": {
+							"type": "boolean"
+						},
+						"supportsReasoning": {
+							"type": "boolean"
+						},
+						"reasoningLevels": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							}
+						},
+						"defaultReasoningLevel": {
+							"type": "string"
+						},
+						"supportsImage": {
+							"type": "boolean"
+						},
+						"supportsAudio": {
+							"type": "boolean"
+						},
+						"capabilities": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							}
+						},
+						"contextWindow": {
+							"type": "integer"
+						},
+						"maxOutputTokens": {
+							"type": "integer"
+						}
+					}
+				}
 			}
 		}
 	},
@@ -24,15 +75,5 @@
 		"modelId": "ELAINA_OPENAI_MODEL_ID"
 	},
 	"secretKeys": ["apiKey"],
-	"ui": [
-		{
-			"kind": "settings-form",
-			"id": "openai-compatible.settings",
-			"title": "OpenAI-compatible provider",
-			"component": "plugin-config-form",
-			"data": {
-				"restartRequired": true
-			}
-		}
-	]
+	"ui": []
 }
