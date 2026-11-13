@@ -92,7 +92,12 @@ describe("admin RPC", () => {
 		const logs = logSnapshotSchema.parse(await request("admin/diagnostics/logs"));
 		expect(logs.capacity).toBeGreaterThan(0);
 		expect(logs.entries.length).toBeGreaterThan(0);
-		expect(logs.entries.every((entry) => entry.text.includes("elaina::server"))).toBe(true);
+		expect(
+			logs.entries.every(
+				(entry) =>
+					entry.text.includes("elaina::server") || entry.text.includes("openai-compatible"),
+			),
+		).toBe(true);
 
 		const conversations = await request("admin/conversations/list");
 		expect(Array.isArray(conversations)).toBe(true);
@@ -116,25 +121,21 @@ describe("admin RPC", () => {
 		const initialSettings = await request("admin/settings/get");
 		expect(initialSettings).toEqual({
 			logLevel: "info",
-			openAiApiKeySet: false,
-			plugins: [{ config: {}, id: "onebot-napcat", secretsSet: [] }],
+			plugins: [
+				{ config: {}, id: "openai-compatible", secretsSet: [] },
+				{ config: {}, id: "onebot-napcat", secretsSet: [] },
+			],
 		});
-		const updatedSettings = await request("admin/settings/update", {
-			logLevel: "debug",
-			openAiApiKey: "provider-secret",
-			openAiBaseUrl: "https://magpie.example/v1",
-			openAiModelId: "magpie-chat",
-		});
+		const updatedSettings = await request("admin/settings/update", { logLevel: "debug" });
 		expect(updatedSettings).toEqual({
 			logLevel: "debug",
-			openAiApiKeySet: true,
-			openAiBaseUrl: "https://magpie.example/v1",
-			openAiModelId: "magpie-chat",
-			plugins: [{ config: {}, id: "onebot-napcat", secretsSet: [] }],
+			plugins: [
+				{ config: {}, id: "openai-compatible", secretsSet: [] },
+				{ config: {}, id: "onebot-napcat", secretsSet: [] },
+			],
 		});
-		expect(JSON.stringify(updatedSettings)).not.toContain("provider-secret");
 		expect(lifecycle.logLevel).toBe("debug");
-		expect(lifecycle.providerRestartRequired).toBe(true);
+		expect(lifecycle.providerRestartRequired).toBe(false);
 
 		await lifecycle.updatePluginConfig("onebot-napcat", {
 			accessToken: "test-token",
@@ -146,13 +147,11 @@ describe("admin RPC", () => {
 		const configuredSettings = (await request("admin/settings/get")) as {
 			plugins: Array<{ config: Record<string, unknown>; id: string; secretsSet: string[] }>;
 		};
-		expect(configuredSettings.plugins).toEqual([
-			{
-				config: { wsUrl: "ws://127.0.0.1:3001" },
-				id: "onebot-napcat",
-				secretsSet: ["accessToken"],
-			},
-		]);
+		expect(configuredSettings.plugins).toContainEqual({
+			config: { wsUrl: "ws://127.0.0.1:3001" },
+			id: "onebot-napcat",
+			secretsSet: ["accessToken"],
+		});
 		expect(JSON.stringify(configuredSettings)).not.toContain("test-token");
 
 		await lifecycle.updatePluginConfig("onebot-napcat", { wsUrl: "ws://127.0.0.1:3100" });
@@ -178,57 +177,5 @@ describe("admin RPC", () => {
 
 		await lifecycle.stop();
 		expect(app).toBeDefined();
-	});
-
-	test("fetches provider models through the server without returning the API key", async () => {
-		const provider = Bun.serve({
-			fetch(request) {
-				const url = new URL(request.url);
-				expect(url.pathname).toBe("/v1/models");
-				expect(request.headers.get("authorization")).toBe("Bearer unsaved-provider-secret");
-				return Response.json({
-					data: [{ id: "model-b", owned_by: "vendor" }, { id: "model-a" }],
-					object: "list",
-				});
-			},
-			port: 0,
-		});
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-admin-model-list-"));
-		directories.push(directory);
-		const { app, lifecycle } = createApp({
-			ELAINA_ADMIN_PASSWORD: TEST_ADMIN.password,
-			ELAINA_ADMIN_USERNAME: TEST_ADMIN.username,
-			ELAINA_DATA_DIR: directory,
-			ELAINA_PORT: "7420",
-			ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
-		});
-		await lifecycle.start();
-
-		try {
-			const cookie = await signInAdmin(app);
-			const response = await app.handle(
-				new Request("http://localhost/rpc/admin/settings/models", {
-					body: JSON.stringify({
-						json: {
-							apiKey: "unsaved-provider-secret",
-							baseUrl: `http://127.0.0.1:${provider.port}/v1`,
-						},
-					}),
-					headers: { cookie, "content-type": "application/json" },
-					method: "POST",
-				}),
-			);
-			const result = (await response.json()) as { json: unknown };
-			expect(response.status).toBe(200);
-
-			expect(result.json).toEqual({
-				baseUrl: `http://127.0.0.1:${provider.port}/v1`,
-				models: [{ id: "model-a" }, { id: "model-b", ownedBy: "vendor" }],
-			});
-			expect(JSON.stringify(result.json)).not.toContain("unsaved-provider-secret");
-		} finally {
-			provider.stop(true);
-			await lifecycle.stop();
-		}
 	});
 });

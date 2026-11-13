@@ -210,14 +210,46 @@ export type UserDetail = z.infer<typeof userDetailSchema>;
 
 export const pluginRowSchema = z.object({
 	apiVersion: z.string(),
+	config: z.record(z.string(), z.unknown()),
+	configSchema: z.record(z.string(), z.unknown()).optional(),
 	enabled: z.number().int(),
 	id: z.string(),
 	kind: z.enum(["builtin", "first-party", "third-party"]),
+	modelProviders: z.array(z.string()).readonly(),
 	name: z.string(),
 	runMode: z.enum(["host", "worker"]),
+	secretKeys: z.array(z.string()).readonly(),
+	secretsSet: z.array(z.string()).readonly(),
+	ui: z
+		.array(
+			z.object({
+				component: z.string(),
+				data: z.record(z.string(), z.unknown()),
+				id: z.string(),
+				kind: z.enum([
+					"panel",
+					"conversation-action",
+					"message-card",
+					"settings-form",
+					"approval-card",
+				]),
+				title: z.string(),
+			}),
+		)
+		.readonly(),
 	version: z.string(),
 });
 export type PluginRow = z.infer<typeof pluginRowSchema>;
+
+export const pluginConfigUpdateInputSchema = z.object({
+	config: z.record(z.string(), z.unknown()),
+	pluginId: z.string().min(1),
+});
+
+export const pluginRpcInputSchema = z.object({
+	input: z.unknown().optional(),
+	method: z.string().min(1),
+});
 
 // ─── Diagnostics ─────────────────────────────────────────────────────────────
 
@@ -307,9 +339,7 @@ export type DiagnosticsData = z.infer<typeof diagnosticsDataSchema>;
 
 export const settingsViewSchema = z.object({
 	logLevel: logLevelSchema,
-	openAiApiKeySet: z.boolean(),
-	openAiBaseUrl: z.string().optional(),
-	openAiModelId: z.string().optional(),
+	modelProviderId: z.string().optional(),
 	plugins: z.array(
 		z.object({
 			config: z.record(z.string(), z.unknown()),
@@ -320,37 +350,14 @@ export const settingsViewSchema = z.object({
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
-export const remoteModelSchema = z.object({
-	id: z.string(),
-	ownedBy: z.string().optional(),
-});
-
-export const remoteModelListSchema = z.object({
-	baseUrl: z.string(),
-	models: z.array(remoteModelSchema),
-});
-export type RemoteModelList = z.infer<typeof remoteModelListSchema>;
-
-export const settingsModelsInputSchema = z.object({
-	apiKey: z.string().min(1).optional(),
-	baseUrl: z.string().url().optional(),
-});
-
 export const runtimeSettingsPatchSchema = z
 	.object({
 		logLevel: logLevelSchema.optional(),
-		openAiApiKey: z.union([z.string().min(1), z.null()]).optional(),
-		openAiBaseUrl: z.union([z.string().url(), z.literal(""), z.null()]).optional(),
-		openAiModelId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
+		modelProviderId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
 	})
-	.refine(
-		(input) =>
-			input.logLevel !== undefined ||
-			input.openAiApiKey !== undefined ||
-			input.openAiBaseUrl !== undefined ||
-			input.openAiModelId !== undefined,
-		{ message: "At least one setting must be provided" },
-	);
+	.refine((input) => input.logLevel !== undefined || input.modelProviderId !== undefined, {
+		message: "At least one setting must be provided",
+	});
 export type RuntimeSettingsPatch = z.infer<typeof runtimeSettingsPatchSchema>;
 
 // ─── Input schemas ───────────────────────────────────────────────────────────
@@ -541,6 +548,16 @@ export const appContract = oc.router({
 		},
 		plugins: {
 			list: oc.output(z.array(pluginRowSchema)),
+			rpc: oc.input(pluginRpcInputSchema).output(z.unknown()).meta({ audit: true }),
+			updateConfig: oc
+				.input(pluginConfigUpdateInputSchema)
+				.output(
+					z.object({
+						config: z.record(z.string(), z.unknown()),
+						secretsSet: z.array(z.string()),
+					}),
+				)
+				.meta({ audit: true }),
 		},
 		requests: {
 			get: oc.input(requestsGetInputSchema).output(requestRowSchema.nullable()),
@@ -560,7 +577,6 @@ export const appContract = oc.router({
 		},
 		settings: {
 			get: oc.output(settingsViewSchema),
-			models: oc.input(settingsModelsInputSchema).output(remoteModelListSchema),
 			update: oc.input(runtimeSettingsPatchSchema).output(settingsViewSchema).meta({ audit: true }),
 		},
 		users: {

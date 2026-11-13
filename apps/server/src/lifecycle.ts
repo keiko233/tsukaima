@@ -6,7 +6,6 @@ import {
 	ModelUsageLedger,
 	PiDurableConversationHost,
 	createFakeModel,
-	createOpenAICompatibleModelPort,
 	type ActivityWindowEvent,
 	type ModelPort,
 	type ModelPolicy,
@@ -83,10 +82,7 @@ export class ElainaLifecycle {
 	routingPolicies: readonly ModelPolicy[] = [];
 	private readonly runtimeLog: Logger;
 	private readonly modelOverride: ModelPort | undefined;
-	private activeProviderSettings: Pick<
-		RuntimeSettings,
-		"openAiApiKey" | "openAiBaseUrl" | "openAiModelId"
-	> = {};
+	private activeProviderId: string | undefined;
 
 	constructor(config: ElainaConfig, options?: LifecycleOptions) {
 		this.config = config;
@@ -174,36 +170,51 @@ export class ElainaLifecycle {
 		this.logger.setLevel(level);
 	}
 
-	private createModelPort(settings: RuntimeSettings): ModelPort {
+	private async createModelPort(settings: RuntimeSettings): Promise<ModelPort> {
 		if (this.modelOverride !== undefined) return this.modelOverride;
-		const openAiApiKey = settings.openAiApiKey ?? this.config.openAiApiKey;
-		const openAiBaseUrl = settings.openAiBaseUrl ?? this.config.openAiBaseUrl;
-		const openAiModelId = settings.openAiModelId ?? this.config.openAiModelId;
-		if (openAiBaseUrl === undefined || openAiApiKey === undefined || openAiModelId === undefined) {
-			this.runtimeLog.info(
-				"OpenAI-compatible provider not configured; using deterministic fake model",
-			);
+		const providerId = settings.modelProviderId ?? this.pluginHost.modelProviders()[0]?.id;
+		if (providerId === undefined) {
+			this.runtimeLog.info("No plugin model provider configured; using deterministic fake model");
 			return createFakeModel({
 				onMessage: (message) => {
 					this.modelUsageLedger.record(message, "basic-chat");
 				},
 			});
 		}
-		this.runtimeLog.info("OpenAI-compatible provider configured", {
-			modelId: openAiModelId,
-			providerId: "openai-compatible",
-		});
-		return createOpenAICompatibleModelPort(
-			{
-				apiKey: openAiApiKey,
-				baseUrl: openAiBaseUrl,
-				onMessage: (message) => {
-					this.modelUsageLedger.record(message, "basic-chat");
-				},
-				providerId: "openai-compatible",
+		const provider = this.pluginHost.modelProvider(providerId);
+		if (provider !== undefined) {
+			try {
+				if ((await provider.isConfigured?.()) === false) {
+					this.runtimeLog.info("plugin model provider is not configured", { providerId });
+					return createFakeModel({
+						onMessage: (message) => {
+							this.modelUsageLedger.record(message, "basic-chat");
+						},
+					});
+				}
+				const port = await provider.createPort({
+					onMessage: (message) => {
+						this.modelUsageLedger.record(
+							message as Parameters<typeof this.modelUsageLedger.record>[0],
+							"basic-chat",
+						);
+					},
+				});
+				this.runtimeLog.info("plugin model provider configured", { providerId });
+				return port as ModelPort;
+			} catch (error) {
+				this.runtimeLog.warn("plugin model provider unavailable; using fake model", {
+					error: error instanceof Error ? error.message : String(error),
+					providerId,
+				});
+			}
+		}
+		this.runtimeLog.info("No plugin model provider configured; using deterministic fake model");
+		return createFakeModel({
+			onMessage: (message) => {
+				this.modelUsageLedger.record(message, "basic-chat");
 			},
-			[{ capabilities: ["basic-chat", "tool-use"], modelId: openAiModelId }],
-		);
+		});
 	}
 
 	async start(): Promise<void> {
@@ -218,16 +229,13 @@ export class ElainaLifecycle {
 		const settings = await readRuntimeSettings(this.domainDatabase);
 		this.setLogLevel(settings.logLevel);
 
+		// Plugins register model providers during setup, which happens later in startup. The
+		// host therefore prepares plugin surfaces first, then resolves the active provider.
+		this.transition("plugins");
+		await this.pluginHost.prepare();
 		this.transition("domain-services");
-		const model = this.createModelPort(settings);
-		const activeOpenAiApiKey = settings.openAiApiKey ?? this.config.openAiApiKey;
-		const activeOpenAiBaseUrl = settings.openAiBaseUrl ?? this.config.openAiBaseUrl;
-		const activeOpenAiModelId = settings.openAiModelId ?? this.config.openAiModelId;
-		this.activeProviderSettings = {
-			...(activeOpenAiApiKey === undefined ? {} : { openAiApiKey: activeOpenAiApiKey }),
-			...(activeOpenAiBaseUrl === undefined ? {} : { openAiBaseUrl: activeOpenAiBaseUrl }),
-			...(activeOpenAiModelId === undefined ? {} : { openAiModelId: activeOpenAiModelId }),
-		};
+		const model = await this.createModelPort(settings);
+		this.activeProviderId = model.providerId;
 		this.conversationHost = new PiDurableConversationHost({
 			contextProvider: this.contextProvider,
 			model,
@@ -291,10 +299,9 @@ export class ElainaLifecycle {
 
 	async applyRuntimeSettings(settings: RuntimeSettings): Promise<void> {
 		this.setLogLevel(settings.logLevel);
+		const requestedProviderId = settings.modelProviderId;
 		this.providerRestartRequired =
-			settings.openAiApiKey !== this.activeProviderSettings.openAiApiKey ||
-			settings.openAiBaseUrl !== this.activeProviderSettings.openAiBaseUrl ||
-			settings.openAiModelId !== this.activeProviderSettings.openAiModelId;
+			requestedProviderId !== undefined && requestedProviderId !== this.activeProviderId;
 		this.runtimeLog.info("runtime settings applied", {
 			logLevel: settings.logLevel,
 			providerRestartRequired: this.providerRestartRequired,

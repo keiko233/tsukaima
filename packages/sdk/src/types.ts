@@ -53,6 +53,42 @@ export interface PluginUiRegistry {
 	list(): readonly PluginUiDefinition[];
 }
 
+export interface PluginModelDescriptor {
+	readonly id: string;
+	readonly capabilities: readonly string[];
+	readonly contextWindow?: number;
+	readonly maxOutputTokens?: number;
+}
+
+export interface PluginModelPort {
+	readonly providerId: string;
+	readonly modelId: string;
+	/** Opaque to the SDK: the host consumes the underlying pi-ai `Models` collection. */
+	readonly models: unknown;
+}
+
+export interface PluginModelProvider {
+	readonly id: string;
+	/** False when the plugin has no usable credentials yet; the host then falls back. */
+	isConfigured?(): boolean | Promise<boolean>;
+	createPort(options?: {
+		readonly onMessage?: (message: unknown) => void;
+	}): PluginModelPort | Promise<PluginModelPort>;
+}
+
+export interface PluginModelRegistry {
+	registerProvider(provider: PluginModelProvider): () => void;
+	getProvider(id: string): PluginModelProvider | undefined;
+	listProviders(): readonly PluginModelProvider[];
+}
+
+export type PluginRpcHandler = (input: unknown) => Promise<unknown> | unknown;
+
+export interface PluginRpcRegistry {
+	register(method: string, handler: PluginRpcHandler): () => void;
+	list(): readonly { readonly method: string }[];
+}
+
 export interface PluginChannelApi {
 	send(conversationId: string, parts: readonly MessagePart[]): Promise<void>;
 }
@@ -146,6 +182,10 @@ export interface PluginContext {
 	events: PluginEvents;
 	tools: PluginToolRegistry;
 	ui: PluginUiRegistry;
+	/** Model providers contributed by this plugin. */
+	models: PluginModelRegistry;
+	/** WebUI-callable procedures contributed by this plugin. */
+	rpc: PluginRpcRegistry;
 	channel?: PluginChannelApi;
 	/** Present when the plugin declares channel permissions. */
 	channels?: PluginChannelRegistry;

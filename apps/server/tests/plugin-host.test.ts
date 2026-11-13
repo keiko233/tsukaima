@@ -125,9 +125,13 @@ async function waitFor<T>(read: () => Promise<T | undefined>, timeoutMs = 3_000)
 describe("plugin host", () => {
 	test("loads built-in plugins into the registry", async () =>
 		withApp({}, async (lifecycle) => {
-			const plugins = lifecycle.pluginHost.list();
-			expect(plugins.map((plugin) => plugin.name)).toEqual(["onebot-napcat", "fake-channel"]);
-			expect(plugins[0]).toEqual(
+			const plugins = await lifecycle.pluginHost.list();
+			expect(plugins.map((plugin) => plugin.name)).toEqual([
+				"openai-compatible",
+				"onebot-napcat",
+				"fake-channel",
+			]);
+			expect(plugins[1]).toEqual(
 				expect.objectContaining({ apiVersion: "1", enabled: 1, kind: "builtin", runMode: "host" }),
 			);
 		}));
