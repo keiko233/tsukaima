@@ -514,14 +514,17 @@ export type LiveEvent = z.infer<typeof liveEventSchema>;
 export const appContract = oc.router({
 	admin: {
 		chats: {
-			createLocal: oc.input(chatsCreateLocalInputSchema).output(createLocalChatOutputSchema),
+			createLocal: oc
+				.input(chatsCreateLocalInputSchema)
+				.output(createLocalChatOutputSchema)
+				.meta({ audit: true }),
 			list: oc.input(chatsListInputSchema).output(z.array(chatSummarySchema)),
 		},
 		conversations: {
 			list: oc.output(z.array(conversationRowSchema)),
 		},
 		diagnostics: {
-			clearLogs: oc.output(z.object({ cleared: z.number().int() })),
+			clearLogs: oc.output(z.object({ cleared: z.number().int() })).meta({ audit: true }),
 			logs: oc.input(diagnosticsLogsInputSchema).output(logSnapshotSchema),
 			status: oc.output(diagnosticsDataSchema),
 		},
@@ -531,7 +534,10 @@ export const appContract = oc.router({
 		},
 		modelPolicies: {
 			list: oc.output(z.array(modelPolicyRowSchema)),
-			set: oc.input(modelPoliciesSetInputSchema).output(z.array(modelPolicySchema)),
+			set: oc
+				.input(modelPoliciesSetInputSchema)
+				.output(z.array(modelPolicySchema))
+				.meta({ audit: true }),
 		},
 		plugins: {
 			list: oc.output(z.array(pluginRowSchema)),
@@ -539,20 +545,23 @@ export const appContract = oc.router({
 		requests: {
 			get: oc.input(requestsGetInputSchema).output(requestRowSchema.nullable()),
 			list: oc.input(requestsListInputSchema).output(z.array(requestRowSchema)),
-			respond: oc.input(requestsRespondInputSchema).output(requestRowSchema),
+			respond: oc.input(requestsRespondInputSchema).output(requestRowSchema).meta({ audit: true }),
 		},
 		sessions: {
-			create: oc.input(sessionsCreateInputSchema).output(createSessionOutputSchema),
+			create: oc
+				.input(sessionsCreateInputSchema)
+				.output(createSessionOutputSchema)
+				.meta({ audit: true }),
 			get: oc.input(sessionIdInputSchema).output(sessionDetailSchema.nullable()),
 			messages: oc.input(sessionIdInputSchema).output(z.array(messageSummarySchema)),
-			send: oc.input(sessionsSendInputSchema).output(messageSummarySchema),
-			setReceiving: oc.input(sessionIdInputSchema).output(okSchema),
-			update: oc.input(sessionsUpdateInputSchema).output(okSchema),
+			send: oc.input(sessionsSendInputSchema).output(messageSummarySchema).meta({ audit: true }),
+			setReceiving: oc.input(sessionIdInputSchema).output(okSchema).meta({ audit: true }),
+			update: oc.input(sessionsUpdateInputSchema).output(okSchema).meta({ audit: true }),
 		},
 		settings: {
 			get: oc.output(settingsViewSchema),
 			models: oc.input(settingsModelsInputSchema).output(remoteModelListSchema),
-			update: oc.input(runtimeSettingsPatchSchema).output(settingsViewSchema),
+			update: oc.input(runtimeSettingsPatchSchema).output(settingsViewSchema).meta({ audit: true }),
 		},
 		users: {
 			get: oc.input(usersGetInputSchema).output(userDetailSchema.nullable()),

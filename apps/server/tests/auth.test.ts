@@ -159,6 +159,26 @@ describe("admin auth", () => {
 		expect(adminActionRow?.actorId).toBe("admin:tsukaima");
 		expect(adminActionRow?.payloadJson).toContain("admin/chats/createLocal");
 
+		const failing = await rpc(
+			app,
+			"admin/sessions/send",
+			{ sessionId: "missing", target: "tsukaima", text: "hello" },
+			cookie,
+		);
+		expect(failing.status).toBe(500);
+		const failedAudit = (await database.select().from(auditLog)).find(
+			(row) =>
+				row.action === "admin.rpc" &&
+				row.result === "failed" &&
+				row.payloadJson?.includes("admin/sessions/send") === true,
+		);
+		expect(failedAudit?.actorId).toBe("admin:tsukaima");
+
+		// A read procedure is authenticated but must not add a mutation audit row.
+		const beforeReads = (await database.select().from(auditLog)).length;
+		await rpc(app, "admin/diagnostics/status", {}, cookie);
+		expect((await database.select().from(auditLog)).length).toBe(beforeReads);
+
 		const logout = await signOut(app, cookie);
 		expect(logout.status).toBe(200);
 		expect(logout.headers.get("set-cookie") ?? "").toContain("Max-Age=0");
