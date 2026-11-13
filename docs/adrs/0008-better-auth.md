@@ -39,9 +39,9 @@ Use Better Auth as the sole authentication authority for the single WebUI admini
   wraps `getSession` so the rest of the application keeps a single server-state model.
 - The public auth surface is broader than three oRPC procedures, so the Elysia mount must preserve
   Better Auth routing, origin checks, and disabled sign-up behavior.
-- The initial single-admin deployment uses an in-process per-instance rate-limit bucket rather than
-  trusting client-supplied `X-Forwarded-For`. A trusted proxy configuration is required before
-  exposing auth beyond the LAN.
+- Sign-in throttling uses an in-process per-instance bucket keyed by client IP. Direct connections
+  use Bun's socket peer address rather than trusting client-supplied `X-Forwarded-For`; reverse
+  proxies must be explicitly listed in `ELAINA_TRUSTED_PROXIES`.
 - Migration `0005` drops the legacy `admin_credentials` table. Argon2id hashes are not portable to
   Better Auth accounts; the pre-deployment upgrade path recreates the administrator from the
   bootstrap environment values.

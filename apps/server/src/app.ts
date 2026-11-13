@@ -51,7 +51,8 @@ export function createApp(
 		logger: lifecycle.logger.child("elaina::server::auth"),
 		secret: config.authSecret,
 		secureCookies: config.secureCookies,
-		trustedOrigins: config.webOrigin === undefined ? [] : [config.webOrigin],
+		trustedOrigins: config.trustedOrigins,
+		trustedProxies: config.trustedProxies,
 	});
 	auth.start();
 	lifecycle.onStop(() => auth.stop());
@@ -85,9 +86,16 @@ export function createApp(
 			}
 			return createLiveEventStream(lifecycle, request, eventStreamOptions);
 		})
-		.all("/api/auth/*", async ({ request }: { request: Request }) => auth.handle(request), {
-			parse: "none",
-		})
+		.all(
+			"/api/auth/*",
+			async ({ request, server }: { request: Request; server: unknown }) => {
+				const address = (
+					server as { requestIP?: (request: Request) => { address: string } | null } | null
+				)?.requestIP?.(request);
+				return auth.handle(request, address?.address);
+			},
+			{ parse: "none" },
+		)
 		.all(
 			"/rpc/*",
 			async ({ request }: { request: Request }) => {
