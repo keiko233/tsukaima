@@ -550,6 +550,40 @@ export const migrationRuns = sqliteTable("migration_runs", {
 	}).notNull(),
 });
 
+export const codingTasks = sqliteTable(
+	"coding_tasks",
+	{
+		artifactsJson: text("artifacts_json").notNull().default("[]"),
+		baseRef: text("base_ref").notNull(),
+		constraintsJson: text("constraints_json").notNull(),
+		createdAtMs: integer("created_at_ms").notNull(),
+		goal: text("goal").notNull(),
+		id: text("id").primaryKey(),
+		logsJson: text("logs_json").notNull().default("[]"),
+		mode: text("mode", { enum: ["analysis", "patch", "proposal", "maintenance"] }).notNull(),
+		sourceConversationId: text("source_conversation_id").notNull(),
+		status: text("status", {
+			enum: [
+				"awaiting_approval",
+				"approved",
+				"cancelled",
+				"completed",
+				"deploying",
+				"failed",
+				"in_progress",
+				"pending",
+			],
+		}).notNull(),
+		timelineJson: text("timeline_json").notNull().default("[]"),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+		worktreePath: text("worktree_path"),
+	},
+	(table) => [
+		index("coding_tasks_status_idx").on(table.status, table.updatedAtMs),
+		index("coding_tasks_conversation_idx").on(table.sourceConversationId, table.updatedAtMs),
+	],
+);
+
 export const codingApprovals = sqliteTable(
 	"coding_approvals",
 	{
@@ -574,11 +608,18 @@ export const codingApprovals = sqliteTable(
 export const codingProposals = sqliteTable(
 	"coding_proposals",
 	{
+		artifactMetadataJson: text("artifact_metadata_json"),
+		changedFilesJson: text("changed_files_json").notNull().default("[]"),
 		createdAtMs: integer("created_at_ms").notNull(),
 		diff: text("diff").notNull(),
+		diffChecksum: text("diff_checksum").notNull().default(""),
+		envChangesJson: text("env_changes_json").notNull().default("[]"),
 		id: text("id").primaryKey(),
+		motivation: text("motivation").notNull().default(""),
+		requiresRestart: integer("requires_restart").notNull().default(0),
 		riskAssessment: text("risk_assessment").notNull(),
 		rollbackNotes: text("rollback_notes").notNull(),
+		sourceRevision: text("source_revision").notNull().default(""),
 		status: text("status", {
 			enum: [
 				"approved",
@@ -600,6 +641,31 @@ export const codingProposals = sqliteTable(
 	(table) => [
 		index("coding_proposals_task_idx").on(table.taskId, table.updatedAtMs),
 		index("coding_proposals_status_idx").on(table.status),
+	],
+);
+
+export const codingDeployments = sqliteTable(
+	"coding_deployments",
+	{
+		artifactMetadataJson: text("artifact_metadata_json"),
+		createdAtMs: integer("created_at_ms").notNull(),
+		createdBy: text("created_by").notNull(),
+		id: text("id").primaryKey(),
+		postCheckJson: text("post_check_json"),
+		preCheckJson: text("pre_check_json"),
+		proposalId: text("proposal_id").notNull(),
+		reloadedAtMs: integer("reloaded_at_ms"),
+		rollbackOfId: text("rollback_of_id"),
+		rollbackPlan: text("rollback_plan").notNull(),
+		sourceRevision: text("source_revision").notNull(),
+		status: text("status", { enum: ["pending", "deployed", "failed", "rolled_back"] }).notNull(),
+		taskId: text("task_id").notNull(),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+	},
+	(table) => [
+		index("coding_deployments_proposal_idx").on(table.proposalId, table.createdAtMs),
+		index("coding_deployments_task_idx").on(table.taskId, table.createdAtMs),
+		index("coding_deployments_status_idx").on(table.status, table.updatedAtMs),
 	],
 );
 

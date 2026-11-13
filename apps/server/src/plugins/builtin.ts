@@ -2,6 +2,7 @@ import { oneBotNapCatPlugin } from "@elaina-plugin/onebot-napcat";
 import { openAiCompatiblePlugin } from "@elaina-plugin/openai-compatible";
 import { proactiveSchedulerPlugin } from "@elaina-plugin/proactive-scheduler";
 import { searchFetchPlugin } from "@elaina-plugin/search-fetch";
+import { selfIterationPlugin } from "@elaina-plugin/self-iteration";
 import { stickerMemePlugin } from "@elaina-plugin/sticker-meme";
 import type { ElainaPlugin } from "@elaina/sdk";
 import { memoryPlugin } from "./memory.ts";
@@ -15,6 +16,7 @@ export const builtinPlugins: readonly ElainaPlugin[] = [
 	oneBotNapCatPlugin,
 	memoryPlugin,
 	proactiveSchedulerPlugin,
+	selfIterationPlugin,
 	searchFetchPlugin,
 	stickerMemePlugin,
 ];

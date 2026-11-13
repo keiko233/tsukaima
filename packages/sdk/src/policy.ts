@@ -95,9 +95,10 @@ export function resolveToolPolicyAccess(
 	}
 	const requiredCapabilities = policy.requiredConversationCapabilities ?? [];
 	if (requiredCapabilities.length > 0) {
-		const available = new Set(
-			context.channelCapabilities ?? context.conversationCapabilities ?? [],
-		);
+		const available = new Set([
+			...(context.channelCapabilities ?? []),
+			...(context.conversationCapabilities ?? []),
+		]);
 		const missing = requiredCapabilities.find((capability) => !available.has(capability));
 		if (missing !== undefined) return deny(`missing_capability:${missing}`);
 	}

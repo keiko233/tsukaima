@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { mkdir, rm } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { lstat, mkdir, realpath, rm } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export interface WorktreeManagerConfig {
 	readonly pathAllowlist: readonly string[];
@@ -75,6 +75,15 @@ export class WorktreeManager {
 		return isPathWithinAllowlist(info.path, this.#config.pathAllowlist, candidatePath);
 	}
 
+	/** Async variant that additionally rejects symlinks escaping the worktree. */
+	async assertSafePath(taskId: string, candidatePath: string): Promise<string> {
+		const info = this.#active.get(taskId);
+		if (!info) {
+			throw new WorktreeError(`No active worktree for task "${taskId}"`);
+		}
+		return assertSafeWorktreePath(info.path, this.#config.pathAllowlist, candidatePath);
+	}
+
 	async validateBaseRef(baseRef: string): Promise<void> {
 		const result = await this.#git(["rev-parse", "--verify", `${baseRef}^{commit}`]);
 		if (result.exitCode !== 0) {
@@ -104,6 +113,54 @@ export class WorktreeManager {
 			});
 		});
 	}
+}
+
+/** Reject traversal, symlink escapes, and paths outside the allowlist before any write. */
+export async function assertSafeWorktreePath(
+	worktreePath: string,
+	allowlist: readonly string[],
+	candidatePath: string,
+): Promise<string> {
+	if (candidatePath.includes("\0")) {
+		throw new WorktreeError("Path contains a null byte");
+	}
+	if (!isPathWithinAllowlist(worktreePath, allowlist, candidatePath)) {
+		throw new WorktreeError(`Path "${candidatePath}" is outside the worktree allowlist`);
+	}
+	const realWorktree = await realpath(worktreePath);
+	const target = resolve(realWorktree, candidatePath);
+	const rel = relative(realWorktree, target);
+	if (rel.startsWith("..") || isAbsolute(rel) || rel === "") {
+		throw new WorktreeError(`Path "${candidatePath}" escapes the worktree`);
+	}
+	let current = target;
+	while (true) {
+		try {
+			const resolved = await realpath(current);
+			const fromRoot = relative(realWorktree, resolved);
+			if (fromRoot.startsWith("..") || isAbsolute(fromRoot)) {
+				throw new WorktreeError(`Path "${candidatePath}" resolves outside the worktree`);
+			}
+		} catch (error) {
+			if (error instanceof WorktreeError) throw error;
+			if (current === realWorktree) break;
+			const parent = dirname(current);
+			if (parent === current) break;
+			current = parent;
+			continue;
+		}
+		try {
+			const stats = await lstat(current);
+			if (stats.isSymbolicLink()) {
+				throw new WorktreeError(`Path "${candidatePath}" traverses a symlink`);
+			}
+		} catch (error) {
+			if (error instanceof WorktreeError) throw error;
+		}
+		if (current === realWorktree) break;
+		current = dirname(current);
+	}
+	return target;
 }
 
 export function isPathWithinAllowlist(

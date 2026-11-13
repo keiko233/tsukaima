@@ -3,6 +3,7 @@ import {
 	collectPluginModels,
 	hasPermission,
 	LocalStorageBridge,
+	providerSafeToolName,
 	type AuditEntry,
 	type ElainaPlugin,
 	type PluginContext,
@@ -47,6 +48,8 @@ export interface PluginHostOptions {
 	readonly bindings?: ReadonlyMap<string, unknown>;
 	readonly channels: ChannelRegistry;
 	readonly conversations?: PluginConversationService;
+	/** Resolve explicitly granted capabilities for the durable conversation id. */
+	readonly conversationCapabilities?: (conversationId: string) => Promise<readonly string[]>;
 	readonly hooks: HookBus;
 	readonly logger: Logger;
 	readonly plugins: readonly ElainaPlugin[];
@@ -112,6 +115,9 @@ export class PluginHost {
 	readonly #logger: Logger;
 	readonly #options: PluginHostOptions;
 	readonly #conversations: PluginConversationService | undefined;
+	readonly #conversationCapabilities:
+		| ((conversationId: string) => Promise<readonly string[]>)
+		| undefined;
 	readonly #plugins = new Map<string, ElainaPlugin>();
 	readonly #modelProviders = new Map<string, PluginModelProvider>();
 	readonly #modelProviderOwners = new Map<string, string>();
@@ -135,6 +141,7 @@ export class PluginHost {
 		this.#audit = options.audit;
 		this.#bindings = options.bindings ?? new Map();
 		this.#conversations = options.conversations;
+		this.#conversationCapabilities = options.conversationCapabilities;
 		this.#hooks = options.hooks;
 		this.#logger = options.logger.child("elaina::server::plugins");
 		this.#requests = options.requests;
@@ -342,14 +349,15 @@ export class PluginHost {
 	}
 
 	/** Policy context layered by the SDK tool adapter for a registered tool. */
-	toolPolicyContext(
+	async toolPolicyContext(
 		tool: PluginTool,
 		context: ToolInvocationContext,
-	): {
+	): Promise<{
 		readonly grantedPermissions: readonly string[];
 		readonly conversationAllowedTools?: readonly string[];
 		readonly channelCapabilities?: readonly string[];
-	} {
+		readonly conversationCapabilities?: readonly string[];
+	}> {
 		const owner = this.#toolOwner(tool.name);
 		const manifest = owner === undefined ? undefined : this.#plugins.get(owner)?.manifest;
 		const conversation = context.conversationId;
@@ -357,13 +365,29 @@ export class PluginHost {
 			conversation === undefined
 				? undefined
 				: this.channels.capabilities(conversation.split(":")[0] ?? "");
+		let conversationCapabilities: readonly string[] | undefined;
+		if (conversation !== undefined && this.#conversationCapabilities !== undefined) {
+			try {
+				conversationCapabilities = await this.#conversationCapabilities(conversation);
+			} catch {
+				conversationCapabilities = [];
+			}
+		}
 		return {
 			grantedPermissions: manifest?.permissions ?? [],
 			...(context.allowedTools === undefined
 				? {}
 				: { conversationAllowedTools: context.allowedTools }),
 			...(channelCapabilities === undefined ? {} : { channelCapabilities }),
+			...(conversationCapabilities === undefined ? {} : { conversationCapabilities }),
 		};
+	}
+
+	/** Provider-safe model tool names owned by one plugin, used for per-conversation filters. */
+	modelToolNames(pluginId: string): readonly string[] {
+		const context = this.#contexts.get(pluginId);
+		if (context === undefined) return [];
+		return context.tools.list().map((tool) => providerSafeToolName(tool.name));
 	}
 
 	#toolOwner(name: string): string | undefined {

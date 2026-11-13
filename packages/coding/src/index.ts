@@ -1,22 +1,51 @@
 export const CODING_API_VERSION = "0.1.0";
 
+/** Host binding consumed by the self-iteration plugin; the server owns the values. */
+export const SELF_ITERATION_HOST_BINDING = "elaina.self-iteration.host";
+
 export type {
 	AuditEvent,
 	AuditOutcome,
+	CodingTaskMode,
+	CreateDeploymentInput,
+	CreateIterationTaskInput,
+	DeploymentRecord,
+	DeploymentRecordPatch,
+	DeploymentStatus,
+	HealthCheckResult,
 	IterationTask,
 	IterationTaskConstraints,
+	IterationTaskPatch,
 	IterationTaskStatus,
+	TaskArtifact,
 	TaskGraph,
 	TaskGraphNode,
+	TaskLogEntry,
 	TaskNodeKind,
 	TaskNodeStatus,
+	TaskTimelineEntry,
 } from "./types.ts";
 
 export { CodingRunner, CommandRejectedError } from "./runner.ts";
 export type { CommandResult, RunnerConfig } from "./runner.ts";
 
-export { isPathWithinAllowlist, WorktreeError, WorktreeManager } from "./worktree.ts";
+export {
+	assertSafeWorktreePath,
+	isPathWithinAllowlist,
+	WorktreeError,
+	WorktreeManager,
+} from "./worktree.ts";
 export type { GitExecResult, WorktreeInfo, WorktreeManagerConfig } from "./worktree.ts";
+
+export {
+	applyStructuredEdit,
+	EditValidationError,
+	readAllowedTextFile,
+	validateStructuredEdit,
+} from "./edit.ts";
+export type { EditOptions, EditResult, StructuredEdit } from "./edit.ts";
+
+export { sha256Hex } from "./hash.ts";
 
 export { CodingTools, parseDiffOutput, parseTestOutput } from "./tools.ts";
 export type { BuildResult, DiffFileEntry, DiffResult, TestRunResult } from "./tools.ts";
@@ -32,15 +61,28 @@ export type {
 	ResolvedApprovalRequest,
 } from "./approval.ts";
 
-export { JsonFileProposalStore, ProposalError } from "./proposal.ts";
+export {
+	missingProposalFields,
+	normalizeDeploymentProposal,
+	JsonFileProposalStore,
+	ProposalError,
+	validateProposalFields,
+} from "./proposal.ts";
 export type {
+	ArtifactMetadata,
 	DeploymentProposal,
 	DeploymentProposalInput,
 	DeploymentProposalStatus,
 	DeploymentProposalStore,
 } from "./proposal.ts";
 
-export { NoopReloadController } from "./reload.ts";
-export type { ReloadContext, ReloadController, ReloadResult } from "./reload.ts";
+export { NoopReloadController, SupervisedReloadController } from "./reload.ts";
+export type {
+	ReloadContext,
+	ReloadController,
+	ReloadResult,
+	SupervisedReloadOptions,
+	SupervisedReloadOutcome,
+} from "./reload.ts";
 
 export { DomainCodingStore } from "./domain-store.ts";
