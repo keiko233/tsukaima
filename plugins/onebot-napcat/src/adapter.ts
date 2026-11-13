@@ -175,6 +175,20 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 		return toSendResult(result);
 	}
 
+	async sendTyping(target: OutboundTarget, typing: boolean): Promise<void> {
+		const channel = this.#channel;
+		if (channel === undefined || !channel.diagnostics.connected) return;
+		if (target.kind !== "private") return;
+		try {
+			await channel.setTyping(target, typing);
+		} catch (error) {
+			this.#logger.debug("typing indicator unavailable", {
+				error: error instanceof Error ? error.message : String(error),
+				target: target.platformConversationId,
+			});
+		}
+	}
+
 	async lookupMessage(platformMessageId: string): Promise<ChannelHistoryItem | undefined> {
 		return this.#channel?.lookupMessage(platformMessageId);
 	}

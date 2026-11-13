@@ -15,21 +15,31 @@ import {
 import {
 	type ActivityAggregationPolicy,
 	type ConversationPolicy,
+	conversationPolicyFromActivityAggregation,
+	conversationPolicySchema,
 	defaultConversationPolicy,
 	durableDocumentKinds,
 	messagePartSchema,
 	messagePartText,
 	messagePartsText,
 	type MessageEnvelope,
+	type TriggerClassification,
 } from "@elaina/contracts";
 import type { SqliteStorage } from "@elaina/durable";
 import { createContextExtension, type ContextPromptProvider } from "./context.ts";
+import {
+	ConversationExecutionLock,
+	defaultConversationExecutionLock,
+	withConversationLock,
+} from "./execution-lock.ts";
 import { createFakeModel, type ModelPort } from "./model.ts";
+import { busyDisposition } from "./output-pacing.ts";
 import { shouldCloseActivityWindow } from "./index.ts";
 
 type StoredEnvelope = JsonObject & {
 	readonly id: string;
 	readonly source: JsonObject & { readonly timestampMs: number };
+	triggerContext?: string;
 };
 
 type ActivityWindowDocument = JsonObject & {
@@ -45,10 +55,8 @@ type ActivityWindowSeed = JsonObject & {
 	openedAtMs: number;
 };
 
-type StoredConversationPolicy = {
-	enabled: boolean;
-	followUpWhenBusy: "follow-up" | "reject";
-	steerWhenBusy: "steer" | "follow-up" | "reject";
+type StoredConversationPolicy = JsonObject & {
+	policyJson: string;
 };
 
 /**
@@ -87,14 +95,12 @@ const conversationPolicyDefinition = {
 	fork: "current",
 	history: "latest",
 	checkpointWhen: () => true,
-	initial: (seed: ConversationPolicy) => ({
-		enabled: seed.enabled,
-		followUpWhenBusy: seed.followUpWhenBusy,
-		steerWhenBusy: seed.steerWhenBusy,
+	initial: (seed: JsonObject) => ({
+		policyJson: JSON.stringify(conversationPolicySchema.parse(seed)),
 	}),
 } as const;
 
-const conversationPolicyDoc = defineDocFamily<StoredConversationPolicy, ConversationPolicy>(
+const conversationPolicyDoc = defineDocFamily<StoredConversationPolicy, JsonObject>(
 	conversationPolicyDefinition,
 );
 
@@ -143,6 +149,19 @@ export type AppendConversationResult = {
 	readonly messageId: string;
 	readonly status: string;
 };
+
+export interface AppendConversationInput {
+	/** Compact trigger contract appended to the model submission for direct/soft turns. */
+	readonly triggerContext?: string;
+	readonly classification?: TriggerClassification;
+	/** Collect only; the router uses this while a cooldown/rate limit is active. */
+	readonly collectOnly?: boolean;
+	readonly conversationId: string;
+	readonly envelope: MessageEnvelope;
+	readonly forceSubmit?: boolean;
+	readonly submittedAtMs: number;
+	readonly whenBusy?: "steer" | "follow-up";
+}
 
 /**
  * One settled assistant answer. Emitted by the host after an input run produced an
@@ -196,6 +215,10 @@ export interface DurableConversationHostOptions {
 	 */
 	readonly onAnswer?: (answer: ConversationAnswer) => Promise<void> | void;
 	readonly policy?: ActivityAggregationPolicy;
+	/** Shared execution lock; defaults to the host-wide lock. */
+	readonly executionLock?: ConversationExecutionLock;
+	/** How long a busy run may still be steered before a follow-up is queued. */
+	readonly steerGraceMs?: number;
 	readonly storage: SqliteStorage;
 }
 
@@ -223,7 +246,10 @@ function assistantEntryText(entry: EntryRecord): string | undefined {
 export class PiDurableConversationHost {
 	private harness?: DurableHarness;
 	private readonly model: ModelPort;
-	private readonly policy: ActivityAggregationPolicy;
+	private readonly policy: ConversationPolicy;
+	private readonly executionLock: ConversationExecutionLock;
+	private readonly steerGraceMs: number;
+	private readonly activeRuns = new Map<string, Map<string, { startedAtMs: number }>>();
 	private readonly activityTimers = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
 	private readonly activityFlushes = new Set<string>();
 	private readonly contextExtension: Extension | undefined;
@@ -237,7 +263,12 @@ export class PiDurableConversationHost {
 		this.model =
 			options.model ??
 			createFakeModel(options.responses === undefined ? {} : { responses: options.responses });
-		this.policy = options.policy ?? { maxMessages: 20, windowMs: 6_000 };
+		this.policy =
+			options.policy === undefined
+				? defaultConversationPolicy
+				: conversationPolicyFromActivityAggregation(options.policy);
+		this.executionLock = options.executionLock ?? defaultConversationExecutionLock;
+		this.steerGraceMs = options.steerGraceMs ?? 3_000;
 		this.contextExtension =
 			options.contextProvider === undefined
 				? undefined
@@ -266,13 +297,15 @@ export class PiDurableConversationHost {
 		return String(conversation.id);
 	}
 
-	async append(input: {
-		conversationId: string;
-		envelope: MessageEnvelope;
-		forceSubmit?: boolean;
-		submittedAtMs: number;
-		whenBusy?: "steer" | "follow-up";
-	}): Promise<AppendConversationResult> {
+	async append(input: AppendConversationInput): Promise<AppendConversationResult> {
+		return withConversationLock(
+			input.conversationId,
+			() => this.appendLocked(input),
+			this.executionLock,
+		);
+	}
+
+	private async appendLocked(input: AppendConversationInput): Promise<AppendConversationResult> {
 		const harness = await this.openHarness();
 		const conversationId = Number(input.conversationId) as ConversationId;
 		const conversation = await harness.conversation(conversationId, BACKGROUND_CONTEXT);
@@ -294,6 +327,7 @@ export class PiDurableConversationHost {
 		}
 		const policy = await this.readPolicy(conversationId);
 		if (!policy.enabled) throw new Error(`Conversation disabled: ${input.conversationId}`);
+		const pacing = policy.pacing;
 		const activityId = `${conversationId}:activity`;
 		const window = await harness.snapshot(
 			activityWindowDoc,
@@ -303,17 +337,37 @@ export class PiDurableConversationHost {
 		);
 		const envelopes: StoredEnvelope[] = window?.envelopes ?? [];
 		const shouldOpen = !window || window.status !== "collecting";
-		const storedEnvelope = this.toStoredEnvelope(input.envelope);
+		const storedEnvelope = this.toStoredEnvelope(input.envelope, input.triggerContext);
 		const nextEnvelopes = shouldOpen ? [storedEnvelope] : [...envelopes, storedEnvelope];
+		const firstMessageAtMs =
+			nextEnvelopes[0]?.source.timestampMs ?? input.envelope.source.timestampMs;
+		const latestMessageAtMs =
+			nextEnvelopes.at(-1)?.source.timestampMs ?? input.envelope.source.timestampMs;
+		const longMessage =
+			messagePartsText(input.envelope.parts).length >= pacing.burstLongMessageThreshold;
+		const windowClosed = shouldCloseActivityWindow(
+			firstMessageAtMs,
+			input.submittedAtMs,
+			pacing,
+			latestMessageAtMs,
+		);
 		const shouldSubmit =
 			input.forceSubmit === true ||
-			nextEnvelopes.length >= this.policy.maxMessages ||
-			shouldCloseActivityWindow(
-				nextEnvelopes[0]?.source.timestampMs ?? input.envelope.source.timestampMs,
-				input.submittedAtMs,
-				this.policy,
-			);
-		const whenBusy = input.whenBusy ?? (shouldSubmit ? policy.followUpWhenBusy : "follow-up");
+			(input.collectOnly !== true &&
+				(nextEnvelopes.length >= pacing.burstMaxMessages || longMessage || windowClosed));
+		const activeSinceMs = this.activeRunSince(input.conversationId);
+		const disposition = busyDisposition(activeSinceMs, input.submittedAtMs, this.steerGraceMs);
+		const whenBusy =
+			input.whenBusy ??
+			(disposition === "steer"
+				? policy.steerWhenBusy === "reject"
+					? "follow-up"
+					: policy.steerWhenBusy === "follow-up"
+						? "follow-up"
+						: "steer"
+				: policy.followUpWhenBusy === "reject"
+					? "follow-up"
+					: "follow-up");
 		if (shouldSubmit) this.clearActivityTimer(input.conversationId);
 		const submissionId = await conversation.commit(async (tx) => {
 			const receipt = await tx.doc(messageReceiptDoc, conversationId, input.envelope.id, {
@@ -344,7 +398,7 @@ export class PiDurableConversationHost {
 				shouldSubmit
 					? {
 							type: "input",
-							content: this.envelopeToText(input.envelope),
+							content: this.envelopesToText(nextEnvelopes),
 							entry,
 							requestId: activitySubmissionRequestId(activityId, input.envelope.id),
 							whenBusy: whenBusy === "follow-up" ? "followUp" : whenBusy,
@@ -375,9 +429,10 @@ export class PiDurableConversationHost {
 		const submission = await harness.submission(submissionId, BACKGROUND_CONTEXT);
 		const record = await submission?.status(BACKGROUND_CONTEXT);
 		if (!shouldSubmit) {
-			this.scheduleActivityFlush(input.conversationId);
+			this.scheduleActivityFlush(input.conversationId, pacing.burstSettleMs);
 		} else {
-			this.observeAnswer(harness, input.conversationId, submission);
+			this.trackSubmission(input.conversationId, String(submissionId));
+			this.observeAnswer(harness, input.conversationId, submission, String(submissionId));
 		}
 		return {
 			activityId,
@@ -395,12 +450,17 @@ export class PiDurableConversationHost {
 		harness: DurableHarness,
 		conversationId: string,
 		submission: Submission | undefined,
+		submissionId?: string,
 	): void {
 		const onAnswer = this.options.onAnswer;
-		if (onAnswer === undefined || submission === undefined) return;
+		if (submission === undefined) {
+			if (submissionId !== undefined) this.untrackSubmission(conversationId, submissionId);
+			return;
+		}
 		void (async () => {
 			try {
 				const settled = await submission.wait(BACKGROUND_CONTEXT);
+				if (onAnswer === undefined) return;
 				if (settled.type !== "input" || settled.status !== "done") return;
 				const answerId = settled.answer;
 				const entry = await harness.commit((tx) => tx.entry(answerId), BACKGROUND_CONTEXT);
@@ -416,11 +476,39 @@ export class PiDurableConversationHost {
 			} catch (error) {
 				if (this.closed) return;
 				console.error("Failed to observe conversation answer", error);
+			} finally {
+				if (submissionId !== undefined) this.untrackSubmission(conversationId, submissionId);
 			}
 		})();
 	}
 
-	private scheduleActivityFlush(conversationId: string, delayMs = this.policy.windowMs): void {
+	private trackSubmission(conversationId: string, submissionId: string): void {
+		const runs = this.activeRuns.get(conversationId) ?? new Map();
+		runs.set(submissionId, { startedAtMs: Date.now() });
+		this.activeRuns.set(conversationId, runs);
+	}
+
+	private untrackSubmission(conversationId: string, submissionId: string): void {
+		const runs = this.activeRuns.get(conversationId);
+		if (runs === undefined) return;
+		runs.delete(submissionId);
+		if (runs.size === 0) this.activeRuns.delete(conversationId);
+	}
+
+	private activeRunSince(conversationId: string): number | undefined {
+		const runs = this.activeRuns.get(conversationId);
+		if (runs === undefined || runs.size === 0) return undefined;
+		let earliest: number | undefined;
+		for (const run of runs.values()) {
+			if (earliest === undefined || run.startedAtMs < earliest) earliest = run.startedAtMs;
+		}
+		return earliest;
+	}
+
+	private scheduleActivityFlush(
+		conversationId: string,
+		delayMs = this.policy.pacing.burstSettleMs,
+	): void {
 		this.clearActivityTimer(conversationId);
 		const timer = setTimeout(() => {
 			this.activityTimers.delete(conversationId);
@@ -438,10 +526,27 @@ export class PiDurableConversationHost {
 		this.activityTimers.delete(conversationId);
 	}
 
+	/** Let the router defer a collected window until a cooldown or rate limit expires. */
+	scheduleActivityFlushAfter(conversationId: string, delayMs: number): void {
+		this.scheduleActivityFlush(conversationId, Math.max(0, delayMs));
+	}
+
 	private async flushActivity(conversationId: string): Promise<void> {
 		if (this.activityFlushes.has(conversationId)) return;
 		this.activityFlushes.add(conversationId);
 		try {
+			await withConversationLock(
+				conversationId,
+				() => this.flushActivityLocked(conversationId),
+				this.executionLock,
+			);
+		} finally {
+			this.activityFlushes.delete(conversationId);
+		}
+	}
+
+	private async flushActivityLocked(conversationId: string): Promise<void> {
+		{
 			const harness = await this.openHarness();
 			const numericId = Number(conversationId) as ConversationId;
 			const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
@@ -460,6 +565,11 @@ export class PiDurableConversationHost {
 			const policy = await this.readPolicy(numericId);
 			if (!policy.enabled) return;
 			const envelopes = window.envelopes;
+			const disposition = busyDisposition(
+				this.activeRunSince(conversationId),
+				Date.now(),
+				this.steerGraceMs,
+			);
 			const submissionId = await conversation.commit(async (tx) => {
 				const document = await tx.doc(activityWindowDoc, numericId, activityId, {
 					conversationId: numericId,
@@ -481,7 +591,12 @@ export class PiDurableConversationHost {
 					entry,
 					requestId: activitySubmissionRequestId(activityId, envelopes[0]?.id ?? "window"),
 					type: "input",
-					whenBusy: policy.followUpWhenBusy === "follow-up" ? "followUp" : "reject",
+					whenBusy:
+						disposition === "steer" && policy.steerWhenBusy === "steer"
+							? "steer"
+							: policy.followUpWhenBusy === "reject"
+								? "followUp"
+								: "followUp",
 				});
 			}, BACKGROUND_CONTEXT);
 			this.emitActivityEvent({
@@ -491,9 +606,8 @@ export class PiDurableConversationHost {
 				type: "closed",
 			});
 			const submission = await harness.submission(submissionId, BACKGROUND_CONTEXT);
-			this.observeAnswer(harness, conversationId, submission);
-		} finally {
-			this.activityFlushes.delete(conversationId);
+			this.trackSubmission(conversationId, String(submissionId));
+			this.observeAnswer(harness, conversationId, submission, String(submissionId));
 		}
 	}
 
@@ -523,9 +637,35 @@ export class PiDurableConversationHost {
 			BACKGROUND_CONTEXT,
 		);
 		if (!window || window.status !== "collecting" || window.envelopes.length === 0) return;
+		const policy = await this.readPolicy(numericId);
 		const latest = window.envelopes.at(-1)?.source.timestampMs ?? window.openedAtMs;
-		const remainingMs = this.policy.windowMs - (Date.now() - latest);
+		const remainingMs = policy.pacing.burstSettleMs - (Date.now() - latest);
 		this.scheduleActivityFlush(conversationId, Math.max(0, remainingMs));
+	}
+
+	/**
+	 * Persist the effective domain policy into the durable conversation document. The server
+	 * policy service owns resolution and revision history; this method only syncs the active
+	 * document so activity aggregation and pacing read from one durable source.
+	 */
+	async updatePolicy(conversationId: string, policy: ConversationPolicy): Promise<void> {
+		const parsed = conversationPolicySchema.parse(policy);
+		await withConversationLock(
+			conversationId,
+			async () => {
+				const harness = await this.openHarness();
+				const numericId = Number(conversationId) as ConversationId;
+				const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
+				if (conversation === undefined)
+					throw new Error(`Conversation not found: ${conversationId}`);
+				await conversation.commit(async (tx) => {
+					const seed = JSON.parse(JSON.stringify(parsed)) as JsonObject;
+					const document = await tx.doc(conversationPolicyDoc, numericId, "policy", seed);
+					document.policyJson = JSON.stringify(parsed);
+				}, BACKGROUND_CONTEXT);
+			},
+			this.executionLock,
+		);
 	}
 
 	private async readPolicy(conversationId: ConversationId): Promise<ConversationPolicy> {
@@ -536,12 +676,16 @@ export class PiDurableConversationHost {
 			"policy",
 			BACKGROUND_CONTEXT,
 		);
-		if (!document) return defaultConversationPolicy;
-		return {
-			enabled: document.enabled,
-			followUpWhenBusy: document.followUpWhenBusy,
-			steerWhenBusy: document.steerWhenBusy,
-		};
+		if (!document) return this.policy;
+		try {
+			const legacy = document as unknown as JsonObject;
+			const source =
+				typeof legacy.policyJson === "string" ? (JSON.parse(legacy.policyJson) as unknown) : legacy;
+			const parsed = conversationPolicySchema.safeParse(source);
+			return parsed.success ? parsed.data : this.policy;
+		} catch {
+			return this.policy;
+		}
 	}
 
 	/**
@@ -616,6 +760,13 @@ export class PiDurableConversationHost {
 	}
 
 	private envelopesToText(envelopes: readonly StoredEnvelope[]): string {
+		const triggerContexts = [
+			...new Set(
+				envelopes
+					.map((envelope) => envelope.triggerContext)
+					.filter((value): value is string => typeof value === "string" && value.length > 0),
+			),
+		];
 		const text = envelopes
 			.map((envelope) => {
 				const parts = Array.isArray(envelope.parts) ? envelope.parts : [];
@@ -639,11 +790,18 @@ export class PiDurableConversationHost {
 				return `${sender}: ${content}`;
 			})
 			.join("\n");
-		return envelopes.length === 1 ? text.replace(/^[^:]+:\s/, "") : text;
+		const conversationText = envelopes.length === 1 ? text.replace(/^[^:]+:\s/, "") : text;
+		return triggerContexts.length === 0
+			? conversationText
+			: `${triggerContexts.join("\n\n")}\n\n${conversationText}`;
 	}
 
-	private toStoredEnvelope(envelope: MessageEnvelope): StoredEnvelope {
-		return JSON.parse(JSON.stringify(envelope)) as StoredEnvelope;
+	private toStoredEnvelope(envelope: MessageEnvelope, triggerContext?: string): StoredEnvelope {
+		const stored = JSON.parse(JSON.stringify(envelope)) as StoredEnvelope;
+		if (triggerContext !== undefined && triggerContext.trim().length > 0) {
+			stored.triggerContext = triggerContext;
+		}
+		return stored;
 	}
 
 	private async openHarness(): Promise<DurableHarness> {

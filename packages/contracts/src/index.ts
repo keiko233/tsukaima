@@ -113,31 +113,7 @@ export const channelMessageSchema = z.object({
 
 export type ChannelMessage = z.infer<typeof channelMessageSchema>;
 
-export const activityAggregationPolicySchema = z.object({
-	maxMessages: z.number().int().min(1),
-	windowMs: z.number().int().min(3_000).max(10_000),
-});
-
-export type ActivityAggregationPolicy = z.infer<typeof activityAggregationPolicySchema>;
-
-export const defaultActivityAggregationPolicy: ActivityAggregationPolicy = {
-	maxMessages: 20,
-	windowMs: 6_000,
-};
-
-export const conversationPolicySchema = z.object({
-	enabled: z.boolean().default(true),
-	followUpWhenBusy: z.enum(["follow-up", "reject"]).default("follow-up"),
-	steerWhenBusy: z.enum(["steer", "follow-up", "reject"]).default("steer"),
-});
-
-export type ConversationPolicy = z.infer<typeof conversationPolicySchema>;
-
-export const defaultConversationPolicy: ConversationPolicy = {
-	enabled: true,
-	followUpWhenBusy: "follow-up",
-	steerWhenBusy: "steer",
-};
+export * from "./policy.ts";
 
 export const activityWindowSchema = z.object({
 	activityId: z.string().min(1),

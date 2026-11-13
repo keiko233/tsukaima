@@ -25,6 +25,8 @@ import { createLogger, LogBuffer, type Logger } from "./logging.ts";
 import { readRuntimeSettings, type RuntimeSettings } from "./runtime-settings.ts";
 import { builtinPlugins } from "./plugins/builtin.ts";
 import { ChannelRegistry } from "./services/channel-registry.ts";
+import { ConversationPacingTracker } from "./services/conversation-pacing.ts";
+import { ConversationPolicyService } from "./services/conversation-policy.ts";
 import { ConversationRouter } from "./services/conversation-router.ts";
 import { DrizzleContextProvider } from "./services/context-provider.ts";
 import { MediaService } from "./services/media-service.ts";
@@ -67,6 +69,8 @@ export class ElainaLifecycle {
 	readonly startedAtMs = Date.now();
 	readonly channels: ChannelRegistry;
 	readonly contextProvider: DrizzleContextProvider;
+	readonly conversationPacing: ConversationPacingTracker;
+	readonly conversationPolicy: ConversationPolicyService;
 	readonly conversationRouter: ConversationRouter;
 	readonly hooks: HookBus;
 	readonly pluginHost: PluginHost;
@@ -125,14 +129,26 @@ export class ElainaLifecycle {
 			database: () => this.domainDatabase,
 			logger: this.runtimeLog,
 		});
-		this.conversationRouter = new ConversationRouter({
+		this.conversationPacing = new ConversationPacingTracker();
+		this.conversationPolicy = new ConversationPolicyService({
 			database: () => this.domainDatabase,
 			host: () => this.conversationHost,
 			logger: this.runtimeLog,
 		});
+		this.conversationRouter = new ConversationRouter({
+			audit: (entry) => this.writeAudit(entry),
+			database: () => this.domainDatabase,
+			host: () => this.conversationHost,
+			logger: this.runtimeLog,
+			onInboundTrigger: (conversationId) =>
+				this.replyDispatcher.cancelPendingOutput(conversationId),
+			pacing: this.conversationPacing,
+			policy: this.conversationPolicy,
+		});
 		this.contextProvider = new DrizzleContextProvider({
 			database: () => this.domainDatabase,
 			logger: this.runtimeLog,
+			policyService: this.conversationPolicy,
 		});
 		this.requestService = new RequestService({
 			audit: (entry) => this.writeAudit(entry),
@@ -151,6 +167,8 @@ export class ElainaLifecycle {
 			database: () => this.domainDatabase,
 			hooks: this.hooks,
 			logger: this.runtimeLog,
+			pacing: this.conversationPacing,
+			policy: this.conversationPolicy,
 			...(options?.reply?.pendingGraceMs === undefined
 				? {}
 				: { pendingGraceMs: options.reply.pendingGraceMs }),
@@ -373,11 +391,12 @@ export class ElainaLifecycle {
 	private async handleChannelEnvelope(channelId: string, envelope: MessageEnvelope): Promise<void> {
 		try {
 			const result = await this.conversationRouter.ingest(envelope);
-			if (!result.duplicated) {
+			if (!result.duplicated && !result.ignored) {
 				this.processedMessageCount += 1;
 				this.hooks.emitDetached("message.received", {
 					channelId,
 					chatObjectId: result.chatObjectId,
+					classification: result.classification,
 					envelope,
 					sessionId: result.sessionId,
 				});
@@ -432,6 +451,10 @@ export class ElainaLifecycle {
 			this.lastProcessingError = error instanceof Error ? error : new Error(String(error));
 			throw error;
 		}
+	}
+
+	triggerStats(): ReturnType<ConversationRouter["triggerStats"]> {
+		return this.conversationRouter.triggerStats();
 	}
 
 	async processEnvelope(envelope: MessageEnvelope): Promise<void> {

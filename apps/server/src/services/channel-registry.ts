@@ -85,4 +85,20 @@ export class ChannelRegistry {
 		}
 		return adapter.send({ channelId, kind, platformConversationId }, parts, options);
 	}
+
+	/** No-op when the adapter does not support typing indicators. */
+	async sendTyping(
+		channelId: string,
+		kind: "private" | "group",
+		platformConversationId: string,
+		typing: boolean,
+	): Promise<void> {
+		const adapter = this.#adapters.get(channelId);
+		if (adapter?.sendTyping === undefined) return;
+		try {
+			await adapter.sendTyping({ channelId, kind, platformConversationId }, typing);
+		} catch {
+			// Typing is cosmetic; a platform rejection must never fail the reply.
+		}
+	}
 }

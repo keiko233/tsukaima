@@ -9,6 +9,7 @@ import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { useShellNavigation } from "../../_modules/shell/admin-shell";
 import { Avatar, InlineError } from "../../_modules/shell/primitives";
+import { ConversationPolicyPanel } from "./conversation-policy-panel";
 import { MessageComposer } from "./message-composer";
 import { MessageList } from "./message-list";
 
@@ -174,6 +175,7 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 						) : null}
 					</div>
 				</div>
+				<ConversationPolicyPanel chatObjectId={detail.chat.id} sessionId={detail.id} />
 			</header>
 
 			{archived ? (

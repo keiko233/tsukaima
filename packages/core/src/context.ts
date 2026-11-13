@@ -16,6 +16,8 @@ export interface ContextPromptProvider {
 	renderPersona(conversationId: string): Promise<string | undefined>;
 	/** Retrieved memory text for one durable conversation, or `undefined` when there is none. */
 	renderMemories(conversationId: string): Promise<string | undefined>;
+	/** Compact identity/conversation contract text rendered between persona and memory. */
+	renderPolicy?(conversationId: string): Promise<string | undefined>;
 }
 
 /**
@@ -23,8 +25,10 @@ export interface ContextPromptProvider {
  * `/^[a-z][a-z0-9_-]*$/`, so the dotted `elaina.persona` form is not available.
  */
 export const CONTEXT_EXTENSION_NAME = "elaina-context";
-/** Section key for the conversation's persona (rendered before memories). */
+/** Section key for the conversation's persona (rendered before policy and memories). */
 export const PERSONA_SECTION_KEY = "elaina-persona";
+/** Section key for the compact conversation policy/trigger contract. */
+export const POLICY_SECTION_KEY = "elaina-policy";
 /** Section key for the conversation's retrieved memories. */
 export const MEMORY_SECTION_KEY = "elaina-memory";
 
@@ -33,6 +37,7 @@ export interface ContextExtensionOptions {
 	readonly keys?: {
 		readonly memory?: string;
 		readonly persona?: string;
+		readonly policy?: string;
 	};
 }
 
@@ -59,15 +64,25 @@ export function createContextExtension<Tool extends ToolRegistration = ToolRegis
 				return undefined;
 			}
 		});
+	const sections = [
+		buildSection(options.keys?.persona ?? PERSONA_SECTION_KEY, (conversationId) =>
+			provider.renderPersona(conversationId),
+		),
+		...(provider.renderPolicy === undefined
+			? []
+			: [
+					buildSection(
+						options.keys?.policy ?? POLICY_SECTION_KEY,
+						(conversationId) =>
+							provider.renderPolicy?.(conversationId) ?? Promise.resolve(undefined),
+					),
+				]),
+		buildSection(options.keys?.memory ?? MEMORY_SECTION_KEY, (conversationId) =>
+			provider.renderMemories(conversationId),
+		),
+	];
 	return defineExtension<Tool>({
 		name: CONTEXT_EXTENSION_NAME,
-		sections: [
-			buildSection(options.keys?.persona ?? PERSONA_SECTION_KEY, (conversationId) =>
-				provider.renderPersona(conversationId),
-			),
-			buildSection(options.keys?.memory ?? MEMORY_SECTION_KEY, (conversationId) =>
-				provider.renderMemories(conversationId),
-			),
-		],
+		sections,
 	});
 }

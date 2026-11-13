@@ -152,6 +152,50 @@ export const adminRouter = {
 			return toContractPolicies(context.lifecycle.routingPolicies);
 		}),
 	},
+	personas: {
+		bind: adminBase.admin.personas.bind.handler(async ({ context, input }) => {
+			const binding = await context.lifecycle.conversationPolicy.bindPersona({
+				personaId: input.personaId,
+				scope: input.scope,
+				...(input.chatKind === undefined ? {} : { chatKind: input.chatKind }),
+				...(input.chatObjectId === undefined ? {} : { chatObjectId: input.chatObjectId }),
+				...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+			});
+			await context.lifecycle.writeAudit({
+				action: "persona.bind",
+				payload: { scope: input.scope },
+				result: "ok",
+				targetId: binding.id,
+				targetKind: "persona-binding",
+			});
+			return binding;
+		}),
+		bindings: adminBase.admin.personas.bindings.handler(async ({ context }) =>
+			context.lifecycle.conversationPolicy.listBindings(),
+		),
+		list: adminBase.admin.personas.list.handler(async ({ context }) =>
+			context.lifecycle.conversationPolicy.listPersonas(),
+		),
+		upsert: adminBase.admin.personas.upsert.handler(async ({ context, input }) => {
+			const persona = await context.lifecycle.conversationPolicy.upsertPersona({
+				name: input.name,
+				prompt: input.prompt,
+				summary: input.summary,
+				...(input.id === undefined ? {} : { id: input.id }),
+				...(input.isActive === undefined ? {} : { isActive: input.isActive }),
+				...(input.selfAliases === undefined ? {} : { selfAliases: input.selfAliases }),
+				...(input.version === undefined ? {} : { version: input.version }),
+			});
+			await context.lifecycle.writeAudit({
+				action: "persona.upsert",
+				payload: { version: persona.version },
+				result: "ok",
+				targetId: persona.id,
+				targetKind: "persona",
+			});
+			return persona;
+		}),
+	},
 	plugins: {
 		list: adminBase.admin.plugins.list.handler(async ({ context }) => [
 			...(await context.lifecycle.pluginHost.list()),
@@ -170,6 +214,39 @@ export const adminRouter = {
 			await context.lifecycle.updatePluginConfig(input.pluginId, input.config);
 			const view = await context.lifecycle.pluginConfigView(input.pluginId);
 			return { config: view.config, secretsSet: [...view.secretsSet] };
+		}),
+	},
+	policies: {
+		get: adminBase.admin.policies.get.handler(async ({ context, input }) =>
+			context.lifecycle.conversationPolicy.view({
+				...(input?.chatObjectId === undefined ? {} : { chatObjectId: input.chatObjectId }),
+				...(input?.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+			}),
+		),
+		history: adminBase.admin.policies.history.handler(async ({ context, input }) =>
+			context.lifecycle.conversationPolicy.history({
+				...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+				scope: input.scope,
+			}),
+		),
+		update: adminBase.admin.policies.update.handler(async ({ context, input }) => {
+			const view = await context.lifecycle.conversationPolicy.update({
+				...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+				policy: input.policy,
+				scope: input.scope,
+			});
+			await context.lifecycle.writeAudit({
+				action: "policy.update",
+				payload: {
+					conversationId: input.conversationId,
+					scope: input.scope,
+					version: view.policy.version,
+				},
+				result: "ok",
+				...(view.source.revisionId === null ? {} : { targetId: view.source.revisionId }),
+				targetKind: "policy",
+			});
+			return view;
 		}),
 	},
 	requests: {

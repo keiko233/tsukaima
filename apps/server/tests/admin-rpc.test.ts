@@ -8,6 +8,7 @@ import {
 	type DiagnosticsData,
 	logSnapshotSchema,
 } from "@elaina/contracts";
+import { auditLog } from "@elaina/db";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	type OneBotTransport,
@@ -177,5 +178,113 @@ describe("admin RPC", () => {
 
 		await lifecycle.stop();
 		expect(app).toBeDefined();
+	});
+});
+
+describe("admin conversation policy and persona RPC", () => {
+	test("updates policy revisions and binds personas with audit", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-admin-policy-"));
+		directories.push(directory);
+		const { app, lifecycle } = createApp({
+			ELAINA_ADMIN_PASSWORD: TEST_ADMIN.password,
+			ELAINA_ADMIN_USERNAME: TEST_ADMIN.username,
+			ELAINA_DATA_DIR: directory,
+			ELAINA_PORT: "7420",
+			ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+		});
+		await lifecycle.start();
+		try {
+			const cookie = await signInAdmin(app);
+			const request = async (procedure: string, input?: unknown) => {
+				const response = await app.handle(
+					new Request(`http://localhost/rpc/${procedure}`, {
+						body: JSON.stringify(input === undefined ? {} : { json: input }),
+						headers: { cookie, "content-type": "application/json" },
+						method: "POST",
+					}),
+				);
+				const result = (await response.json()) as { json: unknown };
+				if (response.status !== 200) {
+					throw new Error(`RPC ${procedure} failed: ${response.status} ${JSON.stringify(result)}`);
+				}
+				return result.json;
+			};
+
+			const chat = (await request("admin/chats/createLocal", {
+				sessionTitle: "Main",
+				title: "Policy chat",
+			})) as { chatId: string; sessionId: string };
+
+			const initial = (await request("admin/policies/get", {
+				conversationId: chat.sessionId,
+			})) as { policy: { version: number }; source: { scope: string } };
+			expect(initial.source.scope).toBe("default");
+			expect(initial.policy.version).toBe(1);
+
+			const updated = (await request("admin/policies/update", {
+				conversationId: chat.sessionId,
+				policy: {
+					pacing: { burstSettleMs: 321, replyCooldownMs: 100 },
+					trigger: { keywords: ["hello"], privateAccess: "open" },
+				},
+				scope: "conversation",
+			})) as { policy: { pacing: { burstSettleMs: number }; trigger: { keywords: string[] } } };
+			expect(updated.policy.pacing.burstSettleMs).toBe(321);
+			expect(updated.policy.trigger.keywords).toEqual(["hello"]);
+
+			const history = (await request("admin/policies/history", {
+				conversationId: chat.sessionId,
+				scope: "conversation",
+			})) as Array<{ isActive: boolean; policy: { version: number } }>;
+			expect(history).toHaveLength(1);
+			expect(history[0]?.isActive).toBe(true);
+
+			const persona = (await request("admin/personas/upsert", {
+				name: "Admin persona",
+				prompt: "You are the admin-created persona.",
+				selfAliases: ["Elaina"],
+				summary: "Admin persona",
+			})) as { id: string; version: number };
+			expect(persona.version).toBe(1);
+			const bumped = (await request("admin/personas/upsert", {
+				id: persona.id,
+				name: "Admin persona",
+				prompt: "Updated prompt.",
+				selfAliases: ["Elaina", "Lain"],
+				summary: "Admin persona",
+			})) as { id: string; selfAliases: string[]; version: number };
+			expect(bumped.version).toBe(2);
+			expect(bumped.selfAliases).toEqual(["Elaina", "Lain"]);
+
+			const binding = (await request("admin/personas/bind", {
+				conversationId: chat.sessionId,
+				personaId: persona.id,
+				scope: "conversation",
+			})) as { conversationId: string; personaId: string };
+			expect(binding).toMatchObject({
+				conversationId: chat.sessionId,
+				personaId: persona.id,
+			});
+			const bindings = (await request("admin/personas/bindings")) as Array<{
+				conversationId: string;
+			}>;
+			expect(bindings.some((entry) => entry.conversationId === chat.sessionId)).toBe(true);
+			const personas = (await request("admin/personas/list")) as Array<{ id: string }>;
+			expect(personas.filter((entry) => entry.id === persona.id)).toHaveLength(2);
+
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("database missing");
+			const audits = await database.select().from(auditLog);
+			for (const action of ["policy.update", "persona.upsert", "persona.bind"]) {
+				expect(audits.some((row) => row.action === action && row.result === "ok")).toBe(true);
+			}
+			expect(
+				audits.some(
+					(row) => row.action === "admin.rpc" && row.payloadJson?.includes("policies/update"),
+				),
+			).toBe(true);
+		} finally {
+			await lifecycle.stop();
+		}
 	});
 });

@@ -1,6 +1,11 @@
 import { oc } from "@orpc/contract";
 import { z } from "zod";
 import { healthResponseSchema, messagePartSchema } from "./base.ts";
+import {
+	conversationPolicyPatchSchema,
+	conversationPolicySchema,
+	triggerClassificationSchema,
+} from "./policy.ts";
 
 /**
  * The oRPC contract is the single source of truth for the admin/health API. Every consumer
@@ -38,6 +43,7 @@ export const messageSummarySchema = z.object({
 	senderDisplayName: z.string(),
 	senderExternalId: z.string().nullable(),
 	senderKind: z.enum(["human", "bot", "assistant", "system"]),
+	triggerClassification: triggerClassificationSchema,
 });
 export type MessageSummary = z.infer<typeof messageSummarySchema>;
 
@@ -567,6 +573,101 @@ export const liveEventSchema = z.discriminatedUnion("type", [
 ]);
 export type LiveEvent = z.infer<typeof liveEventSchema>;
 
+// ─── Conversation policy and personas ───────────────────────────────────────
+
+export const policyRevisionSchema = z.object({
+	conversationId: z.string().nullable(),
+	createdAt: z.string(),
+	id: z.string(),
+	isActive: z.boolean(),
+	policy: conversationPolicySchema,
+	scope: z.enum(["global", "conversation"]),
+	updatedAt: z.string(),
+});
+export type PolicyRevision = z.infer<typeof policyRevisionSchema>;
+
+export const conversationPolicyViewSchema = z.object({
+	conversation: policyRevisionSchema.nullable(),
+	global: policyRevisionSchema.nullable(),
+	policy: conversationPolicySchema,
+	source: z.object({
+		conversationId: z.string().nullable(),
+		revisionId: z.string().nullable(),
+		scope: z.enum(["global", "conversation", "default"]),
+		version: z.number().int(),
+	}),
+});
+export type ConversationPolicyView = z.infer<typeof conversationPolicyViewSchema>;
+
+export const policyGetInputSchema = z
+	.object({
+		chatObjectId: z.string().min(1).optional(),
+		conversationId: z.string().min(1).optional(),
+	})
+	.strict()
+	.optional();
+
+export const policyUpdateInputSchema = z
+	.object({
+		conversationId: z.string().min(1).optional(),
+		policy: conversationPolicyPatchSchema,
+		scope: z.enum(["global", "conversation"]),
+	})
+	.strict();
+
+export const policyHistoryInputSchema = z
+	.object({
+		conversationId: z.string().min(1).optional(),
+		scope: z.enum(["global", "conversation"]),
+	})
+	.strict();
+
+export const personaSummarySchema = z.object({
+	createdAt: z.string(),
+	id: z.string(),
+	isActive: z.boolean(),
+	name: z.string(),
+	prompt: z.string(),
+	selfAliases: z.array(z.string()),
+	summary: z.string(),
+	version: z.number().int(),
+});
+export type PersonaSummary = z.infer<typeof personaSummarySchema>;
+
+export const personaUpsertInputSchema = z
+	.object({
+		id: z.string().min(1).optional(),
+		isActive: z.boolean().optional(),
+		name: z.string().trim().min(1).max(120),
+		prompt: z.string().trim().min(1).max(20_000),
+		selfAliases: z.array(z.string().trim().min(1)).max(50).optional(),
+		summary: z.string().trim().min(1).max(1_000),
+		version: z.number().int().min(1).optional(),
+	})
+	.strict();
+
+export const personaBindInputSchema = z
+	.object({
+		chatKind: z.enum(["private", "group"]).optional(),
+		chatObjectId: z.string().min(1).optional(),
+		conversationId: z.string().min(1).optional(),
+		personaId: z.string().min(1),
+		scope: z.enum(["global", "chat-kind", "chat-object", "conversation"]),
+	})
+	.strict();
+
+export const personaBindingSchema = z.object({
+	chatKind: z.enum(["private", "group"]).nullable(),
+	chatObjectId: z.string().nullable(),
+	conversationId: z.string().nullable(),
+	createdAt: z.string(),
+	id: z.string(),
+	isActive: z.boolean(),
+	isGlobal: z.boolean(),
+	personaId: z.string(),
+});
+export type PersonaBinding = z.infer<typeof personaBindingSchema>;
+
 // ─── Contract ────────────────────────────────────────────────────────────────
 
 export const appContract = oc.router({
@@ -595,6 +696,20 @@ export const appContract = oc.router({
 			set: oc
 				.input(modelPoliciesSetInputSchema)
 				.output(z.array(modelPolicySchema))
+				.meta({ audit: true }),
+		},
+		personas: {
+			bind: oc.input(personaBindInputSchema).output(personaBindingSchema).meta({ audit: true }),
+			bindings: oc.output(z.array(personaBindingSchema)),
+			list: oc.output(z.array(personaSummarySchema)),
+			upsert: oc.input(personaUpsertInputSchema).output(personaSummarySchema).meta({ audit: true }),
+		},
+		policies: {
+			get: oc.input(policyGetInputSchema).output(conversationPolicyViewSchema),
+			history: oc.input(policyHistoryInputSchema).output(z.array(policyRevisionSchema)),
+			update: oc
+				.input(policyUpdateInputSchema)
+				.output(conversationPolicyViewSchema)
 				.meta({ audit: true }),
 		},
 		plugins: {
