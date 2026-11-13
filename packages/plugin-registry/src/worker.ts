@@ -7,7 +7,7 @@ export interface PluginWorkerChannel {
 	invokeTool(
 		name: string,
 		input: Record<string, unknown>,
-		context?: { conversationId?: string; userId?: string },
+		context?: { conversationId?: string; userId?: string; signal?: AbortSignal },
 	): Promise<{ ok: true; result: unknown } | { ok: false; reason: string }>;
 	listTools(): readonly { name: string }[];
 	listUi(): readonly { id: string }[];
@@ -51,7 +51,7 @@ export class LocalPluginWorker implements PluginWorkerChannel {
 	async invokeTool(
 		name: string,
 		input: Record<string, unknown>,
-		context?: { conversationId?: string; userId?: string },
+		context?: { conversationId?: string; userId?: string; signal?: AbortSignal },
 	): Promise<{ ok: true; result: unknown } | { ok: false; reason: string }> {
 		return this.#requireHostBridge().invokeTool(name, input, context);
 	}

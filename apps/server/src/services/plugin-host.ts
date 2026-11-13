@@ -1,6 +1,8 @@
 import {
 	createPluginContext,
 	collectPluginModels,
+	hasPermission,
+	LocalStorageBridge,
 	type AuditEntry,
 	type ElainaPlugin,
 	type PluginContext,
@@ -16,14 +18,26 @@ import {
 	type PluginUiRegistry,
 	type ToolInvocationContext,
 } from "@elaina/sdk";
-import { PluginRegistry, type InstalledPlugin } from "@elaina/plugin-registry";
+import {
+	PluginLifecycleManager,
+	PluginRegistry,
+	type InstalledPlugin,
+	type PluginLifecycleUpgradeOptions,
+	type PluginInstallState,
+} from "@elaina/plugin-registry";
 import type { PluginStatusSnapshot } from "@elaina/contracts";
 import type { Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 import type { HookBus } from "./hook-bus.ts";
 import type { PluginSettingsStore } from "./plugin-settings.ts";
 import type { PluginStatusStore } from "./plugin-status.ts";
+import type { PluginStorageStore } from "./plugin-storage.ts";
+import type { PluginTaskService } from "./plugin-task-service.ts";
 import type { RequestService } from "./request-service.ts";
+import type { MigrationRegistry } from "@elaina/plugin-registry";
+import { createScopedPluginDatabase } from "./plugin-scoped-database.ts";
+import { pluginInstallStates, type ElainaDatabase } from "@elaina/db";
+import { eq } from "drizzle-orm";
 
 export interface PluginHostOptions {
 	readonly audit: (entry: AuditEntry) => Promise<void>;
@@ -35,6 +49,10 @@ export interface PluginHostOptions {
 	readonly requests: RequestService;
 	readonly settings: PluginSettingsStore;
 	readonly statuses: PluginStatusStore;
+	readonly database?: () => ElainaDatabase | undefined;
+	readonly migrations?: MigrationRegistry;
+	readonly storage?: PluginStorageStore;
+	readonly tasks?: PluginTaskService;
 }
 
 export interface PluginHostEntry {
@@ -45,6 +63,12 @@ export interface PluginHostEntry {
 	readonly enabled: number;
 	readonly id: string;
 	readonly kind: PluginManifest["kind"];
+	readonly lifecycle?: {
+		readonly failureCount: number;
+		readonly quarantinedAt: string | null;
+		readonly quarantineReason: string | null;
+		readonly retainData: boolean;
+	};
 	readonly modelProviders: readonly string[];
 	readonly name: string;
 	readonly permissions: readonly string[];
@@ -58,8 +82,13 @@ export interface PluginHostEntry {
 		readonly component: string;
 		readonly data: Record<string, unknown>;
 		readonly id: string;
+		readonly i18nKeys?: readonly string[];
 		readonly kind: ReturnType<PluginUiRegistry["list"]>[number]["kind"];
+		readonly requiredPermissions?: readonly string[];
+		readonly schema?: Record<string, unknown>;
+		readonly slot?: ReturnType<PluginUiRegistry["list"]>[number]["kind"];
 		readonly title: string;
+		readonly version?: string;
 	}[];
 	readonly version: string;
 }
@@ -87,6 +116,12 @@ export class PluginHost {
 	readonly #started: string[] = [];
 	readonly #statuses: PluginStatusStore;
 	readonly #rpcOwners = new Map<string, string>();
+	readonly #database: (() => ElainaDatabase | undefined) | undefined;
+	readonly #migrations: MigrationRegistry | undefined;
+	readonly #storage: PluginStorageStore | undefined;
+	readonly #tasks: PluginTaskService | undefined;
+	readonly #lifecycle: PluginLifecycleManager;
+	#statesLoaded = false;
 
 	constructor(options: PluginHostOptions) {
 		this.#options = options;
@@ -98,6 +133,39 @@ export class PluginHost {
 		this.channels = options.channels;
 		this.settings = options.settings;
 		this.#statuses = options.statuses;
+		this.#database = options.database;
+		this.#migrations = options.migrations;
+		this.#storage = options.storage;
+		this.#tasks = options.tasks;
+		this.#lifecycle = new PluginLifecycleManager({
+			maxFailures: 3,
+			migrations: options.migrations,
+			registry: this.#registry,
+			hooks: {
+				clearStorage: async (pluginId) => {
+					await this.#storage?.clear(pluginId);
+				},
+				exportStorage: async (pluginId) => (await this.#storage?.export(pluginId)) ?? [],
+				importStorage: async (_pluginId, storage) => {
+					if (Array.isArray(storage)) await this.#storage?.import(storage as never);
+				},
+				readConfig: async (pluginId) => await this.settings.read(pluginId),
+				reload: async (pluginId) => {
+					this.#contexts.delete(pluginId);
+					this.#prepared.delete(pluginId);
+				},
+				start: async (pluginId) => {
+					this.#syncManifest(pluginId);
+					await this.#restartPlugin(pluginId);
+				},
+				stop: async (pluginId) => {
+					await this.#stopPlugin(pluginId);
+				},
+				writeConfig: async (pluginId, config) => {
+					await this.settings.write(pluginId, config);
+				},
+			},
+		});
 	}
 
 	async list(): Promise<readonly PluginHostEntry[]> {
@@ -105,6 +173,7 @@ export class PluginHost {
 		for (const installed of this.#registry.list()) {
 			const view = await this.settings.publicView(installed.manifest.name);
 			const ui = this.ui().filter((definition) => definition.pluginId === installed.manifest.name);
+			const state = this.#lifecycle.state(installed.manifest.name);
 			entries.push({
 				apiVersion: installed.manifest.apiVersion,
 				config: view.config,
@@ -114,6 +183,16 @@ export class PluginHost {
 				enabled: installed.enabled ? 1 : 0,
 				id: installed.manifest.name,
 				kind: installed.manifest.kind,
+				...(state === undefined
+					? {}
+					: {
+							lifecycle: {
+								failureCount: state.failureCount,
+								quarantinedAt: state.quarantinedAt ?? null,
+								quarantineReason: state.quarantineReason ?? null,
+								retainData: state.retainData,
+							},
+						}),
 				modelProviders: [...this.#modelProviderOwners.entries()]
 					.filter(([, owner]) => owner === installed.manifest.name)
 					.map(([providerId]) => providerId),
@@ -135,6 +214,13 @@ export class PluginHost {
 					id: definition.id,
 					kind: definition.kind,
 					title: definition.title,
+					...(definition.i18nKeys === undefined ? {} : { i18nKeys: definition.i18nKeys }),
+					...(definition.requiredPermissions === undefined
+						? {}
+						: { requiredPermissions: definition.requiredPermissions }),
+					...(definition.schema === undefined ? {} : { schema: definition.schema }),
+					...(definition.slot === undefined ? {} : { slot: definition.slot }),
+					...(definition.version === undefined ? {} : { version: definition.version }),
 				})),
 				version: installed.manifest.version,
 			});
@@ -170,9 +256,14 @@ export class PluginHost {
 		readonly component: string;
 		readonly data: Record<string, unknown>;
 		readonly id: string;
+		readonly i18nKeys?: readonly string[];
 		readonly kind: ReturnType<PluginUiRegistry["list"]>[number]["kind"];
 		readonly pluginId: string;
+		readonly requiredPermissions?: readonly string[];
+		readonly schema?: Record<string, unknown>;
+		readonly slot?: ReturnType<PluginUiRegistry["list"]>[number]["kind"];
 		readonly title: string;
+		readonly version?: string;
 	}[] {
 		const definitions = [];
 		for (const pluginId of this.#started) {
@@ -241,13 +332,50 @@ export class PluginHost {
 		throw new Error(`Unknown plugin tool ${name}`);
 	}
 
+	/** Policy context layered by the SDK tool adapter for a registered tool. */
+	toolPolicyContext(
+		tool: PluginTool,
+		context: ToolInvocationContext,
+	): {
+		readonly grantedPermissions: readonly string[];
+		readonly conversationAllowedTools?: readonly string[];
+		readonly channelCapabilities?: readonly string[];
+	} {
+		const owner = this.#toolOwner(tool.name);
+		const manifest = owner === undefined ? undefined : this.#plugins.get(owner)?.manifest;
+		const conversation = context.conversationId;
+		const channelCapabilities =
+			conversation === undefined
+				? undefined
+				: this.channels.capabilities(conversation.split(":")[0] ?? "");
+		return {
+			grantedPermissions: manifest?.permissions ?? [],
+			...(context.allowedTools === undefined
+				? {}
+				: { conversationAllowedTools: context.allowedTools }),
+			...(channelCapabilities === undefined ? {} : { channelCapabilities }),
+		};
+	}
+
+	#toolOwner(name: string): string | undefined {
+		for (const pluginId of this.#started) {
+			const context = this.#contexts.get(pluginId);
+			if (context?.tools.list().some((tool) => tool.name === name) === true) {
+				return pluginId;
+			}
+		}
+		return undefined;
+	}
+
 	/** Register host surfaces that must exist before the conversation host is built. */
 	async prepare(): Promise<void> {
+		await this.#loadLifecycleStates();
 		for (const plugin of this.#options.plugins) {
 			const manifest = plugin.manifest;
 			this.settings.registerManifest(manifest);
 			this.#plugins.set(manifest.name, plugin);
 			if (this.#prepared.has(manifest.name)) continue;
+			if (this.#lifecycle.isQuarantined(manifest.name)) continue;
 			if (this.#registry.get(manifest.name) === undefined) {
 				const enabled = await this.settings.isEnabled(manifest.name);
 				this.#registry.install(manifest, {
@@ -267,6 +395,10 @@ export class PluginHost {
 					error: error instanceof Error ? error.message : String(error),
 					pluginId: manifest.name,
 				});
+				await this.recordPluginFailure(
+					manifest.name,
+					`prepare: ${error instanceof Error ? error.message : String(error)}`,
+				);
 			}
 		}
 	}
@@ -275,6 +407,7 @@ export class PluginHost {
 		await this.prepare();
 		for (const plugin of this.#options.plugins) {
 			if (this.#registry.get(plugin.manifest.name)?.enabled === false) continue;
+			if (this.#lifecycle.isQuarantined(plugin.manifest.name)) continue;
 			await this.#startPlugin(plugin);
 		}
 	}
@@ -316,16 +449,208 @@ export class PluginHost {
 		}
 		const plugin = this.#plugins.get(pluginId);
 		if (plugin !== undefined && !this.#started.includes(pluginId)) {
+			if (this.#lifecycle.isQuarantined(pluginId)) return;
 			// `prepare` owns host surfaces such as model providers. Re-run it after a
 			// disable/enable cycle so those surfaces are registered again.
 			if (!this.#prepared.has(pluginId)) {
 				const context = this.#contexts.get(pluginId) ?? this.#createContext(plugin.manifest);
 				this.#contexts.set(pluginId, context);
-				await plugin.prepare?.(context);
-				this.#prepared.add(pluginId);
+				try {
+					await plugin.prepare?.(context);
+					this.#prepared.add(pluginId);
+				} catch (error) {
+					await this.recordPluginFailure(
+						pluginId,
+						`prepare: ${error instanceof Error ? error.message : String(error)}`,
+					);
+					return;
+				}
 			}
 			await this.#startPlugin(plugin);
 		}
+	}
+
+	async install(
+		input: unknown,
+		options: {
+			readonly config?: Record<string, unknown>;
+			readonly enabled?: boolean;
+			readonly grantedPermissions?: readonly string[];
+			readonly runMode?: InstalledPlugin["runMode"];
+		} = {},
+	): Promise<PluginHostEntry> {
+		const manifest = await this.#registry.loadManifest(input);
+		await this.#lifecycle.install(manifest, options);
+		this.settings.registerManifest(manifest);
+		const plugin: ElainaPlugin = { manifest, setup() {} };
+		this.#plugins.set(manifest.name, plugin);
+		const installed = this.#registry.get(manifest.name);
+		if (installed !== undefined && installed.enabled) {
+			const context = this.#createContext(manifest);
+			this.#contexts.set(manifest.name, context);
+			await this.#startPlugin(plugin);
+		}
+		await this.#persistLifecycleState(manifest.name);
+		return await this.#entry(manifest.name);
+	}
+
+	async upgrade(
+		pluginId: string,
+		input: unknown,
+		options: PluginLifecycleUpgradeOptions = {},
+	): Promise<PluginHostEntry> {
+		const manifest = await this.#registry.loadManifest(input);
+		await this.#lifecycle.upgrade(pluginId, manifest, options);
+		this.#syncManifest(pluginId);
+		await this.#persistLifecycleState(pluginId);
+		return await this.#entry(pluginId);
+	}
+
+	async downgrade(
+		pluginId: string,
+		input: unknown,
+		options: PluginLifecycleUpgradeOptions = {},
+	): Promise<PluginHostEntry> {
+		const manifest = await this.#registry.loadManifest(input);
+		await this.#lifecycle.downgrade(pluginId, manifest, options);
+		this.#syncManifest(pluginId);
+		await this.#persistLifecycleState(pluginId);
+		return await this.#entry(pluginId);
+	}
+
+	async reload(pluginId: string): Promise<PluginHostEntry> {
+		await this.#lifecycle.reload(pluginId);
+		this.#syncManifest(pluginId);
+		await this.#persistLifecycleState(pluginId);
+		return await this.#entry(pluginId);
+	}
+
+	async recover(pluginId: string): Promise<PluginHostEntry> {
+		await this.#lifecycle.recover(pluginId);
+		this.#syncManifest(pluginId);
+		await this.#persistLifecycleState(pluginId);
+		return await this.#entry(pluginId);
+	}
+
+	async uninstall(
+		pluginId: string,
+		options: { readonly retainData?: boolean } = {},
+	): Promise<boolean> {
+		await this.#lifecycle.uninstall(pluginId, options);
+		await this.#stopPlugin(pluginId);
+		this.#plugins.delete(pluginId);
+		this.#contexts.delete(pluginId);
+		this.#prepared.delete(pluginId);
+		const database = this.#database?.();
+		if (database !== undefined) {
+			await database.delete(pluginInstallStates).where(eq(pluginInstallStates.pluginId, pluginId));
+		}
+		return true;
+	}
+
+	async recordPluginFailure(pluginId: string, reason: string): Promise<PluginInstallState> {
+		const state = this.#lifecycle.recordFailure(pluginId, reason);
+		await this.#persistLifecycleState(pluginId);
+		if (state.quarantinedAt !== undefined) {
+			await this.#stopPlugin(pluginId);
+			this.#logger.warn("plugin quarantined", { pluginId, reason });
+		}
+		return state;
+	}
+
+	async #entry(pluginId: string): Promise<PluginHostEntry> {
+		const entries = await this.list();
+		const entry = entries.find((plugin) => plugin.id === pluginId);
+		if (entry === undefined) throw new Error(`Unknown plugin ${pluginId}`);
+		return entry;
+	}
+
+	async #restartPlugin(pluginId: string): Promise<void> {
+		await this.#stopPlugin(pluginId);
+		const plugin = this.#plugins.get(pluginId);
+		if (plugin === undefined) return;
+		this.#contexts.delete(pluginId);
+		this.#prepared.delete(pluginId);
+		const context = this.#createContext(plugin.manifest);
+		this.#contexts.set(pluginId, context);
+		try {
+			await plugin.prepare?.(context);
+			this.#prepared.add(pluginId);
+		} catch (error) {
+			await this.recordPluginFailure(
+				pluginId,
+				`prepare: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return;
+		}
+		await this.#startPlugin(plugin);
+	}
+
+	#syncManifest(pluginId: string): void {
+		const installed = this.#registry.get(pluginId);
+		const plugin = this.#plugins.get(pluginId);
+		if (installed === undefined || plugin === undefined) return;
+		plugin.manifest = installed.manifest;
+		this.settings.registerManifest(installed.manifest);
+	}
+
+	async #loadLifecycleStates(): Promise<void> {
+		if (this.#statesLoaded) return;
+		this.#statesLoaded = true;
+		const database = this.#database?.();
+		if (database === undefined) return;
+		const rows = await database.select().from(pluginInstallStates);
+		const states: PluginInstallState[] = [];
+		for (const row of rows) {
+			try {
+				states.push({
+					backup: row.backupJson === null ? undefined : JSON.parse(row.backupJson),
+					failureCount: row.failureCount,
+					installedVersion: row.installedVersion,
+					kind: row.kind,
+					manifest: this.#registry.get(row.pluginId)?.manifest ?? JSON.parse(row.manifestJson),
+					...(row.quarantineReason === null ? {} : { quarantineReason: row.quarantineReason }),
+					...(row.quarantinedAt === null ? {} : { quarantinedAt: row.quarantinedAt }),
+					retainData: row.retainData === 1,
+					updatedAt: row.updatedAt,
+				});
+			} catch {}
+		}
+		this.#lifecycle.hydrate(states);
+	}
+
+	async #persistLifecycleState(pluginId: string): Promise<void> {
+		const database = this.#database?.();
+		const state = this.#lifecycle.state(pluginId);
+		if (database === undefined || state === undefined) return;
+		await database
+			.insert(pluginInstallStates)
+			.values({
+				backupJson: state.backup === undefined ? null : JSON.stringify(state.backup),
+				failureCount: state.failureCount,
+				installedVersion: state.installedVersion,
+				kind: state.kind,
+				manifestJson: JSON.stringify(state.manifest),
+				pluginId,
+				quarantineReason: state.quarantineReason ?? null,
+				quarantinedAt: state.quarantinedAt ?? null,
+				retainData: state.retainData ? 1 : 0,
+				updatedAt: state.updatedAt,
+			})
+			.onConflictDoUpdate({
+				set: {
+					backupJson: state.backup === undefined ? null : JSON.stringify(state.backup),
+					failureCount: state.failureCount,
+					installedVersion: state.installedVersion,
+					kind: state.kind,
+					manifestJson: JSON.stringify(state.manifest),
+					quarantineReason: state.quarantineReason ?? null,
+					quarantinedAt: state.quarantinedAt ?? null,
+					retainData: state.retainData ? 1 : 0,
+					updatedAt: state.updatedAt,
+				},
+				target: pluginInstallStates.pluginId,
+			});
 	}
 
 	async #startPlugin(plugin: ElainaPlugin): Promise<void> {
@@ -337,12 +662,18 @@ export class PluginHost {
 		try {
 			await plugin.setup(context);
 			this.#started.push(pluginId);
+			this.#lifecycle.recordSuccess(pluginId);
+			await this.#persistLifecycleState(pluginId);
 			this.#logger.info("plugin started", { kind: manifest.kind, pluginId });
 		} catch (error) {
 			this.#logger.error("plugin failed to start", {
 				error: error instanceof Error ? error.message : String(error),
 				pluginId,
 			});
+			await this.recordPluginFailure(
+				pluginId,
+				`setup: ${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
 	}
 
@@ -378,7 +709,21 @@ export class PluginHost {
 		const pluginId = manifest.name;
 		const events: PluginEvents = {
 			emit: async (name, payload) => this.#hooks.emit(name, payload),
-			on: (name, handler) => this.#hooks.on(name, handler),
+			on: (name, handler) => {
+				if (name === "reply.transform" && !hasPermission(manifest.permissions, name)) {
+					this.#logger.warn("plugin lacks reply.transform permission; hook ignored", {
+						pluginId,
+					});
+					return () => {};
+				}
+				return this.#hooks.on(name, handler);
+			},
+			transform: async (name, payload) => {
+				if (name === "reply.transform" && !hasPermission(manifest.permissions, name)) {
+					return payload;
+				}
+				return await this.#hooks.transform(name, payload);
+			},
 		};
 		const settings: PluginSettingsApi = {
 			get: async () => this.settings.read(pluginId),
@@ -393,6 +738,57 @@ export class PluginHost {
 					const ownerId = this.#modelProviderOwners.get(model.providerId);
 					return ownerId === undefined ? model : { ...model, pluginId: ownerId };
 				});
+			},
+			findModel: async (modelId: string, providerId?: string) => {
+				const catalog = await collectPluginModels(
+					this.#modelProviders.values(),
+					providerId === undefined ? {} : { providerId },
+				);
+				return catalog.find((model) => model.id === modelId);
+			},
+			embed: async (request: Parameters<NonNullable<PluginModelProvider["embed"]>>[0]) => {
+				for (const provider of this.#modelProviders.values()) {
+					if (provider.embed !== undefined) return await provider.embed(request);
+					if (provider.embedding !== undefined) {
+						return await provider.embedding.embed(request);
+					}
+				}
+				throw new Error(`No embedding provider for ${request.modelId ?? "default"}`);
+			},
+			embedding: async (request: Parameters<NonNullable<PluginModelProvider["embed"]>>[0]) => {
+				for (const provider of this.#modelProviders.values()) {
+					if (provider.embed !== undefined) return await provider.embed(request);
+					if (provider.embedding !== undefined) {
+						return await provider.embedding.embed(request);
+					}
+				}
+				throw new Error(`No embedding provider for ${request.modelId ?? "default"}`);
+			},
+			transcribeAudio: async (
+				request: Parameters<NonNullable<PluginModelProvider["transcribeAudio"]>>[0],
+			) => {
+				for (const provider of this.#modelProviders.values()) {
+					if (provider.transcribeAudio !== undefined) {
+						return await provider.transcribeAudio(request);
+					}
+					if (provider.audioTranscribe !== undefined) {
+						return await provider.audioTranscribe.transcribeAudio(request);
+					}
+				}
+				throw new Error(`No audio-transcribe provider for ${request.modelId ?? "default"}`);
+			},
+			audioTranscribe: async (
+				request: Parameters<NonNullable<PluginModelProvider["transcribeAudio"]>>[0],
+			) => {
+				for (const provider of this.#modelProviders.values()) {
+					if (provider.transcribeAudio !== undefined) {
+						return await provider.transcribeAudio(request);
+					}
+					if (provider.audioTranscribe !== undefined) {
+						return await provider.audioTranscribe.transcribeAudio(request);
+					}
+				}
+				throw new Error(`No audio-transcribe provider for ${request.modelId ?? "default"}`);
 			},
 			registerProvider: (provider: PluginModelProvider): (() => void) => {
 				if (this.#modelProviders.has(provider.id)) {
@@ -421,8 +817,40 @@ export class PluginHost {
 				};
 			},
 		};
+		const runMode = this.#registry.get(pluginId)?.runMode ?? "host";
+		const database = this.#database?.();
+		const storage =
+			this.#storage?.bridge(pluginId, manifest.permissions) ?? new LocalStorageBridge();
+		const migrations =
+			this.#migrations === undefined
+				? undefined
+				: {
+						list: async () =>
+							(await this.#migrations!.list(pluginId)).map((migration) => ({
+								checksum: migration.checksum,
+								durationMs: migration.durationMs,
+								pluginId: migration.pluginId,
+								rollbackSql: migration.rollbackSql ?? null,
+								status: "applied" as const,
+								version: migration.version,
+							})),
+						rollback: async (options?: { readonly dryRun?: boolean }) =>
+							await this.#migrations!.rollbackPlugin(
+								pluginId,
+								options?.dryRun === undefined ? {} : { dryRun: options.dryRun },
+							),
+					};
+		const scopedDatabase =
+			runMode === "host" && database !== undefined && manifest.migrations.length > 0
+				? createScopedPluginDatabase(database, pluginId)
+				: undefined;
+		const tasks = this.#tasks?.apiFor(pluginId, manifest.permissions);
 		return createPluginContext({
 			channels: this.channels,
+			storage,
+			...(tasks === undefined ? {} : { tasks }),
+			...(migrations === undefined ? {} : { migrations }),
+			...(scopedDatabase === undefined ? {} : { database: scopedDatabase }),
 			dependencies: {
 				get: <T = unknown>(key: string): T | undefined => this.#bindings.get(key) as T | undefined,
 			},

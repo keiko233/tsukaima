@@ -1,10 +1,15 @@
 import { z } from "zod";
 
+/**
+ * Permission names are either a single scope (`settings`), `<scope>.<action>`
+ * (`tasks.read`), `<scope>.*` (`channel.*`), or the global wildcard `*`. The schema is
+ * intentionally aligned with `permissionMatches()` in `permissions.ts`.
+ */
 export const pluginPermissionSchema = z
 	.string()
 	.trim()
 	.min(1)
-	.regex(/^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-<>.]*)?$/u, "Invalid permission name");
+	.regex(/^(?:\*|[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*(?:\.\*)?)$/u, "Invalid permission name");
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 
@@ -38,6 +43,7 @@ export const pluginManifestSchema = z.object({
 					"activity.closed",
 					"before.agent",
 					"before.reply",
+					"reply.transform",
 					"after.reply",
 					"task.created",
 					"task.completed",
@@ -58,13 +64,32 @@ export const pluginManifestSchema = z.object({
 					"settings-form",
 					"approval-card",
 				]),
+				slot: z
+					.enum(["panel", "conversation-action", "message-card", "settings-form", "approval-card"])
+					.optional(),
 				id: z.string().min(1),
 				title: z.string().min(1),
 				component: z.string().min(1),
+				version: z.string().min(1).optional(),
+				requiredPermissions: z.array(pluginPermissionSchema).max(32).default([]),
+				i18nKeys: z.array(z.string().min(1)).max(128).default([]),
+				schema: jsonObjectSchema.optional(),
 				data: z.record(z.string(), z.unknown()).default({}),
 			}),
 		)
 		.max(64)
+		.default([]),
+	/** Plugin-owned SQL migrations applied by the host before `prepare()`. */
+	migrations: z
+		.array(
+			z.object({
+				version: z.string().min(1),
+				sql: z.string().min(1),
+				rollbackSql: z.string().min(1).optional(),
+				checksum: z.string().min(1).optional(),
+			}),
+		)
+		.max(512)
 		.default([]),
 	configSchema: jsonObjectSchema.optional(),
 	/** Config key -> environment variable name, used as a fallback when unset. */

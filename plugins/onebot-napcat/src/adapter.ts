@@ -25,7 +25,26 @@ import type {
 
 export const ONEBOT_CHANNEL_KIND = "onebot-v11";
 
+/**
+ * Granular capabilities are the machine-readable contract. Legacy values stay advertised for
+ * the compatibility window so existing action descriptors keep working.
+ */
 const CAPABILITIES: readonly ChannelCapability[] = [
+	"send.text",
+	"send.image",
+	"send.audio",
+	"send.video",
+	"send.file",
+	"send.forward",
+	"reply.quote",
+	"interact.poke",
+	"interact.react",
+	"interact.typing",
+	"manage.group",
+	"manage.friend",
+	"manage.self",
+	"read.history",
+	"fetch.media",
 	"send",
 	"interact",
 	"group-manage",

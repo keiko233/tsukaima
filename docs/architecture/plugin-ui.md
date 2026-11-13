@@ -646,7 +646,17 @@ does not require plugin i18n.
 5. **Status durability.** Status stays in memory and is cleared on teardown; durable facts belong
    in plugin storage.
 
-## 13. Implemented surface
+## 13. Declarative component registry (Phase 3)
+
+The fallback tier now has a named host registry in `packages/sdk/src/ui/registry.tsx`:
+`approval-card`, `memory-review`, `sticker-grid`, `task-list`, `task-graph`, `diagnostic-card`,
+and `settings-form`, plus a generic `fallback` card. Manifest `ui` entries may declare `version`,
+`slot`, `requiredPermissions`, `i18nKeys`, and a data `schema`. Rendering checks the host UI
+version, slot, and the plugin's granted permissions; unknown names and incompatible versions render
+the generic card instead of blanking the page. Trusted `src/ui.tsx` panels remain the build-time
+React tier and are unaffected.
+
+## 14. Implemented surface
 
 - `admin.plugins.list` rows: `status`, `permissions`, `tools`, `rpcMethods`.
 - `admin.plugins.setEnabled`, and `admin.plugins.rpc` with an optional `pluginId` namespace check.

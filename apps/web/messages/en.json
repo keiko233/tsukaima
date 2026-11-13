@@ -126,6 +126,7 @@
 	"plugins_config_empty": "This plugin has no configuration fields.",
 	"plugins_config_title": "Configuration",
 	"plugins_config_unset": "Not configured",
+	"plugins_declarative_ui": "Declarative interface",
 	"plugins_custom_ui_cancel": "Not now",
 	"plugins_custom_ui_confirm": "Open custom interface",
 	"plugins_custom_ui_notice": "This plugin ships its own interface. It runs in the admin page and can read the administrator session.",

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, lt } from "drizzle-orm";
 import {
+	messagePartSchema,
 	type ConversationPolicy,
 	defaultConversationPolicy,
 	type MessagePart,
@@ -218,8 +219,23 @@ export class ReplyDispatcher {
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}
-		const prepared = prepareOutboundText(answer.text, policy.pacing);
-		if (prepared.units.length === 0) return;
+		const transformed = await this.#transformReply({
+			channelId: session.channelId,
+			chatKind: session.chatKind,
+			chatObjectId: session.chatId,
+			entryId: answer.entryId,
+			parts: [{ text: lurk.text, type: "text" }],
+			sessionId: session.sessionId,
+			text: lurk.text,
+		});
+		const prepared = prepareOutboundText(transformed.text, policy.pacing);
+		const nonTextParts = transformed.parts.filter((part) => part.type !== "text");
+		if (prepared.units.length === 0 && nonTextParts.length === 0) return;
+		const text = prepared.text;
+		const parts: MessagePart[] = [
+			...(text.length > 0 ? [{ text, type: "text" as const }] : []),
+			...nonTextParts,
+		];
 		if (prepared.overflowCount > 0) {
 			await this.#audit({
 				action: "message.output-overflow",
@@ -240,8 +256,6 @@ export class ReplyDispatcher {
 		const channelKind =
 			external && channelId !== null ? this.#channels.get(channelId)?.kind : undefined;
 		const kind = external ? (channelKind ?? "plugin") : chatKind;
-		const text = prepared.text;
-		const parts: MessagePart[] = [{ text, type: "text" }];
 		const now = new Date().toISOString();
 		const id = randomUUID();
 		const inserted = await database
@@ -314,6 +328,64 @@ export class ReplyDispatcher {
 			sessionId: session.sessionId,
 			text,
 		});
+	}
+
+	async #transformReply(input: {
+		readonly channelId: string | null;
+		readonly chatKind: ChatKind;
+		readonly chatObjectId: string;
+		readonly entryId: string;
+		readonly parts: readonly MessagePart[];
+		readonly sessionId: string;
+		readonly text: string;
+	}): Promise<{ readonly parts: readonly MessagePart[]; readonly text: string }> {
+		let current = { parts: [...input.parts], text: input.text };
+		let result: unknown;
+		try {
+			result = await this.#hooks.transform("reply.transform", {
+				channelId: input.channelId,
+				chatKind: input.chatKind,
+				chatObjectId: input.chatObjectId,
+				entryId: input.entryId,
+				parts: current.parts,
+				sessionId: input.sessionId,
+				text: current.text,
+			});
+		} catch (error) {
+			this.#logger.warn("reply transform failed; using original answer", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return current;
+		}
+		if (typeof result !== "object" || result === null) return current;
+		const candidate = result as { readonly parts?: unknown; readonly text?: unknown };
+		let text = typeof candidate.text === "string" ? candidate.text : current.text;
+		let parts: MessagePart[] = current.parts;
+		if (candidate.parts !== undefined) {
+			const parsed = messagePartSchema.array().safeParse(candidate.parts);
+			if (!parsed.success) {
+				this.#logger.warn("reply transform returned invalid message parts", {
+					error: parsed.error.message,
+				});
+				return current;
+			}
+			parts = [...parsed.data];
+			if (typeof candidate.text !== "string") {
+				const textParts = parts.filter((part) => part.type === "text");
+				if (textParts.length > 0) {
+					text = textParts.map((part) => (part.type === "text" ? part.text : "")).join("\n");
+				}
+			}
+		}
+		if (candidate.text !== undefined && typeof candidate.text !== "string") {
+			this.#logger.warn("reply transform returned an invalid text value");
+			return current;
+		}
+		if (typeof candidate.text === "string" && !parts.some((part) => part.type === "text")) {
+			if (candidate.text.length > 0) parts = [{ text: candidate.text, type: "text" }, ...parts];
+		}
+		if (parts.length === 0 && text.length > 0) parts = [{ text, type: "text" }];
+		return { parts, text };
 	}
 
 	/** Startup and periodic reconciliation; never resends an unconfirmed pending row. */
@@ -516,30 +588,44 @@ export class ReplyDispatcher {
 				}
 				const delayMs = boundedReplyDelayMs(target.policy.pacing, this.#random);
 				if (delayMs > 0) await this.#sleep(delayMs, controller.signal);
+				let replyTargetSent = false;
+				const sendChunk = async (chunk: readonly MessagePart[]) => {
+					if (controller.signal.aborted) throw new OutputCancelledError();
+					const result = await this.#channels.send(
+						channelId,
+						target.chatKind,
+						platformConversationId,
+						chunk,
+						replyTo !== undefined && !replyTargetSent
+							? { replyToPlatformMessageId: replyTo }
+							: undefined,
+					);
+					replyTargetSent = true;
+					if (firstPlatformMessageId === null && result.platformMessageId !== undefined) {
+						firstPlatformMessageId = result.platformMessageId;
+					}
+					sentCount += 1;
+				};
 				for (const [unitIndex, unit] of target.units.entries()) {
-					const unitParts: MessagePart[] = [{ text: unit, type: "text" }];
-					const chunks = splitMessageParts(unitParts, this.#splitMaxChars);
+					const chunks = splitMessageParts([{ text: unit, type: "text" }], this.#splitMaxChars);
 					for (const [chunkIndex, chunk] of chunks.entries()) {
-						if (controller.signal.aborted) throw new OutputCancelledError();
-						const result = await this.#channels.send(
-							channelId,
-							target.chatKind,
-							platformConversationId,
-							chunk,
-							replyTo !== undefined && unitIndex === 0 && chunkIndex === 0
-								? { replyToPlatformMessageId: replyTo }
-								: undefined,
-						);
-						if (firstPlatformMessageId === null && result.platformMessageId !== undefined) {
-							firstPlatformMessageId = result.platformMessageId;
-						}
-						sentCount += 1;
+						await sendChunk(chunk);
 						if (
 							target.policy.pacing.sendIntervalMs > 0 &&
 							(unitIndex < target.units.length - 1 || chunkIndex < chunks.length - 1)
 						) {
 							await this.#sleep(target.policy.pacing.sendIntervalMs, controller.signal);
 						}
+					}
+				}
+				const mediaParts = target.parts.filter((part) => part.type !== "text");
+				const mediaChunks = splitMessageParts(mediaParts, this.#splitMaxChars).filter((chunk) =>
+					chunk.some((part) => part.type !== "text"),
+				);
+				for (const [index, chunk] of mediaChunks.entries()) {
+					await sendChunk(chunk);
+					if (target.policy.pacing.sendIntervalMs > 0 && index < mediaChunks.length - 1) {
+						await this.#sleep(target.policy.pacing.sendIntervalMs, controller.signal);
 					}
 				}
 				await database

@@ -1,5 +1,12 @@
-import { assertPermission, hasPermission, type PluginPermission } from "./permissions.ts";
+import { assertPermission, hasPermission } from "./permissions.ts";
 import { pluginManifestSchema } from "./manifest.ts";
+import { LocalTaskBridge } from "./tasks.ts";
+import {
+	resolveToolPolicyAccess,
+	resolveToolPolicy,
+	toolPayloadTooLarge,
+	type ToolPolicyAccessContext,
+} from "./policy.ts";
 import type {
 	AuditEntry,
 	PluginAuditApi,
@@ -16,6 +23,12 @@ import type {
 	PluginEvents,
 	PluginHookName,
 	PluginLogger,
+	PluginAudioTranscribeRequest,
+	PluginAudioTranscribeResult,
+	PluginDatabaseApi,
+	PluginEmbeddingRequest,
+	PluginEmbeddingResult,
+	PluginMigrationsApi,
 	PluginModelDescriptor,
 	PluginModelInfo,
 	PluginModelProvider,
@@ -24,21 +37,32 @@ import type {
 	PluginRpcHandler,
 	PluginRpcRegistry,
 	PluginStorage,
+	PluginTasksApi,
 	PluginTool,
 	PluginToolInvocationResult,
 	PluginToolRegistration,
 	PluginToolsExtension,
 	PluginUiDefinition,
 	ToolInvocationContext,
-	ToolResult,
 } from "./types.ts";
 import { pluginStatusInputSchema } from "@elaina/contracts";
 import type { PluginStatusSnapshot } from "@elaina/contracts";
 
-export class LocalPluginEventBridge {
-	readonly #handlers = new Map<PluginHookName, Set<(payload: unknown) => Promise<void> | void>>();
+export {
+	DEFAULT_TOOL_POLICY,
+	isModelVisibleTool,
+	resolveToolPolicy,
+	resolveToolPolicyAccess,
+	toolPayloadTooLarge,
+} from "./policy.ts";
 
-	on(name: PluginHookName, handler: (payload: unknown) => Promise<void> | void): () => void {
+export class LocalPluginEventBridge {
+	readonly #handlers = new Map<
+		PluginHookName,
+		Set<(payload: unknown) => unknown | Promise<unknown>>
+	>();
+
+	on(name: PluginHookName, handler: (payload: unknown) => unknown | Promise<unknown>): () => void {
 		const handlers = this.#handlers.get(name) ?? new Set();
 		handlers.add(handler);
 		this.#handlers.set(name, handlers);
@@ -55,6 +79,15 @@ export class LocalPluginEventBridge {
 		for (const handler of handlers) {
 			await handler(payload);
 		}
+	}
+
+	async transform(name: PluginHookName, payload: unknown): Promise<unknown> {
+		let current = payload;
+		for (const handler of this.#handlers.get(name) ?? []) {
+			const next = await handler(current);
+			if (next !== undefined) current = next;
+		}
+		return current;
 	}
 }
 
@@ -87,13 +120,14 @@ export class LocalToolBridge {
 		name: string,
 		input: Record<string, unknown>,
 		context: ToolInvocationContext = {},
-	): Promise<
-		| { ok: true; result: ToolResult }
-		| { ok: false; reason: "permission_denied"; permission: PluginPermission }
-	> {
+	): Promise<PluginToolInvocationResult> {
 		const tool = this.#tools.get(name);
 		if (!tool) {
-			throw new Error(`Unknown tool ${name}`);
+			return {
+				message: `Unknown tool ${name}`,
+				ok: false as const,
+				reason: "unknown_tool",
+			};
 		}
 		for (const permission of tool.requiredPermissions) {
 			if (!hasPermission(this.#grantedPermissions, permission)) {
@@ -103,6 +137,24 @@ export class LocalToolBridge {
 					permission,
 				};
 			}
+		}
+		const decision = resolveToolPolicyAccess(tool, {
+			...context,
+			grantedPermissions: this.#grantedPermissions,
+		});
+		if (!decision.allowed) {
+			return {
+				ok: false as const,
+				reason: decision.reason?.startsWith("task_kind") ? "task_kind_denied" : "unauthorized",
+				...(decision.reason === undefined ? {} : { message: decision.reason }),
+			};
+		}
+		if (toolPayloadTooLarge(tool, input)) {
+			return {
+				message: `Tool ${name} payload exceeds maxPayloadBytes`,
+				ok: false as const,
+				reason: "payload_too_large",
+			};
 		}
 		return {
 			ok: true as const,
@@ -132,6 +184,8 @@ export class LocalUiBridge {
 
 	register(definition: PluginUiDefinition): void {
 		assertPermission(this.#grantedPermissions, "ui.panel", this.#pluginId);
+		// Component-specific permissions are enforced by the renderer against the plugin's
+		// grant; registration only requires the base ui.panel scope.
 		this.#definitions.set(definition.id, definition);
 	}
 
@@ -204,6 +258,58 @@ export class LocalModelRegistry implements PluginModelRegistry {
 	async listModels(query: PluginModelQuery = {}): Promise<readonly PluginModelInfo[]> {
 		return collectPluginModels(this.#providers.values(), query);
 	}
+
+	async findModel(modelId: string, providerId?: string): Promise<PluginModelInfo | undefined> {
+		const models = await this.listModels(providerId === undefined ? {} : { providerId });
+		return models.find((model) => model.id === modelId);
+	}
+
+	async embed(request: PluginEmbeddingRequest): Promise<PluginEmbeddingResult> {
+		const providers = this.#providersFor(request.modelId, "embedding");
+		for (const provider of providers) {
+			if (provider.embed !== undefined) return provider.embed(request);
+			if (provider.embedding !== undefined) return provider.embedding.embed(request);
+		}
+		throw new Error(`No embedding-capable model provider for ${request.modelId ?? "default"}`);
+	}
+
+	async embedding(request: PluginEmbeddingRequest): Promise<PluginEmbeddingResult> {
+		return await this.embed(request);
+	}
+
+	async transcribeAudio(
+		request: PluginAudioTranscribeRequest,
+	): Promise<PluginAudioTranscribeResult> {
+		const providers = this.#providersFor(request.modelId, "audio.transcribe");
+		for (const provider of providers) {
+			if (provider.transcribeAudio !== undefined) return provider.transcribeAudio(request);
+			if (provider.audioTranscribe !== undefined) {
+				return provider.audioTranscribe.transcribeAudio(request);
+			}
+		}
+		throw new Error(
+			`No audio-transcribe-capable model provider for ${request.modelId ?? "default"}`,
+		);
+	}
+
+	async audioTranscribe(
+		request: PluginAudioTranscribeRequest,
+	): Promise<PluginAudioTranscribeResult> {
+		return await this.transcribeAudio(request);
+	}
+
+	#providersFor(modelId: string | undefined, capability: string): readonly PluginModelProvider[] {
+		const providers = [...this.#providers.values()];
+		if (modelId === undefined) return providers;
+		return providers.filter((provider) => {
+			const models = provider.listModels?.();
+			if (models instanceof Promise) return true;
+			return (
+				models === undefined ||
+				models.some((model) => model.id === modelId && model.capabilities.includes(capability))
+			);
+		});
+	}
 }
 
 /**
@@ -262,6 +368,56 @@ export class LocalRpcBridge implements PluginRpcRegistry {
 	}
 }
 
+class ToolSemaphore {
+	readonly #limit: number;
+	#active = 0;
+	readonly #waiters: Array<{
+		readonly reject: (error: Error) => void;
+		readonly resolve: (release: () => void) => void;
+	}> = [];
+
+	constructor(limit: number) {
+		this.#limit = Math.max(1, Math.floor(limit));
+	}
+
+	async acquire(signal?: AbortSignal): Promise<() => void> {
+		if (this.#active < this.#limit) {
+			this.#active += 1;
+			return this.#releaseOnce();
+		}
+		if (signal?.aborted === true) throw new Error("Tool invocation timed out while queued");
+		return await new Promise<() => void>((resolve, reject) => {
+			const waiter = { reject, resolve };
+			this.#waiters.push(waiter);
+			const onAbort = () => {
+				const index = this.#waiters.indexOf(waiter);
+				if (index !== -1) this.#waiters.splice(index, 1);
+				reject(new Error("Tool invocation timed out while queued"));
+			};
+			signal?.addEventListener("abort", onAbort, { once: true });
+			const originalResolve = waiter.resolve;
+			waiter.resolve = (release) => {
+				signal?.removeEventListener("abort", onAbort);
+				originalResolve(release);
+			};
+		});
+	}
+
+	#releaseOnce(): () => void {
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			const next = this.#waiters.shift();
+			if (next === undefined) {
+				this.#active -= 1;
+				return;
+			}
+			next.resolve(this.#releaseOnce());
+		};
+	}
+}
+
 export const PLUGIN_TOOLS_EXTENSION_NAME = "elaina-plugin-tools";
 
 /**
@@ -290,6 +446,15 @@ export interface PluginToolsExtensionOptions {
 	/** Called only when auditing or a duplicate name fails; never affects the tool result. */
 	readonly logger?: (message: string, error?: unknown) => void;
 	readonly name?: string;
+	/** Additional policy context or a resolver invoked per tool execution. */
+	readonly policyContext?:
+		| ToolPolicyAccessContext
+		| ((
+				tool: PluginTool,
+				context: ToolInvocationContext,
+		  ) => ToolPolicyAccessContext | Promise<ToolPolicyAccessContext>);
+	/** Model-visibility filter; defaults to the tool policy's `visibility === "model"`. */
+	readonly filter?: (tool: PluginTool) => boolean;
 }
 
 type PluginToolSource = () => readonly PluginTool[];
@@ -345,6 +510,25 @@ export function createPluginToolsExtension(
 		}
 	};
 
+	const semaphores = new Map<string, ToolSemaphore>();
+	const semaphoreFor = (tool: PluginTool): ToolSemaphore => {
+		const policy = resolveToolPolicy(tool);
+		const key = `${tool.name}:${policy.maxConcurrent}`;
+		const existing = semaphores.get(key);
+		if (existing !== undefined) return existing;
+		const created = new ToolSemaphore(policy.maxConcurrent);
+		semaphores.set(key, created);
+		return created;
+	};
+
+	const policyContextFor = async (
+		tool: PluginTool,
+		context: ToolInvocationContext,
+	): Promise<ToolPolicyAccessContext> =>
+		typeof options.policyContext === "function"
+			? options.policyContext(tool, context)
+			: (options.policyContext ?? {});
+
 	const registrationFor = (tool: PluginTool): PluginToolRegistration => {
 		const existing = registrations.get(tool.name);
 		if (existing?.tool === tool) return existing.registration;
@@ -354,20 +538,99 @@ export function createPluginToolsExtension(
 				const input = isRecord(args) ? args : {};
 				const conversationId = String(api.conversationId);
 				const invocationContext: ToolInvocationContext = { conversationId };
+				const policy = resolveToolPolicy(tool);
+				const decision = resolveToolPolicyAccess(tool, {
+					...invocationContext,
+					...(await policyContextFor(tool, invocationContext)),
+				});
+				if (!decision.allowed) {
+					await audit({
+						action: "plugin.tool.invoke",
+						payload: { conversationId, tool: tool.name },
+						reason: decision.reason ?? "denied",
+						result: "denied",
+						targetId: tool.name,
+						targetKind: "plugin-tool",
+					});
+					return {
+						isError: true,
+						output: textOutput(
+							`Tool ${tool.name} is not available: ${decision.reason ?? "denied"}`,
+						),
+					};
+				}
+				if (toolPayloadTooLarge(tool, input)) {
+					await audit({
+						action: "plugin.tool.invoke",
+						payload: { conversationId, tool: tool.name },
+						reason: `payload_too_large:${policy.maxPayloadBytes}`,
+						result: "denied",
+						targetId: tool.name,
+						targetKind: "plugin-tool",
+					});
+					return {
+						isError: true,
+						output: textOutput(`Tool ${tool.name} input exceeds ${policy.maxPayloadBytes} bytes`),
+					};
+				}
+				const semaphore = semaphoreFor(tool);
+				const controller = new AbortController();
+				let timedOut = false;
+				const timer = setTimeout(() => {
+					timedOut = true;
+					controller.abort();
+				}, policy.timeoutMs);
+				let release: (() => void) | undefined;
 				try {
-					const outcome = await invoke(tool.name, input, invocationContext);
+					release = await semaphore.acquire(controller.signal);
+					if (timedOut) throw new Error(`Tool ${tool.name} timed out after ${policy.timeoutMs}ms`);
+					const execution = Promise.resolve().then(() =>
+						invoke(tool.name, input, invocationContext),
+					);
+					const timeout = new Promise<never>((_resolve, reject) => {
+						if (controller.signal.aborted) {
+							reject(new Error(`Tool ${tool.name} timed out after ${policy.timeoutMs}ms`));
+							return;
+						}
+						controller.signal.addEventListener(
+							"abort",
+							() => reject(new Error(`Tool ${tool.name} timed out after ${policy.timeoutMs}ms`)),
+							{ once: true },
+						);
+					});
+					void execution.catch(() => undefined);
+					const outcome = await Promise.race([execution, timeout]);
 					if (!outcome.ok) {
+						if (outcome.reason === "permission_denied") {
+							await audit({
+								action: "plugin.tool.invoke",
+								payload: { conversationId, tool: tool.name },
+								reason: `permission_denied:${outcome.permission}`,
+								result: "denied",
+								targetId: tool.name,
+								targetKind: "plugin-tool",
+							});
+							return {
+								isError: true,
+								output: textOutput(
+									`Permission denied for tool ${tool.name}: ${outcome.permission}`,
+								),
+							};
+						}
+						const reason = `${outcome.reason}${outcome.message === undefined ? "" : `:${outcome.message}`}`;
 						await audit({
 							action: "plugin.tool.invoke",
 							payload: { conversationId, tool: tool.name },
-							reason: `permission_denied:${outcome.permission}`,
+							reason,
 							result: "denied",
 							targetId: tool.name,
 							targetKind: "plugin-tool",
 						});
 						return {
 							isError: true,
-							output: textOutput(`Permission denied for tool ${tool.name}: ${outcome.permission}`),
+							output: textOutput(
+								`Tool ${tool.name} is not available: ${outcome.message ?? outcome.reason}`,
+							),
 						};
 					}
 					await audit({
@@ -385,7 +648,7 @@ export function createPluginToolsExtension(
 					await audit({
 						action: "plugin.tool.invoke",
 						payload: { conversationId, tool: tool.name },
-						reason: message,
+						reason: timedOut ? `timeout:${policy.timeoutMs}` : message,
 						result: "failed",
 						targetId: tool.name,
 						targetKind: "plugin-tool",
@@ -394,6 +657,9 @@ export function createPluginToolsExtension(
 						isError: true,
 						output: textOutput(`Tool ${tool.name} failed: ${message}`),
 					};
+				} finally {
+					clearTimeout(timer);
+					release?.();
 				}
 			},
 			name: providerSafeToolName(tool.name),
@@ -418,6 +684,9 @@ export function createPluginToolsExtension(
 			for (const tool of current) {
 				if (names.has(tool.name)) {
 					warn(options.logger, `duplicate plugin tool name ${tool.name}`);
+					continue;
+				}
+				if (!(options.filter?.(tool) ?? resolveToolPolicy(tool).visibility === "model")) {
 					continue;
 				}
 				names.add(tool.name);
@@ -488,6 +757,9 @@ export interface PluginContextOptions {
 	settings?: PluginSettingsApi;
 	requests?: PluginRequestApi;
 	audit?: PluginAuditApi;
+	tasks?: PluginTasksApi;
+	migrations?: PluginMigrationsApi;
+	database?: PluginDatabaseApi;
 	dependencies?: PluginDependencyBag;
 	onStatus?: (status: PluginStatusSnapshot | null) => void;
 }
@@ -513,6 +785,12 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 	});
 	const models = options.models ?? new LocalModelRegistry();
 	const rpc = options.rpc ?? new LocalRpcBridge();
+	const tasks =
+		options.tasks ??
+		new LocalTaskBridge({
+			grantedPermissions: options.grantedPermissions ?? manifest.permissions,
+			pluginId,
+		});
 	return {
 		pluginId,
 		manifest,
@@ -530,6 +808,9 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 		...(options.settings ? { settings: options.settings } : {}),
 		...(options.requests ? { requests: options.requests } : {}),
 		...(options.audit ? { audit: options.audit } : {}),
+		tasks,
+		...(options.migrations ? { migrations: options.migrations } : {}),
+		...(options.database ? { database: options.database } : {}),
 		...(options.dependencies ? { dependencies: options.dependencies } : {}),
 	};
 }

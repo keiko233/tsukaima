@@ -9,7 +9,7 @@ import type {
  * Capabilities a channel adapter can offer. Plugins that call channel verbs should check
  * for the capability instead of assuming an IM platform supports an action.
  */
-export type ChannelCapability =
+export type LegacyChannelCapability =
 	| "send"
 	| "interact"
 	| "group-manage"
@@ -17,6 +17,70 @@ export type ChannelCapability =
 	| "read-media"
 	| "upload"
 	| "raw";
+
+export type GranularChannelCapability =
+	| "send.text"
+	| "send.image"
+	| "send.audio"
+	| "send.video"
+	| "send.file"
+	| "send.forward"
+	| "reply.quote"
+	| "interact.poke"
+	| "interact.react"
+	| "interact.typing"
+	| "manage.group"
+	| "manage.friend"
+	| "manage.self"
+	| "read.history"
+	| "fetch.media";
+
+/** Both legacy and granular values are accepted during the compatibility window. */
+export type ChannelCapability = LegacyChannelCapability | GranularChannelCapability;
+
+/** Expand a legacy capability to the machine-readable capabilities it implies. */
+export function expandLegacyChannelCapabilities(
+	capability: ChannelCapability,
+): readonly GranularChannelCapability[] {
+	switch (capability) {
+		case "send":
+			return ["send.text", "send.image", "send.audio", "send.video", "send.file"];
+		case "interact":
+			return ["reply.quote", "interact.poke", "interact.react", "interact.typing"];
+		case "group-manage":
+			return ["manage.group"];
+		case "read-info":
+			return ["read.history"];
+		case "read-media":
+		case "upload":
+			return ["fetch.media"];
+		case "raw":
+			return [];
+		default:
+			return [capability];
+	}
+}
+
+export function expandChannelCapabilities(
+	capabilities: readonly ChannelCapability[],
+): readonly GranularChannelCapability[] {
+	const result = new Set<GranularChannelCapability>();
+	for (const capability of capabilities) {
+		for (const expanded of expandLegacyChannelCapabilities(capability)) result.add(expanded);
+	}
+	return [...result];
+}
+
+/** True when a channel capability set satisfies a required legacy or granular capability. */
+export function hasChannelCapability(
+	available: readonly ChannelCapability[],
+	required: ChannelCapability,
+): boolean {
+	if (available.includes(required)) return true;
+	const expanded = new Set(expandChannelCapabilities(available));
+	if (expanded.has(required as GranularChannelCapability)) return true;
+	return expandLegacyChannelCapabilities(required).some((value) => expanded.has(value));
+}
 
 export interface ChannelDiagnostics {
 	readonly connected: boolean;
@@ -101,11 +165,26 @@ export interface ChannelAdapter {
 	resolveRequest?(request: ChannelRequest, decision: ChannelRequestDecision): Promise<void>;
 }
 
+export interface ChannelCapabilityNarrowing {
+	/** Optional allowlist applied on top of the adapter's own capabilities. */
+	readonly allow?: readonly ChannelCapability[];
+	/** Capabilities explicitly removed for a conversation. */
+	readonly deny?: readonly ChannelCapability[];
+}
+
 export interface PluginChannelRegistry {
 	/** Returns a disposer that unregisters the adapter. */
 	register(adapter: ChannelAdapter): () => void;
 	get(channelId: string): ChannelAdapter | undefined;
 	list(): readonly ChannelAdapter[];
+	/** Host- or conversation-owned narrowing of an adapter's capabilities. */
+	narrow?(
+		channelId: string,
+		narrowing: ChannelCapabilityNarrowing | null,
+		conversationId?: string,
+	): void;
+	capabilities?(channelId: string, conversationId?: string): readonly ChannelCapability[];
+	hasCapability?(channelId: string, required: ChannelCapability, conversationId?: string): boolean;
 }
 
 export interface PluginSettingsApi<T = unknown> {
