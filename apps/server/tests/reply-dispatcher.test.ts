@@ -155,7 +155,7 @@ describe("reply dispatcher", () => {
 					.limit(1);
 				if (session === undefined) throw new Error("Answer session is missing");
 				await lifecycle.replyDispatcher.handleAnswer({
-					activityId: answer.activityId ?? "",
+					activityId: "test-activity",
 					conversationId: session.durableConversationId,
 					entryId,
 					text: "ok",

@@ -1,4 +1,4 @@
-import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk";
+import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk/manifest";
 
 export const ONEBOT_PLUGIN_ID = "onebot-napcat";
 

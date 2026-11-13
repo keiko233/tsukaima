@@ -439,6 +439,13 @@ export const settingsViewSchema = z.object({
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
+export const runtimeSettingsSchema = z.object({
+	logLevel: logLevelSchema,
+	/** Plugin id that owns the active model provider. */
+	modelProviderId: z.string().min(1).optional(),
+});
+export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>;
+
 export const runtimeSettingsPatchSchema = z
 	.object({
 		logLevel: logLevelSchema.optional(),
@@ -905,7 +912,10 @@ export const appContract = oc.router({
 				.meta({ audit: true }),
 		},
 		personas: {
-			bind: oc.input(personaBindInputSchema).output(personaBindingSchema).meta({ audit: true }),
+			bindPersona: oc
+				.input(personaBindInputSchema)
+				.output(personaBindingSchema)
+				.meta({ audit: true }),
 			bindings: oc.output(z.array(personaBindingSchema)),
 			list: oc.output(z.array(personaSummarySchema)),
 			upsert: oc.input(personaUpsertInputSchema).output(personaSummarySchema).meta({ audit: true }),

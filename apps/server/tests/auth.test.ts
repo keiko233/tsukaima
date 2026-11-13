@@ -404,7 +404,7 @@ describe("admin auth", () => {
 				primaryModel: "fake-deterministic",
 				primaryProvider: "fake",
 			},
-			"personas/bind": { personaId: "persona-1", scope: "global" },
+			"personas/bindPersona": { personaId: "persona-1", scope: "global" },
 			"personas/bindings": {},
 			"personas/list": {},
 			"personas/upsert": {

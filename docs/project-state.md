@@ -7,11 +7,12 @@ This file is the cross-session handoff record. Update it whenever implementation
 - Project name: `tsukaima-chatbot`.
 - Repository initialized at `<repo-root>` on branch `main`.
 - First commit: `5dc80bc Add Tsukaima Chatbot architecture and DSH migration plan`.
-- Current phase: migration-spec Phase 3 (plugin host maturity) is complete. Phase 1–7
-  core/library implementation remains in place: the closed reply loop, the oRPC contract layer,
-  the ingest boundary, persona/memory injection, admin authentication, plugin migrations/tasks/
-  tool policy, and live WebUI updates. Remaining work starts with Phase 4 memory/context review,
-  followed by the feature plugins and the DSH cutover.
+- Current phase: implementation-spec Phases 0–9 and the Release Readiness checklist are complete.
+  The closed reply loop, oRPC contract layer, ingest boundary, persona/memory injection, admin
+  authentication, plugin host, feature plugins (`onebot-napcat`, `openai-compatible`,
+  `sticker-meme`, `proactive-scheduler`, `search-fetch`, `self-iteration`), DSH migration kit,
+  Playwright WebUI E2E suite, secret scanning, and backup/restore drills all exist. Remaining
+  work is operational: run the real DSH snapshot/import/verify/rollback and cut NapCat over.
 - Bun workspace, strict TypeScript config, domain schema/migrations, Pi Durable Bun SQLite adapter, startup lifecycle, Elysia + oRPC API, and React/TanStack WebUI exist.
 - Implemented packages:
   - `packages/contracts`: message, conversation policy, activity window, submission, and admin event schemas.
@@ -29,6 +30,7 @@ This file is the cross-session handoff record. Update it whenever implementation
   - `plugins/onebot-napcat`: built-in channel plugin that owns the OneBot channel lifecycle, settings, diagnostics, and request resolution.
   - `plugins/openai-compatible`: built-in model-provider plugin. It registers a provider factory with the host; its API key, base URL, discovered multi-model catalog, enablement, and capability metadata live in plugin config and environment fallbacks, not in host runtime settings.
   - `packages/chaos`: transient storage failure injection, restart drill, rate limiting, idempotent ingestion, and abuse guards.
+  - `tools/ops`: offline secret scanner (`check:secrets`), and the reusable SQLite + blob backup/restore drill (`ops:backup-drill`). The drill logic itself lives in `packages/migration/src/backup-drill.ts` and is reused by `@tsukaima/server` scheduling.
 - Runtime target is Bun.
 - Runtime settings are limited to interface/log level concerns. Provider and channel configuration are owned by their plugins; secret values are never returned by the API.
 - Built-in plugins are loaded from `apps/server/src/plugins/builtin.ts`; the OneBot channel is now a plugin, not lifecycle code. `TsukaimaLifecycle` no longer holds channel, request, or identity-resolution logic.
@@ -103,6 +105,29 @@ This file is the cross-session handoff record. Update it whenever implementation
 - The WebUI conversation view exposes conversation rules (trigger/access, pacing, quiet hours,
   rate limit, output chunking/delay/typing/Markdown, tool allowlist, persona binding, and policy
   history). All mutations use authenticated oRPC admin routes and are audited.
+- `messages.activity_id` was dropped from the Drizzle schema and removed from server writes and
+  tests (migration `0011_black_dust.sql`). Runtime turn/activity IDs stay inside `@tsukaima/core`
+  (`conversation-host.ts`), `memory-service.ts`, and `event-stream.ts`; they are not persisted on
+  `messages`.
+- `runtimeSettingsSchema`/`runtimeSettingsPatchSchema` have exactly one definition in
+  `packages/contracts/src/api.ts`; `apps/server/src/runtime-settings.ts` imports them from
+  `@tsukaima/contracts`. `remoteModelsInputSchema` no longer has a server duplicate.
+- A Playwright Chromium E2E suite (`e2e/*.spec.ts`, root `playwright.config.ts`,
+  `bun run test:e2e`) starts an isolated stack: a temporary data directory, the real
+  `@tsukaima/server` with a fake model provider and bootstrap admin credentials from env, and a
+  `@tsukaima/web` Vite server on ephemeral ports. It covers sign-in/session persistence, local
+  messaging, conversation policy revisions, and every built-in plugin panel.
+- `bun run check:secrets` scans `git ls-files` offline for private keys, provider tokens, JWTs,
+  credential assignments, password-bearing connection strings, and forbidden sensitive files. It
+  supports inline `secret-scan:allow` markers and a documented path allowlist.
+- `bun run ops:backup-drill` checkpoints both SQLite databases, snapshots `domain.sqlite`,
+  `durable.sqlite`, and the blob directory, verifies manifest hashes, restores into isolated
+  staging, runs `PRAGMA integrity_check`, compares blob SHA-256 and file counts, and writes a
+  secret-free report. `@tsukaima/server` can schedule it via
+  `TSUKAIMA_BACKUP_DRILL_INTERVAL_MS`; it is disabled by default and in tests.
+- `docs/operations/runbook.md` documents deployment prerequisites, secrets, NapCat setup,
+  `/healthz`/`/readyz`, the offline DSH snapshot → dry-run → import → verify → rollback workflow,
+  scheduled drills, and supervised self-iteration reload recovery.
 
 ## Confirmed decisions
 
@@ -143,6 +168,7 @@ This file is the cross-session handoff record. Update it whenever implementation
 - `docs/migration/migration-kit.md`
 - `docs/roadmap.md`
 - `docs/operations/quality.md`
+- `docs/operations/runbook.md`
 - `docs/reviews/implementation-review-2026-11-12.md`
 - ADRs 0001–0007
 
@@ -174,34 +200,42 @@ These are implementation-level decisions, not blockers for starting scaffolding:
 
 ## Implementation status
 
-- Phase 1: durable storage conformance, conversation host, fake model, activity policy/window, admin contracts, and health lifecycle are implemented.
-- Phase 2: OneBot outbound WebSocket is connected in lifecycle startup; inbound envelopes are normalized, deduplicated by domain conversation key, and routed to reusable durable conversations. The migration-spec conversation policy, trigger classification/lurk handling, cooldown/burst queues, humanlike output pacing, persona binding precedence, and admin policy/persona UI/API are implemented.
-- Phase 3: model registry/policy routing, OpenAI-compatible provider, provider settings, and usage accounting are implemented; live Magpie deployment values can be supplied through WebUI settings or environment variables.
-- Migration-spec Phase 3: plugin migrations, durable plugin storage/tasks, layered tool policy, ordered reply transforms, declarative UI components, granular channel/model capabilities, install lifecycle/quarantine, and the mature worker contract are implemented.
-- Phase 4: plugin SDK, registry, config validation, bridges, admin WebUI, and real Bun Worker isolation are implemented.
-- Phase 5: coding runner, worktree policy, tools, DB-backed approval/proposal stores, and reload controller are implemented.
-- Phase 6: migration inspection/normalize/dry-run/import/verify/rollback, CLI, and persona/memory/sticker/settings import pipeline are implemented; live DSH cutover has not been executed.
-- Phase 7: chaos storage, restart drill, rate limiting, idempotency, and abuse guards are implemented as libraries.
+- Phase 0: DSH baseline/audit inventory, value classes, and the secret-free audit record are implemented.
+- Phase 1: durable storage conformance, conversation host, fake model, activity policy/window, admin contracts, health lifecycle, and OneBot/NapCat operational parity are implemented.
+- Phase 2: OneBot outbound WebSocket is connected in lifecycle startup; inbound envelopes are normalized, deduplicated by domain conversation key, and routed to reusable durable conversations. Conversation policy, trigger classification/lurk handling, cooldown/burst queues, humanlike output pacing, persona binding precedence, and admin policy/persona UI/API are implemented.
+- Phase 3: model registry/policy routing, OpenAI-compatible provider, provider settings, usage accounting, plugin migrations, durable plugin storage/tasks, layered tool policy, ordered reply transforms, declarative UI components, granular channel/model capabilities, install lifecycle/quarantine, and the mature worker contract are implemented.
+- Phase 4: memory extraction/review, scoped recall, compaction, and the memory admin UI are implemented.
+- Phase 5: `sticker-meme` import, review, selection, send tokens, transforms, and panel are implemented.
+- Phase 6: `search-fetch` multi-provider routing, SSRF-hardened fetching, cache, redaction, tools, and panel are implemented.
+- Phase 7: `proactive-scheduler` durable tasks, gates, decisions, tools, and panel are implemented.
+- Phase 8: `self-iteration` runtime, coding tasks/proposals/approvals, supervised reload, deployments, rollback, tools, and panel are implemented.
+- Phase 9: offline DSH v4 snapshot, parsers, normalize/dry-run/import/verify/rollback pipeline, migration CLI, and backup/restore rollback are implemented; the live DSH cutover has not been executed.
+- Release Readiness: `messages.activity_id` and duplicated RPC schemas are removed, the Playwright WebUI E2E suite exists, CI secret scanning and scheduled SQLite + blob backup/restore drills exist, and the production runbook is written.
 
-All existing tests pass:
+Verified baseline (this working tree):
 
 ```sh
+bun run check:secrets
+bun --filter '@tsukaima/web' check:i18n && bun --filter '@tsukaima/web' lint:i18n && bun --filter '@tsukaima/web' build
 bun run check
+bun run test:e2e
 ```
 
-Current baseline: lint, formatting, root TypeScript, WebUI TypeScript, WebUI production
-build, WebUI i18n checks, and 303 tests across 63 files pass.
+Observed results: secret scan passes over the tracked tree; WebUI i18n checks, i18n lint, and the
+production build exit `0`; `bun run check` passes lint, formatting, all TypeScript projects, and
+440 tests across 90 files; `bun run test:e2e` passes 5 Chromium specs against the isolated stack.
 
 ## Next implementation steps
 
-Follow the ordered implementation specs in `docs/specs/README.md`:
+The implementation phases are done. Remaining work is operational:
 
-1. **Phases 0–1**: Finish the DSH baseline/audit and NapCat operational parity. Phase 2
-   conversation policy/pacing and Phase 3 plugin host maturity are complete.
-2. **Phases 4–8**: Memory and context extraction/review, `sticker-meme`, `search-fetch`,
-   `proactive-scheduler`, and `self-iteration` runtime/UI.
-3. **Phase 9**: Full DSH v4 snapshot/import/verify/rollback migration and NapCat cutover.
-4. **Release readiness**: Schema/contract cleanup (`messages.activity_id`, duplicated schemas), Playwright E2E suite, secret scanning, backup/restore drills, and the production runbook.
+1. **Phase 9 execution**: run the real DSH v4 snapshot → dry-run → import → verify on a copy, then
+   keep the rollback run id until the cutover is accepted.
+2. **NapCat cutover**: connect the production bot account, validate channel diagnostics, and tune
+   conversation policies per group.
+3. **Scheduled operations**: enable `TSUKAIMA_BACKUP_DRILL_INTERVAL_MS` in production and alert on
+   failed drill reports; keep `bun run check:secrets` in CI.
+4. **Ongoing review**: use the self-iteration approval/deployment flow for every runtime change.
 
 The full built-in plugin inventory and migration order are tracked in
 `docs/architecture/builtin-plugin-migration.md`.
@@ -215,10 +249,6 @@ The full built-in plugin inventory and migration order are tracked in
   leaves a permanent `pending` row with no reconciliation job yet.
 - Answers with no text blocks (tool-only) produce no reply. Output is now newline-chunked and
   platform-length split per unit, but there is still no media-aware unit grouping.
-- `messages.activity_id` is a dangling column: the `activities` tables were dropped while the
-  column stayed.
-- `remoteModelsInputSchema` and `runtimeSettingsPatchSchema` exist both in `apps/server/src` and
-  in `packages/contracts`; one definition should move.
 - Better Auth sign-in throttling is per client IP. Direct connections use Bun's socket peer
   address; reverse proxies must be listed in `TSUKAIMA_TRUSTED_PROXIES` before their forwarded chain
   is trusted. There is no password-rotation UI or multi-admin model yet. Migration `0005` drops the legacy
@@ -236,7 +266,8 @@ The full built-in plugin inventory and migration order are tracked in
   panels still require the future iframe sandbox rather than the trusted build-time tier.
 - Unread state, chat-object pin/archive controls beyond session archive, and group management
   actions are not implemented.
-- Narrow-screen navigation is implemented, but no Playwright end-to-end suite is present yet.
+- The Playwright suite runs against the deterministic fake model and a fresh temporary database;
+  it does not exercise a live NapCat connection or the real provider.
 
 ## How to resume in a new session
 

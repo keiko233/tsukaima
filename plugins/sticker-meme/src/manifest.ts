@@ -1,4 +1,4 @@
-import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk";
+import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk/manifest";
 
 export const STICKER_MEME_PLUGIN_ID = "sticker-meme";
 export const STICKER_MEME_RPC_PREFIX = `${STICKER_MEME_PLUGIN_ID}.`;

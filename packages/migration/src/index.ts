@@ -146,6 +146,12 @@ export {
 	type VerifyBackupResult,
 } from "./backup.ts";
 export {
+	runBackupDrill,
+	type BackupDrillIntegrityCheck,
+	type BackupDrillOptions,
+	type BackupDrillReport,
+} from "./backup-drill.ts";
+export {
 	collectSecretValues,
 	containsSecretValue,
 	isHostSpecificKey,

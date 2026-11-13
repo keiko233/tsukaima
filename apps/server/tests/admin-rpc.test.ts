@@ -271,7 +271,7 @@ describe("admin conversation policy and persona RPC", () => {
 			expect(bumped.version).toBe(2);
 			expect(bumped.selfAliases).toEqual(["Tsukaima", "Lain"]);
 
-			const binding = (await request("admin/personas/bind", {
+			const binding = (await request("admin/personas/bindPersona", {
 				conversationId: chat.sessionId,
 				personaId: persona.id,
 				scope: "conversation",

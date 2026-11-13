@@ -26,11 +26,16 @@ import {
 import { BACKGROUND_CONTEXT, openDurableStorage, type SqliteStorage } from "@tsukaima/durable";
 import { createPluginToolsExtension, type AuditEntry, type TsukaimaPlugin } from "@tsukaima/sdk";
 import { MigrationRegistry, type PluginMigrationPlan } from "@tsukaima/plugin-registry";
+import { runBackupDrill as executeBackupDrill, type BackupDrillReport } from "@tsukaima/migration";
 import type { ChannelNotice, ChannelRequest, MessageEnvelope } from "@tsukaima/contracts";
 import { loadConfig, type TsukaimaConfig } from "./config.ts";
 import { createLogger, LogBuffer, type Logger } from "./logging.ts";
 import { readRuntimeSettings, type RuntimeSettings } from "./runtime-settings.ts";
 import { builtinPlugins } from "./plugins/builtin.ts";
+import {
+	BackupDrillScheduler,
+	type BackupDrillRunResult,
+} from "./services/backup-drill-scheduler.ts";
 import { ChannelRegistry } from "./services/channel-registry.ts";
 import { ConversationPacingTracker } from "./services/conversation-pacing.ts";
 import { ConversationPolicyService } from "./services/conversation-policy.ts";
@@ -53,6 +58,14 @@ import { ReplyDispatcher } from "./services/reply-dispatcher.ts";
 import { RequestService } from "./services/request-service.ts";
 
 export interface LifecycleOptions {
+	/** Optional scheduled backup/restore drill override; disabled unless configured. */
+	readonly backupDrill?:
+		| {
+				readonly intervalMs?: number;
+				readonly root?: string;
+				readonly run?: () => Promise<BackupDrillRunResult>;
+		  }
+		| undefined;
 	/** Process environment, used for plugin `configEnv` fallbacks. */
 	readonly env?: Record<string, string | undefined>;
 	readonly logger?: Logger;
@@ -82,6 +95,7 @@ export interface LifecycleState {
 export class TsukaimaLifecycle {
 	readonly config: TsukaimaConfig;
 	readonly startedAtMs = Date.now();
+	readonly backupDrills: BackupDrillScheduler;
 	readonly channels: ChannelRegistry;
 	readonly contextProvider: DrizzleContextProvider;
 	readonly conversationPacing: ConversationPacingTracker;
@@ -121,6 +135,7 @@ export class TsukaimaLifecycle {
 	providerRestartRequired = false;
 	routingPolicies: readonly ModelPolicy[] = [];
 	private readonly runtimeLog: Logger;
+	private readonly backupDrillRoot: string | undefined;
 	private readonly modelOverride: ModelPort | undefined;
 	private activeProviderId: string | undefined;
 
@@ -136,7 +151,23 @@ export class TsukaimaLifecycle {
 		this.logs = this.logger.buffer;
 		this.plugins = options?.plugins ?? builtinPlugins;
 		this.runtimeLog = this.logger.child("tsukaima::server::lifecycle");
+		this.backupDrillRoot = options?.backupDrill?.root ?? config.backupDrillRoot;
 		this.modelOverride = options?.model;
+		this.backupDrills = new BackupDrillScheduler({
+			intervalMs: options?.backupDrill?.intervalMs ?? config.backupDrillIntervalMs ?? 0,
+			logger: this.runtimeLog,
+			run:
+				options?.backupDrill?.run ??
+				(async () => {
+					const report = await this.runBackupDrill();
+					return {
+						...(report.error === undefined ? {} : { error: report.error }),
+						ok: report.ok,
+						reportPath: report.reportPath,
+						runId: report.runId,
+					};
+				}),
+		});
 		this.executionLock = new ConversationExecutionLock();
 		this.hooks = new HookBus(this.logger);
 		this.channels = new ChannelRegistry({
@@ -463,7 +494,18 @@ export class TsukaimaLifecycle {
 			});
 		}
 		this.replyDispatcher.startPendingReconciliation();
+		this.backupDrills.start();
 		this.transition("ready", "ready");
+	}
+
+	/** Run one isolated SQLite + blob backup/restore drill and return its secret-free report. */
+	async runBackupDrill(runId?: string): Promise<BackupDrillReport> {
+		return executeBackupDrill({
+			dataDir: this.config.dataDir,
+			mediaDir: join(this.config.dataDir, "blobs"),
+			...(runId === undefined ? {} : { runId }),
+			...(this.backupDrillRoot === undefined ? {} : { root: this.backupDrillRoot }),
+		});
 	}
 
 	fail(reason: string): void {
@@ -665,6 +707,7 @@ export class TsukaimaLifecycle {
 
 	async stop(): Promise<void> {
 		this.transition("stopping", "maintenance");
+		this.backupDrills.stop();
 		for (const listener of this.stopListeners) {
 			try {
 				listener();

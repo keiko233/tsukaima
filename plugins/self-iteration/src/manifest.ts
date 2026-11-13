@@ -1,4 +1,4 @@
-import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk";
+import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk/manifest";
 import { SELF_ITERATION_PLUGIN_ID } from "./domain.ts";
 
 export const SELF_ITERATION_MANIFEST: PluginManifest = pluginManifestSchema.parse({

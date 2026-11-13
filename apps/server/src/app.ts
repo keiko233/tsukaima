@@ -5,7 +5,7 @@ import type { TsukaimaPlugin } from "@tsukaima/sdk";
 import { appRouter } from "./rpc/index.ts";
 import type { TsukaimaApiContext } from "./rpc/base.ts";
 import { loadConfig } from "./config.ts";
-import { TsukaimaLifecycle } from "./lifecycle.ts";
+import { TsukaimaLifecycle, type LifecycleOptions } from "./lifecycle.ts";
 import { AuthService } from "./services/auth.ts";
 import {
 	createLiveEventStream,
@@ -14,6 +14,8 @@ import {
 } from "./services/event-stream.ts";
 
 export interface CreateAppOptions {
+	/** Optional scheduled backup/restore drill; disabled unless an interval is configured. */
+	readonly backupDrill?: LifecycleOptions["backupDrill"] | undefined;
 	/** Test seam; production should keep SSE authenticated. */
 	readonly eventHeartbeatMs?: number;
 	/** Opaque host bindings consumed by built-in plugins in tests or embedders. */

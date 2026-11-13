@@ -1,0 +1,17 @@
+{
+	"name": "@tsukaima/ops",
+	"version": "0.1.0",
+	"private": true,
+	"bin": {
+		"tsukaima-backup-drill": "./backup-drill.ts",
+		"tsukaima-secret-scan": "./secret-scan.ts"
+	},
+	"type": "module",
+	"scripts": {
+		"backup-drill": "bun backup-drill.ts",
+		"check:secrets": "bun secret-scan.ts"
+	},
+	"dependencies": {
+		"@tsukaima/migration": "workspace:*"
+	}
+}

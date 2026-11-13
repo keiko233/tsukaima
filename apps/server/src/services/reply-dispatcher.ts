@@ -310,7 +310,6 @@ export class ReplyDispatcher {
 		const inserted = await database
 			.insert(messages)
 			.values({
-				activityId: answer.activityId,
 				chatObjectId: session.chatId,
 				contentText: text,
 				conversationId: session.sessionId,
