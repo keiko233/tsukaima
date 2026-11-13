@@ -55,6 +55,7 @@ export interface MessageSummary {
 	senderDisplayName: string;
 	senderExternalId: string | null;
 	senderKind: "human" | "bot" | "assistant" | "system";
+	triggerClassification: "ambient" | "direct" | "soft";
 }
 
 export interface SessionDetail {
@@ -115,6 +116,7 @@ function toMessageSummary(row: MessageRow): MessageSummary {
 				: row.senderExternalId === "tsukaima"
 					? "assistant"
 					: "human",
+		triggerClassification: row.triggerClassification,
 	};
 }
 

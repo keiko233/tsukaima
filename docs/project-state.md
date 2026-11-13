@@ -7,9 +7,10 @@ This file is the cross-session handoff record. Update it whenever implementation
 - Project name: `tsukaima-chatbot`.
 - Repository initialized at `<repo-root>` on branch `main`.
 - First commit: `5dc80bc Add Tsukaima Chatbot architecture and DSH migration plan`.
-- Current phase: Phase 1–7 core/library implementation complete. The closed reply loop, the oRPC
-  contract layer, the ingest boundary, persona/memory injection, admin authentication, plugin tool
-  bridging, and live WebUI updates are in place. Remaining work is the DSH cutover, the
+- Current phase: the migration-spec Phase 2 conversation policy and humanlike pacing work is
+  complete. Phase 1–7 core/library implementation remains in place: the closed reply loop, the
+  oRPC contract layer, the ingest boundary, persona/memory injection, admin authentication,
+  plugin tool bridging, and live WebUI updates. Remaining work is the DSH cutover, the
   memory/audit review surfaces, and the self-iteration UI.
 - Bun workspace, strict TypeScript config, domain schema/migrations, Pi Durable Bun SQLite adapter, startup lifecycle, Elysia + oRPC API, and React/TanStack WebUI exist.
 - Implemented packages:
@@ -17,7 +18,10 @@ This file is the cross-session handoff record. Update it whenever implementation
   - `packages/contracts`: additionally owns the oRPC `appContract` (`api.ts`), so every RPC
     input/output schema and every client-facing type has exactly one definition. The WebUI derives
     its client, query keys, and types from it; no hand-written wire types remain.
-  - `packages/core`: durable conversation host, activity aggregation, steering/follow-up submission, deterministic fake model, OpenAI-compatible provider, capability routing, and usage accounting.
+  - `packages/core`: durable conversation host, activity aggregation, trigger classification,
+  lurk-marker handling, output normalization/stripping, per-conversation execution lock,
+  steering/follow-up submission, deterministic fake model, OpenAI-compatible provider,
+  capability routing, and usage accounting.
   - `plugins/onebot-napcat/src/protocol`: outbound WebSocket channel, NapCat event normalization, private/group send actions, access-token headers, reconnect backoff, and action timeouts. The former `packages/onebot` workspace was folded into the plugin, so the protocol implementation ships only with its only consumer.
   - `packages/coding`: self-iteration runner, worktree policy, test/build/diff tools, DB-backed approval/proposal stores, and local reload controller.
   - `packages/migration`: DSH snapshot inspection, session/persona/memory/sticker/settings normalization, compression hook, dry-run/import/verify/rollback pipeline.
@@ -75,6 +79,30 @@ This file is the cross-session handoff record. Update it whenever implementation
 - `chat_objects` is separate from `conversations`, which now represents Tsukaima sessions. Each external chat object has one explicit receiving session for new messages.
 - Incoming messages are protected by a durable message receipt plus `(chat_object_id, platform_message_id)` uniqueness. Activity windows flush after inactivity and resume after restart.
 - The request inbox persists OneBot friend/group request events separately from chat turns. Decisions are capability- and connection-aware; timeouts remain uncertain.
+- Conversation policy is a versioned durable document (`tsukaima.conversationPolicy`) owned by the
+  domain `policies` table. Global defaults inherit into conversation overrides, every update
+  writes a new active revision and keeps previous rows with `isActive = 0` for history. The
+  policy owns access (`privateAccess`/`groupAccess`), allowlist/keywords/aliases/peer bots,
+  burst/cooldown/rate limits, quiet hours, output pacing, and the tool allowlist.
+- Inbound activity is classified as `direct`, `soft`, `ambient`, or `ignored`. Ignored traffic is
+  dropped before `messages` and the durable host, with a cumulative counter plus a rate-limited
+  `conversation.trigger-ignored` audit row. Ambient messages persist with
+  `messages.trigger_classification = 'ambient'` and group context but never enter the activity
+  window. Direct/soft turns receive a compact trigger contract and the model may return
+  `TSUKAIMA_LURK`; that marker is suppressed before outbound history/channel dispatch and recorded
+  as an audited no-send (`message.lurk`).
+- Burst settle, max-wait, max-count, long-message immediate submission, cooldown/rate-limit
+  aggregation, and steer-then-follow-up all run under a shared per-conversation execution lock.
+  Outbound delivery strips Markdown, splits newline units (preserving fenced code), applies the
+  immediate-message cap, optional typing/delay, send intervals, and per-conversation cancellation
+  on new inbound turns.
+- Personas are versioned rows with explicit `aliases_json` (shared with trigger aliases) and
+  active-version filtering. `persona_bindings` supports global, chat-kind, chat-object, and
+  conversation scopes; resolution is conversation/chat-object > chat-kind > global. The compact
+  identity and conversation-policy prompt sections render before memory.
+- The WebUI conversation view exposes conversation rules (trigger/access, pacing, quiet hours,
+  rate limit, output chunking/delay/typing/Markdown, tool allowlist, persona binding, and policy
+  history). All mutations use authenticated oRPC admin routes and are audited.
 
 ## Confirmed decisions
 
@@ -147,7 +175,7 @@ These are implementation-level decisions, not blockers for starting scaffolding:
 ## Implementation status
 
 - Phase 1: durable storage conformance, conversation host, fake model, activity policy/window, admin contracts, and health lifecycle are implemented.
-- Phase 2: OneBot outbound WebSocket is connected in lifecycle startup; inbound envelopes are normalized, deduplicated by domain conversation key, and routed to reusable durable conversations.
+- Phase 2: OneBot outbound WebSocket is connected in lifecycle startup; inbound envelopes are normalized, deduplicated by domain conversation key, and routed to reusable durable conversations. The migration-spec conversation policy, trigger classification/lurk handling, cooldown/burst queues, humanlike output pacing, persona binding precedence, and admin policy/persona UI/API are implemented.
 - Phase 3: model registry/policy routing, OpenAI-compatible provider, provider settings, and usage accounting are implemented; live Magpie deployment values can be supplied through WebUI settings or environment variables.
 - Phase 4: plugin SDK, registry, config validation, bridges, admin WebUI, and real Bun Worker isolation are implemented.
 - Phase 5: coding runner, worktree policy, tools, DB-backed approval/proposal stores, and reload controller are implemented.
@@ -161,13 +189,14 @@ bun run check
 ```
 
 Current baseline: lint, formatting, root TypeScript, WebUI TypeScript, WebUI production
-build, and 179 tests across 36 files pass.
+build, WebUI i18n checks, and 278 tests across 53 files pass.
 
 ## Next implementation steps
 
 Follow the ordered implementation specs in `docs/specs/README.md`:
 
-1. **Phases 0–2**: DSH baseline/audit, NapCat operational parity, and conversation policy/pacing.
+1. **Phases 0–1**: Finish the DSH baseline/audit and NapCat operational parity. Phase 2
+   conversation policy/pacing is complete.
 2. **Phase 3**: Plugin host maturity (plugin-owned migrations, `tasks.*`, `ToolPolicy`, outbound transform hook, UI slots/status, and fine-grained `ChannelCapability`) plus remaining `openai-compatible` RPC model discovery/validation and `task.created`/`task.completed` / channel-state hook emissions.
 3. **Phases 4–8**: Memory and context extraction/review, `sticker-meme`, `search-fetch`, `proactive-scheduler`, and `self-iteration` runtime/UI.
 4. **Phase 9**: Full DSH v4 snapshot/import/verify/rollback migration and NapCat cutover.
@@ -178,13 +207,13 @@ The full built-in plugin inventory and migration order are tracked in
 
 ## Current known limitations
 
-- One inbound message is answered only when its activity window flushes, so a single DM waits
-  roughly `policy.windowMs` (6 s) before the model run starts. Tune the default or add an
-  immediate first-message path.
+- One inbound message is answered when its activity window settles (roughly
+  `pacing.burstSettleMs`, 6 s by default), unless a long message or max-wait forces an earlier
+  submission. Tune the policy or add an immediate first-message path.
 - Reply delivery is at-most-once: a crash between claiming the outbound row and a successful send
   leaves a permanent `pending` row with no reconciliation job yet.
-- Replies are sent as one text part; there is no platform length chunking, and answers with no
-  text blocks (tool-only) produce no reply.
+- Answers with no text blocks (tool-only) produce no reply. Output is now newline-chunked and
+  platform-length split per unit, but there is still no media-aware unit grouping.
 - `messages.activity_id` is a dangling column: the `activities` tables were dropped while the
   column stayed.
 - `remoteModelsInputSchema` and `runtimeSettingsPatchSchema` exist both in `apps/server/src` and

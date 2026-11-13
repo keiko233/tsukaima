@@ -1,12 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
-import type { PiDurableConversationHost } from "@tsukaima/core";
+import {
+	buildTriggerContext,
+	classifyConversationTrigger,
+	type PiDurableConversationHost,
+	type ResolvedReplyTarget,
+} from "@tsukaima/core";
 import {
 	channelNoticeSchema,
+	conversationPolicySchema,
+	defaultConversationPolicy,
 	messageEnvelopeSchema,
 	messagePartsText,
 	type ChannelNotice,
 	type MessageEnvelope,
+	type TriggerDecision,
 } from "@tsukaima/contracts";
 import {
 	chatObjects,
@@ -18,19 +26,30 @@ import {
 	users,
 	userAliases,
 } from "@tsukaima/db";
+import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
+import type { ConversationPacingTracker } from "./conversation-pacing.ts";
+import type { ConversationPolicyService } from "./conversation-policy.ts";
 
 export interface ConversationIngestResult {
 	readonly activityId: string;
 	readonly chatObjectId: string;
+	readonly classification: TriggerDecision;
 	readonly duplicated: boolean;
+	readonly ignored: boolean;
 	readonly sessionId: string;
 }
 
 export interface ConversationRouterOptions {
+	readonly audit?: (entry: AuditEntry) => Promise<void>;
 	readonly database: () => TsukaimaDatabase | undefined;
 	readonly host: () => PiDurableConversationHost | undefined;
+	/** Rate limit for ignored-trigger audit rows, per channel/conversation key. */
+	readonly ignoredAuditIntervalMs?: number;
 	readonly logger: Logger;
+	readonly onInboundTrigger?: (durableConversationId: string) => void;
+	readonly pacing?: ConversationPacingTracker;
+	readonly policy?: ConversationPolicyService;
 }
 
 export const messageText = messagePartsText;
@@ -58,15 +77,41 @@ const safeChannelId = (envelope: unknown): string => {
  * `MessageEnvelope`.
  */
 export class ConversationRouter {
+	readonly #audit: ConversationRouterOptions["audit"];
 	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #host: () => PiDurableConversationHost | undefined;
+	readonly #ignoredAuditIntervalMs: number;
 	readonly #logger: Logger;
+	readonly #onInboundTrigger: ConversationRouterOptions["onInboundTrigger"];
+	readonly #pacing: ConversationPacingTracker | undefined;
+	readonly #policy: ConversationPolicyService | undefined;
 	readonly #ingesting = new Set<string>();
+	readonly #ignoredAuditAt = new Map<string, number>();
+	readonly #stats = {
+		ambient: 0,
+		direct: 0,
+		ignored: 0,
+		soft: 0,
+	};
 
 	constructor(options: ConversationRouterOptions) {
+		this.#audit = options.audit;
 		this.#database = options.database;
 		this.#host = options.host;
+		this.#ignoredAuditIntervalMs = options.ignoredAuditIntervalMs ?? 60_000;
 		this.#logger = options.logger;
+		this.#onInboundTrigger = options.onInboundTrigger;
+		this.#pacing = options.pacing;
+		this.#policy = options.policy;
+	}
+
+	triggerStats(): {
+		readonly ambient: number;
+		readonly direct: number;
+		readonly ignored: number;
+		readonly soft: number;
+	} {
+		return { ...this.#stats };
 	}
 
 	async ingest(envelope: MessageEnvelope): Promise<ConversationIngestResult> {
@@ -101,8 +146,7 @@ export class ConversationRouter {
 			const host = this.#host();
 			if (host === undefined) throw new Error("Conversation host is not ready");
 			const database = this.#requireDatabase();
-			const sender = await this.resolveIdentity(message);
-			const target = await this.resolveSession(message, sender.displayName);
+			const target = await this.resolveSession(message, message.sender.displayName);
 			const platformMessageId = message.source.messageId ?? message.id;
 			const existing = await database
 				.select({ id: messages.id })
@@ -122,84 +166,240 @@ export class ConversationRouter {
 				return {
 					activityId: "",
 					chatObjectId: target.chatObjectId,
+					classification: "direct",
 					duplicated: true,
+					ignored: false,
 					sessionId: target.sessionId,
 				};
 			}
-			const result = await host.append({
-				conversationId: target.durableConversationId,
+
+			const policy =
+				(await this.#policy?.effectivePolicy(target.sessionId)) ??
+				conversationPolicySchema.parse(defaultConversationPolicy);
+			const selfAliases =
+				(await this.#policy?.selfAliases(target.sessionId, policy)) ?? policy.trigger.selfAliases;
+			const replyTarget = await this.#resolveReplyTarget(
+				database,
+				target.chatObjectId,
+				message.target?.replyToEnvelopeId,
+			);
+			const recentActivity =
+				this.#pacing?.isRecentlyActive(
+					target.durableConversationId,
+					Math.max(300_000, policy.pacing.burstMaxWaitMs),
+				) ?? false;
+			const trigger = classifyConversationTrigger({
+				chatKind: message.conversationKey.kind,
 				envelope: message,
-				submittedAtMs: Date.now(),
+				policy,
+				recentActivity,
+				selfAliases,
+				...(replyTarget === undefined ? {} : { replyTarget }),
 			});
-			const occurredAt = new Date(
-				message.source.timestampMs > 0 ? message.source.timestampMs : Date.now(),
-			).toISOString();
-			const now = new Date().toISOString();
-			await database
-				.insert(messages)
-				.values({
-					activityId: result.activityId,
+			this.#stats[trigger.classification] += 1;
+
+			if (trigger.classification === "ignored") {
+				await this.#recordIgnored(message, target.sessionId, target.chatObjectId, trigger.reason);
+				messageLog.warn("conversation trigger ignored", {
 					chatObjectId: target.chatObjectId,
-					contentText: messageText(message.parts),
-					conversationId: target.sessionId,
-					direction: "inbound",
-					id: randomUUID(),
-					ingestedAt: now,
-					kind: message.channelKind,
-					occurredAt,
-					partsJson: JSON.stringify(message.parts),
-					platformMessageId,
-					rawRefJson: JSON.stringify(message),
-					...(message.target?.replyToEnvelopeId === undefined
-						? {}
-						: { replyToMessageId: message.target.replyToEnvelopeId }),
-					senderDisplayName: sender.displayName,
-					senderExternalId: message.sender.platformId,
-					senderUserId: sender.userId,
-					updatedAt: now,
-				})
-				.onConflictDoNothing();
-			await Promise.all([
-				database
-					.update(chatObjects)
-					.set({ updatedAt: now })
-					.where(eq(chatObjects.id, target.chatObjectId)),
-				database
-					.update(conversations)
-					.set({ updatedAt: now })
-					.where(eq(conversations.id, target.sessionId)),
-			]);
-			if (message.conversationKey.kind === "group") {
-				await database
-					.insert(conversationMembers)
-					.values({
-						conversationId: target.sessionId,
-						lastSeenAt: occurredAt,
-						role: message.sender.groupRole === "admin" ? "admin" : "member",
-						userId: sender.userId,
-						...(message.sender.groupRole === undefined
-							? {}
-							: { platformRole: message.sender.groupRole }),
-					})
-					.onConflictDoUpdate({
-						set: { lastSeenAt: occurredAt },
-						target: [conversationMembers.conversationId, conversationMembers.userId],
-					});
+					reason: trigger.reason,
+					sessionId: target.sessionId,
+				});
+				return {
+					activityId: "",
+					chatObjectId: target.chatObjectId,
+					classification: "ignored",
+					duplicated: false,
+					ignored: true,
+					sessionId: target.sessionId,
+				};
 			}
+
+			const sender = await this.resolveIdentity(message);
+			let activityId = "";
+			if (trigger.classification !== "ambient") {
+				this.#onInboundTrigger?.(target.durableConversationId);
+				await this.#policy?.ensureHostPolicy(target.sessionId, target.durableConversationId);
+				const cooldownMs =
+					this.#pacing?.remainingCooldownMs(target.durableConversationId, policy) ?? 0;
+				const result = await host.append({
+					classification: trigger.classification,
+					collectOnly: cooldownMs > 0,
+					conversationId: target.durableConversationId,
+					envelope: message,
+					submittedAtMs: Date.now(),
+					triggerContext: buildTriggerContext({
+						classification: trigger.classification,
+						result: trigger,
+						...(message.sender.isBot === undefined ? {} : { senderIsBot: message.sender.isBot }),
+					}),
+				});
+				activityId = result.activityId;
+				if (cooldownMs > 0) {
+					host.scheduleActivityFlushAfter(target.durableConversationId, cooldownMs);
+				}
+			}
+			await this.#persistInbound(database, {
+				activityId: activityId === "" ? null : activityId,
+				classification: trigger.classification,
+				envelope: message,
+				sender,
+				target,
+			});
 			messageLog.info("channel message processed", {
 				chatObjectId: target.chatObjectId,
+				classification: trigger.classification,
 				durationMs: Math.round(performance.now() - startedAt),
-				duplicated: result.deduplicated,
 				sessionId: target.sessionId,
 			});
 			return {
-				activityId: result.activityId,
+				activityId,
 				chatObjectId: target.chatObjectId,
-				duplicated: result.deduplicated,
+				classification: trigger.classification,
+				duplicated: false,
+				ignored: false,
 				sessionId: target.sessionId,
 			};
 		} finally {
 			this.#ingesting.delete(ingestionKey);
+		}
+	}
+
+	async #recordIgnored(
+		envelope: MessageEnvelope,
+		sessionId: string,
+		chatObjectId: string,
+		reason: string,
+	): Promise<void> {
+		const key = `${envelope.channelId}:${chatObjectId}`;
+		const now = Date.now();
+		if (now - (this.#ignoredAuditAt.get(key) ?? 0) < this.#ignoredAuditIntervalMs) return;
+		this.#ignoredAuditAt.set(key, now);
+		this.#logger.warn("ignored inbound activity", {
+			channelId: envelope.channelId,
+			chatObjectId,
+			reason,
+			// Counter is cumulative; the audit/log row is rate-limited per conversation.
+			ignoredTotal: this.#stats.ignored,
+		});
+		try {
+			await this.#audit?.({
+				action: "conversation.trigger-ignored",
+				actorId: envelope.sender.platformId,
+				actorKind: "user",
+				payload: {
+					channelId: envelope.channelId,
+					conversationKind: envelope.conversationKey.kind,
+					reason,
+				},
+				result: "denied",
+				targetId: sessionId,
+				targetKind: "session",
+			});
+		} catch {
+			// Audit failure must not make unauthorized traffic retryable.
+		}
+	}
+
+	async #resolveReplyTarget(
+		database: TsukaimaDatabase,
+		chatObjectId: string,
+		replyToEnvelopeId: string | undefined,
+	): Promise<ResolvedReplyTarget | undefined> {
+		if (replyToEnvelopeId === undefined) return undefined;
+		const [row] = await database
+			.select({
+				direction: messages.direction,
+				senderExternalId: messages.senderExternalId,
+				senderKind: messages.senderExternalId,
+			})
+			.from(messages)
+			.where(
+				and(
+					eq(messages.chatObjectId, chatObjectId),
+					eq(messages.platformMessageId, replyToEnvelopeId),
+				),
+			)
+			.limit(1);
+		if (row === undefined) return undefined;
+		return {
+			direction: row.direction,
+			senderExternalId: row.senderExternalId,
+			senderKind:
+				row.direction === "outbound"
+					? "assistant"
+					: row.senderExternalId === "tsukaima"
+						? "assistant"
+						: "human",
+		};
+	}
+
+	async #persistInbound(
+		database: TsukaimaDatabase,
+		input: {
+			activityId: string | null;
+			classification: "ambient" | "direct" | "soft";
+			envelope: MessageEnvelope;
+			sender: { displayName: string; userId: string };
+			target: { chatObjectId: string; sessionId: string };
+		},
+	): Promise<void> {
+		const message = input.envelope;
+		const occurredAt = new Date(
+			message.source.timestampMs > 0 ? message.source.timestampMs : Date.now(),
+		).toISOString();
+		const now = new Date().toISOString();
+		await database
+			.insert(messages)
+			.values({
+				activityId: input.activityId,
+				chatObjectId: input.target.chatObjectId,
+				contentText: messageText(message.parts),
+				conversationId: input.target.sessionId,
+				direction: "inbound",
+				id: randomUUID(),
+				ingestedAt: now,
+				kind: message.channelKind,
+				occurredAt,
+				partsJson: JSON.stringify(message.parts),
+				platformMessageId: message.source.messageId ?? message.id,
+				rawRefJson: JSON.stringify(message),
+				...(message.target?.replyToEnvelopeId === undefined
+					? {}
+					: { replyToMessageId: message.target.replyToEnvelopeId }),
+				senderDisplayName: input.sender.displayName,
+				senderExternalId: message.sender.platformId,
+				senderUserId: input.sender.userId,
+				triggerClassification: input.classification,
+				updatedAt: now,
+			})
+			.onConflictDoNothing();
+		await Promise.all([
+			database
+				.update(chatObjects)
+				.set({ updatedAt: now })
+				.where(eq(chatObjects.id, input.target.chatObjectId)),
+			database
+				.update(conversations)
+				.set({ updatedAt: now })
+				.where(eq(conversations.id, input.target.sessionId)),
+		]);
+		if (message.conversationKey.kind === "group") {
+			await database
+				.insert(conversationMembers)
+				.values({
+					conversationId: input.target.sessionId,
+					lastSeenAt: occurredAt,
+					role: message.sender.groupRole === "admin" ? "admin" : "member",
+					userId: input.sender.userId,
+					...(message.sender.groupRole === undefined
+						? {}
+						: { platformRole: message.sender.groupRole }),
+				})
+				.onConflictDoUpdate({
+					set: { lastSeenAt: occurredAt },
+					target: [conversationMembers.conversationId, conversationMembers.userId],
+				});
 		}
 	}
 

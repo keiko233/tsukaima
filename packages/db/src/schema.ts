@@ -266,6 +266,11 @@ export const messages = sqliteTable(
 		senderDisplayName: text("sender_display_name"),
 		senderExternalId: text("sender_external_id"),
 		senderUserId: text("sender_user_id").references(() => users.id, { onDelete: "set null" }),
+		triggerClassification: text("trigger_classification", {
+			enum: ["direct", "soft", "ambient"],
+		})
+			.notNull()
+			.default("direct"),
 		updatedAt: text("updated_at").notNull().default(now),
 	},
 	(table) => [
@@ -320,10 +325,11 @@ export const requests = sqliteTable(
 export const personas = sqliteTable(
 	"personas",
 	{
+		aliasesJson: text("aliases_json").notNull().default("[]"),
 		behaviorJson: text("behavior_json").notNull(),
 		createdAt: text("created_at").notNull().default(now),
 		createdBy: text("created_by"),
-		id: text("id").primaryKey(),
+		id: text("id").notNull(),
 		isActive: integer("is_active").notNull().default(0),
 		modelPolicyId: text("model_policy_id"),
 		name: text("name").notNull(),
@@ -331,21 +337,38 @@ export const personas = sqliteTable(
 		summary: text("summary").notNull(),
 		version: integer("version").notNull(),
 	},
-	(table) => [unique("personas_id_version_unique").on(table.id, table.version)],
+	(table) => [
+		primaryKey({ columns: [table.id, table.version] }),
+		unique("personas_id_version_unique").on(table.id, table.version),
+	],
 );
 
-export const personaBindings = sqliteTable("persona_bindings", {
-	conversationId: text("conversation_id").references(() => conversations.id, {
-		onDelete: "cascade",
-	}),
-	createdAt: text("created_at").notNull().default(now),
-	id: text("id").primaryKey(),
-	isActive: integer("is_active").notNull().default(1),
-	isGlobal: integer("is_global").notNull(),
-	personaId: text("persona_id")
-		.notNull()
-		.references(() => personas.id, { onDelete: "restrict" }),
-});
+export const personaBindings = sqliteTable(
+	"persona_bindings",
+	{
+		chatKind: text("chat_kind", { enum: ["private", "group"] }),
+		chatObjectId: text("chat_object_id").references(() => chatObjects.id, {
+			onDelete: "cascade",
+		}),
+		conversationId: text("conversation_id").references(() => conversations.id, {
+			onDelete: "cascade",
+		}),
+		createdAt: text("created_at").notNull().default(now),
+		id: text("id").primaryKey(),
+		isActive: integer("is_active").notNull().default(1),
+		isGlobal: integer("is_global").notNull(),
+		personaId: text("persona_id").notNull(),
+	},
+	(table) => [
+		index("persona_bindings_target_idx").on(
+			table.isActive,
+			table.isGlobal,
+			table.chatKind,
+			table.chatObjectId,
+			table.conversationId,
+		),
+	],
+);
 
 export const modelPolicies = sqliteTable(
 	"model_policies",

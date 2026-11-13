@@ -5,11 +5,10 @@ import {
 	conversations,
 	memories,
 	messages,
-	personaBindings,
-	personas,
 	type TsukaimaDatabase,
 } from "@tsukaima/db";
 import type { Logger } from "../logging.ts";
+import { ConversationPolicyService } from "./conversation-policy.ts";
 
 /**
  * Combined persona + memory character budget for one request, in characters (not tokens,
@@ -47,6 +46,8 @@ export interface DrizzleContextProviderOptions {
 	readonly budgetChars?: number;
 	/** Maximum memories injected per request; mainly for tests. */
 	readonly memoryTopK?: number;
+	/** Shared policy resolution; a database-backed service is created when omitted. */
+	readonly policyService?: ConversationPolicyService;
 }
 
 type MemoryRow = {
@@ -113,32 +114,13 @@ function truncateChars(text: string, max: number, note: string): string {
 	return `${text.slice(0, max - suffix.length)}${suffix}`;
 }
 
-/** Prompt text from `personas.prompt_json`; tolerates raw strings and common object shapes. */
-function personaPromptText(promptJson: string): string | undefined {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(promptJson);
-	} catch {
-		const raw = promptJson.trim();
-		return raw.length > 0 ? raw : undefined;
-	}
-	if (typeof parsed === "string" && parsed.trim().length > 0) return parsed.trim();
-	if (parsed !== null && typeof parsed === "object") {
-		for (const key of ["prompt", "system", "instructions", "text"] as const) {
-			const value = (parsed as Record<string, unknown>)[key];
-			if (typeof value === "string" && value.trim().length > 0) return value.trim();
-		}
-	}
-	return undefined;
-}
-
 function personaText(persona: {
 	readonly name: string;
-	readonly promptJson: string;
+	readonly prompt: string;
 	readonly summary: string;
 }): string | undefined {
-	const prompt = personaPromptText(persona.promptJson);
-	if (prompt !== undefined) return prompt;
+	const prompt = persona.prompt.trim();
+	if (prompt.length > 0) return prompt;
 	const summary = persona.summary.trim();
 	if (summary.length > 0) return `${persona.name}: ${summary}`;
 	return persona.name.trim().length > 0 ? persona.name.trim() : undefined;
@@ -150,6 +132,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	readonly #logger: Logger;
 	readonly #memoryTopK: number;
 	readonly #personaBudget: number;
+	readonly #policyService: ConversationPolicyService;
 
 	constructor(options: DrizzleContextProviderOptions) {
 		this.#database = options.database;
@@ -157,6 +140,13 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		this.#budgetChars = options.budgetChars ?? PROMPT_BUDGET_CHARS;
 		this.#memoryTopK = options.memoryTopK ?? DEFAULT_MEMORY_TOP_K;
 		this.#personaBudget = Math.floor(this.#budgetChars * PERSONA_BUDGET_FRACTION);
+		this.#policyService =
+			options.policyService ??
+			new ConversationPolicyService({
+				database: options.database,
+				host: () => undefined,
+				logger: options.logger,
+			});
 	}
 
 	async renderPersona(durableConversationId: string): Promise<string | undefined> {
@@ -164,24 +154,54 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			const database = this.#database();
 			if (database === undefined) return undefined;
 			const session = await this.#resolveSession(database, durableConversationId);
-			const binding = session?.personaBinding;
-			if (binding === undefined) return undefined;
-			const [persona] = await database
-				.select({
-					name: personas.name,
-					promptJson: personas.promptJson,
-					summary: personas.summary,
-				})
-				.from(personas)
-				.where(and(eq(personas.id, binding.personaId), eq(personas.isActive, 1)))
-				.orderBy(desc(personas.version))
-				.limit(1);
+			if (session === undefined) return undefined;
+			const persona = await this.#policyService.personaForSession({
+				...session,
+				conversationId: session.sessionId,
+			});
 			if (persona === undefined) return undefined;
 			const text = personaText(persona);
 			if (text === undefined) return undefined;
 			return truncateChars(text, this.#personaBudget, PERSONA_TRUNCATION_NOTE);
 		} catch (error) {
 			this.#logger.warn("persona context unavailable", { error: errorMessage(error) });
+			return undefined;
+		}
+	}
+
+	/**
+	 * Compact identity + conversation contract. It names only user-visible behavior and never
+	 * leaks plugin/package/database/transport internals into the prompt.
+	 */
+	async renderPolicy(durableConversationId: string): Promise<string | undefined> {
+		try {
+			const database = this.#database();
+			if (database === undefined) return undefined;
+			const session = await this.#resolveSession(database, durableConversationId);
+			if (session === undefined) return undefined;
+			const [policy, persona] = await Promise.all([
+				this.#policyService.effectivePolicy(session.sessionId),
+				this.#policyService.personaForSession({ ...session, conversationId: session.sessionId }),
+			]);
+			const lines = ["Conversation contract:"];
+			if (persona !== undefined) lines.push(`- Speak as: ${persona.name}`);
+			lines.push(
+				`- Access: private ${policy.trigger.privateAccess}, group ${policy.trigger.groupAccess}`,
+				`- Group mentions: ${policy.trigger.groupMentionMode}`,
+				`- Reply pacing: settle ${policy.pacing.burstSettleMs} ms, wait at most ${policy.pacing.burstMaxWaitMs} ms, cooldown ${policy.pacing.replyCooldownMs} ms`,
+				`- Output: up to ${policy.pacing.maxImmediateOutputMessages} immediate messages, ${policy.pacing.sendIntervalMs} ms apart, markdown ${policy.pacing.stripMarkdown ? "stripped" : "kept"}`,
+			);
+			if (policy.trigger.keywords.length > 0) {
+				lines.push(`- Wake keywords: ${policy.trigger.keywords.join(", ")}`);
+			}
+			const aliases = [
+				...new Set([...policy.trigger.selfAliases, ...(persona?.selfAliases ?? [])]),
+			];
+			if (aliases.length > 0) lines.push(`- Self aliases: ${aliases.join(", ")}`);
+			lines.push("- If a reply would be noise, answer with exactly TSUKAIMA_LURK.");
+			return lines.join("\n");
+		} catch (error) {
+			this.#logger.warn("policy context unavailable", { error: errorMessage(error) });
 			return undefined;
 		}
 	}
@@ -205,7 +225,12 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 						eq(memories.conversationId, session.sessionId),
 					]),
 				);
-				if (session.personaBinding !== undefined) {
+				if (
+					(await this.#policyService.personaForSession({
+						...session,
+						conversationId: session.sessionId,
+					})) !== undefined
+				) {
 					scopes.push(
 						combine([
 							eq(memories.scope, "persona"),
@@ -235,40 +260,29 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		database: TsukaimaDatabase,
 		durableConversationId: string,
 	): Promise<
-		{ personaBinding?: { readonly personaId: string }; readonly sessionId: string } | undefined
+		| {
+				chatKind: string;
+				chatObjectId: string | null;
+				sessionId: string;
+		  }
+		| undefined
 	> {
 		const [session] = await database
-			.select({ id: conversations.id })
+			.select({
+				chatKind: conversations.kind,
+				chatObjectId: conversations.chatObjectId,
+				id: conversations.id,
+			})
 			.from(conversations)
 			.where(eq(conversations.durableConversationId, durableConversationId))
 			.orderBy(desc(conversations.updatedAt))
 			.limit(1);
 		if (session === undefined) return undefined;
-		const personaBinding = await this.#resolvePersonaBinding(database, session.id);
 		return {
+			chatKind: session.chatKind,
+			chatObjectId: session.chatObjectId,
 			sessionId: session.id,
-			...(personaBinding === undefined ? {} : { personaBinding }),
 		};
-	}
-
-	async #resolvePersonaBinding(
-		database: TsukaimaDatabase,
-		sessionId: string,
-	): Promise<{ readonly personaId: string } | undefined> {
-		const [conversationBinding] = await database
-			.select({ personaId: personaBindings.personaId })
-			.from(personaBindings)
-			.where(and(eq(personaBindings.conversationId, sessionId), eq(personaBindings.isActive, 1)))
-			.orderBy(desc(personaBindings.createdAt))
-			.limit(1);
-		if (conversationBinding !== undefined) return conversationBinding;
-		const [globalBinding] = await database
-			.select({ personaId: personaBindings.personaId })
-			.from(personaBindings)
-			.where(and(eq(personaBindings.isGlobal, 1), eq(personaBindings.isActive, 1)))
-			.orderBy(desc(personaBindings.createdAt))
-			.limit(1);
-		return globalBinding;
 	}
 
 	/**

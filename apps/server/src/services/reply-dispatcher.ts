@@ -1,11 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, lt } from "drizzle-orm";
-import type { MessagePart } from "@tsukaima/contracts";
-import type { ConversationAnswer } from "@tsukaima/core";
+import {
+	type ConversationPolicy,
+	defaultConversationPolicy,
+	type MessagePart,
+} from "@tsukaima/contracts";
+import {
+	boundedReplyDelayMs,
+	type ConversationAnswer,
+	extractLurkMarker,
+	prepareOutboundText,
+	withConversationLock,
+} from "@tsukaima/core";
 import { chatObjects, conversations, messages, type TsukaimaDatabase } from "@tsukaima/db";
 import type { AuditEntry, ChannelHistoryItem } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
+import type { ConversationPacingTracker } from "./conversation-pacing.ts";
+import type { ConversationPolicyService } from "./conversation-policy.ts";
 import type { HookBus } from "./hook-bus.ts";
 
 type ChatKind = "private" | "group" | "webui" | "task" | "plugin";
@@ -73,6 +85,11 @@ export interface ReplyDispatcherOptions {
 	readonly reconcileLookbackMs?: number;
 	readonly replyAsQuote?: boolean;
 	readonly now?: () => number;
+	readonly pacing?: ConversationPacingTracker;
+	readonly policy?: ConversationPolicyService;
+	/** Test seams for deterministic pacing. */
+	readonly random?: () => number;
+	readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 
 export interface ReconcilePendingResult {
@@ -99,6 +116,11 @@ export class ReplyDispatcher {
 	readonly #reconcileLookbackMs: number;
 	readonly #replyAsQuote: boolean;
 	readonly #splitMaxChars: number;
+	readonly #policy: ConversationPolicyService | undefined;
+	readonly #pacing: ConversationPacingTracker | undefined;
+	readonly #random: () => number;
+	readonly #sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+	readonly #pendingOutput = new Map<string, AbortController>();
 	#reconcileTimer: ReturnType<typeof setInterval> | undefined;
 
 	constructor(options: ReplyDispatcherOptions) {
@@ -113,6 +135,33 @@ export class ReplyDispatcher {
 		this.#reconcileLookbackMs = options.reconcileLookbackMs ?? DEFAULT_RECONCILE_LOOKBACK_MS;
 		this.#replyAsQuote = options.replyAsQuote ?? false;
 		this.#now = options.now ?? Date.now;
+		this.#policy = options.policy;
+		this.#pacing = options.pacing;
+		this.#random = options.random ?? Math.random;
+		this.#sleep =
+			options.sleep ??
+			((ms, signal) =>
+				new Promise<void>((resolve, reject) => {
+					if (signal.aborted) {
+						reject(new OutputCancelledError());
+						return;
+					}
+					const timer = setTimeout(resolve, ms);
+					const onAbort = () => {
+						clearTimeout(timer);
+						reject(new OutputCancelledError());
+					};
+					signal.addEventListener("abort", onAbort, { once: true });
+				}));
+	}
+
+	/** Cancel queued output for one conversation without touching other chats. */
+	cancelPendingOutput(conversationId: string): boolean {
+		const controller = this.#pendingOutput.get(conversationId);
+		if (controller === undefined) return false;
+		controller.abort();
+		this.#logger.info("pending output cancelled", { conversationId });
+		return true;
 	}
 
 	async handleAnswer(answer: ConversationAnswer): Promise<void> {
@@ -138,13 +187,61 @@ export class ReplyDispatcher {
 			});
 			return;
 		}
+
+		const lurk = extractLurkMarker(answer.text);
+		if (lurk.lurk) {
+			this.#pacing?.recordLurk(answer.conversationId);
+			await this.#audit({
+				action: "message.lurk",
+				actorKind: "agent",
+				payload: {
+					activityId: answer.activityId,
+					entryId: answer.entryId,
+					remainingText: lurk.text,
+				},
+				result: "ok",
+				targetId: session.sessionId,
+				targetKind: "session",
+			});
+			this.#logger.info("assistant lurk marker suppressed", {
+				conversationId: answer.conversationId,
+				entryId: answer.entryId,
+			});
+			return;
+		}
+
+		let policy: ConversationPolicy = defaultConversationPolicy;
+		try {
+			policy = (await this.#policy?.effectivePolicy(session.sessionId)) ?? policy;
+		} catch (error) {
+			this.#logger.warn("reply pacing policy unavailable", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+		const prepared = prepareOutboundText(answer.text, policy.pacing);
+		if (prepared.units.length === 0) return;
+		if (prepared.overflowCount > 0) {
+			await this.#audit({
+				action: "message.output-overflow",
+				actorKind: "agent",
+				payload: {
+					immediateCap: policy.pacing.maxImmediateOutputMessages,
+					overflowCount: prepared.overflowCount,
+				},
+				result: "ok",
+				targetId: session.sessionId,
+				targetKind: "session",
+			});
+		}
+
 		const chatKind: ChatKind = session.chatKind;
 		const external = isExternalChat(chatKind);
 		const channelId = session.channelId;
 		const channelKind =
 			external && channelId !== null ? this.#channels.get(channelId)?.kind : undefined;
 		const kind = external ? (channelKind ?? "plugin") : chatKind;
-		const parts: MessagePart[] = [{ text: answer.text, type: "text" }];
+		const text = prepared.text;
+		const parts: MessagePart[] = [{ text, type: "text" }];
 		const now = new Date().toISOString();
 		const id = randomUUID();
 		const inserted = await database
@@ -152,7 +249,7 @@ export class ReplyDispatcher {
 			.values({
 				activityId: answer.activityId,
 				chatObjectId: session.chatId,
-				contentText: answer.text,
+				contentText: text,
 				conversationId: session.sessionId,
 				deliveryStatus: external ? "pending" : "sent",
 				direction: "outbound",
@@ -192,26 +289,30 @@ export class ReplyDispatcher {
 				chatObjectId: session.chatId,
 				entryId: answer.entryId,
 				sessionId: session.sessionId,
-				text: answer.text,
+				text,
 			});
 		}
 		const deliveryStatus = external
 			? await this.#deliver(database, {
 					channelId,
 					chatKind,
+					conversationId: answer.conversationId,
 					id,
 					parts,
 					platformConversationId: session.platformConversationId,
+					policy,
 					sessionId: session.sessionId,
+					units: prepared.units,
 				})
 			: "sent";
+		this.#pacing?.recordReply(answer.conversationId);
 		this.#hooks.emitDetached("after.reply", {
 			channelId,
 			chatObjectId: session.chatId,
 			deliveryStatus,
 			entryId: answer.entryId,
 			sessionId: session.sessionId,
-			text: answer.text,
+			text,
 		});
 	}
 
@@ -385,12 +486,15 @@ export class ReplyDispatcher {
 		target: {
 			channelId: string | null;
 			chatKind: "private" | "group";
+			conversationId: string;
 			id: string;
 			parts: readonly MessagePart[];
 			platformConversationId: string | null;
+			policy: ConversationPolicy;
 			sessionId: string;
+			units: readonly string[];
 		},
-	): Promise<"sent" | "failed" | "uncertain"> {
+	): Promise<"failed" | "sent" | "uncertain"> {
 		const { channelId, platformConversationId } = target;
 		if (channelId === null || platformConversationId === null) {
 			return this.#fail(database, target.id, target.sessionId, "External chat has no destination", {
@@ -398,51 +502,116 @@ export class ReplyDispatcher {
 				platformConversationId,
 			});
 		}
-		const chunks = splitMessageParts(target.parts, this.#splitMaxChars);
-		const replyTo = this.#replyAsQuote
-			? await this.#quoteTarget(database, target.sessionId, target.chatKind)
-			: undefined;
-		let firstPlatformMessageId: string | null = null;
-		try {
-			for (const [index, chunk] of chunks.entries()) {
-				const result = await this.#channels.send(
-					channelId,
-					target.chatKind,
-					platformConversationId,
-					chunk,
-					replyTo === undefined || index > 0 ? undefined : { replyToPlatformMessageId: replyTo },
-				);
-				if (firstPlatformMessageId === null && result.platformMessageId !== undefined) {
-					firstPlatformMessageId = result.platformMessageId;
+		return withConversationLock(target.conversationId, async () => {
+			const controller = new AbortController();
+			this.#pendingOutput.set(target.conversationId, controller);
+			const replyTo = this.#replyAsQuote
+				? await this.#quoteTarget(database, target.sessionId, target.chatKind)
+				: undefined;
+			let firstPlatformMessageId: string | null = null;
+			let sentCount = 0;
+			try {
+				if (target.policy.pacing.typingEnabled) {
+					await this.#channels.sendTyping(channelId, target.chatKind, platformConversationId, true);
 				}
-			}
-			await database
-				.update(messages)
-				.set({
-					deliveryStatus: "sent",
-					platformMessageId: firstPlatformMessageId,
-					updatedAt: new Date().toISOString(),
-				})
-				.where(eq(messages.id, target.id));
-			await this.#audit({
-				action: "message.send-reply",
-				payload: {
-					chunkCount: chunks.length,
+				const delayMs = boundedReplyDelayMs(target.policy.pacing, this.#random);
+				if (delayMs > 0) await this.#sleep(delayMs, controller.signal);
+				for (const [unitIndex, unit] of target.units.entries()) {
+					const unitParts: MessagePart[] = [{ text: unit, type: "text" }];
+					const chunks = splitMessageParts(unitParts, this.#splitMaxChars);
+					for (const [chunkIndex, chunk] of chunks.entries()) {
+						if (controller.signal.aborted) throw new OutputCancelledError();
+						const result = await this.#channels.send(
+							channelId,
+							target.chatKind,
+							platformConversationId,
+							chunk,
+							replyTo !== undefined && unitIndex === 0 && chunkIndex === 0
+								? { replyToPlatformMessageId: replyTo }
+								: undefined,
+						);
+						if (firstPlatformMessageId === null && result.platformMessageId !== undefined) {
+							firstPlatformMessageId = result.platformMessageId;
+						}
+						sentCount += 1;
+						if (
+							target.policy.pacing.sendIntervalMs > 0 &&
+							(unitIndex < target.units.length - 1 || chunkIndex < chunks.length - 1)
+						) {
+							await this.#sleep(target.policy.pacing.sendIntervalMs, controller.signal);
+						}
+					}
+				}
+				await database
+					.update(messages)
+					.set({
+						deliveryStatus: "sent",
+						platformMessageId: firstPlatformMessageId,
+						updatedAt: new Date().toISOString(),
+					})
+					.where(eq(messages.id, target.id));
+				await this.#audit({
+					action: "message.send-reply",
+					payload: {
+						chatKind: target.chatKind,
+						platformConversationId,
+						sentCount,
+						unitCount: target.units.length,
+					},
+					result: "ok",
+					targetId: target.sessionId,
+					targetKind: "session",
+				});
+				return "sent";
+			} catch (error) {
+				if (error instanceof OutputCancelledError) {
+					const deliveryStatus = sentCount === 0 ? "failed" : "uncertain";
+					await database
+						.update(messages)
+						.set({
+							deliveryStatus,
+							platformMessageId: firstPlatformMessageId,
+							updatedAt: new Date().toISOString(),
+						})
+						.where(eq(messages.id, target.id));
+					await this.#audit({
+						action: "message.cancel-output",
+						payload: {
+							chatKind: target.chatKind,
+							platformConversationId,
+							remainingUnits: target.units.length,
+							sentCount,
+						},
+						reason: "superseded by new inbound activity",
+						result: "ok",
+						targetId: target.sessionId,
+						targetKind: "session",
+					});
+					this.#logger.info("assistant reply delivery cancelled", {
+						sentCount,
+						sessionId: target.sessionId,
+					});
+					return deliveryStatus;
+				}
+				const message = error instanceof Error ? error.message : String(error);
+				return this.#fail(database, target.id, target.sessionId, message, {
 					chatKind: target.chatKind,
 					platformConversationId,
-				},
-				result: "ok",
-				targetId: target.sessionId,
-				targetKind: "session",
-			});
-			return "sent";
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			return this.#fail(database, target.id, target.sessionId, message, {
-				chatKind: target.chatKind,
-				platformConversationId,
-			});
-		}
+				});
+			} finally {
+				if (target.policy.pacing.typingEnabled) {
+					await this.#channels.sendTyping(
+						channelId,
+						target.chatKind,
+						platformConversationId,
+						false,
+					);
+				}
+				if (this.#pendingOutput.get(target.conversationId) === controller) {
+					this.#pendingOutput.delete(target.conversationId);
+				}
+			}
+		});
 	}
 
 	async #quoteTarget(
@@ -485,6 +654,13 @@ export class ReplyDispatcher {
 			targetKind: "session",
 		});
 		return deliveryStatus;
+	}
+}
+
+class OutputCancelledError extends Error {
+	constructor() {
+		super("Output cancelled");
+		this.name = "OutputCancelledError";
 	}
 }
 

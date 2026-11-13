@@ -87,6 +87,8 @@ export interface ChannelAdapter {
 		options?: SendOptions,
 	): Promise<SendResult>;
 	onEnvelope(handler: (envelope: MessageEnvelope) => void): void;
+	/** Optional typing/input indicator. Transport-only: callers decide pacing/trigger policy. */
+	sendTyping?(target: OutboundTarget, typing: boolean): Promise<void>;
 	/** Dedicated notice channel; notices never masquerade as message envelopes. */
 	onNotice?(handler: (notice: ChannelNotice) => void): void;
 	onRequest?(handler: (request: ChannelRequest) => void): void;
