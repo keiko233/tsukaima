@@ -22,8 +22,6 @@ export type {
 	LogLevel,
 	LogSnapshot,
 	MessageSummary,
-	ModelPolicy,
-	ModelPolicyRow,
 	PluginRow,
 	PluginStatusSnapshot,
 	RequestRow,
