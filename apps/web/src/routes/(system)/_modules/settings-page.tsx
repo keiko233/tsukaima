@@ -9,7 +9,6 @@ import { applyLocale } from "@/lib/locale";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { getLocale, locales, toLocale, type Locale } from "@/paraglide/runtime";
-import { PluginConfigForm } from "./plugin-config-form";
 import { SystemPage } from "./page-header";
 
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
@@ -22,7 +21,6 @@ export function SettingsPage() {
 	const toast = useToast();
 	const queryClient = useQueryClient();
 	const settingsQuery = useQuery(orpc.admin.settings.get.queryOptions());
-	const pluginsQuery = useQuery(orpc.admin.plugins.list.queryOptions());
 	const updateSettings = useMutation(
 		orpc.admin.settings.update.mutationOptions({
 			onError: (error) =>
@@ -40,10 +38,6 @@ export function SettingsPage() {
 	}
 
 	const settings = settingsQuery.data;
-	const providers = (pluginsQuery.data ?? []).filter(
-		(plugin) => plugin.modelProviders.length > 0,
-	);
-	const modelProviderId = settings?.modelProviderId ?? providers[0]?.modelProviders[0] ?? "";
 	const changeLocale = (value: string) => {
 		const next = toLocale(value);
 		if (next === undefined || next === locale) return;
@@ -85,6 +79,9 @@ export function SettingsPage() {
 						<CardTitle as="h2">{m.settings_title()}</CardTitle>
 					</CardHeader>
 					<CardContent className="space-y-4">
+						<div className="px-1 text-sm font-medium text-foreground">
+							{m.settings_log_level_label()}
+						</div>
 						<Select
 							value={settings?.logLevel ?? "info"}
 							onValueChange={(value) => updateSettings.mutate({ logLevel: value as LogLevel })}
@@ -100,42 +97,6 @@ export function SettingsPage() {
 								))}
 							</SelectContent>
 						</Select>
-						{providers.length > 0 ? (
-							<div className="space-y-1.5">
-								<div className="px-1 text-sm font-medium text-foreground">
-									{m.settings_provider_label()}
-								</div>
-								<Select
-									value={modelProviderId}
-									onValueChange={(value) => updateSettings.mutate({ modelProviderId: value })}
-								>
-									<SelectTrigger className="w-full">
-										<SelectValue placeholder={m.settings_provider_placeholder()} />
-									</SelectTrigger>
-									<SelectContent>
-										{providers.flatMap((plugin) =>
-											plugin.modelProviders.map((providerId) => (
-												<SelectItem key={providerId} value={providerId}>
-													{providerId} ({plugin.name})
-												</SelectItem>
-											)),
-										)}
-									</SelectContent>
-								</Select>
-								<p className="text-xs text-muted-foreground">{m.settings_provider_hint()}</p>
-							</div>
-						) : null}
-					</CardContent>
-				</Card>
-				<Card size="compact">
-					<CardHeader>
-						<CardTitle as="h2">{m.settings_channels_title()}</CardTitle>
-					</CardHeader>
-					<CardContent className="space-y-4">
-						<p className="text-xs text-muted-foreground">{m.settings_channels_hint()}</p>
-						{(pluginsQuery.data ?? []).map((plugin) => (
-							<PluginConfigForm key={plugin.id} plugin={plugin} />
-						))}
 					</CardContent>
 				</Card>
 			</div>

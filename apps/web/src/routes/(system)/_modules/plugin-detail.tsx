@@ -34,7 +34,6 @@ import type { PluginI18n } from "@tsukaima/sdk/i18n";
 import type { PluginRow, PluginStatusSnapshot } from "@/lib/api";
 import { client, orpc } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
-import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { getLocale } from "@/paraglide/runtime";
 import { pluginUiLoader } from "@/plugins/registry";
@@ -283,22 +282,18 @@ function PanelHost({ plugin, ui }: { plugin: PluginRow; ui: PluginUiModuleDefini
 					{ui.panels.map((candidate) => {
 						const selected = candidate.id === panel.id;
 						return (
-							<button
+							<Button
 								key={candidate.id}
-								type="button"
 								role="tab"
 								aria-selected={selected}
+								className="rounded-md"
+								leadingIcon={candidate.icon ? PANEL_ICONS[candidate.icon] : undefined}
 								onClick={() => setActive(candidate.id)}
-								className={cn(
-									"inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-									selected
-										? "bg-muted text-foreground"
-										: "text-muted-foreground hover:text-foreground",
-								)}
+								size="sm"
+								variant={selected ? "secondary" : "ghost"}
 							>
-								{candidate.icon ? PANEL_ICONS[candidate.icon] : null}
 								{candidate.title((key) => i18n.t(key))}
-							</button>
+							</Button>
 						);
 					})}
 				</div>
@@ -433,14 +428,15 @@ export function PluginDetail({ plugin }: { plugin: PluginRow }) {
 	return (
 		<div className="space-y-5">
 			<header className="space-y-3">
-				<button
-					type="button"
+				<Button
+					className="-ml-2 md:hidden"
+					leadingIcon={<ArrowLeft />}
 					onClick={() => void navigate({ to: "/plugins" })}
-					className="inline-flex items-center gap-1.5 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden"
+					size="sm"
+					variant="ghost"
 				>
-					<ArrowLeft className="size-3.5" />
 					{m.plugins_back()}
-				</button>
+				</Button>
 				<div className="flex flex-wrap items-start justify-between gap-3">
 					<div className="min-w-0">
 						<div className="flex flex-wrap items-center gap-2">
@@ -518,10 +514,10 @@ export function PluginDetail({ plugin }: { plugin: PluginRow }) {
 					<PluginSection title={m.plugins_config_title()}>
 						<PluginConfigForm
 							labels={{
-								configured: m.settings_provider_key_placeholder(),
+								configured: m.plugins_config_configured(),
 								empty: m.plugins_config_empty(),
 								save: m.settings_save(),
-								unset: m.settings_provider_key_unset(),
+								unset: m.plugins_config_unset(),
 							}}
 							onSave={async (patch) => {
 								await updateConfig.mutateAsync({ config: patch, pluginId: plugin.id });
