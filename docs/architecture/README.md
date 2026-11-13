@@ -26,6 +26,7 @@ This document set is the durable design record for Elaina. Each file is meant to
 | [WebUI](web-ui.md) | Admin console layout and interaction model |
 | [Technology stack](tech-stack.md) | Full library choices, workspace layout, and dependency policy |
 | [Quality gates](../operations/quality.md) | Lint, format, commits, tests, scopes, and dependency review |
+| [Implementation specs](../specs/README.md) | Ordered parity specs for DSH migration and remaining runtime work |
 | [Implementation review 2026-11-12](../reviews/implementation-review-2026-11-12.md) | Verified baseline, findings, and the remediation rounds for the first implementation pass |
 
 The system has five planes:
