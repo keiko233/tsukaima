@@ -16,6 +16,10 @@ import type {
 	PluginEvents,
 	PluginHookName,
 	PluginLogger,
+	PluginModelProvider,
+	PluginModelRegistry,
+	PluginRpcHandler,
+	PluginRpcRegistry,
 	PluginStorage,
 	PluginTool,
 	PluginToolInvocationResult,
@@ -111,6 +115,51 @@ export class LocalUiBridge {
 
 	list(): readonly PluginUiDefinition[] {
 		return [...this.#definitions.values()];
+	}
+}
+
+export class LocalModelRegistry implements PluginModelRegistry {
+	readonly #providers = new Map<string, PluginModelProvider>();
+
+	registerProvider(provider: PluginModelProvider): () => void {
+		if (provider.id.trim().length === 0) throw new Error("Model provider id must not be empty");
+		this.#providers.set(provider.id, provider);
+		return () => {
+			this.#providers.delete(provider.id);
+		};
+	}
+
+	getProvider(id: string): PluginModelProvider | undefined {
+		return this.#providers.get(id);
+	}
+
+	listProviders(): readonly PluginModelProvider[] {
+		return [...this.#providers.values()];
+	}
+}
+
+export class LocalRpcBridge implements PluginRpcRegistry {
+	readonly #handlers = new Map<string, PluginRpcHandler>();
+
+	register(method: string, handler: PluginRpcHandler): () => void {
+		const name = method.trim();
+		if (!/^[a-z][a-zA-Z0-9._-]*$/u.test(name)) {
+			throw new Error(`Invalid plugin RPC method: ${method}`);
+		}
+		this.#handlers.set(name, handler);
+		return () => {
+			this.#handlers.delete(name);
+		};
+	}
+
+	list(): readonly { readonly method: string }[] {
+		return [...this.#handlers.keys()].map((method) => ({ method }));
+	}
+
+	async invoke(method: string, input: unknown): Promise<unknown> {
+		const handler = this.#handlers.get(method);
+		if (handler === undefined) throw new Error(`Unknown plugin RPC method: ${method}`);
+		return handler(input);
 	}
 }
 
@@ -335,6 +384,8 @@ export interface PluginContextOptions {
 	channel?: PluginChannelApi;
 	channels?: PluginChannelRegistry;
 	events?: PluginEvents;
+	models?: PluginModelRegistry;
+	rpc?: PluginRpcRegistry;
 	settings?: PluginSettingsApi;
 	requests?: PluginRequestApi;
 	audit?: PluginAuditApi;
@@ -356,6 +407,8 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 		});
 	const tools = new LocalToolBridge(pluginId, options.grantedPermissions ?? manifest.permissions);
 	const ui = new LocalUiBridge();
+	const models = options.models ?? new LocalModelRegistry();
+	const rpc = options.rpc ?? new LocalRpcBridge();
 	return {
 		pluginId,
 		manifest,
@@ -366,6 +419,8 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 		events,
 		tools,
 		ui,
+		models,
+		rpc,
 		...(options.channel ? { channel: options.channel } : {}),
 		...(options.channels ? { channels: options.channels } : {}),
 		...(options.settings ? { settings: options.settings } : {}),

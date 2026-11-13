@@ -24,7 +24,6 @@ export type {
 	ModelPolicy,
 	ModelPolicyRow,
 	PluginRow,
-	RemoteModelList,
 	RequestRow,
 	SessionDetail,
 	SessionSummary,

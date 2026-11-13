@@ -1,0 +1,30 @@
+{
+	"name": "openai-compatible",
+	"version": "0.1.0",
+	"apiVersion": "1",
+	"kind": "builtin",
+	"permissions": ["model.call", "settings"],
+	"configSchema": {
+		"type": "object",
+		"properties": {
+			"baseUrl": { "type": "string" },
+			"apiKey": { "type": "string" },
+			"modelId": { "type": "string" }
+		}
+	},
+	"configEnv": {
+		"baseUrl": "TSUKAIMA_OPENAI_BASE_URL",
+		"apiKey": "TSUKAIMA_OPENAI_API_KEY",
+		"modelId": "TSUKAIMA_OPENAI_MODEL_ID"
+	},
+	"secretKeys": ["apiKey"],
+	"ui": [
+		{
+			"kind": "settings-form",
+			"id": "openai-compatible.settings",
+			"title": "OpenAI-compatible provider",
+			"component": "plugin-config-form",
+			"data": { "restartRequired": true }
+		}
+	]
+}

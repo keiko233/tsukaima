@@ -17,6 +17,7 @@
       "dependencies": {
         "@better-auth/drizzle-adapter": "1.7.22",
         "@tsukaima-plugin/onebot-napcat": "workspace:*",
+        "@tsukaima-plugin/openai-compatible": "workspace:*",
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/core": "workspace:*",
         "@tsukaima/db": "workspace:*",
@@ -150,6 +151,16 @@
       "version": "0.1.0",
       "dependencies": {
         "@tsukaima/contracts": "workspace:*",
+        "@tsukaima/sdk": "workspace:*",
+        "zod": "4.6.7",
+      },
+    },
+    "plugins/openai-compatible": {
+      "name": "@tsukaima-plugin/openai-compatible",
+      "version": "0.1.0",
+      "dependencies": {
+        "@tsukaima/contracts": "workspace:*",
+        "@tsukaima/core": "workspace:*",
         "@tsukaima/sdk": "workspace:*",
         "zod": "4.6.7",
       },
@@ -299,6 +310,8 @@
     "@earendil-works/pi-telemetry": ["@earendil-works/pi-telemetry@1.5.2", "", {}, "sha512-m+cumjIqNh1aMISi/9ttcG3ZOwIdriPbz/eMyWmRMJCGa/WcgY1RX4lrb7HvsHhSfI/JUeBESA4nOCr8C3y5ow=="],
 
     "@tsukaima-plugin/onebot-napcat": ["@tsukaima-plugin/onebot-napcat@workspace:plugins/onebot-napcat"],
+
+    "@tsukaima-plugin/openai-compatible": ["@tsukaima-plugin/openai-compatible@workspace:plugins/openai-compatible"],
 
     "@tsukaima/chaos": ["@tsukaima/chaos@workspace:packages/chaos"],
 

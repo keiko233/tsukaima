@@ -1,10 +1,13 @@
 import type { PluginContext, PluginHookName, ToolInvocationContext } from "./types.ts";
 
 export type PluginSetup = (context: PluginContext) => Promise<void> | void;
+/** Runs before the conversation host exists, for host-surface registration. */
+export type PluginPrepare = (context: PluginContext) => Promise<void> | void;
 export type PluginTeardown = (context: PluginContext) => Promise<void> | void;
 
 export interface TsukaimaPlugin {
 	manifest: PluginContext["manifest"];
+	prepare?: PluginPrepare;
 	setup: PluginSetup;
 	teardown?: PluginTeardown;
 }

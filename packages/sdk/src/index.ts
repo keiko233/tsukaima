@@ -6,7 +6,7 @@ export {
 } from "./permissions.ts";
 export { pluginPermissionSchema } from "./manifest.ts";
 export { PluginRuntime } from "./runtime.ts";
-export type { TsukaimaPlugin, PluginSetup, PluginTeardown } from "./runtime.ts";
+export type { TsukaimaPlugin, PluginPrepare, PluginSetup, PluginTeardown } from "./runtime.ts";
 export { pluginManifestSchema } from "./manifest.ts";
 export type {
 	PluginChannelApi,
@@ -15,6 +15,12 @@ export type {
 	PluginHook,
 	PluginHookName,
 	PluginLogger,
+	PluginModelDescriptor,
+	PluginModelPort,
+	PluginModelProvider,
+	PluginModelRegistry,
+	PluginRpcHandler,
+	PluginRpcRegistry,
 	PluginStorage,
 	PluginTool,
 	PluginToolExecutionApi,
@@ -46,6 +52,8 @@ export {
 	createPluginContext,
 	createPluginToolsExtension,
 	LocalPluginEventBridge,
+	LocalModelRegistry,
+	LocalRpcBridge,
 	LocalToolBridge,
 	LocalUiBridge,
 	PLUGIN_TOOLS_EXTENSION_NAME,

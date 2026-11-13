@@ -1,0 +1,15 @@
+{
+	"name": "@tsukaima-plugin/openai-compatible",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"dependencies": {
+		"@tsukaima/contracts": "workspace:*",
+		"@tsukaima/core": "workspace:*",
+		"@tsukaima/sdk": "workspace:*",
+		"zod": "4.6.7"
+	}
+}

@@ -22,7 +22,6 @@ import {
 	publicRuntimeSettings,
 	readRuntimeSettings,
 } from "../runtime-settings.ts";
-import { listRemoteModels } from "../remote-models.ts";
 
 type LifecycleModelPolicy = TsukaimaApiContext["lifecycle"]["routingPolicies"][number];
 
@@ -152,8 +151,16 @@ export const adminRouter = {
 	},
 	plugins: {
 		list: adminBase.admin.plugins.list.handler(async ({ context }) => [
-			...context.lifecycle.pluginHost.list(),
+			...(await context.lifecycle.pluginHost.list()),
 		]),
+		rpc: adminBase.admin.plugins.rpc.handler(async ({ context, input }) => {
+			return context.lifecycle.pluginHost.invokeRpc(input.method, input.input);
+		}),
+		updateConfig: adminBase.admin.plugins.updateConfig.handler(async ({ context, input }) => {
+			await context.lifecycle.updatePluginConfig(input.pluginId, input.config);
+			const view = await context.lifecycle.pluginConfigView(input.pluginId);
+			return { config: view.config, secretsSet: [...view.secretsSet] };
+		}),
 	},
 	requests: {
 		get: adminBase.admin.requests.get.handler(async ({ context, input }) =>
@@ -211,16 +218,6 @@ export const adminRouter = {
 				...publicRuntimeSettings(settings),
 				plugins: await context.lifecycle.pluginHost.configViews(),
 			};
-		}),
-		models: adminBase.admin.settings.models.handler(async ({ context, input }) => {
-			const settings = await readRuntimeSettings(context.lifecycle.domainDatabase);
-			const baseUrl =
-				input.baseUrl ?? settings.openAiBaseUrl ?? context.lifecycle.config.openAiBaseUrl;
-			const apiKey = input.apiKey ?? settings.openAiApiKey ?? context.lifecycle.config.openAiApiKey;
-			if (baseUrl === undefined) throw new Error("Model base URL is not configured");
-			if (apiKey === undefined) throw new Error("Provider API key is not configured");
-			const models = await listRemoteModels({ apiKey, baseUrl });
-			return { baseUrl: models.baseUrl, models: [...models.models] };
 		}),
 		update: adminBase.admin.settings.update.handler(async ({ context, input }) => {
 			const database = context.lifecycle.domainDatabase;
