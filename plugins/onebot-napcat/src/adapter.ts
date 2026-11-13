@@ -1,15 +1,27 @@
-import type { ChannelRequest, MessageEnvelope, MessagePart } from "@tsukaima/contracts";
+import type {
+	ChannelNotice,
+	ChannelRequest,
+	MessageEnvelope,
+	MessagePart,
+} from "@tsukaima/contracts";
 import type {
 	ChannelAdapter,
 	ChannelCapability,
 	ChannelDiagnostics,
+	ChannelHistoryItem,
+	ChannelHistoryOptions,
 	ChannelRequestDecision,
 	OutboundTarget,
 	PluginLogger,
+	SendOptions,
 	SendResult,
 } from "@tsukaima/sdk";
 import { OneBotChannel } from "./protocol/channel.ts";
-import type { OneBotConfig, OneBotTransportFactory } from "./protocol/types.ts";
+import type {
+	OneBotConfig,
+	OneBotReverseServerFactory,
+	OneBotTransportFactory,
+} from "./protocol/types.ts";
 
 export const ONEBOT_CHANNEL_KIND = "onebot-v11";
 
@@ -18,6 +30,8 @@ const CAPABILITIES: readonly ChannelCapability[] = [
 	"interact",
 	"group-manage",
 	"read-info",
+	"read-media",
+	"upload",
 	"raw",
 ];
 
@@ -25,6 +39,7 @@ export interface OneBotChannelAdapterOptions {
 	readonly channelId: string;
 	readonly config: OneBotConfig;
 	readonly logger: PluginLogger;
+	readonly reverseServerFactory?: OneBotReverseServerFactory;
 	readonly transportFactory?: OneBotTransportFactory;
 	readonly onStateChange?: (state: "connected" | "disconnected") => void;
 }
@@ -50,9 +65,11 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 	readonly #config: OneBotConfig;
 	readonly #logger: PluginLogger;
 	readonly #onStateChange: ((state: "connected" | "disconnected") => void) | undefined;
+	readonly #reverseServerFactory: OneBotReverseServerFactory | undefined;
 	readonly #transportFactory: OneBotTransportFactory | undefined;
 	#channel: OneBotChannel | undefined;
 	#envelopeHandler: ((envelope: MessageEnvelope) => void) | undefined;
+	#noticeHandler: ((notice: ChannelNotice) => void) | undefined;
 	#requestHandler: ((request: ChannelRequest) => void) | undefined;
 	#restartRequired = false;
 
@@ -60,8 +77,17 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 		this.id = options.channelId;
 		this.#config = options.config;
 		this.#logger = options.logger;
+		this.#reverseServerFactory = options.reverseServerFactory;
 		this.#transportFactory = options.transportFactory;
 		this.#onStateChange = options.onStateChange;
+	}
+
+	get channel(): OneBotChannel | undefined {
+		return this.#channel;
+	}
+
+	get config(): OneBotConfig {
+		return this.#config;
 	}
 
 	capabilities(): readonly ChannelCapability[] {
@@ -75,7 +101,11 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 			connected: base?.connected ?? false,
 			eventCount: base?.eventCount ?? 0,
 			lastErrorClass: base?.lastErrorClass,
+			...(base?.lastEventAtMs === undefined ? {} : { lastEventAtMs: base.lastEventAtMs }),
+			mode: base?.mode ?? this.#config.mode ?? "forward",
+			...(base?.origin === undefined ? {} : { origin: base.origin }),
 			reconnectAttempts: base?.reconnectAttempts ?? 0,
+			...(base?.remoteAddress === undefined ? {} : { remoteAddress: base.remoteAddress }),
 			restartRequired: this.#restartRequired,
 			state: this.#restartRequired ? "closed" : (base?.state ?? "closed"),
 		};
@@ -83,6 +113,10 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 
 	onEnvelope(handler: (envelope: MessageEnvelope) => void): void {
 		this.#envelopeHandler = handler;
+	}
+
+	onNotice(handler: (notice: ChannelNotice) => void): void {
+		this.#noticeHandler = handler;
 	}
 
 	onRequest(handler: (request: ChannelRequest) => void): void {
@@ -95,8 +129,13 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 	 */
 	async start(): Promise<void> {
 		try {
-			const channel = new OneBotChannel(this.#config, this.#transportFactory);
+			const channel = new OneBotChannel(
+				this.#config,
+				this.#transportFactory,
+				this.#reverseServerFactory,
+			);
 			channel.onMessage((envelope) => this.#envelopeHandler?.(envelope));
+			channel.onNotice((notice) => this.#noticeHandler?.(notice));
 			channel.onRequest((request) => this.#requestHandler?.(request));
 			channel.onStateChange((state) => {
 				if (state === "open") this.#onStateChange?.("connected");
@@ -109,6 +148,7 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 			this.#restartRequired = true;
 			this.#logger.error("OneBot channel failed to start", {
 				error: error instanceof Error ? error.message : String(error),
+				mode: this.#config.mode ?? "forward",
 				url: this.#config.url,
 			});
 		}
@@ -119,16 +159,31 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 		this.#channel = undefined;
 	}
 
-	async send(target: OutboundTarget, parts: readonly MessagePart[]): Promise<SendResult> {
+	async send(
+		target: OutboundTarget,
+		parts: readonly MessagePart[],
+		options?: SendOptions,
+	): Promise<SendResult> {
 		const channel = this.#channel;
 		if (channel === undefined || !channel.diagnostics.connected) {
 			throw new Error(`Channel ${this.id} is not connected`);
 		}
 		const result =
 			target.kind === "group"
-				? await channel.sendGroup(target.platformConversationId, parts)
-				: await channel.sendPrivate(target.platformConversationId, parts);
+				? await channel.sendGroup(target.platformConversationId, parts, options)
+				: await channel.sendPrivate(target.platformConversationId, parts, options);
 		return toSendResult(result);
+	}
+
+	async lookupMessage(platformMessageId: string): Promise<ChannelHistoryItem | undefined> {
+		return this.#channel?.lookupMessage(platformMessageId);
+	}
+
+	async readHistory(
+		target: OutboundTarget,
+		options?: ChannelHistoryOptions,
+	): Promise<readonly ChannelHistoryItem[]> {
+		return (await this.#channel?.readHistory(target, options)) ?? [];
 	}
 
 	async resolveRequest(request: ChannelRequest, decision: ChannelRequestDecision): Promise<void> {

@@ -56,6 +56,47 @@ export const channelRequestSchema = z.object({
 
 export type ChannelRequest = z.infer<typeof channelRequestSchema>;
 
+export const channelNoticeTypeSchema = z.enum([
+	"poke",
+	"revoke",
+	"reaction",
+	"typing",
+	"ban",
+	"mute",
+	"group-file",
+	"title",
+	"member-change",
+	"unknown",
+]);
+
+export type ChannelNoticeType = z.infer<typeof channelNoticeTypeSchema>;
+
+/**
+ * Platform notices are deliberately not `MessageEnvelope`s: they have no required message
+ * parts and must never trigger a model turn by themselves. The server persists the ones that
+ * matter as system/notice rows and hands poke-at-bot to the Phase 2 wake policy later.
+ */
+export const channelNoticeSchema = z.object({
+	channelId: z.string().min(1),
+	channelKind: z.string().min(1),
+	conversationKey: conversationKeySchema.refine(
+		(key) => key.kind === "private" || key.kind === "group",
+		{ message: "Channel notices only belong to private or group conversations" },
+	),
+	noticeType: channelNoticeTypeSchema,
+	id: z.string().min(1),
+	occurredAtMs: z.number().int().nonnegative(),
+	actorId: z.string().min(1).optional(),
+	actorDisplayName: z.string().min(1).optional(),
+	targetUserId: z.string().min(1).optional(),
+	targetMessageId: z.string().min(1).optional(),
+	isSelfTarget: z.boolean().optional(),
+	details: z.record(z.string(), z.unknown()).optional(),
+	raw: z.unknown().optional(),
+});
+
+export type ChannelNotice = z.infer<typeof channelNoticeSchema>;
+
 export const channelMessageSchema = z.object({
 	channelId: z.string().min(1),
 	deliveryStatus: z.enum(["received", "pending", "accepted", "sent", "failed", "uncertain"]),

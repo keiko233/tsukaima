@@ -1,5 +1,10 @@
-import type { ChannelAdapter, ChannelDiagnostics, SendResult } from "@tsukaima/sdk";
-import type { ChannelRequest, MessageEnvelope, MessagePart } from "@tsukaima/contracts";
+import type { ChannelAdapter, ChannelDiagnostics, SendOptions, SendResult } from "@tsukaima/sdk";
+import type {
+	ChannelNotice,
+	ChannelRequest,
+	MessageEnvelope,
+	MessagePart,
+} from "@tsukaima/contracts";
 
 export interface ChannelStatus extends ChannelDiagnostics {
 	readonly id: string;
@@ -11,6 +16,8 @@ export interface ChannelRegistryOptions {
 	readonly onEnvelope?: (channelId: string, envelope: MessageEnvelope) => void;
 	/** Host-owned inbox for friend/group requests. */
 	readonly onRequest?: (channelId: string, request: ChannelRequest) => void;
+	/** Host-owned notice stream (poke, revoke, reactions, moderation, ...). */
+	readonly onNotice?: (channelId: string, notice: ChannelNotice) => void;
 }
 
 /**
@@ -34,9 +41,12 @@ export class ChannelRegistry {
 			throw new Error(`Channel ${adapter.id} is already registered`);
 		}
 		this.#adapters.set(adapter.id, adapter);
-		const { onEnvelope, onRequest } = this.#options;
+		const { onEnvelope, onNotice, onRequest } = this.#options;
 		if (onEnvelope !== undefined) {
 			adapter.onEnvelope((envelope) => onEnvelope(adapter.id, envelope));
+		}
+		if (onNotice !== undefined && adapter.onNotice !== undefined) {
+			adapter.onNotice((notice) => onNotice(adapter.id, notice));
 		}
 		if (onRequest !== undefined && adapter.onRequest !== undefined) {
 			adapter.onRequest((request) => onRequest(adapter.id, request));
@@ -67,11 +77,12 @@ export class ChannelRegistry {
 		kind: "private" | "group",
 		platformConversationId: string,
 		parts: readonly MessagePart[],
+		options?: SendOptions,
 	): Promise<SendResult> {
 		const adapter = this.#adapters.get(channelId);
 		if (adapter === undefined) {
 			throw new Error(`Channel ${channelId} is not registered`);
 		}
-		return adapter.send({ channelId, kind, platformConversationId }, parts);
+		return adapter.send({ channelId, kind, platformConversationId }, parts, options);
 	}
 }
