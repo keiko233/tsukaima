@@ -28,10 +28,7 @@ export interface ParaglideRuntimeLike {
 	readonly overwriteSetLocale?: (fn: () => void) => void;
 }
 
-type ParaglideMessages = Record<
-	string,
-	((params?: Record<string, string | number>) => string) | string | undefined
->;
+type ParaglideMessages = Record<string, ((...args: never[]) => string) | string | undefined>;
 
 export interface BindParaglideOptions {
 	readonly messages: ParaglideMessages;
@@ -62,7 +59,11 @@ function createI18n(
 	locale: string,
 	locales: readonly string[],
 	baseLocale: string,
-	resolve: (locale: string, key: string) => string | undefined,
+	resolve: (
+		locale: string,
+		key: string,
+		params?: Record<string, string | number>,
+	) => string | undefined,
 	warnMissing: (key: string) => void,
 ): PluginI18n {
 	const resolved = locales.includes(locale) ? locale : baseLocale;
@@ -72,12 +73,13 @@ function createI18n(
 		locale: resolved,
 		locales,
 		t(key, params) {
-			const template = resolve(resolved, key) ?? resolve(baseLocale, key) ?? undefined;
-			if (template === undefined) {
+			const message =
+				resolve(resolved, key, params) ?? resolve(baseLocale, key, params) ?? undefined;
+			if (message === undefined) {
 				warnMissing(key);
 				return key;
 			}
-			return interpolate(template, params);
+			return message;
 		},
 	};
 }
@@ -115,12 +117,14 @@ export function bindParaglide(options: BindParaglideOptions): PluginI18nSource {
 				active,
 				locales,
 				baseLocale,
-				(_which, key) => {
+				(_which, key, params) => {
 					const entry = options.messages[key];
-					if (typeof entry === "string") return entry;
+					if (typeof entry === "string") return interpolate(entry, params);
 					if (typeof entry === "function") {
 						try {
-							return entry({});
+							return (entry as unknown as (values: Record<string, string | number>) => string)(
+								params ?? {},
+							);
 						} catch {
 							return undefined;
 						}
@@ -153,7 +157,10 @@ export function createDictionaryI18n(options: DictionaryI18nOptions): PluginI18n
 				resolved,
 				locales,
 				baseLocale,
-				(which, key) => options.messages[which]?.[key],
+				(which, key, params) => {
+					const template = options.messages[which]?.[key];
+					return template === undefined ? undefined : interpolate(template, params);
+				},
 				(key) => {
 					if (missing.has(key)) return;
 					missing.add(key);
