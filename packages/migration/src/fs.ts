@@ -8,6 +8,10 @@ export function sha256String(value: string): string {
 	return hashPrefix + createHash("sha256").update(value).digest("hex");
 }
 
+export function sha256Bytes(bytes: Uint8Array): string {
+	return hashPrefix + createHash("sha256").update(bytes).digest("hex");
+}
+
 export async function sha256File(path: string): Promise<string> {
 	return (
 		hashPrefix +
