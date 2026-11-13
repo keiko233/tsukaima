@@ -1,0 +1,53 @@
+{
+	"name": "search-fetch",
+	"version": "0.1.0",
+	"apiVersion": "1",
+	"kind": "builtin",
+	"permissions": [
+		"ui.panel",
+		"tools",
+		"audit.write",
+		"network.search",
+		"network.fetch",
+		"conversation.read",
+		"storage.global"
+	],
+	"tools": [],
+	"hooks": [],
+	"ui": [],
+	"migrations": [],
+	"configSchema": {
+		"properties": {
+			"allowDomains": { "type": "array", "items": { "type": "string" } },
+			"allowedProviders": { "type": "array", "items": { "type": "string" } },
+			"blockDomains": { "type": "array", "items": { "type": "string" } },
+			"braveApiKey": { "type": "string" },
+			"cache": {
+				"type": "object",
+				"properties": {
+					"maxBytes": { "type": "integer" },
+					"maxEntries": { "type": "integer" },
+					"ttlMs": { "type": "integer" }
+				}
+			},
+			"cooldownMs": { "type": "integer" },
+			"disabledProviders": { "type": "array", "items": { "type": "string" } },
+			"failureThreshold": { "type": "integer" },
+			"languagePools": { "type": "object" },
+			"maxProviders": { "type": "integer" },
+			"maxResults": { "type": "integer" },
+			"priority": { "type": "array", "items": { "type": "string" } },
+			"rateLimits": { "type": "object" },
+			"searchTimeoutMs": { "type": "integer" },
+			"serperApiKey": { "type": "string" },
+			"tavilyApiKey": { "type": "string" }
+		},
+		"type": "object"
+	},
+	"configEnv": {
+		"braveApiKey": "ELAINA_SEARCH_BRAVE_API_KEY",
+		"tavilyApiKey": "ELAINA_SEARCH_TAVILY_API_KEY",
+		"serperApiKey": "ELAINA_SEARCH_SERPER_API_KEY"
+	},
+	"secretKeys": ["braveApiKey", "serperApiKey", "tavilyApiKey"]
+}

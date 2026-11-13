@@ -18,6 +18,7 @@
         "@better-auth/drizzle-adapter": "1.7.22",
         "@elaina-plugin/onebot-napcat": "workspace:*",
         "@elaina-plugin/openai-compatible": "workspace:*",
+        "@elaina-plugin/search-fetch": "workspace:*",
         "@elaina-plugin/sticker-meme": "workspace:*",
         "@elaina/contracts": "workspace:*",
         "@elaina/core": "workspace:*",
@@ -225,6 +226,23 @@
         "react-dom": "^19.3.1",
       },
     },
+    "plugins/search-fetch": {
+      "name": "@elaina-plugin/search-fetch",
+      "version": "0.1.0",
+      "dependencies": {
+        "@elaina/sdk": "workspace:*",
+        "@elaina/ui": "workspace:*",
+        "@inlang/paraglide-js": "^3.2.2",
+        "lucide-react": "^1.72.0",
+        "zod": "4.6.7",
+      },
+      "devDependencies": {
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "react": "^19.3.1",
+        "react-dom": "^19.3.1",
+      },
+    },
     "plugins/sticker-meme": {
       "name": "@elaina-plugin/sticker-meme",
       "version": "0.1.0",
@@ -390,6 +408,8 @@
     "@elaina-plugin/onebot-napcat": ["@elaina-plugin/onebot-napcat@workspace:plugins/onebot-napcat"],
 
     "@elaina-plugin/openai-compatible": ["@elaina-plugin/openai-compatible@workspace:plugins/openai-compatible"],
+
+    "@elaina-plugin/search-fetch": ["@elaina-plugin/search-fetch@workspace:plugins/search-fetch"],
 
     "@elaina-plugin/sticker-meme": ["@elaina-plugin/sticker-meme@workspace:plugins/sticker-meme"],
 
