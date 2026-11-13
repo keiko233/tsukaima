@@ -401,7 +401,38 @@ describe("admin auth", () => {
 				prompt: "You are a sample persona.",
 				summary: "Sample persona",
 			},
+			"plugins/downgrade": {
+				manifest: {
+					apiVersion: "1",
+					kind: "third-party",
+					name: "sample",
+					permissions: [],
+					version: "0.1.0",
+				},
+				pluginId: "sample",
+			},
+			"plugins/install": {
+				manifest: {
+					apiVersion: "1",
+					kind: "third-party",
+					name: "sample",
+					permissions: [],
+					version: "0.1.0",
+				},
+			},
 			"plugins/list": {},
+			"plugins/reload": { pluginId: "onebot-napcat" },
+			"plugins/uninstall": { pluginId: "sample" },
+			"plugins/upgrade": {
+				manifest: {
+					apiVersion: "1",
+					kind: "third-party",
+					name: "sample",
+					permissions: [],
+					version: "0.2.0",
+				},
+				pluginId: "sample",
+			},
 			"policies/get": { conversationId: "session-1" },
 			"policies/history": { conversationId: "session-1", scope: "conversation" },
 			"policies/update": { policy: {}, scope: "global" },

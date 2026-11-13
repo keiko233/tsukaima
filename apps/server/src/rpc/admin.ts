@@ -197,9 +197,25 @@ export const adminRouter = {
 		}),
 	},
 	plugins: {
+		downgrade: adminBase.admin.plugins.downgrade.handler(async ({ context, input }) =>
+			context.lifecycle.pluginHost.downgrade(input.pluginId, input.manifest),
+		),
+		install: adminBase.admin.plugins.install.handler(async ({ context, input }) =>
+			context.lifecycle.pluginHost.install(input.manifest, {
+				...(input.config === undefined ? {} : { config: input.config }),
+				...(input.enabled === undefined ? {} : { enabled: input.enabled }),
+				...(input.grantedPermissions === undefined
+					? {}
+					: { grantedPermissions: input.grantedPermissions }),
+				...(input.runMode === undefined ? {} : { runMode: input.runMode }),
+			}),
+		),
 		list: adminBase.admin.plugins.list.handler(async ({ context }) => [
 			...(await context.lifecycle.pluginHost.list()),
 		]),
+		reload: adminBase.admin.plugins.reload.handler(async ({ context, input }) =>
+			context.lifecycle.pluginHost.reload(input.pluginId),
+		),
 		rpc: adminBase.admin.plugins.rpc.handler(async ({ context, input }) => {
 			return context.lifecycle.pluginHost.invokeRpc(input.method, input.input, input.pluginId);
 		}),
@@ -210,11 +226,26 @@ export const adminRouter = {
 			if (row === undefined) throw new Error(`Unknown plugin ${input.pluginId}`);
 			return row;
 		}),
+		uninstall: adminBase.admin.plugins.uninstall.handler(async ({ context, input }) => ({
+			pluginId: input.pluginId,
+			removed: await context.lifecycle.pluginHost.uninstall(
+				input.pluginId,
+				input.retainData === undefined ? {} : { retainData: input.retainData },
+			),
+		})),
 		updateConfig: adminBase.admin.plugins.updateConfig.handler(async ({ context, input }) => {
 			await context.lifecycle.updatePluginConfig(input.pluginId, input.config);
 			const view = await context.lifecycle.pluginConfigView(input.pluginId);
 			return { config: view.config, secretsSet: [...view.secretsSet] };
 		}),
+		upgrade: adminBase.admin.plugins.upgrade.handler(async ({ context, input }) =>
+			context.lifecycle.pluginHost.upgrade(input.pluginId, input.manifest, {
+				...(input.config === undefined ? {} : { config: input.config }),
+				...(input.grantedPermissions === undefined
+					? {}
+					: { grantedPermissions: input.grantedPermissions }),
+			}),
+		),
 	},
 	policies: {
 		get: adminBase.admin.policies.get.handler(async ({ context, input }) =>

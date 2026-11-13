@@ -19,6 +19,7 @@ import {
 } from "@tsukaima/db";
 import { BACKGROUND_CONTEXT, openDurableStorage, type SqliteStorage } from "@tsukaima/durable";
 import { createPluginToolsExtension, type AuditEntry, type TsukaimaPlugin } from "@tsukaima/sdk";
+import { MigrationRegistry, type PluginMigrationPlan } from "@tsukaima/plugin-registry";
 import type { ChannelNotice, ChannelRequest, MessageEnvelope } from "@tsukaima/contracts";
 import { loadConfig, type TsukaimaConfig } from "./config.ts";
 import { createLogger, LogBuffer, type Logger } from "./logging.ts";
@@ -34,6 +35,8 @@ import { HookBus } from "./services/hook-bus.ts";
 import { PluginHost } from "./services/plugin-host.ts";
 import { PluginSettingsStore } from "./services/plugin-settings.ts";
 import { PluginStatusStore } from "./services/plugin-status.ts";
+import { PluginStorageStore } from "./services/plugin-storage.ts";
+import { PluginTaskService } from "./services/plugin-task-service.ts";
 import { ReplyDispatcher } from "./services/reply-dispatcher.ts";
 import { RequestService } from "./services/request-service.ts";
 
@@ -74,8 +77,12 @@ export class TsukaimaLifecycle {
 	readonly conversationRouter: ConversationRouter;
 	readonly hooks: HookBus;
 	readonly pluginHost: PluginHost;
+	readonly pluginMigrations: MigrationRegistry;
 	readonly pluginSettings: PluginSettingsStore;
 	readonly pluginStatuses: PluginStatusStore;
+	readonly pluginStorage: PluginStorageStore;
+	readonly pluginTasks: PluginTaskService;
+	private readonly plugins: readonly TsukaimaPlugin[];
 	readonly media: MediaService;
 	readonly replyDispatcher: ReplyDispatcher;
 	readonly requestService: RequestService;
@@ -110,6 +117,7 @@ export class TsukaimaLifecycle {
 				target: "tsukaima::server",
 			});
 		this.logs = this.logger.buffer;
+		this.plugins = options?.plugins ?? builtinPlugins;
 		this.runtimeLog = this.logger.child("tsukaima::server::lifecycle");
 		this.modelOverride = options?.model;
 		this.hooks = new HookBus(this.logger);
@@ -161,6 +169,15 @@ export class TsukaimaLifecycle {
 			env: options?.env ?? {},
 		});
 		this.pluginStatuses = new PluginStatusStore();
+		this.pluginStorage = new PluginStorageStore(() => this.domainDatabase);
+		this.pluginMigrations = new MigrationRegistry({
+			database: () => this.domainDatabase,
+		});
+		this.pluginTasks = new PluginTaskService({
+			database: () => this.domainDatabase,
+			hooks: this.hooks,
+			logger: this.runtimeLog,
+		});
 		this.replyDispatcher = new ReplyDispatcher({
 			audit: (entry) => this.writeAudit(entry),
 			channels: this.channels,
@@ -189,12 +206,16 @@ export class TsukaimaLifecycle {
 			audit: (entry) => this.writeAudit(entry),
 			...(options?.pluginBindings === undefined ? {} : { bindings: options.pluginBindings }),
 			channels: this.channels,
+			database: () => this.domainDatabase,
 			hooks: this.hooks,
 			logger: this.logger,
-			plugins: options?.plugins ?? builtinPlugins,
+			migrations: this.pluginMigrations,
+			plugins: this.plugins,
 			requests: this.requestService,
 			settings: this.pluginSettings,
 			statuses: this.pluginStatuses,
+			storage: this.pluginStorage,
+			tasks: this.pluginTasks,
 		});
 	}
 
@@ -280,6 +301,21 @@ export class TsukaimaLifecycle {
 		this.transition("domain-database");
 		this.domainDatabase = await openDomainDatabase(join(this.config.dataDir, "domain.sqlite"));
 		migrateDomainDatabase(this.domainDatabase);
+		this.transition("plugin-migrations");
+		const pluginMigrations: PluginMigrationPlan[] = [];
+		for (const plugin of this.plugins) {
+			pluginMigrations.push({
+				enabled: await this.pluginSettings.isEnabled(plugin.manifest.name),
+				migrations: plugin.manifest.migrations.map((migration) => ({
+					sql: migration.sql,
+					version: migration.version,
+					...(migration.checksum === undefined ? {} : { checksum: migration.checksum }),
+					...(migration.rollbackSql === undefined ? {} : { rollbackSql: migration.rollbackSql }),
+				})),
+				pluginId: plugin.manifest.name,
+			});
+		}
+		await this.pluginMigrations.migrate(pluginMigrations);
 		this.transition("load-settings");
 		const settings = await readRuntimeSettings(this.domainDatabase);
 		this.setLogLevel(settings.logLevel);
@@ -327,6 +363,7 @@ export class TsukaimaLifecycle {
 									error: error instanceof Error ? error.message : String(error),
 								});
 							},
+							policyContext: (tool, context) => this.pluginHost.toolPolicyContext(tool, context),
 						},
 					);
 		if (conversationHost !== undefined && pluginTools !== undefined) {
@@ -336,6 +373,7 @@ export class TsukaimaLifecycle {
 		}
 		this.transition("plugins");
 		await this.pluginHost.start();
+		this.pluginTasks.start();
 		if (conversationHost !== undefined && pluginTools !== undefined) {
 			// Reinstall after startup to reset per-conversation checks for sessions that received
 			// a message while the extension still had no tools.
@@ -512,6 +550,7 @@ export class TsukaimaLifecycle {
 			}
 		}
 		this.stopListeners.clear();
+		this.pluginTasks.stop();
 		this.replyDispatcher.stopPendingReconciliation();
 		await this.pluginHost.stop();
 		await this.conversationHost?.close();

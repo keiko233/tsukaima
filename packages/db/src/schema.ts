@@ -583,3 +583,92 @@ export const codingProposals = sqliteTable(
 		index("coding_proposals_status_idx").on(table.status),
 	],
 );
+
+/**
+ * Host-owned records for plugin SQL migrations. Plugin schemas themselves stay namespaced
+ * (`plugin_<sanitized_id>_*`); these rows only track what the host applied.
+ */
+export const pluginMigrations = sqliteTable(
+	"plugin_migrations",
+	{
+		appliedAt: text("applied_at").notNull().default(now),
+		checksum: text("checksum").notNull(),
+		durationMs: integer("duration_ms").notNull().default(0),
+		id: text("id").primaryKey(),
+		pluginId: text("plugin_id").notNull(),
+		rollbackSql: text("rollback_sql"),
+		status: text("status", { enum: ["applied", "rolled_back", "failed"] })
+			.notNull()
+			.default("applied"),
+		version: text("version").notNull(),
+	},
+	(table) => [
+		unique("plugin_migrations_plugin_version_unique").on(table.pluginId, table.version),
+		index("plugin_migrations_plugin_idx").on(table.pluginId, table.appliedAt),
+	],
+);
+
+export const pluginKvStorage = sqliteTable(
+	"plugin_kv_storage",
+	{
+		key: text("key").notNull(),
+		pluginId: text("plugin_id").notNull(),
+		scope: text("scope", { enum: ["global", "conversation"] }).notNull(),
+		scopeKey: text("scope_key").notNull().default(""),
+		updatedAt: text("updated_at").notNull().default(now),
+		valueJson: text("value_json").notNull(),
+	},
+	(table) => [
+		unique("plugin_kv_storage_unique").on(table.pluginId, table.scope, table.scopeKey, table.key),
+		index("plugin_kv_storage_plugin_idx").on(table.pluginId, table.scope, table.scopeKey),
+	],
+);
+
+export const pluginTasks = sqliteTable(
+	"plugin_tasks",
+	{
+		attempts: integer("attempts").notNull().default(0),
+		chatObjectId: text("chat_object_id").references(() => chatObjects.id, {
+			onDelete: "set null",
+		}),
+		conversationId: text("conversation_id").references(() => conversations.id, {
+			onDelete: "set null",
+		}),
+		createdAtMs: integer("created_at_ms").notNull(),
+		dedupeKey: text("dedupe_key"),
+		id: text("id").primaryKey(),
+		intervalMs: integer("interval_ms"),
+		kind: text("kind").notNull(),
+		logsJson: text("logs_json").notNull().default("[]"),
+		maxAttempts: integer("max_attempts").notNull().default(3),
+		nextRunAtMs: integer("next_run_at_ms").notNull(),
+		outcomeJson: text("outcome_json"),
+		payloadJson: text("payload_json"),
+		permissionsJson: text("permissions_json").notNull().default("[]"),
+		pluginId: text("plugin_id").notNull(),
+		status: text("status", {
+			enum: ["pending", "running", "completed", "failed", "cancelled"],
+		})
+			.notNull()
+			.default("pending"),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+	},
+	(table) => [
+		index("plugin_tasks_due_idx").on(table.status, table.nextRunAtMs),
+		index("plugin_tasks_plugin_dedupe_idx").on(table.pluginId, table.dedupeKey),
+		index("plugin_tasks_plugin_status_idx").on(table.pluginId, table.status),
+	],
+);
+
+export const pluginInstallStates = sqliteTable("plugin_install_states", {
+	backupJson: text("backup_json"),
+	failureCount: integer("failure_count").notNull().default(0),
+	installedVersion: text("installed_version").notNull(),
+	kind: text("kind", { enum: ["builtin", "first-party", "third-party"] }).notNull(),
+	manifestJson: text("manifest_json").notNull(),
+	pluginId: text("plugin_id").primaryKey(),
+	quarantineReason: text("quarantine_reason"),
+	quarantinedAt: text("quarantined_at"),
+	retainData: integer("retain_data").notNull().default(1),
+	updatedAt: text("updated_at").notNull().default(now),
+});

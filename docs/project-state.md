@@ -7,11 +7,11 @@ This file is the cross-session handoff record. Update it whenever implementation
 - Project name: `tsukaima-chatbot`.
 - Repository initialized at `<repo-root>` on branch `main`.
 - First commit: `5dc80bc Add Tsukaima Chatbot architecture and DSH migration plan`.
-- Current phase: the migration-spec Phase 2 conversation policy and humanlike pacing work is
-  complete. Phase 1–7 core/library implementation remains in place: the closed reply loop, the
-  oRPC contract layer, the ingest boundary, persona/memory injection, admin authentication,
-  plugin tool bridging, and live WebUI updates. Remaining work is the DSH cutover, the
-  memory/audit review surfaces, and the self-iteration UI.
+- Current phase: migration-spec Phase 3 (plugin host maturity) is complete. Phase 1–7
+  core/library implementation remains in place: the closed reply loop, the oRPC contract layer,
+  the ingest boundary, persona/memory injection, admin authentication, plugin migrations/tasks/
+  tool policy, and live WebUI updates. Remaining work starts with Phase 4 memory/context review,
+  followed by the feature plugins and the DSH cutover.
 - Bun workspace, strict TypeScript config, domain schema/migrations, Pi Durable Bun SQLite adapter, startup lifecycle, Elysia + oRPC API, and React/TanStack WebUI exist.
 - Implemented packages:
   - `packages/contracts`: message, conversation policy, activity window, submission, and admin event schemas.
@@ -25,7 +25,7 @@ This file is the cross-session handoff record. Update it whenever implementation
   - `plugins/onebot-napcat/src/protocol`: outbound WebSocket channel, NapCat event normalization, private/group send actions, access-token headers, reconnect backoff, and action timeouts. The former `packages/onebot` workspace was folded into the plugin, so the protocol implementation ships only with its only consumer.
   - `packages/coding`: self-iteration runner, worktree policy, test/build/diff tools, DB-backed approval/proposal stores, and local reload controller.
   - `packages/migration`: DSH snapshot inspection, session/persona/memory/sticker/settings normalization, compression hook, dry-run/import/verify/rollback pipeline.
-  - `packages/sdk` and `packages/plugin-registry`: plugin manifest validation, permissions, tool/hook/UI bridges, runtime context, channel/settings/requests/audit host surfaces, install/uninstall registry, and real Bun Worker isolation.
+  - `packages/sdk` and `packages/plugin-registry`: plugin manifest validation, permissions, tool/hook/UI bridges, runtime context, channel/settings/requests/audit host surfaces, install/upgrade/downgrade/quarantine lifecycle, plugin-owned migration registry, durable task/storage contracts, tool policy, declarative UI registry, and the mature Bun Worker protocol (handshake, cancellation, streamed logs/progress, host-mediated storage/audit, bounded restart, timeout/backpressure).
   - `plugins/onebot-napcat`: built-in channel plugin that owns the OneBot channel lifecycle, settings, diagnostics, and request resolution.
   - `plugins/openai-compatible`: built-in model-provider plugin. It registers a provider factory with the host; its API key, base URL, discovered multi-model catalog, enablement, and capability metadata live in plugin config and environment fallbacks, not in host runtime settings.
   - `packages/chaos`: transient storage failure injection, restart drill, rate limiting, idempotent ingestion, and abuse guards.
@@ -177,6 +177,7 @@ These are implementation-level decisions, not blockers for starting scaffolding:
 - Phase 1: durable storage conformance, conversation host, fake model, activity policy/window, admin contracts, and health lifecycle are implemented.
 - Phase 2: OneBot outbound WebSocket is connected in lifecycle startup; inbound envelopes are normalized, deduplicated by domain conversation key, and routed to reusable durable conversations. The migration-spec conversation policy, trigger classification/lurk handling, cooldown/burst queues, humanlike output pacing, persona binding precedence, and admin policy/persona UI/API are implemented.
 - Phase 3: model registry/policy routing, OpenAI-compatible provider, provider settings, and usage accounting are implemented; live Magpie deployment values can be supplied through WebUI settings or environment variables.
+- Migration-spec Phase 3: plugin migrations, durable plugin storage/tasks, layered tool policy, ordered reply transforms, declarative UI components, granular channel/model capabilities, install lifecycle/quarantine, and the mature worker contract are implemented.
 - Phase 4: plugin SDK, registry, config validation, bridges, admin WebUI, and real Bun Worker isolation are implemented.
 - Phase 5: coding runner, worktree policy, tools, DB-backed approval/proposal stores, and reload controller are implemented.
 - Phase 6: migration inspection/normalize/dry-run/import/verify/rollback, CLI, and persona/memory/sticker/settings import pipeline are implemented; live DSH cutover has not been executed.
@@ -189,18 +190,18 @@ bun run check
 ```
 
 Current baseline: lint, formatting, root TypeScript, WebUI TypeScript, WebUI production
-build, WebUI i18n checks, and 278 tests across 53 files pass.
+build, WebUI i18n checks, and 303 tests across 63 files pass.
 
 ## Next implementation steps
 
 Follow the ordered implementation specs in `docs/specs/README.md`:
 
 1. **Phases 0–1**: Finish the DSH baseline/audit and NapCat operational parity. Phase 2
-   conversation policy/pacing is complete.
-2. **Phase 3**: Plugin host maturity (plugin-owned migrations, `tasks.*`, `ToolPolicy`, outbound transform hook, UI slots/status, and fine-grained `ChannelCapability`) plus remaining `openai-compatible` RPC model discovery/validation and `task.created`/`task.completed` / channel-state hook emissions.
-3. **Phases 4–8**: Memory and context extraction/review, `sticker-meme`, `search-fetch`, `proactive-scheduler`, and `self-iteration` runtime/UI.
-4. **Phase 9**: Full DSH v4 snapshot/import/verify/rollback migration and NapCat cutover.
-5. **Release readiness**: Schema/contract cleanup (`messages.activity_id`, duplicated schemas), Playwright E2E suite, secret scanning, backup/restore drills, and the production runbook.
+   conversation policy/pacing and Phase 3 plugin host maturity are complete.
+2. **Phases 4–8**: Memory and context extraction/review, `sticker-meme`, `search-fetch`,
+   `proactive-scheduler`, and `self-iteration` runtime/UI.
+3. **Phase 9**: Full DSH v4 snapshot/import/verify/rollback migration and NapCat cutover.
+4. **Release readiness**: Schema/contract cleanup (`messages.activity_id`, duplicated schemas), Playwright E2E suite, secret scanning, backup/restore drills, and the production runbook.
 
 The full built-in plugin inventory and migration order are tracked in
 `docs/architecture/builtin-plugin-migration.md`.
@@ -224,15 +225,15 @@ The full built-in plugin inventory and migration order are tracked in
   `admin_credentials` table; an existing deployment must have the bootstrap env values available
   for the first run after upgrade or use a dedicated credential-import tool.
 - Hook payloads are asymmetric: `activity.opened`/`activity.closed` carry durable ids while
-  `before.reply`/`after.reply` carry domain ids, and `task.created`/`task.completed` are declared
-  with no emission point.
+  `before.reply`/`after.reply` carry domain ids. `task.created`/`task.completed` now emit from the
+  host task service.
 - SSE has no `Last-Event-ID` replay; a reconnect relies on the fresh `snapshot` followed by
   re-query, and a logout does not tear down an already-open stream (it is authorised at connect
   time).
-- All plugin tools are visible to the model with no per-tool allowlist, `deferred` flag, or timeout,
-  and the tool name the model sees is a hashed provider-safe alias.
-- Plugin UI rendering is still generic: manifest metadata and JSON-schema config forms are rendered,
-  but named components such as approval cards and review panels need a host component registry.
+- The tool name the model sees is still a hashed provider-safe alias; plugin routing and audit use
+  the original `<pluginId>.<action>` name.
+- Declarative UI components are host-rendered data cards; runtime-installed third-party React
+  panels still require the future iframe sandbox rather than the trusted build-time tier.
 - Unread state, chat-object pin/archive controls beyond session archive, and group management
   actions are not implemented.
 - Narrow-screen navigation is implemented, but no Playwright end-to-end suite is present yet.

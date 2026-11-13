@@ -57,6 +57,13 @@
 			"when": 1794582009109,
 			"tag": "0007_busy_doctor_spectrum",
 			"breakpoints": true
+		},
+		{
+			"idx": 8,
+			"version": "6",
+			"when": 1794582715381,
+			"tag": "0008_abnormal_maestro",
+			"breakpoints": true
 		}
 	]
 }

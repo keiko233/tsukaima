@@ -1,4 +1,14 @@
-import type { ChannelAdapter, ChannelDiagnostics, SendOptions, SendResult } from "@tsukaima/sdk";
+import {
+	expandChannelCapabilities,
+	expandLegacyChannelCapabilities,
+	hasChannelCapability,
+	type ChannelAdapter,
+	type ChannelCapability,
+	type ChannelCapabilityNarrowing,
+	type ChannelDiagnostics,
+	type SendOptions,
+	type SendResult,
+} from "@tsukaima/sdk";
 import type {
 	ChannelNotice,
 	ChannelRequest,
@@ -26,6 +36,8 @@ export interface ChannelRegistryOptions {
  */
 export class ChannelRegistry {
 	readonly #adapters = new Map<string, ChannelAdapter>();
+	readonly #narrowings = new Map<string, ChannelCapabilityNarrowing>();
+	readonly #conversationNarrowings = new Map<string, ChannelCapabilityNarrowing>();
 	readonly #options: ChannelRegistryOptions;
 
 	constructor(options: ChannelRegistryOptions = {}) {
@@ -53,6 +65,10 @@ export class ChannelRegistry {
 		}
 		return () => {
 			this.#adapters.delete(adapter.id);
+			this.#narrowings.delete(adapter.id);
+			for (const key of this.#conversationNarrowings.keys()) {
+				if (key.startsWith(`${adapter.id}:`)) this.#conversationNarrowings.delete(key);
+			}
 		};
 	}
 
@@ -62,6 +78,52 @@ export class ChannelRegistry {
 
 	list(): readonly ChannelAdapter[] {
 		return [...this.#adapters.values()];
+	}
+
+	/** Narrow (or reset) host capabilities for a channel, optionally per conversation. */
+	narrow(
+		channelId: string,
+		narrowing: ChannelCapabilityNarrowing | null,
+		conversationId?: string,
+	): void {
+		const key = conversationId === undefined ? channelId : `${channelId}:${conversationId}`;
+		const target = conversationId === undefined ? this.#narrowings : this.#conversationNarrowings;
+		if (narrowing === null) {
+			target.delete(key);
+			return;
+		}
+		target.set(key, narrowing);
+	}
+
+	capabilities(channelId: string, conversationId?: string): readonly ChannelCapability[] {
+		const adapter = this.#adapters.get(channelId);
+		if (adapter === undefined) return [];
+		const base = new Set<ChannelCapability>(adapter.capabilities());
+		for (const capability of expandChannelCapabilities(adapter.capabilities()))
+			base.add(capability);
+		const apply = (narrowing: ChannelCapabilityNarrowing | undefined) => {
+			if (narrowing === undefined) return;
+			const allow = narrowing.allow === undefined ? undefined : new Set(narrowing.allow);
+			const deny = new Set(narrowing.deny ?? []);
+			for (const capability of base) {
+				const expanded = expandLegacyChannelCapabilities(capability);
+				const denied = deny.has(capability) || expanded.some((candidate) => deny.has(candidate));
+				const allowed =
+					allow === undefined ||
+					allow.has(capability) ||
+					expanded.some((candidate) => allow.has(candidate));
+				if (denied || !allowed) base.delete(capability);
+			}
+		};
+		apply(this.#narrowings.get(channelId));
+		if (conversationId !== undefined) {
+			apply(this.#conversationNarrowings.get(`${channelId}:${conversationId}`));
+		}
+		return [...base];
+	}
+
+	hasCapability(channelId: string, required: ChannelCapability, conversationId?: string): boolean {
+		return hasChannelCapability(this.capabilities(channelId, conversationId), required);
 	}
 
 	statuses(): readonly ChannelStatus[] {

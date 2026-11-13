@@ -27,9 +27,11 @@ import {
 	StatusBadge,
 	StatGrid,
 	Skeleton,
+	UiComponentRenderer,
 	statusText,
 	usePluginPanel,
 } from "@tsukaima/sdk/ui";
+import type { PluginUiDefinition } from "@tsukaima/sdk";
 import type { PluginI18n } from "@tsukaima/sdk/i18n";
 import type { PluginRow, PluginStatusSnapshot } from "@/lib/api";
 import { client, orpc } from "@/lib/api";
@@ -510,6 +512,21 @@ export function PluginDetail({ plugin }: { plugin: PluginRow }) {
 							icon={<Puzzle className="size-5" />}
 							title={m.plugins_no_custom_ui()}
 						/>
+					) : null}
+					{plugin.ui.length > 0 && ui.state !== "ready" ? (
+						<PluginSection title={m.plugins_declarative_ui()}>
+							<div className="space-y-3">
+								{plugin.ui.map((definition) => (
+									<UiComponentRenderer
+										definition={definition as PluginUiDefinition}
+										grantedPermissions={plugin.permissions}
+										key={definition.id}
+										pluginId={plugin.id}
+										t={t === null ? undefined : (key) => t.t(key)}
+									/>
+								))}
+							</div>
+						</PluginSection>
 					) : null}
 					<PluginSection title={m.plugins_config_title()}>
 						<PluginConfigForm

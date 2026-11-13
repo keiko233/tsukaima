@@ -91,6 +91,41 @@ export class PluginRegistry {
 		return installed;
 	}
 
+	/** Replace an installed plugin manifest/config while preserving install identity. */
+	replace(
+		pluginId: string,
+		manifest: PluginManifest,
+		options: InstallPluginOptions = {},
+	): InstalledPlugin {
+		const existing = this.#plugins.get(pluginId);
+		if (existing === undefined) {
+			throw new PluginRegistryError(`Unknown plugin ${pluginId}`);
+		}
+		if (manifest.name !== pluginId) {
+			throw new PluginRegistryError(`Manifest name ${manifest.name} does not match ${pluginId}`);
+		}
+		const grantedPermissions = options.grantedPermissions ?? existing.grantedPermissions;
+		const undeclared = grantedPermissions.filter(
+			(permission) => !manifest.permissions.includes(permission),
+		);
+		if (undeclared.length > 0) {
+			throw new PluginRegistryError(
+				`Plugin ${manifest.name} has grants not declared in its manifest: ${undeclared.join(", ")}`,
+			);
+		}
+		const config = options.config ?? existing.config;
+		validatePluginConfig(manifest.configSchema, config, manifest.name);
+		const installed: InstalledPlugin = {
+			config,
+			enabled: options.enabled ?? existing.enabled,
+			grantedPermissions,
+			manifest,
+			runMode: options.runMode ?? existing.runMode,
+		};
+		this.#plugins.set(pluginId, installed);
+		return installed;
+	}
+
 	setEnabled(pluginId: string, enabled: boolean): InstalledPlugin {
 		const installed = this.#plugins.get(pluginId);
 		if (installed === undefined) {

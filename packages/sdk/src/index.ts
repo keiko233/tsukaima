@@ -5,6 +5,23 @@ export {
 	toolRequiresPermission,
 } from "./permissions.ts";
 export { pluginPermissionSchema } from "./manifest.ts";
+export {
+	DEFAULT_TOOL_POLICY,
+	isModelVisibleTool,
+	resolveToolPolicy,
+	resolveToolPolicyAccess,
+	toolPayloadTooLarge,
+	type ToolPolicyAccessContext,
+	type ToolPolicyDecision,
+} from "./policy.ts";
+export { LocalTaskBridge, PLUGIN_TASK_STATUSES, taskOwnedBy } from "./tasks.ts";
+export {
+	SqlitePluginStorage,
+	type PluginStorageDriver,
+	type PluginStorageRow,
+	type PluginStorageScope,
+	type SqlitePluginStorageOptions,
+} from "./storage.ts";
 export { PluginRuntime } from "./runtime.ts";
 export type { TsukaimaPlugin, PluginPrepare, PluginSetup, PluginTeardown } from "./runtime.ts";
 export { pluginManifestSchema } from "./manifest.ts";
@@ -20,21 +37,42 @@ export type {
 	PluginModelInputModality,
 	PluginModelPort,
 	PluginModelProvider,
+	PluginEmbeddingPort,
+	PluginAudioTranscribePort,
 	PluginModelQuery,
 	PluginModelReasoning,
 	PluginModelReasoningLevel,
 	PluginModelRegistry,
+	PluginEmbeddingRequest,
+	PluginEmbeddingResult,
+	PluginAudioTranscribeRequest,
+	PluginAudioTranscribeResult,
 	PluginRpcHandler,
 	PluginRpcRegistry,
 	PluginStorage,
+	PluginTask,
+	PluginTaskCreateInput,
+	PluginTaskListQuery,
+	PluginTaskPermissions,
+	PluginTaskStatus,
+	PluginTaskWatchEvent,
+	PluginTasksApi,
+	PluginMigrationDescriptor,
+	PluginMigrationRecord,
+	PluginMigrationStatus,
+	PluginMigrationsApi,
+	PluginDatabaseApi,
 	PluginTool,
+	ToolPolicy,
 	PluginToolExecutionApi,
 	PluginToolInvocationResult,
 	PluginToolRegistration,
 	PluginToolRegistry,
 	PluginToolsExtension,
+	PluginUiDefinition,
 	PluginUiRegistry,
 	PluginStatusListener,
+	PluginUiSlot,
 	ToolInvocationContext,
 	ToolResult,
 } from "./types.ts";
@@ -44,6 +82,7 @@ export type {
 	AuditEntry,
 	ChannelAdapter,
 	ChannelCapability,
+	ChannelCapabilityNarrowing,
 	ChannelDiagnostics,
 	ChannelHistoryItem,
 	ChannelHistoryOptions,
@@ -56,6 +95,13 @@ export type {
 	PluginRequestApi,
 	PluginSettingsApi,
 	SendResult,
+	GranularChannelCapability,
+	LegacyChannelCapability,
+} from "./host.ts";
+export {
+	expandChannelCapabilities,
+	expandLegacyChannelCapabilities,
+	hasChannelCapability,
 } from "./host.ts";
 export {
 	createPluginContext,
@@ -64,6 +110,7 @@ export {
 	LocalPluginEventBridge,
 	LocalModelRegistry,
 	LocalRpcBridge,
+	LocalStorageBridge,
 	LocalToolBridge,
 	LocalUiBridge,
 	PLUGIN_TOOLS_EXTENSION_NAME,

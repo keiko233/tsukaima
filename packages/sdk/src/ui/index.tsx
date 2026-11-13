@@ -19,6 +19,22 @@ export type {
 	PluginRpcApi,
 	PluginSummary,
 } from "./context.tsx";
+export {
+	HOST_UI_VERSION,
+	UiComponentRenderer,
+	declarativeUiRegistry,
+	isUiVersionCompatible,
+	resolvePluginUiComponent,
+	resolveUiComponent,
+	uiComponentRegistry,
+} from "./registry.tsx";
+export type {
+	DeclarativeUiComponentName,
+	DeclarativeUiRegistryEntry,
+	DeclarativeUiRenderProps,
+	PluginUiComponentName,
+	UiComponentResolution,
+} from "./registry.tsx";
 export { definePluginUi, resolvePluginUi } from "./define.ts";
 export type {
 	PluginPanelDefinition,

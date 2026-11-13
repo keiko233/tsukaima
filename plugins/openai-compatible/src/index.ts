@@ -60,6 +60,90 @@ export const openAiCompatiblePlugin: TsukaimaPlugin = {
 				const config = resolveOpenAiCompatibleConfig(raw);
 				return config?.enabledModels.map(toPluginModelDescriptor) ?? [];
 			},
+			async embed(request) {
+				const raw = ((await context.settings?.get()) ?? {}) as Record<string, unknown>;
+				const config = resolveOpenAiCompatibleConfig(raw);
+				if (config === null) throw new Error("OpenAI-compatible provider is not configured");
+				const model =
+					config.enabledModels.find(
+						(candidate) =>
+							candidate.id === request.modelId &&
+							modelCapabilities(candidate).includes("embedding"),
+					) ??
+					config.enabledModels.find((candidate) =>
+						modelCapabilities(candidate).includes("embedding"),
+					);
+				if (model === undefined) {
+					throw new Error("No enabled embedding model is configured");
+				}
+				const response = await fetch(`${config.baseUrl.replace(/\/$/u, "")}/embeddings`, {
+					body: JSON.stringify({ input: request.texts, model: model.id }),
+					headers: {
+						"content-type": "application/json",
+						authorization: `Bearer ${config.apiKey}`,
+					},
+					method: "POST",
+				});
+				if (!response.ok) {
+					throw new Error(`Embedding request failed with ${response.status}`);
+				}
+				const payload = (await response.json()) as {
+					data?: readonly { readonly embedding?: readonly number[] }[];
+				};
+				return {
+					modelId: model.id,
+					providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
+					vectors: (payload.data ?? []).map((item) => item.embedding ?? []),
+				};
+			},
+			async transcribeAudio(request) {
+				const raw = ((await context.settings?.get()) ?? {}) as Record<string, unknown>;
+				const config = resolveOpenAiCompatibleConfig(raw);
+				if (config === null) throw new Error("OpenAI-compatible provider is not configured");
+				const model =
+					config.enabledModels.find(
+						(candidate) =>
+							candidate.id === request.modelId &&
+							modelCapabilities(candidate).includes("audio.transcribe"),
+					) ??
+					config.enabledModels.find((candidate) =>
+						modelCapabilities(candidate).includes("audio.transcribe"),
+					);
+				if (model === undefined) {
+					throw new Error("No enabled audio-transcribe model is configured");
+				}
+				const form = new FormData();
+				form.set("model", model.id);
+				const bytes =
+					typeof request.audio === "string"
+						? new TextEncoder().encode(request.audio)
+						: request.audio instanceof ArrayBuffer
+							? new Uint8Array(request.audio)
+							: request.audio;
+				form.set(
+					"file",
+					new Blob([bytes], { type: request.mimeType ?? "application/octet-stream" }),
+					"audio",
+				);
+				const response = await fetch(`${config.baseUrl.replace(/\/$/u, "")}/audio/transcriptions`, {
+					body: form,
+					headers: { authorization: `Bearer ${config.apiKey}` },
+					method: "POST",
+				});
+				if (!response.ok) {
+					throw new Error(`Audio transcription failed with ${response.status}`);
+				}
+				const payload = (await response.json()) as {
+					language?: string;
+					text?: string;
+				};
+				return {
+					...(payload.language === undefined ? {} : { language: payload.language }),
+					modelId: model.id,
+					providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
+					text: payload.text ?? "",
+				};
+			},
 			async createPort(options = {}) {
 				const raw = ((await context.settings?.get()) ?? {}) as Record<string, unknown>;
 				const config = resolveOpenAiCompatibleConfig(raw);

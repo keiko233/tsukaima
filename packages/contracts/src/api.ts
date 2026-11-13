@@ -244,6 +244,30 @@ export const pluginStatusSnapshotSchema = pluginStatusInputSchema.extend({
 });
 export type PluginStatusSnapshot = z.infer<typeof pluginStatusSnapshotSchema>;
 
+export const pluginUiDefinitionSchema = z.object({
+	component: z.string(),
+	data: z.record(z.string(), z.unknown()),
+	i18nKeys: z.array(z.string()).readonly().optional(),
+	id: z.string(),
+	kind: z.enum(["panel", "conversation-action", "message-card", "settings-form", "approval-card"]),
+	requiredPermissions: z.array(z.string()).readonly().optional(),
+	schema: z.record(z.string(), z.unknown()).optional(),
+	slot: z
+		.enum(["panel", "conversation-action", "message-card", "settings-form", "approval-card"])
+		.optional(),
+	title: z.string(),
+	version: z.string().optional(),
+});
+export type PluginUiDefinitionRow = z.infer<typeof pluginUiDefinitionSchema>;
+
+export const pluginLifecycleStateSchema = z.object({
+	failureCount: z.number().int().nonnegative(),
+	quarantinedAt: z.string().nullable(),
+	quarantineReason: z.string().nullable(),
+	retainData: z.boolean(),
+});
+export type PluginLifecycleState = z.infer<typeof pluginLifecycleStateSchema>;
+
 export const pluginRowSchema = z.object({
 	apiVersion: z.string(),
 	config: z.record(z.string(), z.unknown()),
@@ -251,6 +275,7 @@ export const pluginRowSchema = z.object({
 	enabled: z.number().int(),
 	id: z.string(),
 	kind: z.enum(["builtin", "first-party", "third-party"]),
+	lifecycle: pluginLifecycleStateSchema.optional(),
 	modelProviders: z.array(z.string()).readonly(),
 	name: z.string(),
 	permissions: z.array(z.string()).readonly(),
@@ -260,23 +285,7 @@ export const pluginRowSchema = z.object({
 	secretsSet: z.array(z.string()).readonly(),
 	status: pluginStatusSnapshotSchema.nullable(),
 	tools: z.array(z.string()).readonly(),
-	ui: z
-		.array(
-			z.object({
-				component: z.string(),
-				data: z.record(z.string(), z.unknown()),
-				id: z.string(),
-				kind: z.enum([
-					"panel",
-					"conversation-action",
-					"message-card",
-					"settings-form",
-					"approval-card",
-				]),
-				title: z.string(),
-			}),
-		)
-		.readonly(),
+	ui: z.array(pluginUiDefinitionSchema).readonly(),
 	version: z.string(),
 });
 export type PluginRow = z.infer<typeof pluginRowSchema>;
@@ -295,6 +304,37 @@ export const pluginRpcInputSchema = z.object({
 	input: z.unknown().optional(),
 	method: z.string().min(1),
 	pluginId: z.string().min(1).optional(),
+});
+
+export const pluginManifestInputSchema = z.record(z.string(), z.unknown());
+
+export const pluginInstallInputSchema = z.object({
+	config: z.record(z.string(), z.unknown()).optional(),
+	enabled: z.boolean().optional(),
+	grantedPermissions: z.array(z.string()).optional(),
+	manifest: pluginManifestInputSchema,
+	runMode: z.enum(["host", "worker"]).optional(),
+});
+
+export const pluginUpgradeInputSchema = z.object({
+	config: z.record(z.string(), z.unknown()).optional(),
+	grantedPermissions: z.array(z.string()).optional(),
+	manifest: pluginManifestInputSchema,
+	pluginId: z.string().min(1),
+});
+
+export const pluginDowngradeInputSchema = z.object({
+	manifest: pluginManifestInputSchema,
+	pluginId: z.string().min(1),
+});
+
+export const pluginLifecycleInputSchema = z.object({
+	pluginId: z.string().min(1),
+});
+
+export const pluginUninstallInputSchema = z.object({
+	pluginId: z.string().min(1),
+	retainData: z.boolean().optional(),
 });
 
 // ─── Diagnostics ─────────────────────────────────────────────────────────────
@@ -713,12 +753,20 @@ export const appContract = oc.router({
 				.meta({ audit: true }),
 		},
 		plugins: {
+			downgrade: oc.input(pluginDowngradeInputSchema).output(pluginRowSchema).meta({ audit: true }),
+			install: oc.input(pluginInstallInputSchema).output(pluginRowSchema).meta({ audit: true }),
 			list: oc.output(z.array(pluginRowSchema)),
+			reload: oc.input(pluginLifecycleInputSchema).output(pluginRowSchema).meta({ audit: true }),
 			rpc: oc.input(pluginRpcInputSchema).output(z.unknown()).meta({ audit: true }),
 			setEnabled: oc
 				.input(pluginEnabledUpdateInputSchema)
 				.output(pluginRowSchema)
 				.meta({ audit: true }),
+			uninstall: oc
+				.input(pluginUninstallInputSchema)
+				.output(z.object({ pluginId: z.string(), removed: z.boolean() }))
+				.meta({ audit: true }),
+			upgrade: oc.input(pluginUpgradeInputSchema).output(pluginRowSchema).meta({ audit: true }),
 			updateConfig: oc
 				.input(pluginConfigUpdateInputSchema)
 				.output(

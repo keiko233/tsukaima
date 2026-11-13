@@ -40,7 +40,12 @@ export interface PluginConfig {
 
 export interface PluginEvents {
 	emit(name: PluginHookName, payload: unknown): Promise<void>;
-	on(name: PluginHookName, handler: (payload: unknown) => Promise<void> | void): () => void;
+	on(name: PluginHookName, handler: (payload: unknown) => unknown | Promise<unknown>): () => void;
+	/**
+	 * Ordered transform fan-out. Every handler may return a replacement payload; the next
+	 * handler receives the previous result. Used by `reply.transform`.
+	 */
+	transform?(name: PluginHookName, payload: unknown): Promise<unknown>;
 }
 
 export interface PluginToolRegistry {
@@ -101,6 +106,40 @@ export interface PluginModelPort {
 	readonly models: unknown;
 }
 
+export interface PluginEmbeddingRequest {
+	readonly modelId?: string;
+	readonly texts: readonly string[];
+}
+
+export interface PluginEmbeddingResult {
+	readonly modelId: string;
+	readonly providerId: string;
+	readonly vectors: readonly (readonly number[])[];
+}
+
+export interface PluginAudioTranscribeRequest {
+	readonly modelId?: string;
+	readonly audio: Uint8Array | ArrayBuffer | string;
+	readonly mimeType?: string;
+}
+
+export interface PluginAudioTranscribeResult {
+	readonly modelId: string;
+	readonly providerId: string;
+	readonly text: string;
+	readonly language?: string;
+}
+
+export interface PluginEmbeddingPort {
+	embed(request: PluginEmbeddingRequest): Promise<PluginEmbeddingResult> | PluginEmbeddingResult;
+}
+
+export interface PluginAudioTranscribePort {
+	transcribeAudio(
+		request: PluginAudioTranscribeRequest,
+	): Promise<PluginAudioTranscribeResult> | PluginAudioTranscribeResult;
+}
+
 export interface PluginModelProvider {
 	readonly id: string;
 	/** False when the plugin has no usable credentials yet; the host then falls back. */
@@ -110,6 +149,16 @@ export interface PluginModelProvider {
 	createPort(options?: {
 		readonly onMessage?: (message: unknown) => void;
 	}): PluginModelPort | Promise<PluginModelPort>;
+	/** Optional embedding port (`embedding` capability). */
+	embed?(request: PluginEmbeddingRequest): Promise<PluginEmbeddingResult> | PluginEmbeddingResult;
+	/** Object-shaped embedding port alias. */
+	embedding?: PluginEmbeddingPort;
+	/** Optional speech-to-text port (`audio.transcribe` capability). */
+	transcribeAudio?(
+		request: PluginAudioTranscribeRequest,
+	): Promise<PluginAudioTranscribeResult> | PluginAudioTranscribeResult;
+	/** Object-shaped audio-transcribe port alias. */
+	audioTranscribe?: PluginAudioTranscribePort;
 }
 
 export interface PluginModelRegistry {
@@ -118,6 +167,16 @@ export interface PluginModelRegistry {
 	listProviders(): readonly PluginModelProvider[];
 	/** Enabled models from every registered provider, optionally filtered by capability or input. */
 	listModels(query?: PluginModelQuery): Promise<readonly PluginModelInfo[]>;
+	/** Find one enabled model by id, preferring the requested provider when supplied. */
+	findModel(modelId: string, providerId?: string): Promise<PluginModelInfo | undefined>;
+	/** Run embedding through the selected provider/model capability port. */
+	embed(request: PluginEmbeddingRequest): Promise<PluginEmbeddingResult>;
+	/** Object-shaped alias for `embed`. */
+	embedding?(request: PluginEmbeddingRequest): Promise<PluginEmbeddingResult>;
+	/** Run speech-to-text through the selected provider/model capability port. */
+	transcribeAudio(request: PluginAudioTranscribeRequest): Promise<PluginAudioTranscribeResult>;
+	/** Object-shaped alias for `transcribeAudio`. */
+	audioTranscribe?(request: PluginAudioTranscribeRequest): Promise<PluginAudioTranscribeResult>;
 }
 
 export type PluginRpcHandler = (input: unknown) => Promise<unknown> | unknown;
@@ -131,9 +190,121 @@ export interface PluginChannelApi {
 	send(conversationId: string, parts: readonly MessagePart[]): Promise<void>;
 }
 
+export type PluginTaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+
+export interface PluginTaskPermissions {
+	/** Granted plugin permissions inherited by the task, never escalated by the caller. */
+	readonly permissions: readonly PluginPermission[];
+}
+
+export interface PluginTask {
+	readonly id: string;
+	readonly pluginId: string;
+	readonly conversationId?: string;
+	readonly chatObjectId?: string;
+	readonly kind: string;
+	readonly payload: unknown;
+	readonly dedupeKey?: string;
+	readonly status: PluginTaskStatus;
+	readonly attempts: number;
+	readonly maxAttempts: number;
+	readonly nextRunAtMs: number;
+	readonly intervalMs?: number;
+	readonly logs: readonly string[];
+	readonly outcome?: unknown;
+	readonly permissions: PluginTaskPermissions;
+	readonly createdAtMs: number;
+	readonly updatedAtMs: number;
+}
+
+export interface PluginTaskCreateInput {
+	readonly conversationId?: string;
+	readonly chatObjectId?: string;
+	readonly kind: string;
+	readonly payload?: unknown;
+	readonly dedupeKey?: string;
+	readonly maxAttempts?: number;
+	readonly nextRunAtMs?: number;
+	readonly intervalMs?: number;
+	/** Optional narrowing of the owning plugin's permissions. Escalation is rejected. */
+	readonly permissions?: readonly PluginPermission[];
+}
+
+export interface PluginTaskListQuery {
+	readonly status?: PluginTaskStatus | readonly PluginTaskStatus[];
+	readonly kind?: string;
+	readonly conversationId?: string;
+	readonly limit?: number;
+}
+
+export interface PluginTaskWatchEvent {
+	readonly type: "created" | "updated" | "completed" | "cancelled";
+	readonly task: PluginTask;
+}
+
+export interface PluginTasksApi {
+	create(input: PluginTaskCreateInput): Promise<PluginTask>;
+	get(taskId: string): Promise<PluginTask | undefined>;
+	list(query?: PluginTaskListQuery): Promise<readonly PluginTask[]>;
+	cancel(taskId: string): Promise<PluginTask | undefined>;
+	watch(taskId: string, listener: (event: PluginTaskWatchEvent) => void): () => void;
+}
+
+export interface PluginMigrationDescriptor {
+	readonly version: string;
+	readonly sql: string;
+	readonly rollbackSql?: string;
+}
+
+export interface PluginMigrationRecord {
+	readonly checksum: string;
+	readonly durationMs: number;
+	readonly pluginId: string;
+	readonly rollbackSql: string | null;
+	readonly status: PluginMigrationStatus;
+	readonly version: string;
+}
+
+export type PluginMigrationStatus = "applied" | "rolled_back" | "failed";
+
+export interface PluginMigrationsApi {
+	list(): Promise<readonly PluginMigrationRecord[]>;
+	rollback(options?: { readonly dryRun?: boolean }): Promise<readonly string[]>;
+}
+
+/**
+ * A namespaced SQL handle for `host`-mode plugins. Every object must be prefixed with
+ * `plugin_<sanitizedId>_`; the host rejects cross-plugin/core access.
+ */
+export interface PluginDatabaseApi {
+	exec(sql: string): Promise<void>;
+	query<T = unknown>(sql: string, params?: readonly unknown[]): Promise<readonly T[]>;
+	readonly prefix: string;
+}
+
+export interface ToolPolicy {
+	readonly visibility: "model" | "ui" | "admin" | "hidden";
+	readonly deferred?: boolean;
+	readonly timeoutMs: number;
+	readonly maxConcurrent: number;
+	readonly requiredConversationCapabilities?: readonly string[];
+	readonly conversationAllowlist?: boolean;
+	readonly destructive?: boolean;
+	readonly maxPayloadBytes?: number;
+	/** Optional task-kind gate (`scheduled`, `proactive`, `coding`, ...). */
+	readonly allowedTaskKinds?: readonly string[];
+}
+
 export interface ToolInvocationContext {
 	readonly conversationId?: string;
 	readonly userId?: string;
+	readonly isAdmin?: boolean;
+	readonly role?: string;
+	readonly taskKind?: string;
+	readonly allowedTools?: readonly string[];
+	readonly conversationCapabilities?: readonly string[];
+	/** Cancellation signal propagated to cancellable worker/tool executions. */
+	readonly signal?: AbortSignal;
 }
 
 export interface ToolResult {
@@ -145,6 +316,8 @@ export interface PluginTool {
 	description: string;
 	parameters: Record<string, unknown>;
 	requiredPermissions: readonly PluginPermission[];
+	/** Host-enforced execution policy. Defaults are model-visible, 30s, 4 concurrent. */
+	policy?: Partial<ToolPolicy>;
 	execute(
 		input: Record<string, unknown>,
 		context: ToolInvocationContext,
@@ -153,7 +326,18 @@ export interface PluginTool {
 
 export type PluginToolInvocationResult =
 	| { ok: true; result: ToolResult }
-	| { ok: false; reason: "permission_denied"; permission: PluginPermission };
+	| { ok: false; reason: "permission_denied"; permission: PluginPermission }
+	| {
+			ok: false;
+			reason:
+				| "busy"
+				| "payload_too_large"
+				| "task_kind_denied"
+				| "timeout"
+				| "unauthorized"
+				| "unknown_tool";
+			message?: string;
+	  };
 
 /** The subset of the durable tool API a plugin tool adapter needs. */
 export interface PluginToolExecutionApi {
@@ -183,12 +367,26 @@ export interface PluginToolsExtension {
 	readonly tools: readonly PluginToolRegistration[];
 }
 
+export type PluginUiSlot =
+	| "panel"
+	| "conversation-action"
+	| "message-card"
+	| "settings-form"
+	| "approval-card";
+
 export interface PluginUiDefinition {
-	kind: "panel" | "conversation-action" | "message-card" | "settings-form" | "approval-card";
+	kind: PluginUiSlot;
 	id: string;
 	title: string;
 	component: string;
 	data: Record<string, unknown>;
+	/** Declarative component registry version. */
+	version?: string;
+	requiredPermissions?: readonly PluginPermission[];
+	i18nKeys?: readonly string[];
+	slot?: PluginUiSlot;
+	/** Data contract for the declarative component. */
+	schema?: Record<string, unknown>;
 }
 
 export type PluginStatusListener = (status: PluginStatusSnapshot | null) => void;
@@ -199,6 +397,7 @@ export type PluginHookName =
 	| "activity.closed"
 	| "before.agent"
 	| "before.reply"
+	| "reply.transform"
 	| "after.reply"
 	| "task.created"
 	| "task.completed"
@@ -207,7 +406,7 @@ export type PluginHookName =
 
 export interface PluginHook {
 	name: PluginHookName;
-	handler: (payload: unknown) => Promise<void> | void;
+	handler: (payload: unknown) => unknown | Promise<unknown>;
 }
 
 export interface PluginContext {
@@ -235,6 +434,12 @@ export interface PluginContext {
 	requests?: PluginRequestApi;
 	/** Host audit trail. */
 	audit?: PluginAuditApi;
+	/** Durable host scheduler tasks. Present when the plugin has `tasks.*` permission. */
+	tasks?: PluginTasksApi;
+	/** Host-owned plugin migration records and rollback for `host`-mode plugins. */
+	migrations?: PluginMigrationsApi;
+	/** Namespaced database handle for `host`-mode plugins that own tables. */
+	database?: PluginDatabaseApi;
 	/** Host bindings for built-in plugins; absent for third-party plugins. */
 	dependencies?: PluginDependencyBag;
 }
