@@ -165,18 +165,13 @@ build, and 179 tests across 36 files pass.
 
 ## Next implementation steps
 
-Do these in order unless a later decision changes the plan:
+Follow the ordered implementation specs in `docs/specs/README.md`:
 
-1. Consume the plugin UI registry in the WebUI, and add `task.created`/`task.completed` emission
-   points if pi-durable exposes a host-level task lifecycle.
-2. Add host hooks for channel connection state and friend/group requests so the SSE heartbeat
-   resync is no longer the only source.
-3. Move the remaining model-provider configuration UI (model discovery and model-id validation) into the plugin's own RPC/UI contribution. The provider itself is already extracted.
-4. Add full persona/memory/audit admin services and review UI, plus memory extraction jobs.
-5. Add sticker/meme and search plugins plus plugin-owned database migrations.
-6. Add task graph/audit visualization for self-iteration.
-7. Run the real DSH import, verify data, and cut NapCat from DSH to Tsukaima.
-8. Add secret scanning, backup/restore drills, and the production runbook.
+1. **Phases 0–2**: DSH baseline/audit, NapCat operational parity, and conversation policy/pacing.
+2. **Phase 3**: Plugin host maturity (plugin-owned migrations, `tasks.*`, `ToolPolicy`, outbound transform hook, UI slots/status, and fine-grained `ChannelCapability`) plus remaining `openai-compatible` RPC model discovery/validation and `task.created`/`task.completed` / channel-state hook emissions.
+3. **Phases 4–8**: Memory and context extraction/review, `sticker-meme`, `search-fetch`, `proactive-scheduler`, and `self-iteration` runtime/UI.
+4. **Phase 9**: Full DSH v4 snapshot/import/verify/rollback migration and NapCat cutover.
+5. **Release readiness**: Schema/contract cleanup (`messages.activity_id`, duplicated schemas), Playwright E2E suite, secret scanning, backup/restore drills, and the production runbook.
 
 The full built-in plugin inventory and migration order are tracked in
 `docs/architecture/builtin-plugin-migration.md`.
