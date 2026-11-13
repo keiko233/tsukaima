@@ -1,0 +1,10 @@
+{
+	"id": "synthetic-pack-01",
+	"name": "Synthetic Pack 01",
+	"version": "1.0.0",
+	"description": "Synthetic fixture meme pack",
+	"maintainer": "synthetic-fixture",
+	"license": "MIT",
+	"tags": ["synthetic", "fixture"],
+	"source": "fixture"
+}

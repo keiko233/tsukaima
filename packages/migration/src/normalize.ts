@@ -1,3 +1,4 @@
+import { isCredentialLikeKey } from "./dsh-baseline.ts";
 import { DSH_SOURCE, inspectDshSnapshot, type SnapshotSource } from "./dsh-inspect.ts";
 import { sha256String, stableStringify } from "./fs.ts";
 import { readZip } from "./zip.ts";
@@ -147,7 +148,6 @@ export interface NormalizeResult {
 	readonly warnings: readonly string[];
 }
 
-const secretKeys = ["token", "secret", "password", "authorization", "apikey"];
 const defaultTime = new Date(0).toISOString();
 
 function timestamp(value: string | number | undefined, fallback: string): string {
@@ -224,7 +224,7 @@ function collectSecretPaths(value: unknown, path = "$"): string[] {
 	}
 	return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) => {
 		const childPath = `${path}.${key}`;
-		if (typeof child === "string" && secretKeys.includes(key.toLowerCase())) {
+		if (typeof child === "string" && isCredentialLikeKey(key)) {
 			return [childPath];
 		}
 		return collectSecretPaths(child, childPath);

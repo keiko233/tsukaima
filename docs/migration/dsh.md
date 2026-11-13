@@ -2,6 +2,24 @@
 
 Only the current DSH instance is migrated. AstrBot is explicitly out of scope.
 
+## Baseline
+
+The compared deployment, value classes, and audit acceptance criteria are defined in
+[the DSH baseline spec](../specs/dsh-baseline.md). The secret-free audit record and reproduction
+commands are in [the DSH baseline audit record](dsh-baseline.md). The local synthetic fixture lives
+under `packages/migration/fixtures/dsh-baseline/`.
+
+Baseline inventory commands:
+
+```sh
+bun tools/migration/src/cli.ts baseline --source packages/migration/fixtures/dsh-baseline
+DSH_AUDIT_HOST="<ssh-target>" DSH_AUDIT_PROJECT="<project-dir>" DSH_AUDIT_CONTAINER="<container>" \
+  bun tools/migration/src/cli.ts baseline
+```
+
+Host, project, and container values come from flags or `DSH_AUDIT_*` environment variables; they are
+not runtime defaults or fixture data.
+
 ## Current DSH deployment facts
 
 - Project: `/opt/dsh-project` on `192.0.2.10`.

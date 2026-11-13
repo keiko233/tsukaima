@@ -1,0 +1,47 @@
+[
+	{
+		"id": "napcat-task-synthetic-001",
+		"status": "pending",
+		"createdAt": 1767225600000,
+		"dueAt": 1767229200000,
+		"repeatEveryMs": 0,
+		"flexMs": 30000,
+		"firedAt": null,
+		"closedAt": null,
+		"attempts": 0,
+		"maxAttempts": 2,
+		"fireCount": 0,
+		"cancelIfReplied": true,
+		"kind": "message"
+	},
+	{
+		"id": "napcat-task-synthetic-002",
+		"status": "done",
+		"createdAt": 1767225600000,
+		"dueAt": 1767225900000,
+		"repeatEveryMs": 0,
+		"flexMs": 0,
+		"firedAt": 1767225900000,
+		"closedAt": 1767225901000,
+		"attempts": 1,
+		"maxAttempts": 1,
+		"fireCount": 1,
+		"cancelIfReplied": false,
+		"kind": "message"
+	},
+	{
+		"id": "napcat-task-synthetic-003",
+		"status": "cancelled",
+		"createdAt": 1767225600000,
+		"dueAt": 1767232800000,
+		"repeatEveryMs": 0,
+		"flexMs": 0,
+		"firedAt": null,
+		"closedAt": 1767226000000,
+		"attempts": 0,
+		"maxAttempts": 1,
+		"fireCount": 0,
+		"cancelIfReplied": true,
+		"kind": "message"
+	}
+]

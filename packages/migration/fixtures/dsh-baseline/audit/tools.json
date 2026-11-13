@@ -1,0 +1,30 @@
+{
+	"napcatTools": [
+		"napcat_send_message",
+		"napcat_list_targets",
+		"napcat_view_image",
+		"napcat_api",
+		"napcat_dump_messages",
+		"napcat_send_image",
+		"napcat_send_file",
+		"napcat_lookup",
+		"napcat_video_peek",
+		"napcat_image_edit",
+		"napcat_schedule",
+		"napcat_schedule_list",
+		"napcat_schedule_cancel",
+		"napcat_poke",
+		"napcat_react",
+		"napcat_send_forward",
+		"napcat_forward_msg",
+		"napcat_ocr",
+		"napcat_translate",
+		"napcat_admin",
+		"napcat_list_group_files",
+		"napcat_fetch_group_file",
+		"napcat_shared_memory",
+		"napcat_inject_prompt",
+		"napcat_relay",
+		"napcat_memory_space"
+	]
+}

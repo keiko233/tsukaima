@@ -84,6 +84,24 @@ describe("DSH migration kit", () => {
 		expect(result.plan.stickers).toBe(1);
 	});
 
+	test("does not classify structural key fields as settings secrets", async () => {
+		await fs.writeFile(
+			join(snapshotRoot, "settings/settings.json"),
+			JSON.stringify({
+				chatKey: "group_1",
+				dayKey: "2026-01-01",
+				sessionKey: "session-1",
+				primaryKey: "id",
+				cacheKey: "cache",
+				sortKey: "name",
+				foreignKey: "other",
+				accessToken: "synthetic-secret-value",
+			}),
+		);
+		const result = await normalizeSnapshot([[snapshotRoot, "snapshot"]]);
+		expect(result.database.settings[0]?.secretsDetected).toEqual(["$.accessToken"]);
+	});
+
 	test("imports, verifies, and rolls back through the domain database", async () => {
 		const source: [[string, string]] = [[snapshotRoot, "snapshot"]];
 		const pipeline = createPipeline(`sqlite:${join(testRoot, "domain.sqlite")}`);
