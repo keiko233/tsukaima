@@ -1,11 +1,14 @@
 import {
 	createPluginContext,
+	collectPluginModels,
 	type AuditEntry,
 	type ElainaPlugin,
 	type PluginContext,
 	type PluginEvents,
 	type PluginManifest,
+	type PluginModelInfo,
 	type PluginModelProvider,
+	type PluginModelQuery,
 	type PluginRpcHandler,
 	type PluginSettingsApi,
 	type PluginTool,
@@ -384,6 +387,13 @@ export class PluginHost {
 		const models = {
 			getProvider: (id: string) => this.#modelProviders.get(id),
 			listProviders: () => [...this.#modelProviders.values()],
+			listModels: async (query?: PluginModelQuery): Promise<readonly PluginModelInfo[]> => {
+				const catalog = await collectPluginModels(this.#modelProviders.values(), query);
+				return catalog.map((model) => {
+					const ownerId = this.#modelProviderOwners.get(model.providerId);
+					return ownerId === undefined ? model : { ...model, pluginId: ownerId };
+				});
+			},
 			registerProvider: (provider: PluginModelProvider): (() => void) => {
 				if (this.#modelProviders.has(provider.id)) {
 					throw new Error(`Model provider ${provider.id} is already registered`);

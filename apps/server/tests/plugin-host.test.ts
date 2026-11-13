@@ -192,6 +192,43 @@ describe("plugin host", () => {
 			},
 		));
 
+	test("lets another plugin query the enabled model catalog", async () =>
+		withApp({}, async (lifecycle) => {
+			await lifecycle.updatePluginConfig("openai-compatible", {
+				apiKey: "test-key",
+				baseUrl: "https://models.example/v1",
+				models: [
+					{
+						enabled: true,
+						id: "vision-reasoner",
+						supportsImage: true,
+						supportsReasoning: true,
+					},
+					{ enabled: true, id: "text-chat" },
+					{ enabled: false, id: "disabled-chat" },
+				],
+			});
+			const observer = lifecycle.pluginHost.context("fake-channel");
+			if (observer === undefined) throw new Error("fake-channel context missing");
+			expect((await observer.models.listModels()).map((model) => model.id)).toEqual([
+				"vision-reasoner",
+				"text-chat",
+			]);
+			expect(await observer.models.listModels({ capability: "vision", input: "image" })).toEqual([
+				expect.objectContaining({
+					id: "vision-reasoner",
+					pluginId: "openai-compatible",
+					providerId: "openai-compatible",
+				}),
+			]);
+			expect((await observer.models.listModels({ capability: "reasoning" }))[0]?.reasoning).toEqual(
+				expect.objectContaining({
+					default: "medium",
+					levels: expect.arrayContaining(["low", "medium", "high"]),
+				}),
+			);
+		}));
+
 	test("publishes status snapshots and stops a disabled plugin", async () =>
 		withApp({}, async (lifecycle) => {
 			const plugins = await lifecycle.pluginHost.list();

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	LocalModelRegistry,
 	LocalToolBridge,
 	LocalUiBridge,
 	createPluginContext,
@@ -102,6 +103,47 @@ describe("plugin sdk", () => {
 		};
 		ui.register(definition);
 		expect(ui.list()).toEqual([definition]);
+	});
+
+	test("lists enabled models and filters them by capability and input", async () => {
+		const models = new LocalModelRegistry();
+		models.registerProvider({
+			id: "provider-a",
+			createPort: () => {
+				throw new Error("not used");
+			},
+			listModels: () => [
+				{
+					capabilities: ["basic-chat", "tool-use"],
+					id: "chat",
+					input: ["text"],
+				},
+				{
+					capabilities: ["basic-chat", "vision"],
+					id: "vision",
+					input: ["text", "image"],
+					reasoning: { default: "medium", levels: ["low", "medium", "high"] },
+				},
+			],
+		});
+		models.registerProvider({
+			id: "broken",
+			createPort: () => {
+				throw new Error("not used");
+			},
+			listModels: () => {
+				throw new Error("catalog unavailable");
+			},
+		});
+
+		expect((await models.listModels()).map((model) => model.id)).toEqual(["chat", "vision"]);
+		expect((await models.listModels({ capability: "vision" })).map((model) => model.id)).toEqual([
+			"vision",
+		]);
+		expect((await models.listModels({ input: "image" })).map((model) => model.id)).toEqual([
+			"vision",
+		]);
+		expect(await models.listModels({ capability: "vision", providerId: "provider-b" })).toEqual([]);
 	});
 
 	test("requires ui.panel for UI registration and status", () => {
