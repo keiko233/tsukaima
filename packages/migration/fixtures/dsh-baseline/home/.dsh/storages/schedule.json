@@ -1,0 +1,26 @@
+{
+	"unit": "milliseconds",
+	"global": {
+		"enabled": true,
+		"maxConcurrent": 2
+	},
+	"tables": {
+		"scheduled_tasks": [
+			{
+				"id": "task-synthetic-001",
+				"status": "pending",
+				"createdAt": 1767225600000,
+				"dueAt": 1767229200000,
+				"repeatEveryMs": 3600000,
+				"flexMs": 60000,
+				"firedAt": null,
+				"closedAt": null,
+				"attempts": 0,
+				"maxAttempts": 3,
+				"fireCount": 0,
+				"cancelIfReplied": false,
+				"kind": "reminder"
+			}
+		]
+	}
+}

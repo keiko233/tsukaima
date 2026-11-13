@@ -1,0 +1,10 @@
+{
+	"id": "pack-mvc2p5cv",
+	"name": "Pack MVC2P5CV",
+	"version": "1.0.0",
+	"description": "Synthetic fixture meme pack",
+	"maintainer": "synthetic-fixture",
+	"license": "MIT",
+	"tags": ["synthetic", "fixture"],
+	"source": "fixture"
+}

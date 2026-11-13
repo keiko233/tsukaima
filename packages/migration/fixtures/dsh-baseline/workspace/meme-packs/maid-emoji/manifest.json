@@ -1,0 +1,10 @@
+{
+	"id": "maid-emoji",
+	"name": "Maid Emoji",
+	"version": "1.0.0",
+	"description": "Synthetic fixture meme pack",
+	"maintainer": "synthetic-fixture",
+	"license": "MIT",
+	"tags": ["synthetic", "fixture"],
+	"source": "fixture"
+}

@@ -1,0 +1,14 @@
+{
+	"name": "dsh-profile-web",
+	"version": "0.0.0",
+	"private": true,
+	"dependencies": {
+		"@hytime/dsh-thinking-effort": "0.3.11",
+		"dsh-free-search": "0.9.16",
+		"dsh-meme": "0.1.63",
+		"dsh-mnemon": "0.5.36",
+		"dsh-napcat": "link:/workspace/work/dsh-napcat",
+		"dsh-purge": "0.1.0",
+		"dshmarket": "^1.70.2"
+	}
+}

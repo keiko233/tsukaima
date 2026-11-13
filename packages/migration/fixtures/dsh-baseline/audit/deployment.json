@@ -1,0 +1,4 @@
+{
+	"image": "docker.io/runzhliu/deepseek-harness:0.2.1-rc.3-r1",
+	"cliVersion": "0.2.1-rc.3"
+}

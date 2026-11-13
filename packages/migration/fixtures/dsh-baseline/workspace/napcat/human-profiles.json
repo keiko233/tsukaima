@@ -1,0 +1,30 @@
+{
+	"version": 1,
+	"savedAt": "2026-01-01T00:00:00.000Z",
+	"profiles": {
+		"group_20001": {
+			"chatKey": "group_20001",
+			"createdAt": "2026-01-01T00:00:00.000Z",
+			"updatedAt": "2026-01-01T00:05:00.000Z",
+			"interactions": 3,
+			"otherFirst": 1,
+			"selfFirst": 2,
+			"replyDelayAvgMs": 1200,
+			"proactiveSent": 1,
+			"proactiveAnswered": 1,
+			"unansweredStreak": 0,
+			"refusedCount": 0,
+			"refusedAt": null,
+			"unansweredAt": null,
+			"silentUntil": null,
+			"level": 2,
+			"activeHours": [9, 22],
+			"lastActiveHour": 21,
+			"openers": ["synthetic opener"],
+			"warm": true,
+			"dayKey": "2026-01-01",
+			"proactiveToday": 1,
+			"lastIgnoredReason": null
+		}
+	}
+}

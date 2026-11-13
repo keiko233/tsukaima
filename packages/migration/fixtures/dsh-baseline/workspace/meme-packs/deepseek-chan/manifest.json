@@ -1,0 +1,10 @@
+{
+	"id": "deepseek-chan",
+	"name": "DeepSeek Chan",
+	"version": "1.0.0",
+	"description": "Synthetic fixture meme pack",
+	"maintainer": "synthetic-fixture",
+	"license": "MIT",
+	"tags": ["synthetic", "fixture"],
+	"source": "fixture"
+}

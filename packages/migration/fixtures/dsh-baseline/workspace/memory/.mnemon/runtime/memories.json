@@ -1,0 +1,13 @@
+{
+	"version": 1,
+	"entries": [
+		{
+			"id": "memory-synthetic-001",
+			"content": "Synthetic memory entry",
+			"category": "fixture",
+			"importance": 0.5,
+			"tags": ["synthetic"],
+			"storedAt": "2026-01-01T00:00:00.000Z"
+		}
+	]
+}

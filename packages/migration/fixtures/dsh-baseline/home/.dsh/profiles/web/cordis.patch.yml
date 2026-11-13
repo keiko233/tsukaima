@@ -1,0 +1,208 @@
+plugins:
+  ui-settings-general:
+    package: "@deepseek-ai/dsh-client-ui-settings-general"
+    disabled: false
+  locale:
+    package: "@deepseek-ai/dsh-client-locale"
+    disabled: false
+  llm-pi-ai:
+    package: "@deepseek-ai/dsh-llm-pi-ai"
+    disabled: false
+  agent-default-model:
+    package: "@deepseek-ai/dsh-agent-default-model"
+    disabled: false
+  agent-preset-registry:
+    package: "@deepseek-ai/dsh-agent-preset-registry"
+    disabled: false
+    presets:
+      - preset-dsh-napcat-qq-chat
+      - preset-cordis
+  mcp-snowluma-host:
+    package: "@deepseek-ai/dsh-mcp-snowluma-host"
+    disabled: false
+  mcp-web-search-safe:
+    package: "@deepseek-ai/dsh-mcp-web-search-safe"
+    disabled: false
+  qq-mode:
+    package: qq-mode-console
+    disabled: false
+  web:
+    package: "@deepseek-ai/dsh-web"
+    disabled: false
+  dsh-napcat:
+    package: dsh-napcat
+    disabled: false
+    config:
+      accessToken: SYNTHETIC-TEST-SECRET-DO-NOT-LEAK
+      apiKeyEnv: SYNTHETIC_API_KEY_ENV
+      layaGateApiKey: SYNTHETIC-TEST-SECRET-DO-NOT-LEAK
+      imageEditToken: ""
+      customWebhookSecret: SYNTHETIC-TEST-SECRET-DO-NOT-LEAK
+      thirdPartyApiToken: SYNTHETIC-TEST-SECRET-DO-NOT-LEAK
+      xAuthCredential: SYNTHETIC-TEST-SECRET-DO-NOT-LEAK
+      legacyWebhookToken: ""
+      botQQ: qq_10001
+      adminUsers:
+        - qq_10001
+        - qq_10002
+      personaOverrides:
+        group_20001:
+          persona: synthetic-persona
+      url: "ws://napcat-synthetic:3001"
+      host: napcat-synthetic
+      port: 3001
+      workspacePath: /synthetic/workspace
+      sharedMemoryPath: /synthetic/workspace/shared-memory.md
+      crossStorePath: /synthetic/workspace/cross-recent.jsonl
+      memeDirs:
+        - /synthetic/memes
+      imageCache: /synthetic/cache/images
+      compactRpcUrl: "http://synthetic-rpc:8080"
+      layaGateUrl: "http://synthetic-gateway:8090"
+      imageEditUrl: "http://synthetic-edit:8091"
+      imageEditOutDir: /synthetic/edit-out
+      perChatWorkspace: true
+      enabled: true
+      dmPolicy: allowlist
+      allowFrom:
+        - qq_10001
+      groupPolicy: allowlist
+      groupAllowFrom:
+        - group_20001
+      triggerKeywords:
+        - synthetic-trigger
+        - help
+      requireMention: true
+      participationMode: balanced
+      burstSettleMs: 1200
+      burstMaxWaitMs: 5000
+      burstMaxMessages: 6
+      burstLongChars: 240
+      replyCooldownSeconds: 15
+      stickerPolicy: allow
+      staticEveryTurns: 8
+      noticeEvents:
+        - group_increase
+      noticeWake: true
+      pttToText: true
+      pttTimeoutMs: 30000
+      pttMinIntervalMs: 5000
+      forwardExpand: true
+      forwardMaxNodes: 20
+      forwardMaxChars: 4000
+      forwardTimeoutMs: 10000
+      memorySharedEnabled: true
+      memorySharedWrite: true
+      crossSessionEnabled: true
+      crossRecentMinutes: 120
+      crossRecentLimit: 50
+      crossInjectMaxChars: 2000
+      crossPrivateToGroup: false
+      allowRelay: true
+      allowGroupBan: true
+      allowGroupWholeBan: false
+      allowGroupKick: false
+      allowGroupAdmin: true
+      allowGroupCard: true
+      allowGroupName: true
+      allowGroupLeave: true
+      allowGroupSpecialTitle: false
+      allowGroupAddRequest: true
+      allowFriendAddRequest: true
+      allowFriendRemark: true
+      allowDeleteFriend: false
+      allowDeleteUnidirectionalFriend: false
+      allowSetQqAvatar: false
+      allowSetQqProfile: false
+      allowSetSelfLongnick: true
+      allowSetOnlineStatus: true
+      allowSetDiyOnlineStatus: false
+      allowSendLike: true
+      allowDeleteGroupFile: false
+      allowCreateGroupFileFolder: true
+      allowDeleteGroupFileFolder: false
+      allowMoveGroupFile: true
+      allowRenameGroupFile: true
+      friendRequestEvents: true
+      friendRequestNotifyAdmin: true
+      friendRequestAutoApprove: false
+      friendRequestPendingTtlMinutes: 1440
+      ignoreSelf: true
+      replyAsQuote: true
+      splitMaxChars: 1800
+      dryRun: false
+      dangerPolicy: block
+      dangerWords:
+        - synthetic-danger
+      layaGateEnabled: false
+      bubbleGateEnabled: true
+      bubbleGateThreshold: 3
+      replyGateEnabled: true
+      replyGateThreshold: 2
+      burstGateEnabled: true
+      burstGateThreshold: 4
+      proactiveEnabled: true
+      proactiveRatePerHour: 2
+      proactiveChance: 0.25
+      proactiveCooldownMinutes: 60
+      proactiveMaxPerHour: 3
+      proactiveQuietHours:
+        - 23
+        - 7
+      proactiveMinMessages: 5
+      proactiveWindowMinutes: 30
+      proactiveTickEnabled: true
+      proactiveTickMinutes: 20
+      proactiveIdleMinutes: 45
+      proactiveTickMinutesL1: 15
+      proactiveTickMinutesL2: 30
+      scheduleEnabled: true
+      scheduleMaxPerChat: 10
+      scheduleMaxDelayMinutes: 10080
+      compactAutoEnabled: true
+      compactThresholdTokens: 120000
+      mode: forward
+      adminTitles:
+        - Admin
+      typingIndicator: true
+      faceFallback: true
+      memeEnabled: true
+      memeAsSticker: true
+      memeNudgeAfter: 4
+      memeLooseFallback: false
+      outboundImageMaxBytes: 10485760
+      imageFlattenTransparent: true
+      imageFlattenBackground: "#ffffff"
+      imageFlattenMaxEdge: 2048
+      sendIntervalMs: 500
+      streamNarration: true
+      repetitionRewrite: true
+      videoPeekMaxBytes: 5242880
+      videoPeekFrames: 4
+      imageEditTimeoutSeconds: 60
+      reconnectMaxAttempts: 5
+      imageCacheMaxBytes: 104857600
+      imageCacheDailyCap: 50
+      imageCacheRetentionDays: 7
+      proactiveUseCannedLines: true
+      proactiveContextLines: 10
+      proactiveBubbleBackoffMinutes: 30
+      logLevel: info
+  ui-theme:
+    package: "@deepseek-ai/dsh-client-ui-theme"
+    disabled: false
+  sandbox-policy:
+    package: "@deepseek-ai/dsh-sandbox-policy"
+    disabled: false
+  approval:
+    package: "@deepseek-ai/dsh-approval"
+    disabled: false
+  permission:
+    package: "@deepseek-ai/dsh-permission"
+    disabled: false
+  dsh-purge:
+    package: dsh-purge
+    disabled: false
+  mcp-snowluma:
+    package: "@deepseek-ai/dsh-mcp-snowluma"
+    disabled: true
