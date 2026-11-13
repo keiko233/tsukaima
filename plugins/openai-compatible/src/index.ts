@@ -13,6 +13,8 @@ export const openAiCompatibleConfigSchema = z.object({
 
 export type OpenAiCompatibleConfig = z.infer<typeof openAiCompatibleConfigSchema>;
 
+const unsubscribers = new WeakMap<object, () => void>();
+
 /**
  * A model provider plugin. It registers a factory rather than a live port so the host can
  * decide when to build the model catalog and can inject usage accounting.
@@ -48,7 +50,37 @@ export const openAiCompatiblePlugin: TsukaimaPlugin = {
 		});
 		context.logger.info("OpenAI-compatible provider registered");
 	},
-	setup() {},
+	async setup(context) {
+		const report = async (): Promise<void> => {
+			const raw = (await context.settings?.get()) ?? {};
+			const parsed = openAiCompatibleConfigSchema.safeParse(raw);
+			if (!parsed.success) {
+				context.ui.setStatus({
+					code: "status_unconfigured",
+					level: "unknown",
+					summary: "Provider credentials are incomplete",
+				});
+				return;
+			}
+			context.ui.setStatus({
+				code: "status_configured",
+				details: { baseUrl: parsed.data.baseUrl },
+				level: "ok",
+				metrics: { model: parsed.data.modelId },
+				summary: parsed.data.modelId,
+			});
+		};
+		await report();
+		const unsubscribe = context.settings?.onChange(() => {
+			void report();
+		});
+		if (unsubscribe !== undefined) unsubscribers.set(context, unsubscribe);
+	},
+	teardown(context) {
+		unsubscribers.get(context)?.();
+		unsubscribers.delete(context);
+		context.ui.setStatus(null);
+	},
 };
 
 export default openAiCompatiblePlugin;

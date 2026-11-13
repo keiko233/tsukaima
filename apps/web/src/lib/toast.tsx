@@ -14,7 +14,7 @@ import {
 	type ToastInput,
 	type ToastStatus,
 	useAnimatedToastStack,
-} from "@/components/motion/animated-toast-stack";
+} from "@tsukaima/ui/components/motion/animated-toast-stack";
 import { m } from "@/paraglide/messages";
 
 type ToastOptions = Omit<ToastInput, "status" | "title">;

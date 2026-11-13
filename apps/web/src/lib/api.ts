@@ -25,6 +25,7 @@ export type {
 	ModelPolicy,
 	ModelPolicyRow,
 	PluginRow,
+	PluginStatusSnapshot,
 	RequestRow,
 	SessionDetail,
 	SessionSummary,

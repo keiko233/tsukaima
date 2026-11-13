@@ -11,7 +11,7 @@
 	"scripts": {
 		"dev": "bun run --filter '@tsukaima/server' dev",
 		"build": "bun run --filter '*' build",
-		"typecheck": "tsc --noEmit && bun run --filter '@tsukaima/web' typecheck",
+		"typecheck": "tsc --noEmit && bun run --filter '@tsukaima/ui' typecheck && bun run --filter '@tsukaima/sdk' typecheck && bun run --filter '@tsukaima/web' typecheck",
 		"lint": "oxlint .",
 		"format": "oxfmt 'apps/**/*.ts' 'packages/**/*.ts' 'plugins/**/*.ts' 'plugins/**/*.json' '*.json' '*.ts' '.env.example'",
 		"format:check": "oxfmt --check 'apps/**/*.ts' 'packages/**/*.ts' 'plugins/**/*.ts' 'plugins/**/*.json' '*.json' '*.ts' '.env.example'",

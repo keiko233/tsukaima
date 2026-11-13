@@ -1,0 +1,21 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"plugin_name": "OneBot / NapCat",
+	"plugin_description": "将 Tsukaima 连接到 NapCat 的 OneBot v11 WebSocket。",
+	"panel_connection": "连接",
+	"panel_settings": "设置",
+	"connection_title": "通道状态",
+	"connection_hint": "适配器会自动重连；修改配置会重启连接。",
+	"events": "事件数",
+	"reconnects": "重连次数",
+	"endpoint": "地址",
+	"reconnect": "立即重连",
+	"reconnect_started": "已开始重连",
+	"reconnect_failed": "重连失败",
+	"status_connected": "已连接到 NapCat",
+	"status_disconnected": "与 NapCat 断开",
+	"status_unconfigured": "尚未配置 WebSocket 地址",
+	"save": "保存",
+	"configured": "已配置；输入新值以替换",
+	"unset": "未配置"
+}

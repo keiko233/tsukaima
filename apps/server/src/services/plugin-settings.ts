@@ -16,6 +16,7 @@ export interface PluginSettingsStoreOptions {
 }
 
 const SETTINGS_PREFIX = "plugin-config:";
+const ENABLED_PREFIX = "plugin-enabled:";
 
 function isEmpty(value: unknown): boolean {
 	return value === undefined || value === null || value === "";
@@ -101,6 +102,28 @@ export class PluginSettingsStore {
 			config[key] = value;
 		}
 		return { config, secretsSet };
+	}
+
+	/** Installed plugins default to enabled until an administrator turns one off. */
+	async isEnabled(pluginId: string): Promise<boolean> {
+		const database = this.#database();
+		if (database === undefined) return true;
+		const rows = await database
+			.select()
+			.from(meta)
+			.where(eq(meta.key, `${ENABLED_PREFIX}${pluginId}`))
+			.limit(1);
+		return rows[0]?.value !== "false";
+	}
+
+	async setEnabled(pluginId: string, enabled: boolean): Promise<void> {
+		const database = this.#database();
+		if (database === undefined) return;
+		const key = `${ENABLED_PREFIX}${pluginId}`;
+		await database
+			.insert(meta)
+			.values({ key, value: enabled ? "true" : "false" })
+			.onConflictDoUpdate({ target: meta.key, set: { value: enabled ? "true" : "false" } });
 	}
 
 	async #readStored(pluginId: string): Promise<PluginConfigValue> {

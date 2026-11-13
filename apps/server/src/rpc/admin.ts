@@ -154,7 +154,14 @@ export const adminRouter = {
 			...(await context.lifecycle.pluginHost.list()),
 		]),
 		rpc: adminBase.admin.plugins.rpc.handler(async ({ context, input }) => {
-			return context.lifecycle.pluginHost.invokeRpc(input.method, input.input);
+			return context.lifecycle.pluginHost.invokeRpc(input.method, input.input, input.pluginId);
+		}),
+		setEnabled: adminBase.admin.plugins.setEnabled.handler(async ({ context, input }) => {
+			await context.lifecycle.setPluginEnabled(input.pluginId, input.enabled);
+			const rows = await context.lifecycle.pluginHost.list();
+			const row = rows.find((plugin) => plugin.id === input.pluginId);
+			if (row === undefined) throw new Error(`Unknown plugin ${input.pluginId}`);
+			return row;
 		}),
 		updateConfig: adminBase.admin.plugins.updateConfig.handler(async ({ context, input }) => {
 			await context.lifecycle.updatePluginConfig(input.pluginId, input.config);

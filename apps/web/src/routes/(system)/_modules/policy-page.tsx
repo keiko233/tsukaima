@@ -2,10 +2,10 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Button } from "@/components/motion/button";
-import { Card } from "@/components/motion/card";
-import { CardContent } from "@/components/motion/card";
-import { Input } from "@/components/motion/input";
+import { Button } from "@tsukaima/ui/components/motion/button";
+import { Card } from "@tsukaima/ui/components/motion/card";
+import { CardContent } from "@tsukaima/ui/components/motion/card";
+import { Input } from "@tsukaima/ui/components/motion/input";
 import { orpc } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";

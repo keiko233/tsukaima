@@ -9,7 +9,12 @@
 		"noUncheckedIndexedAccess": false,
 		"baseUrl": ".",
 		"paths": {
-			"@/*": ["src/*"]
+			"@/*": ["src/*"],
+			"@tsukaima/ui/*": ["../../packages/ui/src/*"],
+			"@tsukaima/ui": ["../../packages/ui/src/index.ts"],
+			"@tsukaima/sdk/*": ["../../packages/sdk/src/*"],
+			"@tsukaima/sdk": ["../../packages/sdk/src/index.ts"],
+			"@tsukaima/contracts": ["../../packages/contracts/src/index.ts"]
 		}
 	},
 	"include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"],

@@ -91,6 +91,16 @@ export class PluginRegistry {
 		return installed;
 	}
 
+	setEnabled(pluginId: string, enabled: boolean): InstalledPlugin {
+		const installed = this.#plugins.get(pluginId);
+		if (installed === undefined) {
+			throw new PluginRegistryError(`Unknown plugin ${pluginId}`);
+		}
+		const next: InstalledPlugin = { ...installed, enabled };
+		this.#plugins.set(pluginId, next);
+		return next;
+	}
+
 	uninstall(pluginId: string): void {
 		if (!this.#plugins.delete(pluginId)) {
 			throw new PluginRegistryError(`Unknown plugin ${pluginId}`);

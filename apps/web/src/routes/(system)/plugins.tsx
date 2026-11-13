@@ -1,4 +1,10 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { PluginPage } from "./_modules/plugin-page";
+import { Outlet, createFileRoute } from "@tanstack/react-router";
+import { PluginLayout } from "./_modules/plugin-layout";
 
-export const Route = createFileRoute("/(system)/plugins")({ component: PluginPage });
+export const Route = createFileRoute("/(system)/plugins")({
+	component: () => (
+		<PluginLayout>
+			<Outlet />
+		</PluginLayout>
+	),
+});

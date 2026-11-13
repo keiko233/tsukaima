@@ -1,0 +1,18 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"plugin_name": "OpenAI-compatible provider",
+	"plugin_description": "Registers an OpenAI-compatible chat model provider.",
+	"panel_provider": "Provider",
+	"panel_settings": "Settings",
+	"provider_title": "Model provider",
+	"provider_hint": "The host resolves this provider after plugin preparation. Changing the model id takes effect for new conversations.",
+	"model": "Model",
+	"base_url": "Base URL",
+	"configured": "Configured",
+	"not_configured": "Not configured",
+	"save": "Save",
+	"configured_placeholder": "Configured; enter a new value to replace it",
+	"unset_placeholder": "Not configured",
+	"status_configured": "Provider configured",
+	"status_unconfigured": "Provider credentials are incomplete"
+}

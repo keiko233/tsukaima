@@ -1,5 +1,5 @@
 import { Bot, FolderOpen, MessageCircle, Users, type LucideIcon } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export function Avatar({
 	className,

@@ -1,0 +1,18 @@
+{
+	"extends": "../../tsconfig.json",
+	"compilerOptions": {
+		"jsx": "react-jsx",
+		"lib": ["ES2023", "DOM", "DOM.Iterable"],
+		"types": ["bun", "react", "react-dom"],
+		"noEmit": true,
+		"exactOptionalPropertyTypes": false,
+		"noUncheckedIndexedAccess": false,
+		"baseUrl": ".",
+		"paths": {
+			"@tsukaima/ui/*": ["./../ui/src/*"],
+			"@tsukaima/ui": ["./../ui/src/index.ts"],
+			"@tsukaima/contracts": ["./../contracts/src/index.ts"]
+		}
+	},
+	"include": ["src/**/*.ts", "src/**/*.tsx"]
+}

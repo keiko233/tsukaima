@@ -10,9 +10,9 @@ import {
 	MessageFooter,
 	MessageHeader,
 	MessageScroller,
-} from "@/components/agents/message";
+} from "@tsukaima/ui/components/agents/message";
 import type { DeliveryStatus, MessageSummary } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { formatDateTime, formatTimestamp } from "../../_modules/lib/format";
 

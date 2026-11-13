@@ -191,4 +191,40 @@ describe("plugin host", () => {
 				);
 			},
 		));
+
+	test("publishes status snapshots and stops a disabled plugin", async () =>
+		withApp({}, async (lifecycle) => {
+			const plugins = await lifecycle.pluginHost.list();
+			const oneBot = plugins.find((plugin) => plugin.id === "onebot-napcat");
+			expect(oneBot?.status).toEqual(
+				expect.objectContaining({ code: "status_unconfigured", level: "unknown" }),
+			);
+			expect(oneBot?.rpcMethods).toEqual(["onebot-napcat.reconnect"]);
+			expect(oneBot?.permissions).toContain("ui.panel");
+
+			await lifecycle.setPluginEnabled("onebot-napcat", false);
+			const disabled = (await lifecycle.pluginHost.list()).find(
+				(plugin) => plugin.id === "onebot-napcat",
+			);
+			expect(disabled?.enabled).toBe(0);
+			expect(disabled?.status).toBeNull();
+			expect(disabled?.rpcMethods).toEqual([]);
+			expect(lifecycle.channels.get("onebot")).toBeUndefined();
+			expect(lifecycle.pluginStatuses.get("onebot-napcat")).toBeUndefined();
+
+			await lifecycle.setPluginEnabled("onebot-napcat", true);
+			const enabled = (await lifecycle.pluginHost.list()).find(
+				(plugin) => plugin.id === "onebot-napcat",
+			);
+			expect(enabled?.enabled).toBe(1);
+			expect(enabled?.rpcMethods).toEqual(["onebot-napcat.reconnect"]);
+			expect(enabled?.status).not.toBeNull();
+		}));
+
+	test("rejects an RPC call outside the requested plugin namespace", async () =>
+		withApp({}, async (lifecycle) => {
+			await expect(
+				lifecycle.pluginHost.invokeRpc("onebot-napcat.reconnect", undefined, "openai-compatible"),
+			).rejects.toThrow("does not belong to");
+		}));
 });

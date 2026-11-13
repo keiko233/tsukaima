@@ -3,7 +3,7 @@
 import { createHighlighter, type Highlighter } from "shiki";
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import type { LogEntry } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 const LIGHT_THEME = "github-light-high-contrast";
 const DARK_THEME = "github-dark-high-contrast";

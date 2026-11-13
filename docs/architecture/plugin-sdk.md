@@ -265,6 +265,13 @@ plugin with a `configSchema`. The WebUI does not import plugin React components,
 execute arbitrary page code. Richer named components can be added later by extending the host's
 component registry rather than by loading remote modules.
 
+The plugin UI design is now specified in [plugin-ui.md](plugin-ui.md). It adds a two-pane
+`/plugins` route, trusted build-time React panels for built-in/first-party plugins, a shared
+`@tsukaima/sdk/ui` kit, a status snapshot channel, and `@tsukaima/sdk/i18n` for Paraglide-compiled
+plugin messages. Third-party plugins that ship a panel in the workspace bundle are gated behind
+a confirmation modal; runtime-installed plugins remain data-only until a sandboxed panel tier
+exists.
+
 ## Worker boundary
 
 Third-party plugins run in a worker by default.

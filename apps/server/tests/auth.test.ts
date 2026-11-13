@@ -395,6 +395,7 @@ describe("admin auth", () => {
 			},
 			"plugins/list": {},
 			"plugins/rpc": { input: {}, method: "test.ping" },
+			"plugins/setEnabled": { enabled: false, pluginId: "onebot-napcat" },
 			"plugins/updateConfig": { config: {}, pluginId: "onebot-napcat" },
 			"requests/get": { requestId: "request-1" },
 			"requests/list": {},

@@ -2,10 +2,10 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Circle, MessageCircle } from "lucide-react";
-import { Button } from "@/components/motion/button";
+import { Button } from "@tsukaima/ui/components/motion/button";
 import { orpc, type DeliveryStatus } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
-import { cn } from "@/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { useShellNavigation } from "../../_modules/shell/admin-shell";
 import { Avatar, InlineError } from "../../_modules/shell/primitives";

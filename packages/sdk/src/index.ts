@@ -29,6 +29,7 @@ export type {
 	PluginToolRegistry,
 	PluginToolsExtension,
 	PluginUiRegistry,
+	PluginStatusListener,
 	ToolInvocationContext,
 	ToolResult,
 } from "./types.ts";
