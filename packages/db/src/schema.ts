@@ -468,7 +468,9 @@ export const media = sqliteTable("media", {
 	mimeType: text("mime_type").notNull(),
 	sha256: text("sha256").notNull(),
 	sizeBytes: integer("size_bytes").notNull(),
-	source: text("source", { enum: ["onebot", "webui", "migration", "generated"] }).notNull(),
+	source: text("source", {
+		enum: ["channel", "webui", "migration", "generated"],
+	}).notNull(),
 	sourceUrl: text("source_url"),
 	width: integer("width"),
 });

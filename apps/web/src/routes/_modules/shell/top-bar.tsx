@@ -35,8 +35,7 @@ function connectionStatus(data: DiagnosticsData | undefined): {
 	tone: ConnectionTone;
 } {
 	if (data === undefined) return { label: m.connect_connecting, tone: "muted" };
-	const channels = data.channels.filter((channel) => channel.kind === "onebot-v11");
-	const channel = channels[0];
+	const channel = data.channels[0];
 	if (channel === undefined) return { label: m.connect_unconfigured, tone: "muted" };
 	const state = channel.state;
 	if (!channel.configured) {

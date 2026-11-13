@@ -12,7 +12,7 @@ export const conversationKeySchema = z.object({
 
 export const messageEnvelopeSchema = z.object({
 	channelId: z.string().min(1),
-	channelKind: z.enum(["onebot-v11", "webui", "system", "plugin"]),
+	channelKind: z.string().min(1),
 	conversationKey: conversationKeySchema,
 	id: z.string().min(1),
 	mentions: z.array(z.object({ id: z.string().min(1).optional(), all: z.boolean().optional() })),

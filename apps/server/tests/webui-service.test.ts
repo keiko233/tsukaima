@@ -26,7 +26,7 @@ afterEach(async () => {
 
 const envelope = (id: string, text: string, timestampMs = Date.now()): MessageEnvelope => ({
 	channelId: "onebot-test",
-	channelKind: "onebot-v11",
+	channelKind: "test-channel",
 	conversationKey: { kind: "private", peerId: "user-1" },
 	id,
 	mentions: [],

@@ -15,10 +15,8 @@ import type { ElainaLifecycle } from "../lifecycle.ts";
 
 type ChatKind = "private" | "group" | "webui" | "task" | "plugin";
 
-const messageKinds = ["onebot-v11", "webui", "system", "plugin"] as const;
-
-const toMessageKind = (channelKind: string | undefined): (typeof messageKinds)[number] =>
-	messageKinds.find((candidate) => candidate === channelKind) ?? "plugin";
+/** Store the adapter's own kind; the WebUI must not know which platforms exist. */
+const toMessageKind = (channelKind: string | undefined): string => channelKind ?? "plugin";
 
 export interface SessionSummary {
 	createdAt: string;
