@@ -1,5 +1,6 @@
-import { and, desc, eq, gt, inArray, isNull, like, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, or, sql, type SQL } from "drizzle-orm";
 import type { ContextPromptProvider } from "@elaina/core";
+import type { ConversationPolicy } from "@elaina/contracts";
 import {
 	conversationMembers,
 	conversations,
@@ -9,6 +10,7 @@ import {
 } from "@elaina/db";
 import type { Logger } from "../logging.ts";
 import { ConversationPolicyService } from "./conversation-policy.ts";
+import { MemoryService, type RankedMemory } from "./memory-service.ts";
 
 /**
  * Combined persona + memory character budget for one request, in characters (not tokens,
@@ -20,24 +22,24 @@ export const PROMPT_BUDGET_CHARS = 4_000;
 /** Persona's share of {@link PROMPT_BUDGET_CHARS}; memories get the remainder. */
 const PERSONA_BUDGET_FRACTION = 0.4;
 const DEFAULT_MEMORY_TOP_K = 10;
-const MAX_QUERY_TOKENS = 6;
-const RECENT_MESSAGE_LIMIT = 8;
-const CANDIDATE_LIMIT = 100;
-const KEYWORD_CANDIDATES_PER_TOKEN = 25;
+const RECENT_MESSAGE_LIMIT = 6;
+const RECENT_TIER_MIN_BUDGET = 260;
 const MEMORY_SNIPPET_LIMIT = 180;
+const RECENT_SNIPPET_LIMIT = 120;
 const PERSONA_TRUNCATION_NOTE = "[persona truncated to fit the context budget]";
 const MEMORY_TRUNCATION_NOTE = "[memories truncated to fit the context budget]";
+const RECENT_HEADER = "Recent conversation window:";
+const WARM_HEADER = "Warm session state:";
+const LONG_TERM_HEADER = "Known memories, most relevant first:";
 
 /**
  * Resolves the persona and memory text for one durable conversation and keeps it inside a
  * character budget. Every failure degrades to `undefined` (the section is omitted) — prompt
  * rendering must never break a model run — and memory content is never written to logs.
  *
- * Retrieval uses only SQLite capabilities (no embeddings, no new dependencies): scoped
- * candidates from `memories`, keyword/LIKE recall from the newest inbound messages, then
- * ranking by keyword hits, importance, and recency. `scope = 'persona'` has no persona
- * foreign key in the schema, so persona memories are associated through the conversation
- * they were recorded in and only surface while a persona binding is active.
+ * Memory retrieval is tiered: a bounded recent-message window, the latest additive warm
+ * summary (`kind = 'summary'`), then hybrid-ranked long-term memories. Conversation policy
+ * gates long-term recall and prevents private/group scope leakage.
  */
 export interface DrizzleContextProviderOptions {
 	readonly database: () => ElainaDatabase | undefined;
@@ -48,64 +50,12 @@ export interface DrizzleContextProviderOptions {
 	readonly memoryTopK?: number;
 	/** Shared policy resolution; a database-backed service is created when omitted. */
 	readonly policyService?: ConversationPolicyService;
+	/** Shared memory service (hybrid recall, warm state); created internally when omitted. */
+	readonly memoryService?: MemoryService;
 }
 
-type MemoryRow = {
-	readonly content: string;
-	readonly id: string;
-	readonly importance: number;
-	readonly kind: string;
-	readonly scope: string;
-	readonly summary: string;
-	readonly updatedAt: string;
-};
-
-type RankedMemory = MemoryRow & { readonly hits: number };
-
-const memoryColumns = {
-	content: memories.content,
-	id: memories.id,
-	importance: memories.importance,
-	kind: memories.kind,
-	scope: memories.scope,
-	summary: memories.summary,
-	updatedAt: memories.updatedAt,
-} as const;
-
-/** `and()`/`or()` can type as `undefined`; a query always needs one concrete condition. */
-function combine(conditions: readonly (SQL | undefined)[]): SQL {
-	const filtered = conditions.filter((condition): condition is SQL => condition !== undefined);
-	if (filtered.length === 0) return sql`1 = 0`;
-	return and(...filtered) ?? sql`1 = 0`;
-}
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
-const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
-
-/**
- * Query tokens from recent inbound text: ASCII words stay whole; CJK runs become character
- * bigrams so partial matches recall without a tokenizer or embeddings.
- */
-function extractTokens(text: string, limit = MAX_QUERY_TOKENS): string[] {
-	const tokens = new Set<string>();
-	for (const raw of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
-		if (raw.length < 2) continue;
-		if (CJK.test(raw)) {
-			if (raw.length <= 4) tokens.add(raw);
-			else {
-				for (let index = 0; index + 2 <= raw.length; index += 1)
-					tokens.add(raw.slice(index, index + 2));
-			}
-		} else {
-			tokens.add(raw.slice(0, 32));
-		}
-		if (tokens.size >= limit) break;
-	}
-	return [...tokens].slice(0, limit);
-}
+const errorMessage = (error: unknown): string =>
+	error instanceof Error ? error.message : String(error);
 
 function truncateChars(text: string, max: number, note: string): string {
 	if (text.length <= max) return text;
@@ -126,10 +76,27 @@ function personaText(persona: {
 	return persona.name.trim().length > 0 ? persona.name.trim() : undefined;
 }
 
+function snippet(text: string, limit: number): string {
+	return text.replace(/\s+/gu, " ").trim().slice(0, limit);
+}
+
+function combine(conditions: readonly (SQL | undefined)[]): SQL {
+	const filtered = conditions.filter((condition): condition is SQL => condition !== undefined);
+	if (filtered.length === 0) return sql`1 = 1`;
+	return and(...filtered) ?? sql`1 = 1`;
+}
+
+function stringList(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+		: [];
+}
+
 export class DrizzleContextProvider implements ContextPromptProvider {
 	readonly #budgetChars: number;
 	readonly #database: () => ElainaDatabase | undefined;
 	readonly #logger: Logger;
+	readonly #memoryService: MemoryService;
 	readonly #memoryTopK: number;
 	readonly #personaBudget: number;
 	readonly #policyService: ConversationPolicyService;
@@ -146,6 +113,13 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				database: options.database,
 				host: () => undefined,
 				logger: options.logger,
+			});
+		this.#memoryService =
+			options.memoryService ??
+			new MemoryService({
+				database: options.database,
+				logger: options.logger,
+				policyService: this.#policyService,
 			});
 	}
 
@@ -211,62 +185,79 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			const database = this.#database();
 			if (database === undefined) return undefined;
 			const session = await this.#resolveSession(database, durableConversationId);
-			const now = new Date().toISOString();
-			const base: (SQL | undefined)[] = [
-				isNull(memories.revokedAt),
-				or(isNull(memories.expiresAt), gt(memories.expiresAt, now)),
-			];
-			const scopes: SQL[] = [combine([eq(memories.scope, "global")])];
-			let participants: string[] = [];
-			if (session !== undefined) {
-				scopes.push(
-					combine([
-						eq(memories.scope, "conversation"),
-						eq(memories.conversationId, session.sessionId),
-					]),
-				);
-				if (
-					(await this.#policyService.personaForSession({
-						...session,
-						conversationId: session.sessionId,
-					})) !== undefined
-				) {
-					scopes.push(
-						combine([
-							eq(memories.scope, "persona"),
-							eq(memories.conversationId, session.sessionId),
-						]),
-					);
-				}
-				participants = await this.#resolveParticipants(database, session.sessionId);
-				if (participants.length > 0) {
-					scopes.push(
-						combine([eq(memories.scope, "user"), inArray(memories.subjectUserId, participants)]),
-					);
-				}
-			}
-			base.push(or(...scopes));
-			const candidates = await this.#collectCandidates(database, base, session?.sessionId);
-			if (candidates.length === 0) return undefined;
-			const ranked = this.#rank(candidates);
-			return this.#format(ranked);
+			const policy =
+				session === undefined
+					? await this.#policyService.effectivePolicy()
+					: await this.#policyService.effectivePolicy(session.sessionId);
+			if (policy.memoryEnabled === false) return undefined;
+
+			const recent = await this.#recentMessages(database, session?.sessionId);
+			const warm =
+				session === undefined ? undefined : await this.#memoryService.warmState(session.sessionId);
+			const scopeFilter = await this.#scopeFilter(database, session, policy);
+			const query = [
+				...recent.map((row) => row.contentText ?? ""),
+				...(warm === undefined ? [] : [String(warm.evidence.topic ?? "")]),
+			].join("\n");
+			const ranked =
+				scopeFilter === undefined
+					? []
+					: await this.#memoryService.recall({
+							...(session === undefined ? {} : { conversationId: session.sessionId }),
+							limit: Math.max(this.#memoryTopK * 3, this.#memoryTopK),
+							query,
+							scopeFilter,
+						});
+			const longTerm = ranked.filter((entry) => entry.memory.id !== warm?.memory.id);
+			return this.#format({ policy, recent, warm, ranked: longTerm });
 		} catch (error) {
 			this.#logger.warn("memory context unavailable", { error: errorMessage(error) });
 			return undefined;
 		}
 	}
 
+	async #scopeFilter(
+		database: ElainaDatabase,
+		session: { chatKind: string; chatObjectId: string | null; sessionId: string } | undefined,
+		policy: ConversationPolicy,
+	): Promise<SQL | undefined> {
+		const scopes: SQL[] = [eq(memories.scope, "global")];
+		if (session !== undefined) {
+			scopes.push(
+				combine([
+					eq(memories.scope, "conversation"),
+					eq(memories.conversationId, session.sessionId),
+				]),
+			);
+			if (
+				(await this.#policyService.personaForSession({
+					...session,
+					conversationId: session.sessionId,
+				})) !== undefined
+			) {
+				scopes.push(
+					combine([eq(memories.scope, "persona"), eq(memories.conversationId, session.sessionId)]),
+				);
+			}
+			const participants = await this.#resolveParticipants(database, session.sessionId);
+			if (participants.length > 0) {
+				scopes.push(
+					combine([eq(memories.scope, "user"), inArray(memories.subjectUserId, participants)]),
+				);
+			}
+		}
+		const scopeCondition = or(...scopes);
+		if (scopeCondition === undefined) return undefined;
+		if (session?.chatKind === "group" && policy.sharedMemoryEnabled === false) {
+			return and(scopeCondition, ne(memories.visibility, "shared"));
+		}
+		return scopeCondition;
+	}
+
 	async #resolveSession(
 		database: ElainaDatabase,
 		durableConversationId: string,
-	): Promise<
-		| {
-				chatKind: string;
-				chatObjectId: string | null;
-				sessionId: string;
-		  }
-		| undefined
-	> {
+	): Promise<{ chatKind: string; chatObjectId: string | null; sessionId: string } | undefined> {
 		const [session] = await database
 			.select({
 				chatKind: conversations.kind,
@@ -309,83 +300,87 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		return [...participants];
 	}
 
-	/** Keyword recall from recent inbound text, plus the most important scoped memories. */
-	async #collectCandidates(
+	async #recentMessages(
 		database: ElainaDatabase,
-		base: readonly (SQL | undefined)[],
 		sessionId: string | undefined,
-	): Promise<RankedMemory[]> {
-		const byId = new Map<string, MemoryRow>();
-		const recent =
-			sessionId === undefined
-				? []
-				: await database
-						.select({ contentText: messages.contentText })
-						.from(messages)
-						.where(and(eq(messages.conversationId, sessionId), eq(messages.direction, "inbound")))
-						.orderBy(desc(messages.occurredAt))
-						.limit(RECENT_MESSAGE_LIMIT);
-		const tokens = extractTokens(recent.map((row) => row.contentText ?? "").join("\n"));
-		for (const token of tokens) {
-			const pattern = `%${token}%`;
-			const rows = await database
-				.select(memoryColumns)
-				.from(memories)
-				.where(
-					combine([...base, or(like(memories.summary, pattern), like(memories.content, pattern))]),
-				)
-				.orderBy(desc(memories.importance), desc(memories.updatedAt))
-				.limit(KEYWORD_CANDIDATES_PER_TOKEN);
-			for (const row of rows) byId.set(row.id, row);
-		}
-		const baseline = await database
-			.select(memoryColumns)
-			.from(memories)
-			.where(combine(base))
-			.orderBy(desc(memories.importance), desc(memories.updatedAt))
-			.limit(CANDIDATE_LIMIT);
-		for (const row of baseline) byId.set(row.id, row);
-		return [...byId.values()].map((row) => ({ ...row, hits: countHits(row, tokens) }));
+	): Promise<{ contentText: string | null; direction: string; id: string }[]> {
+		if (sessionId === undefined) return [];
+		const recent = await database
+			.select({
+				contentText: messages.contentText,
+				direction: messages.direction,
+				id: messages.id,
+			})
+			.from(messages)
+			.where(eq(messages.conversationId, sessionId))
+			.orderBy(desc(messages.occurredAt))
+			.limit(RECENT_MESSAGE_LIMIT);
+		return recent.toReversed();
 	}
 
-	#rank(candidates: readonly RankedMemory[]): RankedMemory[] {
-		return [...candidates].toSorted((left, right) => {
-			if (left.hits !== right.hits) return right.hits - left.hits;
-			if (left.importance !== right.importance) return right.importance - left.importance;
-			return right.updatedAt.localeCompare(left.updatedAt);
-		});
-	}
-
-	#format(ranked: readonly RankedMemory[]): string | undefined {
+	#format(input: {
+		readonly policy: ConversationPolicy;
+		readonly ranked: readonly RankedMemory[];
+		readonly recent: readonly { contentText: string | null; direction: string }[];
+		readonly warm: { readonly evidence: Record<string, unknown> } | undefined;
+	}): string | undefined {
 		const memoryBudget = this.#budgetChars - this.#personaBudget;
-		const header = "Known memories, most relevant first:";
-		const lines: string[] = [header];
-		let used = header.length + 1;
-		const pool = ranked.slice(0, this.#memoryTopK);
-		for (const memory of pool) {
-			const summary = (memory.summary.trim() || memory.content.trim())
-				.replace(/\s+/g, " ")
-				.slice(0, MEMORY_SNIPPET_LIMIT);
-			const line = `- [${memory.scope}/${memory.kind}] ${summary}`;
-			if (used + line.length + 1 > memoryBudget) break;
+		const lines: string[] = [];
+		let used = 0;
+		const push = (line: string): boolean => {
+			if (used + line.length + 1 > memoryBudget) return false;
 			lines.push(line);
 			used += line.length + 1;
+			return true;
+		};
+		const includeRecent =
+			memoryBudget >= RECENT_TIER_MIN_BUDGET &&
+			input.recent.some((row) => (row.contentText ?? "").trim().length > 0);
+		if (includeRecent) {
+			if (push(RECENT_HEADER)) {
+				for (const row of input.recent) {
+					const text = snippet(row.contentText ?? "", RECENT_SNIPPET_LIMIT);
+					if (text.length === 0) continue;
+					if (!push(`- ${row.direction}: ${text}`)) break;
+				}
+			}
 		}
-		const omitted = pool.length - (lines.length - 1);
-		if (omitted > 0) lines.push(`- (+${omitted} more not shown)`);
-		else if (lines.length === 1) return undefined;
+		if (input.warm !== undefined) {
+			if (push(WARM_HEADER)) {
+				const topic = stringList(input.warm.evidence.topic).join(", ");
+				const topicText = topic.length > 0 ? topic : String(input.warm.evidence.topic ?? "").trim();
+				if (topicText.length > 0) push(`- Topic: ${snippet(topicText, 140)}`);
+				for (const [label, key] of [
+					["Decisions", "decisions"],
+					["Todos", "todos"],
+					["Open threads", "openThreads"],
+				] as const) {
+					const values = stringList(input.warm.evidence[key]);
+					if (values.length === 0) continue;
+					push(`- ${label}: ${values.map((value) => snippet(value, 120)).join("; ")}`);
+				}
+			}
+		}
+		const pool = input.ranked.slice(0, this.#memoryTopK);
+		if (pool.length > 0) {
+			if (push(LONG_TERM_HEADER)) {
+				let shown = 0;
+				for (const entry of pool) {
+					const summary = (entry.memory.summary.trim() || entry.memory.content.trim())
+						.replace(/\s+/gu, " ")
+						.slice(0, MEMORY_SNIPPET_LIMIT);
+					if (!push(`- [${entry.memory.scope}/${entry.memory.kind}] ${summary}`)) break;
+					shown += 1;
+				}
+				if (shown < pool.length) {
+					push(`- (+${pool.length - shown} more not shown)`);
+				}
+			}
+		}
+		if (lines.length === 0) return undefined;
 		const text = lines.join("\n");
 		return text.length > memoryBudget
 			? truncateChars(text, memoryBudget, MEMORY_TRUNCATION_NOTE)
 			: text;
 	}
-}
-
-function countHits(memory: MemoryRow, tokens: readonly string[]): number {
-	const haystack = `${memory.summary}\n${memory.content}`.toLowerCase();
-	let hits = 0;
-	for (const token of tokens) {
-		if (haystack.includes(token)) hits += 1;
-	}
-	return hits;
 }

@@ -111,11 +111,38 @@ export function mergeConversationPolicy(
 	const pacing = mergeSection<ConversationPacingPolicy>(base.pacing, pacingPatch);
 	if (pacingPatch?.allowedTools === null) delete pacing.allowedTools;
 	const trigger = mergeSection<ConversationTriggerPolicy>(base.trigger, triggerPatch);
+	const memoryExtractModel =
+		patch.memoryExtractModel === null
+			? undefined
+			: (patch.memoryExtractModel ?? base.memoryExtractModel);
 	return conversationPolicySchema.parse({
 		...base,
 		...(patch.enabled === undefined ? {} : { enabled: patch.enabled }),
 		...(patch.followUpWhenBusy === undefined ? {} : { followUpWhenBusy: patch.followUpWhenBusy }),
 		...(patch.steerWhenBusy === undefined ? {} : { steerWhenBusy: patch.steerWhenBusy }),
+		...(patch.memoryEnabled === undefined ? {} : { memoryEnabled: patch.memoryEnabled }),
+		...(patch.sharedMemoryEnabled === undefined
+			? {}
+			: { sharedMemoryEnabled: patch.sharedMemoryEnabled }),
+		...(patch.sharedMemoryWriteEnabled === undefined
+			? {}
+			: { sharedMemoryWriteEnabled: patch.sharedMemoryWriteEnabled }),
+		...(patch.memoryReviewRequired === undefined
+			? {}
+			: { memoryReviewRequired: patch.memoryReviewRequired }),
+		...(patch.memoryCompactionEnabled === undefined
+			? {}
+			: { memoryCompactionEnabled: patch.memoryCompactionEnabled }),
+		...(memoryExtractModel === undefined ? {} : { memoryExtractModel }),
+		...(patch.memoryExtractionPromptVersion === undefined
+			? {}
+			: { memoryExtractionPromptVersion: patch.memoryExtractionPromptVersion }),
+		...(patch.memoryMinConfidence === undefined
+			? {}
+			: { memoryMinConfidence: patch.memoryMinConfidence }),
+		...(patch.memoryMaxWritesPerActivity === undefined
+			? {}
+			: { memoryMaxWritesPerActivity: patch.memoryMaxWritesPerActivity }),
 		...(patch.version === undefined ? {} : { version: patch.version }),
 		pacing,
 		trigger,

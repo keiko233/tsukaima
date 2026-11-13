@@ -30,6 +30,11 @@ import { ConversationPacingTracker } from "./services/conversation-pacing.ts";
 import { ConversationPolicyService } from "./services/conversation-policy.ts";
 import { ConversationRouter } from "./services/conversation-router.ts";
 import { DrizzleContextProvider } from "./services/context-provider.ts";
+import {
+	MEMORY_SERVICE_BINDING,
+	MemoryService,
+	type MemoryEmbeddingOutput,
+} from "./services/memory-service.ts";
 import { MediaService } from "./services/media-service.ts";
 import { HookBus } from "./services/hook-bus.ts";
 import { PluginHost } from "./services/plugin-host.ts";
@@ -82,6 +87,7 @@ export class ElainaLifecycle {
 	readonly pluginStatuses: PluginStatusStore;
 	readonly pluginStorage: PluginStorageStore;
 	readonly pluginTasks: PluginTaskService;
+	readonly memory: MemoryService;
 	private readonly plugins: readonly ElainaPlugin[];
 	readonly media: MediaService;
 	readonly replyDispatcher: ReplyDispatcher;
@@ -100,6 +106,7 @@ export class ElainaLifecycle {
 	readonly logger: Logger;
 	readonly modelUsageLedger = new ModelUsageLedger();
 	modelRouter: ModelPolicyRouter | undefined;
+	private memoryModel: ModelPort | undefined;
 	processedMessageCount = 0;
 	providerRestartRequired = false;
 	routingPolicies: readonly ModelPolicy[] = [];
@@ -178,6 +185,24 @@ export class ElainaLifecycle {
 			hooks: this.hooks,
 			logger: this.runtimeLog,
 		});
+		this.memory = new MemoryService({
+			audit: (entry) => this.writeAudit(entry),
+			complete: (prompt, modelId) => this.completeMemoryPrompt(prompt, modelId),
+			database: () => this.domainDatabase,
+			embed: (texts) => this.embedMemoryTexts(texts),
+			llmEnabled: () => this.memoryModel !== undefined && this.memoryModel.providerId !== "fake",
+			logger: this.runtimeLog,
+			policyService: this.conversationPolicy,
+			tasks: this.pluginTasks,
+		});
+		this.memory.registerTaskHandlers(this.pluginTasks);
+		this.hooks.on("after.reply", (payload) => {
+			if (typeof payload !== "object" || payload === null) return;
+			const sessionId = (payload as { sessionId?: unknown }).sessionId;
+			if (typeof sessionId !== "string") return;
+			void this.memory.scheduleExtraction({ conversationId: sessionId });
+			void this.memory.scheduleCompaction({ conversationId: sessionId });
+		});
 		this.replyDispatcher = new ReplyDispatcher({
 			audit: (entry) => this.writeAudit(entry),
 			channels: this.channels,
@@ -202,9 +227,11 @@ export class ElainaLifecycle {
 				? {}
 				: { splitMaxChars: options.reply.splitMaxChars }),
 		});
+		const pluginBindings = new Map(options?.pluginBindings ?? []);
+		pluginBindings.set(MEMORY_SERVICE_BINDING, this.memory);
 		this.pluginHost = new PluginHost({
 			audit: (entry) => this.writeAudit(entry),
-			...(options?.pluginBindings === undefined ? {} : { bindings: options.pluginBindings }),
+			bindings: pluginBindings,
 			channels: this.channels,
 			database: () => this.domainDatabase,
 			hooks: this.hooks,
@@ -326,6 +353,7 @@ export class ElainaLifecycle {
 		await this.pluginHost.prepare();
 		this.transition("domain-services");
 		const model = await this.createModelPort(settings);
+		this.memoryModel = model;
 		this.activeProviderId = model.providerId;
 		this.conversationHost = new PiDurableConversationHost({
 			contextProvider: this.contextProvider,
@@ -374,6 +402,7 @@ export class ElainaLifecycle {
 		this.transition("plugins");
 		await this.pluginHost.start();
 		this.pluginTasks.start();
+		await this.memory.start();
 		if (conversationHost !== undefined && pluginTools !== undefined) {
 			// Reinstall after startup to reset per-conversation checks for sessions that received
 			// a message while the extension still had no tools.
@@ -426,6 +455,49 @@ export class ElainaLifecycle {
 		return this.pluginSettings.publicView(pluginId);
 	}
 
+	private async completeMemoryPrompt(
+		prompt: string,
+		modelId?: string,
+	): Promise<string | undefined> {
+		const model = this.memoryModel;
+		if (model === undefined) return undefined;
+		const selected =
+			model.models.getModel(model.providerId, modelId ?? model.modelId) ??
+			model.models.getModel(model.providerId, model.modelId);
+		if (selected === undefined) return undefined;
+		const response = await model.models.completeSimple(selected, {
+			messages: [{ content: prompt, role: "user", timestamp: Date.now() }],
+		});
+		return response.content
+			.filter(
+				(part): part is { readonly text: string; readonly type: "text" } => part.type === "text",
+			)
+			.map((part) => part.text)
+			.join("");
+	}
+
+	/** Embed through the first configured plugin provider; silently degrades when absent. */
+	private async embedMemoryTexts(
+		texts: readonly string[],
+	): Promise<MemoryEmbeddingOutput | undefined> {
+		try {
+			for (const provider of this.pluginHost.modelProviders()) {
+				const result =
+					provider.embed !== undefined
+						? await provider.embed({ texts })
+						: provider.embedding === undefined
+							? undefined
+							: await provider.embedding.embed({ texts });
+				if (result !== undefined) {
+					return { modelId: result.modelId, vectors: result.vectors };
+				}
+			}
+		} catch {
+			// Embedding is optional; callers fall back to lexical/recency ranking.
+		}
+		return undefined;
+	}
+
 	private async handleChannelEnvelope(channelId: string, envelope: MessageEnvelope): Promise<void> {
 		try {
 			const result = await this.conversationRouter.ingest(envelope);
@@ -455,6 +527,13 @@ export class ElainaLifecycle {
 			conversationId: event.conversationId,
 			envelopeCount: event.envelopeCount,
 		});
+		if (event.type === "closed") {
+			void this.memory.scheduleExtraction({
+				activityId: event.activityId,
+				durableConversationId: event.conversationId,
+			});
+			void this.memory.scheduleCompaction({ durableConversationId: event.conversationId });
+		}
 	}
 
 	private async handleChannelNotice(channelId: string, notice: ChannelNotice): Promise<void> {

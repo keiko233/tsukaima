@@ -708,6 +708,156 @@ export const personaBindingSchema = z.object({
 });
 export type PersonaBinding = z.infer<typeof personaBindingSchema>;
 
+// ─── Memories ────────────────────────────────────────────────────────────────
+
+export const memoryStatusSchema = z.enum(["active", "pending", "rejected", "expired", "revoked"]);
+export type MemoryStatus = z.infer<typeof memoryStatusSchema>;
+
+export const memoryScopeSchema = z.enum([
+	"global",
+	"persona",
+	"user",
+	"conversation",
+	"project",
+	"ephemeral",
+]);
+export type MemoryScope = z.infer<typeof memoryScopeSchema>;
+
+export const memoryKindSchema = z.enum([
+	"fact",
+	"summary",
+	"setting",
+	"person",
+	"preference",
+	"style",
+	"glossary",
+	"todo",
+	"event",
+	"relationship",
+	"observation",
+]);
+export type MemoryKind = z.infer<typeof memoryKindSchema>;
+
+export const memoryRowSchema = z.object({
+	confidence: z.number(),
+	content: z.string(),
+	conversationId: z.string().nullable(),
+	createdAt: z.string(),
+	createdBy: z.enum(["agent", "user", "migration", "system", "task"]),
+	dedupeKey: z.string().nullable(),
+	embeddingModel: z.string().nullable(),
+	evidenceJson: z.string().nullable(),
+	expiresAt: z.string().nullable(),
+	extractionModel: z.string().nullable(),
+	extractionPromptVersion: z.string().nullable(),
+	id: z.string(),
+	importance: z.number(),
+	kind: z.string(),
+	pinned: z.boolean(),
+	projectId: z.string().nullable(),
+	revokedAt: z.string().nullable(),
+	scope: memoryScopeSchema,
+	sourceActivityId: z.string().nullable(),
+	sourceConversationId: z.string().nullable(),
+	sourceEntryId: z.string().nullable(),
+	sourceMessageId: z.string().nullable(),
+	status: memoryStatusSchema,
+	subjectUserId: z.string().nullable(),
+	summary: z.string(),
+	updatedAt: z.string(),
+	visibility: z.string(),
+});
+export type MemoryRow = z.infer<typeof memoryRowSchema>;
+
+export const memoryListInputSchema = z
+	.object({
+		conversationId: z.string().min(1).optional(),
+		kind: z.string().min(1).optional(),
+		limit: z.number().int().positive().max(500).optional(),
+		offset: z.number().int().nonnegative().optional(),
+		query: z.string().trim().max(500).optional(),
+		scope: memoryScopeSchema.optional(),
+		status: memoryStatusSchema.optional(),
+		subjectUserId: z.string().min(1).optional(),
+	})
+	.strict()
+	.optional();
+
+export const memoryGetInputSchema = z.object({ id: z.string().min(1) }).strict();
+
+export const memoryCreateInputSchema = z
+	.object({
+		confidence: z.number().min(0).max(1).optional(),
+		content: z.string().trim().max(20_000).optional(),
+		conversationId: z.string().min(1).optional(),
+		createdBy: z.enum(["agent", "user", "migration", "system", "task"]).optional(),
+		dedupeKey: z.string().min(1).max(256).optional(),
+		evidenceJson: z.string().max(20_000).optional(),
+		expiresAt: z.string().min(1).optional(),
+		importance: z.number().min(0).max(1).optional(),
+		kind: z.string().trim().min(1).max(64),
+		pinned: z.boolean().optional(),
+		projectId: z.string().min(1).optional(),
+		scope: memoryScopeSchema,
+		status: memoryStatusSchema.optional(),
+		subjectUserId: z.string().min(1).optional(),
+		summary: z.string().trim().min(1).max(4_000),
+		supersedes: z.array(z.string().min(1)).max(50).optional(),
+		visibility: z.string().trim().min(1).max(64).optional(),
+	})
+	.strict();
+
+export const memoryUpdateInputSchema = z
+	.object({
+		confidence: z.number().min(0).max(1).optional(),
+		content: z.string().trim().max(20_000).optional(),
+		dedupeKey: z.string().min(1).max(256).nullish(),
+		expiresAt: z.string().min(1).nullish(),
+		id: z.string().min(1),
+		importance: z.number().min(0).max(1).optional(),
+		kind: z.string().trim().min(1).max(64).optional(),
+		pinned: z.boolean().optional(),
+		status: memoryStatusSchema.optional(),
+		summary: z.string().trim().min(1).max(4_000).optional(),
+		supersedes: z.array(z.string().min(1)).max(50).optional(),
+		visibility: z.string().trim().min(1).max(64).optional(),
+	})
+	.strict();
+
+export const memoryPinInputSchema = z
+	.object({ id: z.string().min(1), pinned: z.boolean() })
+	.strict();
+
+export const memoryCompactInputSchema = z
+	.object({
+		conversationId: z.string().min(1),
+		throughMessageId: z.string().min(1).optional(),
+	})
+	.strict();
+
+export const memorySearchInputSchema = z
+	.object({
+		conversationId: z.string().min(1).optional(),
+		limit: z.number().int().positive().max(100).optional(),
+		query: z.string().trim().min(1).max(1_000),
+	})
+	.strict();
+
+export const memorySearchResultSchema = z.object({
+	lexical: z.number(),
+	memory: memoryRowSchema,
+	recency: z.number(),
+	score: z.number(),
+	vector: z.number(),
+});
+export type MemorySearchResult = z.infer<typeof memorySearchResultSchema>;
+
+export const memoryCompactResultSchema = z.object({
+	created: z.boolean(),
+	memory: memoryRowSchema.nullable(),
+});
+export type MemoryCompactResult = z.infer<typeof memoryCompactResultSchema>;
+
 // ─── Contract ────────────────────────────────────────────────────────────────
 
 export const appContract = oc.router({
@@ -730,6 +880,22 @@ export const appContract = oc.router({
 		groups: {
 			get: oc.input(groupsGetInputSchema).output(groupDetailSchema.nullable()),
 			list: oc.output(z.array(groupSummarySchema)),
+		},
+		memory: {
+			approve: oc.input(memoryGetInputSchema).output(memoryRowSchema).meta({ audit: true }),
+			compact: oc
+				.input(memoryCompactInputSchema)
+				.output(memoryCompactResultSchema)
+				.meta({ audit: true }),
+			create: oc.input(memoryCreateInputSchema).output(memoryRowSchema).meta({ audit: true }),
+			expire: oc.output(z.object({ expired: z.number().int() })).meta({ audit: true }),
+			get: oc.input(memoryGetInputSchema).output(memoryRowSchema.nullable()),
+			list: oc.input(memoryListInputSchema).output(z.array(memoryRowSchema)),
+			pin: oc.input(memoryPinInputSchema).output(memoryRowSchema).meta({ audit: true }),
+			reject: oc.input(memoryGetInputSchema).output(memoryRowSchema).meta({ audit: true }),
+			revoke: oc.input(memoryGetInputSchema).output(memoryRowSchema).meta({ audit: true }),
+			search: oc.input(memorySearchInputSchema).output(z.array(memorySearchResultSchema)),
+			update: oc.input(memoryUpdateInputSchema).output(memoryRowSchema).meta({ audit: true }),
 		},
 		modelPolicies: {
 			list: oc.output(z.array(modelPolicyRowSchema)),

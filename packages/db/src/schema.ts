@@ -398,11 +398,20 @@ export const memories = sqliteTable(
 			onDelete: "cascade",
 		}),
 		createdAt: text("created_at").notNull().default(now),
-		createdBy: text("created_by", { enum: ["agent", "user", "migration", "system"] }).notNull(),
+		createdBy: text("created_by", {
+			enum: ["agent", "user", "migration", "system", "task"],
+		}).notNull(),
+		dedupeKey: text("dedupe_key"),
+		embeddingJson: text("embedding_json"),
+		embeddingModel: text("embedding_model"),
+		evidenceJson: text("evidence_json"),
 		expiresAt: text("expires_at"),
+		extractionModel: text("extraction_model"),
+		extractionPromptVersion: text("extraction_prompt_version"),
 		id: text("id").primaryKey(),
 		importance: real("importance").notNull().default(0.5),
 		kind: text("kind").notNull(),
+		pinned: integer("pinned").notNull().default(0),
 		projectId: text("project_id"),
 		revokedAt: text("revoked_at"),
 		scope: text("scope", {
@@ -413,6 +422,12 @@ export const memories = sqliteTable(
 			onDelete: "set null",
 		}),
 		sourceEntryId: text("source_entry_id"),
+		sourceMessageId: text("source_message_id"),
+		status: text("status", {
+			enum: ["active", "pending", "rejected", "expired", "revoked"],
+		})
+			.notNull()
+			.default("active"),
 		subjectUserId: text("subject_user_id").references(() => users.id, { onDelete: "cascade" }),
 		summary: text("summary").notNull(),
 		updatedAt: text("updated_at").notNull().default(now),
@@ -425,6 +440,10 @@ export const memories = sqliteTable(
 			table.conversationId,
 			table.updatedAt,
 		),
+		index("memories_status_scope_expiry_idx").on(table.status, table.scope, table.expiresAt),
+		uniqueIndex("memories_dedupe_key_unique")
+			.on(table.dedupeKey)
+			.where(sql`${table.dedupeKey} IS NOT NULL`),
 		index("memories_content_idx").on(table.summary),
 	],
 );

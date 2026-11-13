@@ -1,7 +1,8 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Search } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { Brain, Search } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@elaina/ui/components/motion/button";
 import { Input } from "@elaina/ui/components/motion/input";
@@ -33,6 +34,7 @@ export function AppSidebar({ onNavigate }: { onNavigate: () => void }) {
 		users: "",
 	});
 	const [chatFilter, setChatFilter] = useState<ChatFilter>("active");
+	const navigate = useNavigate();
 	const pendingRequests = useQuery(
 		orpc.admin.requests.list.queryOptions({
 			input: { status: "pending" },
@@ -145,6 +147,18 @@ export function AppSidebar({ onNavigate }: { onNavigate: () => void }) {
 					<RequestsSidebar search={search.requests} />
 				</TabsContent>
 			</Tabs>
+			<div className="shrink-0 border-t border-border p-2">
+				<Button
+					variant="ghost"
+					size="sm"
+					fullWidth
+					leadingIcon={<Brain />}
+					className="h-auto justify-start rounded-lg px-2.5 py-2 text-xs"
+					onClick={() => void navigate({ to: "/memories" })}
+				>
+					{m.nav_memories()}
+				</Button>
+			</div>
 		</div>
 	);
 }
