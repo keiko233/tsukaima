@@ -1,7 +1,7 @@
-import { createApp } from "./app.ts";
+import { createApp, listenOptions } from "./app.ts";
 
 const { app, auth, config, lifecycle } = createApp();
-await app.listen({ hostname: config.host, port: config.port });
+await app.listen(listenOptions(config));
 lifecycle.logger.info("server listening", {
 	host: config.host,
 	port: config.port,

@@ -4,7 +4,7 @@ import { ResponseHeadersPlugin } from "@orpc/server/plugins";
 import type { TsukaimaPlugin } from "@tsukaima/sdk";
 import { appRouter } from "./rpc/index.ts";
 import type { TsukaimaApiContext } from "./rpc/base.ts";
-import { loadConfig } from "./config.ts";
+import { loadConfig, type TsukaimaConfig } from "./config.ts";
 import { TsukaimaLifecycle, type LifecycleOptions } from "./lifecycle.ts";
 import { AuthService } from "./services/auth.ts";
 import {
@@ -12,6 +12,18 @@ import {
 	createLogEventStream,
 	eventAuthResponse,
 } from "./services/event-stream.ts";
+
+/**
+ * Bind exclusively so a duplicate or hung process holding the port fails fast
+ * with `EADDRINUSE` instead of sharing `SO_REUSEPORT` traffic on Linux.
+ */
+export function listenOptions(config: Pick<TsukaimaConfig, "host" | "port">) {
+	return {
+		hostname: config.host,
+		port: config.port,
+		reusePort: false,
+	} as const;
+}
 
 export interface CreateAppOptions {
 	/** Optional scheduled backup/restore drill; disabled unless an interval is configured. */
