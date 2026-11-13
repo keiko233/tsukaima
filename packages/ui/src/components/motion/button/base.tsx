@@ -13,8 +13,15 @@ import { EASE_OUT, SPRING_PRESS } from "@tsukaima/ui/lib/ease";
 import { useHoverCapable } from "@tsukaima/ui/lib/hooks/use-hover-capable";
 import { cn } from "@tsukaima/ui/lib/utils";
 
-export type ButtonVariant = "primary" | "secondary" | "ghost" | "outline";
-export type ButtonSize = "sm" | "md" | "lg" | "icon";
+export type ButtonVariant =
+	| "primary"
+	| "secondary"
+	| "outline"
+	| "ghost"
+	| "danger"
+	| "soft"
+	| "link";
+export type ButtonSize = "xs" | "sm" | "md" | "lg" | "icon" | "iconSm" | "iconLg";
 
 export interface ButtonProps extends Omit<HTMLMotionProps<"button">, "children"> {
 	variant?: ButtonVariant;
@@ -22,6 +29,11 @@ export interface ButtonProps extends Omit<HTMLMotionProps<"button">, "children">
 	pressScale?: number;
 	/** Spawn a Material-style ripple from the press point. Off by default. */
 	ripple?: boolean;
+	/** Replaces the leading content with a spinner and disables the button. */
+	loading?: boolean;
+	leadingIcon?: ReactNode;
+	trailingIcon?: ReactNode;
+	fullWidth?: boolean;
 	children?: ReactNode;
 }
 
@@ -29,6 +41,9 @@ export interface ButtonLinkProps extends Omit<HTMLMotionProps<"a">, "children"> 
 	variant?: ButtonVariant;
 	size?: ButtonSize;
 	pressScale?: number;
+	leadingIcon?: ReactNode;
+	trailingIcon?: ReactNode;
+	fullWidth?: boolean;
 	children?: ReactNode;
 }
 
@@ -36,17 +51,42 @@ type Ripple = { id: number; x: number; y: number; size: number };
 
 const VARIANT_CLASS: Record<ButtonVariant, string> = {
 	primary: "bg-primary text-primary-foreground hover:bg-primary/90",
-	secondary: "border border-border bg-card text-foreground hover:border-border",
+	secondary: "border border-border bg-card text-foreground hover:bg-card/80",
 	ghost: "text-muted-foreground hover:text-foreground hover:bg-muted/60",
 	outline: "border border-border bg-transparent text-foreground hover:bg-muted/60",
+	danger: "bg-destructive text-white hover:bg-destructive/90",
+	soft: "bg-primary/10 text-primary hover:bg-primary/15",
+	link: "text-primary underline-offset-4 hover:underline",
 };
 
 const SIZE_CLASS: Record<ButtonSize, string> = {
+	xs: "h-7 px-2.5 text-[11px] gap-1 rounded-full",
 	sm: "h-8 px-3 text-xs gap-1.5 rounded-full",
 	md: "h-10 px-5 text-sm gap-2 rounded-full",
 	lg: "h-12 px-6 text-base gap-2 rounded-full",
 	icon: "h-8 w-8 rounded-lg",
+	iconSm: "h-7 w-7 rounded-md",
+	iconLg: "h-10 w-10 rounded-lg",
 };
+
+const ICON_SIZE_CLASS: Record<ButtonSize, string> = {
+	xs: "[&>svg]:size-3.5",
+	sm: "[&>svg]:size-3.5",
+	md: "[&>svg]:size-4",
+	lg: "[&>svg]:size-5",
+	icon: "[&>svg]:size-4",
+	iconSm: "[&>svg]:size-3.5",
+	iconLg: "[&>svg]:size-5",
+};
+
+function spinner() {
+	return (
+		<span
+			aria-hidden="true"
+			className="size-3.5 animate-spin rounded-full border-2 border-current border-r-transparent"
+		/>
+	);
+}
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
 	{
@@ -54,8 +94,13 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
 		size = "md",
 		pressScale = 0.93,
 		ripple = false,
+		loading = false,
+		leadingIcon,
+		trailingIcon,
+		fullWidth = false,
 		className,
 		children,
+		disabled,
 		onPointerDown,
 		...rest
 	},
@@ -102,8 +147,12 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
 				ripple && "relative overflow-hidden",
 				VARIANT_CLASS[variant],
 				SIZE_CLASS[size],
+				variant === "link" && "h-auto rounded-none px-0",
+				fullWidth && "w-full",
 				className,
 			)}
+			disabled={disabled || loading}
+			aria-busy={loading || undefined}
 			{...rest}
 		>
 			{ripple && !reduce ? (
@@ -131,13 +180,30 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
 					</AnimatePresence>
 				</span>
 			) : null}
+			{loading ? spinner() : null}
+			{!loading && leadingIcon ? (
+				<span className={cn("shrink-0", ICON_SIZE_CLASS[size])}>{leadingIcon}</span>
+			) : null}
 			{children}
+			{trailingIcon ? (
+				<span className={cn("shrink-0", ICON_SIZE_CLASS[size])}>{trailingIcon}</span>
+			) : null}
 		</motion.button>
 	);
 });
 
 export const ButtonLink = forwardRef<HTMLAnchorElement, ButtonLinkProps>(function ButtonLink(
-	{ variant = "primary", size = "md", pressScale = 0.93, className, children, ...rest },
+	{
+		variant = "primary",
+		size = "md",
+		pressScale = 0.93,
+		leadingIcon,
+		trailingIcon,
+		fullWidth = false,
+		className,
+		children,
+		...rest
+	},
 	ref,
 ) {
 	const reduce = useReducedMotion();
@@ -154,11 +220,56 @@ export const ButtonLink = forwardRef<HTMLAnchorElement, ButtonLinkProps>(functio
 				"transition-colors",
 				VARIANT_CLASS[variant],
 				SIZE_CLASS[size],
+				variant === "link" && "h-auto rounded-none px-0",
+				fullWidth && "w-full",
 				className,
 			)}
 			{...rest}
 		>
+			{leadingIcon ? (
+				<span className={cn("shrink-0", ICON_SIZE_CLASS[size])}>{leadingIcon}</span>
+			) : null}
 			{children}
+			{trailingIcon ? (
+				<span className={cn("shrink-0", ICON_SIZE_CLASS[size])}>{trailingIcon}</span>
+			) : null}
 		</motion.a>
 	);
 });
+
+export interface IconButtonProps
+	extends Omit<ButtonProps, "children" | "size" | "leadingIcon" | "trailingIcon"> {
+	/** Accessible name; icon-only controls have no visible label. */
+	label: string;
+	size?: "sm" | "md" | "lg";
+	children: ReactNode;
+}
+
+export function IconButton({
+	label,
+	size = "md",
+	variant = "ghost",
+	className,
+	children,
+	...rest
+}: IconButtonProps) {
+	return (
+		<Button
+			aria-label={label}
+			className={cn(
+				"p-0",
+				size === "sm"
+					? "[&_svg]:size-3.5"
+					: size === "lg"
+						? "[&_svg]:size-5"
+						: "[&_svg]:size-4",
+				className,
+			)}
+			size={size === "sm" ? "iconSm" : size === "lg" ? "iconLg" : "icon"}
+			variant={variant}
+			{...rest}
+		>
+			{children}
+		</Button>
+	);
+}

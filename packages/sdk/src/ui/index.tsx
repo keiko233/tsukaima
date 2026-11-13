@@ -28,7 +28,13 @@ export type {
 	PluginUiModule,
 	ResolvedPluginUi,
 } from "./define.ts";
-export { Button, ButtonLink } from "@tsukaima/ui/components/motion/button";
+export { Button, ButtonLink, IconButton } from "@tsukaima/ui/components/motion/button";
+export type {
+	ButtonProps,
+	ButtonSize,
+	ButtonVariant,
+	IconButtonProps,
+} from "@tsukaima/ui/components/motion/button";
 export { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
 export { Checkbox } from "@tsukaima/ui/components/motion/checkbox";
 export { Input } from "@tsukaima/ui/components/motion/input";
