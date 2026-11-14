@@ -205,6 +205,11 @@ describe("built-in plugin panels", () => {
 		expect(html).toContain("Classification model");
 		expect(html).toContain("Auto (configured vision model)");
 		expect(html).toContain("Save model settings");
+		expect(html).toContain("Import workers");
+		expect(html).toContain("Semantic workers");
+		expect(html).toContain("Classify in a separate background job");
+		expect(html).toContain("Expand a pack to browse its stickers");
+		expect(html).not.toContain("No items in this view.");
 		const zh = renderPanel(stickerUi, stickerI18n.bind("zh-cn"), stickerPlugin);
 		expect(zh).toContain("表情包素材库");
 		expect(zh).toContain("还没有表情包");
@@ -214,5 +219,9 @@ describe("built-in plugin panels", () => {
 		expect(zh).toContain("分类模型");
 		expect(zh).toContain("自动（使用已配置的视觉模型）");
 		expect(zh).toContain("保存模型设置");
+		expect(zh).toContain("导入并发数");
+		expect(zh).toContain("语义并发数");
+		expect(zh).toContain("在独立后台任务中分类");
+		expect(zh).toContain("展开表情包即可浏览素材");
 	});
 });
