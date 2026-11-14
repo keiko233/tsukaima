@@ -24,7 +24,8 @@ export {
 } from "./storage.ts";
 export { PluginRuntime } from "./runtime.ts";
 export type { TsukaimaPlugin, PluginPrepare, PluginSetup, PluginTeardown } from "./runtime.ts";
-export { pluginManifestSchema } from "./manifest.ts";
+export { pluginManifestSchema, pluginMigrationsDeclarationSchema } from "./manifest.ts";
+export type { PluginMigrationsDeclaration } from "./manifest.ts";
 export type {
 	PluginChannelApi,
 	PluginConfig,

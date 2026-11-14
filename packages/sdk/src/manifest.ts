@@ -13,6 +13,17 @@ export const pluginPermissionSchema = z
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 
+/**
+ * Migrations live in SQL files, not in the manifest. The manifest only points at the directory
+ * that holds `<version>_<name>.sql` files and their optional `<version>_<name>.down.sql`
+ * rollbacks. SQL files are loaded relative to the plugin root by the host.
+ */
+export const pluginMigrationsDeclarationSchema = z.object({
+	directory: z.string().trim().min(1).max(256),
+});
+
+export type PluginMigrationsDeclaration = z.infer<typeof pluginMigrationsDeclarationSchema>;
+
 export const pluginManifestSchema = z.object({
 	name: z
 		.string()
@@ -79,18 +90,8 @@ export const pluginManifestSchema = z.object({
 		)
 		.max(64)
 		.default([]),
-	/** Plugin-owned SQL migrations applied by the host before `prepare()`. */
-	migrations: z
-		.array(
-			z.object({
-				version: z.string().min(1),
-				sql: z.string().min(1),
-				rollbackSql: z.string().min(1).optional(),
-				checksum: z.string().min(1).optional(),
-			}),
-		)
-		.max(512)
-		.default([]),
+	/** Directory of plugin-owned SQL migration files, relative to the plugin root. */
+	migrations: pluginMigrationsDeclarationSchema.optional(),
 	configSchema: jsonObjectSchema.optional(),
 	/** Config key -> environment variable name, used as a fallback when unset. */
 	configEnv: z.record(z.string(), z.string().min(1)).default({}),
