@@ -187,7 +187,9 @@ Live-shape handling now includes:
   assistant reports from non-chat sessions are excluded;
 - archived session copies outside the canonical session store are ignored;
 - `workspace/memory/<space>` items and summaries are imported without collapsing space IDs; and
-- large imports are inserted in bounded statements.
+- large imports are inserted in bounded statements; and
+- on first start, imported non-numeric Pi durable markers are replaced with fresh durable
+  conversations, so old domain history can receive new QQ/WebUI turns without failing startup.
 
 ## Cutover
 
