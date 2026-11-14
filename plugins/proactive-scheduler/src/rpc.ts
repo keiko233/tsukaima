@@ -1,4 +1,4 @@
-import type { PluginContext } from "@tsukaima/sdk";
+import type { PluginContext, PluginLogger, PluginRpcHandler } from "@tsukaima/sdk";
 import {
 	CONVERSATION_POLICY_SCOPE,
 	GLOBAL_POLICY_SCOPE,
@@ -27,12 +27,58 @@ function scopeValue(value: unknown): "global" | "conversation" | "persona" {
 	return "global";
 }
 
+/** Wraps an admin procedure with trace/debug timing; rethrows failures for the host. */
+function tracedRpc(
+	context: PluginContext,
+	method: string,
+	handler: PluginRpcHandler,
+): PluginRpcHandler {
+	const logger: PluginLogger = context.logger.child?.("rpc") ?? context.logger;
+	return async (input) => {
+		const startedAtMs = Date.now();
+		const body = record(input);
+		const conversationId = stringValue(body.conversationId ?? body.sessionId) ?? null;
+		const taskId = stringValue(body.taskId) ?? null;
+		logger.trace("rpc invoked", {
+			actor: ADMIN_ACTOR,
+			conversationId,
+			inputKeys: Object.keys(body),
+			method,
+			taskId,
+		});
+		try {
+			const result = await handler(input);
+			logger.debug("rpc finished", {
+				conversationId,
+				durationMs: Date.now() - startedAtMs,
+				method,
+				ok: true,
+				taskId,
+			});
+			return result;
+		} catch (error) {
+			logger.debug("rpc failed", {
+				conversationId,
+				durationMs: Date.now() - startedAtMs,
+				error: error instanceof Error ? error.message : String(error),
+				method,
+				ok: false,
+				taskId,
+			});
+			throw error;
+		}
+	};
+}
+
 /** Registers the admin/WebUI procedure surface. The host adds the plugin-id namespace. */
 export function registerProactiveSchedulerRpc(
 	context: PluginContext,
 	service: ProactiveSchedulerService,
 ): void {
-	context.rpc.register("overview", async () => {
+	const register = (method: string, handler: PluginRpcHandler): void => {
+		context.rpc.register(method, tracedRpc(context, method, handler));
+	};
+	register("overview", async () => {
 		const [overview, tasks] = await Promise.all([
 			service.overview(),
 			service.listTasks({ status: ["scheduled", "running"], limit: 20 }),
@@ -40,7 +86,7 @@ export function registerProactiveSchedulerRpc(
 		return { ...overview, recentTasks: tasks };
 	});
 
-	context.rpc.register("policies.save", async (input) => {
+	register("policies.save", async (input) => {
 		const body = record(input);
 		const scope = scopeValue(body.scope);
 		const scopeId = stringValue(body.scopeId ?? body.id) ?? "";
@@ -58,14 +104,14 @@ export function registerProactiveSchedulerRpc(
 		return await service.savePolicy(scope, scopeId, patch, ADMIN_ACTOR);
 	});
 
-	context.rpc.register("policies.reset", async (input) => {
+	register("policies.reset", async (input) => {
 		const body = record(input);
 		if (body.confirm !== true) throw new Error("policies.reset requires confirm: true");
 		await service.resetPolicies(ADMIN_ACTOR);
 		return { reset: true };
 	});
 
-	context.rpc.register("tasks.list", async (input) => {
+	register("tasks.list", async (input) => {
 		const body = record(input);
 		const status = scheduledTaskStatusSchema.safeParse(body.status);
 		const kind = scheduledTaskKindSchema.safeParse(body.kind);
@@ -80,11 +126,11 @@ export function registerProactiveSchedulerRpc(
 		return { tasks };
 	});
 
-	context.rpc.register("tasks.create", async (input) => {
+	register("tasks.create", async (input) => {
 		return await service.createTask(input, undefined, { id: ADMIN_ACTOR, kind: "admin" });
 	});
 
-	context.rpc.register("tasks.cancel", async (input) => {
+	register("tasks.cancel", async (input) => {
 		const body = record(input);
 		const taskId = stringValue(body.taskId);
 		if (taskId !== undefined) {
@@ -100,7 +146,7 @@ export function registerProactiveSchedulerRpc(
 		return { cancelled: cancelled.map((task) => task.id) };
 	});
 
-	context.rpc.register("tasks.updatePrompt", async (input) => {
+	register("tasks.updatePrompt", async (input) => {
 		const body = record(input);
 		const taskId = stringValue(body.taskId);
 		const prompt = stringValue(body.prompt);
@@ -112,7 +158,7 @@ export function registerProactiveSchedulerRpc(
 		return task;
 	});
 
-	context.rpc.register("decisions.list", async (input) => {
+	register("decisions.list", async (input) => {
 		const body = record(input);
 		const decisions = await service.listDecisions({
 			...(stringValue(body.conversationId) === undefined
@@ -124,7 +170,7 @@ export function registerProactiveSchedulerRpc(
 		return { decisions };
 	});
 
-	context.rpc.register("simulate", async (input) => {
+	register("simulate", async (input) => {
 		const body = record(input);
 		const nowMs =
 			typeof body.nowMs === "number" && Number.isFinite(body.nowMs) ? body.nowMs : undefined;
@@ -137,7 +183,7 @@ export function registerProactiveSchedulerRpc(
 		return { dryRun: true, rows };
 	});
 
-	context.rpc.register("tick", async () => {
+	register("tick", async () => {
 		return await service.runTick();
 	});
 }

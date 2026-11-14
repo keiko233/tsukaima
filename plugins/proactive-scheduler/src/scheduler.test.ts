@@ -13,6 +13,7 @@ import type {
 	PluginConversationsApi,
 	PluginConversationSummary,
 	PluginDatabaseApi,
+	PluginLogger,
 	PluginTask,
 	PluginTaskCancelQuery,
 	PluginTaskCreateInput,
@@ -193,18 +194,45 @@ class FakeTasks implements PluginTasksApi {
 	}
 }
 
-const logger = {
-	debug: () => {},
-	error: () => {},
-	info: () => {},
-	warn: () => {},
-};
+interface LogRecord {
+	readonly details: unknown;
+	readonly level: "debug" | "error" | "info" | "trace" | "warn";
+	readonly message: string;
+}
+
+/** Recording `PluginLogger` double; child loggers share the buffer and prefix their target. */
+function createRecordingLogger(records: LogRecord[], prefix = ""): PluginLogger {
+	const write =
+		(level: LogRecord["level"]) =>
+		(message: string, details?: unknown): void => {
+			records.push({ details, level, message: `${prefix}${message}` });
+		};
+	const logger: PluginLogger = {
+		debug: write("debug"),
+		error: write("error"),
+		info: write("info"),
+		trace: write("trace"),
+		warn: write("warn"),
+	};
+	logger.child = (target) => createRecordingLogger(records, `${prefix}[${target}] `);
+	return logger;
+}
+
+function loggedMessages(
+	logs: readonly LogRecord[],
+	level: LogRecord["level"],
+	needle: string,
+): LogRecord[] {
+	return logs.filter((entry) => entry.level === level && entry.message.includes(needle));
+}
 
 async function setup(now = 1_000_000, globalEnabled = false) {
 	const clock = { now };
 	const database = new TestDatabase();
 	const conversations = new FakeConversations();
 	const tasks = new FakeTasks();
+	const logs: LogRecord[] = [];
+	const logger = createRecordingLogger(logs);
 	const service = new ProactiveSchedulerService({
 		conversations,
 		database,
@@ -229,7 +257,7 @@ async function setup(now = 1_000_000, globalEnabled = false) {
 		...DEFAULT_PROACTIVE_POLICY,
 		enabled: true,
 	});
-	return { clock, conversations, database, service, tasks };
+	return { clock, conversations, database, logger, logs, service, tasks };
 }
 
 function candidate(input: {
@@ -366,7 +394,7 @@ describe("proactive policy and gates", () => {
 
 describe("durable tasks", () => {
 	test("persists, repeats, stops at maxOccurrences, and ignores double claims", async () => {
-		const { service, tasks } = await setup();
+		const { logs, service, tasks } = await setup();
 		const task = await service.createTask(
 			{
 				conversationId: "c1",
@@ -378,10 +406,29 @@ describe("durable tasks", () => {
 			undefined,
 			{ id: "agent-1", kind: "agent" },
 		);
+		expect(loggedMessages(logs, "debug", "task created")).toHaveLength(1);
+		expect(loggedMessages(logs, "debug", "task created")[0]?.message).toStartWith("[service] ");
+		expect(loggedMessages(logs, "debug", "task created")[0]?.details).toEqual(
+			expect.objectContaining({ conversationId: "c1", kind: "remind", taskId: task.id }),
+		);
+		expect(loggedMessages(logs, "trace", "task create requested")[0]?.details).toEqual(
+			expect.objectContaining({
+				conversationId: "c1",
+				createdBy: "agent-1",
+				kind: "remind",
+				promptPreview: "drink water",
+			}),
+		);
 		const host = tasks.tasks.get(task.taskId);
 		expect(host).toBeDefined();
 		const first = await service.runHostTask(host!);
 		expect(first.stop).toBe(false);
+		expect(loggedMessages(logs, "debug", "host run task executed")[0]?.details).toEqual(
+			expect.objectContaining({ kind: "remind", stop: false, taskId: task.id }),
+		);
+		expect(typeof loggedMessages(logs, "debug", "host run task executed")[0]?.details).not.toBe(
+			"undefined",
+		);
 		const afterFirst = await service.repository.getTask(task.id);
 		expect(afterFirst?.status).toBe("scheduled");
 		expect(afterFirst?.occurrences).toBe(1);
@@ -441,7 +488,7 @@ describe("durable tasks", () => {
 	});
 
 	test("retries after failure and records attempts", async () => {
-		const { conversations, service, tasks } = await setup();
+		const { conversations, logs, service, tasks } = await setup();
 		const task = await service.createTask({
 			conversationId: "c1",
 			delayMs: 0,
@@ -453,6 +500,20 @@ describe("durable tasks", () => {
 		await expect(service.runHostTask(tasks.tasks.get(task.taskId)!)).rejects.toThrow("model down");
 		const failed = await service.repository.getTask(task.id);
 		expect(failed).toEqual(expect.objectContaining({ attempts: 1, status: "scheduled" }));
+		expect(
+			loggedMessages(logs, "info", "scheduled proactive task attempt failed")[0]?.details,
+		).toEqual(
+			expect.objectContaining({
+				attempts: 1,
+				conversationId: "c1",
+				error: "model down",
+				taskId: task.id,
+				terminal: false,
+			}),
+		);
+		expect(loggedMessages(logs, "debug", "host run task failed")[0]?.details).toEqual(
+			expect.objectContaining({ error: "model down", taskId: task.id }),
+		);
 		conversations.error = undefined;
 		const host = tasks.tasks.get(task.taskId)!;
 		const retried = await service.runHostTask({ ...host, attempts: 1 });
@@ -503,7 +564,7 @@ describe("durable tasks", () => {
 describe("proactive delivery and markers", () => {
 	test("delivers a tick and increments per-conversation counters", async () => {
 		const now = Date.UTC(2026, 0, 1, 12, 0);
-		const { service } = await setup(now, true);
+		const { logs, service } = await setup(now, true);
 		await service.repository.saveState({
 			...emptyState("c1", now),
 			inboundCount: 10,
@@ -512,6 +573,26 @@ describe("proactive delivery and markers", () => {
 		});
 		const result = await service.runTick();
 		expect(result.delivered).toBe(1);
+		const gateTrace = loggedMessages(logs, "trace", "proactive gates evaluated").find(
+			(entry) => (entry.details as { dryRun?: boolean }).dryRun === false,
+		);
+		expect(gateTrace?.details).toEqual(
+			expect.objectContaining({
+				blocked: false,
+				conversationId: "c1",
+				reason: null,
+				state: expect.objectContaining({ inboundCount: 10, unansweredStreak: 0, warmness: 0.9 }),
+			}),
+		);
+		expect((gateTrace?.details as { gates?: string } | undefined)?.gates).toContain(
+			"bubble_gate:passed",
+		);
+		expect(loggedMessages(logs, "info", "proactive turn delivered")[0]?.details).toEqual(
+			expect.objectContaining({ conversationId: "c1", deliveryStatus: "sent" }),
+		);
+		expect(loggedMessages(logs, "debug", "tick completed")[0]?.details).toEqual(
+			expect.objectContaining({ candidates: 2, delivered: 1, skipped: 1 }),
+		);
 		const state = await service.repository.getState("c1");
 		expect(state?.dailyCount).toBe(1);
 		expect(state?.unansweredStreak).toBe(1);
@@ -591,7 +672,7 @@ describe("proactive delivery and markers", () => {
 
 	test("simulate never sends and explains every gate", async () => {
 		const now = Date.UTC(2026, 0, 1, 12, 0);
-		const { conversations, service } = await setup(now, true);
+		const { conversations, logs, service } = await setup(now, true);
 		await service.repository.saveState({
 			...emptyState("c1", now),
 			inboundCount: 10,
@@ -601,6 +682,12 @@ describe("proactive delivery and markers", () => {
 		const rows = await service.simulate({ conversationId: "c1" });
 		expect(conversations.turns).toHaveLength(0);
 		expect(rows[0]?.eligible).toBe(true);
+		expect(loggedMessages(logs, "trace", "proactive gates evaluated").at(-1)?.details).toEqual(
+			expect.objectContaining({ blocked: false, conversationId: "c1", dryRun: true }),
+		);
+		expect(loggedMessages(logs, "debug", "simulation completed")[0]?.details).toEqual(
+			expect.objectContaining({ eligible: 1, rows: 1 }),
+		);
 		expect(rows[0]?.gates.map((gate) => gate.gate)).toEqual(
 			expect.arrayContaining([
 				"candidate",
@@ -617,5 +704,36 @@ describe("proactive delivery and markers", () => {
 				"audit",
 			]),
 		);
+	});
+});
+
+describe("logging and tracing", () => {
+	test("logs tick registration, restored tasks, start, and stop", async () => {
+		const { logs, service, tasks } = await setup();
+		await service.createTask({ conversationId: "c1", delayMs: 60_000, prompt: "pending" });
+		await service.start();
+		expect(loggedMessages(logs, "debug", "tick task registered")[0]?.details).toEqual(
+			expect.objectContaining({ intervalMs: 60_000 }),
+		);
+		expect(loggedMessages(logs, "debug", "scheduler started")[0]?.details).toEqual(
+			expect.objectContaining({ intervalMs: 60_000, pendingTasks: 1, restoredTasks: 1 }),
+		);
+		await service.stop();
+		expect(loggedMessages(logs, "debug", "scheduler stopped")).toHaveLength(1);
+		expect(tasks.cancelled.length).toBeGreaterThan(0);
+	});
+
+	test("traces single-line bounded prompt previews", async () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const { logs, service } = await setup(now, true);
+		const prompt = `${Array.from({ length: 80 }, () => "word").join(" ")}\nsecond line`;
+		await service.createTask({ conversationId: "c1", delayMs: 0, kind: "remind", prompt });
+		const trace = loggedMessages(logs, "trace", "task create requested")[0];
+		expect(trace?.details).toEqual(expect.objectContaining({ conversationId: "c1" }));
+		const preview = (trace?.details as { promptPreview?: string } | undefined)?.promptPreview;
+		expect(typeof preview).toBe("string");
+		expect(preview?.length ?? 0).toBeLessThanOrEqual(120);
+		expect(preview?.includes("\n")).toBe(false);
+		expect(preview?.startsWith("word word")).toBe(true);
 	});
 });
