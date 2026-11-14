@@ -2,19 +2,16 @@
 
 ## Outcome
 
-Tsukaima can store sticker packs, retrieve candidates safely, learn candidates from chat, send
-real media through OneBot, and provide admin review.
-
-## Current boundary
-
-No runtime sticker/meme implementation exists. The migration importer only creates generic
-media rows from a normalized sticker fixture.
+Tsukaima imports Telegram sticker sets directly, enriches every sticker with a semantic profile,
+retrieves candidates safely, learns candidates from chat, sends real media through OneBot, and
+provides admin review.
 
 ## Plugin identity
 
 `sticker-meme` owns storage, selection, and send integration. It declares permissions for
 media, storage, channel send, conversation read, tools, UI, and audit. It may not edit other
-plugins or read secrets.
+plugins or read secrets belonging to other plugins; its own Telegram and semantic-model
+credentials stay in secret config.
 
 ## Pack model
 
@@ -42,6 +39,15 @@ type StickerItem = {
   width?: number;
   height?: number;
   enabled: boolean;
+  semantic: {
+    source: "none" | "heuristic" | "vision" | "merged" | "manual";
+    labels: string[];
+    emotions: string[];
+    intents: string[];
+    tones: string[];
+    keywords: string[];
+    description: string;
+  };
   score: number;
 };
 ```
@@ -50,17 +56,42 @@ Plugin-owned migrations (via Phase 3 `MigrationRegistry`, running in `host` mode
 pack/item tables (`plugin_sticker_meme_*`). The core `media` table remains the canonical binary
 registry.
 
-## Import/export
+## Telegram import
 
-Support:
+The primary import path is a Telegram sticker-set reference:
 
-- local directory pack import
-- ZIP/manifest import
-- DSH meme pack mapping
-- media dedupe by SHA-256
-- tag/emotion validation
-- disable missing media
-- dry-run report
+- `https://t.me/addstickers/<name>`
+- `tg://addstickers?set=<name>`
+- a bare set name or `addstickers/<name>` shorthand
+
+The plugin uses the Bot API `getStickerSet`/`getFile` calls through grammY and a bot token
+configured in the plugin panel, the backend plugin settings form, or
+`TSUKAIMA_TELEGRAM_BOT_TOKEN`. Secret fields are write-only in the API. Re-importing the same set
+reuses a stable pack id and item ids, dedupes media by SHA-256, and updates metadata in place.
+Static stickers are stored as WebP/PNG.
+
+Animated TGS stickers are decoded from gzipped Lottie JSON with `lottie-web`, rendered through
+`canvas`/`jsdom`, and encoded as animated GIF with `gifenc` so QQ receives a format it supports.
+Video stickers use ffmpeg when available to produce GIF and fall back to the original WebM
+(`video/webm`) otherwise; the reply transform turns WebM items into OneBot `video` parts.
+Administrators can choose GIF or still-thumbnail import per format. Masks and custom emoji are
+skipped.
+
+Legacy local directory, ZIP/manifest, and DSH meme-pack imports remain available for
+migrations. All import paths share media dedupe, tag validation, disable-missing-media, and
+dry-run reporting.
+
+## Semantic preprocessing
+
+Every imported item is classified before it becomes selectable. The deterministic classifier
+maps Telegram emoji (via `emojilib`) and multilingual pack-title terms onto a closed taxonomy of
+emotions, intents, and tones, then writes searchable labels, keywords, and a model-safe
+description. Administrators can select a specific host-registered model (`semanticProviderId` +
+`semanticModel` via `context.models`) or configure custom OpenAI-compatible credentials
+(`semanticBaseUrl`, `semanticApiKey`, `semanticModel`) for vision refinement. Vision output is
+restricted to the same taxonomy, merged with the heuristic profile, and never stores a local
+path or raw URL. Administrators can switch models and re-run classification for a pack from the
+panel.
 
 Exports contain manifests and media, but never user content or secrets.
 
@@ -68,11 +99,12 @@ Exports contain manifests and media, but never user content or secrets.
 
 Model-facing tools (namespaced under `sticker-meme`):
 
-1. `sticker-meme.search` — text/emotion/persona filtered candidates and metadata.
+1. `sticker-meme.search` — text/emotion/persona filtered candidates and metadata, including
+   semantic labels.
 2. `sticker-meme.choose` — chooses one candidate and returns a transient send token.
 
-Selection uses exact keyword, normalized text, emotion, persona, recent usage, score, enabled
-state, and pack preference. No deprecated packs or revoked items are selectable.
+Selection uses exact keyword, normalized text, semantic labels, emotion, persona, recent usage,
+score, enabled state, and pack preference. No deprecated packs or revoked items are selectable.
 
 Send tokens are single-use, short TTL, conversation-bound, and audited.
 
@@ -113,14 +145,18 @@ Model-visible text never includes absolute local paths or raw URLs.
 ## Tests
 
 1. Pack/item validation and migrations.
-2. Import/export and media dedupe.
-3. Selection ranking and policy filtering.
-4. Token single-use/TTL/binding.
-5. Output transformation, chunking, and failure fallback.
-6. Learning/review workflow.
-7. DSH meme-pack migration fixture.
+2. Telegram link parsing, mocked Bot API import, animated-thumbnail fallback, skip rules, dry
+   run, stable ids, and media dedupe.
+3. Semantic taxonomy classification, emoji mapping, vision merge, and unsafe-label rejection.
+4. Legacy import/export and media dedupe.
+5. Selection ranking and policy filtering.
+6. Token single-use/TTL/binding.
+7. Output transformation, chunking, and failure fallback.
+8. Learning/review workflow.
+9. DSH meme-pack migration fixture.
 
 ## Acceptance
 
-Tsukaima can import the DSH pack schema shape, select/send a sticker on QQ, review learned
-candidates, and prevent unreviewed or unavailable media from being sent.
+Tsukaima can import `https://t.me/addstickers/<name>` with one configured bot token, classify its
+stickers semantically, select/send a sticker on QQ, review learned candidates, and prevent
+unreviewed or unavailable media from being sent.
