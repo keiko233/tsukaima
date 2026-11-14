@@ -16,6 +16,7 @@
 		"@tsukaima-plugin/search-fetch": "workspace:*",
 		"@tsukaima-plugin/self-iteration": "workspace:*",
 		"@tsukaima-plugin/sticker-meme": "workspace:*",
+		"@tsukaima/cache": "workspace:*",
 		"@tsukaima/coding": "workspace:*",
 		"@tsukaima/contracts": "workspace:*",
 		"@tsukaima/core": "workspace:*",
