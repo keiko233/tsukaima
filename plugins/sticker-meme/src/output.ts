@@ -115,16 +115,20 @@ export function createStickerReplyTransform(options: StickerOutputOptions) {
 					output.push({ text: "[sticker unavailable]", type: "text" });
 					continue;
 				}
-				output.push({
+				const mediaPart = {
 					...(item.height === null ? {} : { height: item.height }),
 					mediaId: item.mediaId,
 					mimeType: item.mimeType,
 					modelReadable: false,
 					previewText: sanitizeModelText(item.name),
 					sha256: item.hash,
-					type: "sticker",
 					...(item.width === null ? {} : { width: item.width }),
-				});
+				} as const;
+				output.push(
+					item.mimeType.toLowerCase().startsWith("video/")
+						? { ...mediaPart, type: "video" }
+						: { ...mediaPart, type: "sticker" },
+				);
 				await audit({
 					action: "sticker.transform.sent",
 					actorKind: "plugin",

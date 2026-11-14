@@ -13,11 +13,21 @@ import {
 	filesFromBundle,
 	type StickerImportService,
 } from "./import-service.ts";
+import { StickerProgressTracker } from "./progress.ts";
 import type { StickerRepository } from "./repository.ts";
+import {
+	isVisionCapablePluginModel,
+	resolveSemanticClassifier,
+	STICKER_SEMANTIC_CATEGORIES,
+	type StickerSemanticClassifier,
+} from "./semantic.ts";
+import { TelegramStickerClient } from "./telegram.ts";
+import { TelegramStickerImportService } from "./telegram-import.ts";
 
 interface ServiceBag {
 	readonly importService: StickerImportService;
 	readonly learning: LearningService;
+	readonly onSettled?: () => Promise<void>;
 	readonly repository: StickerRepository;
 }
 
@@ -44,6 +54,53 @@ function asFiles(value: unknown): { dataBase64: string; path: string }[] {
 		const path = normalizeText(entry.path);
 		const dataBase64 = normalizeText(entry.dataBase64 ?? entry.base64);
 		return path.length === 0 || dataBase64.length === 0 ? [] : [{ dataBase64, path }];
+	});
+}
+
+function asNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function settingBoolean(record: Record<string, unknown>, key: string, fallback: boolean): boolean {
+	const value = record[key];
+	return typeof value === "boolean" ? value : fallback;
+}
+
+function settingNumber(record: Record<string, unknown>, key: string, fallback: number): number {
+	const value = asNumber(record[key]);
+	return value === undefined ? fallback : value;
+}
+
+function enumValue<T extends string>(value: string, allowed: readonly T[], fallback: T): T {
+	return (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
+}
+
+function optionalOverride(
+	record: Record<string, unknown>,
+	keys: readonly string[],
+): string | undefined {
+	for (const key of keys) {
+		if (Object.hasOwn(record, key)) {
+			return normalizeText(record[key]);
+		}
+	}
+	return undefined;
+}
+
+async function configuredClassifier(
+	context: PluginContext,
+	record: Record<string, unknown> = {},
+): Promise<StickerSemanticClassifier> {
+	const settings = recordValue((await context.settings?.get()) ?? {});
+	const mode = normalizeText(record.semanticMode ?? record.mode) || undefined;
+	const providerId = optionalOverride(record, ["semanticProviderId", "providerId"]);
+	const modelId = optionalOverride(record, ["semanticModel", "modelId"]);
+	return await resolveSemanticClassifier(settings, {
+		logger: context.logger,
+		...(mode === undefined ? {} : { mode }),
+		...(modelId === undefined ? {} : { modelId }),
+		models: context.models,
+		...(providerId === undefined ? {} : { providerId }),
 	});
 }
 
@@ -74,7 +131,16 @@ function asItemPatch(input: Record<string, unknown>) {
 
 /** Registers the admin/WebUI procedure surface. The host adds the plugin-id namespace. */
 export function registerStickerRpc(context: PluginContext, services: ServiceBag): void {
-	const { importService, learning, repository } = services;
+	const { importService, learning, onSettled, repository } = services;
+	const tracker = new StickerProgressTracker({
+		context,
+		...(onSettled === undefined ? {} : { onSettled }),
+	});
+	const importClassifier = async (
+		record: Record<string, unknown> = {},
+	): Promise<StickerSemanticClassifier> => await configuredClassifier(context, record);
+
+	context.rpc.register("progress", async () => ({ active: tracker.current() }));
 
 	context.rpc.register("packs.list", async () => {
 		const packs = await repository.listPacks();
@@ -146,38 +212,310 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		const record = recordValue(input);
 		const directory = normalizeText(record.directory ?? record.path);
 		if (directory.length === 0) throw new Error("directory is required");
-		return await importService.importDirectory({
-			directory,
-			dryRun: record.dryRun === true,
-			source: "webui",
-		});
+		const dryRun = record.dryRun === true;
+		const jobId = tracker.start({ dryRun, kind: "packs.importDir", stage: "fetching" });
+		try {
+			const report = await importService.importDirectory({
+				classifier: await importClassifier(record),
+				directory,
+				dryRun,
+				onProgress: (progress) => tracker.update(jobId, progress),
+				source: "webui",
+			});
+			await tracker.complete(jobId, {
+				current: report.items,
+				skipped: report.missingMedia,
+				total: report.items,
+			});
+			return report;
+		} catch (error) {
+			await tracker.fail(jobId, error);
+			throw error;
+		}
 	});
 
 	context.rpc.register("packs.importBundle", async (input) => {
 		const record = recordValue(input);
 		const dryRun = record.dryRun === true;
 		const zip = normalizeText(record.bundleBase64 ?? record.zipBase64);
-		if (zip.length > 0) {
-			return await importService.importZip({
-				bytes: new Uint8Array(Buffer.from(zip, "base64")),
-				dryRun,
-				source: "webui",
+		const jobId = tracker.start({ dryRun, kind: "packs.importBundle", stage: "fetching" });
+		try {
+			const report =
+				zip.length > 0
+					? await importService.importZip({
+							bytes: new Uint8Array(Buffer.from(zip, "base64")),
+							classifier: await importClassifier(record),
+							dryRun,
+							onProgress: (progress) => tracker.update(jobId, progress),
+							source: "webui",
+						})
+					: await importService.importBundle({
+							classifier: await importClassifier(record),
+							dryRun,
+							files: filesFromBundle(asFiles(record.files)),
+							manifest: record.manifest ?? record,
+							onProgress: (progress) => tracker.update(jobId, progress),
+							source: "webui",
+						});
+			await tracker.complete(jobId, {
+				current: report.items,
+				skipped: report.missingMedia,
+				total: report.items,
 			});
+			return report;
+		} catch (error) {
+			await tracker.fail(jobId, error);
+			throw error;
 		}
-		return await importService.importBundle({
-			dryRun,
-			files: filesFromBundle(asFiles(record.files)),
-			manifest: record.manifest ?? record,
-			source: "webui",
-		});
 	});
 
 	context.rpc.register("packs.importDsh", async (input) => {
 		const record = recordValue(input);
 		const directory = normalizeText(record.directory ?? record.path);
 		if (directory.length === 0) throw new Error("directory is required");
-		return await importService.importDshDirectory({ directory, dryRun: record.dryRun === true });
+		const dryRun = record.dryRun === true;
+		const jobId = tracker.start({ dryRun, kind: "packs.importDsh", stage: "fetching" });
+		try {
+			const report = await importService.importDshDirectory({
+				classifier: await importClassifier(record),
+				directory,
+				dryRun,
+				onProgress: (progress) => tracker.update(jobId, progress),
+			});
+			await tracker.complete(jobId, {
+				current: report.items,
+				skipped: report.missingMedia,
+				total: report.items,
+			});
+			return report;
+		} catch (error) {
+			await tracker.fail(jobId, error);
+			throw error;
+		}
 	});
+
+	context.rpc.register("telegram.import", async (input) => {
+		const record = recordValue(input);
+		const reference = normalizeText(record.url ?? record.reference ?? record.setName);
+		if (reference.length === 0) throw new Error("Telegram sticker set URL or name is required");
+		const media = context.media;
+		if (media === undefined) throw new Error("Host media bridge is unavailable");
+		const settings = recordValue((await context.settings?.get()) ?? {});
+		const token = normalizeText(record.token) || normalizeText(settings.telegramBotToken);
+		if (token.length === 0) {
+			throw new Error(
+				"Telegram bot token is not configured. Set telegramBotToken or TSUKAIMA_TELEGRAM_BOT_TOKEN.",
+			);
+		}
+		const apiBaseUrl =
+			normalizeText(record.apiBaseUrl) || normalizeText(settings.telegramApiBaseUrl);
+		const client = new TelegramStickerClient({
+			...(apiBaseUrl.length === 0 ? {} : { apiBaseUrl }),
+			token,
+		});
+		const service = new TelegramStickerImportService({ client, media, repository });
+		const dryRun = record.dryRun === true;
+		const jobId = tracker.start({ dryRun, kind: "telegram.import", stage: "fetching" });
+		try {
+			const report = await service.importReference(reference, {
+				animatedFormat: enumValue(
+					normalizeText(record.animatedFormat) ||
+						normalizeText(settings.telegramAnimatedFormat, "gif"),
+					["gif", "thumbnail"] as const,
+					"gif",
+				),
+				animatedFps: settingNumber(
+					record,
+					"animatedFps",
+					settingNumber(settings, "telegramAnimatedFps", 15),
+				),
+				animatedMaxFrames: settingNumber(
+					record,
+					"animatedMaxFrames",
+					settingNumber(settings, "telegramAnimatedMaxFrames", 50),
+				),
+				classifier: await importClassifier(record),
+				dryRun,
+				includeAnimated: settingBoolean(
+					record,
+					"includeAnimated",
+					settingBoolean(settings, "telegramIncludeAnimated", true),
+				),
+				includeVideo: settingBoolean(
+					record,
+					"includeVideo",
+					settingBoolean(settings, "telegramIncludeVideo", true),
+				),
+				maxStickers: Math.floor(
+					settingNumber(record, "maxStickers", settingNumber(settings, "telegramMaxStickers", 200)),
+				),
+				onProgress: (progress) => tracker.update(jobId, progress),
+				videoFormat: enumValue(
+					normalizeText(record.videoFormat) || normalizeText(settings.telegramVideoFormat, "gif"),
+					["gif", "thumbnail", "webm"] as const,
+					"gif",
+				),
+			});
+			await context.audit?.record({
+				action: "sticker.telegram.imported",
+				actorKind: "user",
+				payload: {
+					deduped: report.deduped,
+					dryRun: report.dryRun,
+					items: report.items,
+					setName: report.setName,
+					skipped: report.skipped,
+				},
+				result: "ok",
+				targetId: report.setName,
+				targetKind: "telegram-sticker-set",
+			});
+			await tracker.complete(jobId, {
+				classified: report.classified,
+				current: report.items,
+				packTitle: report.title,
+				skipped: report.skipped,
+				total: report.items,
+			});
+			return report;
+		} catch (error) {
+			await tracker.fail(jobId, error);
+			throw error;
+		}
+	});
+
+	context.rpc.register("semantic.reclassify", async (input) => {
+		const record = recordValue(input);
+		const media = context.media;
+		if (media === undefined) throw new Error("Host media bridge is unavailable");
+		const packId = normalizeText(record.packId);
+		const packs = new Map((await repository.listPacks()).map((pack) => [pack.id, pack]));
+		const items = await repository.listItems(packId.length === 0 ? undefined : packId);
+		const targetTitle = packId.length > 0 ? packs.get(packId)?.name : undefined;
+		const jobId = tracker.start({
+			kind: "semantic.reclassify",
+			...(targetTitle === undefined ? {} : { packTitle: targetTitle }),
+			stage: "classifying",
+			total: items.length,
+		});
+		try {
+			const classifier = await importClassifier(record);
+			let updated = 0;
+			let skipped = 0;
+			for (const [index, item] of items.entries()) {
+				tracker.update(jobId, {
+					classified: updated,
+					current: index,
+					currentItem: item.name,
+					skipped,
+					stage: "classifying",
+					total: items.length,
+				});
+				if (item.mediaId.length === 0) {
+					skipped += 1;
+					tracker.update(jobId, { classified: updated, current: index + 1, skipped });
+					continue;
+				}
+				const isImage = item.mimeType.startsWith("image/");
+				if (!isImage && item.mimeType !== "video/webm") {
+					skipped += 1;
+					tracker.update(jobId, { classified: updated, current: index + 1, skipped });
+					continue;
+				}
+				let bytes: Uint8Array | undefined;
+				if (isImage) {
+					try {
+						bytes = await media.readBytes(item.mediaId);
+					} catch {
+						skipped += 1;
+						tracker.update(jobId, { classified: updated, current: index + 1, skipped });
+						continue;
+					}
+				}
+				const profile = await classifier.classify({
+					...(bytes === undefined ? {} : { bytes }),
+					...(item.semantic.emoji === undefined ? {} : { emoji: item.semantic.emoji }),
+					mimeType: item.mimeType,
+					title: packs.get(item.packId)?.name ?? item.name,
+				});
+				tracker.update(jobId, {
+					classified: updated,
+					current: index,
+					currentItem: item.name,
+					skipped,
+					stage: "saving",
+				});
+				await repository.updateItem(item.id, {
+					description: profile.description,
+					emotions: [...item.emotions, ...profile.emotions],
+					keywords: [...item.keywords, ...profile.keywords],
+					semantic: profile,
+				});
+				updated += 1;
+				tracker.update(jobId, {
+					classified: updated,
+					current: index + 1,
+					currentItem: item.name,
+					skipped,
+					stage: "saving",
+				});
+			}
+			await context.audit?.record({
+				action: "sticker.semantic.reclassified",
+				actorKind: "user",
+				payload: {
+					classifier: classifier.name,
+					packId: packId.length === 0 ? null : packId,
+					updated,
+				},
+				result: "ok",
+				...(packId.length === 0 ? {} : { targetId: packId }),
+				targetKind: "sticker-pack",
+			});
+			await tracker.complete(jobId, {
+				classified: updated,
+				current: items.length,
+				skipped,
+				total: items.length,
+			});
+			return { classifier: classifier.name, skipped, updated };
+		} catch (error) {
+			await tracker.fail(jobId, error);
+			throw error;
+		}
+	});
+
+	context.rpc.register("semantic.models", async () => {
+		const all = await context.models.listModels();
+		const sorted = [...all].toSorted((left, right) => {
+			const leftVision = isVisionCapablePluginModel(left);
+			const rightVision = isVisionCapablePluginModel(right);
+			if (leftVision !== rightVision) return leftVision ? -1 : 1;
+			return `${left.providerId}/${left.id}`.localeCompare(`${right.providerId}/${right.id}`);
+		});
+		const settings = recordValue((await context.settings?.get()) ?? {});
+		return {
+			configuredCustom:
+				normalizeText(settings.semanticApiKey).length > 0 &&
+				normalizeText(settings.semanticModel).length > 0,
+			models: sorted.map((model) => ({
+				capabilities: model.capabilities,
+				id: model.id,
+				input: model.input ?? ["text"],
+				name: model.name ?? model.id,
+				...(model.pluginId === undefined ? {} : { pluginId: model.pluginId }),
+				providerId: model.providerId,
+				supportsImage: isVisionCapablePluginModel(model),
+			})),
+		};
+	});
+
+	context.rpc.register("semantic.categories", async () => ({
+		categories: STICKER_SEMANTIC_CATEGORIES.map((category) => ({
+			id: category.id,
+			kind: category.kind,
+		})),
+	}));
 
 	context.rpc.register("packs.export", async (input) => {
 		const record = recordValue(input);

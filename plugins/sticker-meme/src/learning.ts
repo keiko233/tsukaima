@@ -7,6 +7,7 @@ import type {
 } from "@tsukaima/sdk";
 import { decodeBase64 } from "./archive.ts";
 import {
+	EMPTY_SEMANTIC_PROFILE,
 	inferMimeType,
 	normalizeLabels,
 	normalizeText,
@@ -296,6 +297,7 @@ function placeholderItem(
 		reviewStatus: "pending",
 		revokedAt: null,
 		score: 0,
+		semantic: EMPTY_SEMANTIC_PROFILE,
 		sourceConversationId: input.sourceConversationId ?? null,
 		updatedAt: now,
 		useCount: 0,

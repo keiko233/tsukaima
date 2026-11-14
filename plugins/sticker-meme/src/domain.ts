@@ -3,9 +3,31 @@ import { z } from "zod";
 
 export const stickerPackSources = ["builtin", "imported", "generated", "learned"] as const;
 export const stickerReviewStatuses = ["approved", "pending", "rejected"] as const;
+export const stickerSemanticSources = ["none", "heuristic", "vision", "merged", "manual"] as const;
 
 export type StickerPackSource = (typeof stickerPackSources)[number];
 export type StickerReviewStatus = (typeof stickerReviewStatuses)[number];
+export type StickerSemanticSource = (typeof stickerSemanticSources)[number];
+
+/**
+ * Precomputed meaning for one sticker. Telegram only gives us an emoji and a pack title, so
+ * semantic preprocessing expands that signal into searchable labels before the sticker reaches
+ * the selection tool. `vision`/`merged` sources indicate an optional image model contributed to
+ * the profile.
+ */
+export interface StickerSemanticProfile {
+	readonly version: 1;
+	readonly source: StickerSemanticSource;
+	readonly labels: readonly string[];
+	readonly emotions: readonly string[];
+	readonly intents: readonly string[];
+	readonly tones: readonly string[];
+	readonly keywords: readonly string[];
+	readonly description: string;
+	readonly confidence: number;
+	readonly emoji?: string;
+	readonly model?: string;
+}
 
 export interface StickerPack {
 	readonly id: string;
@@ -33,6 +55,7 @@ export interface StickerItem {
 	readonly height: number | null;
 	readonly enabled: boolean;
 	readonly reviewStatus: StickerReviewStatus;
+	readonly semantic: StickerSemanticProfile;
 	readonly score: number;
 	readonly useCount: number;
 	readonly lastUsedAt: string | null;
@@ -54,6 +77,45 @@ export interface StickerPackInput {
 
 export const stickerPackSourceSchema = z.enum(stickerPackSources);
 export const stickerReviewStatusSchema = z.enum(stickerReviewStatuses);
+export const stickerSemanticSourceSchema = z.enum(stickerSemanticSources);
+
+const semanticLabelSchema = z.string().trim().min(1).max(64);
+export const stickerSemanticProfileSchema = z.object({
+	confidence: z.number().finite().min(0).max(1).default(0),
+	description: z.string().max(500).default(""),
+	emotions: z.array(semanticLabelSchema).max(32).default([]),
+	emoji: z.string().max(64).optional(),
+	intents: z.array(semanticLabelSchema).max(32).default([]),
+	keywords: z.array(semanticLabelSchema).max(128).default([]),
+	labels: z.array(semanticLabelSchema).max(64).default([]),
+	model: z.string().max(160).optional(),
+	source: stickerSemanticSourceSchema.default("none"),
+	tones: z.array(semanticLabelSchema).max(32).default([]),
+	version: z.literal(1).default(1),
+});
+
+export const EMPTY_SEMANTIC_PROFILE: StickerSemanticProfile = {
+	confidence: 0,
+	description: "",
+	emotions: [],
+	intents: [],
+	keywords: [],
+	labels: [],
+	source: "none",
+	tones: [],
+	version: 1,
+};
+
+export function parseSemanticProfile(value: unknown): StickerSemanticProfile {
+	const parsed = stickerSemanticProfileSchema.safeParse(value);
+	if (!parsed.success) return EMPTY_SEMANTIC_PROFILE;
+	const { emoji, model, ...rest } = parsed.data;
+	return {
+		...rest,
+		...(emoji === undefined ? {} : { emoji }),
+		...(model === undefined ? {} : { model }),
+	};
+}
 
 const labelPattern = /^[\p{L}\p{N}_-]{1,32}$/u;
 

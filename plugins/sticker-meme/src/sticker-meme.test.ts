@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { gzipSync } from "node:zlib";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	LocalModelRegistry,
 	pluginManifestSchema,
 	type AuditEntry,
 	type PluginDatabaseApi,
@@ -13,13 +15,28 @@ import {
 	type PluginMediaStoreInput,
 } from "@tsukaima/sdk";
 import { readZipEntries } from "./archive.ts";
+import { createAnimatedConverter, tgsToGif, webmToGif } from "./animated.ts";
 import { normalizeLabels, safeRelativePath, type StickerItem } from "./domain.ts";
 import { StickerImportService } from "./import-service.ts";
 import { LearningService, type LearningSettings } from "./learning.ts";
 import { stickerMemeManifest } from "./manifest.ts";
 import { createStickerReplyTransform } from "./output.ts";
+import { StickerProgressTracker } from "./progress.ts";
 import { StickerRepository } from "./repository.ts";
 import { StickerSelectionService } from "./selection.ts";
+import {
+	classifyStickerSemantics,
+	createSemanticClassifier,
+	extractEmojis,
+	resolveSemanticClassifier,
+	VisionSemanticClassifier,
+} from "./semantic.ts";
+import {
+	parseTelegramStickerSetReference,
+	TelegramStickerClient,
+	type TelegramStickerSource,
+} from "./telegram.ts";
+import { TelegramStickerImportService, type TelegramImportProgress } from "./telegram-import.ts";
 
 const directories: string[] = [];
 
@@ -122,6 +139,7 @@ async function seedItem(
 		readonly keywords?: string[];
 		readonly emotions?: string[];
 		readonly enabled?: boolean;
+		readonly mimeType?: string;
 		readonly reviewStatus?: "approved" | "pending" | "rejected";
 		readonly revokedAt?: string | null;
 		readonly lastUsedAt?: string | null;
@@ -129,10 +147,11 @@ async function seedItem(
 		readonly bytes?: Uint8Array;
 	},
 ): Promise<StickerItem> {
+	const mimeType = input.mimeType ?? "image/png";
 	const stored = await media.store({
 		bytes: input.bytes ?? bytes(input.id),
 		kind: "sticker",
-		mimeType: "image/png",
+		mimeType,
 		source: "webui",
 	});
 	const item = await repository.upsertItem({
@@ -143,7 +162,7 @@ async function seedItem(
 		id: input.id,
 		keywords: input.keywords ?? ["happy"],
 		mediaId: stored.id,
-		mimeType: "image/png",
+		mimeType,
 		name: input.id,
 		packId: input.packId ?? "pack-main",
 		reviewStatus: input.reviewStatus ?? "approved",
@@ -552,6 +571,30 @@ describe("sticker selection and send tokens", () => {
 		});
 		expect(missingResult?.parts).toEqual([{ text: "[sticker unavailable]", type: "text" }]);
 	});
+
+	test("turns a webm sticker into a video part for OneBot video delivery", async () => {
+		const setup = await setupSelection();
+		await seedItem(setup.repository, setup.media, {
+			id: "video-sticker",
+			mimeType: "video/webm",
+		});
+		const choice = await setup.selection.choose({
+			conversationId: "conversation-1",
+			itemId: "video-sticker",
+		});
+		const transform = createStickerReplyTransform({
+			media: setup.media,
+			repository: setup.repository,
+		});
+		const transformed = await transform({
+			conversationId: "conversation-1",
+			parts: [{ text: `[[sticker:${choice.sendToken}]]`, type: "text" }],
+		});
+		expect(transformed?.parts[0]).toMatchObject({
+			mimeType: "video/webm",
+			type: "video",
+		});
+	});
 });
 
 describe("sticker learning and review", () => {
@@ -654,5 +697,657 @@ describe("sticker learning and review", () => {
 			source: "generated",
 		});
 		expect(generated.reason).toBe("policy");
+	});
+});
+
+describe("telegram sticker import", () => {
+	const providedLink = "https://t.me/addstickers/example_sticker_set";
+
+	class FakeTelegramClient implements TelegramStickerSource {
+		readonly #files: Record<string, Uint8Array>;
+		readonly #set: Awaited<ReturnType<TelegramStickerSource["getStickerSet"]>>;
+		downloads = 0;
+
+		constructor(
+			set: Awaited<ReturnType<TelegramStickerSource["getStickerSet"]>>,
+			files: Record<string, Uint8Array>,
+		) {
+			this.#set = set;
+			this.#files = files;
+		}
+
+		async getStickerSet(name: string) {
+			expect(name).toBe("example_sticker_set");
+			return this.#set;
+		}
+
+		async downloadFile(fileId: string) {
+			this.downloads += 1;
+			const value = this.#files[fileId];
+			if (value === undefined) throw new Error(`missing fake file ${fileId}`);
+			return { bytes: value, filePath: `${fileId}.webp` };
+		}
+	}
+
+	function telegramFixture() {
+		const client = new FakeTelegramClient(
+			{
+				isAnimated: true,
+				isVideo: true,
+				name: "example_sticker_set",
+				stickerType: "regular",
+				stickers: [
+					{
+						emoji: "😭",
+						fileId: "file-sad",
+						fileUniqueId: "unique-sad",
+						height: 512,
+						isAnimated: false,
+						isVideo: false,
+						type: "regular",
+						width: 512,
+					},
+					{
+						emoji: "🎉",
+						fileId: "file-party",
+						fileUniqueId: "unique-party",
+						height: 512,
+						isAnimated: false,
+						isVideo: false,
+						type: "regular",
+						width: 512,
+					},
+					{
+						emoji: "😊",
+						fileId: "file-happy",
+						fileUniqueId: "unique-happy",
+						height: 512,
+						isAnimated: true,
+						isVideo: false,
+						thumbnailFileId: "thumb-happy",
+						type: "regular",
+						width: 512,
+					},
+					{
+						fileId: "file-mask",
+						fileUniqueId: "unique-mask",
+						height: 512,
+						isAnimated: false,
+						isVideo: false,
+						type: "mask",
+						width: 512,
+					},
+					{
+						emoji: "👍",
+						fileId: "file-praise",
+						fileUniqueId: "unique-praise",
+						height: 512,
+						isAnimated: false,
+						isVideo: true,
+						thumbnailFileId: "thumb-praise",
+						type: "regular",
+						width: 512,
+					},
+				],
+				title: "Example Sticker Pack",
+			},
+			{
+				"file-happy": bytes("tgs-happy"),
+				"file-party": bytes("same-sad-image"),
+				"file-praise": bytes("webm-praise"),
+				"file-sad": bytes("same-sad-image"),
+				"thumb-happy": bytes("happy-thumb"),
+				"thumb-praise": bytes("praise-thumb"),
+			},
+		);
+		const fixture = baseFixture();
+		const converter = createAnimatedConverter({
+			tgs: async () => bytes("gif-happy"),
+			webm: async () => bytes("gif-praise"),
+		});
+		const service = new TelegramStickerImportService({ client, converter, ...fixture });
+		return { ...fixture, client, converter, service };
+	}
+
+	test("parses the provided t.me link and rejects unrelated URLs", () => {
+		expect(parseTelegramStickerSetReference(providedLink)).toEqual({
+			setName: "example_sticker_set",
+			sourceUrl: providedLink,
+		});
+		expect(
+			parseTelegramStickerSetReference("tg://addstickers?set=example_sticker_set").setName,
+		).toBe("example_sticker_set");
+		expect(parseTelegramStickerSetReference("example_sticker_set").setName).toBe(
+			"example_sticker_set",
+		);
+		expect(() => parseTelegramStickerSetReference("https://example.com/addstickers/nope")).toThrow(
+			"Only t.me",
+		);
+		expect(() => parseTelegramStickerSetReference("https://t.me/addstickers/../etc")).toThrow(
+			"Invalid Telegram",
+		);
+	});
+
+	test("talks to the Bot API through grammY with a custom base URL and fetch", async () => {
+		const requests: string[] = [];
+		const fakeFetch = (async (input: string | URL | Request) => {
+			const url = String(input);
+			requests.push(url);
+			if (url.includes("/getStickerSet")) {
+				return Response.json({
+					ok: true,
+					result: {
+						name: "example_sticker_set",
+						sticker_type: "regular",
+						stickers: [
+							{
+								emoji: "😭",
+								file_id: "file-1",
+								file_unique_id: "unique-1",
+								height: 512,
+								is_animated: false,
+								is_video: false,
+								type: "regular",
+								width: 512,
+							},
+						],
+						title: "Serena",
+					},
+				});
+			}
+			if (url.includes("/getFile")) {
+				return Response.json({
+					ok: true,
+					result: {
+						file_id: "file-1",
+						file_path: "stickers/file_1.webp",
+						file_size: 4,
+						file_unique_id: "unique-1",
+					},
+				});
+			}
+			if (url.includes("/file/bot")) return new Response(bytes("webp"));
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+		const client = new TelegramStickerClient({
+			apiBaseUrl: "https://api.test",
+			fetch: fakeFetch,
+			token: "123:abc",
+		});
+		const set = await client.getStickerSet("example_sticker_set");
+		expect(set).toMatchObject({
+			name: "example_sticker_set",
+			stickerType: "regular",
+			title: "Serena",
+		});
+		expect(set.stickers[0]).toMatchObject({ emoji: "😭", fileId: "file-1" });
+		const file = await client.downloadFile("file-1");
+		expect(new TextDecoder().decode(file.bytes)).toBe("webp");
+		expect(file.filePath).toBe("stickers/file_1.webp");
+		expect(requests.some((url) => url.includes("/bot123:abc/getStickerSet"))).toBe(true);
+		expect(requests.some((url) => url.includes("/file/bot123:abc/stickers/file_1.webp"))).toBe(
+			true,
+		);
+	});
+
+	test("dry-runs without downloading or writing and reports skipped formats", async () => {
+		const setup = telegramFixture();
+		const report = await setup.service.importReference(providedLink, { dryRun: true });
+		expect(report).toMatchObject({
+			deduped: 0,
+			dryRun: true,
+			items: 4,
+			missingMedia: 0,
+			packs: 1,
+			setName: "example_sticker_set",
+			skipped: 1,
+		});
+		expect(report.warnings.length).toBeGreaterThan(0);
+		expect(setup.client.downloads).toBe(0);
+		expect(setup.media.storeCalls).toBe(0);
+		expect(await setup.repository.listPacks()).toHaveLength(0);
+	});
+
+	test("imports static stickers plus animated/video GIFs, dedupes media, and is idempotent", async () => {
+		const setup = telegramFixture();
+		const first = await setup.service.importReference(providedLink);
+		expect(first).toMatchObject({
+			deduped: 1,
+			dryRun: false,
+			items: 4,
+			missingMedia: 0,
+			packs: 1,
+			skipped: 1,
+		});
+		expect(setup.media.storeCalls).toBe(3);
+		const [pack] = await setup.repository.listPacks();
+		expect(pack).toMatchObject({
+			name: "Example Sticker Pack",
+			source: "imported",
+			tags: ["telegram", "regular"],
+		});
+		expect(pack?.metadata).toMatchObject({
+			provider: "telegram",
+			telegram: {
+				name: "example_sticker_set",
+				sourceUrl: providedLink,
+			},
+		});
+		const items = await setup.repository.listItems(pack?.id);
+		expect(items).toHaveLength(4);
+		expect(items.every((item) => item.reviewStatus === "approved")).toBe(true);
+		const sad = items.find((item) => item.semantic.emotions.includes("sad"));
+		expect(sad?.semantic.labels).toEqual(expect.arrayContaining(["sad", "cry"]));
+		expect(sad?.emotions).toEqual(expect.arrayContaining(["sad", "cry"]));
+		expect(sad?.keywords).toEqual(expect.arrayContaining(["telegram"]));
+		const happy = items.find((item) => item.name.endsWith("-03"));
+		expect(happy?.mimeType).toBe("image/gif");
+		expect(happy?.keywords).toEqual(expect.arrayContaining(["animated-gif"]));
+		expect(happy?.description).toContain("Animated GIF");
+
+		const second = await setup.service.importReference(providedLink);
+		expect(second).toMatchObject({ deduped: 4, items: 4, missingMedia: 0 });
+		expect(await setup.repository.listItems(pack?.id)).toHaveLength(4);
+		expect(setup.media.storeCalls).toBe(3);
+	});
+
+	test("supports thumbnail-only and raw webm import modes", async () => {
+		const thumbnailSetup = telegramFixture();
+		const thumbnailReport = await thumbnailSetup.service.importReference(providedLink, {
+			animatedFormat: "thumbnail",
+			videoFormat: "thumbnail",
+		});
+		expect(thumbnailReport).toMatchObject({ items: 4, missingMedia: 0 });
+		const thumbnailItems = await thumbnailSetup.repository.listItems();
+		const thumbnailHappy = thumbnailItems.find((item) => item.name.endsWith("-03"));
+		expect(thumbnailHappy).toMatchObject({ mimeType: "image/webp", enabled: true });
+		expect(thumbnailHappy?.keywords).toEqual(expect.arrayContaining(["animated-thumbnail"]));
+
+		const webmSetup = telegramFixture();
+		await webmSetup.service.importReference(providedLink, { videoFormat: "webm" });
+		const webmItems = await webmSetup.repository.listItems();
+		const video = webmItems.find((item) => item.name.endsWith("-05"));
+		expect(video).toMatchObject({ mimeType: "video/webm", enabled: true });
+		expect(video?.keywords).toEqual(expect.arrayContaining(["video-webm"]));
+	});
+
+	test("reports staged import progress and tracks host job snapshots", async () => {
+		const setup = telegramFixture();
+		const events: TelegramImportProgress[] = [];
+		const statuses: Array<{ code: string; progress?: { current: number; total?: number } }> = [];
+		let settled = 0;
+		const tracker = new StickerProgressTracker({
+			context: {
+				ui: {
+					setStatus: (status: { code: string; progress?: { current: number; total?: number } }) => {
+						statuses.push(status);
+					},
+				},
+			} as never,
+			onSettled: async () => {
+				settled += 1;
+			},
+		});
+
+		const jobId = tracker.start({ dryRun: false, kind: "telegram.import", stage: "fetching" });
+		expect(tracker.current()).toMatchObject({
+			current: 0,
+			kind: "telegram.import",
+			stage: "fetching",
+			status: "running",
+			total: null,
+		});
+		expect(statuses[0]?.progress?.total).toBeUndefined();
+
+		const report = await setup.service.importReference(providedLink, {
+			onProgress: (progress) => {
+				events.push(progress);
+				tracker.update(jobId, progress);
+			},
+		});
+		await tracker.complete(jobId, {
+			classified: report.classified,
+			current: report.items,
+			packTitle: report.title,
+			skipped: report.skipped,
+			total: report.items,
+		});
+
+		expect(events[0]?.stage).toBe("fetching");
+		expect(events.some((event) => event.stage === "downloading" && event.total === 4)).toBe(true);
+		expect(events.some((event) => event.stage === "converting")).toBe(true);
+		expect(events.some((event) => event.stage === "classifying")).toBe(true);
+		expect(events.some((event) => event.stage === "saving")).toBe(true);
+		expect(events.at(-1)).toMatchObject({
+			classified: 4,
+			current: 4,
+			packTitle: "Example Sticker Pack",
+			skipped: 1,
+			total: 4,
+		});
+		expect(tracker.current()).toMatchObject({
+			classified: 4,
+			current: 4,
+			skipped: 1,
+			stage: "done",
+			status: "completed",
+			total: 4,
+		});
+		expect(settled).toBe(1);
+
+		const failedJobId = tracker.start({ kind: "telegram.import", stage: "fetching" });
+		await tracker.fail(
+			failedJobId,
+			new Error("request failed https://api.telegram.org/bot123456:SECRET_TOKEN/getFile"),
+		);
+		expect(tracker.current()).toMatchObject({
+			stage: "error",
+			status: "failed",
+		});
+		expect(tracker.current()?.error).toContain("/bot[REDACTED]/getFile");
+		expect(tracker.current()?.error).not.toContain("SECRET_TOKEN");
+		expect(settled).toBe(2);
+	});
+});
+
+describe("animated sticker conversion", () => {
+	const lottie = {
+		assets: [],
+		ddd: 0,
+		fr: 30,
+		h: 100,
+		ip: 0,
+		layers: [
+			{
+				ao: 0,
+				bm: 0,
+				ddd: 0,
+				ind: 1,
+				ip: 0,
+				ks: {
+					a: { a: 0, k: [0, 0, 0] },
+					o: { a: 0, k: 100 },
+					p: {
+						a: 1,
+						k: [
+							{
+								i: { x: 0.667, y: 1 },
+								o: { x: 0.333, y: 0 },
+								s: [20, 50, 0],
+								t: 0,
+								ti: [-13.333, 0, 0],
+								to: [13.333, 0, 0],
+							},
+							{ s: [80, 50, 0], t: 30 },
+						],
+					},
+					r: { a: 0, k: 0 },
+					s: { a: 0, k: [100, 100, 100] },
+				},
+				nm: "Shape Layer 1",
+				op: 30,
+				shapes: [
+					{
+						d: 1,
+						nm: "Rectangle Path 1",
+						p: { a: 0, k: [0, 0] },
+						r: { a: 0, k: 0 },
+						s: { a: 0, k: [20, 20] },
+						ty: "rc",
+					},
+					{
+						c: { a: 0, k: [1, 0, 0, 1] },
+						nm: "Fill 1",
+						o: { a: 0, k: 100 },
+						r: 1,
+						ty: "fl",
+					},
+				],
+				sr: 1,
+				st: 0,
+				ty: 4,
+			},
+		],
+		nm: "conversion-test",
+		op: 30,
+		v: "5.7.4",
+		w: 100,
+	};
+
+	test("renders a gzipped Lottie TGS to an animated GIF", async () => {
+		const tgs = new Uint8Array(gzipSync(Buffer.from(JSON.stringify(lottie))));
+		const gif = await tgsToGif(tgs, { fps: 5, maxFrames: 3, width: 32 });
+		expect(new TextDecoder().decode(gif.slice(0, 6))).toBe("GIF89a");
+		expect(gif.byteLength).toBeGreaterThan(100);
+	});
+
+	const ffmpeg = Bun.which("ffmpeg");
+	test.skipIf(ffmpeg === undefined)(
+		"converts a webm video sticker to GIF with ffmpeg",
+		async () => {
+			const directory = await mkdtemp(join(tmpdir(), "tsukaima-webm-test-"));
+			directories.push(directory);
+			const input = join(directory, "input.webm");
+			const result = await Bun.spawn([
+				ffmpeg as string,
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-f",
+				"lavfi",
+				"-i",
+				"color=c=red:s=32x32:r=5",
+				"-t",
+				"0.4",
+				"-c:v",
+				"libvpx-vp9",
+				"-pix_fmt",
+				"yuva420p",
+				input,
+			]).exited;
+			expect(result).toBe(0);
+			const gif = await webmToGif(new Uint8Array(await Bun.file(input).arrayBuffer()), {
+				fps: 5,
+				maxFrames: 2,
+				width: 32,
+			});
+			expect(gif).toBeDefined();
+			expect(new TextDecoder().decode(gif?.slice(0, 6))).toBe("GIF89a");
+		},
+	);
+});
+
+describe("sticker semantic classification", () => {
+	test("maps telegram emoji and multilingual titles to a closed semantic taxonomy", () => {
+		expect(extractEmojis("😭 happy 🎉")).toEqual(["😭", "🎉"]);
+		const crying = classifyStickerSemantics({
+			emoji: "😭",
+			title: "Example Sticker Pack",
+		});
+		expect(crying.source).toBe("heuristic");
+		expect(crying.emotions).toEqual(expect.arrayContaining(["cry", "sad"]));
+		expect(crying.keywords).toEqual(expect.arrayContaining(["cry", "sad"]));
+		const praise = classifyStickerSemantics({ emoji: "👍", title: "Anime stickers" });
+		expect(praise.labels).toEqual(expect.arrayContaining(["praise", "agree"]));
+		const cjk = classifyStickerSemantics({ title: "おやすみ 眠い" });
+		expect(cjk.labels).toEqual(expect.arrayContaining(["sleepy"]));
+	});
+
+	test("merges a vision response while rejecting labels outside the taxonomy", async () => {
+		const classifier = new VisionSemanticClassifier({
+			apiKey: "test-key",
+			complete: async () =>
+				JSON.stringify({
+					confidence: 0.9,
+					description: "A sad character cries at the viewer.",
+					emotions: ["sad", "not-a-real-label"],
+					keywords: ["crying", "tears"],
+					labels: ["sad", "cry", "made-up"],
+				}),
+			model: "vision-test",
+		});
+		const profile = await classifier.classify({
+			bytes: bytes("image-bytes"),
+			emoji: "😭",
+			mimeType: "image/webp",
+			title: "Serena",
+		});
+		expect(profile.source).toBe("merged");
+		expect(profile.labels).toEqual(expect.arrayContaining(["sad", "cry"]));
+		expect(profile.labels).not.toContain("made-up");
+		expect(profile.emotions).not.toContain("not-a-real-label");
+		expect(profile.description).toBe("A sad character cries at the viewer.");
+		expect(profile.model).toBe("vision-test");
+	});
+
+	test("falls back to heuristic when vision is not configured", async () => {
+		const classifier = createSemanticClassifier({ semanticMode: "auto" });
+		expect(classifier.name).toBe("heuristic");
+		expect(() => createSemanticClassifier({ semanticMode: "vision" })).toThrow(
+			"requires semanticApiKey",
+		);
+	});
+
+	test("resolves a specific host provider model, auto-picks vision models, and honors heuristic mode", async () => {
+		const registry = new LocalModelRegistry();
+		const calls: Array<{
+			modelId: string | undefined;
+			providerId: string | undefined;
+			hasImage: boolean;
+		}> = [];
+		registry.registerProvider({
+			id: "provider-text",
+			createPort: () => {
+				throw new Error("port not used");
+			},
+			listModels: () => [
+				{
+					capabilities: ["basic-chat"],
+					id: "chat-only",
+					input: ["text"],
+				},
+			],
+			complete: async (request) => {
+				const last = request.messages.at(-1);
+				const hasImage =
+					last !== undefined &&
+					typeof last.content !== "string" &&
+					last.content.some((part) => part.type === "image");
+				calls.push({ hasImage, modelId: request.modelId, providerId: request.providerId });
+				return {
+					modelId: request.modelId ?? "chat-only",
+					providerId: request.providerId ?? "provider-text",
+					text: JSON.stringify({
+						confidence: 0.85,
+						description: "Text provider response",
+						emotions: ["calm"],
+						keywords: ["calm"],
+						labels: ["calm"],
+					}),
+				};
+			},
+		});
+		registry.registerProvider({
+			id: "provider-vision",
+			createPort: () => {
+				throw new Error("port not used");
+			},
+			listModels: () => [
+				{
+					capabilities: ["basic-chat", "vision"],
+					id: "vision-a",
+					input: ["text", "image"],
+				},
+				{
+					capabilities: ["basic-chat", "vision"],
+					id: "vision-b",
+					input: ["text", "image"],
+				},
+			],
+			complete: async (request) => {
+				const last = request.messages.at(-1);
+				const hasImage =
+					last !== undefined &&
+					typeof last.content !== "string" &&
+					last.content.some((part) => part.type === "image");
+				calls.push({ hasImage, modelId: request.modelId, providerId: request.providerId });
+				return {
+					modelId: request.modelId ?? "vision-a",
+					providerId: request.providerId ?? "provider-vision",
+					text: JSON.stringify({
+						confidence: 0.92,
+						description: `Classified by ${request.modelId}`,
+						emotions: ["happy"],
+						keywords: ["smile", "cheerful"],
+						labels: ["happy", "cute"],
+					}),
+				};
+			},
+		});
+
+		const selected = await resolveSemanticClassifier(
+			{
+				semanticMode: "vision",
+				semanticModel: "vision-b",
+				semanticProviderId: "provider-vision",
+			},
+			{ models: registry },
+		);
+		expect(selected.name).toBe("vision:provider-vision/vision-b");
+		const profile = await selected.classify({
+			bytes: bytes("png-bytes"),
+			emoji: "😊",
+			mimeType: "image/png",
+			title: "Happy Pack",
+		});
+		expect(profile.source).toBe("merged");
+		expect(profile.model).toBe("vision-b");
+		expect(profile.labels).toEqual(expect.arrayContaining(["happy", "cute"]));
+		expect(calls.at(-1)).toEqual({
+			hasImage: true,
+			modelId: "vision-b",
+			providerId: "provider-vision",
+		});
+
+		const overrideByModelOnly = await resolveSemanticClassifier(
+			{ semanticProviderId: "" },
+			{ modelId: "vision-a", models: registry, providerId: "" },
+		);
+		expect(overrideByModelOnly.name).toBe("vision:provider-vision/vision-a");
+
+		const autoSelected = await resolveSemanticClassifier(
+			{ semanticMode: "auto" },
+			{ models: registry },
+		);
+		expect(autoSelected.name).toBe("vision:provider-vision/vision-a");
+
+		const forcedHeuristic = await resolveSemanticClassifier(
+			{
+				semanticModel: "vision-b",
+				semanticProviderId: "provider-vision",
+			},
+			{ mode: "heuristic", models: registry },
+		);
+		expect(forcedHeuristic.name).toBe("heuristic");
+
+		await expect(
+			resolveSemanticClassifier(
+				{ semanticMode: "auto" },
+				{ models: registry, modelId: "missing-model", providerId: "provider-vision" },
+			),
+		).rejects.toThrow('Model "missing-model" is not enabled on provider "provider-vision"');
+
+		const textOnlyRegistry = new LocalModelRegistry();
+		textOnlyRegistry.registerProvider({
+			id: "text-only",
+			createPort: () => {
+				throw new Error("port not used");
+			},
+			listModels: () => [{ capabilities: ["basic-chat"], id: "plain", input: ["text"] }],
+		});
+		await expect(
+			resolveSemanticClassifier({ semanticMode: "vision" }, { models: textOnlyRegistry }),
+		).rejects.toThrow("Semantic vision mode requires a configured vision model");
 	});
 });

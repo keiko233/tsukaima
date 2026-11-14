@@ -10,11 +10,13 @@ import {
 	type ImportFile,
 } from "./archive.ts";
 import {
+	EMPTY_SEMANTIC_PROFILE,
 	fileExtension,
 	inferMimeType,
 	normalizeLabels,
 	normalizeText,
 	parseJson,
+	parseSemanticProfile,
 	recordValue,
 	safeRelativePath,
 	sha256Bytes,
@@ -22,8 +24,10 @@ import {
 	textList,
 	type StickerPackSource,
 	type StickerReviewStatus,
+	type StickerSemanticProfile,
 } from "./domain.ts";
 import { StickerRepository } from "./repository.ts";
+import type { StickerSemanticClassifier } from "./semantic.ts";
 
 export interface StickerImportReport {
 	readonly deduped: number;
@@ -52,8 +56,10 @@ export interface StickerExportResult {
 				readonly mimeType: string;
 				readonly name: string;
 				readonly score: number;
+				readonly semantic?: StickerSemanticProfile;
 				readonly width?: number;
 			}[];
+			readonly metadata?: Record<string, unknown>;
 			readonly name: string;
 			readonly personaIds: readonly string[];
 			readonly source: StickerPackSource;
@@ -78,6 +84,7 @@ interface ManifestItem {
 	readonly enabled: boolean;
 	readonly reviewStatus?: StickerReviewStatus;
 	readonly score: number;
+	readonly semantic?: StickerSemanticProfile;
 }
 
 interface ManifestPack {
@@ -86,6 +93,7 @@ interface ManifestPack {
 	readonly source: StickerPackSource;
 	readonly tags: readonly string[];
 	readonly personaIds: readonly string[];
+	readonly metadata?: Record<string, unknown>;
 	readonly items: readonly ManifestItem[];
 }
 
@@ -138,6 +146,8 @@ function itemFromRecord(
 	const height = asNumber(record.height);
 	const width = asNumber(record.width);
 	const reviewStatus = asReviewStatus(record.reviewStatus ?? record.review_status);
+	const semantic =
+		record.semantic === undefined ? undefined : parseSemanticProfile(record.semantic);
 	return {
 		description: normalizeText(record.description ?? record.caption),
 		emotions: emotionResult.values,
@@ -154,6 +164,7 @@ function itemFromRecord(
 		name,
 		...(reviewStatus === undefined ? {} : { reviewStatus }),
 		score: Math.max(0, asNumber(record.score) ?? 1),
+		...(semantic === undefined ? {} : { semantic }),
 		...(width === undefined ? {} : { width }),
 	};
 }
@@ -187,6 +198,7 @@ function packFromRecord(
 	return {
 		...(normalizeText(record.id).length === 0 ? {} : { id: normalizeText(record.id) }),
 		items,
+		metadata: recordValue(record.metadata),
 		name,
 		personaIds: personas.values,
 		source: asSource(record.source) ?? "imported",
@@ -229,6 +241,16 @@ function fallbackItemId(packId: string, item: ManifestItem): string {
 	);
 }
 
+export interface StickerImportProgress {
+	readonly classified: number;
+	readonly current: number;
+	readonly currentItem?: string;
+	readonly packTitle?: string;
+	readonly skipped: number;
+	readonly stage: "downloading" | "classifying" | "saving";
+	readonly total: number;
+}
+
 export interface StickerImportServiceOptions {
 	readonly media: PluginMediaApi;
 	readonly repository: StickerRepository;
@@ -245,15 +267,19 @@ export class StickerImportService {
 	}
 
 	async importBundle(input: {
+		readonly classifier?: StickerSemanticClassifier;
 		readonly files: readonly ImportFile[];
 		readonly manifest: unknown;
 		readonly dryRun?: boolean;
 		readonly fallbackName?: string;
+		readonly onProgress?: (progress: StickerImportProgress) => void;
 		readonly source?: PluginMediaSource;
 	}): Promise<StickerImportReport> {
 		const parsed = parsePackManifest(input.manifest, input.fallbackName ?? "Imported pack");
 		return await this.importPacks(parsed.packs, input.files, {
+			...(input.classifier === undefined ? {} : { classifier: input.classifier }),
 			dryRun: input.dryRun === true,
+			...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
 			source: input.source ?? "webui",
 			warnings: parsed.warnings,
 		});
@@ -261,7 +287,9 @@ export class StickerImportService {
 
 	async importZip(input: {
 		readonly bytes: Uint8Array;
+		readonly classifier?: StickerSemanticClassifier;
 		readonly dryRun?: boolean;
+		readonly onProgress?: (progress: StickerImportProgress) => void;
 		readonly source?: PluginMediaSource;
 	}): Promise<StickerImportReport> {
 		const files = readZipEntries(input.bytes);
@@ -280,16 +308,20 @@ export class StickerImportService {
 						path: file.path.startsWith(prefix) ? file.path.slice(prefix.length) : file.path,
 					}));
 		return await this.importBundle({
+			...(input.classifier === undefined ? {} : { classifier: input.classifier }),
 			dryRun: input.dryRun === true,
 			files: relativeFiles,
 			manifest,
+			...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
 			source: input.source ?? "webui",
 		});
 	}
 
 	async importDirectory(input: {
+		readonly classifier?: StickerSemanticClassifier;
 		readonly directory: string;
 		readonly dryRun?: boolean;
+		readonly onProgress?: (progress: StickerImportProgress) => void;
 		readonly source?: PluginMediaSource;
 	}): Promise<StickerImportReport> {
 		const files = await readDirectoryFiles(input.directory);
@@ -298,9 +330,11 @@ export class StickerImportService {
 		const manifest = parseJson<unknown>(new TextDecoder().decode(manifestFile.bytes), undefined);
 		if (manifest === undefined) throw new Error("Directory manifest.json is invalid");
 		return await this.importBundle({
+			...(input.classifier === undefined ? {} : { classifier: input.classifier }),
 			dryRun: input.dryRun === true,
 			files,
 			manifest,
+			...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
 			source: input.source ?? "webui",
 		});
 	}
@@ -310,20 +344,24 @@ export class StickerImportService {
 	 * a `memes` table). Plain image fixtures without SQLite are accepted as well.
 	 */
 	async importDshDirectory(input: {
+		readonly classifier?: StickerSemanticClassifier;
 		readonly directory: string;
 		readonly dryRun?: boolean;
+		readonly onProgress?: (progress: StickerImportProgress) => void;
 	}): Promise<StickerImportReport> {
 		const allFiles = await readDirectoryFiles(input.directory);
 		const manifests = allFiles.filter((file) => /(?:^|\/)manifest\.json$/u.test(file.path));
 		const reports: StickerImportReport[] = [];
 		if (manifests.length === 0) {
 			const fallback = await this.importBundle({
+				...(input.classifier === undefined ? {} : { classifier: input.classifier }),
 				dryRun: input.dryRun === true,
 				files: allFiles,
 				manifest: {
 					items: allFiles.filter((file) => /\.(?:gif|jpe?g|png|webp)$/iu.test(file.path)),
 					name: "DSH meme pack",
 				},
+				...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
 				source: "migration",
 			});
 			return fallback;
@@ -342,10 +380,12 @@ export class StickerImportService {
 			const fallbackName =
 				normalizeText(manifest.name) || prefix.split("/").filter(Boolean).at(-1) || "DSH meme pack";
 			const report = await this.importBundle({
+				...(input.classifier === undefined ? {} : { classifier: input.classifier }),
 				dryRun: input.dryRun === true,
 				fallbackName,
 				files,
 				manifest: { ...manifest, items },
+				...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
 				source: "migration",
 			});
 			reports.push(report);
@@ -391,12 +431,16 @@ export class StickerImportService {
 					mimeType: item.mimeType,
 					name: item.name,
 					score: item.score,
+					...(item.semantic.source === "none" && item.semantic.labels.length === 0
+						? {}
+						: { semantic: { ...item.semantic } }),
 					...(item.width === null ? {} : { width: item.width }),
 				});
 			}
 			exportedPacks.push({
 				id: pack.id,
 				items: exportedItems,
+				...(Object.keys(pack.metadata).length === 0 ? {} : { metadata: { ...pack.metadata } }),
 				name: pack.name,
 				personaIds: [...pack.personaIds],
 				source: pack.source,
@@ -414,14 +458,18 @@ export class StickerImportService {
 		packs: readonly ManifestPack[],
 		files: readonly ImportFile[],
 		options: {
+			readonly classifier?: StickerSemanticClassifier;
 			readonly dryRun: boolean;
+			readonly onProgress?: (progress: StickerImportProgress) => void;
 			readonly source: PluginMediaSource;
 			readonly warnings: readonly string[];
 		},
 	): Promise<StickerImportReport> {
 		const warnings = [...options.warnings];
 		const packIds: string[] = [];
+		const totalItems = packs.reduce((sum, pack) => sum + pack.items.length, 0);
 		let items = 0;
+		let classified = 0;
 		let deduped = 0;
 		let missingMedia = 0;
 		for (const manifestPack of packs) {
@@ -433,6 +481,7 @@ export class StickerImportService {
 					}
 				: await this.#repository.savePack({
 						...(manifestPack.id === undefined ? {} : { id: manifestPack.id }),
+						...(manifestPack.metadata === undefined ? {} : { metadata: manifestPack.metadata }),
 						name: manifestPack.name,
 						personaIds: manifestPack.personaIds,
 						source: manifestPack.source,
@@ -440,6 +489,18 @@ export class StickerImportService {
 					});
 			packIds.push(pack.id);
 			for (const manifestItem of manifestPack.items) {
+				const emit = (stage: StickerImportProgress["stage"], currentCount: number) => {
+					options.onProgress?.({
+						classified,
+						current: currentCount,
+						currentItem: manifestItem.name,
+						packTitle: manifestPack.name,
+						skipped: missingMedia,
+						stage,
+						total: totalItems,
+					});
+				};
+				emit("downloading", items);
 				items += 1;
 				const file = findFile(files, manifestItem.file);
 				if (file === undefined) {
@@ -458,14 +519,34 @@ export class StickerImportService {
 							packId: pack.id,
 							reviewStatus: manifestItem.reviewStatus ?? defaultReviewStatus(manifestPack.source),
 							score: manifestItem.score,
+							...(manifestItem.semantic === undefined ? {} : { semantic: manifestItem.semantic }),
 						});
 					}
+					emit("saving", items);
 					continue;
 				}
 				const hash = sha256Bytes(file.bytes);
 				const existing = await this.#media.findBySha(hash);
 				if (existing !== undefined) deduped += 1;
-				if (options.dryRun) continue;
+				if (options.dryRun) {
+					emit("saving", items);
+					continue;
+				}
+				let semantic = manifestItem.semantic;
+				if (semantic === undefined && options.classifier !== undefined) {
+					emit("classifying", items - 1);
+					try {
+						semantic = await options.classifier.classify({
+							bytes: file.bytes,
+							mimeType: manifestItem.mimeType,
+							title: manifestPack.name,
+						});
+						if (semantic.source !== "none") classified += 1;
+					} catch {
+						warnings.push(`semantic classification failed for ${manifestItem.name}`);
+					}
+				}
+				const profile = semantic ?? EMPTY_SEMANTIC_PROFILE;
 				const stored =
 					existing ??
 					(await this.#media.store({
@@ -476,22 +557,26 @@ export class StickerImportService {
 						source: options.source,
 						...(manifestItem.width === undefined ? {} : { width: manifestItem.width }),
 					}));
+				emit("saving", items - 1);
 				await this.#repository.upsertItem({
-					description: manifestItem.description,
-					emotions: manifestItem.emotions,
+					description:
+						manifestItem.description.length > 0 ? manifestItem.description : profile.description,
+					emotions: normalizeLabels([...manifestItem.emotions, ...profile.emotions]).values,
 					enabled: manifestItem.enabled,
 					hash,
 					height: manifestItem.height ?? stored.height,
 					...(manifestItem.id === undefined ? {} : { id: manifestItem.id }),
-					keywords: manifestItem.keywords,
+					keywords: normalizeLabels([...manifestItem.keywords, ...profile.keywords]).values,
 					mediaId: stored.id,
 					mimeType: manifestItem.mimeType || stored.mimeType,
 					name: manifestItem.name,
 					packId: pack.id,
 					reviewStatus: manifestItem.reviewStatus ?? defaultReviewStatus(manifestPack.source),
 					score: manifestItem.score,
+					semantic: profile,
 					width: manifestItem.width ?? stored.width,
 				});
+				emit("saving", items);
 			}
 		}
 		return {

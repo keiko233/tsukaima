@@ -48,7 +48,7 @@ export function registerStickerTools(
 ): void {
 	context.tools.register({
 		description:
-			"Search approved, enabled sticker candidates by text, emotion, persona, pack, or tags.",
+			"Search approved, enabled stickers by semantic text, emotion, persona, pack, or tags.",
 		async execute(input) {
 			const candidates = await selection.search(searchInput(input));
 			return text(
