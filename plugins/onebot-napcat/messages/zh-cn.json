@@ -84,5 +84,5 @@
 	"config_reconnect_jitter": "抖动比例",
 	"config_reconnect_jitter_hint": "每次延迟叠加的随机幅度，取值 0 到 1；默认 0.1。",
 	"config_action_timeout": "动作超时（毫秒）",
-	"config_action_timeout_hint": "单次 NapCat API 调用允许的最长耗时；默认 5000。"
+	"config_action_timeout_hint": "单次 NapCat API 调用允许的最长耗时；默认 5000，携带媒体时默认 30000。"
 }

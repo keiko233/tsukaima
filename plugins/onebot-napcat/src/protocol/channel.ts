@@ -60,6 +60,8 @@ type NormalizeHookOptions = {
 };
 
 const DEFAULT_ACTION_TIMEOUT_MS = 5_000;
+/** Uploading sticker/media bytes can take much longer than a plain text send. */
+const DEFAULT_MEDIA_ACTION_TIMEOUT_MS = 30_000;
 const DEFAULT_REVERSE_HOST = "127.0.0.1";
 const DEFAULT_REVERSE_PORT = 3002;
 const READ_RETRY_ATTEMPTS = 2;
@@ -86,6 +88,20 @@ export interface OneBotSegmentOptions {
 
 const nativeStickerEnabled = (options?: OneBotSegmentOptions): boolean =>
 	options?.nativeSticker !== false;
+
+const hasRenderableMedia = (parts: readonly MessagePart[]): boolean =>
+	parts.some((part) => part.type !== "text" && part.type !== "channel-native");
+
+/**
+ * Outbound sends carrying media get a longer default timeout because NapCat uploads the bytes
+ * before answering. An explicit `actionTimeoutMs` always wins.
+ */
+export const outboundActionTimeoutMs = (
+	config: OneBotConfig,
+	parts: readonly MessagePart[],
+): number =>
+	config.actionTimeoutMs ??
+	(hasRenderableMedia(parts) ? DEFAULT_MEDIA_ACTION_TIMEOUT_MS : DEFAULT_ACTION_TIMEOUT_MS);
 
 /**
  * Serialize a core message part into OneBot v11 segments. `channel-native` parts degrade to
@@ -355,7 +371,11 @@ export class OneBotChannel {
 		const segments = this.outboundSegments(parts, options);
 		const resolved = segments instanceof Promise ? await segments : segments;
 		this.logOutbound("send_group_msg", groupId, resolved);
-		return this.action("send_group_msg", { group_id: groupId, message: resolved });
+		return this.action(
+			"send_group_msg",
+			{ group_id: groupId, message: resolved },
+			outboundActionTimeoutMs(this.config, parts),
+		);
 	}
 
 	async sendPrivate(
@@ -366,7 +386,11 @@ export class OneBotChannel {
 		const segments = this.outboundSegments(parts, options);
 		const resolved = segments instanceof Promise ? await segments : segments;
 		this.logOutbound("send_private_msg", userId, resolved);
-		return this.action("send_private_msg", { message: resolved, user_id: userId });
+		return this.action(
+			"send_private_msg",
+			{ message: resolved, user_id: userId },
+			outboundActionTimeoutMs(this.config, parts),
+		);
 	}
 
 	async sendForward(target: OutboundTarget, parts: readonly MessagePart[]): Promise<unknown> {
@@ -380,14 +404,22 @@ export class OneBotChannel {
 			node.data.content,
 		);
 		return target.kind === "group"
-			? this.action("send_group_forward_msg", {
-					group_id: target.platformConversationId,
-					messages: [node],
-				})
-			: this.action("send_private_forward_msg", {
-					messages: [node],
-					user_id: target.platformConversationId,
-				});
+			? this.action(
+					"send_group_forward_msg",
+					{
+						group_id: target.platformConversationId,
+						messages: [node],
+					},
+					outboundActionTimeoutMs(this.config, parts),
+				)
+			: this.action(
+					"send_private_forward_msg",
+					{
+						messages: [node],
+						user_id: target.platformConversationId,
+					},
+					outboundActionTimeoutMs(this.config, parts),
+				);
 	}
 
 	async lookupMessage(platformMessageId: string): Promise<ChannelHistoryItem | undefined> {
@@ -929,7 +961,11 @@ export class OneBotChannel {
 		return true;
 	}
 
-	private action(action: string, params: Record<string, unknown>): Promise<unknown> {
+	private action(
+		action: string,
+		params: Record<string, unknown>,
+		timeoutOverrideMs?: number,
+	): Promise<unknown> {
 		const transport = this.transport;
 		if (transport === undefined || this.stopped) {
 			this.logger.debug("OneBot action rejected", {
@@ -940,7 +976,8 @@ export class OneBotChannel {
 		}
 		const echo = `echo-${this.nextEchoId++}`;
 		return new Promise((resolve, reject) => {
-			const timeoutMs = this.config.actionTimeoutMs ?? DEFAULT_ACTION_TIMEOUT_MS;
+			const timeoutMs =
+				timeoutOverrideMs ?? this.config.actionTimeoutMs ?? DEFAULT_ACTION_TIMEOUT_MS;
 			const timer = setTimeout(() => {
 				this.pending.delete(echo);
 				this.lastErrorClass = "action-timeout";

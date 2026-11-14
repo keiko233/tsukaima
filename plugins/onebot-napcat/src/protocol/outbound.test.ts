@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { MessagePart } from "@elaina/contracts";
 import type { OutboundTarget } from "@elaina/sdk";
-import { OneBotChannel, toSegments } from "./channel.ts";
+import { OneBotChannel, outboundActionTimeoutMs, toSegments } from "./channel.ts";
 import type { OneBotConfig, OneBotTransport, OneBotTransportFactory } from "./types.ts";
 
 const config: OneBotConfig = {
@@ -112,6 +112,22 @@ describe("OneBot outbound serialization", () => {
 		expect(
 			toSegments([{ channelRef: "sticker-file", type: "sticker" }], { nativeSticker: false }),
 		).toEqual([{ data: { file: "sticker-file" }, type: "image" }]);
+	});
+
+	test("gives media sends a longer default action timeout", () => {
+		const defaultTimeoutConfig = { ...config };
+		delete defaultTimeoutConfig.actionTimeoutMs;
+		expect(outboundActionTimeoutMs(defaultTimeoutConfig, [{ text: "hello", type: "text" }])).toBe(
+			5_000,
+		);
+		expect(
+			outboundActionTimeoutMs(defaultTimeoutConfig, [
+				{ channelRef: "sticker-file", type: "sticker" },
+			]),
+		).toBe(30_000);
+		expect(outboundActionTimeoutMs(config, [{ channelRef: "sticker-file", type: "sticker" }])).toBe(
+			500,
+		);
 	});
 
 	test("prepends reply references and sends mixed media", async () => {

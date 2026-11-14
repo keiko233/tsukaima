@@ -23,9 +23,10 @@ afterEach(async () => {
 
 type RecordedAction = { readonly action: string; readonly params: Record<string, unknown> };
 
-const createOneBotTransportSpy = () => {
+const createOneBotTransportSpy = (options: { failSendAttempts?: readonly number[] } = {}) => {
 	const actions: RecordedAction[] = [];
 	const connections: Array<{ emitOpen: () => void }> = [];
+	let sendAttempts = 0;
 	const createTransport: OneBotTransportFactory = (): OneBotTransport => {
 		const listeners = new Map<string, (value?: unknown) => void>();
 		connections.push({ emitOpen: () => listeners.get("open")?.() });
@@ -41,9 +42,16 @@ const createOneBotTransportSpy = () => {
 					params: Record<string, unknown>;
 				};
 				actions.push({ action: parsed.action, params: parsed.params });
+				const isSend = parsed.action === "send_private_msg";
+				if (isSend) sendAttempts += 1;
+				const failing = isSend && (options.failSendAttempts?.includes(sendAttempts) ?? false);
 				queueMicrotask(() => {
 					listeners.get("message")?.(
-						JSON.stringify({ data: { message_id: 9001 }, echo: parsed.echo, retcode: 0 }),
+						JSON.stringify(
+							failing
+								? { echo: parsed.echo, message: "synthetic send failure", retcode: 1200 }
+								: { data: { message_id: 9001 }, echo: parsed.echo, retcode: 0 },
+						),
 					);
 				});
 			},
@@ -191,6 +199,51 @@ describe("lurk suppression and humanlike output pacing", () => {
 				.limit(1);
 			expect(row?.deliveryStatus).toBe("sent");
 			expect(row?.contentText).toBe("Title\none\ntwo\nthree");
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("continues with remaining chunks when one send fails", async () => {
+		const onebot = createOneBotTransportSpy({ failSendAttempts: [1] });
+		const lifecycle = await createLifecycle(onebot);
+		try {
+			const { durableConversationId, sessionId } = await createExternalSession(lifecycle);
+			await lifecycle.conversationPolicy.update({
+				conversationId: sessionId,
+				policy: {
+					pacing: {
+						replyDelayEnabled: false,
+						sendIntervalMs: 0,
+						stripMarkdown: false,
+						typingEnabled: false,
+					},
+				},
+				scope: "conversation",
+			});
+			const outcome = await lifecycle.replyDispatcher.handleAnswer({
+				activityId: "activity-partial",
+				conversationId: durableConversationId,
+				entryId: "entry-partial",
+				text: "one\ntwo\nthree",
+			});
+			expect(outcome?.deliveryStatus).toBe("uncertain");
+			const sent = onebot.actions.filter((action) => action.action === "send_private_msg");
+			expect(
+				sent.map((action) => (action.params.message as { data: { text: string } }[])[0]?.data.text),
+			).toEqual(["one", "two", "three"]);
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("database missing");
+			const [row] = await database
+				.select()
+				.from(messages)
+				.where(eq(messages.durableEntryId, "entry-partial"))
+				.limit(1);
+			expect(row?.deliveryStatus).toBe("uncertain");
+			const audits = await database.select().from(auditLog);
+			expect(
+				audits.some((audit) => audit.action === "message.send-reply" && audit.result === "failed"),
+			).toBe(true);
 		} finally {
 			await lifecycle.stop();
 		}
