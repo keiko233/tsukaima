@@ -137,5 +137,15 @@
 	"progress_stage_done": "已完成",
 	"progress_stage_error": "失败",
 	"progress_item_status": "{stage} · {item}",
-	"progress_counts": "已分类 {classified} 个 · 跳过 {skipped} 个"
+	"progress_counts": "已分类 {classified} 个 · 跳过 {skipped} 个",
+	"import_concurrency": "导入并发数",
+	"semantic_concurrency": "语义并发数",
+	"telegram_background_semantic": "在独立后台任务中分类",
+	"packs_hint": "展开表情包即可浏览素材，点击素材进行编辑。",
+	"edit": "编辑",
+	"pack_edit_done": "完成",
+	"pack_items_empty": "这个表情包还没有素材。",
+	"sticker_edit_hint": "选择一个素材以编辑详情。",
+	"item_disabled_short": "已停用",
+	"close": "关闭"
 }
