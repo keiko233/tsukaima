@@ -669,8 +669,10 @@ export const codingDeployments = sqliteTable(
 );
 
 /**
- * Host-owned records for plugin SQL migrations. Plugin schemas themselves stay namespaced
- * (`plugin_<sanitized_id>_*`); these rows only track what the host applied.
+ * Legacy host-owned migration ledger from when plugin tables lived in `domain.sqlite`.
+ * Plugin migrations now record themselves in each plugin's own database; rows here are
+ * deleted as their tables are moved out. The table stays so existing deployments migrate
+ * without a destructive core migration.
  */
 export const pluginMigrations = sqliteTable(
 	"plugin_migrations",

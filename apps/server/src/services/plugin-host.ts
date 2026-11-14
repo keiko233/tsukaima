@@ -25,8 +25,13 @@ import {
 import {
 	PluginLifecycleManager,
 	PluginRegistry,
+	loadPluginMigrations,
+	migrateLegacyPluginTables,
+	wrapPluginSqlConnection,
 	type InstalledPlugin,
+	type PluginDatabaseProvider,
 	type PluginLifecycleUpgradeOptions,
+	type PluginMigration,
 	type PluginInstallState,
 } from "@tsukaima/plugin-registry";
 import type { PluginStatusSnapshot } from "@tsukaima/contracts";
@@ -40,7 +45,7 @@ import type { PluginStorageStore } from "./plugin-storage.ts";
 import type { PluginTaskService } from "./plugin-task-service.ts";
 import type { RequestService } from "./request-service.ts";
 import type { MigrationRegistry } from "@tsukaima/plugin-registry";
-import { createScopedPluginDatabase } from "./plugin-scoped-database.ts";
+import { createPluginDatabase } from "./plugin-scoped-database.ts";
 import { createPluginCacheBridge } from "./plugin-cache.ts";
 import { createPluginMediaBridge } from "./plugin-media.ts";
 import type { MediaService } from "./media-service.ts";
@@ -66,6 +71,7 @@ export interface PluginHostOptions {
 	readonly database?: () => TsukaimaDatabase | undefined;
 	readonly media?: MediaService;
 	readonly migrations?: MigrationRegistry;
+	readonly pluginDatabases?: PluginDatabaseProvider;
 	readonly storage?: PluginStorageStore;
 	readonly tasks?: PluginTaskService;
 }
@@ -155,6 +161,7 @@ export class PluginHost {
 	readonly #database: (() => TsukaimaDatabase | undefined) | undefined;
 	readonly #media: MediaService | undefined;
 	readonly #migrations: MigrationRegistry | undefined;
+	readonly #pluginDatabases: PluginDatabaseProvider | undefined;
 	readonly #storage: PluginStorageStore | undefined;
 	readonly #tasks: PluginTaskService | undefined;
 	readonly #lifecycle: PluginLifecycleManager;
@@ -176,6 +183,7 @@ export class PluginHost {
 		this.#database = options.database;
 		this.#media = options.media;
 		this.#migrations = options.migrations;
+		this.#pluginDatabases = options.pluginDatabases;
 		this.#storage = options.storage;
 		this.#tasks = options.tasks;
 		this.#lifecycle = new PluginLifecycleManager({
@@ -471,12 +479,13 @@ export class PluginHost {
 					runMode: "host",
 				});
 			}
-			const context = this.#createContext(manifest);
-			this.#contexts.set(manifest.name, context);
 			if (this.#registry.get(manifest.name)?.enabled === false) {
 				this.#logger.debug("skipping disabled plugin during prepare", { pluginId: manifest.name });
 				continue;
 			}
+			await this.#ensurePluginDatabase(plugin);
+			const context = this.#createContext(manifest);
+			this.#contexts.set(manifest.name, context);
 			const startedAt = performance.now();
 			try {
 				await plugin.prepare?.(context);
@@ -551,6 +560,10 @@ export class PluginHost {
 		const plugin = this.#plugins.get(pluginId);
 		if (plugin !== undefined && !this.#started.includes(pluginId)) {
 			if (this.#lifecycle.isQuarantined(pluginId)) return;
+			await this.#ensurePluginDatabase(plugin);
+			// A disabled plugin may have been prepared with a context that predates its database.
+			this.#contexts.delete(pluginId);
+			this.#prepared.delete(pluginId);
 			// `prepare` owns host surfaces such as model providers. Re-run it after a
 			// disable/enable cycle so those surfaces are registered again.
 			if (!this.#prepared.has(pluginId)) {
@@ -577,6 +590,8 @@ export class PluginHost {
 			readonly config?: Record<string, unknown>;
 			readonly enabled?: boolean;
 			readonly grantedPermissions?: readonly string[];
+			readonly migrations?: readonly PluginMigration[];
+			readonly rootDir?: string;
 			readonly runMode?: InstalledPlugin["runMode"];
 		} = {},
 	): Promise<PluginHostEntry> {
@@ -752,6 +767,24 @@ export class PluginHost {
 				},
 				target: pluginInstallStates.pluginId,
 			});
+	}
+
+	async #ensurePluginDatabase(plugin: TsukaimaPlugin): Promise<void> {
+		const manifest = plugin.manifest;
+		if (manifest.migrations === undefined || plugin.rootDir === undefined) return;
+		if (this.#migrations === undefined || this.#pluginDatabases === undefined) return;
+		const migrations = await loadPluginMigrations(plugin.rootDir, manifest.migrations);
+		await this.#migrations.run(manifest.name, migrations);
+		const target = await this.#pluginDatabases.open(manifest.name);
+		const domain = this.#database?.();
+		if (domain === undefined) return;
+		migrateLegacyPluginTables({
+			pluginId: manifest.name,
+			source: wrapPluginSqlConnection(
+				domain.$client as unknown as Parameters<typeof wrapPluginSqlConnection>[0],
+			),
+			target,
+		});
 	}
 
 	async #startPlugin(plugin: TsukaimaPlugin): Promise<void> {
@@ -949,7 +982,6 @@ export class PluginHost {
 			},
 		};
 		const runMode = this.#registry.get(pluginId)?.runMode ?? "host";
-		const database = this.#database?.();
 		const storage =
 			this.#storage?.bridge(pluginId, manifest.permissions) ?? new LocalStorageBridge();
 		const cache =
@@ -975,10 +1007,12 @@ export class PluginHost {
 								options?.dryRun === undefined ? {} : { dryRun: options.dryRun },
 							),
 					};
-		const scopedDatabase =
-			runMode === "host" && database !== undefined && manifest.migrations.length > 0
-				? createScopedPluginDatabase(database, pluginId)
+		const pluginDatabase =
+			runMode === "host" && manifest.migrations !== undefined
+				? this.#pluginDatabases?.get(pluginId)
 				: undefined;
+		const scopedDatabase =
+			pluginDatabase === undefined ? undefined : createPluginDatabase(pluginDatabase, pluginId);
 		const media =
 			this.#media !== undefined &&
 			(hasPermission(manifest.permissions, "media.read") ||

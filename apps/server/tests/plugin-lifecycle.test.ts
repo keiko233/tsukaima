@@ -15,6 +15,7 @@ afterEach(async () => {
 const baseManifest = {
 	apiVersion: "1",
 	kind: "third-party" as const,
+	migrations: { directory: "migrations" },
 	name: "runtime-plugin",
 	permissions: ["storage.global", "tasks.create", "tasks.get", "tasks.list"],
 	version: "1.0.0",
@@ -35,8 +36,7 @@ describe("plugin host lifecycle", () => {
 	test("installs a migrated plugin, exposes scoped storage/db/tasks, upgrades, and uninstalls", async () => {
 		const lifecycle = await createLifecycle();
 		try {
-			const installed = await lifecycle.pluginHost.install({
-				...baseManifest,
+			const installed = await lifecycle.pluginHost.install(baseManifest, {
 				migrations: [
 					{
 						rollbackSql: "DROP TABLE plugin_runtime_plugin_items;",
@@ -54,26 +54,33 @@ describe("plugin host lifecycle", () => {
 			expect(await context?.database?.query("SELECT id FROM plugin_runtime_plugin_items")).toEqual([
 				{ id: "one" },
 			]);
-			await expect(context?.database?.exec("CREATE TABLE messages_copy (id text)")).rejects.toThrow(
-				"must start with plugin_runtime_plugin_",
+			await context?.database?.exec("CREATE TABLE messages_copy (id text)");
+			const tables = await context?.database?.query<{ name: string }>(
+				"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'messages_copy'",
 			);
+			expect(tables?.map((table) => table.name)).toEqual(["messages_copy"]);
+			await expect(
+				context?.database?.exec("ATTACH DATABASE '/tmp/escape.sqlite' AS escape"),
+			).rejects.toThrow("may not attach or detach");
 
 			const task = await context?.tasks?.create({ kind: "runtime-test" });
 			if (task === undefined) throw new Error("task not created");
 			expect(task.pluginId).toBe("runtime-plugin");
 			expect((await context?.tasks?.list())?.map((item) => item.id)).toEqual([task.id]);
 
-			const upgraded = await lifecycle.pluginHost.upgrade("runtime-plugin", {
-				...baseManifest,
-				migrations: [
-					{
-						rollbackSql: "ALTER TABLE plugin_runtime_plugin_items DROP COLUMN note;",
-						sql: "ALTER TABLE plugin_runtime_plugin_items ADD COLUMN note text;",
-						version: "2.0.0",
-					},
-				],
-				version: "2.0.0",
-			});
+			const upgraded = await lifecycle.pluginHost.upgrade(
+				"runtime-plugin",
+				{ ...baseManifest, version: "2.0.0" },
+				{
+					migrations: [
+						{
+							rollbackSql: "ALTER TABLE plugin_runtime_plugin_items DROP COLUMN note;",
+							sql: "ALTER TABLE plugin_runtime_plugin_items ADD COLUMN note text;",
+							version: "2.0.0",
+						},
+					],
+				},
+			);
 			expect(upgraded.version).toBe("2.0.0");
 			expect(lifecycle.pluginHost.context("runtime-plugin")?.manifest.version).toBe("2.0.0");
 
@@ -90,7 +97,7 @@ describe("plugin host lifecycle", () => {
 	test("quarantines a plugin after repeated prepare failures and skips auto-start", async () => {
 		const lifecycle = await createLifecycle();
 		try {
-			await lifecycle.pluginHost.install(baseManifest);
+			await lifecycle.pluginHost.install(baseManifest, { migrations: [] });
 			await lifecycle.pluginHost.recordPluginFailure("runtime-plugin", "prepare failed");
 			await lifecycle.pluginHost.recordPluginFailure("runtime-plugin", "prepare failed");
 			await lifecycle.pluginHost.recordPluginFailure("runtime-plugin", "prepare failed");

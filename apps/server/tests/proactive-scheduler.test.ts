@@ -173,11 +173,10 @@ describe("proactive-scheduler host integration", () => {
 			expect(context?.database?.prefix).toBe("plugin_proactive_scheduler_");
 			expect(context?.tasks).toBeDefined();
 			expect(context?.conversations).toBeDefined();
-			const tables = (await lifecycle.domainDatabase?.$client
-				.query(
+			const tables =
+				(await context?.database?.query<{ name: string }>(
 					"SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'plugin_proactive_scheduler_%'",
-				)
-				.all()) as { name: string }[];
+				)) ?? [];
 			expect(tables.map((row) => row.name).toSorted()).toEqual([
 				"plugin_proactive_scheduler_decisions",
 				"plugin_proactive_scheduler_policies",
