@@ -62,6 +62,10 @@ function collectStream(stream: ReturnType<typeof createOpenAICompatibleStreams>[
 	);
 }
 
+function sseData(payload: unknown): string {
+	return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
 async function expectErrorStream(
 	stream: ReturnType<typeof createOpenAICompatibleStreams>["stream"],
 ) {
@@ -90,6 +94,8 @@ describe("OpenAI-compatible provider", () => {
 			max_completion_tokens: 4_096,
 			messages: [{ content: "hi", role: "user" }],
 			model: "test-model",
+			stream: true,
+			stream_options: { include_usage: true },
 		});
 		expect(events.map((event) => event.type)).toEqual([
 			"start",
@@ -110,6 +116,136 @@ describe("OpenAI-compatible provider", () => {
 			},
 			reason: "stop",
 		});
+	});
+
+	test("streams SSE deltas while the response is still arriving", async () => {
+		let controller!: ReadableStreamDefaultController<Uint8Array>;
+		const encoder = new TextEncoder();
+		const body = new ReadableStream<Uint8Array>({
+			start(streamController) {
+				controller = streamController;
+			},
+		});
+		const fetch = mock(
+			async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
+		) as unknown as FetchMock;
+		const streams = createOpenAICompatibleStreams({
+			apiKey: "test-key",
+			baseUrl: "https://model.example/v1",
+			fetch: fetch as unknown as FetchFunction,
+		});
+		const output = collectStream(streams.stream);
+		const iterator = output[Symbol.asyncIterator]();
+
+		// `start` arrives after the response headers, before the first token: the WebUI can show
+		// that the request is in flight instead of waiting for the complete body.
+		expect((await iterator.next()).value).toMatchObject({ type: "start" });
+
+		controller.enqueue(
+			encoder.encode(sseData({ choices: [{ delta: { reasoning_content: "Think" } }] })),
+		);
+		expect((await iterator.next()).value).toMatchObject({ type: "thinking_start" });
+		expect((await iterator.next()).value).toMatchObject({
+			delta: "Think",
+			type: "thinking_delta",
+		});
+
+		controller.enqueue(encoder.encode(sseData({ choices: [{ delta: { content: "Hello" } }] })));
+		expect((await iterator.next()).value).toMatchObject({ type: "thinking_end" });
+		expect((await iterator.next()).value).toMatchObject({ type: "text_start" });
+		expect((await iterator.next()).value).toMatchObject({
+			delta: "Hello",
+			type: "text_delta",
+		});
+
+		controller.enqueue(
+			encoder.encode(
+				sseData({
+					choices: [
+						{
+							delta: {
+								tool_calls: [
+									{
+										function: { arguments: '{"path":', name: "read_file" },
+										id: "call-1",
+										index: 0,
+										type: "function",
+									},
+								],
+							},
+						},
+					],
+				}),
+			),
+		);
+		expect((await iterator.next()).value).toMatchObject({ type: "text_end" });
+		expect((await iterator.next()).value).toMatchObject({ type: "toolcall_start" });
+		expect((await iterator.next()).value).toMatchObject({
+			delta: '{"path":',
+			type: "toolcall_delta",
+		});
+
+		controller.enqueue(
+			encoder.encode(
+				sseData({
+					choices: [
+						{
+							delta: {
+								tool_calls: [{ function: { arguments: '"/tmp/file"}' }, index: 0 }],
+							},
+						},
+					],
+				}),
+			),
+		);
+		expect((await iterator.next()).value).toMatchObject({
+			delta: '"/tmp/file"}',
+			type: "toolcall_delta",
+		});
+
+		controller.enqueue(
+			encoder.encode(
+				sseData({
+					choices: [{ delta: {}, finish_reason: "tool_calls" }],
+					id: "response-2",
+					model: "remote-model",
+					usage: { completion_tokens: 7, prompt_tokens: 11 },
+				}),
+			),
+		);
+		controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+		controller.close();
+
+		expect((await iterator.next()).value).toMatchObject({
+			toolCall: {
+				arguments: { path: "/tmp/file" },
+				id: "call-1",
+				name: "read_file",
+			},
+			type: "toolcall_end",
+		});
+		const done = await iterator.next();
+		expect(done.value).toMatchObject({
+			message: {
+				content: [
+					{ thinking: "Think", type: "thinking" },
+					{ text: "Hello", type: "text" },
+					{
+						arguments: { path: "/tmp/file" },
+						id: "call-1",
+						name: "read_file",
+						type: "toolCall",
+					},
+				],
+				responseId: "response-2",
+				responseModel: "remote-model",
+				stopReason: "toolUse",
+				usage: { input: 11, output: 7 },
+			},
+			reason: "toolUse",
+			type: "done",
+		});
+		expect((await iterator.next()).done).toBe(true);
 	});
 
 	test("parses tool calls and requests declared tools", async () => {

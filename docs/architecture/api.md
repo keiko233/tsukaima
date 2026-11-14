@@ -185,6 +185,8 @@ Events (`event:` name equals the payload's `type`):
 | `activity.opened` / `activity.closed` | `{ timestamp, activityId, conversationId, envelopeCount }` |
 | `before.reply` | `{ timestamp, channelId \| null, chatObjectId, sessionId, entryId, text }` |
 | `after.reply` | Same as `before.reply` plus `deliveryStatus` |
+| `run.state` | `{ timestamp, sessionId, run: LiveRunState \| null }` |
+| `run.delta` | `{ timestamp, sessionId, revision, patch: LiveRunPatch }` |
 
 Contract: `liveEventSchema` in `packages/contracts`. The WebUI validates every frame and only then
 invalidates the affected TanStack Query keys.
@@ -263,9 +265,10 @@ messages.activity.list.query({ conversationId: string; cursor?: string; limit?: 
 ```
 
 For live updates the WebUI subscribes to the server-sent event stream described under
-[Realtime events](#realtime-events). A per-conversation oRPC stream that carries assistant
-streaming tokens, tool cards, and delivery transitions is the next step; today the SSE channel
-publishes lifecycle-level events and the WebUI re-queries the affected procedures.
+[Realtime events](#realtime-events). Assistant streaming is carried by `run.state` and
+`run.delta`: text, reasoning, draft tool calls, and the accumulated model/tool call chain are
+applied to a dedicated per-session store instead of invalidating the transcript on every token.
+Delivery and lifecycle transitions still re-query the affected procedures.
 
 ## Tasks
 

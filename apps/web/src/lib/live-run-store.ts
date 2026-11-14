@@ -53,17 +53,20 @@ export function applyRunDelta(sessionId: string, patch: LiveRunPatch, revision: 
 	const base: LiveRunState =
 		previous ??
 		({
+			draftTools: [],
 			sessionId,
 			settled: false,
 			startedAtMs: Date.now(),
+			steps: [],
 			tools: [],
 			turns: 0,
 		} satisfies LiveRunState);
-	const { failure, ...fields } = patch;
+	const { failure, retry, ...fields } = patch;
 	const next: LiveRunState = {
 		...base,
 		...fields,
 		...(failure === undefined ? {} : failure === null ? { failure: undefined } : { failure }),
+		...(retry === undefined ? {} : retry === null ? { retry: undefined } : { retry }),
 		revision,
 	};
 	if (next.settled && next.failure === undefined) {
@@ -83,20 +86,31 @@ export function getLiveRun(sessionId: string): LiveRunState | undefined {
 	return runs.get(sessionId);
 }
 
+function sameJson(a: unknown, b: unknown): boolean {
+	return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
 function sameRun(a: LiveRunState, b: LiveRunState): boolean {
 	return (
+		a.attempt === b.attempt &&
 		a.failure === b.failure &&
+		sameJson(a.model, b.model) &&
 		a.partialText === b.partialText &&
 		a.partialThinking === b.partialThinking &&
 		a.phase === b.phase &&
+		a.retry?.at === b.retry?.at &&
+		a.retry?.error === b.retry?.error &&
 		a.revision === b.revision &&
 		a.startedAtMs === b.startedAtMs &&
+		sameJson(a.steps ?? [], b.steps ?? []) &&
+		sameJson(a.draftTools ?? [], b.draftTools ?? []) &&
 		a.turns === b.turns &&
 		a.tools.length === b.tools.length &&
 		a.tools.every((tool, index) => {
 			const other = b.tools[index];
 			return (
 				other !== undefined &&
+				tool.argumentsText === other.argumentsText &&
 				tool.callId === other.callId &&
 				tool.output === other.output &&
 				tool.status === other.status &&

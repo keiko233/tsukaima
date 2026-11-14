@@ -326,12 +326,27 @@ export type LiveRunSnapshot = {
 	 */
 	readonly settled: boolean;
 	readonly failure: string | undefined;
+	/** Current generation attempt, starting at 1 and growing across retries. */
+	readonly attempt: number | undefined;
+	/** Provider timestamp of the generation's partial, which is when the request started. */
+	readonly generationStartedAtMs: number | undefined;
+	/** Selected provider and model, once the provider has named them in a partial. */
+	readonly model: { readonly modelId: string; readonly providerId: string } | undefined;
+	/** Durable backoff while the run waits to retry a failed model attempt. */
+	readonly retry: { readonly at: number; readonly error: string } | undefined;
 	/** Streamed answer text so far. */
 	readonly partialText: string | undefined;
 	/** Streamed reasoning so far, when the provider reports it. */
 	readonly partialThinking: string | undefined;
+	/** Tool calls the model is still emitting, before they start executing. */
+	readonly draftTools: readonly {
+		readonly argumentsText: string | undefined;
+		readonly callId: string;
+		readonly toolName: string;
+	}[];
 	readonly startedAtMs: number;
 	readonly tools: readonly {
+		readonly argumentsText: string | undefined;
 		readonly callId: string;
 		readonly output: string | undefined;
 		readonly status: "pending" | "running" | "done";
@@ -418,10 +433,15 @@ function assistantEntryText(entry: EntryRecord): string | undefined {
 /** A settled run: nothing to show, and the client clears its activity view. */
 function emptyLiveRun(conversationId: string, startedAtMs: number): LiveRunSnapshot {
 	return {
+		attempt: undefined,
 		conversationId,
+		draftTools: [],
 		failure: undefined,
+		generationStartedAtMs: undefined,
+		model: undefined,
 		partialText: undefined,
 		partialThinking: undefined,
+		retry: undefined,
 		settled: true,
 		startedAtMs,
 		tools: [],
@@ -476,23 +496,90 @@ function runFailureText(failure: RunFailure): string {
 		: `${failure.reason}: ${detail}`;
 }
 
+/** Compact single-line JSON of a tool call's arguments, bounded for the live view. */
+function argumentsTextOf(argumentsValue: unknown): string | undefined {
+	if (argumentsValue === undefined || argumentsValue === null) return undefined;
+	let text: string;
+	try {
+		text = JSON.stringify(argumentsValue);
+	} catch {
+		return undefined;
+	}
+	if (text.length === 0 || text === "{}") return undefined;
+	return text.length <= 400 ? text : `${text.slice(0, 400)}…`;
+}
+
+/** Tool calls already present in a streamed assistant partial, in model order. */
+function draftToolsOf(message: unknown): LiveRunSnapshot["draftTools"] {
+	if (typeof message !== "object" || message === null) return [];
+	if (!("content" in message) || !Array.isArray(message.content)) return [];
+	const tools: LiveRunSnapshot["draftTools"][number][] = [];
+	for (const block of message.content as readonly unknown[]) {
+		if (typeof block !== "object" || block === null) continue;
+		if (!("type" in block) || block.type !== "toolCall") continue;
+		if (!("id" in block) || typeof block.id !== "string") continue;
+		if (!("name" in block) || typeof block.name !== "string" || block.name.length === 0) continue;
+		const argumentsText = "arguments" in block ? argumentsTextOf(block.arguments) : undefined;
+		tools.push({
+			argumentsText,
+			callId: block.id,
+			toolName: block.name,
+		});
+	}
+	return tools;
+}
+
+/** Provider/model named by a streamed assistant partial, or `undefined` before the first token. */
+function modelOf(
+	message: unknown,
+): { readonly modelId: string; readonly providerId: string } | undefined {
+	if (typeof message !== "object" || message === null) return undefined;
+	if (!("provider" in message) || typeof message.provider !== "string") return undefined;
+	if (!("model" in message) || typeof message.model !== "string") return undefined;
+	if (message.provider.length === 0 || message.model.length === 0) return undefined;
+	return { modelId: message.model, providerId: message.provider };
+}
+
+/** When the provider started the in-flight request, from the partial's timestamp. */
+function generationStartedAtOf(message: unknown): number | undefined {
+	if (typeof message !== "object" || message === null) return undefined;
+	if (!("timestamp" in message) || typeof message.timestamp !== "number") return undefined;
+	return Number.isFinite(message.timestamp)
+		? Math.max(0, Math.floor(message.timestamp))
+		: undefined;
+}
+
 /** Flatten durable live state into the snapshot the WebUI renders. */
 function toLiveRunSnapshot(
 	conversationId: string,
 	startedAtMs: number,
 	live: LiveState,
+	knownArguments: ReadonlyMap<string, string>,
 ): LiveRunSnapshot {
+	const message = live.generation?.message;
+	const draftTools = draftToolsOf(message);
+	const argumentByCall = new Map(knownArguments);
+	for (const tool of draftTools) {
+		if (tool.argumentsText !== undefined) argumentByCall.set(tool.callId, tool.argumentsText);
+	}
 	const tools = (live.tools ?? []).map((slot) => ({
+		argumentsText: argumentByCall.get(slot.callId),
 		callId: slot.callId,
 		output: typeof slot.output === "string" ? slot.output : undefined,
 		status: slot.status,
 		toolName: slot.name,
 	}));
+	const retry = live.generation?.retry;
 	return {
+		attempt: live.generation?.attempt,
 		conversationId,
+		draftTools,
 		failure: live.runFailure === undefined ? undefined : runFailureText(live.runFailure),
-		partialText: partialTextOf(live.generation?.message),
-		partialThinking: partialThinkingOf(live.generation?.message),
+		generationStartedAtMs: generationStartedAtOf(message),
+		model: modelOf(message),
+		partialText: partialTextOf(message),
+		partialThinking: partialThinkingOf(message),
+		retry: retry === undefined ? undefined : { at: retry.at, error: retry.error },
 		settled: false,
 		startedAtMs,
 		tools,
@@ -833,6 +920,10 @@ export class PiDurableConversationHost {
 		// just clearing a timer.
 		const numericId = Number(conversationId) as ConversationId;
 		const startedAtMs = Date.now();
+		// Tool-call arguments are committed while the model streams, then `live.tools` takes over
+		// and only carries the task's output. Remember the last arguments by call id so the
+		// running row still shows what the model asked for.
+		const knownArguments = new Map<string, string>();
 		// The run is admitted by the same commit that flushes the activity window, but the
 		// scheduler may not have started it yet when the first polls land. Seeing no run is only
 		// "settled" once a run was actually observed, or after this grace period, otherwise the
@@ -874,7 +965,13 @@ export class PiDurableConversationHost {
 						return;
 					}
 					sawRun = true;
-					onLiveRun(toLiveRunSnapshot(conversationId, startedAtMs, live));
+					const snapshot = toLiveRunSnapshot(conversationId, startedAtMs, live, knownArguments);
+					for (const tool of snapshot.draftTools) {
+						if (tool.argumentsText !== undefined) {
+							knownArguments.set(tool.callId, tool.argumentsText);
+						}
+					}
+					onLiveRun(snapshot);
 				} catch (error) {
 					// Live presentation is optional; ingestion and answers must not depend on it.
 					this.logger.trace("Live run poll failed", { conversationId, error });

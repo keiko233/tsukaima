@@ -1,6 +1,7 @@
 import type { LiveRunPatch, LiveRunPhase, LiveRunState, RunStep } from "@tsukaima/contracts";
 import type { KeyvCache } from "@tsukaima/cache";
 import type { LiveRunSnapshot } from "@tsukaima/core";
+import { LiveRunTimeline } from "./live-run-timeline.ts";
 
 /** An active run is readable across a browser reload and a short host restart. */
 const STATE_TTL_MS = 30 * 60_000;
@@ -29,12 +30,15 @@ export interface LiveRunFinal {
 function phaseOf(state: LiveRunSnapshot, settled: boolean): LiveRunPhase {
 	if (settled) return "settled";
 	if (state.tools.some((tool) => tool.status !== "done")) return "tools";
+	if (state.retry !== undefined) return "retry";
 	if (state.partialText !== undefined && state.partialText.length > 0) return "writing";
 	if (state.partialThinking !== undefined && state.partialThinking.length > 0) return "thinking";
+	if (state.draftTools.length > 0) return "tool_calls";
 	return "queued";
 }
 
 interface ToolView {
+	readonly argumentsText?: string | undefined;
 	readonly callId: string;
 	readonly output?: string | undefined;
 	readonly status: "pending" | "running" | "done";
@@ -47,6 +51,7 @@ function sameTools(a: readonly ToolView[], b: readonly ToolView[]): boolean {
 		const other = b[index];
 		return (
 			other !== undefined &&
+			tool.argumentsText === other.argumentsText &&
 			tool.callId === other.callId &&
 			tool.output === other.output &&
 			tool.status === other.status &&
@@ -55,8 +60,32 @@ function sameTools(a: readonly ToolView[], b: readonly ToolView[]): boolean {
 	});
 }
 
+function sameSteps(a: readonly RunStep[] | undefined, b: readonly RunStep[] | undefined): boolean {
+	if (a === b) return true;
+	if (a === undefined || b === undefined) return false;
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function sameDrafts(
+	a: LiveRunState["draftTools"] | undefined,
+	b: LiveRunState["draftTools"] | undefined,
+): boolean {
+	if (a === b) return true;
+	if (a === undefined || b === undefined) return false;
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function sameModel(a: LiveRunState["model"], b: LiveRunState["model"]): boolean {
+	return a?.modelId === b?.modelId && a?.providerId === b?.providerId;
+}
+
+function sameRetry(a: LiveRunState["retry"], b: LiveRunState["retry"]): boolean {
+	return a?.at === b?.at && a?.error === b?.error;
+}
+
 function plainTools(state: LiveRunSnapshot): LiveRunState["tools"] {
 	return state.tools.map((tool) => ({
+		...(tool.argumentsText === undefined ? {} : { argumentsText: tool.argumentsText }),
 		callId: tool.callId,
 		...(tool.output === undefined ? {} : { output: tool.output }),
 		status: tool.status,
@@ -64,25 +93,43 @@ function plainTools(state: LiveRunSnapshot): LiveRunState["tools"] {
 	}));
 }
 
+function plainDrafts(state: LiveRunSnapshot): LiveRunState["draftTools"] {
+	return state.draftTools.map((tool) => ({
+		...(tool.argumentsText === undefined ? {} : { argumentsText: tool.argumentsText }),
+		callId: tool.callId,
+		toolName: tool.toolName,
+	}));
+}
+
 function buildPatch(previous: LiveRunState | undefined, next: LiveRunState): LiveRunPatch {
 	const patch: LiveRunPatch = { revision: next.revision ?? 0 };
 	if (previous === undefined) {
+		if (next.attempt !== undefined) patch.attempt = next.attempt;
+		patch.draftTools = next.draftTools ?? [];
 		patch.partialText = next.partialText ?? "";
 		patch.partialThinking = next.partialThinking ?? "";
 		patch.phase = next.phase ?? "queued";
+		patch.retry = next.retry ?? null;
 		patch.settled = next.settled;
+		patch.steps = next.steps ?? [];
 		patch.tools = next.tools;
 		patch.turns = next.turns;
+		if (next.model !== undefined) patch.model = next.model;
 		if (next.failure === undefined) patch.failure = null;
 		else patch.failure = next.failure;
 		return patch;
 	}
+	if (next.attempt !== undefined && next.attempt !== previous.attempt) patch.attempt = next.attempt;
+	if (!sameDrafts(next.draftTools, previous.draftTools)) patch.draftTools = next.draftTools ?? [];
 	if (next.partialText !== previous.partialText) patch.partialText = next.partialText ?? "";
 	if (next.partialThinking !== previous.partialThinking) {
 		patch.partialThinking = next.partialThinking ?? "";
 	}
 	if (next.phase !== previous.phase && next.phase !== undefined) patch.phase = next.phase;
+	if (!sameRetry(next.retry, previous.retry)) patch.retry = next.retry ?? null;
+	if (!sameModel(next.model, previous.model) && next.model !== undefined) patch.model = next.model;
 	if (next.settled !== previous.settled) patch.settled = next.settled;
+	if (!sameSteps(next.steps, previous.steps)) patch.steps = next.steps ?? [];
 	if (!sameTools(next.tools, previous.tools)) patch.tools = next.tools;
 	if (next.turns !== previous.turns) patch.turns = next.turns;
 	if (next.failure !== previous.failure) patch.failure = next.failure ?? null;
@@ -95,8 +142,10 @@ function patchHasChange(patch: LiveRunPatch): boolean {
 
 function hasProcess(state: LiveRunState): boolean {
 	return (
+		(state.steps?.length ?? 0) > 0 ||
 		(state.partialText?.length ?? 0) > 0 ||
 		(state.partialThinking?.length ?? 0) > 0 ||
+		(state.draftTools?.length ?? 0) > 0 ||
 		state.tools.length > 0 ||
 		state.turns > 0
 	);
@@ -109,25 +158,48 @@ function clip(value: string, max = MAX_STEP_TEXT_CHARS): string {
 	return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max)}…`;
 }
 
-/** Turn the final live state into the same step shape the durable transcript produces. */
-function stepsOf(state: LiveRunState): RunStep[] {
-	const steps: RunStep[] = [];
-	if (state.failure !== undefined) steps.push({ detail: state.failure, kind: "failure" });
-	if (state.partialThinking !== undefined && state.partialThinking.trim().length > 0) {
-		steps.push({ kind: "thinking", text: clip(state.partialThinking) });
+/** Current-round fields the timeline had not committed yet when finalization raced ahead. */
+function appendCurrentSteps(steps: RunStep[], state: LiveRunState): void {
+	const thinking = state.partialThinking?.trim();
+	if (thinking !== undefined && thinking.length > 0) {
+		const text = clip(thinking);
+		const lastThinking = steps.findLast((step) => step.kind === "thinking");
+		if (lastThinking?.kind !== "thinking" || lastThinking.text !== text) {
+			steps.push({ kind: "thinking", text });
+		}
+	}
+	const answer = state.partialText?.trim();
+	if (answer !== undefined && answer.length > 0) {
+		const text = clip(answer);
+		const lastText = steps.findLast((step) => step.kind === "text");
+		if (lastText?.kind !== "text" || lastText.text !== text) {
+			steps.push({ kind: "text", text });
+		}
 	}
 	for (const tool of state.tools) {
 		steps.push({
-			argumentsText: "",
+			argumentsText: tool.argumentsText ?? "",
 			isError: false,
 			kind: "tool",
 			output: clip(tool.output ?? ""),
 			toolName: tool.toolName,
 		});
 	}
-	if (state.partialText !== undefined && state.partialText.trim().length > 0) {
-		steps.push({ kind: "text", text: clip(state.partialText) });
+}
+
+/** Turn the final live state into the same step shape the durable transcript produces. */
+function stepsOf(state: LiveRunState): RunStep[] {
+	if (state.steps !== undefined && state.steps.length > 0) {
+		const steps = [...state.steps];
+		appendCurrentSteps(steps, state);
+		if (state.failure !== undefined && !steps.some((step) => step.kind === "failure")) {
+			steps.push({ detail: state.failure, kind: "failure" });
+		}
+		return steps;
 	}
+	const steps: RunStep[] = [];
+	if (state.failure !== undefined) steps.push({ detail: state.failure, kind: "failure" });
+	appendCurrentSteps(steps, state);
 	return steps;
 }
 
@@ -149,6 +221,7 @@ export class LiveRunCache {
 	 * would store nothing.
 	 */
 	readonly #process = new Map<string, LiveRunState>();
+	readonly #timelines = new Map<string, LiveRunTimeline>();
 	readonly #queues = new Map<string, Promise<void>>();
 
 	constructor(cache: KeyvCache) {
@@ -255,14 +328,29 @@ export class LiveRunCache {
 		snapshot: LiveRunSnapshot,
 	): Promise<LiveRunUpdate | undefined> {
 		const previous = await this.snapshot(sessionId);
+		const newRun =
+			previous === undefined ||
+			previous.startedAtMs !== snapshot.startedAtMs ||
+			(previous.settled && !snapshot.settled);
+		let timeline = this.#timelines.get(sessionId);
+		if (timeline === undefined || newRun) {
+			timeline = new LiveRunTimeline(snapshot.startedAtMs);
+			this.#timelines.set(sessionId, timeline);
+		}
+		const steps = timeline.observe(snapshot);
 		const base = {
+			attempt: snapshot.attempt,
+			draftTools: plainDrafts(snapshot),
 			failure: snapshot.failure,
+			model: snapshot.model,
 			partialText: snapshot.partialText,
 			partialThinking: snapshot.partialThinking,
 			phase: phaseOf(snapshot, snapshot.settled),
+			retry: snapshot.retry,
 			settled: snapshot.settled,
 			startedAtMs: snapshot.startedAtMs,
 			sessionId,
+			steps,
 			tools: plainTools(snapshot),
 			turns: snapshot.turns,
 		};
@@ -270,9 +358,12 @@ export class LiveRunCache {
 			...base,
 			revision: (previous?.revision ?? 0) + 1,
 		};
-		const newRun =
-			previous === undefined || previous.settled || previous.startedAtMs !== next.startedAtMs;
+		if (newRun) this.#process.delete(sessionId);
 		if (!next.settled && (newRun || hasProcess(next))) {
+			this.#process.set(sessionId, next);
+		} else if (next.settled && hasProcess(next)) {
+			// A clean settle can still carry the process chain the timeline built. Keep it for
+			// `finalizeAnswer`, which runs after the durable answer entry exists.
 			this.#process.set(sessionId, next);
 		}
 		const patch = buildPatch(previous, next);

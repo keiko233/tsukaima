@@ -73,6 +73,8 @@ interface OpenAIRequest {
 	readonly messages: readonly OpenAIMessage[];
 	readonly max_completion_tokens?: number;
 	readonly reasoning_effort?: OpenAICompatibleReasoningLevel;
+	readonly stream?: true;
+	readonly stream_options?: { readonly include_usage: true };
 	readonly tools?: readonly OpenAITool[];
 	readonly tool_choice?: "auto" | "none";
 }
@@ -136,6 +138,31 @@ interface OpenAIError {
 	readonly message?: unknown;
 }
 
+interface OpenAIStreamToolCall {
+	readonly index?: number;
+	readonly id?: string;
+	readonly type?: string;
+	readonly function?: { readonly name?: string; readonly arguments?: string };
+}
+
+interface OpenAIStreamDelta {
+	readonly content?: string | null;
+	readonly reasoning?: string | null;
+	readonly reasoning_content?: string | null;
+	readonly tool_calls?: readonly OpenAIStreamToolCall[];
+}
+
+interface OpenAIStreamChunk {
+	readonly choices?: readonly {
+		readonly delta?: OpenAIStreamDelta;
+		readonly finish_reason?: string | null;
+	}[];
+	readonly error?: { readonly message?: unknown };
+	readonly id?: string;
+	readonly model?: string;
+	readonly usage?: OpenAIResponse["usage"];
+}
+
 const usageDefaults: Usage = {
 	cacheRead: 0,
 	cacheWrite: 0,
@@ -164,6 +191,120 @@ function usage(input: number, output: number, cacheRead: number): Usage {
 		output,
 		totalTokens: total,
 	};
+}
+
+/** Provider usage object to an assistant usage record; streamed providers may only send it at the end. */
+function usageFromPayload(payload: OpenAIResponse["usage"]): Usage {
+	const base = usage(
+		payload?.prompt_tokens ?? 0,
+		payload?.completion_tokens ?? 0,
+		payload?.prompt_tokens_details?.cached_tokens ?? 0,
+	);
+	const reasoning = payload?.completion_tokens_details?.reasoning_tokens;
+	return reasoning === undefined ? base : { ...base, reasoning };
+}
+
+/** Raw `data:` payloads of a server-sent event response, in arrival order. */
+async function* readSseData(response: Response): AsyncGenerator<string> {
+	const body = response.body;
+	if (body === null) return;
+	const reader = body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let data: string[] = [];
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			let newline = buffer.indexOf("\n");
+			while (newline >= 0) {
+				let line = buffer.slice(0, newline);
+				buffer = buffer.slice(newline + 1);
+				if (line.endsWith("\r")) line = line.slice(0, -1);
+				if (line.length === 0) {
+					if (data.length > 0) {
+						yield data.join("\n");
+						data = [];
+					}
+				} else if (line.startsWith("data:")) {
+					data.push(line.slice(5).replace(/^ /, ""));
+				}
+				newline = buffer.indexOf("\n");
+			}
+		}
+		buffer += decoder.decode();
+		if (buffer.length > 0) {
+			const line = buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer;
+			if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+		}
+		if (data.length > 0) yield data.join("\n");
+	} finally {
+		await reader.cancel().catch(() => undefined);
+		reader.releaseLock();
+	}
+}
+
+/** Replay a completed message as granular events, for providers that answered with JSON. */
+function replayAssistantMessage(
+	message: AssistantMessage,
+	output: AssistantMessageEventStream,
+): void {
+	for (const [index, block] of message.content.entries()) {
+		if (block.type === "thinking") {
+			output.push({
+				type: "thinking_start",
+				contentIndex: index,
+				partial: { ...message, content: [] },
+			});
+			output.push({
+				type: "thinking_delta",
+				contentIndex: index,
+				delta: block.thinking,
+				partial: message,
+			});
+			output.push({
+				type: "thinking_end",
+				contentIndex: index,
+				content: block.thinking,
+				partial: message,
+			});
+		}
+		if (block.type === "text") {
+			output.push({
+				type: "text_start",
+				contentIndex: index,
+				partial: { ...message, content: [] },
+			});
+			output.push({
+				type: "text_delta",
+				contentIndex: index,
+				delta: block.text,
+				partial: message,
+			});
+			output.push({
+				type: "text_end",
+				contentIndex: index,
+				content: block.text,
+				partial: message,
+			});
+		}
+	}
+	for (const [index, block] of message.content.entries()) {
+		if (block.type !== "toolCall") continue;
+		output.push({
+			type: "toolcall_start",
+			contentIndex: index,
+			partial: { ...message, content: [] },
+		});
+		output.push({
+			type: "toolcall_delta",
+			contentIndex: index,
+			delta: JSON.stringify(block.arguments),
+			partial: message,
+		});
+		output.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: message });
+	}
 }
 
 function errorAssistantMessage(model: Model<Api>, error: Error): AssistantMessage {
@@ -245,17 +386,12 @@ function buildAssistantMessage(model: Model<Api>, payload: OpenAIResponse): Assi
 		...(text.length > 0 ? [{ type: "text", text } as AssistantMessage["content"][number]] : []),
 		...toolCalls,
 	];
-	const promptTokens = payload.usage?.prompt_tokens ?? 0;
-	const cacheRead = payload.usage?.prompt_tokens_details?.cached_tokens ?? 0;
-	const outputTokens = payload.usage?.completion_tokens ?? 0;
-	const reasoningTokens = payload.usage?.completion_tokens_details?.reasoning_tokens;
 	const reasoning =
 		typeof message?.reasoning_content === "string" && message.reasoning_content.length > 0
 			? message.reasoning_content
 			: typeof message?.reasoning === "string" && message.reasoning.length > 0
 				? message.reasoning
 				: undefined;
-	const messageUsage = usage(promptTokens, outputTokens, cacheRead);
 	const stopReason: "toolUse" | "length" | "stop" =
 		toolCalls.length > 0 ? "toolUse" : finishReason === "length" ? "length" : "stop";
 	return {
@@ -269,10 +405,7 @@ function buildAssistantMessage(model: Model<Api>, payload: OpenAIResponse): Assi
 		role: "assistant",
 		stopReason,
 		timestamp: Date.now(),
-		usage:
-			reasoningTokens === undefined
-				? messageUsage
-				: { ...messageUsage, reasoning: reasoningTokens },
+		usage: usageFromPayload(payload.usage),
 		...(payload.id === undefined ? {} : { responseId: payload.id }),
 		...(payload.model === undefined ? {} : { responseModel: payload.model }),
 		...(finishReason === undefined ? {} : { rawStopReason: finishReason }),
@@ -352,6 +485,203 @@ function openAIMessageText(message: OpenAIMessage): string {
 	return message.content.map((part) => (part.type === "text" ? part.text : "[image]")).join(" ");
 }
 
+/**
+ * Consume an OpenAI-compatible SSE response and publish each delta as it arrives.
+ *
+ * The provider API is the only place a token can wait: a request that buffers the whole body
+ * before replaying it gives the WebUI nothing until the model has already answered. Every
+ * `delta` here is pushed immediately, so durable's throttled `pi.live` commit sees text,
+ * reasoning, and tool-call arguments while the model is still producing them.
+ */
+async function consumeOpenAIStream(
+	model: Model<Api>,
+	response: Response,
+	output: AssistantMessageEventStream,
+	timestamp: number,
+): Promise<AssistantMessage> {
+	const content: AssistantMessage["content"] = [];
+	const base: AssistantMessage = {
+		api: model.api,
+		content,
+		model: model.id,
+		provider: model.provider,
+		role: "assistant",
+		stopReason: "pending",
+		timestamp,
+		usage: usage(0, 0, 0),
+	};
+	const partial = (): AssistantMessage => ({ ...base, content: [...content] });
+	let thinking:
+		| { block: Extract<AssistantMessage["content"][number], { type: "thinking" }>; index: number }
+		| undefined;
+	let text:
+		| { block: Extract<AssistantMessage["content"][number], { type: "text" }>; index: number }
+		| undefined;
+	const toolCalls = new Map<
+		number,
+		{
+			block: Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
+			index: number;
+			rawArguments: string;
+		}
+	>();
+	let responseId: string | undefined;
+	let responseModel: string | undefined;
+	let rawStopReason: string | undefined;
+	let messageUsage = usage(0, 0, 0);
+	let sawChoice = false;
+
+	const closeThinking = () => {
+		if (thinking === undefined) return;
+		output.push({
+			type: "thinking_end",
+			contentIndex: thinking.index,
+			content: thinking.block.thinking,
+			partial: partial(),
+		});
+		thinking = undefined;
+	};
+	const closeText = () => {
+		if (text === undefined) return;
+		output.push({
+			type: "text_end",
+			contentIndex: text.index,
+			content: text.block.text,
+			partial: partial(),
+		});
+		text = undefined;
+	};
+	const startThinking = () => {
+		if (thinking !== undefined) return thinking;
+		output.push({ type: "thinking_start", contentIndex: content.length, partial: partial() });
+		const block = { type: "thinking" as const, thinking: "" };
+		content.push(block);
+		thinking = { block, index: content.length - 1 };
+		return thinking;
+	};
+	const startText = () => {
+		if (text !== undefined) return text;
+		output.push({ type: "text_start", contentIndex: content.length, partial: partial() });
+		const block = { type: "text" as const, text: "" };
+		content.push(block);
+		text = { block, index: content.length - 1 };
+		return text;
+	};
+
+	for await (const data of readSseData(response)) {
+		if (data.trim() === "[DONE]") break;
+		let chunk: OpenAIStreamChunk;
+		try {
+			chunk = JSON.parse(data) as OpenAIStreamChunk;
+		} catch {
+			continue;
+		}
+		const errorMessage = chunk.error?.message;
+		if (typeof errorMessage === "string" && errorMessage.length > 0) {
+			throw new Error(`OpenAI-compatible stream failed: ${errorMessage}`);
+		}
+		if (chunk.id !== undefined) responseId ??= chunk.id;
+		if (chunk.model !== undefined) responseModel ??= chunk.model;
+		if (chunk.usage !== undefined) messageUsage = usageFromPayload(chunk.usage);
+		const choice = chunk.choices?.[0];
+		if (choice === undefined) continue;
+		sawChoice = true;
+		if (typeof choice.finish_reason === "string") rawStopReason = choice.finish_reason;
+		const delta = choice.delta;
+		if (delta === undefined) continue;
+
+		const reasoning = delta.reasoning_content ?? delta.reasoning;
+		if (typeof reasoning === "string" && reasoning.length > 0) {
+			if (text !== undefined) closeText();
+			const current = startThinking();
+			current.block.thinking += reasoning;
+			output.push({
+				type: "thinking_delta",
+				contentIndex: current.index,
+				delta: reasoning,
+				partial: partial(),
+			});
+		}
+		if (typeof delta.content === "string" && delta.content.length > 0) {
+			if (thinking !== undefined) closeThinking();
+			const current = startText();
+			current.block.text += delta.content;
+			output.push({
+				type: "text_delta",
+				contentIndex: current.index,
+				delta: delta.content,
+				partial: partial(),
+			});
+		}
+		for (const call of delta.tool_calls ?? []) {
+			const key = call.index ?? 0;
+			let current = toolCalls.get(key);
+			if (current === undefined) {
+				if (thinking !== undefined) closeThinking();
+				if (text !== undefined) closeText();
+				const block = {
+					arguments: {},
+					id: call.id ?? `tool-call-${key}`,
+					name: call.function?.name ?? "",
+					type: "toolCall" as const,
+				};
+				output.push({
+					type: "toolcall_start",
+					contentIndex: content.length,
+					partial: partial(),
+				});
+				content.push(block);
+				current = { block, index: content.length - 1, rawArguments: "" };
+				toolCalls.set(key, current);
+			} else {
+				if (current.block.name.length === 0 && call.function?.name !== undefined) {
+					current.block.name = call.function.name;
+				}
+				if (call.id !== undefined) current.block.id = call.id;
+			}
+			const argumentPart = call.function?.arguments;
+			if (typeof argumentPart === "string" && argumentPart.length > 0) {
+				current.rawArguments += argumentPart;
+				output.push({
+					type: "toolcall_delta",
+					contentIndex: current.index,
+					delta: argumentPart,
+					partial: partial(),
+				});
+			}
+		}
+	}
+
+	if (!sawChoice) throw new Error("OpenAI-compatible stream contained no choices");
+	if (thinking !== undefined) closeThinking();
+	if (text !== undefined) closeText();
+	for (const current of [...toolCalls.values()].toSorted((a, b) => a.index - b.index)) {
+		const parsed = parseToolArguments(
+			current.rawArguments.length === 0 ? "{}" : current.rawArguments,
+			current.block.id,
+		);
+		current.block.arguments = parsed.arguments;
+		if (parsed.argumentsError !== undefined) current.block.argumentsError = parsed.argumentsError;
+		output.push({
+			type: "toolcall_end",
+			contentIndex: current.index,
+			toolCall: current.block,
+			partial: partial(),
+		});
+	}
+	const stopReason: "toolUse" | "length" | "stop" =
+		toolCalls.size > 0 ? "toolUse" : rawStopReason === "length" ? "length" : "stop";
+	return {
+		...base,
+		content,
+		...(responseId === undefined ? {} : { responseId }),
+		...(responseModel === undefined ? {} : { responseModel }),
+		...(rawStopReason === undefined ? {} : { rawStopReason }),
+		stopReason,
+		usage: messageUsage,
+	};
+}
+
 export function createOpenAICompatibleStreams(
 	config: OpenAICompatibleConfig,
 	modelConfigs: readonly OpenAICompatibleModelConfig[] = [],
@@ -361,251 +691,210 @@ export function createOpenAICompatibleStreams(
 	const fetchImplementation = config.fetch ?? (fetch as FetchFunction);
 	const configs = new Map(modelConfigs.map((modelConfig) => [modelConfig.modelId, modelConfig]));
 
-	const execute = async (
-		model: Model<Api>,
-		context: TranscriptContext,
-		options?: SimpleStreamOptions,
-	): Promise<AssistantMessage> => {
-		const startedAt = performance.now();
-		const logger = config.logger;
-		const providerId = config.providerId ?? model.provider;
-		const modelConfig = configs.get(model.id);
-		const url = `${baseUrl}/chat/completions`;
-		const messages: OpenAIMessage[] = [];
-		for (const [index, message] of context.messages.entries()) {
-			const converted = messageToOpenAI(message, index);
-			if (converted) messages.push(converted);
-		}
-		const declaredTools = getCurrentTools(context.messages);
-		const supportsTools = modelConfig?.supportsTools ?? true;
-		const requestedTools = options?.toolChoice === "none" ? [] : declaredTools;
-		const tools = supportsTools ? openAITools(requestedTools) : [];
-		const maxOutputTokens = Math.min(
-			model.maxTokens ?? Number.POSITIVE_INFINITY,
-			options?.maxTokens ?? Number.POSITIVE_INFINITY,
-		);
-		if (!Number.isFinite(maxOutputTokens)) {
-			const error = new Error(`Model has no output token limit: ${model.id}`);
-			logger?.error("OpenAI-compatible request has no output token limit", {
-				providerId,
-				modelId: model.id,
-				durationMs: Math.round(performance.now() - startedAt),
-				error,
-			});
-			throw error;
-		}
-		const apiKeyFromOptions = options?.apiKey ?? apiKey;
-		const reasoningEffort =
-			model.reasoning === true
-				? (options?.reasoning ?? modelConfig?.defaultReasoningLevel)
-				: undefined;
-		const request: OpenAIRequest = {
-			model: model.id,
-			messages,
-			max_completion_tokens: maxOutputTokens,
-			...(reasoningEffort === undefined ? {} : { reasoning_effort: reasoningEffort }),
-			...(tools.length > 0 ? { tools, tool_choice: options?.toolChoice ?? "auto" } : {}),
-		};
-		logger?.debug("OpenAI-compatible chat completion requested", {
-			providerId,
-			modelId: model.id,
-			messageCount: messages.length,
-			toolCount: tools.length,
-			maxOutputTokens,
-			reasoningEffort,
-		});
-		const lastMessage = messages.findLast(
-			(message) => message.role === "user" || message.role === "tool",
-		);
-		logger?.trace("OpenAI-compatible request detail", {
-			providerId,
-			modelId: model.id,
-			lastMessageRole: lastMessage?.role,
-			lastMessagePreview:
-				lastMessage === undefined ? undefined : previewText(openAIMessageText(lastMessage)),
-			tools: declaredTools.map((tool) => tool.name),
-		});
-		let response: Response;
-		try {
-			response = await fetchImplementation(url, {
-				body: JSON.stringify(request),
-				headers: {
-					accept: "application/json",
-					authorization: `Bearer ${apiKeyFromOptions}`,
-					"content-type": "application/json",
-				},
-				method: "POST",
-				...(options?.signal === undefined ? {} : { signal: options.signal }),
-			});
-		} catch (error) {
-			const durationMs = Math.round(performance.now() - startedAt);
-			if (error instanceof Error && error.name === "AbortError") {
-				logger?.debug("OpenAI-compatible request aborted", {
-					providerId,
-					modelId: model.id,
-					durationMs,
-				});
-				throw error;
-			}
-			const wrapped = new Error(
-				`OpenAI-compatible request failed: ${error instanceof Error ? error.message : String(error)}`,
-				{ cause: error },
-			);
-			logger?.error("OpenAI-compatible request failed", {
-				providerId,
-				modelId: model.id,
-				durationMs,
-				error: wrapped,
-			});
-			throw wrapped;
-		}
-		if (!response.ok) {
-			const message = await readErrorMessage(response);
-			logger?.warn("OpenAI-compatible request rejected", {
-				providerId,
-				modelId: model.id,
-				durationMs: Math.round(performance.now() - startedAt),
-				status: response.status,
-				error: message,
-			});
-			throw new Error(message);
-		}
-		let payload: OpenAIResponse;
-		try {
-			payload = (await response.json()) as OpenAIResponse;
-		} catch (error) {
-			const wrapped = new Error(
-				`Invalid JSON from OpenAI-compatible provider: ${error instanceof Error ? error.message : String(error)}`,
-				{ cause: error },
-			);
-			logger?.warn("OpenAI-compatible response was not valid JSON", {
-				providerId,
-				modelId: model.id,
-				durationMs: Math.round(performance.now() - startedAt),
-				status: response.status,
-				error: wrapped,
-			});
-			throw wrapped;
-		}
-		if (!payload.choices?.length) {
-			const message = "OpenAI-compatible response contained no choices";
-			logger?.warn("OpenAI-compatible response contained no choices", {
-				providerId,
-				modelId: model.id,
-				durationMs: Math.round(performance.now() - startedAt),
-				status: response.status,
-				error: message,
-			});
-			throw new Error(message);
-		}
-		const assistant = buildAssistantMessage(model, payload);
-		const texts: string[] = [];
-		const thinkingTexts: string[] = [];
-		const calledTools: string[] = [];
-		for (const block of assistant.content) {
-			if (block.type === "text") texts.push(block.text);
-			else if (block.type === "thinking") thinkingTexts.push(block.thinking);
-			else if (block.type === "toolCall") calledTools.push(block.name);
-		}
-		logger?.debug("OpenAI-compatible chat completion completed", {
-			providerId,
-			modelId: model.id,
-			durationMs: Math.round(performance.now() - startedAt),
-			stopReason: assistant.stopReason,
-			rawStopReason: assistant.rawStopReason,
-			inputTokens: assistant.usage.input,
-			outputTokens: assistant.usage.output,
-			cacheRead: assistant.usage.cacheRead,
-			reasoningTokens: assistant.usage.reasoning,
-			toolCallCount: calledTools.length,
-		});
-		logger?.trace("OpenAI-compatible response detail", {
-			providerId,
-			modelId: model.id,
-			textPreview: previewText(texts.join("\n")),
-			reasoningPreview:
-				thinkingTexts.length === 0 ? undefined : previewText(thinkingTexts.join("\n")),
-			toolCalls: calledTools,
-		});
-		return assistant;
-	};
-
 	const stream = (
 		requestModel: Model<Api>,
 		requestContext: TranscriptContext,
 		requestOptions?: SimpleStreamOptions,
 	): AssistantMessageEventStream => {
 		const output = createAssistantMessageEventStream();
+		const startedAt = performance.now();
+		const timestamp = Date.now();
+		const logger = config.logger;
+		const providerId = config.providerId ?? requestModel.provider;
 		queueMicrotask(async () => {
 			try {
-				const message = await execute(requestModel, requestContext, requestOptions);
-				config.onMessage?.(message);
-				output.push({ type: "start", partial: { ...message, content: [], stopReason: "pending" } });
-				for (const [index, block] of message.content.entries()) {
-					if (block.type === "thinking") {
-						output.push({
-							type: "thinking_start",
-							contentIndex: index,
-							partial: { ...message, content: [] },
-						});
-						output.push({
-							type: "thinking_delta",
-							contentIndex: index,
-							delta: block.thinking,
-							partial: message,
-						});
-						output.push({
-							type: "thinking_end",
-							contentIndex: index,
-							content: block.thinking,
-							partial: message,
-						});
-					}
-					if (block.type === "text") {
-						output.push({
-							type: "text_start",
-							contentIndex: index,
-							partial: { ...message, content: [] },
-						});
-						output.push({
-							type: "text_delta",
-							contentIndex: index,
-							delta: block.text,
-							partial: message,
-						});
-						output.push({
-							type: "text_end",
-							contentIndex: index,
-							content: block.text,
-							partial: message,
-						});
-					}
+				const modelConfig = configs.get(requestModel.id);
+				const url = `${baseUrl}/chat/completions`;
+				const messages: OpenAIMessage[] = [];
+				for (const [index, message] of requestContext.messages.entries()) {
+					const converted = messageToOpenAI(message, index);
+					if (converted) messages.push(converted);
 				}
-				for (const [index, toolCall] of message.content
-					.flatMap((block) => (block.type === "toolCall" ? [block] : []))
-					.entries()) {
-					output.push({
-						type: "toolcall_start",
-						contentIndex: index,
-						partial: { ...message, content: [] },
+				const declaredTools = getCurrentTools(requestContext.messages);
+				const supportsTools = modelConfig?.supportsTools ?? true;
+				const requestedTools = requestOptions?.toolChoice === "none" ? [] : declaredTools;
+				const tools = supportsTools ? openAITools(requestedTools) : [];
+				const maxOutputTokens = Math.min(
+					requestModel.maxTokens ?? Number.POSITIVE_INFINITY,
+					requestOptions?.maxTokens ?? Number.POSITIVE_INFINITY,
+				);
+				if (!Number.isFinite(maxOutputTokens)) {
+					const error = new Error(`Model has no output token limit: ${requestModel.id}`);
+					logger?.error("OpenAI-compatible request has no output token limit", {
+						providerId,
+						modelId: requestModel.id,
+						durationMs: Math.round(performance.now() - startedAt),
+						error,
 					});
-					output.push({
-						type: "toolcall_delta",
-						contentIndex: index,
-						delta: JSON.stringify(toolCall.arguments),
-						partial: message,
-					});
-					output.push({ type: "toolcall_end", contentIndex: index, toolCall, partial: message });
+					throw error;
 				}
+				const apiKeyFromOptions = requestOptions?.apiKey ?? apiKey;
+				const reasoningEffort =
+					requestModel.reasoning === true
+						? (requestOptions?.reasoning ?? modelConfig?.defaultReasoningLevel)
+						: undefined;
+				const request: OpenAIRequest = {
+					model: requestModel.id,
+					messages,
+					max_completion_tokens: maxOutputTokens,
+					...(reasoningEffort === undefined ? {} : { reasoning_effort: reasoningEffort }),
+					stream: true,
+					stream_options: { include_usage: true },
+					...(tools.length > 0 ? { tools, tool_choice: requestOptions?.toolChoice ?? "auto" } : {}),
+				};
+				logger?.debug("OpenAI-compatible chat completion requested", {
+					providerId,
+					modelId: requestModel.id,
+					messageCount: messages.length,
+					toolCount: tools.length,
+					maxOutputTokens,
+					reasoningEffort,
+				});
+				const lastMessage = messages.findLast(
+					(message) => message.role === "user" || message.role === "tool",
+				);
+				logger?.trace("OpenAI-compatible request detail", {
+					providerId,
+					modelId: requestModel.id,
+					lastMessageRole: lastMessage?.role,
+					lastMessagePreview:
+						lastMessage === undefined ? undefined : previewText(openAIMessageText(lastMessage)),
+					tools: declaredTools.map((tool) => tool.name),
+				});
+				let response: Response;
+				try {
+					response = await fetchImplementation(url, {
+						body: JSON.stringify(request),
+						headers: {
+							accept: "text/event-stream",
+							authorization: `Bearer ${apiKeyFromOptions}`,
+							"content-type": "application/json",
+						},
+						method: "POST",
+						...(requestOptions?.signal === undefined ? {} : { signal: requestOptions.signal }),
+					});
+				} catch (error) {
+					const durationMs = Math.round(performance.now() - startedAt);
+					if (error instanceof Error && error.name === "AbortError") {
+						logger?.debug("OpenAI-compatible request aborted", {
+							providerId,
+							modelId: requestModel.id,
+							durationMs,
+						});
+						throw error;
+					}
+					const wrapped = new Error(
+						`OpenAI-compatible request failed: ${error instanceof Error ? error.message : String(error)}`,
+						{ cause: error },
+					);
+					logger?.error("OpenAI-compatible request failed", {
+						providerId,
+						modelId: requestModel.id,
+						durationMs,
+						error: wrapped,
+					});
+					throw wrapped;
+				}
+				if (!response.ok) {
+					const message = await readErrorMessage(response);
+					logger?.warn("OpenAI-compatible request rejected", {
+						providerId,
+						modelId: requestModel.id,
+						durationMs: Math.round(performance.now() - startedAt),
+						status: response.status,
+						error: message,
+					});
+					throw new Error(message);
+				}
+				const contentType = response.headers.get("content-type") ?? "";
+				output.push({
+					type: "start",
+					partial: {
+						api: requestModel.api,
+						content: [],
+						model: requestModel.id,
+						provider: requestModel.provider,
+						role: "assistant",
+						stopReason: "pending",
+						timestamp,
+						usage: usage(0, 0, 0),
+					},
+				});
+				let assistant: AssistantMessage;
+				if (contentType.includes("json") || response.body === null) {
+					// Some compatible servers ignore `stream: true`; keep the full-body path so a
+					// provider that cannot stream still produces a usable answer.
+					let payload: OpenAIResponse;
+					try {
+						payload = (await response.json()) as OpenAIResponse;
+					} catch (error) {
+						const wrapped = new Error(
+							`Invalid JSON from OpenAI-compatible provider: ${error instanceof Error ? error.message : String(error)}`,
+							{ cause: error },
+						);
+						logger?.warn("OpenAI-compatible response was not valid JSON", {
+							providerId,
+							modelId: requestModel.id,
+							durationMs: Math.round(performance.now() - startedAt),
+							status: response.status,
+							error: wrapped,
+						});
+						throw wrapped;
+					}
+					if (!payload.choices?.length) {
+						const message = "OpenAI-compatible response contained no choices";
+						logger?.warn("OpenAI-compatible response contained no choices", {
+							providerId,
+							modelId: requestModel.id,
+							durationMs: Math.round(performance.now() - startedAt),
+							status: response.status,
+							error: message,
+						});
+						throw new Error(message);
+					}
+					assistant = { ...buildAssistantMessage(requestModel, payload), timestamp };
+					replayAssistantMessage(assistant, output);
+				} else {
+					assistant = await consumeOpenAIStream(requestModel, response, output, timestamp);
+				}
+				config.onMessage?.(assistant);
+				const texts: string[] = [];
+				const thinkingTexts: string[] = [];
+				const calledTools: string[] = [];
+				for (const block of assistant.content) {
+					if (block.type === "text") texts.push(block.text);
+					else if (block.type === "thinking") thinkingTexts.push(block.thinking);
+					else if (block.type === "toolCall") calledTools.push(block.name);
+				}
+				logger?.debug("OpenAI-compatible chat completion completed", {
+					providerId,
+					modelId: requestModel.id,
+					durationMs: Math.round(performance.now() - startedAt),
+					stopReason: assistant.stopReason,
+					rawStopReason: assistant.rawStopReason,
+					inputTokens: assistant.usage.input,
+					outputTokens: assistant.usage.output,
+					cacheRead: assistant.usage.cacheRead,
+					reasoningTokens: assistant.usage.reasoning,
+					toolCallCount: calledTools.length,
+				});
+				logger?.trace("OpenAI-compatible response detail", {
+					providerId,
+					modelId: requestModel.id,
+					textPreview: previewText(texts.join("\n")),
+					reasoningPreview:
+						thinkingTexts.length === 0 ? undefined : previewText(thinkingTexts.join("\n")),
+					toolCalls: calledTools,
+				});
 				output.push({
 					type: "done",
 					reason:
-						message.stopReason === "toolUse" || message.stopReason === "length"
-							? message.stopReason
+						assistant.stopReason === "toolUse" || assistant.stopReason === "length"
+							? assistant.stopReason
 							: "stop",
-					message,
+					message: assistant,
 				});
-				output.end(message);
+				output.end(assistant);
 			} catch (error) {
 				const message = errorAssistantMessage(
 					requestModel,
@@ -618,7 +907,6 @@ export function createOpenAICompatibleStreams(
 		});
 		return output;
 	};
-
 	return {
 		stream,
 		streamSimple: stream,

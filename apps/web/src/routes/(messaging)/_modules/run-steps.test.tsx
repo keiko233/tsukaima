@@ -3,7 +3,11 @@ import type { RunStep } from "@tsukaima/contracts";
 
 mock.module("@/paraglide/messages", () => ({
 	m: {
+		live_run_model_failed: () => "Failed",
+		live_run_model_retry: () => "Retrying",
+		live_run_model_running: () => "Running",
 		run_step_failed: () => "Run failed",
+		run_step_model: () => "Model call",
 		run_step_thinking: () => "Thinking",
 		run_steps_empty: () => "No steps.",
 		run_steps_loading: () => "Loading…",
@@ -39,6 +43,38 @@ describe("run step rows", () => {
 		expect(rows).toHaveLength(2);
 		expect(JSON.stringify(rows[0]?.label)).toContain("Thinking");
 		expect(rows[1]?.body).toBe("let me check the logs");
+	});
+
+	test("renders a model call before the work it produced", () => {
+		const rows = toStepRows([
+			{
+				attempt: 2,
+				call: 2,
+				endedAtMs: 3_000,
+				kind: "model",
+				modelId: "model-1",
+				startedAtMs: 1_000,
+				status: "done",
+			},
+			{ kind: "thinking", text: "checking" },
+		]);
+		expect(JSON.stringify(rows[0]?.label)).toContain("Model call");
+		expect(rows[0]?.body).toContain("model-1");
+		expect(JSON.stringify(rows[1]?.label)).toContain("Thinking");
+	});
+
+	test("hides a model call when it is the only step", () => {
+		expect(
+			toStepRows([
+				{
+					attempt: 1,
+					call: 1,
+					kind: "model",
+					startedAtMs: 1_000,
+					status: "done",
+				},
+			]),
+		).toEqual([]);
 	});
 
 	test("renders a tool call as one expandable row carrying arguments and output", () => {

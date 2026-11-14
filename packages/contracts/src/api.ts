@@ -722,104 +722,35 @@ export type LivePluginStatusEvent = z.infer<typeof livePluginStatusEventSchema>;
 // ─── Live agent run ─────────────────────────────────────────────────────────
 
 /**
- * One tool call of the current round, as the WebUI shows it while a run is active. Mirrors the
- * durable `ToolSlot` presentation but flattens it to what a viewer needs: identity, status, and
- * the retained output tail.
- */
-export const liveToolCallSchema = z.object({
-	callId: z.string().min(1),
-	/** Retained running output; bounded by the durable output buffer, never the full stream. */
-	output: z.string().optional(),
-	status: z.enum(["pending", "running", "done"]),
-	toolName: z.string().min(1),
-});
-export type LiveToolCall = z.infer<typeof liveToolCallSchema>;
-
-/**
- * The coarse phase of an in-flight run. The WebUI shows it as a status line even before the
- * model has streamed text, so a slow first token no longer looks like a hung bot.
- */
-export const liveRunPhaseSchema = z.enum(["queued", "thinking", "tools", "writing", "settled"]);
-export type LiveRunPhase = z.infer<typeof liveRunPhaseSchema>;
-
-/**
- * The in-flight run of one conversation: enough for an agent-style activity view. Every field
- * but `sessionId` is optional because a run has phases: it starts before the model streams a
- * first token, may spend time in tool rounds, and may fail without ever answering.
- */
-export const liveRunStateSchema = z.object({
-	/** Coarse stage used for the live status label. */
-	phase: liveRunPhaseSchema.optional(),
-	/** Monotonic revision of this session's run state, used to order snapshots and deltas. */
-	revision: z.number().int().nonnegative().optional(),
-	/** Committed partial of the in-flight response; grows as the model streams. */
-	partialText: z.string().optional(),
-	/** Committed reasoning so far, when the provider reports it. */
-	partialThinking: z.string().optional(),
-	/** Why the newest run ended without an answer, so a client can show it after the run ends. */
-	failure: z.string().optional(),
-	/** `true` once the run ended, so the client can stop showing it as in flight. */
-	settled: z.boolean(),
-	/** Run start, used for the elapsed-time label. */
-	startedAtMs: z.number().int().nonnegative(),
-	sessionId: z.string().min(1),
-	/** Tool calls of the current round, in call order. */
-	tools: z.array(liveToolCallSchema),
-	/** Assistant turns completed so far, which bounds the run. */
-	turns: z.number().int().nonnegative(),
-});
-export type LiveRunState = z.infer<typeof liveRunStateSchema>;
-
-/**
- * One change of a live run. Only fields that moved are present, so a 100ms text commit sends
- * the new committed text instead of the whole run: tool state and thinking are repeated only
- * when they actually changed. `failure: null` explicitly clears a previous failure.
- */
-export const liveRunPatchSchema = z.object({
-	failure: z.string().nullable().optional(),
-	partialText: z.string().optional(),
-	partialThinking: z.string().optional(),
-	phase: liveRunPhaseSchema.optional(),
-	revision: z.number().int().nonnegative().optional(),
-	settled: z.boolean().optional(),
-	tools: z.array(liveToolCallSchema).optional(),
-	turns: z.number().int().nonnegative().optional(),
-});
-export type LiveRunPatch = z.infer<typeof liveRunPatchSchema>;
-
-export const liveRunEventSchema = liveEventTimestampSchema.extend({
-	/** Present while a run is active or just failed; absent once the run settled cleanly. */
-	run: liveRunStateSchema.nullable(),
-	sessionId: z.string().min(1),
-	type: z.literal("run.state"),
-});
-export type LiveRunEvent = z.infer<typeof liveRunEventSchema>;
-
-/**
- * A browser that is already rendering a run applies this immediately. A browser that
- * reconnects receives `run.state` snapshots from the KV cache first, so deltas never have to
- * rebuild a run from nothing.
- */
-export const liveRunDeltaEventSchema = liveEventTimestampSchema.extend({
-	patch: liveRunPatchSchema,
-	revision: z.number().int().nonnegative(),
-	sessionId: z.string().min(1),
-	type: z.literal("run.delta"),
-});
-export type LiveRunDeltaEvent = z.infer<typeof liveRunDeltaEventSchema>;
-
-// ─── Persisted run steps ────────────────────────────────────────────────────
-
-/**
  * One step of a completed agent turn, derived from the durable transcript rather than the
  * ephemeral `pi.live` document. `pi.live` is cleared when a run settles, so a transcript that
  * wants to keep showing "what the agent did" has to read the durable entries instead.
  *
- * Kinds mirror what a coding agent shows: its reasoning, the tools it ran, and the text it
- * produced. `tool` steps are paired with the result that follows them, so a reader sees the
- * call and its outcome as one row.
+ * Kinds mirror what a coding agent shows: the model call it made, its reasoning, the tools it
+ * ran, and the text it produced. `tool` steps are paired with the result that follows them, so
+ * a reader sees the call and its outcome as one row.
  */
 export const runStepSchema = z.discriminatedUnion("kind", [
+	z.object({
+		/** Provider attempt within this round, starting at 1 and growing across retries. */
+		attempt: z.number().int().positive(),
+		/**
+		 * One model request inside the run, numbered across tool rounds and retries. A tool round
+		 * starts another request, and a retry starts another attempt; the row keeps the round
+		 * readable even before the first token arrives.
+		 */
+		call: z.number().int().positive(),
+		/** When the request ended, so the UI can show its wall-clock duration. */
+		endedAtMs: z.number().int().nonnegative().optional(),
+		/** Why the attempt failed or is being retried. */
+		error: z.string().optional(),
+		kind: z.literal("model"),
+		modelId: z.string().optional(),
+		providerId: z.string().optional(),
+		/** When the request started. */
+		startedAtMs: z.number().int().nonnegative(),
+		status: z.enum(["running", "retry", "done", "failed"]),
+	}),
 	z.object({
 		/** Short, already-truncated text of the model's reasoning. */
 		kind: z.literal("thinking"),
@@ -847,6 +778,143 @@ export const runStepSchema = z.discriminatedUnion("kind", [
 	}),
 ]);
 export type RunStep = z.infer<typeof runStepSchema>;
+
+/**
+ * One tool call of the current round, as the WebUI shows it while a run is active. Mirrors the
+ * durable `ToolSlot` presentation but flattens it to what a viewer needs: identity, status, and
+ * the retained output tail.
+ */
+export const liveToolCallSchema = z.object({
+	/** Compact JSON of the model's arguments, when the call is known from the streamed partial. */
+	argumentsText: z.string().optional(),
+	callId: z.string().min(1),
+	/** Retained running output; bounded by the durable output buffer, never the full stream. */
+	output: z.string().optional(),
+	status: z.enum(["pending", "running", "done"]),
+	toolName: z.string().min(1),
+});
+export type LiveToolCall = z.infer<typeof liveToolCallSchema>;
+
+/** A tool call the model is still emitting, before its tool task exists. */
+export const liveDraftToolCallSchema = z.object({
+	argumentsText: z.string().optional(),
+	callId: z.string().min(1),
+	toolName: z.string().min(1),
+});
+export type LiveDraftToolCall = z.infer<typeof liveDraftToolCallSchema>;
+
+/** The provider and model selected for the in-flight request, once the first partial names them. */
+export const liveRunModelSchema = z.object({
+	modelId: z.string().min(1),
+	providerId: z.string().min(1),
+});
+export type LiveRunModel = z.infer<typeof liveRunModelSchema>;
+
+/** Durable backoff before the next model attempt. */
+export const liveRunRetrySchema = z.object({
+	at: z.number().int().nonnegative(),
+	error: z.string(),
+});
+export type LiveRunRetry = z.infer<typeof liveRunRetrySchema>;
+
+/**
+ * The coarse phase of an in-flight run. The WebUI shows it as a status line even before the
+ * model has streamed text, so a slow first token no longer looks like a hung bot.
+ */
+export const liveRunPhaseSchema = z.enum([
+	"queued",
+	"retry",
+	"thinking",
+	"tool_calls",
+	"tools",
+	"writing",
+	"settled",
+]);
+export type LiveRunPhase = z.infer<typeof liveRunPhaseSchema>;
+
+/**
+ * The in-flight run of one conversation: enough for an agent-style activity view. Every field
+ * but `sessionId` is optional because a run has phases: it starts before the model streams a
+ * first token, may spend time in tool rounds, and may fail without ever answering.
+ */
+export const liveRunStateSchema = z.object({
+	/** Current generation attempt, starting at 1 and growing across retries. */
+	attempt: z.number().int().positive().optional(),
+	/** Model calls, reasoning, and tools from rounds that already finished, in run order. */
+	steps: z.array(runStepSchema).optional(),
+	/** Tool calls the model is still emitting, before they start executing. */
+	draftTools: z.array(liveDraftToolCallSchema).optional(),
+	/** Coarse stage used for the live status label. */
+	phase: liveRunPhaseSchema.optional(),
+	/** Selected provider and model for the in-flight request. */
+	model: liveRunModelSchema.optional(),
+	/** Durable backoff when the run is waiting to retry a failed model attempt. */
+	retry: liveRunRetrySchema.optional(),
+	/** Monotonic revision of this session's run state, used to order snapshots and deltas. */
+	revision: z.number().int().nonnegative().optional(),
+	/** Committed partial of the in-flight response; grows as the model streams. */
+	partialText: z.string().optional(),
+	/** Committed reasoning so far, when the provider reports it. */
+	partialThinking: z.string().optional(),
+	/** Why the newest run ended without an answer, so a client can show it after the run ends. */
+	failure: z.string().optional(),
+	/** `true` once the run ended, so the client can stop showing it as in flight. */
+	settled: z.boolean(),
+	/** Run start, used for the elapsed-time label. */
+	startedAtMs: z.number().int().nonnegative(),
+	sessionId: z.string().min(1),
+	/** Tool calls of the current round, in call order. */
+	tools: z.array(liveToolCallSchema),
+	/** Assistant turns completed so far, which bounds the run. */
+	turns: z.number().int().nonnegative(),
+});
+export type LiveRunState = z.infer<typeof liveRunStateSchema>;
+
+/**
+ * One change of a live run. Only fields that moved are present, so a 100ms text commit sends
+ * the new committed text instead of the whole run: tool state and thinking are repeated only
+ * when they actually changed. `failure` and `retry` clear with `null`; `draftTools` clears with
+ * an empty array.
+ */
+export const liveRunPatchSchema = z.object({
+	attempt: z.number().int().positive().optional(),
+	draftTools: z.array(liveDraftToolCallSchema).optional(),
+	failure: z.string().nullable().optional(),
+	model: liveRunModelSchema.optional(),
+	partialText: z.string().optional(),
+	partialThinking: z.string().optional(),
+	phase: liveRunPhaseSchema.optional(),
+	retry: liveRunRetrySchema.nullable().optional(),
+	revision: z.number().int().nonnegative().optional(),
+	settled: z.boolean().optional(),
+	steps: z.array(runStepSchema).optional(),
+	tools: z.array(liveToolCallSchema).optional(),
+	turns: z.number().int().nonnegative().optional(),
+});
+export type LiveRunPatch = z.infer<typeof liveRunPatchSchema>;
+
+export const liveRunEventSchema = liveEventTimestampSchema.extend({
+	/** Present while a run is active or just failed; absent once the run settled cleanly. */
+	run: liveRunStateSchema.nullable(),
+	sessionId: z.string().min(1),
+	type: z.literal("run.state"),
+});
+export type LiveRunEvent = z.infer<typeof liveRunEventSchema>;
+
+/**
+ * A browser that is already rendering a run applies this immediately. A browser that
+ * reconnects receives `run.state` snapshots from the KV cache first, so deltas never have to
+ * rebuild a run from nothing.
+ */
+export const liveRunDeltaEventSchema = liveEventTimestampSchema.extend({
+	patch: liveRunPatchSchema,
+	revision: z.number().int().nonnegative(),
+	sessionId: z.string().min(1),
+	type: z.literal("run.delta"),
+});
+export type LiveRunDeltaEvent = z.infer<typeof liveRunDeltaEventSchema>;
+
+// ─── Persisted run steps ────────────────────────────────────────────────────
 
 export const runStepsSchema = z.object({
 	/**
