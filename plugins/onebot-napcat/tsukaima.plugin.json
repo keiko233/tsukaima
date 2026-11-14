@@ -144,6 +144,14 @@
 				"description": "Forward: Tsukaima dials NapCat. Reverse: NapCat dials Tsukaima. Defaults to forward.",
 				"descriptionKey": "config_mode_hint"
 			},
+			"nativeSticker": {
+				"default": true,
+				"description": "Send stickers as QQ native animated stickers instead of plain image attachments.",
+				"descriptionKey": "config_native_sticker_hint",
+				"title": "Native sticker replies",
+				"titleKey": "config_native_sticker",
+				"type": "boolean"
+			},
 			"pendingGraceMs": {
 				"type": "number",
 				"title": "Pending delivery grace (ms)",

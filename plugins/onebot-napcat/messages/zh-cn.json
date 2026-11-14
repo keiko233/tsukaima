@@ -41,6 +41,8 @@
 	"config_bot_account_hint": "机器人自己的账号 ID，用于识别自身消息；默认 tsukaima-server。",
 	"config_reply_as_quote": "以引用方式回复",
 	"config_reply_as_quote_hint": "回复时引用被回复的消息，而不是发送独立消息。",
+	"config_native_sticker": "以原生表情包回复",
+	"config_native_sticker_hint": "把表情包作为 QQ 原生动画表情发送，而不是普通图片附件。",
 	"config_split_max_chars": "单条消息最大字数",
 	"config_split_max_chars_hint": "单条回复的最大字符数，超出会拆分发送；默认 2000。",
 	"config_send_interval": "分条发送间隔（毫秒）",

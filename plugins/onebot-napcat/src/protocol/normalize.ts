@@ -132,6 +132,28 @@ const textPart = (segment: OneBotSegment): MessagePart | undefined => {
 	return text === undefined ? undefined : { text, type: "text" };
 };
 
+/**
+ * NapCat reports QQ animated/collected stickers as `image` segments. `sub_type=1` is the
+ * documented marker; some deployments only expose `emoji_id`/`emoji_package_id`, and others
+ * only write a sticker summary. Treating these as images hid them from sticker-only policy and
+ * fed them to the vision path as ordinary photos.
+ */
+const STICKER_SUMMARY_PATTERN = /表情|贴纸|sticker|emoji/iu;
+
+const isStickerImage = (segment: OneBotSegment): boolean => {
+	const data = segment.data ?? {};
+	const subType = asString(data.sub_type) ?? asString(data.subType);
+	if (subType === "1") return true;
+	if (asString(data.emoji_id) !== undefined || asString(data.emojiId) !== undefined) return true;
+	if (
+		asString(data.emoji_package_id) !== undefined ||
+		asString(data.emojiPackageId) !== undefined
+	) {
+		return true;
+	}
+	return STICKER_SUMMARY_PATTERN.test(asString(data.summary) ?? "");
+};
+
 const facePart = (segment: OneBotSegment): MessagePart | undefined => {
 	const id = asString(segment.data?.id) ?? asString(segment.data?.face_id);
 	if (id !== undefined) {
@@ -425,7 +447,7 @@ const syncPart = (
 		case "face":
 			return facePart(segment);
 		case "image":
-			return displayMedia(segment, "image");
+			return displayMedia(segment, isStickerImage(segment) ? "sticker" : "image");
 		case "record":
 		case "audio":
 			return audioPart(segment);

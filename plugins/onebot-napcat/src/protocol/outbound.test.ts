@@ -99,6 +99,21 @@ describe("OneBot outbound serialization", () => {
 		]);
 	});
 
+	test("sends media stickers as native animated stickers by default", () => {
+		expect(toSegments([{ channelRef: "sticker-file", type: "sticker" }])).toEqual([
+			{
+				data: { file: "sticker-file", sub_type: 1, summary: "[动画表情]" },
+				type: "image",
+			},
+		]);
+	});
+
+	test("falls back to a plain image when native stickers are disabled", () => {
+		expect(
+			toSegments([{ channelRef: "sticker-file", type: "sticker" }], { nativeSticker: false }),
+		).toEqual([{ data: { file: "sticker-file" }, type: "image" }]);
+	});
+
 	test("prepends reply references and sends mixed media", async () => {
 		const { channel, transport } = await createChannel();
 		await channel.sendPrivate(
@@ -169,7 +184,10 @@ describe("OneBot outbound serialization", () => {
 			action: "send_private_msg",
 			params: {
 				message: [
-					{ data: { file: "base64://cmVhbA==" }, type: "image" },
+					{
+						data: { file: "base64://cmVhbA==", sub_type: 1, summary: "[动画表情]" },
+						type: "image",
+					},
 					{ data: { text: "[image unavailable]" }, type: "text" },
 				],
 				user_id: "10001",

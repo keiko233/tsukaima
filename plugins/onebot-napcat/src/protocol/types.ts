@@ -120,6 +120,8 @@ export type OneBotConfig = {
 		  };
 	pttToText?: boolean | { minIntervalMs?: number | undefined; timeoutMs?: number | undefined };
 	splitMaxChars?: number;
+	/** Send sticker media as QQ native animated stickers instead of plain images. */
+	nativeSticker?: boolean;
 	sendIntervalMs?: number;
 	replyAsQuote?: boolean;
 	pendingGraceMs?: number;
