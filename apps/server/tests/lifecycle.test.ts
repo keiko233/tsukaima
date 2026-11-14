@@ -148,4 +148,53 @@ describe("server lifecycle with fake model", () => {
 			await rm(directory, { force: true, recursive: true });
 		}
 	});
+
+	test("hot-refreshes active model provider when openai-compatible is configured or toggled", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-server-model-hot-"));
+		try {
+			const { lifecycle } = createApp({
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			});
+			await lifecycle.start();
+			expect(lifecycle.routingPolicies[0]?.primary).toEqual({
+				modelId: "fake-deterministic",
+				providerId: "fake",
+			});
+			expect(
+				lifecycle.modelRouter?.select({
+					capability: "basic-chat",
+					policies: lifecycle.routingPolicies,
+				})?.model.id,
+			).toBe("fake-deterministic");
+
+			await lifecycle.updatePluginConfig("openai-compatible", {
+				apiKey: "test-synthetic-key",
+				baseUrl: "http://127.0.0.1:1/v1",
+				models: [{ enabled: true, id: "real-chat-model" }],
+			});
+			expect(lifecycle.routingPolicies[0]?.primary).toEqual({
+				modelId: "real-chat-model",
+				providerId: "openai-compatible",
+			});
+			expect(
+				lifecycle.modelRouter?.select({
+					capability: "basic-chat",
+					policies: lifecycle.routingPolicies,
+				})?.model.id,
+			).toBe("real-chat-model");
+			expect(lifecycle.providerRestartRequired).toBe(false);
+
+			await lifecycle.setPluginEnabled("openai-compatible", false);
+			expect(lifecycle.routingPolicies[0]?.primary).toEqual({
+				modelId: "fake-deterministic",
+				providerId: "fake",
+			});
+
+			await lifecycle.stop();
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
 });

@@ -541,7 +541,7 @@ function legacyUser(role: string, entry: DshSessionEntry, bot: NormalizedUser): 
 		externalId: external,
 		isAdmin: false,
 		kind: roleLower === "system" ? "system" : "human",
-		platform: external ? "onebot-napcat" : null,
+		platform: external ? "onebot-v11" : null,
 		sourceHash: sha256String(sourceId),
 		sourceId,
 		sourceSystem: DSH_SOURCE,
@@ -1274,7 +1274,7 @@ function normalizeV4Session(
 				externalId: external,
 				isAdmin: external === null,
 				kind: "human",
-				platform: external ? "onebot-napcat" : null,
+				platform: external ? "onebot-v11" : null,
 				sourceHash: sha256String(sourceId),
 				sourceId,
 				sourceSystem: DSH_SOURCE,
@@ -1356,8 +1356,7 @@ function normalizeV4Session(
 			sourceId: session.id,
 			sourceSystem: DSH_SOURCE,
 			status: identity.isTest ? "archived" : "active",
-			title:
-				identity.channelId === "onebot-napcat" ? identity.title : session.title || identity.title,
+			title: identity.channelId === "onebot" ? identity.title : session.title || identity.title,
 			updatedAt,
 		},
 		messages,
@@ -1622,7 +1621,7 @@ function identityFromUser(user: NormalizedUser): NormalizedIdentity | null {
 		id: canonicalId("identity", `${platform}:${user.kind}:${external}:${user.sourceId}`),
 		kind: user.kind === "system" ? "system" : "user",
 		platform,
-		platformAccountId: external,
+		platformAccountId: platform === "onebot-v11" ? "onebot" : external,
 		sourceHash: sha256String(`${platform}:${external}:${user.sourceId}`),
 		sourceId: `${user.sourceId}:identity`,
 		sourceSystem: DSH_SOURCE,
@@ -1966,7 +1965,7 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 			title: parsed.session.title,
 			workspace: parsed.session.workspace,
 		});
-		if (identity.channelId === "onebot-napcat") {
+		if (identity.channelId === "onebot") {
 			const chatKey = `${identity.kind}:${identity.platformConversationId}`;
 			const conversationId = canonicalId(
 				"conversation",
@@ -2016,7 +2015,7 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 						externalId: external,
 						isAdmin: false,
 						kind: "human",
-						platform: "onebot-napcat",
+						platform: "onebot-v11",
 						sourceHash: sha256String(senderSourceId),
 						sourceId: senderSourceId,
 						sourceSystem: DSH_SOURCE,
@@ -2149,7 +2148,7 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 					externalId: external,
 					isAdmin: false,
 					kind: "human",
-					platform: "onebot-napcat",
+					platform: "onebot-v11",
 					sourceHash: sha256String(senderSourceId),
 					sourceId: senderSourceId,
 					sourceSystem: DSH_SOURCE,
@@ -2234,7 +2233,7 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 			unique.length > 0 ? laterIso(chat.updatedAt, unique.at(-1)!.occurredAt) : chat.updatedAt;
 		const conversation: NormalizedConversation = {
 			canonicalId: chat.conversationId,
-			channelId: "onebot-napcat",
+			channelId: "onebot",
 			chatObjectId: chat.chatObjectId,
 			createdAt,
 			durableConversationId: `durable_${chat.conversationId}`,
@@ -2306,7 +2305,7 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 				externalId: message.senderExternalId ?? null,
 				isAdmin: false,
 				kind: "human",
-				platform: message.senderExternalId ? "onebot-napcat" : null,
+				platform: message.senderExternalId ? "onebot-v11" : null,
 				sourceHash: sha256String(sourceId),
 				sourceId,
 				sourceSystem: DSH_SOURCE,
@@ -2357,7 +2356,7 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 			for (const setting of mapped.settings) settings.set(setting.canonicalId, setting);
 			decisions.push(...mapped.entries);
 			const qqConversationIds = [...conversations.values()]
-				.filter((conversation) => conversation.channelId === "onebot-napcat")
+				.filter((conversation) => conversation.channelId === "onebot")
 				.map((conversation) => conversation.canonicalId);
 			try {
 				for (const persona of personasFromConfig(

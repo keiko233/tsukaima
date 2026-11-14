@@ -79,10 +79,58 @@ describe("DSH migration kit", () => {
 		const result = await normalizeSnapshot([[snapshotRoot, "snapshot"]]);
 		expect(result.plan.users).toBe(2);
 		expect(result.plan.conversations).toBe(1);
+		expect(result.database.conversations[0]?.channelId).toBe("onebot");
+		expect(result.database.chatObjects[0]?.channelId).toBe("onebot");
 		expect(result.plan.messages).toBe(2);
 		expect(result.plan.personas).toBe(1);
 		expect(result.plan.memories).toBe(1);
 		expect(result.plan.stickers).toBe(1);
+	});
+
+	test("maps QQ identities and OneBot requests to runtime onebot channel and onebot-v11 platform", async () => {
+		await fs.mkdir(join(snapshotRoot, "home/node/.dsh/workspace/napcat"), {
+			recursive: true,
+		});
+		await fs.mkdir(join(snapshotRoot, "home/node/.dsh/workspace/memory/private-10001"), {
+			recursive: true,
+		});
+		await fs.writeFile(
+			join(snapshotRoot, "home/node/.dsh/workspace/napcat/friend-requests.jsonl"),
+			JSON.stringify({
+				channelId: "onebot-napcat",
+				comment: "hi",
+				flag: "flag-1",
+				kind: "friend",
+				requesterExternalId: "10001",
+				status: "pending",
+			}),
+		);
+		await fs.writeFile(
+			join(snapshotRoot, "home/node/.dsh/workspace/memory/private-10001/recent.jsonl"),
+			JSON.stringify({
+				nick: "Tester",
+				t: 1767225700000,
+				text: "hello from qq",
+				uid: "10001",
+			}),
+		);
+
+		const result = await normalizeSnapshot([[snapshotRoot, "snapshot"]]);
+		const qqConversation = result.database.conversations.find(
+			(conversation) => conversation.platformConversationId === "10001",
+		);
+		const qqChat = result.database.chatObjects.find(
+			(chat) => chat.platformConversationId === "10001",
+		);
+		const qqIdentity = result.database.identities.find(
+			(identity) => identity.externalId === "10001",
+		);
+		const qqRequest = result.database.requests.find((request) => request.flag === "flag-1");
+		expect(qqConversation?.channelId).toBe("onebot");
+		expect(qqChat?.channelId).toBe("onebot");
+		expect(qqIdentity?.platform).toBe("onebot-v11");
+		expect(qqIdentity?.platformAccountId).toBe("onebot");
+		expect(qqRequest?.channelId).toBe("onebot");
 	});
 
 	test("does not classify structural key fields as settings secrets", async () => {

@@ -575,11 +575,34 @@ export class TsukaimaLifecycle {
 		this.runtimeLog.error("lifecycle failed", { reason, stage: this.currentStage });
 	}
 
-	async applyRuntimeSettings(settings: RuntimeSettings): Promise<void> {
-		this.setLogLevel(settings.logLevel);
-		const requestedProviderId = settings.modelProviderId;
+	private async refreshModelPort(settings?: RuntimeSettings): Promise<void> {
+		if (this.modelOverride !== undefined || this.domainDatabase === undefined) return;
+		const effectiveSettings = settings ?? (await readRuntimeSettings(this.domainDatabase));
+		const model = await this.createModelPort(effectiveSettings);
+		this.memoryModel = model;
+		this.activeProviderId = model.providerId;
+		this.modelRouter = new ModelPolicyRouter(model.models.getModels(model.providerId));
+		this.routingPolicies = [
+			{
+				capability: "basic-chat",
+				primary: { modelId: model.modelId, providerId: model.providerId },
+			},
+		];
+		this.conversationHost?.setModel(model);
+		const requestedProviderId = effectiveSettings.modelProviderId;
 		this.providerRestartRequired =
 			requestedProviderId !== undefined && requestedProviderId !== this.activeProviderId;
+	}
+
+	async applyRuntimeSettings(settings: RuntimeSettings): Promise<void> {
+		this.setLogLevel(settings.logLevel);
+		if (this.modelOverride === undefined && this.domainDatabase !== undefined) {
+			await this.refreshModelPort(settings);
+		} else {
+			const requestedProviderId = settings.modelProviderId;
+			this.providerRestartRequired =
+				requestedProviderId !== undefined && requestedProviderId !== this.activeProviderId;
+		}
 		this.runtimeLog.info("runtime settings applied", {
 			logLevel: settings.logLevel,
 			providerRestartRequired: this.providerRestartRequired,
@@ -589,10 +612,12 @@ export class TsukaimaLifecycle {
 	/** Apply configuration for a built-in plugin; plugins react through `settings.onChange`. */
 	async updatePluginConfig(pluginId: string, patch: Record<string, unknown>): Promise<void> {
 		await this.pluginHost.applySettings(pluginId, patch);
+		await this.refreshModelPort();
 	}
 
 	async setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
 		await this.pluginHost.setEnabled(pluginId, enabled);
+		await this.refreshModelPort();
 	}
 
 	async pluginConfig(pluginId: string): Promise<Record<string, unknown>> {
