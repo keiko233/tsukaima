@@ -41,9 +41,11 @@ import type { PluginTaskService } from "./plugin-task-service.ts";
 import type { RequestService } from "./request-service.ts";
 import type { MigrationRegistry } from "@tsukaima/plugin-registry";
 import { createScopedPluginDatabase } from "./plugin-scoped-database.ts";
+import { createPluginCacheBridge } from "./plugin-cache.ts";
 import { createPluginMediaBridge } from "./plugin-media.ts";
 import type { MediaService } from "./media-service.ts";
 import { pluginInstallStates, type TsukaimaDatabase } from "@tsukaima/db";
+import type { KeyvCache } from "@tsukaima/cache";
 import { eq } from "drizzle-orm";
 
 export interface PluginHostOptions {
@@ -60,6 +62,7 @@ export interface PluginHostOptions {
 	readonly requests: RequestService;
 	readonly settings: PluginSettingsStore;
 	readonly statuses: PluginStatusStore;
+	readonly cache?: KeyvCache;
 	readonly database?: () => TsukaimaDatabase | undefined;
 	readonly media?: MediaService;
 	readonly migrations?: MigrationRegistry;
@@ -148,6 +151,7 @@ export class PluginHost {
 	readonly #started: string[] = [];
 	readonly #statuses: PluginStatusStore;
 	readonly #rpcOwners = new Map<string, string>();
+	readonly #cache: KeyvCache | undefined;
 	readonly #database: (() => TsukaimaDatabase | undefined) | undefined;
 	readonly #media: MediaService | undefined;
 	readonly #migrations: MigrationRegistry | undefined;
@@ -168,6 +172,7 @@ export class PluginHost {
 		this.channels = options.channels;
 		this.settings = options.settings;
 		this.#statuses = options.statuses;
+		this.#cache = options.cache;
 		this.#database = options.database;
 		this.#media = options.media;
 		this.#migrations = options.migrations;
@@ -947,6 +952,10 @@ export class PluginHost {
 		const database = this.#database?.();
 		const storage =
 			this.#storage?.bridge(pluginId, manifest.permissions) ?? new LocalStorageBridge();
+		const cache =
+			this.#cache === undefined
+				? undefined
+				: createPluginCacheBridge(this.#cache, pluginId, manifest.permissions);
 		const migrations =
 			this.#migrations === undefined
 				? undefined
@@ -981,6 +990,7 @@ export class PluginHost {
 		return createPluginContext({
 			channels: this.channels,
 			storage,
+			...(cache === undefined ? {} : { cache }),
 			...(tasks === undefined ? {} : { tasks }),
 			...(conversations === undefined ? {} : { conversations }),
 			...(migrations === undefined ? {} : { migrations }),

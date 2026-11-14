@@ -41,6 +41,35 @@ export interface PluginConfig {
 	get<T = SerializedValue>(key: string): Promise<T | undefined>;
 }
 
+export interface PluginCacheSetOptions {
+	/** Keep the value for this many milliseconds. Omit to keep it until overwritten. */
+	readonly ttlMs?: number;
+}
+
+/**
+ * Fast, TTL-aware shared state for plugins, backed by the host KV cache.
+ *
+ * This is intentionally not plugin storage: values may expire, are namespaced per plugin,
+ * and are meant for short-lived coordination (search snapshots, cooldowns, stream cursors,
+ * cache invalidation). Durable plugin data still belongs in `storage`.
+ */
+export interface PluginCacheApi {
+	get<T = SerializedValue>(key: string): Promise<T | undefined>;
+	set(key: string, value: SerializedValue, options?: PluginCacheSetOptions): Promise<void>;
+	delete(key: string): Promise<boolean>;
+	has(key: string): Promise<boolean>;
+	/** Read or compute on a miss. The host serializes concurrent misses for the same key. */
+	getOrSet<T = SerializedValue>(
+		key: string,
+		factory: () => Promise<T> | T,
+		options?: PluginCacheSetOptions,
+	): Promise<T>;
+	/** Publish to this plugin's cache channel namespace. `channel` is not global. */
+	publish(channel: string, payload: SerializedValue): Promise<void>;
+	/** Host-mode only; worker plugins receive no subscribe function. */
+	subscribe?(channel: string, handler: (payload: unknown) => void): () => void;
+}
+
 export type PluginMediaKind = "image" | "sticker" | "audio" | "video" | "file";
 
 export type PluginMediaSource = "channel" | "webui" | "migration" | "generated";
@@ -594,6 +623,8 @@ export interface PluginContext {
 	config: PluginConfig;
 	logger: PluginLogger;
 	storage: PluginStorage;
+	/** TTL-aware shared cache, present when the plugin declares `cache.*` permissions. */
+	cache?: PluginCacheApi;
 	conversation: {
 		read(): Promise<readonly MessageEnvelope[]>;
 	};

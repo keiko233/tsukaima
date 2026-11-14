@@ -421,6 +421,27 @@ describe("plugin sdk", () => {
 		});
 	});
 
+	test("exposes a TTL cache only to plugins with a cache permission", async () => {
+		const without = createPluginContext({ manifest, pluginId: "sample" });
+		expect(without.cache).toBeUndefined();
+
+		const withCache = createPluginContext({
+			grantedPermissions: ["cache.read", "cache.write", "cache.publish"],
+			manifest,
+			pluginId: "sample",
+		});
+		expect(withCache.cache).toBeDefined();
+		await withCache.cache?.set("key", "value", { ttlMs: 10 });
+		expect(await withCache.cache?.get("key")).toBe("value");
+		const payloads: unknown[] = [];
+		const dispose = withCache.cache?.subscribe?.("updates", (payload) => payloads.push(payload));
+		await withCache.cache?.publish("updates", 42);
+		dispose?.();
+		expect(payloads).toEqual([42]);
+		await Bun.sleep(20);
+		expect(await withCache.cache?.get("key")).toBeUndefined();
+	});
+
 	test("degrades to no tools when the registry cannot be listed", () => {
 		const extension = createPluginToolsExtension(
 			() => {
