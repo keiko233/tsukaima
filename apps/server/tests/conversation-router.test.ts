@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MessageEnvelope } from "@elaina/contracts";
 import { identities, messages, users } from "@elaina/db";
+import type { ChannelAdapter, ChannelDiagnostics } from "@elaina/sdk";
 import { createApp } from "../src/app.ts";
+import type { ChannelRegistry } from "../src/services/channel-registry.ts";
 
 const directories: string[] = [];
 
@@ -36,6 +38,31 @@ async function createLifecycle() {
 	return lifecycle;
 }
 
+/**
+ * Register a minimal adapter and return the function that pushes an envelope through the
+ * registry's real detached `onEnvelope` callback.
+ */
+function registerFakeChannel(
+	registry: ChannelRegistry,
+	channelId: string,
+): (envelope: MessageEnvelope) => void {
+	const handlers: Array<(envelope: MessageEnvelope) => void> = [];
+	const adapter: ChannelAdapter = {
+		capabilities: () => [],
+		diagnostics: (): ChannelDiagnostics => ({ configured: true, connected: true, state: "open" }),
+		id: channelId,
+		kind: "fake",
+		onEnvelope: (handler) => handlers.push(handler),
+		send: async () => ({}),
+		start: async () => {},
+		stop: async () => {},
+	};
+	registry.register(adapter);
+	return (next: MessageEnvelope) => {
+		for (const handler of handlers) handler(next);
+	};
+}
+
 describe("ConversationRouter ingestion boundary", () => {
 	test("rejects an invalid envelope without persisting anything", async () => {
 		const lifecycle = await createLifecycle();
@@ -60,6 +87,52 @@ describe("ConversationRouter ingestion boundary", () => {
 			expect(await database.select({ id: messages.id }).from(messages)).toHaveLength(0);
 			expect(await database.select({ id: users.id }).from(users)).toHaveLength(0);
 			expect(await database.select({ id: identities.id }).from(identities)).toHaveLength(0);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	// Regression: the channel registry invokes these handlers from a detached promise. Swallowing
+	// the rejection meant a contract violation or database error dropped the message with no log
+	// at all, which is why an empty sender name looked like "the bot ignores me".
+	test("logs a rejected envelope instead of swallowing the failure", async () => {
+		const lifecycle = await createLifecycle();
+		try {
+			const emit = registerFakeChannel(lifecycle.channels, "onebot");
+			// Push an invalid envelope through the real detached registry path.
+			emit({ ...envelope("logged-1", "x"), parts: [] });
+			await Bun.sleep(50);
+
+			const failures = lifecycle.logs
+				.list({ level: "warn" })
+				.filter((entry) => entry.message.includes("inbound channel event"));
+			expect(failures).toHaveLength(1);
+			expect(failures[0]?.fields).toMatchObject({
+				channelId: "onebot",
+				conversationKey: "private:peer:user-1",
+				eventId: "logged-1",
+				stage: "envelope",
+			});
+			expect(lifecycle.lastProcessingError).toBeInstanceOf(Error);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("rate limits repeated inbound failures per conversation", async () => {
+		const lifecycle = await createLifecycle();
+		try {
+			const emit = registerFakeChannel(lifecycle.channels, "onebot");
+			for (let index = 0; index < 5; index += 1) {
+				emit({ ...envelope(`flood-${index}`, "x"), parts: [] });
+				await Bun.sleep(10);
+			}
+			const failures = lifecycle.logs
+				.list({ level: "warn" })
+				.filter((entry) => entry.message.includes("inbound channel event"));
+			// Every failure is recorded; only the first of the burst is not marked suppressed.
+			expect(failures).toHaveLength(5);
+			expect(failures.filter((entry) => entry.fields.suppressed !== true)).toHaveLength(1);
 		} finally {
 			await lifecycle.stop();
 		}

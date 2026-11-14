@@ -57,6 +57,13 @@ import { PluginTaskService } from "./services/plugin-task-service.ts";
 import { ReplyDispatcher } from "./services/reply-dispatcher.ts";
 import { RequestService } from "./services/request-service.ts";
 
+/**
+ * Minimum spacing between logged failures for one channel stage and conversation. Detached
+ * inbound handlers can fail on every event, so the log needs a floor that still surfaces a
+ * breakage immediately.
+ */
+const INBOUND_FAILURE_LOG_INTERVAL_MS = 60_000;
+
 export interface LifecycleOptions {
 	/** Optional scheduled backup/restore drill override; disabled unless configured. */
 	readonly backupDrill?:
@@ -137,6 +144,12 @@ export class ElainaLifecycle {
 	private readonly runtimeLog: Logger;
 	private readonly backupDrillRoot: string | undefined;
 	private readonly modelOverride: ModelPort | undefined;
+	/**
+	 * Last time each channel pipeline stage logged a failure. Channel adapters report errors from
+	 * a detached promise, so an unthrottled log would let a permanently broken event flood the
+	 * buffer. Keyed by stage + conversation key.
+	 */
+	private readonly inboundFailureLoggedAt = new Map<string, number>();
 	private activeProviderId: string | undefined;
 
 	constructor(config: ElainaConfig, options?: LifecycleOptions) {
@@ -172,13 +185,19 @@ export class ElainaLifecycle {
 		this.hooks = new HookBus(this.logger);
 		this.channels = new ChannelRegistry({
 			onEnvelope: (channelId, envelope) => {
-				void this.handleChannelEnvelope(channelId, envelope).catch(() => undefined);
+				void this.handleChannelEnvelope(channelId, envelope).catch((error: unknown) =>
+					this.reportInboundFailure("envelope", channelId, envelope, error),
+				);
 			},
 			onNotice: (channelId, notice) => {
-				void this.handleChannelNotice(channelId, notice).catch(() => undefined);
+				void this.handleChannelNotice(channelId, notice).catch((error: unknown) =>
+					this.reportInboundFailure("notice", channelId, notice, error),
+				);
 			},
 			onRequest: (channelId, request) => {
-				void this.handleChannelRequest(channelId, request).catch(() => undefined);
+				void this.handleChannelRequest(channelId, request).catch((error: unknown) =>
+					this.reportInboundFailure("request", channelId, request, error),
+				);
 			},
 		});
 		this.media = new MediaService({
@@ -584,6 +603,58 @@ export class ElainaLifecycle {
 			// Embedding is optional; callers fall back to lexical/recency ranking.
 		}
 		return undefined;
+	}
+
+	/**
+	 * Report a failed inbound pipeline stage. The channel registry calls these handlers from a
+	 * detached promise, so without this every processing failure vanished: a contract violation
+	 * or database error dropped the message with no log, no audit, and no visible symptom beyond
+	 * "the bot did not answer".
+	 *
+	 * Failures are rate-limited per stage and conversation so a persistent breakage cannot flood
+	 * the log buffer; the first occurrence is always logged, and `lastProcessingError` still
+	 * carries the raw error for the diagnostics panel.
+	 */
+	private reportInboundFailure(
+		stage: "envelope" | "notice" | "request",
+		channelId: string,
+		payload: unknown,
+		error: unknown,
+	): void {
+		const cause = error instanceof Error ? error : new Error(String(error));
+		this.lastProcessingError = cause;
+		const record =
+			typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+		const conversationKey = this.conversationKeyOf(record.conversationKey);
+		const key = `${stage}:${channelId}:${conversationKey}`;
+		const now = Date.now();
+		const lastLoggedAt = this.inboundFailureLoggedAt.get(key);
+		const shouldLog =
+			lastLoggedAt === undefined || now - lastLoggedAt >= INBOUND_FAILURE_LOG_INTERVAL_MS;
+		if (shouldLog) this.inboundFailureLoggedAt.set(key, now);
+		const eventId = typeof record.id === "string" ? record.id : undefined;
+		this.runtimeLog.warn("inbound channel event could not be processed", {
+			channelId,
+			conversationKey,
+			error: cause.message,
+			...(eventId === undefined ? {} : { eventId }),
+			...(shouldLog ? {} : { suppressed: true }),
+			stage,
+		});
+	}
+
+	/** Stable, log-safe conversation identity for a channel payload. */
+	private conversationKeyOf(value: unknown): string {
+		if (typeof value !== "object" || value === null) return "unknown";
+		const record = value as Record<string, unknown>;
+		const kind = typeof record.kind === "string" ? record.kind : "unknown";
+		const peer =
+			typeof record.groupId === "string"
+				? `group:${record.groupId}`
+				: typeof record.peerId === "string"
+					? `peer:${record.peerId}`
+					: "unknown";
+		return `${kind}:${peer}`;
 	}
 
 	private async handleChannelEnvelope(channelId: string, envelope: MessageEnvelope): Promise<void> {
