@@ -127,4 +127,48 @@ describe("PiDurableConversationHost", () => {
 			await rm(directory, { force: true, recursive: true });
 		}
 	});
+
+	// Regression: burst pacing compares envelope times against the local `submittedAtMs`. When a
+	// remote platform clock ran ahead, `submittedAtMs - latestMessageAtMs` stayed negative, so
+	// neither the idle settle nor the `burstMaxWaitMs` cap could ever be reached: the activity
+	// window never submitted and the conversation silently stopped replying.
+	test("submits a burst at the max-wait cap when the platform clock runs ahead", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const host = new PiDurableConversationHost({
+				// A settle window far longer than the test so only the max-wait cap can submit.
+				policy: {
+					burstMaxWaitMs: 120,
+					maxMessages: 100,
+					windowMs: 60_000,
+				},
+				storage,
+			});
+			const conversationId = await host.createConversation();
+			for (let index = 0; index < 25; index += 1) {
+				const now = Date.now();
+				await host.append({
+					conversationId,
+					envelope: {
+						...envelope(`skewed-burst-${index}`, `burst ${index}`),
+						source: {
+							messageId: `skewed-burst-${index}`,
+							receivedAtMs: now,
+							// Platform clock 36s ahead of this process.
+							timestampMs: now + 36_000,
+						},
+					},
+					submittedAtMs: now,
+				});
+				await Bun.sleep(20);
+			}
+			const entries = await host.listEntries(conversationId);
+			expect(entries.some((entry) => entry.kind === "pi.assistant")).toBe(true);
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
 });

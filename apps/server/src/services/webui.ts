@@ -525,7 +525,7 @@ export async function sendMessage(
 					id: "webui-admin",
 					platformId: "webui-admin",
 				},
-				source: { messageId: id, timestampMs: Date.now() },
+				source: { messageId: id, receivedAtMs: Date.now(), timestampMs: Date.now() },
 			},
 			forceSubmit: true,
 			submittedAtMs: Date.now(),

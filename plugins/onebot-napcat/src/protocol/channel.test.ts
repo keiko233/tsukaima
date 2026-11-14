@@ -148,7 +148,12 @@ test("normalizes private messages and rejects invalid events", () => {
 		],
 		raw: privateEvent,
 		sender: { displayName: "Test User", id: "10001", platformId: "10001" },
-		source: { messageId: "100", timestampMs: 123_000 },
+		source: {
+			messageId: "100",
+			// Local observation time; `timestampMs` stays the platform clock.
+			receivedAtMs: expect.any(Number) as number,
+			timestampMs: 123_000,
+		},
 		target: { replyToEnvelopeId: "source-message" },
 	});
 	expect(

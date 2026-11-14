@@ -39,9 +39,20 @@ import { shouldCloseActivityWindow } from "./index.ts";
 
 type StoredEnvelope = JsonObject & {
 	readonly id: string;
-	readonly source: JsonObject & { readonly timestampMs: number };
+	readonly source: JsonObject & {
+		readonly timestampMs: number;
+		readonly receivedAtMs?: number;
+	};
 	triggerContext?: string;
 };
+
+/**
+ * Local observation time for a stored envelope, falling back to the platform timestamp for
+ * envelopes persisted before `receivedAtMs` existed. Burst pacing must use the same clock
+ * domain as `submittedAtMs`, which is local.
+ */
+const envelopeObservedAtMs = (envelope: StoredEnvelope | undefined): number | undefined =>
+	envelope?.source.receivedAtMs ?? envelope?.source.timestampMs;
 
 type ActivityWindowDocument = JsonObject & {
 	closedAtMs: number | null;
@@ -363,10 +374,11 @@ export class PiDurableConversationHost {
 		const shouldOpen = !window || window.status !== "collecting";
 		const storedEnvelope = this.toStoredEnvelope(input.envelope, input.triggerContext);
 		const nextEnvelopes = shouldOpen ? [storedEnvelope] : [...envelopes, storedEnvelope];
-		const firstMessageAtMs =
-			nextEnvelopes[0]?.source.timestampMs ?? input.envelope.source.timestampMs;
-		const latestMessageAtMs =
-			nextEnvelopes.at(-1)?.source.timestampMs ?? input.envelope.source.timestampMs;
+		// Pacing compares against `submittedAtMs`, which is local. Envelope timestamps come from
+		// the remote platform's clock, so using them here made the settle window unreachable
+		// whenever the platform clock ran ahead. Prefer the locally observed time.
+		const firstMessageAtMs = envelopeObservedAtMs(nextEnvelopes[0]) ?? input.submittedAtMs;
+		const latestMessageAtMs = envelopeObservedAtMs(nextEnvelopes.at(-1)) ?? input.submittedAtMs;
 		const longMessage =
 			messagePartsText(input.envelope.parts).length >= pacing.burstLongMessageThreshold;
 		const windowClosed = shouldCloseActivityWindow(
@@ -717,7 +729,7 @@ export class PiDurableConversationHost {
 		);
 		if (!window || window.status !== "collecting" || window.envelopes.length === 0) return;
 		const policy = await this.readPolicy(numericId);
-		const latest = window.envelopes.at(-1)?.source.timestampMs ?? window.openedAtMs;
+		const latest = envelopeObservedAtMs(window.envelopes.at(-1)) ?? window.openedAtMs;
 		const remainingMs = policy.pacing.burstSettleMs - (Date.now() - latest);
 		this.scheduleActivityFlush(conversationId, Math.max(0, remainingMs));
 	}
