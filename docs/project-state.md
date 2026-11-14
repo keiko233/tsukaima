@@ -205,7 +205,7 @@ These are implementation-level decisions, not blockers for starting scaffolding:
 - Phase 2: OneBot outbound WebSocket is connected in lifecycle startup; inbound envelopes are normalized, deduplicated by domain conversation key, and routed to reusable durable conversations. Conversation policy, trigger classification/lurk handling, cooldown/burst queues, humanlike output pacing, persona binding precedence, and admin policy/persona UI/API are implemented.
 - Phase 3: model registry/policy routing, OpenAI-compatible provider, provider settings, usage accounting, plugin migrations, durable plugin storage/tasks, layered tool policy, ordered reply transforms, declarative UI components, granular channel/model capabilities, install lifecycle/quarantine, and the mature worker contract are implemented.
 - Phase 4: memory extraction/review, scoped recall, compaction, and the memory admin UI are implemented.
-- Phase 5: `sticker-meme` import, review, selection, send tokens, transforms, and panel are implemented.
+- Phase 5: `sticker-meme` Telegram sticker-set import (including TGS-to-GIF rendering and WebM support), semantic preprocessing (emoji/title heuristics with an optional vision model), panel-managed bot token, review, selection, send tokens, transforms, and panel are implemented. Local directory/ZIP/DSH imports remain for migration.
 - Phase 6: `search-fetch` multi-provider routing, SSRF-hardened fetching, cache, redaction, tools, and panel are implemented.
 - Phase 7: `proactive-scheduler` durable tasks, gates, decisions, tools, and panel are implemented.
 - Phase 8: `self-iteration` runtime, coding tasks/proposals/approvals, supervised reload, deployments, rollback, tools, and panel are implemented.
