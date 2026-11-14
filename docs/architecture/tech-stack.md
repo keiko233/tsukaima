@@ -25,6 +25,7 @@ packages/
   contracts/    oRPC routers, Zod schemas, shared error types
   core/         conversation, memory, persona, policy, plugin domain services
   durable/      pi-durable host and Bun SQLite adapter
+  cache/        Keyv TTL cache, live-run event stream, and plugin cache
   db/           Drizzle schema and migrations
   onebot/       OneBot/NapCat adapter
   coding/       self-iteration runtime policies and tools
@@ -93,6 +94,8 @@ Frontend state rules:
 - Database files:
   - `durable.sqlite`: conversations, entries, tasks, documents, usage, compactions.
   - `domain.sqlite`: users, personas, memory, plugin registry, policies, audit, migration ledger, media index.
+  - `cache.sqlite`: Keyv TTL values, live-run snapshots, and bounded run event streams.
+- Ephemeral KV cache: `keyv` + `@keyv/sqlite` with the Bun SQLite driver, wrapped by `@tsukaima/cache`.
 - Attachments: content-addressed files plus SQLite metadata.
 
 Use Drizzle for explicit domain schema and queries. Use `pi-durable` APIs for conversation/task operations. Do not write directly to durable tables from domain services.

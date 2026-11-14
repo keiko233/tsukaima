@@ -37,6 +37,7 @@ type PluginContext = {
   config: PluginConfig;
   logger: PluginLogger;
   storage: PluginStorage;
+  cache?: PluginCacheApi;
   events: PluginEvents;
   tools: PluginToolRegistry;
   ui: PluginUiRegistry;
@@ -65,6 +66,10 @@ Implemented host surfaces:
   `plugin-config:<pluginId>` in the domain `meta` table, with `manifest.configEnv` fallbacks.
   Writing a patch validates it against `manifest.configSchema` and notifies the plugin, which
   is how a channel restarts on a settings change.
+- `cache.get/set/delete/has/getOrSet/publish` — TTL-aware key/value state shared with the
+  host KV cache. Present only with `cache.read`, `cache.write`, or `cache.publish`; keys are
+  namespaced under `plugin:<pluginId>:` and channels under `plugin.<pluginId>.`. `subscribe` is
+  host-mode only. Use `storage` for durable data and `cache` for short-lived state.
 - `requests.persist(request)` — durable friend/group request inbox.
 - `audit.record(entry)` — host audit trail.
 - `dependencies.get(key)` — host bindings injected for built-in plugins (for example a
@@ -158,6 +163,26 @@ await context.storage.global.set("state", value);
 ```
 
 Storage values are versioned JSON. The host validates against the plugin's declared schema where available.
+
+## Cache
+
+Plugins that declare `cache.read`, `cache.write`, or `cache.publish` get `context.cache`, backed
+by the host Keyv cache. It is for short-lived state; see [KV cache](kv-cache.md).
+
+```ts
+const key = `provider:${providerId}`;
+const cooldown = await context.cache?.get<number>(key);
+if (cooldown !== undefined) return;
+await context.cache?.getOrSet(
+  key,
+  async () => computeExpensiveValue(),
+  { ttlMs: 60_000 },
+);
+await context.cache?.publish("provider.updated", { providerId });
+```
+
+Keys and channels are automatically prefixed with the plugin id. `subscribe` is available in
+host mode only; worker plugins use the value operations through host-mediated calls.
 
 ## Channel API
 

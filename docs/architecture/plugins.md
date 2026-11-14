@@ -58,6 +58,8 @@ Required permission groups:
 | persona.read/write | Modify persona bindings |
 | model.call | Call a declared model route |
 | task.create | Create durable background tasks |
+| cache.read/write | Use the TTL-aware plugin cache namespace |
+| cache.publish | Publish to the plugin cache channel namespace |
 | ui.panel | Add WebUI panels |
 | secrets.read.<name> | Read one named secret |
 | coding.execute | Use self-iteration tools |

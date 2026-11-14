@@ -8,6 +8,7 @@ This document set is the durable design record for Tsukaima. Each file is meant 
 | --- | --- |
 | [Project state](../project-state.md) | Current phase, completed work, next actions, and context needed to resume |
 | [Runtime and persistence](runtime.md) | Process model, `pi-durable`, SQLite adapter, storage boundaries, media, failure behavior |
+| [KV cache](kv-cache.md) | Keyv-backed TTL cache, live-run streaming, reconnect snapshots, plugin cache |
 | [Startup lifecycle](startup-lifecycle.md) | Boot stages, database migrations, service readiness, and shutdown |
 | [Runtime logging](logging.md) | Structured tracing records, console/SSE transports, retention, and WebUI rendering |
 | [Domain model](domain-model.md) | Envelopes, activity windows, conversation resolution, users, memory, persona |
@@ -34,6 +35,7 @@ The system has five planes:
 1. **Channel plane**: adapters normalize IM events into `MessageEnvelope`s and send outbound actions.
 2. **Conversation plane**: `pi-durable` stores immutable entries, tasks, submissions, documents, usage, and compactions.
 3. **Agent plane**: model routing, prompt assembly, tools, plugins, hooks, and policy.
+   Ephemeral run state is published through the KV cache instead of being polled from durable.
 4. **Domain plane**: users, relationships, memory, personas, stickers, moderation, and IM-specific state.
 5. **Interface plane**: WebUI, admin APIs, migration tools, and deployment artifacts.
 
