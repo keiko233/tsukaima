@@ -126,6 +126,26 @@ describe("OneBot inbound segment fidelity", () => {
 		expect(envelope?.parts[5]).toMatchObject({ nativeType: "rps", type: "channel-native" });
 	});
 
+	test("classifies QQ sticker images as stickers, not photos", () => {
+		const cases: OneBotSegment[] = [
+			{ data: { file: "a.gif", sub_type: 1, summary: "[动画表情]" }, type: "image" },
+			{ data: { emoji_id: "e1", emoji_package_id: "1", file: "b.gif" }, type: "image" },
+			{ data: { file: "c.webp", summary: "sticker" }, type: "image" },
+		];
+		for (const segment of cases) {
+			const envelope = normalizeOneBotEvent(message([segment]), config);
+			expect(envelope?.parts[0]?.type).toBe("sticker");
+		}
+	});
+
+	test("keeps ordinary photos as images", () => {
+		const envelope = normalizeOneBotEvent(
+			message([{ data: { file: "photo.jpg", sub_type: 0 }, type: "image" }]),
+			config,
+		);
+		expect(envelope?.parts[0]?.type).toBe("image");
+	});
+
 	test("does not resolve unsafe file path schemes", () => {
 		const envelope = normalizeOneBotEvent(
 			message([{ data: { file: "file:///tmp/../secret", name: "secret" }, type: "file" }]),

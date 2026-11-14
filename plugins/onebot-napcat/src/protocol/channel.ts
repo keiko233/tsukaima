@@ -76,11 +76,25 @@ const mediaFile = (part: MessagePart): string | undefined => {
 	return part.channelRef ?? part.sourceUrl ?? part.sha256 ?? part.mediaId;
 };
 
+/** QQ renders an `image` segment as a native animated sticker when these fields are set. */
+const NATIVE_STICKER_SUMMARY = "[动画表情]";
+
+export interface OneBotSegmentOptions {
+	/** Send sticker media as QQ native animated stickers instead of plain images. Default true. */
+	readonly nativeSticker?: boolean | undefined;
+}
+
+const nativeStickerEnabled = (options?: OneBotSegmentOptions): boolean =>
+	options?.nativeSticker !== false;
+
 /**
  * Serialize a core message part into OneBot v11 segments. `channel-native` parts degrade to
  * their safe summary because the remote platform cannot render an opaque local structure.
  */
-export const toSegments = (parts: readonly MessagePart[]): OneBotSegment[] => {
+export const toSegments = (
+	parts: readonly MessagePart[],
+	options?: OneBotSegmentOptions,
+): OneBotSegment[] => {
 	const segments: OneBotSegment[] = [];
 	for (const part of parts) {
 		switch (part.type) {
@@ -99,7 +113,16 @@ export const toSegments = (parts: readonly MessagePart[]): OneBotSegment[] => {
 					break;
 				}
 				const file = mediaFile(part);
-				if (file !== undefined) segments.push({ data: { file }, type: "image" });
+				if (file !== undefined) {
+					// `sub_type: 1` is NapCat/QQ's collected animated sticker subtype; `summary`
+					// keeps clients that ignore it from rendering an empty image.
+					segments.push({
+						data: nativeStickerEnabled(options)
+							? { file, sub_type: 1, summary: NATIVE_STICKER_SUMMARY }
+							: { file },
+						type: "image",
+					});
+				}
 				break;
 			}
 			case "audio": {
@@ -347,7 +370,10 @@ export class OneBotChannel {
 	}
 
 	async sendForward(target: OutboundTarget, parts: readonly MessagePart[]): Promise<unknown> {
-		const node = { data: { content: toSegments(parts) }, type: "node" };
+		const node = {
+			data: { content: toSegments(parts, { nativeSticker: this.config.nativeSticker }) },
+			type: "node",
+		};
 		this.logOutbound(
 			target.kind === "group" ? "send_group_forward_msg" : "send_private_forward_msg",
 			target.platformConversationId,
@@ -620,9 +646,10 @@ export class OneBotChannel {
 					part.channelRef === undefined &&
 					part.sourceUrl === undefined,
 			);
-		if (!needsResolution) return withReply(toSegments(parts));
+		const segmentOptions: OneBotSegmentOptions = { nativeSticker: this.config.nativeSticker };
+		if (!needsResolution) return withReply(toSegments(parts, segmentOptions));
 		return Promise.all(parts.map((part) => this.resolveOutboundPart(part))).then((resolved) =>
-			withReply(toSegments(resolved)),
+			withReply(toSegments(resolved, segmentOptions)),
 		);
 	}
 

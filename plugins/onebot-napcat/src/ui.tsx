@@ -88,6 +88,7 @@ function SettingsPanel() {
 						{
 							keys: [
 								"replyAsQuote",
+								"nativeSticker",
 								"splitMaxChars",
 								"sendIntervalMs",
 								"pendingGraceMs",

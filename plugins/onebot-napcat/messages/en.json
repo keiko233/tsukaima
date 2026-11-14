@@ -41,6 +41,8 @@
 	"config_bot_account_hint": "The bot's own account id, used to recognise its own messages. Defaults to elaina-server.",
 	"config_reply_as_quote": "Reply with a quote",
 	"config_reply_as_quote_hint": "Quote the message being answered instead of sending a standalone reply.",
+	"config_native_sticker": "Native sticker replies",
+	"config_native_sticker_hint": "Send stickers as QQ native animated stickers instead of plain image attachments.",
 	"config_split_max_chars": "Max characters per chunk",
 	"config_split_max_chars_hint": "Maximum characters per reply chunk; longer replies are split. Defaults to 2000.",
 	"config_send_interval": "Delay between chunks (ms)",

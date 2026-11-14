@@ -204,7 +204,10 @@ test("passes private and group send payloads through the transport", async () =>
 			group_id: "555",
 			message: [
 				{ data: { file: "image-hash" }, type: "image" },
-				{ data: { file: "face-hash" }, type: "image" },
+				{
+					data: { file: "face-hash", sub_type: 1, summary: "[动画表情]" },
+					type: "image",
+				},
 			],
 		},
 	});

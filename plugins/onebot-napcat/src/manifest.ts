@@ -133,6 +133,15 @@ const configProperties = {
 		titleKey: "config_mode",
 		type: "string",
 	},
+	nativeSticker: {
+		// Native stickers are the default: only an explicit `false` falls back to plain images.
+		default: true,
+		description: "Send stickers as QQ native animated stickers instead of plain image attachments.",
+		descriptionKey: "config_native_sticker_hint",
+		title: "Native sticker replies",
+		titleKey: "config_native_sticker",
+		type: "boolean",
+	},
 	pendingGraceMs: {
 		description:
 			"Grace period in milliseconds before an unconfirmed delivery is reconciled. Defaults to 15000.",
