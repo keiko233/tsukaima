@@ -103,24 +103,38 @@ export const proactiveSchedulerPlugin: ElainaPlugin = {
 		});
 		const runtime: SchedulerRuntime = { disposers: [], service };
 		runtimes.set(context, runtime);
+		context.logger.debug("proactive-scheduler setup", {
+			maxPromptChars: maxPromptChars ?? null,
+			tickIntervalMs: tickIntervalMs ?? null,
+		});
 		runtime.disposers.push(
 			tasks.registerHandler(PROACTIVE_SCHEDULER_RUN_KIND, (task) => service.runHostTask(task)),
 			tasks.registerHandler(PROACTIVE_SCHEDULER_TICK_KIND, (task) => service.runHostTask(task)),
 			context.events.on("message.received", async (payload) => {
+				const startedAtMs = Date.now();
 				try {
 					await service.handleMessageReceived(payload);
+					context.logger.debug("message.received handled", {
+						durationMs: Date.now() - startedAtMs,
+					});
 				} catch (error) {
 					context.logger.warn("proactive scheduler inbound state update failed", {
+						durationMs: Date.now() - startedAtMs,
 						error: error instanceof Error ? error.message : String(error),
 					});
 				}
 			}),
 			context.events.on("after.reply", async (payload) => {
+				const startedAtMs = Date.now();
 				try {
 					await service.handleAfterReply(payload);
 					await updateStatus(context, service);
+					context.logger.debug("after.reply handled", {
+						durationMs: Date.now() - startedAtMs,
+					});
 				} catch (error) {
 					context.logger.warn("proactive scheduler reply state update failed", {
+						durationMs: Date.now() - startedAtMs,
 						error: error instanceof Error ? error.message : String(error),
 					});
 				}
@@ -155,6 +169,9 @@ export const proactiveSchedulerPlugin: ElainaPlugin = {
 		}
 		runtimes.delete(context);
 		context.ui.setStatus(null);
+		context.logger.info("proactive-scheduler stopped", {
+			disposers: runtime?.disposers.length ?? 0,
+		});
 	},
 };
 

@@ -30,6 +30,7 @@ import {
 	evaluateProactiveGates,
 	nextCounters,
 	type CandidateContext,
+	type GateEvaluation,
 } from "./engine.ts";
 import {
 	PROACTIVE_SCHEDULER_RUN_KIND,
@@ -92,6 +93,29 @@ function kindToTurnKind(kind: ScheduledTaskKind): "scheduled" | "proactive" {
 	return kind === "proactive" || kind === "nudge" ? "proactive" : "scheduled";
 }
 
+const LOG_PREVIEW_MAX_CHARS = 120;
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/** Bounded single-line preview so trace logs never leak a full prompt or span lines. */
+function logPreview(value: string | null | undefined): string | undefined {
+	if (value === null || value === undefined) return undefined;
+	const singleLine = value.replace(/\s+/gu, " ").trim();
+	if (singleLine.length <= LOG_PREVIEW_MAX_CHARS) return singleLine;
+	return `${singleLine.slice(0, LOG_PREVIEW_MAX_CHARS - 1)}…`;
+}
+
+function gateSummary(gates: readonly GateResult[]): string {
+	return gates
+		.map(
+			(entry) =>
+				`${entry.gate}:${entry.status}${entry.reason === undefined ? "" : `:${entry.reason}`}`,
+		)
+		.join(",");
+}
+
 /**
  * Plugin-owned scheduler state. Timers, retries, and atomic claims are delegated entirely to
  * the Phase 3 host `tasks.*` service; this class only persists domain records and evaluates
@@ -112,7 +136,7 @@ export class ProactiveSchedulerService {
 	constructor(options: ProactiveSchedulerServiceOptions) {
 		this.#audit = options.audit;
 		this.#conversations = options.conversations;
-		this.#logger = options.logger;
+		this.#logger = options.logger.child?.("service") ?? options.logger;
 		this.#now = options.now ?? Date.now;
 		this.#promptMaxChars = options.promptMaxChars ?? DEFAULT_PROMPT_MAX_CHARS;
 		this.#random = options.random ?? Math.random;
@@ -127,6 +151,7 @@ export class ProactiveSchedulerService {
 
 	/** Register the repeat tick and any pending durable tasks from a previous process. */
 	async start(): Promise<void> {
+		const startedAtMs = this.#now();
 		const tick = await this.#tasks.create({
 			dedupeKey: PROACTIVE_SCHEDULER_TICK_DEDUPE_KEY,
 			intervalMs: this.#tickIntervalMs,
@@ -134,7 +159,12 @@ export class ProactiveSchedulerService {
 			nextRunAtMs: this.#now() + this.#tickIntervalMs,
 		});
 		this.#tickTaskId = tick.id;
+		this.#logger.debug("tick task registered", {
+			intervalMs: this.#tickIntervalMs,
+			tickTaskId: tick.id,
+		});
 		const pending = await this.#repository.listTasks({ status: ["scheduled", "running"] });
+		let restored = 0;
 		for (const persisted of pending) {
 			try {
 				const task =
@@ -143,20 +173,37 @@ export class ProactiveSchedulerService {
 							persisted)
 						: persisted;
 				await this.ensureHostTask(task);
+				restored += 1;
+				this.#logger.trace("restored pending task", {
+					kind: persisted.kind,
+					previousStatus: persisted.status,
+					taskId: persisted.id,
+				});
 			} catch (error) {
 				this.#logger.warn("proactive scheduler could not restore task", {
-					error: error instanceof Error ? error.message : String(error),
+					error: errorMessage(error),
 					taskId: persisted.id,
 				});
 			}
 		}
+		this.#logger.debug("scheduler started", {
+			durationMs: this.#now() - startedAtMs,
+			intervalMs: this.#tickIntervalMs,
+			pendingTasks: pending.length,
+			restoredTasks: restored,
+			tickTaskId: tick.id,
+		});
 	}
 
 	async stop(): Promise<void> {
-		if (this.#tickTaskId === null) return;
+		if (this.#tickTaskId === null) {
+			this.#logger.debug("scheduler stop skipped", { reason: "no_tick_task" });
+			return;
+		}
 		const taskId = this.#tickTaskId;
 		this.#tickTaskId = null;
 		await this.#tasks.cancel(taskId);
+		this.#logger.debug("scheduler stopped", { tickTaskId: taskId });
 	}
 
 	async overview(): Promise<Overview> {
@@ -180,7 +227,22 @@ export class ProactiveSchedulerService {
 		patch: ProactivePolicyPatch,
 		actorId = "webui-admin",
 	): Promise<ProactivePolicy> {
+		const startedAtMs = this.#now();
 		const policy = await this.#repository.savePolicy(scope, scopeId, patch);
+		this.#logger.debug("policy saved", {
+			actorId,
+			changedFields: Object.keys(patch),
+			durationMs: this.#now() - startedAtMs,
+			enabled: policy.enabled,
+			scope,
+			scopeId,
+		});
+		if (patch.enabled !== undefined) {
+			this.#logger.debug(
+				patch.enabled ? "proactive scheduling resumed" : "proactive scheduling paused",
+				{ actorId, scope, scopeId },
+			);
+		}
 		await this.#recordAudit({
 			action: "proactive.policy.saved",
 			actorId,
@@ -194,6 +256,7 @@ export class ProactiveSchedulerService {
 
 	async resetPolicies(actorId = "webui-admin"): Promise<void> {
 		await this.#repository.resetPolicies();
+		this.#logger.debug("policies reset", { actorId });
 		await this.#recordAudit({
 			action: "proactive.policy.reset",
 			actorId,
@@ -268,6 +331,14 @@ export class ProactiveSchedulerService {
 		if (parsed.repeat?.untilMs !== undefined && parsed.repeat.untilMs <= now) {
 			throw new Error("repeat.untilMs must be in the future");
 		}
+		this.#logger.trace("task create requested", {
+			conversationId: parsed.conversationId,
+			createdBy: createdBy.id,
+			delayMs: parsed.delayMs,
+			kind: parsed.kind,
+			promptPreview: logPreview(parsed.prompt),
+			repeat: parsed.repeat !== undefined,
+		});
 		const created = await this.#repository.insertTask({
 			attempts: 0,
 			cancelIfReplied: parsed.cancelIfReplied ?? false,
@@ -288,6 +359,16 @@ export class ProactiveSchedulerService {
 			taskId: "",
 		});
 		const withHost = await this.ensureHostTask(created);
+		this.#logger.debug("task created", {
+			attempts: withHost.attempts,
+			conversationId: withHost.conversationId,
+			hostTaskId: withHost.taskId,
+			kind: withHost.kind,
+			maxAttempts: withHost.maxAttempts,
+			scheduledForMs: withHost.scheduledForMs,
+			status: withHost.status,
+			taskId: withHost.id,
+		});
 		await this.#recordAudit({
 			action: "proactive.task.created",
 			actorId: createdBy.id,
@@ -306,8 +387,19 @@ export class ProactiveSchedulerService {
 
 	async cancelTask(taskId: string, actorId = "webui-admin"): Promise<ScheduledTask | undefined> {
 		const task = await this.#repository.getTask(taskId);
-		if (task === undefined) return undefined;
+		if (task === undefined) {
+			this.#logger.debug("task cancel skipped", { reason: "unknown_task", taskId });
+			return undefined;
+		}
 		const cancelled = await this.#repository.updateTask(taskId, { status: "cancelled" });
+		this.#logger.debug("task cancelled", {
+			actorId,
+			conversationId: task.conversationId,
+			hostTaskId: task.taskId,
+			kind: task.kind,
+			status: cancelled?.status ?? "cancelled",
+			taskId,
+		});
 		await this.#tasks.cancelMany({ dedupeKey: hostDedupeKey(taskId) });
 		if (task.taskId.length > 0) await this.#tasks.cancel(task.taskId);
 		await this.#recordAudit({
@@ -335,6 +427,12 @@ export class ProactiveSchedulerService {
 			if (task.taskId.length > 0) await this.#tasks.cancel(task.taskId);
 		}
 		if (cancelled.length > 0) {
+			this.#logger.debug("conversation tasks cancelled", {
+				actorId,
+				cancelIfRepliedOnly,
+				cancelled: cancelled.length,
+				conversationId,
+			});
 			await this.#recordAudit({
 				action: "proactive.task.cancelled",
 				actorId,
@@ -357,7 +455,17 @@ export class ProactiveSchedulerService {
 			throw new Error(`prompt must be between 1 and ${this.#promptMaxChars} characters`);
 		}
 		const task = await this.#repository.updateTask(taskId, { prompt: trimmed });
-		if (task === undefined) return undefined;
+		if (task === undefined) {
+			this.#logger.debug("task prompt update skipped", { reason: "unknown_task", taskId });
+			return undefined;
+		}
+		this.#logger.debug("task prompt updated", {
+			actorId,
+			conversationId: task.conversationId,
+			promptLength: trimmed.length,
+			promptPreview: logPreview(trimmed),
+			taskId,
+		});
 		await this.#recordAudit({
 			action: "proactive.task.prompt-updated",
 			actorId,
@@ -372,7 +480,11 @@ export class ProactiveSchedulerService {
 	/** Inbound activity updates operational state and cancels answered nudges. */
 	async handleMessageReceived(payload: unknown): Promise<void> {
 		const conversationId = conversationIdFromPayload(payload);
-		if (conversationId === undefined) return;
+		if (conversationId === undefined) {
+			this.#logger.trace("inbound message ignored", { reason: "no_conversation_id" });
+			return;
+		}
+		const startedAtMs = this.#now();
 		const cancelled = await this.#repository.cancelTasks({
 			cancelIfRepliedOnly: true,
 			conversationId,
@@ -398,11 +510,21 @@ export class ProactiveSchedulerService {
 			updatedAtMs: now,
 			warmness: Math.min(1, state.warmness + 0.1),
 		});
+		this.#logger.trace("inbound message recorded", {
+			activeHourBucket: bucket,
+			cancelledTasks: cancelled.length,
+			conversationId,
+			durationMs: this.#now() - startedAtMs,
+			inboundCount: state.inboundCount + 1,
+		});
 	}
 
 	async handleAfterReply(payload: unknown): Promise<void> {
 		const conversationId = conversationIdFromPayload(payload);
-		if (conversationId === undefined) return;
+		if (conversationId === undefined) {
+			this.#logger.trace("after.reply ignored", { reason: "no_conversation_id" });
+			return;
+		}
 		const now = this.#now();
 		const state =
 			(await this.#repository.getState(conversationId)) ?? emptyState(conversationId, now);
@@ -412,19 +534,43 @@ export class ProactiveSchedulerService {
 			lastOutboundAtMs: now,
 			updatedAtMs: now,
 		});
+		this.#logger.trace("outbound reply recorded", {
+			conversationId,
+			unansweredStreak: state.unansweredStreak,
+		});
 	}
 
 	async runHostTask(task: PluginTask): Promise<PluginTaskExecutionResult> {
+		const startedAtMs = this.#now();
 		if (task.kind === PROACTIVE_SCHEDULER_TICK_KIND) {
-			const summary = await this.runTick();
-			return {
-				logs: [
-					`tick candidates=${summary.candidates} sent=${summary.delivered} skipped=${summary.skipped}`,
-				],
-				outcome: summary,
-			};
+			try {
+				const summary = await this.runTick();
+				this.#logger.debug("host tick task executed", {
+					candidates: summary.candidates,
+					delivered: summary.delivered,
+					durationMs: this.#now() - startedAtMs,
+					kind: "tick",
+					skipped: summary.skipped,
+					taskId: task.id,
+				});
+				return {
+					logs: [
+						`tick candidates=${summary.candidates} sent=${summary.delivered} skipped=${summary.skipped}`,
+					],
+					outcome: summary,
+				};
+			} catch (error) {
+				this.#logger.debug("host tick task failed", {
+					durationMs: this.#now() - startedAtMs,
+					error: errorMessage(error),
+					kind: "tick",
+					taskId: task.id,
+				});
+				throw error;
+			}
 		}
 		if (task.kind !== PROACTIVE_SCHEDULER_RUN_KIND) {
+			this.#logger.trace("host task ignored", { kind: task.kind, taskId: task.id });
 			return { outcome: { ignored: true }, stop: true };
 		}
 		const payloadTaskId =
@@ -435,26 +581,71 @@ export class ProactiveSchedulerService {
 			(typeof payloadTaskId === "string" && payloadTaskId.length > 0
 				? await this.#repository.getTask(payloadTaskId)
 				: undefined) ?? (await this.#repository.findTaskByHostId(task.id));
-		if (scheduled === undefined) return { outcome: { missing: true }, stop: true };
-		return await this.#runScheduled(scheduled, task);
+		if (scheduled === undefined) {
+			this.#logger.debug("host task has no scheduled task", {
+				durationMs: this.#now() - startedAtMs,
+				hostTaskId: task.id,
+			});
+			return { outcome: { missing: true }, stop: true };
+		}
+		try {
+			const result = await this.#runScheduled(scheduled, task);
+			this.#logger.debug("host run task executed", {
+				durationMs: this.#now() - startedAtMs,
+				hostTaskId: task.id,
+				kind: scheduled.kind,
+				outcome: result.outcome,
+				stop: result.stop === true,
+				taskId: scheduled.id,
+			});
+			return result;
+		} catch (error) {
+			this.#logger.debug("host run task failed", {
+				durationMs: this.#now() - startedAtMs,
+				error: errorMessage(error),
+				kind: scheduled.kind,
+				taskId: scheduled.id,
+			});
+			throw error;
+		}
 	}
 
 	async runTick(): Promise<{ candidates: number; delivered: number; skipped: number }> {
+		const startedAtMs = this.#now();
 		const conversations = await this.#conversations.list();
 		let candidates = 0;
 		let delivered = 0;
 		let skipped = 0;
 		const now = this.#now();
+		this.#logger.trace("tick started", { conversations: conversations.length, nowMs: now });
 		for (const conversation of conversations) {
-			if (conversation.status !== "active") continue;
-			if (conversation.kind === "task" || conversation.kind === "plugin") continue;
+			if (conversation.status !== "active") {
+				this.#logger.trace("tick candidate skipped", {
+					conversationId: conversation.id,
+					reason: `conversation_${conversation.status}`,
+				});
+				continue;
+			}
+			if (conversation.kind === "task" || conversation.kind === "plugin") {
+				this.#logger.trace("tick candidate skipped", {
+					conversationId: conversation.id,
+					reason: `conversation_kind_${conversation.kind}`,
+				});
+				continue;
+			}
 			try {
 				const [policy, conversationPolicy, state] = await Promise.all([
 					this.#repository.effectivePolicy(conversation.id),
 					this.#conversations.getPolicy(conversation.id),
 					this.#repository.getState(conversation.id),
 				]);
-				if (!policy.enabled) continue;
+				if (!policy.enabled) {
+					this.#logger.trace("tick candidate skipped", {
+						conversationId: conversation.id,
+						reason: "disabled",
+					});
+					continue;
+				}
 				candidates += 1;
 				const candidate: CandidateContext = {
 					conversation,
@@ -462,13 +653,14 @@ export class ProactiveSchedulerService {
 					policy,
 					state: state ?? emptyState(conversation.id, now),
 				};
-				const evaluation = evaluateProactiveGates({
-					candidate,
-					nowMs: now,
-					random: this.#random,
-				});
+				const evaluation = this.#evaluateGates(candidate, now, false);
 				if (evaluation.blocked) {
 					skipped += 1;
+					this.#logger.trace("tick candidate blocked", {
+						conversationId: conversation.id,
+						gates: gateSummary(evaluation.gates),
+						reason: evaluation.reason ?? "blocked",
+					});
 					await this.#recordDecision({
 						conversationId: conversation.id,
 						gateResult: "skipped",
@@ -490,7 +682,7 @@ export class ProactiveSchedulerService {
 				skipped += 1;
 				this.#logger.warn("proactive evaluation failed", {
 					conversationId: conversation.id,
-					error: error instanceof Error ? error.message : String(error),
+					error: errorMessage(error),
 				});
 				await this.#recordDecision({
 					conversationId: conversation.id,
@@ -503,6 +695,13 @@ export class ProactiveSchedulerService {
 				});
 			}
 		}
+		this.#logger.debug("tick completed", {
+			candidates,
+			conversations: conversations.length,
+			delivered,
+			durationMs: this.#now() - startedAtMs,
+			skipped,
+		});
 		return { candidates, delivered, skipped };
 	}
 
@@ -512,6 +711,7 @@ export class ProactiveSchedulerService {
 			readonly nowMs?: number;
 		} = {},
 	): Promise<readonly SimulationRow[]> {
+		const startedAtMs = this.#now();
 		const conversations =
 			input.conversationId === undefined
 				? await this.#conversations.list()
@@ -526,17 +726,16 @@ export class ProactiveSchedulerService {
 				this.#conversations.getPolicy(conversation.id),
 				this.#repository.getState(conversation.id),
 			]);
-			const evaluation = evaluateProactiveGates({
-				candidate: {
+			const evaluation = this.#evaluateGates(
+				{
 					conversation,
 					conversationPolicy,
 					policy,
 					state: state ?? emptyState(conversation.id, now),
 				},
-				dryRun: true,
-				nowMs: now,
-				random: this.#random,
-			});
+				now,
+				true,
+			);
 			rows.push({
 				conversationId: conversation.id,
 				dryRun: true,
@@ -545,6 +744,11 @@ export class ProactiveSchedulerService {
 				...(evaluation.reason === undefined ? {} : { reason: evaluation.reason }),
 			});
 		}
+		this.#logger.debug("simulation completed", {
+			durationMs: this.#now() - startedAtMs,
+			eligible: rows.filter((row) => row.eligible).length,
+			rows: rows.length,
+		});
 		return rows;
 	}
 
@@ -569,6 +773,13 @@ export class ProactiveSchedulerService {
 			nextRunAtMs: Math.max(this.#now(), task.scheduledForMs),
 			payload: { taskId: task.id },
 		});
+		this.#logger.trace("host task registered", {
+			conversationId: task.conversationId,
+			hostTaskId: host.id,
+			kind: task.kind,
+			nextRunAtMs: host.nextRunAtMs,
+			taskId: task.id,
+		});
 		return (await this.#repository.updateTask(task.id, { taskId: host.id })) ?? task;
 	}
 
@@ -577,19 +788,45 @@ export class ProactiveSchedulerService {
 		hostTask: PluginTask,
 	): Promise<PluginTaskExecutionResult> {
 		if (task.status === "cancelled" || task.status === "completed") {
+			this.#logger.debug("scheduled task run skipped", {
+				reason: `task_${task.status}`,
+				taskId: task.id,
+			});
 			return { outcome: { status: task.status }, stop: true };
 		}
-		const now = this.#now();
+		const startedAtMs = this.#now();
+		const now = startedAtMs;
 		const claimed = await this.#repository.claimTask(task.id, now);
 		if (claimed === undefined) {
+			this.#logger.trace("scheduled task claim lost", {
+				status: task.status,
+				taskId: task.id,
+			});
 			return { outcome: { unclaimed: true }, stop: task.status !== "running" };
 		}
 		const dueExpired =
 			claimed.dueWindowMs !== null && now > claimed.scheduledForMs + claimed.dueWindowMs;
 		const policy = await this.#repository.effectivePolicy(claimed.conversationId);
 		const gate = this.#scheduledGate(claimed, policy, now);
+		this.#logger.trace("scheduled task claimed", {
+			attempts: claimed.attempts,
+			conversationId: claimed.conversationId,
+			dueExpired,
+			gate: gate ?? null,
+			kind: claimed.kind,
+			promptPreview: logPreview(claimed.prompt),
+			scheduledForMs: claimed.scheduledForMs,
+			taskId: claimed.id,
+		});
 		if (dueExpired || gate !== undefined) {
 			const reason = dueExpired ? "due_window_expired" : (gate ?? "policy_blocked");
+			this.#logger.debug("scheduled task skipped by gate", {
+				conversationId: claimed.conversationId,
+				durationMs: this.#now() - startedAtMs,
+				kind: claimed.kind,
+				reason,
+				taskId: claimed.id,
+			});
 			await this.#recordDecision({
 				conversationId: claimed.conversationId,
 				deliveryStatus: "skipped",
@@ -637,13 +874,22 @@ export class ProactiveSchedulerService {
 				status: outcome.status,
 				...(claimed.repeat === null || outcome.stop ? {} : next),
 			});
+			this.#logger.debug("scheduled task executed", {
+				conversationId: claimed.conversationId,
+				deliveryStatus: result.deliveryStatus,
+				durationMs: this.#now() - startedAtMs,
+				kind: claimed.kind,
+				marker: result.marker ?? null,
+				status: outcome.status,
+				taskId: claimed.id,
+			});
 			return {
 				logs: [`run ${outcome.status}`],
 				outcome: { deliveryStatus: result.deliveryStatus, status: outcome.status },
 				stop: outcome.stop || (claimed.repeat !== null && next.status === "completed"),
 			};
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = errorMessage(error);
 			const attempts = hostTask.attempts + 1;
 			const failed = attempts >= claimed.maxAttempts;
 			await this.#repository.updateTask(claimed.id, {
@@ -661,12 +907,63 @@ export class ProactiveSchedulerService {
 				skippedReason: "error",
 				taskId: claimed.id,
 			});
+			this.#logger.info("scheduled proactive task attempt failed", {
+				attempts,
+				conversationId: claimed.conversationId,
+				durationMs: this.#now() - startedAtMs,
+				error: message,
+				kind: claimed.kind,
+				maxAttempts: claimed.maxAttempts,
+				taskId: claimed.id,
+				terminal: failed,
+			});
 			this.#logger.warn("scheduled proactive task failed", {
 				attempts,
 				taskId: claimed.id,
 			});
 			throw error;
 		}
+	}
+
+	/**
+	 * Runs the pure gate engine and traces the full decision context (policy, state, backoff,
+	 * gate results) so operators can replay why a candidate was blocked.
+	 */
+	#evaluateGates(candidate: CandidateContext, nowMs: number, dryRun: boolean): GateEvaluation {
+		const evaluation = evaluateProactiveGates({
+			candidate,
+			...(dryRun ? { dryRun: true } : {}),
+			nowMs,
+			random: this.#random,
+		});
+		const { policy, state } = candidate;
+		this.#logger.trace("proactive gates evaluated", {
+			blocked: evaluation.blocked,
+			conversationId: candidate.conversation.id,
+			conversationKind: candidate.conversation.kind,
+			dryRun,
+			gates: gateSummary(evaluation.gates),
+			policy: {
+				bubbleGate: policy.bubbleGate,
+				cooldownMs: policy.cooldownMs,
+				dailyCap: policy.dailyCap,
+				hourlyCap: policy.hourlyCap,
+				minIdleMs: policy.minIdleMs,
+				minWarmness: policy.minWarmness,
+				probability: policy.probability,
+			},
+			reason: evaluation.reason ?? null,
+			state: {
+				inboundCount: state.inboundCount,
+				lastMessageAtMs: state.lastMessageAtMs,
+				lastOutboundAtMs: state.lastOutboundAtMs,
+				refusedCount: state.refusedCount,
+				silenceUntilMs: state.silenceUntilMs,
+				unansweredStreak: state.unansweredStreak,
+				warmness: state.warmness,
+			},
+		});
+		return evaluation;
 	}
 
 	#scheduledGate(task: ScheduledTask, policy: ProactivePolicy, now: number): string | undefined {
@@ -716,6 +1013,11 @@ export class ProactiveSchedulerService {
 	): Promise<{ readonly status: ScheduledTaskStatus; readonly stop: boolean }> {
 		if (result.marker === "schedule-later") {
 			const delay = result.scheduleLaterMs ?? DEFAULT_SCHEDULE_LATER_MS;
+			this.#logger.debug("scheduled task requested schedule-later", {
+				conversationId: task.conversationId,
+				delayMs: delay,
+				taskId: task.id,
+			});
 			await this.#scheduleLater(task, delay, now);
 			await this.#recordDecision({
 				conversationId: task.conversationId,
@@ -731,6 +1033,11 @@ export class ProactiveSchedulerService {
 			return { status: task.repeat === null ? "skipped" : "scheduled", stop: task.repeat === null };
 		}
 		if (result.marker === "skip" || result.marker === "lurk") {
+			this.#logger.debug("scheduled task suppressed by marker", {
+				conversationId: task.conversationId,
+				marker: result.marker,
+				taskId: task.id,
+			});
 			await this.#recordDecision({
 				conversationId: task.conversationId,
 				deliveryStatus: result.deliveryStatus,
@@ -747,6 +1054,15 @@ export class ProactiveSchedulerService {
 			return { status: task.repeat === null ? "skipped" : "scheduled", stop: task.repeat === null };
 		}
 		const delivered = result.delivered;
+		this.#logger.debug("scheduled task turn result", {
+			conversationId: task.conversationId,
+			delivered,
+			deliveryStatus: result.deliveryStatus,
+			marker: result.marker ?? null,
+			skippedReason: result.skippedReason ?? null,
+			textChars: (result.text ?? "").length,
+			taskId: task.id,
+		});
 		await this.#recordDecision({
 			conversationId: task.conversationId,
 			deliveryStatus: result.deliveryStatus,
@@ -764,6 +1080,13 @@ export class ProactiveSchedulerService {
 			taskId: task.id,
 		});
 		if (delivered) {
+			this.#logger.info("scheduled task delivered", {
+				conversationId: task.conversationId,
+				deliveryStatus: result.deliveryStatus,
+				kind: task.kind,
+				textChars: (result.text ?? "").length,
+				taskId: task.id,
+			});
 			await this.#repository.saveState(await this.#deliveredState(state, policy, now, result.text));
 		}
 		return {
@@ -782,7 +1105,16 @@ export class ProactiveSchedulerService {
 		candidate: CandidateContext,
 		now: number,
 	): Promise<PluginBackgroundTurnResult> {
+		const startedAtMs = this.#now();
 		const recent = await this.#conversations.recentMessages(candidate.conversation.id, 8);
+		const prompt =
+			"You are initiating a short, natural follow-up in this conversation. Keep it brief and relevant.";
+		this.#logger.trace("proactive turn submitting", {
+			conversationId: candidate.conversation.id,
+			conversationKind: candidate.conversation.kind,
+			promptPreview: logPreview(prompt),
+			recentMessages: recent.length,
+		});
 		const result = await this.#conversations.submitBackgroundTurn({
 			context: compactStateContext({
 				conversationKind: candidate.conversation.kind,
@@ -791,9 +1123,16 @@ export class ProactiveSchedulerService {
 			}),
 			conversationId: candidate.conversation.id,
 			kind: "proactive",
-			prompt: promptWithGuardrails(
-				"You are initiating a short, natural follow-up in this conversation. Keep it brief and relevant.",
-			),
+			prompt: promptWithGuardrails(prompt),
+		});
+		this.#logger.debug("proactive turn finished", {
+			conversationId: candidate.conversation.id,
+			delivered: result.delivered,
+			deliveryStatus: result.deliveryStatus,
+			durationMs: this.#now() - startedAtMs,
+			marker: result.marker ?? null,
+			skippedReason: result.skippedReason ?? null,
+			textChars: (result.text ?? "").length,
 		});
 		if (result.marker === "schedule-later") {
 			const delay = result.scheduleLaterMs ?? DEFAULT_SCHEDULE_LATER_MS;
@@ -879,9 +1218,21 @@ export class ProactiveSchedulerService {
 			taskId: null,
 		});
 		if (result.delivered) {
+			this.#logger.info("proactive turn delivered", {
+				conversationId: candidate.conversation.id,
+				deliveryStatus: result.deliveryStatus,
+				durationMs: this.#now() - startedAtMs,
+				textChars: (result.text ?? "").length,
+			});
 			await this.#repository.saveState(
 				await this.#deliveredState(candidate.state, candidate.policy, now, result.text),
 			);
+		} else {
+			this.#logger.debug("proactive turn not delivered", {
+				conversationId: candidate.conversation.id,
+				deliveryStatus: result.deliveryStatus,
+				skippedReason: result.skippedReason ?? null,
+			});
 		}
 		return result;
 	}
@@ -925,6 +1276,12 @@ export class ProactiveSchedulerService {
 			status: "scheduled",
 			taskId: "",
 		});
+		this.#logger.trace("task rescheduled later", {
+			conversationId: task.conversationId,
+			delayMs,
+			newTaskId: created.id,
+			sourceTaskId: task.id,
+		});
 		await this.ensureHostTask(created);
 	}
 
@@ -944,6 +1301,16 @@ export class ProactiveSchedulerService {
 			deliveryStatus: input.deliveryStatus ?? null,
 			gateResult: input.gateResult,
 			gates: input.gates,
+			kind: input.kind,
+			marker: input.marker,
+			skippedReason: input.skippedReason,
+			taskId: input.taskId,
+		});
+		this.#logger.debug("proactive decision recorded", {
+			conversationId: input.conversationId,
+			deliveryStatus: input.deliveryStatus ?? null,
+			gateResult: input.gateResult,
+			gates: gateSummary(input.gates),
 			kind: input.kind,
 			marker: input.marker,
 			skippedReason: input.skippedReason,
