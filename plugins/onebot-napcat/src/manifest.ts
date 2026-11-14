@@ -19,7 +19,8 @@ const configProperties = {
 		type: "string",
 	},
 	actionTimeoutMs: {
-		description: "How long one NapCat API call may take before it fails. Defaults to 5000.",
+		description:
+			"How long one NapCat API call may take before it fails. Defaults to 5000, or 30000 for sends carrying media.",
 		descriptionKey: "config_action_timeout_hint",
 		title: "Action timeout (ms)",
 		titleKey: "config_action_timeout",

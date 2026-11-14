@@ -667,6 +667,7 @@ export class ReplyDispatcher {
 					: undefined;
 				let firstPlatformMessageId: string | null = null;
 				let sentCount = 0;
+				const failures: string[] = [];
 				try {
 					if (target.policy.pacing.typingEnabled) {
 						await this.#channels.sendTyping(
@@ -710,7 +711,21 @@ export class ReplyDispatcher {
 							(chunk) => chunk.length > 0,
 						);
 						for (const [chunkIndex, chunk] of chunks.entries()) {
-							await sendChunk(chunk);
+							try {
+								await sendChunk(chunk);
+							} catch (error) {
+								if (error instanceof OutputCancelledError) throw error;
+								const reason = error instanceof Error ? error.message : String(error);
+								failures.push(reason);
+								this.#logger.warn("reply chunk delivery failed; continuing with remaining output", {
+									channelId,
+									chunkIndex,
+									itemIndex,
+									reason,
+									sentCount,
+									sessionId: target.sessionId,
+								});
+							}
 							if (
 								target.policy.pacing.sendIntervalMs > 0 &&
 								(itemIndex < target.plan.length - 1 || chunkIndex < chunks.length - 1)
@@ -718,6 +733,48 @@ export class ReplyDispatcher {
 								await this.#sleep(target.policy.pacing.sendIntervalMs, controller.signal);
 							}
 						}
+					}
+					if (failures.length > 0) {
+						// A failed chunk must not discard the rest of the reply. Keep sending the remaining
+						// text and media, then report the logical message as partial.
+						const firstFailure = failures[0] ?? "unknown send failure";
+						const deliveryStatus =
+							sentCount > 0 || failures.some((reason) => /timeout/i.test(reason))
+								? "uncertain"
+								: "failed";
+						await database
+							.update(messages)
+							.set({
+								deliveryStatus,
+								platformMessageId: firstPlatformMessageId,
+								updatedAt: new Date().toISOString(),
+							})
+							.where(eq(messages.id, target.id));
+						await this.#audit({
+							action: "message.send-reply",
+							payload: {
+								chatKind: target.chatKind,
+								failedCount: failures.length,
+								platformConversationId,
+								sentCount,
+								unitCount: target.units.length,
+							},
+							reason: firstFailure,
+							result: "failed",
+							targetId: target.sessionId,
+							targetKind: "session",
+						});
+						this.#logger.warn("assistant reply partially delivered", {
+							channelId,
+							chatKind: target.chatKind,
+							deliveryStatus,
+							failedCount: failures.length,
+							firstFailure,
+							platformConversationId,
+							sentCount,
+							sessionId: target.sessionId,
+						});
+						return deliveryStatus;
 					}
 					await database
 						.update(messages)

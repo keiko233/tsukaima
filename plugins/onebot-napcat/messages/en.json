@@ -84,5 +84,5 @@
 	"config_reconnect_jitter": "Jitter ratio",
 	"config_reconnect_jitter_hint": "Random spread applied to each delay, between 0 and 1. Defaults to 0.1.",
 	"config_action_timeout": "Action timeout (ms)",
-	"config_action_timeout_hint": "How long one NapCat API call may take before it fails. Defaults to 5000."
+	"config_action_timeout_hint": "How long one NapCat API call may take before it fails. Defaults to 5000, or 30000 for sends carrying media."
 }
