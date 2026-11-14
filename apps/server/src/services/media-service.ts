@@ -49,6 +49,59 @@ const DEFAULT_MIME: Record<MediaKind, string> = {
 const normalizeBytes = (value: Uint8Array): Buffer =>
 	value instanceof Buffer ? value : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
 
+function normalizeMime(header: string | null | undefined): string | undefined {
+	if (typeof header !== "string") return undefined;
+	const base = header.split(";")[0]?.trim().toLowerCase();
+	if (base === undefined || base.length === 0 || base === "application/octet-stream") {
+		return undefined;
+	}
+	return base;
+}
+
+function sniffImageMime(bytes: Uint8Array): string | undefined {
+	if (bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+		return "image/jpeg";
+	}
+	if (
+		bytes.byteLength >= 8 &&
+		bytes[0] === 0x89 &&
+		bytes[1] === 0x50 &&
+		bytes[2] === 0x4e &&
+		bytes[3] === 0x47 &&
+		bytes[4] === 0x0d &&
+		bytes[5] === 0x0a &&
+		bytes[6] === 0x1a &&
+		bytes[7] === 0x0a
+	) {
+		return "image/png";
+	}
+	if (
+		bytes.byteLength >= 6 &&
+		bytes[0] === 0x47 &&
+		bytes[1] === 0x49 &&
+		bytes[2] === 0x46 &&
+		bytes[3] === 0x38 &&
+		(bytes[4] === 0x37 || bytes[4] === 0x39) &&
+		bytes[5] === 0x61
+	) {
+		return "image/gif";
+	}
+	if (
+		bytes.byteLength >= 12 &&
+		bytes[0] === 0x52 &&
+		bytes[1] === 0x49 &&
+		bytes[2] === 0x46 &&
+		bytes[3] === 0x46 &&
+		bytes[8] === 0x57 &&
+		bytes[9] === 0x45 &&
+		bytes[10] === 0x42 &&
+		bytes[11] === 0x50
+	) {
+		return "image/webp";
+	}
+	return undefined;
+}
+
 /**
  * Content-addressed media store. Bytes live once at `<dataDir>/blobs/<sha256>` and the domain
  * `media` row carries the canonical metadata. Re-ingesting identical bytes returns the
@@ -116,10 +169,13 @@ export class MediaService {
 		url: string,
 		input: Omit<MediaStoreInput, "bytes" | "sourceUrl">,
 	): Promise<StoredMedia> {
-		const response = await fetch(url);
+		const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
 		if (!response.ok) throw new Error(`Media fetch failed: ${response.status}`);
 		const bytes = new Uint8Array(await response.arrayBuffer());
-		const mimeType = input.mimeType ?? response.headers.get("content-type") ?? undefined;
+		const mimeType =
+			normalizeMime(input.mimeType) ??
+			normalizeMime(response.headers.get("content-type")) ??
+			sniffImageMime(bytes);
 		return this.store({
 			...input,
 			bytes,

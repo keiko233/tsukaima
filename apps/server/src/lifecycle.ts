@@ -693,7 +693,7 @@ export class TsukaimaLifecycle {
 					channelId,
 					chatObjectId: result.chatObjectId,
 					classification: result.classification,
-					envelope,
+					envelope: result.envelope ?? envelope,
 					sessionId: result.sessionId,
 				});
 			}
@@ -734,7 +734,13 @@ export class TsukaimaLifecycle {
 		if (part.sha256 !== undefined && /^[0-9a-f]{64}$/iu.test(part.sha256)) {
 			const existing = await this.media.findBySha(part.sha256);
 			if (existing !== undefined) {
-				return { ...part, mediaId: existing.id, sha256: existing.sha256 };
+				return {
+					...part,
+					mediaId: existing.id,
+					mimeType: part.mimeType ?? existing.mimeType,
+					sha256: existing.sha256,
+					sizeBytes: part.sizeBytes ?? existing.sizeBytes,
+				};
 			}
 		}
 		if (part.sourceUrl === undefined) return part;

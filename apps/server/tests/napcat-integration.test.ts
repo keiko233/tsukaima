@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { createSlowStreamingModel } from "@tsukaima/core";
 import { chatObjects, media, messages } from "@tsukaima/db";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
@@ -303,6 +304,107 @@ describe("fake NapCat integration", () => {
 			const image = parts.find((part) => part.type === "image");
 			// The stored part references the media row, which is what the transcript renders.
 			expect(image?.mediaId).toBe(stored.id);
+		} finally {
+			server.stop(true);
+			await lifecycle.stop();
+		}
+	});
+
+	// Regression: media bytes must be hydrated before appending to the durable activity window so
+	// vision models receive the image content block (and plugins on `message.received` see the
+	// local `mediaId`/`sha256`) rather than only an `[image]` placeholder.
+	test("passes hydrated OneBot image blocks to a vision model and message.received hook", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-napcat-vision-"));
+		directories.push(directory);
+		const transports: FakeNapCatTransport[] = [];
+		const factory: OneBotTransportFactory = () => {
+			const transport = new FakeNapCatTransport();
+			transports.push(transport);
+			return transport;
+		};
+		let observedContext:
+			| {
+					messages?: readonly {
+						role?: string;
+						content?: unknown;
+					}[];
+			  }
+			| undefined;
+		const { lifecycle } = createApp(
+			{
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001",
+				TSUKAIMA_PORT: "7420",
+			},
+			{
+				model: createSlowStreamingModel(["nice pic"], {
+					delayMs: 5,
+					onContext: (context) => {
+						observedContext = context as typeof observedContext;
+					},
+					supportsImage: true,
+				}),
+				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, factory]]),
+				reply: { pendingGraceMs: 0 },
+			},
+		);
+		const receivedParts: unknown[] = [];
+		lifecycle.hooks.on("message.received", (payload) => {
+			const envelope = (payload as { envelope?: { parts?: unknown[] } }).envelope;
+			if (envelope?.parts !== undefined) receivedParts.push(...envelope.parts);
+		});
+		await lifecycle.start();
+		await lifecycle.conversationPolicy.update({
+			policy: { pacing: { burstMaxWaitMs: 60, burstSettleMs: 20 } },
+			scope: "global",
+		});
+		// JPEG header bytes served as generic octet-stream so MIME sniffing is also exercised.
+		const jpeg = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+		const server = Bun.serve({
+			fetch: () => new Response(jpeg, { headers: { "content-type": "application/octet-stream" } }),
+			port: 0,
+		});
+		try {
+			transports[0]?.emitOpen();
+			transports[0]?.emitMessage({
+				message: [
+					{ data: { text: "look" }, type: "text" },
+					{
+						data: {
+							file: "photo.jpg",
+							file_size: String(jpeg.byteLength),
+							url: `http://127.0.0.1:${server.port}/photo`,
+						},
+						type: "image",
+					},
+				],
+				message_id: 617_018_308,
+				message_type: "private",
+				post_type: "message",
+				self_id: 99,
+				sender: { card: "", nickname: "TestNickname", user_id: 940_582_963 },
+				time: Math.floor(Date.now() / 1_000),
+				user_id: 940_582_963,
+			});
+
+			const userContent = await waitFor(async () => {
+				return observedContext?.messages?.find((message) => message.role === "user")?.content;
+			});
+			expect(userContent).toEqual([
+				{ text: expect.stringContaining("look [image]"), type: "text" },
+				{
+					data: Buffer.from(jpeg).toString("base64"),
+					mimeType: "image/jpeg",
+					type: "image",
+				},
+			]);
+			expect(receivedParts).toContainEqual(
+				expect.objectContaining({
+					mimeType: "image/jpeg",
+					sizeBytes: jpeg.byteLength,
+					type: "image",
+				}),
+			);
 		} finally {
 			server.stop(true);
 			await lifecycle.stop();

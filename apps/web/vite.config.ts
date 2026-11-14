@@ -47,6 +47,12 @@ export default defineConfig({
 				changeOrigin: true,
 				target: serverTarget,
 			},
+			// Media bytes are served by the host, not built by Vite. Without this entry the
+			// browser asks the dev server for them and every transcript image fails to load.
+			"/media": {
+				changeOrigin: true,
+				target: serverTarget,
+			},
 		},
 		strictPort: true,
 	},

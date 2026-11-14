@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
 	File as FileIcon,
 	FileAudio,
@@ -107,7 +108,16 @@ function isInlineImage(part: MessageSummary["parts"][number]): part is MediaPart
 }
 
 function InlineMedia({ part }: { part: MediaPart }) {
+	const [failed, setFailed] = useState(false);
 	if (part.mediaId === undefined) return null;
+	if (failed) {
+		return (
+			<span className="inline-flex items-center gap-1 rounded-lg bg-background/60 px-2 py-1 text-[11px] text-muted-foreground">
+				<PartIcon type={part.type} />
+				{partLabel(part)}
+			</span>
+		);
+	}
 	const alt = partLabel(part);
 	return (
 		// Not `next/image`: the bytes are served by the host with an immutable cache header, and
@@ -116,7 +126,8 @@ function InlineMedia({ part }: { part: MediaPart }) {
 			src={runtimeUrl(`/media/${encodeURIComponent(part.mediaId)}`)}
 			alt={alt}
 			loading="lazy"
-			className="max-h-80 max-w-full rounded-lg border border-border object-contain"
+			onError={() => setFailed(true)}
+			className="h-auto w-auto max-h-80 max-w-full rounded-lg border border-border object-contain"
 			{...(part.width !== undefined && part.height !== undefined
 				? { height: part.height, width: part.width }
 				: {})}

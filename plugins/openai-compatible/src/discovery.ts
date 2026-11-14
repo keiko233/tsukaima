@@ -1,4 +1,9 @@
-import { createOpenAiCompatibleModel, type OpenAiCompatibleModel } from "./config.ts";
+import {
+	createOpenAiCompatibleModel,
+	openAiCompatibleReasoningLevelSchema,
+	type OpenAiCompatibleModel,
+	type OpenAiCompatibleReasoningLevel,
+} from "./config.ts";
 
 export interface DiscoveryOptions {
 	readonly apiKey: string;
@@ -18,13 +23,22 @@ interface ModelRecord {
 	readonly context_length?: number;
 	readonly context_window?: number;
 	readonly created?: number;
+	readonly display_name?: string;
 	readonly id?: string;
+	readonly input_modalities?: readonly string[];
 	readonly max_completion_tokens?: number;
 	readonly max_context_tokens?: number;
 	readonly max_output_tokens?: number;
+	readonly modalities?: {
+		readonly input?: readonly string[];
+	};
 	readonly name?: string;
 	readonly owned_by?: string;
+	readonly reasoning?: boolean;
+	readonly reasoning_levels?: readonly string[];
 	readonly supported_parameters?: readonly string[];
+	readonly supported_reasoning_levels?: readonly string[];
+	readonly tool_call?: boolean;
 	readonly top_provider?: {
 		readonly context_length?: number;
 		readonly max_completion_tokens?: number;
@@ -59,10 +73,29 @@ function stringSet(values: unknown): ReadonlySet<string> {
 	return new Set(stringArray(values).map((value) => value.toLowerCase()));
 }
 
+function parseReasoningLevels(
+	record: ModelRecord,
+): readonly OpenAiCompatibleReasoningLevel[] | undefined {
+	const raw = [
+		...stringArray(record.reasoning_levels),
+		...stringArray(record.supported_reasoning_levels),
+	];
+	const parsed: OpenAiCompatibleReasoningLevel[] = [];
+	const seen = new Set<OpenAiCompatibleReasoningLevel>();
+	for (const entry of raw) {
+		const result = openAiCompatibleReasoningLevelSchema.safeParse(entry.toLowerCase());
+		if (!result.success || seen.has(result.data)) continue;
+		seen.add(result.data);
+		parsed.push(result.data);
+	}
+	return parsed.length > 0 ? parsed : undefined;
+}
+
 function inferCapabilities(
 	record: ModelRecord,
 	id: string,
 ): {
+	readonly reasoningLevels?: readonly OpenAiCompatibleReasoningLevel[];
 	readonly supportsAudio: boolean;
 	readonly supportsImage: boolean;
 	readonly supportsReasoning: boolean;
@@ -72,28 +105,44 @@ function inferCapabilities(
 	const modalities = new Set(
 		[
 			...stringArray(record.architecture?.input_modalities),
+			...stringArray(record.input_modalities),
+			...stringArray(record.modalities?.input),
 			...(typeof record.architecture?.modality === "string"
 				? record.architecture.modality.split("+")
 				: []),
 		].map((value) => value.toLowerCase()),
 	);
+	const reasoningLevels = parseReasoningLevels(record);
 	const supportsReasoning =
-		REASONING_MODEL_PATTERN.test(id) ||
-		[...supported].some(
-			(parameter) =>
-				parameter.includes("reasoning") ||
-				parameter === "thinking" ||
-				parameter === "include_reasoning",
-		);
+		typeof record.reasoning === "boolean"
+			? record.reasoning
+			: reasoningLevels !== undefined ||
+				REASONING_MODEL_PATTERN.test(id) ||
+				[...supported].some(
+					(parameter) =>
+						parameter.includes("reasoning") ||
+						parameter === "thinking" ||
+						parameter === "include_reasoning",
+				);
 	const supportsImage = modalities.has("image") || IMAGE_MODEL_PATTERN.test(id);
 	const supportsAudio = modalities.has("audio") || AUDIO_MODEL_PATTERN.test(id);
 	const supportsTools =
-		supported.size === 0 ||
-		[...supported].some(
-			(parameter) =>
-				parameter === "tools" || parameter === "tool_choice" || parameter === "function_calling",
-		);
-	return { supportsAudio, supportsImage, supportsReasoning, supportsTools };
+		typeof record.tool_call === "boolean"
+			? record.tool_call
+			: supported.size === 0 ||
+				[...supported].some(
+					(parameter) =>
+						parameter === "tools" ||
+						parameter === "tool_choice" ||
+						parameter === "function_calling",
+				);
+	return {
+		...(reasoningLevels === undefined ? {} : { reasoningLevels }),
+		supportsAudio,
+		supportsImage,
+		supportsReasoning,
+		supportsTools,
+	};
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -103,7 +152,17 @@ function normalizeBaseUrl(baseUrl: string): string {
 function parseModel(record: ModelRecord): OpenAiCompatibleModel | undefined {
 	if (typeof record.id !== "string" || record.id.trim().length === 0) return undefined;
 	const id = record.id.trim();
-	const inferred = inferCapabilities(record, id);
+	const { reasoningLevels, ...inferred } = inferCapabilities(record, id);
+	const displayName =
+		typeof record.name === "string" && record.name.trim().length > 0
+			? record.name.trim()
+			: typeof record.display_name === "string" && record.display_name.trim().length > 0
+				? record.display_name.trim()
+				: undefined;
+	const defaultReasoningLevel =
+		reasoningLevels !== undefined && !reasoningLevels.includes("medium")
+			? reasoningLevels[0]!
+			: "medium";
 	return createOpenAiCompatibleModel(id, {
 		contextWindow:
 			positiveInteger(
@@ -112,7 +171,7 @@ function parseModel(record: ModelRecord): OpenAiCompatibleModel | undefined {
 				record.max_context_tokens,
 				record.top_provider?.context_length,
 			) ?? 128_000,
-		defaultReasoningLevel: "medium",
+		defaultReasoningLevel,
 		enabled: false,
 		maxOutputTokens:
 			positiveInteger(
@@ -120,9 +179,8 @@ function parseModel(record: ModelRecord): OpenAiCompatibleModel | undefined {
 				record.max_output_tokens,
 				record.top_provider?.max_completion_tokens,
 			) ?? 4_096,
-		...(typeof record.name === "string" && record.name.trim().length > 0
-			? { name: record.name.trim() }
-			: {}),
+		...(displayName === undefined ? {} : { name: displayName }),
+		...(reasoningLevels === undefined ? {} : { reasoningLevels: [...reasoningLevels] }),
 		...inferred,
 	});
 }

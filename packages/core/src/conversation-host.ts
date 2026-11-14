@@ -1135,7 +1135,10 @@ export class PiDurableConversationHost {
 	 */
 	private async envelopesToInput(envelopes: readonly StoredEnvelope[]): Promise<UserInput> {
 		const resolve = this.options.resolveImage;
-		if (resolve === undefined) return this.envelopesToText(envelopes);
+		// A text-only model must not receive image blocks: the provider either rejects the
+		// request or silently drops them, and the placeholder text is the honest description of
+		// what that model can actually use.
+		if (resolve === undefined || !this.modelAcceptsImages()) return this.envelopesToText(envelopes);
 		const images: { data: string; mimeType: string }[] = [];
 		for (const envelope of envelopes) {
 			const parts = Array.isArray(envelope.parts) ? envelope.parts : [];
@@ -1160,6 +1163,16 @@ export class PiDurableConversationHost {
 				type: "image" as const,
 			})),
 		];
+	}
+
+	/** Whether the conversation's model declares image input. */
+	private modelAcceptsImages(): boolean {
+		const models = this.model.models.getModels(this.model.providerId) as readonly {
+			id: string;
+			input?: readonly string[];
+		}[];
+		const model = models.find((candidate) => candidate.id === this.model.modelId);
+		return model?.input?.includes("image") === true;
 	}
 
 	private envelopesToText(envelopes: readonly StoredEnvelope[]): string {
