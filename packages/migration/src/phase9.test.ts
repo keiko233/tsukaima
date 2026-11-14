@@ -377,6 +377,212 @@ describe("live-shape DSH data", () => {
 		expect(memories.length).toBeGreaterThanOrEqual(3);
 		expect(memories.some((memory) => memory.kind === "summary")).toBe(true);
 	});
+
+	test("imports archived QQ history, recent rows, and interject sessions without duplicates", async () => {
+		const source = join(root, "qq-history-source");
+		const base = Date.UTC(2026, 0, 1, 0, 0, 0);
+		const sessionDir = join(
+			source,
+			"home/node/.dsh/sessions/--workspace-napcat-group-10002--/napcat-interject-group:10002#interject",
+		);
+		await fs.mkdir(sessionDir, { recursive: true });
+		await fs.writeFile(
+			join(sessionDir, "session.v4.jsonl"),
+			[
+				JSON.stringify(
+					sessionRecord({
+						createdAt: base,
+						cwd: "/workspace/napcat/group-10002",
+						id: "napcat-interject-group:10002#interject",
+					}),
+				),
+				JSON.stringify(
+					event("assistant/message", 1, {
+						id: "interject-1",
+						message: {
+							content: [{ text: "interjection hello", type: "text" }],
+							role: "assistant",
+						},
+					}),
+				),
+			].join("\n"),
+		);
+		const controlDir = join(source, "home/node/.dsh/sessions/--workspace--/session-control");
+		await fs.mkdir(controlDir, { recursive: true });
+		await fs.writeFile(
+			join(controlDir, "session.v4.jsonl"),
+			[
+				JSON.stringify(sessionRecord({ cwd: "/workspace", id: "session-control" })),
+				JSON.stringify(
+					event("assistant/message", 1, {
+						id: "control-report",
+						message: { content: [{ text: "internal report", type: "text" }], role: "assistant" },
+					}),
+				),
+				JSON.stringify(
+					event("tool/call", 2, {
+						arguments: { chat_id: "group:10002", text: "tool sent" },
+						id: "call-1",
+						name: "napcat_send_message",
+					}),
+				),
+				JSON.stringify(
+					event(
+						"tool/result",
+						3,
+						{
+							id: "result-1",
+							result: "已发送 1 段到 group:10002（message_id: 555）",
+						},
+						{ sourceEventSeqs: [2] },
+					),
+				),
+				JSON.stringify(
+					event("tool/call", 4, {
+						arguments: { chat_id: "group:10002", text: "multi one\nmulti two" },
+						id: "call-2",
+						name: "napcat_send_message",
+					}),
+				),
+				JSON.stringify(
+					event(
+						"tool/result",
+						5,
+						{
+							id: "result-2",
+							result: "已发送 2 段到 group:10002（message_id: 556, 557）",
+						},
+						{ sourceEventSeqs: [4] },
+					),
+				),
+			].join("\n"),
+		);
+		const recent = join(source, "workspace/memory/group-10002/recent.jsonl");
+		await fs.mkdir(join(source, "workspace/memory/group-10002"), { recursive: true });
+		const recentRows = [
+			{ t: base, nick: "Alice", text: "earlier hello", uid: "123456" },
+			{ t: base + 60_000, nick: "TestUser", text: "bot reply", uid: "1356", own: true },
+			{
+				t: base + 120_000,
+				nick: "Alice",
+				text: "[图片:napcat-inbox/imgs/20260101/x.png]",
+				uid: "123456",
+			},
+			{ t: base + 200_000, nick: "Alice", text: "main only", uid: "123456" },
+		];
+		await fs.writeFile(recent, recentRows.map((row) => JSON.stringify(row)).join("\n"));
+		await fs.mkdir(join(source, "workspace/work/synthetic-snapshot/backups/inplace-synthetic"), {
+			recursive: true,
+		});
+		await fs.writeFile(
+			join(
+				source,
+				"workspace/work/synthetic-snapshot/backups/inplace-synthetic/group-10002.recent.jsonl",
+			),
+			[
+				...recentRows.slice(0, 3),
+				{ t: base + 240_000, nick: "Bob", text: "backup only", uid: "777" },
+			]
+				.map((row) => JSON.stringify(row))
+				.join("\n"),
+		);
+		await fs.mkdir(join(source, "workspace/napcat"), { recursive: true });
+		await fs.writeFile(
+			join(source, "workspace/napcat/cross-recent.jsonl"),
+			JSON.stringify({
+				at: base + 300_000,
+				chatKey: "group:10002",
+				nick: "Carol",
+				text: "cross only",
+				userId: "888",
+			}),
+		);
+		await fs.mkdir(join(source, "workspace/work/synthetic-snapshot/tmp"), { recursive: true });
+		await fs.writeFile(
+			join(source, "workspace/work/synthetic-snapshot/tmp/hist-group.json"),
+			JSON.stringify({
+				chatId: "10002",
+				kind: "group",
+				messages: [
+					{
+						message: [{ data: { text: "earlier hello" }, type: "text" }],
+						message_id: 101,
+						post_type: "message",
+						self_id: 999,
+						sender: { nickname: "Alice" },
+						time: base / 1000,
+						user_id: 123456,
+					},
+					{
+						message: [{ data: { file: "HASHED.png" }, type: "image" }],
+						message_id: 102,
+						post_type: "message",
+						self_id: 999,
+						sender: { nickname: "Alice" },
+						time: base / 1000 + 125,
+						user_id: 123456,
+					},
+					{
+						message: [{ data: { text: "from history bot" }, type: "text" }],
+						message_id: 103,
+						post_type: "message_sent",
+						self_id: 999,
+						sender: { nickname: "TestUser" },
+						time: base / 1000 + 180,
+						user_id: 999,
+					},
+				],
+			}),
+		);
+		const inbox = join(source, "workspace/napcat/group-10002/napcat-inbox/imgs/20260101");
+		await fs.mkdir(inbox, { recursive: true });
+		await fs.writeFile(join(inbox, "x.png"), "recent-image");
+		await fs.writeFile(join(inbox, "abc-HASHED.png"), "history-image");
+
+		const result = await normalizeSnapshot([[source, "snapshot"]]);
+		const db = result.database;
+		expect(result.diagnostics.errors).toHaveLength(0);
+		const conversation = db.conversations.find(
+			(candidate) => candidate.sourceId === "napcat-group-10002",
+		);
+		expect(conversation?.platformConversationId).toBe("10002");
+		expect(db.conversations.some((candidate) => candidate.canonicalId.includes("interject"))).toBe(
+			false,
+		);
+		const messages = db.messages.filter(
+			(message) => message.conversationId === conversation?.canonicalId,
+		);
+		expect(messages.filter((message) => message.content === "earlier hello")).toHaveLength(1);
+		expect(messages.some((message) => message.content === "main only")).toBe(true);
+		expect(messages.some((message) => message.content === "backup only")).toBe(true);
+		expect(messages.some((message) => message.content === "cross only")).toBe(true);
+		expect(messages.some((message) => message.content === "tool sent")).toBe(true);
+		expect(messages.some((message) => message.content === "multi one")).toBe(true);
+		expect(messages.some((message) => message.content === "multi two")).toBe(true);
+		expect(messages.some((message) => message.content === "multi one\nmulti two")).toBe(false);
+		expect(messages.some((message) => message.content === "internal report")).toBe(false);
+		expect(
+			messages.some(
+				(message) => message.direction === "outbound" && message.content === "interjection hello",
+			),
+		).toBe(true);
+		expect(
+			messages.some(
+				(message) => message.direction === "outbound" && message.content === "from history bot",
+			),
+		).toBe(true);
+		expect(
+			messages.some(
+				(message) => message.direction === "outbound" && message.content === "bot reply",
+			),
+		).toBe(true);
+		const images = messages.filter((message) => message.content === "[图片]");
+		expect(images).toHaveLength(2);
+		expect(new Set(images.flatMap((message) => message.attachments)).size).toBe(2);
+		expect(db.attachments.every((attachment) => attachment.fileHash)).toBe(true);
+		const userIds = new Set(db.users.map((user) => user.canonicalId));
+		expect(messages.every((message) => userIds.has(message.senderUserId))).toBe(true);
+	});
 });
 
 describe("DSH session v4 streaming parser", () => {
@@ -636,7 +842,7 @@ describe("ordered transactional import, verify, and authoritative rollback", () 
 		await fs.writeFile(
 			join(source, "sessions/napcat-group-group_20001.jsonl"),
 			[
-				JSON.stringify(sessionRecord({ id: "napcat-group-group_20001" })),
+				JSON.stringify(sessionRecord({ agentPreset: "qq-chat", id: "napcat-group-group_20001" })),
 				JSON.stringify(event("user/message", 1, { text: "hello", userId: "qq_10001" })),
 				JSON.stringify(event("assistant/message", 2, { text: "hi" })),
 			].join("\n"),

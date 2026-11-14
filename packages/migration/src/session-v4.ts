@@ -788,8 +788,8 @@ export function mapDshConversationIdentity(input: {
 	// Session directories append a random suffix and a `-rN` generation
 	// (`napcat-group-118023883-wujhlyc-r1`); the chat key is only the leading id.
 	const group =
-		/^(?:napcat-archive-)?(?:group|napcat-group)[-_:](\d+)/i.exec(id) ??
-		/(?:^|[-_:])napcat-(?:archive-)?group[-_:](\d+)/i.exec(id);
+		/^(?:napcat-(?:archive|interject)-)?(?:group|napcat-group)[-_:](\d+)/i.exec(id) ??
+		/(?:^|[-_:])napcat-(?:archive-|interject-)?group[-_:](\d+)/i.exec(id);
 	if (group?.[1]) {
 		return {
 			channelId: "onebot-napcat",
@@ -814,8 +814,8 @@ export function mapDshConversationIdentity(input: {
 		};
 	}
 	const privateChat =
-		/^(?:napcat-archive-)?(?:private|napcat-private)[-_:](\d+)/i.exec(id) ??
-		/(?:^|[-_:])napcat-(?:archive-)?private[-_:](\d+)/i.exec(id);
+		/^(?:napcat-(?:archive|interject)-)?(?:private|napcat-private)[-_:](\d+)/i.exec(id) ??
+		/(?:^|[-_:])napcat-(?:archive-|interject-)?private[-_:](\d+)/i.exec(id);
 	if (privateChat?.[1]) {
 		return {
 			channelId: "onebot-napcat",

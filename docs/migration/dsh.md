@@ -165,8 +165,8 @@ The migration report lists settings with no direct equivalent for manual decisio
 ## Rehearsal status
 
 The kit has been run against a real read-only capture of the current deployment (13,222 files,
-989 MB, 0 capture errors). The isolated lab import mapped 653 conversations, 47,514 messages,
-1,254 source memories, 112 attachments, 2 personas, 138 settings, and 6 sticker packs; every
+989 MB, 0 capture errors). The isolated lab import mapped 648 conversations, 51,398 messages,
+1,254 source memories, 287 attachments, 2 personas, 138 settings, and 6 sticker packs; every
 `verify` check passed and a second import was idempotent. The live cutover has not run yet.
 
 Live-shape handling now includes:
@@ -177,9 +177,14 @@ Live-shape handling now includes:
 - zstd session bytes are decompressed before NDJSON parsing;
 - array-shaped `cordis.patch.yml` preset files are mapped, including the QQ persona preset;
 - session header epoch timestamps and content-block image attachments are preserved;
-- NapCat session suffixes are normalized so one group/private chat maps to one chat object;
-- QQ inbound history is reconstructed from the bridge's `【最近群聊】` prompt context, with bot
-  aliases, nick suffixes, cached images, and duplicate context windows handled;
+- NapCat session suffixes (including `interject` and `archive` sessions) are normalized so one
+  group/private chat maps to one chat object;
+- QQ history is merged from OneBot `hist-*.json`, every `recent.jsonl` window (current, backup,
+  pending-rebuild, and pre-restore), `cross-recent.jsonl`, archived pending rows, the bridge's
+  `【最近群聊】` prompt context, and successful `napcat_send_*` tool calls;
+- bot aliases, nick/user-id suffixes, cached images, duplicate context windows, and multiline
+  assistant output are deduplicated; successful control-session sends are kept while internal
+  assistant reports from non-chat sessions are excluded;
 - archived session copies outside the canonical session store are ignored;
 - `workspace/memory/<space>` items and summaries are imported without collapsing space IDs; and
 - large imports are inserted in bounded statements.

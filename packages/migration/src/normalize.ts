@@ -372,6 +372,10 @@ export interface NormalizeResult {
 
 const defaultTime = new Date(0).toISOString();
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function timestamp(value: string | number | undefined, fallback: string): string {
 	if (typeof value === "number") {
 		return new Date(value < 1e12 ? value * 1000 : value).toISOString();
@@ -774,6 +778,19 @@ async function loadBotAliases(entries: readonly SourceEntry[]): Promise<Set<stri
 	return aliases;
 }
 
+async function loadBotSelfIds(entries: readonly SourceEntry[]): Promise<Set<string>> {
+	const ids = new Set<string>();
+	for (const entry of entries) {
+		if (!/(?:^|\/)home\/(?:node\/)?\.dsh\/profiles\/[^/]+\/cordis\.patch\.ya?ml$/i.test(entry.path))
+			continue;
+		const content = await fs.readFile(entry.absolutePath, "utf8").catch(() => "");
+		for (const match of content.matchAll(/\bbotQQ:\s*["']?(\d{5,})["']?/g)) {
+			ids.add(match[1]!);
+		}
+	}
+	return ids;
+}
+
 function findMediaEntry(
 	entries: readonly SourceEntry[],
 	path: string,
@@ -793,6 +810,389 @@ function findMediaEntry(
 		if (match !== undefined) return match;
 	}
 	return null;
+}
+
+/**
+ * OneBot history gives only the image file name (the local cache prefixes it with a
+ * download id), while the memory store gives a path. Try the path first, then the
+ * cached file name inside the chat inbox.
+ */
+function findCachedMediaEntry(
+	entries: readonly SourceEntry[],
+	reference: string,
+	chatDirectory: string,
+): SourceEntry | null {
+	const normalized = reference.replaceAll("\\", "/");
+	const file = normalized.split("/").at(-1) ?? normalized;
+	if (file === "") return null;
+	const matchesName = (entry: SourceEntry): boolean => {
+		const name = basename(entry.path);
+		return name === file || name.endsWith(`-${file}`);
+	};
+	return (
+		entries.find(
+			(entry) => entry.path.includes(`/napcat/${chatDirectory}/`) && matchesName(entry),
+		) ??
+		entries.find((entry) => /\/napcat-inbox\//i.test(entry.path) && matchesName(entry)) ??
+		null
+	);
+}
+
+interface QqHistoryRecord {
+	readonly chatKey: string;
+	readonly kind: "group" | "private";
+	readonly platformId: string;
+	readonly timestamp: number;
+	readonly messageId: string | null;
+	readonly own: boolean;
+	readonly senderName: string;
+	readonly senderExternalId: string | null;
+	readonly text: string;
+	readonly mediaRefs: readonly string[];
+	readonly mediaLookup: "path" | "basename";
+	readonly replyToMessageId: string | null;
+	readonly raw: unknown;
+}
+
+function qqChatFromPath(
+	path: string,
+): { chatKey: string; kind: "group" | "private"; platformId: string } | null {
+	const match = /(?:^|\/)(group|private)[-_](\d+)(?:\/|\.|-recent|-archive)/i.exec(path);
+	if (match === null) return null;
+	const kind = match[1]!.toLowerCase() === "private" ? "private" : "group";
+	const platformId = match[2]!;
+	return { chatKey: `${kind}:${platformId}`, kind, platformId };
+}
+
+function segmentsToHistory(segments: readonly unknown[]): {
+	text: string;
+	mediaRefs: string[];
+	replyToMessageId: string | null;
+} {
+	let text = "";
+	const mediaRefs: string[] = [];
+	let replyToMessageId: string | null = null;
+	for (const raw of segments) {
+		if (!isRecord(raw)) continue;
+		const type = typeof raw.type === "string" ? raw.type : "";
+		const data = isRecord(raw.data) ? raw.data : {};
+		if (type === "text") {
+			text += typeof data.text === "string" ? data.text : "";
+		} else if (type === "at") {
+			text += `@${String(data.qq ?? "")}`;
+		} else if (type === "image") {
+			text += "[图片]";
+			const file =
+				typeof data.file === "string"
+					? data.file
+					: typeof data.path === "string"
+						? data.path
+						: null;
+			if (file !== null) mediaRefs.push(file);
+		} else if (type === "face") {
+			text += "[表情]";
+		} else if (type === "reply") {
+			replyToMessageId = typeof data.id === "string" ? data.id : null;
+		} else if (type === "json") {
+			text += "[卡片]";
+		} else if (type === "forward") {
+			text += "[合并转发]";
+		} else if (type === "file") {
+			const name = typeof data.file === "string" ? data.file : "";
+			text += name === "" ? "[文件]" : `[文件:${name}]`;
+		} else if (type !== "") {
+			text += `[${type}]`;
+		}
+	}
+	return { mediaRefs, replyToMessageId, text };
+}
+
+function parseToolArgs(text: string): Record<string, unknown> | null {
+	try {
+		const parsed = JSON.parse(text) as unknown;
+		return isRecord(parsed) ? parsed : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Recover actual sent QQ messages from control-session tool calls and their results. */
+function sentMessageRecords(
+	session: DshV4Session,
+	botSelfIds: ReadonlySet<string>,
+): QqHistoryRecord[] {
+	const results = new Map<number, string>();
+	for (const message of session.messages) {
+		if (message.role !== "tool" || message.toolName !== null) continue;
+		for (const reference of message.references) {
+			if (reference.targetSeq !== null) results.set(reference.targetSeq, message.text);
+		}
+	}
+	const records: QqHistoryRecord[] = [];
+	for (const message of session.messages) {
+		if (message.role !== "tool" || message.toolName === null) continue;
+		const tool = message.toolName;
+		if (
+			!/^napcat_send_(?:message|private_msg|group_msg|image)$/i.test(tool) &&
+			tool !== "napcat_api"
+		) {
+			continue;
+		}
+		const rawArgs =
+			message.source.data.arguments ?? message.source.data.input ?? message.source.data.params;
+		const args = isRecord(rawArgs) ? rawArgs : parseToolArgs(message.text);
+		if (args === null) continue;
+		const result = message.seq === null ? "" : (results.get(message.seq) ?? "");
+		if (result === "" || result.startsWith("Error:") || !/message_id:/i.test(result)) continue;
+		const messageIds = (/message_id:\s*([\d,\s]+)/i.exec(result)?.[1] ?? "")
+			.split(/[,\s]+/)
+			.filter((id) => id !== "");
+		const segmentCount = Number(/已发送\s*(\d+)\s*段/.exec(result)?.[1] ?? "0");
+		let chatKey: string | null = null;
+		if (typeof args.chat_id === "string") {
+			const match = /^(group|private)[:_](\d+)$/i.exec(args.chat_id);
+			if (match !== null) {
+				chatKey = `${match[1]!.toLowerCase()}:${match[2]!}`;
+			}
+		}
+		if (chatKey === null && tool.toLowerCase().endsWith("group_msg")) {
+			if (typeof args.group_id === "string" || typeof args.group_id === "number") {
+				chatKey = `group:${String(args.group_id)}`;
+			}
+		}
+		if (chatKey === null && tool.toLowerCase().endsWith("private_msg")) {
+			if (typeof args.user_id === "string" || typeof args.user_id === "number") {
+				chatKey = `private:${String(args.user_id)}`;
+			}
+		}
+		if (chatKey === null) continue;
+		const parsedChat = /^(group|private):(\d+)$/.exec(chatKey);
+		if (parsedChat === null) continue;
+		const kind = parsedChat[1]!.toLowerCase() === "private" ? "private" : "group";
+		const platformId = parsedChat[2]!;
+		if (kind === "private" && botSelfIds.has(platformId)) continue;
+		const atMs = message.occurredAtMs ?? Date.parse(session.createdAt ?? "");
+		if (!Number.isFinite(atMs)) continue;
+		const mediaRefs: string[] = [];
+		let text = "";
+		if (tool.toLowerCase() === "napcat_send_image") {
+			text = "[图片]";
+			if (typeof args.source === "string") mediaRefs.push(args.source);
+		} else if (typeof args.text === "string") {
+			text = args.text;
+		} else if (typeof args.message === "string") {
+			text = args.message;
+		} else if (Array.isArray(args.message)) {
+			text = segmentsToHistory(args.message).text;
+		}
+		if (text.trim() === "" && mediaRefs.length === 0) continue;
+		const lines = text
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter((line) => line !== "");
+		const split =
+			tool.toLowerCase() !== "napcat_send_image" &&
+			lines.length > 1 &&
+			(segmentCount > 1 || messageIds.length > 1);
+		const parts = split ? lines : [text.trim() === "" ? "[图片]" : text];
+		for (const [index, part] of parts.entries()) {
+			records.push({
+				chatKey,
+				kind,
+				mediaLookup: "path",
+				mediaRefs: index === 0 ? mediaRefs : [],
+				messageId: messageIds[index] ?? (parts.length === 1 ? (messageIds[0] ?? null) : null),
+				own: true,
+				platformId,
+				raw: {
+					args,
+					messageId: messageIds[index] ?? null,
+					result,
+					segment: index,
+					session: session.id,
+				},
+				replyToMessageId: null,
+				senderExternalId: null,
+				senderName: "DSH Assistant",
+				text: part,
+				timestamp: atMs + index,
+			});
+		}
+	}
+	return records;
+}
+
+async function loadQqHistory(
+	source: SnapshotSource,
+	entries: readonly SourceEntry[],
+): Promise<QqHistoryRecord[]> {
+	const records: QqHistoryRecord[] = [];
+	for (const entry of entries) {
+		const path = entry.path.replaceAll("\\", "/");
+		if (!path.includes("/workspace/") || /\/node_modules\//i.test(path)) continue;
+		if (
+			path.endsWith("/recent.jsonl") ||
+			path.endsWith(".recent.jsonl") ||
+			path.endsWith("archive-pending.jsonl")
+		) {
+			const chat = qqChatFromPath(path);
+			if (chat === null) continue;
+			const content = await readTextSource(source, entry.path).catch(() => "");
+			for (const line of content.split(/\r?\n/)) {
+				if (line.trim() === "") continue;
+				let row: Record<string, unknown>;
+				try {
+					const parsed = JSON.parse(line) as unknown;
+					if (!isRecord(parsed)) continue;
+					row = parsed;
+				} catch {
+					continue;
+				}
+				const atMs = typeof row.t === "number" ? row.t : null;
+				if (atMs === null) continue;
+				const rawText = typeof row.text === "string" ? row.text : "";
+				const mediaRefs = inlineImagePaths(rawText);
+				const text = stripInlineImagePaths(rawText).trim();
+				if (text === "" && mediaRefs.length === 0) continue;
+				const own = row.own === true;
+				const uid =
+					typeof row.uid === "string" || typeof row.uid === "number" ? String(row.uid) : null;
+				records.push({
+					chatKey: chat.chatKey,
+					kind: chat.kind,
+					mediaLookup: "path",
+					mediaRefs,
+					messageId: null,
+					own,
+					platformId: chat.platformId,
+					raw: row,
+					replyToMessageId: null,
+					senderExternalId: own ? null : uid,
+					senderName:
+						typeof row.nick === "string" && row.nick !== "" ? row.nick : (uid ?? "Unknown"),
+					text: text === "" ? "[图片]" : text,
+					timestamp: atMs,
+				});
+			}
+			continue;
+		}
+		if (path.endsWith("cross-recent.jsonl")) {
+			const content = await readTextSource(source, entry.path).catch(() => "");
+			for (const line of content.split(/\r?\n/)) {
+				if (line.trim() === "") continue;
+				let row: Record<string, unknown>;
+				try {
+					const parsed = JSON.parse(line) as unknown;
+					if (!isRecord(parsed)) continue;
+					row = parsed;
+				} catch {
+					continue;
+				}
+				const atMs = typeof row.at === "number" ? row.at : null;
+				const rawText = typeof row.text === "string" ? row.text : "";
+				if (atMs === null || rawText.trim() === "") continue;
+				const chatMatch = /^(group|private):(\d+)$/i.exec(
+					typeof row.chatKey === "string" ? row.chatKey : "",
+				);
+				if (chatMatch === null) continue;
+				const kind = chatMatch[1]!.toLowerCase() === "private" ? "private" : "group";
+				const platformId = chatMatch[2]!;
+				const own = row.own === true;
+				const uid =
+					typeof row.userId === "string" || typeof row.userId === "number"
+						? String(row.userId)
+						: null;
+				const mediaRefs = inlineImagePaths(rawText);
+				const text = stripInlineImagePaths(rawText).trim();
+				records.push({
+					chatKey: `${kind}:${platformId}`,
+					kind,
+					mediaLookup: "path",
+					mediaRefs,
+					messageId: null,
+					own,
+					platformId,
+					raw: row,
+					replyToMessageId: null,
+					senderExternalId: own ? null : uid,
+					senderName:
+						typeof row.nick === "string" && row.nick !== "" ? row.nick : (uid ?? "Unknown"),
+					text: text === "" ? "[图片]" : text,
+					timestamp: atMs,
+				});
+			}
+			continue;
+		}
+		if (!/\/hist-[^/]+\.json$/i.test(path)) continue;
+		const content = await readTextSource(source, entry.path).catch(() => "");
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(content);
+		} catch {
+			continue;
+		}
+		if (!isRecord(parsed) || !Array.isArray(parsed.messages)) continue;
+		const kind = parsed.kind === "private" ? "private" : "group";
+		const platformId =
+			typeof parsed.chatId === "string" || typeof parsed.chatId === "number"
+				? String(parsed.chatId)
+				: "";
+		if (platformId === "") continue;
+		const chatKey = `${kind}:${platformId}`;
+		for (const rawMessage of parsed.messages) {
+			if (!isRecord(rawMessage)) continue;
+			const seconds = typeof rawMessage.time === "number" ? rawMessage.time : null;
+			if (seconds === null) continue;
+			const atMs = seconds < 1e12 ? seconds * 1000 : seconds;
+			const userId =
+				typeof rawMessage.user_id === "string" || typeof rawMessage.user_id === "number"
+					? String(rawMessage.user_id)
+					: null;
+			const selfId =
+				typeof rawMessage.self_id === "string" || typeof rawMessage.self_id === "number"
+					? String(rawMessage.self_id)
+					: null;
+			const own =
+				rawMessage.post_type === "message_sent" ||
+				(userId !== null && selfId !== null && userId === selfId);
+			const sender = isRecord(rawMessage.sender) ? rawMessage.sender : {};
+			const senderName =
+				(typeof sender.card === "string" && sender.card !== "" ? sender.card : null) ??
+				(typeof sender.nickname === "string" && sender.nickname !== "" ? sender.nickname : null) ??
+				userId ??
+				"Unknown";
+			const segments = Array.isArray(rawMessage.message) ? rawMessage.message : [];
+			const parsedSegments = segmentsToHistory(segments);
+			const fallbackText =
+				typeof rawMessage.raw_message === "string" && segments.length === 0
+					? rawMessage.raw_message
+					: "";
+			const text = (parsedSegments.text || fallbackText).trim();
+			if (text === "" && parsedSegments.mediaRefs.length === 0) continue;
+			const messageId =
+				typeof rawMessage.message_id === "string" || typeof rawMessage.message_id === "number"
+					? String(rawMessage.message_id)
+					: typeof rawMessage.message_seq === "string" || typeof rawMessage.message_seq === "number"
+						? String(rawMessage.message_seq)
+						: null;
+			records.push({
+				chatKey,
+				kind,
+				mediaLookup: "basename",
+				mediaRefs: parsedSegments.mediaRefs,
+				messageId,
+				own,
+				platformId,
+				raw: rawMessage,
+				replyToMessageId: parsedSegments.replyToMessageId,
+				senderExternalId: own ? null : userId,
+				senderName,
+				text: text === "" ? "[图片]" : text,
+				timestamp: atMs,
+			});
+		}
+	}
+	return records;
 }
 
 function normalizeV4Session(
@@ -821,6 +1221,9 @@ function normalizeV4Session(
 			"chat",
 			`${identity.channelId}:${identity.kind}:${identity.platformConversationId}`,
 		);
+	const isQqChatSession =
+		session.agentPreset === "qq-chat" ||
+		(session.agentPreset === null && /(?:^|\/)napcat\//.test(session.workspace ?? ""));
 	const botId = canonicalId("user", "dsh-assistant");
 	const bot: NormalizedUser = {
 		canonicalId: botId,
@@ -840,6 +1243,7 @@ function normalizeV4Session(
 	const seqToPlatformId = new Map<number, string>();
 	const platformIds = new Set<string>();
 	for (const message of session.messages) {
+		if (options.qqChat && !isQqChatSession) continue;
 		const sourceKind = sourceKindOf(message);
 		const external = externalIdOf(message);
 		if (message.role === "system") continue;
@@ -1256,6 +1660,136 @@ interface QqChatAccumulator {
 	updatedAt: string;
 }
 
+function dshAssistantUser(): NormalizedUser {
+	const sourceId = "assistant";
+	return {
+		canonicalId: canonicalId("user", "dsh-assistant"),
+		displayName: "DSH Assistant",
+		externalId: null,
+		isAdmin: false,
+		kind: "bot",
+		platform: null,
+		sourceHash: sha256String(sourceId),
+		sourceId,
+		sourceSystem: DSH_SOURCE,
+	};
+}
+
+function qqDedupeContent(content: string): string {
+	return content
+		.replace(/\[表情:[^\]]*\]/g, "")
+		.replace(/\[表情\]/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+/** DSH newline-chunks QQ output, so one assistant block can contain several sent messages. */
+function expandQqSessionMessages(messages: readonly NormalizedMessage[]): NormalizedMessage[] {
+	return messages.flatMap((message) => {
+		if (message.direction !== "outbound" || qqMessageRank(message) !== 1) return [message];
+		const lines = message.content
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter((line) => line !== "");
+		if (lines.length <= 1) return [message];
+		return lines.map((line, index) => ({
+			...message,
+			attachments: index === lines.length - 1 ? message.attachments : [],
+			content: line,
+			durableEntryId: `${message.durableEntryId}:line:${index}`,
+			platformMessageId: `${message.platformMessageId}:line:${index}`,
+			position: 0,
+			sourceHash: sha256String(line),
+			sourceId: `${message.sourceId}:line:${index}`,
+		}));
+	});
+}
+
+function sameAttachments(left: NormalizedMessage, right: NormalizedMessage): boolean {
+	const leftIds = [...left.attachments].toSorted();
+	const rightIds = [...right.attachments].toSorted();
+	return leftIds.length === rightIds.length && leftIds.every((id, index) => id === rightIds[index]);
+}
+
+function mergeAttachments(
+	left: NormalizedMessage,
+	right: NormalizedMessage,
+): NormalizedMessage["attachments"] {
+	return [...new Set([...left.attachments, ...right.attachments])];
+}
+
+/** Prefer OneBot history/recent rows (exact ids/timestamps) over prompt-derived rows. */
+function qqMessageRank(message: NormalizedMessage): number {
+	if (/:msg:|:recent:/.test(message.platformMessageId)) return 3;
+	if (message.platformMessageId.startsWith("qq:")) return 2;
+	return 1;
+}
+
+function preferQqMessage(left: NormalizedMessage, right: NormalizedMessage): boolean {
+	const leftRank = qqMessageRank(left);
+	const rightRank = qqMessageRank(right);
+	if (leftRank !== rightRank) return leftRank > rightRank;
+	if (left.attachments.length !== right.attachments.length) {
+		return left.attachments.length > right.attachments.length;
+	}
+	return left.occurredAt > right.occurredAt;
+}
+
+function dedupeQqMessages(input: readonly NormalizedMessage[]): NormalizedMessage[] {
+	const sorted = [...input].toSorted(
+		(left, right) =>
+			left.occurredAt.localeCompare(right.occurredAt) ||
+			left.platformMessageId.localeCompare(right.platformMessageId),
+	);
+	const accepted = new Map<string, NormalizedMessage>();
+	const buckets = new Map<string, NormalizedMessage[]>();
+	for (const message of sorted) {
+		const content = message.content.trim();
+		// DSH records a no-output turn as one of these control tokens; they are not chat.
+		if (content === "__LURK__" || content === "__SKIP__") continue;
+		if (accepted.has(message.sourceId)) continue;
+		const normalizedContent = qqDedupeContent(content);
+		const key = `${message.direction}\u0000${message.senderUserId}\u0000${normalizedContent || content}`;
+		const generic = /^\[(?:图片|表情|视频|语音|文件|卡片|合并转发)(?:\([^)]*\))?\]$/.test(content);
+		const candidates = (buckets.get(key) ?? []).filter(
+			(candidate) =>
+				Math.abs(Date.parse(candidate.occurredAt) - Date.parse(message.occurredAt)) <= 120_000,
+		);
+		const duplicate = candidates.find((candidate) => {
+			if (generic) {
+				return (
+					message.attachments.length > 0 &&
+					candidate.attachments.length > 0 &&
+					sameAttachments(message, candidate)
+				);
+			}
+			if (message.attachments.length > 0 && candidate.attachments.length > 0) {
+				return sameAttachments(message, candidate);
+			}
+			return true;
+		});
+		if (duplicate !== undefined) {
+			if (preferQqMessage(message, duplicate)) {
+				const merged = { ...message, attachments: mergeAttachments(message, duplicate) };
+				accepted.delete(duplicate.sourceId);
+				accepted.set(merged.sourceId, merged);
+				const index = candidates.indexOf(duplicate);
+				if (index >= 0) candidates[index] = merged;
+			}
+			buckets.set(key, candidates);
+			continue;
+		}
+		accepted.set(message.sourceId, message);
+		candidates.push(message);
+		buckets.set(key, candidates);
+	}
+	return [...accepted.values()].toSorted(
+		(left, right) =>
+			left.occurredAt.localeCompare(right.occurredAt) ||
+			left.platformMessageId.localeCompare(right.platformMessageId),
+	);
+}
+
 function earlierIso(left: string, right: string): string {
 	return Date.parse(left) <= Date.parse(right) ? left : right;
 }
@@ -1346,11 +1880,47 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 	};
 
 	const qqChats = new Map<string, QqChatAccumulator>();
-	const [qqPeople, botAliases] = await Promise.all([
+	const ensureQqChat = (chatKey: string, at: string): QqChatAccumulator => {
+		const existing = qqChats.get(chatKey);
+		if (existing !== undefined) return existing;
+		const match = /^(group|private):(.+)$/.exec(chatKey);
+		if (match === null) throw new Error(`Unsupported QQ chat key: ${chatKey}`);
+		const kind = match[1] === "private" ? "private" : "group";
+		const platformId = match[2]!;
+		const identity = mapDshConversationIdentity({
+			sessionId: `napcat-${kind}-${platformId}`,
+		});
+		const conversationId = canonicalId("conversation", `napcat-${kind}-${platformId}`);
+		const chatObjectId = canonicalId(
+			"chat",
+			`${identity.channelId}:${identity.kind}:${identity.platformConversationId}`,
+		);
+		const createdAt = Number.isNaN(Date.parse(at)) ? defaultTime : at;
+		const chat: QqChatAccumulator = {
+			attachments: new Map(),
+			chatKey,
+			chatObjectId,
+			conversationId,
+			createdAt,
+			kind,
+			messages: [],
+			platformId,
+			sessionIds: [],
+			sourceHashes: [],
+			title: identity.title,
+			updatedAt: createdAt,
+			users: new Map(),
+		};
+		qqChats.set(chatKey, chat);
+		return chat;
+	};
+	const [qqPeople, botAliases, botSelfIds] = await Promise.all([
 		loadQqPeople(entries),
 		loadBotAliases(entries),
+		loadBotSelfIds(entries),
 	]);
 
+	const historyRecords = await loadQqHistory(source, entries);
 	const sessionPaths = inventory.sessions.filter(
 		(path) =>
 			/\.jsonl(?:\.zstd)?$/i.test(path) &&
@@ -1378,6 +1948,9 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 			});
 		}
 		sessionErrors.push(...parsed.diagnostics.errors);
+		if (parsed.session !== null) {
+			historyRecords.push(...sentMessageRecords(parsed.session, botSelfIds));
+		}
 		if (parsed.session === null) {
 			const content = /\.zst(?:d)?$/i.test(path) ? "" : await readTextSource(source, path);
 			for (const legacy of parseLegacySessions(content)) {
@@ -1409,21 +1982,7 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 				qqChat: true,
 			});
 			const createdAt = timestamp(parsed.session.createdAt ?? undefined, defaultTime);
-			const chat: QqChatAccumulator = qqChats.get(chatKey) ?? {
-				attachments: new Map(),
-				chatKey,
-				chatObjectId,
-				conversationId,
-				createdAt,
-				kind: identity.kind === "private" ? "private" : "group",
-				messages: [],
-				platformId: identity.platformConversationId,
-				sessionIds: [],
-				sourceHashes: [],
-				title: identity.title,
-				updatedAt: createdAt,
-				users: new Map(),
-			};
+			const chat = ensureQqChat(chatKey, createdAt);
 			chat.sessionIds.push(parsed.session.id);
 			chat.sourceHashes.push(parsed.session.sourceHash);
 			chat.createdAt = earlierIso(chat.createdAt, createdAt);
@@ -1566,16 +2125,109 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 		});
 	}
 
+	const historyCountByChat = new Map<string, number>();
+	for (const record of historyRecords) {
+		const occurredAt = new Date(record.timestamp).toISOString();
+		const chat = ensureQqChat(record.chatKey, occurredAt);
+		const content = record.text.trim();
+		if (content === "") continue;
+		const chatDirectory = `${record.kind}-${record.platformId}`;
+		const bot = dshAssistantUser();
+		const external = record.own ? null : record.senderExternalId;
+		const senderSourceId =
+			external === null
+				? record.own
+					? "assistant"
+					: `user:nick:${record.chatKey}:${record.senderName}`
+				: `user:${external}`;
+		const senderId = record.own ? bot.canonicalId : canonicalId("user", senderSourceId);
+		const sender: NormalizedUser = record.own
+			? bot
+			: (chat.users.get(senderId) ?? {
+					canonicalId: senderId,
+					displayName: record.senderName,
+					externalId: external,
+					isAdmin: false,
+					kind: "human",
+					platform: "onebot-napcat",
+					sourceHash: sha256String(senderSourceId),
+					sourceId: senderSourceId,
+					sourceSystem: DSH_SOURCE,
+				});
+		chat.users.set(senderId, sender);
+		const messageAttachments: string[] = [];
+		for (const reference of new Set(record.mediaRefs)) {
+			const found =
+				record.mediaLookup === "basename"
+					? findCachedMediaEntry(entries, reference, chatDirectory)
+					: findMediaEntry(entries, reference, chatDirectory);
+			if (found === null) continue;
+			const sourcePath = mediaSourcePath(found);
+			const id = canonicalId("media", `${record.chatKey}:${sourcePath}`);
+			chat.attachments.set(id, {
+				id,
+				kind: attachmentKind(mimeTypeForPath(sourcePath)),
+				mimeType: mimeTypeForPath(sourcePath),
+				sha256: null,
+				sizeBytes: 0,
+				sourceHash: sha256String(sourcePath),
+				sourceId: `${record.chatKey}:${sourcePath}`,
+				sourcePath,
+			});
+			messageAttachments.push(id);
+		}
+		const hash = sha256String(`${record.senderName}\n${content}\n${record.timestamp}`).slice(7, 23);
+		const platformMessageId =
+			record.messageId === null
+				? `qq:${record.chatKey}:recent:${record.timestamp}:${hash}`
+				: `qq:${record.chatKey}:msg:${record.messageId}`;
+		const historyMessage: NormalizedMessage = {
+			attachments: messageAttachments,
+			chatObjectId: chat.chatObjectId,
+			content,
+			conversationId: chat.conversationId,
+			direction: record.own ? "outbound" : "inbound",
+			durableEntryId: `durable_${chat.conversationId}:${platformMessageId}`,
+			ingestedAt: new Date().toISOString(),
+			kind: "text",
+			occurredAt,
+			platformMessageId,
+			position: 0,
+			replyToMessageId:
+				record.replyToMessageId === null
+					? null
+					: `qq:${record.chatKey}:msg:${record.replyToMessageId}`,
+			senderDisplayName: sender.displayName,
+			senderExternalId: record.own ? null : external,
+			senderUserId: senderId,
+			sourceHash: sha256String(stableStringify(record.raw)),
+			sourceId: `${chat.conversationId}:${platformMessageId}`,
+			sourceSystem: DSH_SOURCE,
+		};
+		chat.messages.push(historyMessage);
+		chat.createdAt = earlierIso(chat.createdAt, occurredAt);
+		chat.updatedAt = laterIso(chat.updatedAt, occurredAt);
+		historyCountByChat.set(record.chatKey, (historyCountByChat.get(record.chatKey) ?? 0) + 1);
+	}
+	for (const [chatKey, count] of historyCountByChat) {
+		decisions.push({
+			action: "remap",
+			area: "trigger-pacing",
+			reason: `Imported ${count} archived QQ chat record(s) for ${chatKey}`,
+			source: `chat:${chatKey}:history`,
+			target: "conversations",
+		});
+	}
+
 	for (const chat of qqChats.values()) {
 		const bySource = new Map<string, NormalizedMessage>();
-		for (const message of chat.messages) bySource.set(message.sourceId, message);
-		const unique = [...bySource.values()]
-			.toSorted(
-				(left, right) =>
-					left.occurredAt.localeCompare(right.occurredAt) ||
-					left.platformMessageId.localeCompare(right.platformMessageId),
-			)
-			.map((message, position) => ({ ...message, position }));
+		for (const message of expandQqSessionMessages(chat.messages)) {
+			bySource.set(message.sourceId, message);
+		}
+		const unique = dedupeQqMessages([...bySource.values()]).map((message, position) => ({
+			...message,
+			position,
+		}));
 		const createdAt =
 			unique.length > 0 ? earlierIso(chat.createdAt, unique[0]!.occurredAt) : chat.createdAt;
 		const updatedAt =
@@ -1623,12 +2275,11 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 				: (() => {
 						if (attachment.sourcePath === null) return [];
 						const requested = attachment.sourcePath.replaceAll("\\", "/");
-						return entries.filter(
-							(entry) =>
-								entry.path.endsWith(`/${requested}`) ||
-								entry.path === requested ||
-								basename(entry.path) === basename(requested),
+						const exact = entries.filter(
+							(entry) => entry.path === requested || entry.path.endsWith(`/${requested}`),
 						);
+						if (exact.length > 0) return exact;
+						return entries.filter((entry) => basename(entry.path) === basename(requested));
 					})();
 		if (matches.length !== 1) continue;
 		try {
