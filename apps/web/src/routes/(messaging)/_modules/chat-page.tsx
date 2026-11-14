@@ -210,7 +210,12 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 						/>
 					</div>
 				) : (
-					<MessageList liveRun={liveRun} messages={messages.data ?? []} now={now} />
+					<MessageList
+						liveRun={liveRun}
+						messages={messages.data ?? []}
+						now={now}
+						sessionId={sessionId}
+					/>
 				)}
 			</div>
 

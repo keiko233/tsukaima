@@ -34,6 +34,12 @@ export const messageSummarySchema = z.object({
 	contentText: z.string(),
 	deliveryStatus: deliveryStatusSchema,
 	direction: z.enum(["inbound", "outbound", "system"]),
+	/**
+	 * Durable entry this message was produced from, when it is an assistant answer. It is the
+	 * handle the transcript uses to expand the run's steps; `null` for messages with no agent
+	 * run behind them.
+	 */
+	durableEntryId: z.string().nullable(),
 	id: z.string(),
 	kind: z.string(),
 	occurredAt: z.string(),
@@ -460,6 +466,12 @@ export type RuntimeSettingsPatch = z.infer<typeof runtimeSettingsPatchSchema>;
 
 const sessionIdInputSchema = z.object({ sessionId: z.string().min(1) });
 
+/** Which assistant turn to expand. `entryId` is `messages.durableEntryId`. */
+export const runStepsInputSchema = z.object({
+	entryId: z.string().min(1),
+	sessionId: z.string().min(1),
+});
+
 export const chatsCreateLocalInputSchema = z.object({
 	sessionTitle: z.string().trim().min(1).max(120),
 	title: z.string().trim().min(1).max(120),
@@ -651,6 +663,52 @@ export const liveRunEventSchema = liveEventTimestampSchema.extend({
 	type: z.literal("run.state"),
 });
 export type LiveRunEvent = z.infer<typeof liveRunEventSchema>;
+
+// ─── Persisted run steps ────────────────────────────────────────────────────
+
+/**
+ * One step of a completed agent turn, derived from the durable transcript rather than the
+ * ephemeral `pi.live` document. `pi.live` is cleared when a run settles, so a transcript that
+ * wants to keep showing "what the agent did" has to read the durable entries instead.
+ *
+ * Kinds mirror what a coding agent shows: its reasoning, the tools it ran, and the text it
+ * produced. `tool` steps are paired with the result that follows them, so a reader sees the
+ * call and its outcome as one row.
+ */
+export const runStepSchema = z.discriminatedUnion("kind", [
+	z.object({
+		/** Short, already-truncated text of the model's reasoning. */
+		kind: z.literal("thinking"),
+		text: z.string(),
+	}),
+	z.object({
+		/** Arguments the model passed, as a compact single-line JSON string. */
+		argumentsText: z.string(),
+		/** The tool's own text output, truncated. Empty when it produced none. */
+		output: z.string(),
+		/** Whether the tool reported an error. */
+		isError: z.boolean(),
+		kind: z.literal("tool"),
+		/** Tool name as the model called it. */
+		toolName: z.string(),
+	}),
+	z.object({
+		kind: z.literal("text"),
+		text: z.string(),
+	}),
+	z.object({
+		/** Why the run ended without an answer. */
+		detail: z.string(),
+		kind: z.literal("failure"),
+	}),
+]);
+export type RunStep = z.infer<typeof runStepSchema>;
+
+export const runStepsSchema = z.object({
+	/** Steps in transcript order. Empty when the turn produced none worth showing. */
+	steps: z.array(runStepSchema),
+});
+export type RunSteps = z.infer<typeof runStepsSchema>;
 
 export const liveEventSchema = z.discriminatedUnion("type", [
 	liveSnapshotEventSchema,
@@ -1010,6 +1068,7 @@ export const appContract = oc.router({
 				.meta({ audit: true }),
 			get: oc.input(sessionIdInputSchema).output(sessionDetailSchema.nullable()),
 			messages: oc.input(sessionIdInputSchema).output(z.array(messageSummarySchema)),
+			runSteps: oc.input(runStepsInputSchema).output(runStepsSchema),
 			send: oc.input(sessionsSendInputSchema).output(messageSummarySchema).meta({ audit: true }),
 			setReceiving: oc.input(sessionIdInputSchema).output(okSchema).meta({ audit: true }),
 			update: oc.input(sessionsUpdateInputSchema).output(okSchema).meta({ audit: true }),
