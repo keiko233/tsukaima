@@ -77,9 +77,23 @@ Video stickers use ffmpeg when available to produce GIF and fall back to the ori
 Administrators can choose GIF or still-thumbnail import per format. Masks and custom emoji are
 skipped.
 
+Importing and semantic classification are decoupled pipelines. Media import (download,
+TGS/WebM conversion, SHA-256 dedupe, media storage, and the initial item upsert) runs in a
+bounded worker pool (`importConcurrency`, default 4) while semantic classification runs in its
+own bounded pool (`semanticConcurrency`, default 4). The semantic pool starts classifying each
+item as soon as its media is stored, so it overlaps with the remaining downloads instead of
+blocking them. When the active classifier is heuristic-only, the profile is computed inline and
+the item is written once; no redundant second database write is made.
+
+`telegram.import` awaits both stages by default so callers receive final `classified` counts and
+vision-enriched descriptions. Passing `deferSemantic` (or `backgroundSemantic`) finishes the RPC
+as soon as media import completes and launches a separate `semantic.reclassify` job, which is
+tracked independently by the progress tracker.
+
 Legacy local directory, ZIP/manifest, and DSH meme-pack imports remain available for
-migrations. All import paths share media dedupe, tag validation, disable-missing-media, and
-dry-run reporting.
+migrations. They use the same decoupled import/semantic pools, and DSH pack manifests are
+scanned and imported in parallel. All import paths share media dedupe, tag validation,
+disable-missing-media, and dry-run reporting.
 
 ## Semantic preprocessing
 
@@ -91,7 +105,13 @@ description. Administrators can select a specific host-registered model (`semant
 (`semanticBaseUrl`, `semanticApiKey`, `semanticModel`) for vision refinement. Vision output is
 restricted to the same taxonomy, merged with the heuristic profile, and never stores a local
 path or raw URL. Administrators can switch models and re-run classification for a pack from the
-panel.
+panel. Reclassification runs its own bounded worker pool and can execute at the same time as an
+import.
+
+Progress tracking keeps one job per running or recently settled operation. The `progress` RPC
+returns `{ active, jobs }`, where `active` is the most relevant job and `jobs` lists every
+running and recently settled job so the panel can render separate import and semantic progress
+cards concurrently. The host status is only settled once all running jobs finish.
 
 Exports contain manifests and media, but never user content or secrets.
 
@@ -147,13 +167,15 @@ Model-visible text never includes absolute local paths or raw URLs.
 1. Pack/item validation and migrations.
 2. Telegram link parsing, mocked Bot API import, animated-thumbnail fallback, skip rules, dry
    run, stable ids, and media dedupe.
-3. Semantic taxonomy classification, emoji mapping, vision merge, and unsafe-label rejection.
-4. Legacy import/export and media dedupe.
-5. Selection ranking and policy filtering.
-6. Token single-use/TTL/binding.
-7. Output transformation, chunking, and failure fallback.
-8. Learning/review workflow.
-9. DSH meme-pack migration fixture.
+3. Import/semantic worker-pool overlap, concurrency bounds, deferred semantic jobs, and
+   multi-job progress tracking.
+4. Semantic taxonomy classification, emoji mapping, vision merge, and unsafe-label rejection.
+5. Legacy import/export and media dedupe.
+6. Selection ranking and policy filtering.
+7. Token single-use/TTL/binding.
+8. Output transformation, chunking, and failure fallback.
+9. Learning/review workflow.
+10. DSH meme-pack migration fixture.
 
 ## Acceptance
 
