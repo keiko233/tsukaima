@@ -1,36 +1,24 @@
-import { assertPluginSqlNamespaced, pluginSqlPrefix } from "@elaina/plugin-registry";
-import type { ElainaDatabase } from "@elaina/db";
+import { assertPluginSqlIsolated, pluginSqlPrefix } from "@elaina/plugin-registry";
+import type { PluginDatabaseConnection } from "@elaina/plugin-registry";
 import type { PluginDatabaseApi } from "@elaina/sdk";
 
-type RawSqlite = {
-	readonly query: (sql: string) => {
-		all: (...params: unknown[]) => unknown[];
-		run: (...params: unknown[]) => unknown;
-	};
-	readonly run: (sql: string, ...params: unknown[]) => unknown;
-};
-
 /**
- * Host-mode-only SQLite facade. Every statement is checked against the plugin's object prefix
- * before it reaches the shared connection; worker-mode plugins never receive this handle.
+ * Facade over one plugin's own SQLite file. The file already isolates the plugin from core and
+ * other plugins; the only rejected statement is one that would attach another database.
  */
-export function createScopedPluginDatabase(
-	database: ElainaDatabase,
+export function createPluginDatabase(
+	database: PluginDatabaseConnection,
 	pluginId: string,
 ): PluginDatabaseApi {
-	const prefix = pluginSqlPrefix(pluginId);
-	const assert = (sql: string) => assertPluginSqlNamespaced(sql, pluginId);
 	return {
 		async exec(sql) {
-			assert(sql);
-			(database as unknown as { $client: RawSqlite }).$client.run(sql);
+			assertPluginSqlIsolated(sql, pluginId);
+			database.exec(sql);
 		},
-		prefix,
+		prefix: pluginSqlPrefix(pluginId),
 		async query<T = unknown>(sql: string, params: readonly unknown[] = []): Promise<readonly T[]> {
-			assert(sql);
-			return (database as unknown as { $client: RawSqlite }).$client
-				.query(sql)
-				.all(...params) as T[];
+			assertPluginSqlIsolated(sql, pluginId);
+			return database.query<T>(sql, params);
 		},
 	};
 }

@@ -29,7 +29,13 @@ import { BACKGROUND_CONTEXT, openDurableStorage, type SqliteStorage } from "@ela
 import { KeyvCache } from "@elaina/cache";
 import { eq } from "drizzle-orm";
 import { createPluginToolsExtension, type AuditEntry, type ElainaPlugin } from "@elaina/sdk";
-import { MigrationRegistry, type PluginMigrationPlan } from "@elaina/plugin-registry";
+import {
+	MigrationRegistry,
+	PluginDatabaseStore,
+	loadPluginMigrations,
+	migrateLegacyPluginTables,
+	wrapPluginSqlConnection,
+} from "@elaina/plugin-registry";
 import { runBackupDrill as executeBackupDrill, type BackupDrillReport } from "@elaina/migration";
 import type {
 	ChannelNotice,
@@ -130,6 +136,7 @@ export class ElainaLifecycle {
 	readonly hooks: HookBus;
 	readonly pluginHost: PluginHost;
 	readonly pluginMigrations: MigrationRegistry;
+	readonly pluginDatabases: PluginDatabaseStore;
 	readonly pluginSettings: PluginSettingsStore;
 	readonly pluginStatuses: PluginStatusStore;
 	readonly pluginStorage: PluginStorageStore;
@@ -280,8 +287,11 @@ export class ElainaLifecycle {
 		});
 		this.pluginStatuses = new PluginStatusStore();
 		this.pluginStorage = new PluginStorageStore(() => this.domainDatabase);
+		this.pluginDatabases = new PluginDatabaseStore({
+			directory: join(this.config.dataDir, "plugins"),
+		});
 		this.pluginMigrations = new MigrationRegistry({
-			database: () => this.domainDatabase,
+			databases: this.pluginDatabases,
 		});
 		this.pluginTasks = new PluginTaskService({
 			database: () => this.domainDatabase,
@@ -366,6 +376,7 @@ export class ElainaLifecycle {
 			logger: this.logger,
 			migrations: this.pluginMigrations,
 			media: this.media,
+			pluginDatabases: this.pluginDatabases,
 			onModelMessage: (message, pluginId) => {
 				this.modelUsageLedger.record(
 					message as Parameters<typeof this.modelUsageLedger.record>[0],
@@ -483,20 +494,48 @@ export class ElainaLifecycle {
 		this.domainDatabase = await openDomainDatabase(join(this.config.dataDir, "domain.sqlite"));
 		migrateDomainDatabase(this.domainDatabase);
 		this.transition("plugin-migrations");
-		const pluginMigrations: PluginMigrationPlan[] = [];
+		const domainSource = wrapPluginSqlConnection(
+			this.domainDatabase.$client as unknown as Parameters<typeof wrapPluginSqlConnection>[0],
+		);
 		for (const plugin of this.plugins) {
-			pluginMigrations.push({
-				enabled: await this.pluginSettings.isEnabled(plugin.manifest.name),
-				migrations: plugin.manifest.migrations.map((migration) => ({
-					sql: migration.sql,
-					version: migration.version,
-					...(migration.checksum === undefined ? {} : { checksum: migration.checksum }),
-					...(migration.rollbackSql === undefined ? {} : { rollbackSql: migration.rollbackSql }),
-				})),
-				pluginId: plugin.manifest.name,
+			const pluginId = plugin.manifest.name;
+			if (!(await this.pluginSettings.isEnabled(pluginId))) continue;
+			if (plugin.manifest.migrations === undefined) continue;
+			if (plugin.rootDir === undefined) {
+				throw new Error(
+					`Plugin ${pluginId} declares a migrations directory but exposes no rootDir`,
+				);
+			}
+			const migrations = await loadPluginMigrations(plugin.rootDir, plugin.manifest.migrations);
+			const result = await this.pluginMigrations.run(pluginId, migrations);
+			if (result.applied.length > 0) {
+				this.runtimeLog.info("applied plugin migrations", {
+					pluginId,
+					versions: result.applied.map((migration) => migration.version),
+				});
+			}
+			const database = await this.pluginDatabases.open(pluginId);
+			const legacy = migrateLegacyPluginTables({
+				pluginId,
+				source: domainSource,
+				target: database,
 			});
+			if (legacy.imported.length > 0) {
+				this.runtimeLog.info("moved legacy plugin tables into the plugin database", {
+					pluginId,
+					tables: legacy.imported.map((table) => ({
+						importedRows: table.importedRows,
+						table: table.table,
+					})),
+				});
+			}
+			if (legacy.orphaned.length > 0) {
+				this.runtimeLog.warn("legacy plugin tables have no target schema and were left in place", {
+					pluginId,
+					tables: legacy.orphaned,
+				});
+			}
 		}
-		await this.pluginMigrations.migrate(pluginMigrations);
 		this.transition("load-settings");
 		const settings = await readRuntimeSettings(this.domainDatabase);
 		if (this.config.logLevelFromEnv) {
@@ -1065,6 +1104,7 @@ export class ElainaLifecycle {
 		await this.conversationHost?.close();
 		await this.liveRuns.close();
 		await this.cache.close();
+		this.pluginDatabases.closeAll();
 		await this.durableStorage?.close(BACKGROUND_CONTEXT);
 		this.domainDatabase?.$client.close();
 		this.runtimeLog.info("lifecycle stopped");

@@ -123,11 +123,10 @@ describe("sticker-meme host integration", () => {
 			const context = lifecycle.pluginHost.context("sticker-meme");
 			expect(context?.database?.prefix).toBe("plugin_sticker_meme_");
 			expect(context?.media).toBeDefined();
-			const tables = (await lifecycle.domainDatabase?.$client
-				.query(
+			const tables =
+				(await context?.database?.query<{ name: string }>(
 					"SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'plugin_sticker_meme_%'",
-				)
-				.all()) as { name: string }[];
+				)) ?? [];
 			expect(tables.map((row) => row.name).toSorted()).toEqual([
 				"plugin_sticker_meme_items",
 				"plugin_sticker_meme_packs",
