@@ -8,9 +8,9 @@ or task hacks.
 ## Current boundary
 
 The plugin SDK has manifests, permissions, worker isolation, tools, hooks, RPC/UI/model
-bridges, settings/status, install/uninstall, audit, and requests. Missing production surfaces:
+bridges, settings/status, install/uninstall, audit, requests, durable tasks, and plugin-owned
+databases. Missing production surfaces:
 
-- plugin-owned database migrations
 - durable task creation
 - per-tool allowlist/deferred/timeout
 - named UI component registry
@@ -19,21 +19,25 @@ bridges, settings/status, install/uninstall, audit, and requests. Missing produc
 
 ## Plugin-owned migrations and storage
 
-Implement a `MigrationRegistry` that:
+Each plugin gets its own `data/plugins/<sanitized-id>.sqlite` file. Plugins declare only a
+migrations directory in the manifest; the host loads `<version>_<name>.sql` and optional
+`<version>_<name>.down.sql` files from the plugin root. A `MigrationRegistry`:
 
 1. runs after core migrations, before plugin `prepare()`
-2. applies enabled plugin journals by version
+2. applies enabled plugin journals inside that plugin's database
 3. serializes with the core migration lock
-4. records plugin ID, version, checksum, applied at, status, timing
-5. rejects duplicate/reordered versions
-6. supports dry-run
-7. keeps rollback plan per plugin, though automatic rollback may be manual
+4. records version, checksum, applied at, timing in `_elaina_plugin_migrations` inside the
+   plugin database
+5. rejects duplicate/reordered versions and checksum drift
+6. supports dry-run and rollback
+7. moves legacy `plugin_<id>_*` tables out of `domain.sqlite` on first startup, then drops them
 
-Core tables remain host-owned; plugin schemas are namespaced (`plugin_<id>_*`) or plugin-owned.
-Replace the in-memory `LocalStorageBridge` with SQLite-backed durable `PluginStorage`. Plugins
-that own relational tables via `MigrationRegistry` run in `host` mode with a scoped repository/DB
-handle; `worker`-mode plugins access persisted state exclusively through host-mediated
-`PluginStorage` / RPC calls across the `BunPluginWorker` boundary.
+Core tables remain host-owned and never appear in a plugin database. The plugin SQL facade rejects
+`ATTACH`/`DETACH` and `VACUUM INTO`, so a plugin cannot escape its own file even with raw SQL.
+Plugins that own relational tables run in `host` mode with the database handle; `worker`-mode
+plugins access persisted state exclusively through host-mediated `PluginStorage` / RPC calls
+across the `BunPluginWorker` boundary. Durable `PluginStorage` remains the right home for small
+key-value state that does not need relational queries.
 
 ## Task surface
 

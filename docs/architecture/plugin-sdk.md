@@ -350,6 +350,9 @@ The worker protocol is Elaina-specific. It is intentionally not Cordis Context w
 my-elaina-plugin/
   package.json
   elaina.plugin.json
+  migrations/
+    0001_init.sql
+    0001_init.down.sql
   dist/index.js
   README.md
 ```
@@ -370,9 +373,14 @@ my-elaina-plugin/
   "tools": ["dist/tools.js"],
   "hooks": ["dist/hooks.js"],
   "ui": ["dist/ui.js"],
+  "migrations": { "directory": "migrations" },
   "configSchema": "./config.schema.json"
 }
 ```
+
+`migrations` is only a directory declaration. The host loads `<version>_<name>.sql` and the
+optional `<version>_<name>.down.sql` rollback from that directory into the plugin's own database.
+JSON manifests must not contain SQL.
 
 The exact loader format is finalized during implementation.
 

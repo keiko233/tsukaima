@@ -78,10 +78,16 @@ the host process but go through the same registry, permission checks, settings s
 plugins/onebot-napcat/
   package.json          @elaina-plugin/onebot-napcat
   elaina.plugin.json    declarative descriptor (kept in sync with the TS manifest by a test)
+  migrations/           plugin-owned SQL files, when the plugin owns tables
   src/manifest.ts       PluginManifest source of truth
-  src/index.ts          export const plugin: ElainaPlugin
+  src/index.ts          export const plugin: ElainaPlugin (with rootDir for migrations)
   src/*.test.ts
 ```
+
+Plugins that own relational state keep their SQL in `migrations/<version>_<name>.sql` (and an
+optional `.down.sql`) and declare only `"migrations": { "directory": "migrations" }` in the
+manifest. Each one gets its own `data/plugins/<sanitized-id>.sqlite`; see
+[database.md](database.md). The JSON manifest never carries SQL.
 
 Implemented:
 
