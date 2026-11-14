@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { messages } from "@tsukaima/db";
+import { chatObjects, messages } from "@tsukaima/db";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	type OneBotTransport,
@@ -177,6 +177,60 @@ describe("fake NapCat integration", () => {
 				return rows[0];
 			});
 			expect(afterCrash.contentText).toContain("after crash");
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	// Regression: real NapCat sends `card: ""` for friends without a remark. That produced an
+	// empty `displayName`, which failed envelope validation and silently dropped the message, so
+	// the chat never appeared in the WebUI chat list.
+	test("accepts a private message whose sender card is empty", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-napcat-empty-card-"));
+		directories.push(directory);
+		const transports: FakeNapCatTransport[] = [];
+		const factory: OneBotTransportFactory = () => {
+			const transport = new FakeNapCatTransport();
+			transports.push(transport);
+			return transport;
+		};
+		const { lifecycle } = createApp(
+			{
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001",
+				TSUKAIMA_PORT: "7420",
+			},
+			{
+				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, factory]]),
+				reply: { pendingGraceMs: 0 },
+			},
+		);
+		await lifecycle.start();
+		try {
+			transports[0]?.emitOpen();
+			transports[0]?.emitMessage({
+				message: [{ data: { text: "test" }, type: "text" }],
+				message_id: 617_018_306,
+				message_type: "private",
+				post_type: "message",
+				self_id: 99,
+				sender: { card: "", nickname: "TestNickname", user_id: 940_582_963 },
+				time: Math.floor(Date.now() / 1_000),
+				user_id: 940_582_963,
+			});
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("Domain database not ready");
+			const inbound = await waitFor(async () => {
+				const rows = await database.select().from(messages);
+				return rows.find((row) => row.platformMessageId === "700001");
+			});
+			expect(inbound.contentText).toBe("test");
+			expect(inbound.senderDisplayName).toBe("TestNickname");
+			expect(inbound.triggerClassification).toBe("direct");
+			// The chat object is what the WebUI chat list renders; without it the message is invisible.
+			const chats = await database.select().from(chatObjects);
+			expect(chats.map((chat) => chat.platformConversationId)).toContain("10003");
+			expect(lifecycle.lastProcessingError).toBeUndefined();
 		} finally {
 			await lifecycle.stop();
 		}

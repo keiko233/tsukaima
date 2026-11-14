@@ -15,6 +15,13 @@ import {
 } from "@tsukaima/sdk/ui";
 import { useState } from "react";
 import { i18n } from "./i18n.ts";
+import { ONEBOT_PLUGIN_ID } from "./manifest.ts";
+
+/**
+ * Plugin RPC methods are namespaced by plugin id on the host side. `usePluginRpc().call` passes
+ * the method straight through, so the panel has to send the fully qualified name.
+ */
+const rpcName = (method: string): string => `${ONEBOT_PLUGIN_ID}.${method}`;
 
 function ConnectionPanel() {
 	const { plugin, status, refresh } = usePluginPanel();
@@ -35,7 +42,7 @@ function ConnectionPanel() {
 					onClick={async () => {
 						setBusy(true);
 						try {
-							await rpc.call("reconnect");
+							await rpc.call(rpcName("reconnect"));
 							toast.success(i18nValue.t("reconnect_started"));
 							await refresh();
 						} catch (error) {

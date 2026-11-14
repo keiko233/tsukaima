@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { messageEnvelopeSchema } from "@tsukaima/contracts";
 import { OneBotIntervalRateLimiter } from "./rate-limit.ts";
 import {
 	normalizeOneBotEvent,
@@ -135,6 +136,27 @@ describe("OneBot inbound segment fidelity", () => {
 		if (part?.type === "file") {
 			expect(part.channelRef).not.toContain("..");
 			expect(part.fileName).toBe("secret");
+		}
+	});
+
+	test("falls back to nickname when NapCat sends an empty card", () => {
+		// NapCat sends `card: ""` for friends without a remark, and `card: null` for some
+		// accounts. An empty display name fails the envelope contract, which used to drop the
+		// whole message before ingestion.
+		const cases: Array<[NonNullable<OneBotEvent["sender"]>, string]> = [
+			[{ card: "", nickname: "TestNickname", user_id: 10_001 }, "TestNickname"],
+			[{ card: "   ", nickname: "TestNickname", user_id: 10_001 }, "TestNickname"],
+			[{ nickname: "TestNickname", user_id: 10_001 }, "TestNickname"],
+			[{ card: "Test User", nickname: "TestNickname", user_id: 10_001 }, "Test User"],
+			[{ card: "", user_id: 10_001 }, "10001"],
+		];
+		for (const [sender, expected] of cases) {
+			const envelope = normalizeOneBotEvent(
+				message([{ data: { text: "test" }, type: "text" }], { sender }),
+				config,
+			);
+			expect(envelope?.sender.displayName).toBe(expected);
+			expect(messageEnvelopeSchema.safeParse(envelope).success).toBe(true);
 		}
 	});
 
