@@ -59,7 +59,7 @@ Domain data uses SQLite with Drizzle ORM in a separate database file from durabl
 - policy, audit, deployment, and migration records
 - media index
 
-Durable chat entries remain in `durable.sqlite`. Domain records that are useful outside one chat (people, facts, plugin registry, audit) live in `domain.sqlite`. IDs reference, but do not duplicate, durable conversation/entry IDs.
+Durable chat entries remain in `durable.sqlite`. Domain records that are useful outside one chat (people, facts, plugin registry, audit) live in `domain.sqlite`. IDs reference, but do not duplicate, durable conversation/entry IDs. Ephemeral TTL state, live-run snapshots, and plugin caches live in `cache.sqlite` and are never the source of truth; see [KV cache](kv-cache.md).
 
 The domain database uses:
 
