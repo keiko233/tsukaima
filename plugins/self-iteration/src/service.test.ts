@@ -9,7 +9,7 @@ import {
 	type HealthCheckResult,
 	type ReloadController,
 } from "@tsukaima/coding";
-import type { AuditEntry, PluginStorage } from "@tsukaima/sdk";
+import type { AuditEntry, PluginLogger, PluginStorage } from "@tsukaima/sdk";
 import { SELF_ITERATION_HOST_BINDING } from "./domain.ts";
 import { selfIterationPlugin } from "./index.ts";
 import { SelfIterationService } from "./service.ts";
@@ -39,9 +39,40 @@ async function git(cwd: string, args: readonly string[]): Promise<void> {
 	});
 }
 
+interface CapturedLog {
+	readonly details: unknown;
+	readonly level: "debug" | "error" | "info" | "trace" | "warn";
+	readonly message: string;
+}
+
+/** In-memory logger covering the full `PluginLogger` surface, including `trace`. */
+function captureLogger(logs: CapturedLog[]): PluginLogger {
+	const write =
+		(level: CapturedLog["level"]) =>
+		(message: string, details?: unknown): void => {
+			logs.push({ details, level, message });
+		};
+	const logger: PluginLogger = {
+		debug: write("debug"),
+		error: write("error"),
+		info: write("info"),
+		trace: write("trace"),
+		warn: write("warn"),
+	};
+	logger.child = () => logger;
+	return logger;
+}
+
+function detailsOf(entry: CapturedLog | undefined): Record<string, unknown> {
+	return typeof entry?.details === "object" && entry.details !== null
+		? (entry.details as Record<string, unknown>)
+		: {};
+}
+
 interface Fixture {
 	readonly audits: AuditEntry[];
 	readonly checks: { count: number; script: (count: number) => boolean };
+	readonly logs: CapturedLog[];
 	readonly reloads: string[];
 	readonly repo: string;
 	readonly service: SelfIterationService;
@@ -74,6 +105,7 @@ async function fixture(): Promise<Fixture> {
 	await git(repo, ["commit", "-m", "initial"]);
 	const store = new DomainCodingStore(join(root, "domain.sqlite"));
 	const audits: AuditEntry[] = [];
+	const logs: CapturedLog[] = [];
 	const reloads: string[] = [];
 	const checks = { count: 0, script: (_count: number) => true };
 	const reload: ReloadController = {
@@ -95,9 +127,10 @@ async function fixture(): Promise<Fixture> {
 			store,
 			worktreeRoot: worktrees,
 		},
+		logger: captureLogger(logs),
 		storage: new MemoryStorage(),
 	});
-	return { audits, checks, reloads, repo, service, store, worktrees };
+	return { audits, checks, logs, reloads, repo, service, store, worktrees };
 }
 
 beforeEach(() => {});
@@ -315,10 +348,70 @@ describe("SelfIterationService", () => {
 		expect(deployments.filter((deployment) => deployment.status === "rolled_back")).toHaveLength(2);
 	});
 
+	test("emits info, debug, and trace logs across the proposal lifecycle", async () => {
+		const { logs, service } = await fixture();
+		const task = await patchTask(service);
+		const proposal = await proposalFor(service, task.id);
+		await service.resolveApproval({
+			action: "approve",
+			approvalId: proposal.approvalId,
+			resolvedBy: "admin",
+		});
+		const deployed = await service.deploy({
+			createdBy: "admin",
+			proposalId: proposal.proposal.id,
+		});
+		await service.rollback({ createdBy: "admin", deploymentId: deployed.deployment.id });
+
+		const saw = (level: CapturedLog["level"], message: string): boolean =>
+			logs.some((entry) => entry.level === level && entry.message === message);
+
+		expect(saw("debug", "task created")).toBe(true);
+		expect(saw("debug", "worktree created")).toBe(true);
+		expect(saw("debug", "edit applied")).toBe(true);
+		expect(saw("info", "proposal created")).toBe(true);
+		expect(saw("info", "proposal approved")).toBe(true);
+		expect(saw("info", "deployment started")).toBe(true);
+		expect(saw("info", "deployment succeeded")).toBe(true);
+		expect(saw("info", "rollback started")).toBe(true);
+		expect(saw("info", "rollback succeeded")).toBe(true);
+		expect(saw("trace", "test started")).toBe(true);
+		expect(saw("trace", "build started")).toBe(true);
+		expect(saw("trace", "proposal requested")).toBe(true);
+		expect(saw("trace", "task create requested")).toBe(true);
+
+		const completed = logs.find(
+			(entry) => entry.level === "debug" && entry.message === "test completed",
+		);
+		expect(typeof detailsOf(completed).durationMs).toBe("number");
+
+		const deploymentLog = logs.find(
+			(entry) => entry.level === "info" && entry.message === "deployment started",
+		);
+		expect(deploymentLog?.details).toEqual(
+			expect.objectContaining({ dryRun: false, proposalId: proposal.proposal.id }),
+		);
+	});
+
+	test("bounds trace previews to one line of 120 characters", async () => {
+		const { logs, service } = await fixture();
+		const goal = `${`x`.repeat(40)}\n${"y".repeat(200)}`;
+		await service.createTask({ goal, mode: "analysis" });
+		const requested = logs.filter(
+			(entry) => entry.level === "trace" && entry.message === "task create requested",
+		);
+		const preview = String(detailsOf(requested.at(-1)).goal ?? "");
+		expect(preview.length).toBeLessThanOrEqual(120);
+		expect(preview).toContain("\\n");
+		expect(preview).not.toContain("\n");
+		expect(preview.endsWith("…")).toBe(true);
+	});
+
 	test("registers the plugin and exposes exactly the eight model tools", async () => {
 		const { repo, store, worktrees } = await fixture();
 		const tools: string[] = [];
 		const rpc: string[] = [];
+		const logs: CapturedLog[] = [];
 		const context = {
 			audit: { record: async () => undefined },
 			dependencies: {
@@ -330,12 +423,7 @@ describe("SelfIterationService", () => {
 					worktreeRoot: worktrees,
 				}),
 			},
-			logger: {
-				child: () => context.logger,
-				error: () => undefined,
-				info: () => undefined,
-				warn: () => undefined,
-			},
+			logger: captureLogger(logs),
 			rpc: { register: (name: string) => void rpc.push(name) },
 			storage: new MemoryStorage(),
 			tools: { register: (tool: { name: string }) => void tools.push(tool.name) },
@@ -360,5 +448,17 @@ describe("SelfIterationService", () => {
 		expect(rpc).toContain("approvals.resolve");
 		expect(rpc).toContain("policy.update");
 		expect(SELF_ITERATION_HOST_BINDING).toBe("tsukaima.self-iteration.host");
+		expect(logs.some((entry) => entry.level === "debug" && entry.message.includes("setup"))).toBe(
+			true,
+		);
+		expect(
+			logs.some((entry) => entry.level === "info" && entry.message === "self-iteration ready"),
+		).toBe(true);
+
+		if (selfIterationPlugin.teardown === undefined) throw new Error("teardown missing");
+		await selfIterationPlugin.teardown(context as never);
+		expect(
+			logs.some((entry) => entry.level === "debug" && entry.message === "self-iteration teardown"),
+		).toBe(true);
 	});
 });
