@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { gzipSync } from "node:zlib";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +28,14 @@ import {
 import { StickerImportService } from "./import-service.ts";
 import { LearningService, type LearningSettings } from "./learning.ts";
 import { stickerMemeManifest } from "./manifest.ts";
+
+const MIGRATIONS = readdirSync(new URL("../migrations", import.meta.url))
+	.filter((file) => file.endsWith(".sql") && !file.endsWith(".down.sql"))
+	.toSorted()
+	.map((file) => ({
+		file,
+		sql: readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"),
+	}));
 import { createStickerReplyTransform } from "./output.ts";
 import { StickerProgressTracker } from "./progress.ts";
 import { StickerRepository } from "./repository.ts";
@@ -115,7 +124,7 @@ class MemoryMedia implements PluginMediaApi {
 function createDatabase(): PluginDatabaseApi {
 	const database = new Database(":memory:");
 	database.run("PRAGMA foreign_keys = ON");
-	for (const migration of stickerMemeManifest.migrations) database.run(migration.sql);
+	for (const migration of MIGRATIONS) database.run(migration.sql);
 	return {
 		async exec(sql) {
 			database.run(sql);

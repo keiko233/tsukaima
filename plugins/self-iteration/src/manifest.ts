@@ -12,7 +12,6 @@ export const SELF_ITERATION_MANIFEST: PluginManifest = pluginManifestSchema.pars
 	},
 	hooks: [],
 	kind: "builtin",
-	migrations: [],
 	name: SELF_ITERATION_PLUGIN_ID,
 	permissions: [
 		"tools.register",

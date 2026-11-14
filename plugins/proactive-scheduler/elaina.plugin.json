@@ -19,7 +19,7 @@
 	"tools": [],
 	"hooks": [{ "name": "message.received" }, { "name": "after.reply" }],
 	"ui": [],
-	"migrations": [],
+	"migrations": { "directory": "migrations" },
 	"configSchema": {
 		"properties": {
 			"tickIntervalMs": { "type": "integer" },

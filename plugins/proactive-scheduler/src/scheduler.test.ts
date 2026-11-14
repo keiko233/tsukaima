@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { readdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import {
 	consumeProactiveMarkers,
@@ -32,7 +33,10 @@ import {
 	type ProactivePolicy,
 } from "./domain.ts";
 import { evaluateProactiveGates } from "./engine.ts";
-import { proactiveSchedulerManifest } from "./manifest.ts";
+const MIGRATIONS = readdirSync(new URL("../migrations", import.meta.url))
+	.filter((file) => file.endsWith(".sql") && !file.endsWith(".down.sql"))
+	.toSorted()
+	.map((file) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
 import { ProactiveSchedulerService } from "./service.ts";
 
 class TestDatabase implements PluginDatabaseApi {
@@ -40,8 +44,8 @@ class TestDatabase implements PluginDatabaseApi {
 	readonly #database = new Database(":memory:");
 
 	constructor() {
-		for (const migration of proactiveSchedulerManifest.migrations) {
-			this.#database.exec(migration.sql);
+		for (const sql of MIGRATIONS) {
+			this.#database.exec(sql);
 		}
 	}
 

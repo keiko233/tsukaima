@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS plugin_proactive_scheduler_tasks_conversation_idx;
+DROP INDEX IF EXISTS plugin_proactive_scheduler_tasks_status_idx;
+DROP TABLE IF EXISTS plugin_proactive_scheduler_tasks;

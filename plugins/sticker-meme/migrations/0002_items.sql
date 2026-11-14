@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS plugin_sticker_meme_items (
+	id TEXT PRIMARY KEY,
+	pack_id TEXT NOT NULL REFERENCES plugin_sticker_meme_packs(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	description TEXT NOT NULL DEFAULT '',
+	keywords_json TEXT NOT NULL DEFAULT '[]',
+	emotions_json TEXT NOT NULL DEFAULT '[]',
+	mime_type TEXT NOT NULL,
+	media_id TEXT NOT NULL DEFAULT '',
+	hash TEXT NOT NULL,
+	width INTEGER,
+	height INTEGER,
+	enabled INTEGER NOT NULL DEFAULT 1,
+	review_status TEXT NOT NULL DEFAULT 'pending' CHECK (review_status IN ('approved', 'pending', 'rejected')),
+	score REAL NOT NULL DEFAULT 1,
+	use_count INTEGER NOT NULL DEFAULT 0,
+	last_used_at TEXT,
+	source_conversation_id TEXT,
+	revoked_at TEXT,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+);

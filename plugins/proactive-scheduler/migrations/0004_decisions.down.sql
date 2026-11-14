@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS plugin_proactive_scheduler_decisions_conversation_idx;
+DROP TABLE IF EXISTS plugin_proactive_scheduler_decisions;

@@ -15,7 +15,6 @@
 	"tools": [],
 	"hooks": [],
 	"ui": [],
-	"migrations": [],
 	"configSchema": {
 		"properties": {
 			"allowDomains": { "type": "array", "items": { "type": "string" } },
