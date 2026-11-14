@@ -1,4 +1,8 @@
+import { join } from "node:path";
+import { logLevelSchema } from "@elaina/contracts";
 import { z } from "zod";
+
+const DEFAULT_LOG_BUFFER_CAPACITY = 5_000;
 
 const configurationSchema = z.object({
 	adminEmail: z.string().email().optional(),
@@ -9,7 +13,12 @@ const configurationSchema = z.object({
 	backupDrillRoot: z.string().min(1).optional(),
 	dataDir: z.string().min(1),
 	host: z.string().min(1),
-	logLevel: z.enum(["debug", "info", "warn", "error"]),
+	logBufferCapacity: z.number().int().positive().max(100_000),
+	logDir: z.string().min(1).optional(),
+	logFileEnabled: z.boolean(),
+	logLevel: logLevelSchema,
+	logLevelFromEnv: z.boolean(),
+	logRetentionDays: z.number().int().positive().optional(),
 	port: z.number().int().min(1).max(65_535),
 	publicUrl: z.string().url(),
 	secureCookies: z.boolean(),
@@ -21,6 +30,19 @@ const configurationSchema = z.object({
 });
 
 export type ElainaConfig = z.infer<typeof configurationSchema>;
+
+function parseOptionalPositiveInt(
+	rawValue: string | undefined,
+	envName: string,
+): number | undefined {
+	const trimmed = rawValue?.trim() ?? "";
+	if (trimmed === "") return undefined;
+	const parsed = Number(trimmed);
+	if (!Number.isInteger(parsed) || parsed <= 0) {
+		throw new Error(`${envName} must be a positive integer`);
+	}
+	return parsed;
+}
 
 export function loadConfig(env: Record<string, string | undefined>): ElainaConfig {
 	const port = Number(env.ELAINA_PORT ?? "7420");
@@ -50,6 +72,25 @@ export function loadConfig(env: Record<string, string | undefined>): ElainaConfi
 		parsedDrillInterval === undefined || parsedDrillInterval === 0
 			? undefined
 			: parsedDrillInterval;
+
+	const dataDir = env.ELAINA_DATA_DIR ?? "./data";
+	const rawLogLevel = env.ELAINA_LOG_LEVEL?.trim();
+	const logLevelFromEnv = rawLogLevel !== undefined && rawLogLevel.length > 0;
+	const logBufferCapacity =
+		parseOptionalPositiveInt(env.ELAINA_LOG_BUFFER_CAPACITY, "ELAINA_LOG_BUFFER_CAPACITY") ??
+		DEFAULT_LOG_BUFFER_CAPACITY;
+	const logRetentionDays = parseOptionalPositiveInt(
+		env.ELAINA_LOG_RETENTION_DAYS,
+		"ELAINA_LOG_RETENTION_DAYS",
+	);
+	const logFileEnabled = env.ELAINA_LOG_FILE_ENABLED?.trim().toLowerCase() !== "false";
+	const rawLogDir = env.ELAINA_LOG_DIR?.trim();
+	const logDir = logFileEnabled
+		? rawLogDir && rawLogDir.length > 0
+			? rawLogDir
+			: join(dataDir, "logs")
+		: undefined;
+
 	const config = configurationSchema.parse({
 		adminEmail: env.ELAINA_ADMIN_EMAIL || undefined,
 		adminPassword: env.ELAINA_ADMIN_PASSWORD || undefined,
@@ -57,9 +98,14 @@ export function loadConfig(env: Record<string, string | undefined>): ElainaConfi
 		authSecret: env.ELAINA_AUTH_SECRET || env.BETTER_AUTH_SECRET || undefined,
 		...(backupDrillIntervalMs === undefined ? {} : { backupDrillIntervalMs }),
 		backupDrillRoot: env.ELAINA_BACKUP_DRILL_ROOT || undefined,
-		dataDir: env.ELAINA_DATA_DIR ?? "./data",
+		dataDir,
 		host: env.ELAINA_HOST ?? "127.0.0.1",
-		logLevel: env.ELAINA_LOG_LEVEL ?? "info",
+		logBufferCapacity,
+		...(logDir === undefined ? {} : { logDir }),
+		logFileEnabled,
+		logLevel: logLevelFromEnv ? rawLogLevel : "info",
+		logLevelFromEnv,
+		...(logRetentionDays === undefined ? {} : { logRetentionDays }),
 		port,
 		publicUrl,
 		secureCookies: env.ELAINA_AUTH_SECURE_COOKIES === "true" || publicUrl.startsWith("https://"),

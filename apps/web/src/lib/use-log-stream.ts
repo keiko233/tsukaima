@@ -22,9 +22,9 @@ function parseStreamData<T>(event: Event): T | null {
  */
 export function useLogStream(enabled = true) {
 	const [entries, setEntries] = useState<LogEntry[]>([]);
-	const [capacity, setCapacity] = useState(2_000);
+	const [capacity, setCapacity] = useState(5_000);
 	const [streamState, setStreamState] = useState<LogStreamState>("connecting");
-	const capacityRef = useRef(2_000);
+	const capacityRef = useRef(5_000);
 
 	useEffect(() => {
 		if (!enabled) return;

@@ -26,14 +26,13 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@elaina/ui/components/motion/select";
-import { orpc, type LogLevel } from "@/lib/api";
+import { logLevels as LOG_LEVELS, orpc, type LogLevel } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { useLogStream } from "@/lib/use-log-stream";
 import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { LogTerminal } from "@/routes/(system)/_modules/log-terminal";
 
-const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 const HEIGHT_KEY = "elaina.webui.log-panel-height";
 const MIN_HEIGHT = 200;
 const DEFAULT_HEIGHT = 340;

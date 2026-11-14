@@ -8,7 +8,7 @@ import {
 	messages,
 	type ElainaDatabase,
 } from "@elaina/db";
-import type { Logger } from "../logging.ts";
+import { previewText, type Logger } from "../logging.ts";
 import { ConversationPolicyService } from "./conversation-policy.ts";
 import { MemoryService, type RankedMemory } from "./memory-service.ts";
 
@@ -154,7 +154,14 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			if (persona === undefined) return undefined;
 			const text = personaText(persona);
 			if (text === undefined) return undefined;
-			return truncateChars(text, this.#personaBudget, PERSONA_TRUNCATION_NOTE);
+			const rendered = truncateChars(text, this.#personaBudget, PERSONA_TRUNCATION_NOTE);
+			this.#logger.debug("rendered persona context", {
+				durableConversationId,
+				personaName: persona.name,
+				renderedChars: rendered.length,
+				truncated: rendered.length < text.length,
+			});
+			return rendered;
 		} catch (error) {
 			this.#logger.warn("persona context unavailable", { error: errorMessage(error) });
 			return undefined;
@@ -191,7 +198,14 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			];
 			if (aliases.length > 0) lines.push(`- Self aliases: ${aliases.join(", ")}`);
 			lines.push("- If a reply would be noise, answer with exactly ELAINA_LURK.");
-			return lines.join("\n");
+			const rendered = lines.join("\n");
+			this.#logger.debug("rendered policy context", {
+				aliasCount: aliases.length,
+				durableConversationId,
+				renderedChars: rendered.length,
+				sessionId: session.sessionId,
+			});
+			return rendered;
 		} catch (error) {
 			this.#logger.warn("policy context unavailable", { error: errorMessage(error) });
 			return undefined;
@@ -201,13 +215,27 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	async renderMemories(durableConversationId: string): Promise<string | undefined> {
 		try {
 			const collected = await this.#collectMemories(durableConversationId);
-			if (collected === undefined || !collected.enabled) return undefined;
-			return this.#format({
+			if (collected === undefined || !collected.enabled) {
+				this.#logger.debug("memory context skipped", {
+					durableConversationId,
+					enabled: collected?.enabled ?? false,
+				});
+				return undefined;
+			}
+			const rendered = this.#format({
 				policy: collected.policy,
 				ranked: collected.longTerm,
 				recent: collected.recent,
 				warm: collected.warm,
 			});
+			this.#logger.debug("rendered memory context", {
+				durableConversationId,
+				hasWarm: collected.warm !== undefined,
+				longTermCount: collected.longTerm.length,
+				recentCount: collected.recent.length,
+				renderedChars: rendered?.length ?? 0,
+			});
+			return rendered;
 		} catch (error) {
 			this.#logger.warn("memory context unavailable", { error: errorMessage(error) });
 			return undefined;
@@ -338,6 +366,13 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			...recent.map((row) => row.contentText ?? ""),
 			...(warm === undefined ? [] : [String(warm.evidence.topic ?? "")]),
 		].join("\n");
+		this.#logger.trace("collecting memories for context", {
+			durableConversationId,
+			hasScopeFilter: scopeFilter !== undefined,
+			queryPreview: previewText(query),
+			recentCount: recent.length,
+			sessionId: session?.sessionId,
+		});
 		const ranked =
 			scopeFilter === undefined
 				? []

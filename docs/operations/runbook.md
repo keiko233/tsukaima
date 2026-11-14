@@ -57,7 +57,11 @@ Recommended:
 | `ELAINA_WEB_ORIGIN`, `ELAINA_TRUSTED_ORIGINS` | Browser origins accepted by Better Auth. |
 | `ELAINA_TRUSTED_PROXIES` | Reverse proxies whose forwarded client IP headers may be trusted. |
 | `ELAINA_AUTH_SECURE_COOKIES` | Defaults to `true` when `ELAINA_PUBLIC_URL` is HTTPS. |
-| `ELAINA_LOG_LEVEL` | `debug`, `info`, `warn`, or `error`. |
+| `ELAINA_LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, or `error` (overrides persisted DB runtime setting on startup when explicitly set). |
+| `ELAINA_LOG_BUFFER_CAPACITY` | In-memory log ring buffer size (default `5000`). |
+| `ELAINA_LOG_FILE_ENABLED` | Set to `false` to disable daily date-chunked file logs (enabled by default). |
+| `ELAINA_LOG_DIR` | Directory for `elaina-YYYY-MM-DD.log` files (default `<data>/logs`). |
+| `ELAINA_LOG_RETENTION_DAYS` | Optional number of days to keep daily log files. |
 | `ELAINA_BACKUP_DRILL_INTERVAL_MS` | Optional scheduled backup drill cadence; unset/`0` disables it. |
 | `ELAINA_BACKUP_DRILL_ROOT` | Optional drill output root (default `<data>/backup-drills`). |
 

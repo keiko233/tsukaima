@@ -9,6 +9,7 @@ import {
 	type ElainaPlugin,
 	type PluginContext,
 	type PluginEvents,
+	type PluginLogger,
 	type PluginManifest,
 	type PluginModelCompleteRequest,
 	type PluginModelInfo,
@@ -102,6 +103,22 @@ export interface PluginHostEntry {
 		readonly version?: string;
 	}[];
 	readonly version: string;
+}
+
+function adaptPluginLogger(logger: Logger, target: string): PluginLogger {
+	const build = (current: Logger, currentTarget: string): PluginLogger => ({
+		trace: (message, details) => current.trace(message, details),
+		debug: (message, details) => current.debug(message, details),
+		info: (message, details) => current.info(message, details),
+		warn: (message, details) => current.warn(message, details),
+		error: (message, details) => current.error(message, details),
+		child: (subTarget, fields) => {
+			const trimmed = subTarget.trim();
+			const nextTarget = trimmed.length === 0 ? currentTarget : `${currentTarget}::${trimmed}`;
+			return build(current.child(nextTarget, fields), nextTarget);
+		},
+	});
+	return build(logger.child(target), target);
 }
 
 /**
@@ -311,7 +328,26 @@ export class PluginHost {
 		}
 		const handler = this.#rpcHandlers.get(method);
 		if (handler === undefined) throw new Error(`Unknown plugin RPC method: ${method}`);
-		return handler(input);
+		const owner = this.#rpcOwners.get(method) ?? pluginId;
+		const startedAt = performance.now();
+		this.#logger.trace("plugin RPC invoked", { method, pluginId: owner });
+		try {
+			const result = await handler(input);
+			this.#logger.debug("plugin RPC completed", {
+				durationMs: Math.round(performance.now() - startedAt),
+				method,
+				pluginId: owner,
+			});
+			return result;
+		} catch (error) {
+			this.#logger.warn("plugin RPC failed", {
+				durationMs: Math.round(performance.now() - startedAt),
+				error,
+				method,
+				pluginId: owner,
+			});
+			throw error;
+		}
 	}
 
 	rpcMethods(): readonly string[] {
@@ -346,6 +382,11 @@ export class PluginHost {
 		for (const pluginId of this.#started) {
 			const pluginContext = this.#contexts.get(pluginId);
 			if (pluginContext?.tools.list().some((tool) => tool.name === name) !== true) continue;
+			this.#logger.trace("routing plugin tool invocation", {
+				conversationId: context.conversationId,
+				pluginId,
+				tool: name,
+			});
 			return pluginContext.tools.invoke(name, input, context);
 		}
 		throw new Error(`Unknown plugin tool ${name}`);
@@ -411,7 +452,12 @@ export class PluginHost {
 			this.settings.registerManifest(manifest);
 			this.#plugins.set(manifest.name, plugin);
 			if (this.#prepared.has(manifest.name)) continue;
-			if (this.#lifecycle.isQuarantined(manifest.name)) continue;
+			if (this.#lifecycle.isQuarantined(manifest.name)) {
+				this.#logger.debug("skipping quarantined plugin during prepare", {
+					pluginId: manifest.name,
+				});
+				continue;
+			}
 			if (this.#registry.get(manifest.name) === undefined) {
 				const enabled = await this.settings.isEnabled(manifest.name);
 				this.#registry.install(manifest, {
@@ -422,13 +468,21 @@ export class PluginHost {
 			}
 			const context = this.#createContext(manifest);
 			this.#contexts.set(manifest.name, context);
-			if (this.#registry.get(manifest.name)?.enabled === false) continue;
+			if (this.#registry.get(manifest.name)?.enabled === false) {
+				this.#logger.debug("skipping disabled plugin during prepare", { pluginId: manifest.name });
+				continue;
+			}
+			const startedAt = performance.now();
 			try {
 				await plugin.prepare?.(context);
 				this.#prepared.add(manifest.name);
+				this.#logger.debug("plugin prepared", {
+					durationMs: Math.round(performance.now() - startedAt),
+					pluginId: manifest.name,
+				});
 			} catch (error) {
 				this.#logger.error("plugin prepare failed", {
-					error: error instanceof Error ? error.message : String(error),
+					error,
 					pluginId: manifest.name,
 				});
 				await this.recordPluginFailure(
@@ -455,9 +509,10 @@ export class PluginHost {
 			if (context === undefined || plugin === undefined) continue;
 			try {
 				await plugin.teardown?.(context);
+				this.#logger.debug("plugin stopped", { pluginId });
 			} catch (error) {
 				this.#logger.warn("plugin teardown failed", {
-					error: error instanceof Error ? error.message : String(error),
+					error,
 					pluginId,
 				});
 			}
@@ -470,6 +525,10 @@ export class PluginHost {
 	}
 
 	async applySettings(pluginId: string, patch: Record<string, unknown>): Promise<unknown> {
+		this.#logger.debug("applying plugin settings patch", {
+			keys: Object.keys(patch),
+			pluginId,
+		});
 		return this.settings.write(pluginId, patch);
 	}
 
@@ -479,6 +538,7 @@ export class PluginHost {
 		if (installed === undefined) throw new Error(`Unknown plugin ${pluginId}`);
 		await this.settings.setEnabled(pluginId, enabled);
 		this.#registry.setEnabled(pluginId, enabled);
+		this.#logger.info("plugin enabled state updated", { enabled, pluginId });
 		if (!enabled) {
 			await this.#stopPlugin(pluginId);
 			return;
@@ -695,15 +755,29 @@ export class PluginHost {
 		if (this.#started.includes(pluginId)) return;
 		const context = this.#contexts.get(pluginId) ?? this.#createContext(manifest);
 		this.#contexts.set(pluginId, context);
+		const startedAt = performance.now();
+		this.#logger.debug("starting plugin", { kind: manifest.kind, pluginId });
 		try {
 			await plugin.setup(context);
 			this.#started.push(pluginId);
 			this.#lifecycle.recordSuccess(pluginId);
 			await this.#persistLifecycleState(pluginId);
-			this.#logger.info("plugin started", { kind: manifest.kind, pluginId });
+			this.#logger.info("plugin started", {
+				durationMs: Math.round(performance.now() - startedAt),
+				kind: manifest.kind,
+				pluginId,
+			});
+			this.#logger.trace("plugin registered surfaces", {
+				pluginId,
+				rpcMethods: [...this.#rpcOwners.entries()]
+					.filter(([, owner]) => owner === pluginId)
+					.map(([method]) => method),
+				tools: context.tools.list().map((tool) => tool.name),
+			});
 		} catch (error) {
 			this.#logger.error("plugin failed to start", {
-				error: error instanceof Error ? error.message : String(error),
+				durationMs: Math.round(performance.now() - startedAt),
+				error,
 				pluginId,
 			});
 			await this.recordPluginFailure(
@@ -717,11 +791,12 @@ export class PluginHost {
 		const context = this.#contexts.get(pluginId);
 		const plugin = this.#plugins.get(pluginId);
 		if (context === undefined || plugin === undefined) return;
+		this.#logger.debug("stopping plugin", { pluginId });
 		try {
 			await plugin.teardown?.(context);
 		} catch (error) {
 			this.#logger.warn("plugin teardown failed", {
-				error: error instanceof Error ? error.message : String(error),
+				error,
 				pluginId,
 			});
 		}
@@ -916,7 +991,7 @@ export class PluginHost {
 			},
 			events,
 			grantedPermissions: manifest.permissions,
-			logger: this.#logger.child(pluginId),
+			logger: adaptPluginLogger(this.#logger, `elaina::plugin::${pluginId}`),
 			manifest,
 			models,
 			pluginId,

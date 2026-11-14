@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { createApp } from "../src/app.ts";
+import { writeRuntimeSettings } from "../src/runtime-settings.ts";
 import type { MessageEnvelope } from "@elaina/contracts";
 import { conversations } from "@elaina/db";
 import {
@@ -193,6 +194,50 @@ describe("server lifecycle with fake model", () => {
 			});
 
 			await lifecycle.stop();
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("ELAINA_LOG_LEVEL overrides persisted runtime setting on startup and writes daily log files", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "elaina-server-logging-"));
+		try {
+			const first = createApp({
+				ELAINA_DATA_DIR: directory,
+				ELAINA_LOG_BUFFER_CAPACITY: "25",
+				ELAINA_LOG_FILE_ENABLED: "false",
+				ELAINA_PORT: "7420",
+				ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			});
+			await first.lifecycle.start();
+			if (first.lifecycle.domainDatabase === undefined) {
+				throw new Error("Domain database not initialized");
+			}
+			await writeRuntimeSettings(first.lifecycle.domainDatabase, { logLevel: "error" });
+			await first.lifecycle.stop();
+
+			const entriesWhenDisabled = await readdir(directory);
+			expect(entriesWhenDisabled).not.toContain("logs");
+
+			const second = createApp({
+				ELAINA_DATA_DIR: directory,
+				ELAINA_LOG_BUFFER_CAPACITY: "25",
+				ELAINA_LOG_LEVEL: "trace",
+				ELAINA_PORT: "7420",
+				ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			});
+			await second.lifecycle.start();
+			expect(second.lifecycle.logger.level).toBe("trace");
+			expect(second.lifecycle.logs.list({ limit: 100 }).length).toBeLessThanOrEqual(25);
+
+			await second.lifecycle.applyRuntimeSettings({ logLevel: "warn" });
+			expect(second.lifecycle.logger.level).toBe("warn");
+			await second.lifecycle.stop();
+
+			const logFiles = await readdir(join(directory, "logs"));
+			expect(logFiles.some((name) => /^elaina-\d{4}-\d{2}-\d{2}\.log$/.test(name))).toBe(true);
+			const logContent = await readFile(join(directory, "logs", logFiles[0]!), "utf8");
+			expect(logContent).toContain("elaina::server::lifecycle");
 		} finally {
 			await rm(directory, { force: true, recursive: true });
 		}

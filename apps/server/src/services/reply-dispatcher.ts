@@ -16,7 +16,7 @@ import {
 } from "@elaina/core";
 import { chatObjects, conversations, messages, type ElainaDatabase } from "@elaina/db";
 import type { AuditEntry, ChannelHistoryItem } from "@elaina/sdk";
-import type { Logger } from "../logging.ts";
+import { previewText, type Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 import type { ConversationPacingTracker } from "./conversation-pacing.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
@@ -204,6 +204,20 @@ export class ReplyDispatcher {
 			return { deliveryStatus: "skipped", reason: "no_domain_session" };
 		}
 
+		this.#logger.debug("handling assistant answer", {
+			activityId: answer.activityId,
+			chatKind: session.chatKind,
+			conversationId: answer.conversationId,
+			entryId: answer.entryId,
+			sessionId: session.sessionId,
+			textChars: answer.text.length,
+		});
+		this.#logger.trace("assistant answer preview", {
+			conversationId: answer.conversationId,
+			entryId: answer.entryId,
+			preview: previewText(answer.text),
+		});
+
 		const lurk = extractLurkMarker(answer.text);
 		if (lurk.lurk) {
 			this.#pacing?.recordLurk(answer.conversationId);
@@ -269,6 +283,10 @@ export class ReplyDispatcher {
 				}
 			}
 			if (normalizedParts.length === 0) {
+				this.#logger.debug("assistant answer skipped as empty after transform", {
+					entryId: answer.entryId,
+					sessionId: session.sessionId,
+				});
 				return { deliveryStatus: "skipped", reason: "empty_output" };
 			}
 			parts = normalizedParts;
@@ -279,6 +297,10 @@ export class ReplyDispatcher {
 				.trim();
 		} else {
 			if (prepared.units.length === 0) {
+				this.#logger.debug("assistant answer skipped as empty output", {
+					entryId: answer.entryId,
+					sessionId: session.sessionId,
+				});
 				return { deliveryStatus: "skipped", reason: "empty_output" };
 			}
 			text = prepared.text;
@@ -561,6 +583,13 @@ export class ReplyDispatcher {
 				skipped,
 				uncertain,
 			});
+		} else if (rows.length > 0) {
+			this.#logger.debug("pending deliveries reconciled", {
+				candidateCount: rows.length,
+				confirmed,
+				skipped,
+				uncertain,
+			});
 		}
 		return { confirmed, skipped, uncertain };
 	}
@@ -630,6 +659,7 @@ export class ReplyDispatcher {
 		return withConversationLock(
 			target.conversationId,
 			async () => {
+				const startedAt = performance.now();
 				const controller = new AbortController();
 				this.#pendingOutput.set(target.conversationId, controller);
 				const replyTo = this.#replyAsQuote
@@ -647,6 +677,15 @@ export class ReplyDispatcher {
 						);
 					}
 					const delayMs = boundedReplyDelayMs(target.policy.pacing, this.#random);
+					this.#logger.trace("delivering reply to channel", {
+						channelId,
+						chatKind: target.chatKind,
+						delayMs,
+						planItems: target.plan.length,
+						platformConversationId,
+						sessionId: target.sessionId,
+						unitCount: target.units.length,
+					});
 					if (delayMs > 0) await this.#sleep(delayMs, controller.signal);
 					let replyTargetSent = false;
 					const sendChunk = async (chunk: readonly MessagePart[]) => {
@@ -699,6 +738,14 @@ export class ReplyDispatcher {
 						result: "ok",
 						targetId: target.sessionId,
 						targetKind: "session",
+					});
+					this.#logger.debug("reply delivered to channel", {
+						channelId,
+						chatKind: target.chatKind,
+						durationMs: Math.round(performance.now() - startedAt),
+						platformConversationId,
+						sentCount,
+						sessionId: target.sessionId,
 					});
 					return "sent";
 				} catch (error) {

@@ -16,7 +16,7 @@ import {
 	type PluginConversationSummary,
 	type PluginPermission,
 } from "@elaina/sdk";
-import type { Logger } from "../logging.ts";
+import { previewText, type Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
 import type { ReplyDispatcher } from "./reply-dispatcher.ts";
@@ -204,12 +204,35 @@ export class PluginConversationService {
 	): Promise<PluginBackgroundTurnResult> {
 		const conversation = await this.#get(input.conversationId);
 		if (conversation === undefined) {
+			this.#logger.debug("plugin background turn skipped", {
+				conversationId: input.conversationId,
+				kind: input.kind,
+				pluginId,
+				reason: "unknown_conversation",
+			});
 			return { delivered: false, deliveryStatus: "skipped", skippedReason: "unknown_conversation" };
 		}
 		const host = this.#host();
 		if (host === undefined) {
+			this.#logger.debug("plugin background turn skipped", {
+				conversationId: conversation.id,
+				kind: input.kind,
+				pluginId,
+				reason: "host_unavailable",
+			});
 			return { delivered: false, deliveryStatus: "skipped", skippedReason: "host_unavailable" };
 		}
+		this.#logger.debug("plugin background turn started", {
+			conversationId: conversation.id,
+			kind: input.kind,
+			pluginId,
+		});
+		this.#logger.trace("plugin background turn prompt preview", {
+			conversationId: conversation.id,
+			kind: input.kind,
+			pluginId,
+			promptPreview: previewText(input.prompt),
+		});
 		const result = await withConversationLock(
 			conversation.id,
 			async (): Promise<PluginBackgroundTurnResult> => {

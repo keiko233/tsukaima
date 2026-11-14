@@ -101,15 +101,23 @@ export function createApp(
 		.get("/events/logs", async ({ request }) => {
 			if (requireAuthForEvents) {
 				const denied = await eventAuthResponse(auth, request);
-				if (denied !== undefined) return denied;
+				if (denied !== undefined) {
+					httpLog.debug("log event stream unauthorized");
+					return denied;
+				}
 			}
+			httpLog.debug("log event stream opened");
 			return createLogEventStream(lifecycle.logs, request, eventStreamOptions);
 		})
 		.get("/events/stream", async ({ request }) => {
 			if (requireAuthForEvents) {
 				const denied = await eventAuthResponse(auth, request);
-				if (denied !== undefined) return denied;
+				if (denied !== undefined) {
+					httpLog.debug("live event stream unauthorized");
+					return denied;
+				}
 			}
+			httpLog.debug("live event stream opened");
 			return createLiveEventStream(lifecycle, request, eventStreamOptions);
 		})
 		.get("/media/:mediaId", async ({ params, request, status }) => {
@@ -125,15 +133,27 @@ export function createApp(
 				.where(eq(media.id, params.mediaId))
 				.limit(1)
 				.all();
-			if (row === undefined) return status(404, "Media not found");
+			if (row === undefined) {
+				httpLog.debug("media metadata not found", { mediaId: params.mediaId });
+				return status(404, "Media not found");
+			}
 			let bytes: Uint8Array;
 			try {
 				bytes = await lifecycle.media.readBytes(row.sha256);
 			} catch {
 				// The row survived but its bytes are gone; the transcript falls back to the
 				// placeholder instead of showing a broken image.
+				httpLog.warn("media blob missing from disk", {
+					mediaId: params.mediaId,
+					sha256: row.sha256,
+				});
 				return status(404, "Media bytes not found");
 			}
+			httpLog.trace("media served", {
+				bytes: bytes.byteLength,
+				mediaId: params.mediaId,
+				mimeType: row.mimeType,
+			});
 			return new Response(bytes, {
 				headers: {
 					"cache-control": "private, max-age=31536000, immutable",
@@ -170,18 +190,30 @@ export function createApp(
 					const result = matched
 						? (response ?? new Response("No RPC response", { status: 500 }))
 						: new Response("Not found", { status: 404 });
-					httpLog.debug("RPC request completed", {
-						durationMs: Math.round(performance.now() - startedAt),
+					const durationMs = Math.round(performance.now() - startedAt);
+					const fields = {
+						durationMs,
 						method: request.method,
 						path,
 						requestId,
 						status: result.status,
-					});
+					};
+					const isPollingPath =
+						result.status < 400 &&
+						(path.startsWith("/rpc/admin/diagnostics") ||
+							path === "/rpc/admin/overview" ||
+							path === "/rpc/health" ||
+							path === "/rpc/plugins/list");
+					if (isPollingPath) {
+						httpLog.trace("RPC request completed", fields);
+					} else {
+						httpLog.debug("RPC request completed", fields);
+					}
 					return result;
 				} catch (error) {
 					httpLog.error("RPC request failed", {
 						durationMs: Math.round(performance.now() - startedAt),
-						error: error instanceof Error ? error.message : String(error),
+						error,
 						method: request.method,
 						path,
 						requestId,

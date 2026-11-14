@@ -1,9 +1,22 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { createLogger, encodeSseEvent, LogBuffer, type LogEntry } from "../src/logging.ts";
+import {
+	createDailyFileLogSink,
+	createLogger,
+	DEFAULT_LOG_CAPACITY,
+	encodeSseEvent,
+	LogBuffer,
+	previewText,
+	type LogEntry,
+} from "../src/logging.ts";
 
 describe("runtime logging", () => {
-	test("formats tracing-style text, fields, spans, and ANSI colors", () => {
+	test("formats tracing-style text, fields, spans, trace level, and ANSI colors", () => {
 		const buffer = new LogBuffer();
+		expect(buffer.capacity).toBe(5_000);
+		expect(DEFAULT_LOG_CAPACITY).toBe(5_000);
 		const entries: LogEntry[] = [];
 		const logger = createLogger({
 			buffer,
@@ -12,6 +25,7 @@ describe("runtime logging", () => {
 			target: "elaina::test",
 		});
 
+		logger.trace("hidden-trace");
 		logger.debug("hidden");
 		logger.info("ready", { accessToken: "secret", stage: "ready" });
 		logger
@@ -32,9 +46,19 @@ describe("runtime logging", () => {
 			/Z  WARN request\{requestId="req-1"\}: elaina::test::http: slow request durationMs=42$/,
 		);
 		expect(entries[1]?.ansi).toContain("\u001b[1;33m WARN\u001b[0m");
+
+		logger.setLevel("trace");
+		logger.trace("visible-trace", "raw-string-detail");
+		expect(entries).toHaveLength(3);
+		expect(entries[2]?.level).toBe("trace");
+		expect(entries[2]?.fields).toEqual({ detail: "raw-string-detail" });
+		expect(entries[2]?.text).toMatch(
+			/Z TRACE elaina::test: visible-trace detail="raw-string-detail"$/,
+		);
+		expect(entries[2]?.ansi).toContain("\u001b[90mTRACE\u001b[0m");
 	});
 
-	test("filters levels, sanitizes terminal input, and bounds the ring buffer", () => {
+	test("filters levels, sanitizes terminal input, previews text, and bounds the ring buffer", () => {
 		const buffer = new LogBuffer(2);
 		const logger = createLogger({
 			buffer,
@@ -62,6 +86,32 @@ describe("runtime logging", () => {
 		logger.error("visible");
 		expect(buffer.size).toBe(2);
 		expect(buffer.list().at(-1)?.message).toBe("visible");
+
+		expect(previewText("hello\nworld", 8)).toBe("hello\\n…");
+	});
+
+	test("writes daily date-chunked log files and prunes expired files when retentionDays is set", () => {
+		const dir = mkdtempSync(join(tmpdir(), "elaina-daily-logs-"));
+		try {
+			const oldFile = join(dir, "elaina-2020-01-01.log");
+			writeFileSync(oldFile, "old\n", "utf8");
+			const daily = createDailyFileLogSink({ dir, retentionDays: 7 });
+			const logger = createLogger({
+				level: "trace",
+				sinks: [daily.sink],
+				target: "elaina::test",
+			});
+			logger.trace("first line", { step: 1 });
+			const currentPath = daily.currentPath();
+			expect(currentPath).toBeDefined();
+			expect(currentPath!).toMatch(/elaina-\d{4}-\d{2}-\d{2}\.log$/);
+			const content = readFileSync(currentPath!, "utf8");
+			expect(content).toContain("TRACE elaina::test: first line step=1");
+			expect(() => readFileSync(oldFile, "utf8")).toThrow();
+			daily.close();
+		} finally {
+			rmSync(dir, { force: true, recursive: true });
+		}
 	});
 
 	test("encodes SSE frames", () => {

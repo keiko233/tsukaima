@@ -270,4 +270,31 @@ describe("plugin host", () => {
 				lifecycle.pluginHost.invokeRpc("onebot-napcat.reconnect", undefined, "openai-compatible"),
 			).rejects.toThrow("does not belong to");
 		}));
+
+	test("gives each plugin a scoped logger supporting trace and child targets", async () =>
+		withApp({ ELAINA_LOG_LEVEL: "trace" }, async (lifecycle) => {
+			const context = lifecycle.pluginHost.context("fake-channel");
+			if (context === undefined) throw new Error("fake-channel context missing");
+			context.logger.trace("plugin trace probe", { apiKey: "secret-should-redact", step: 1 });
+			const child = context.logger.child?.("transport", { channel: "fake" });
+			child?.debug("child debug probe", { ok: true });
+
+			const entries = lifecycle.logs.list({ limit: 200 });
+			expect(entries).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						level: "trace",
+						message: "plugin trace probe",
+						target: "elaina::plugin::fake-channel",
+					}),
+					expect.objectContaining({
+						level: "debug",
+						message: "child debug probe",
+						target: "elaina::plugin::fake-channel::transport",
+					}),
+				]),
+			);
+			const traceEntry = entries.find((entry) => entry.message === "plugin trace probe");
+			expect(traceEntry?.fields.apiKey).toBe("[REDACTED]");
+		}));
 });

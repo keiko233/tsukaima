@@ -21,15 +21,13 @@ import {
 	SelectValue,
 } from "@elaina/ui/components/motion/select";
 import { Switch } from "@elaina/ui/components/motion/switch";
-import { orpc, type LogLevel } from "@/lib/api";
+import { logLevels as LOG_LEVELS, orpc, type LogLevel } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { useLogStream } from "@/lib/use-log-stream";
 import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { LogTerminal } from "./log-terminal";
 import { SystemPage } from "./page-header";
-
-const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 
 type LogFilter = "all" | LogLevel;
 
