@@ -17,7 +17,7 @@ import {
 	users,
 } from "@tsukaima/db";
 import type { TsukaimaLifecycle } from "../lifecycle.ts";
-import { runStepsFromEntries } from "./run-steps.ts";
+import { collectRunSteps } from "./run-steps.ts";
 
 type ChatKind = "private" | "group" | "webui" | "task" | "plugin";
 
@@ -106,6 +106,8 @@ function toMessageSummary(row: MessageRow): MessageSummary {
 		replyToMessageId: row.replyToMessageId,
 		senderDisplayName: row.senderDisplayName ?? (isWebui ? "WebUI" : "Unknown"),
 		senderExternalId: row.senderExternalId,
+		// The WebUI operator is the system side of a local conversation, not a channel user: it
+		// drives the bot directly, so it is distinguished from the people in the chat.
 		senderKind: isBot
 			? "assistant"
 			: row.senderExternalId === "webui-admin"
@@ -407,7 +409,7 @@ export async function listMessages(
 export async function listRunSteps(
 	lifecycle: TsukaimaLifecycle,
 	input: { entryId: string; sessionId: string },
-): Promise<{ steps: RunStep[] }> {
+): Promise<{ durationSeconds?: number; steps: RunStep[] }> {
 	const database = requireDatabase(lifecycle);
 	const host = lifecycle.conversationHost;
 	if (host === undefined) throw new Error("Conversation host is not ready");
@@ -418,17 +420,15 @@ export async function listRunSteps(
 		.limit(1);
 	if (session === undefined) throw new Error("Session not found");
 	const entries = await host.listEntries(session.durableConversationId, 500);
-	return {
-		steps: runStepsFromEntries(
-			entries.map((entry) => ({
-				data: entry.data,
-				id: String(entry.id),
-				kind: entry.kind,
-				model: entry.model,
-			})),
-			input.entryId,
-		),
-	};
+	return collectRunSteps(
+		entries.map((entry) => ({
+			data: entry.data,
+			id: String(entry.id),
+			kind: entry.kind,
+			model: entry.model,
+		})),
+		input.entryId,
+	);
 }
 
 export async function sendMessage(
@@ -565,6 +565,15 @@ export async function sendMessage(
 			.update(messages)
 			.set({ deliveryStatus: "accepted", updatedAt: new Date().toISOString() })
 			.where(eq(messages.id, id));
+		// Announce the message like any other inbound one. Without this the WebUI that sent it
+		// never learns the message exists: the channel path emits this hook, and the send path
+		// bypasses the channel entirely.
+		lifecycle.hooks.emitDetached("message.received", {
+			channelId: "webui",
+			chatObjectId: session.chat.id,
+			envelope: { id },
+			sessionId: session.session.id,
+		});
 	} catch (error) {
 		await database
 			.update(messages)

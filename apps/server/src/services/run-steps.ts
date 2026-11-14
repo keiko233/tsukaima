@@ -84,8 +84,19 @@ function isToolCall(block: unknown): block is ToolCallBlock {
  * answer belong to an earlier turn and are skipped.
  */
 export function runStepsFromEntries(entries: readonly StepEntry[], entryId: string): RunStep[] {
+	return collectRunSteps(entries, entryId).steps;
+}
+
+/**
+ * Steps plus the turn's total model and tool time. Duration is summed from the per-message
+ * `durationMs` the provider reports; the transcript has no wall clock for the turn itself.
+ */
+export function collectRunSteps(
+	entries: readonly StepEntry[],
+	entryId: string,
+): { durationSeconds?: number; steps: RunStep[] } {
 	const endIndex = entries.findIndex((entry) => entry.id === entryId);
-	if (endIndex === -1) return [];
+	if (endIndex === -1) return { steps: [] };
 	// Walk back to the entry that started this turn. A turn is one activity window: the model
 	// may answer several times within it (one entry per tool round), so the boundary is the
 	// window, not the previous assistant entry.
@@ -98,6 +109,8 @@ export function runStepsFromEntries(entries: readonly StepEntry[], entryId: stri
 	}
 
 	const steps: RunStep[] = [];
+	let durationMs = 0;
+	let sawDuration = false;
 	/** Results are paired onto their call, so a result alone still shows up. */
 	const pendingCalls = new Map<string, { index: number }>();
 
@@ -108,6 +121,10 @@ export function runStepsFromEntries(entries: readonly StepEntry[], entryId: stri
 		if (entry.kind === "pi.assistant") {
 			const message = firstMessage(entry.model);
 			if (typeof message !== "object" || message === null) continue;
+			if (typeof message.durationMs === "number") {
+				durationMs += message.durationMs;
+				sawDuration = true;
+			}
 			if (!("content" in message) || !Array.isArray(message.content)) continue;
 			for (const block of message.content as readonly unknown[]) {
 				if (typeof block !== "object" || block === null) continue;
@@ -141,6 +158,10 @@ export function runStepsFromEntries(entries: readonly StepEntry[], entryId: stri
 		if (entry.kind === "pi.tool-result") {
 			const message = firstMessage(entry.model);
 			if (typeof message !== "object" || message === null) continue;
+			if (typeof message.durationMs === "number") {
+				durationMs += message.durationMs;
+				sawDuration = true;
+			}
 			const callId =
 				"toolCallId" in message && typeof message.toolCallId === "string"
 					? message.toolCallId
@@ -160,5 +181,7 @@ export function runStepsFromEntries(entries: readonly StepEntry[], entryId: stri
 		}
 	}
 
-	return steps;
+	return sawDuration
+		? { durationSeconds: Math.round((durationMs / 1_000) * 10) / 10, steps }
+		: { steps };
 }

@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { chatObjects, messages } from "@tsukaima/db";
+import { chatObjects, media, messages } from "@tsukaima/db";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	type OneBotTransport,
@@ -232,6 +232,79 @@ describe("fake NapCat integration", () => {
 			expect(chats.map((chat) => chat.platformConversationId)).toContain("10003");
 			expect(lifecycle.lastProcessingError).toBeUndefined();
 		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	// Channels hand over a remote URL for an inbound image and nothing else fetches it. Until the
+	// bytes land in the media store the transcript has nothing to render and the model only sees
+	// `[image]`; this covers the download half of that path.
+	test("downloads an inbound image into the media store", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-napcat-image-"));
+		directories.push(directory);
+		const transports: FakeNapCatTransport[] = [];
+		const factory: OneBotTransportFactory = () => {
+			const transport = new FakeNapCatTransport();
+			transports.push(transport);
+			return transport;
+		};
+		const { lifecycle } = createApp(
+			{
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001",
+				TSUKAIMA_PORT: "7420",
+			},
+			{
+				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, factory]]),
+				reply: { pendingGraceMs: 0 },
+			},
+		);
+		await lifecycle.start();
+		// Serve the image the channel points at.
+		const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+		const server = Bun.serve({
+			fetch: () => new Response(png, { headers: { "content-type": "image/png" } }),
+			port: 0,
+		});
+		try {
+			transports[0]?.emitOpen();
+			transports[0]?.emitMessage({
+				message: [
+					{ data: { text: "see this" }, type: "text" },
+					{
+						data: { file: "a.png", url: `http://127.0.0.1:${server.port}/a.png` },
+						type: "image",
+					},
+				],
+				message_id: 617_018_307,
+				message_type: "private",
+				post_type: "message",
+				self_id: 99,
+				sender: { card: "", nickname: "TestNickname", user_id: 940_582_963 },
+				time: Math.floor(Date.now() / 1_000),
+				user_id: 940_582_963,
+			});
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("Domain database not ready");
+			const stored = await waitFor(async () => {
+				const rows = await database.select().from(media);
+				return rows[0];
+			});
+			// The bytes are content-addressed, so the WebUI and the model can both resolve them.
+			expect(stored.mimeType).toBe("image/png");
+			expect(stored.sizeBytes).toBe(png.byteLength);
+			expect(await lifecycle.media.readBytes(stored.sha256)).toEqual(png);
+
+			const inbound = await waitFor(async () => {
+				const rows = await database.select().from(messages);
+				return rows.find((row) => row.platformMessageId === "700002");
+			});
+			const parts = JSON.parse(inbound.partsJson ?? "[]") as { mediaId?: string; type: string }[];
+			const image = parts.find((part) => part.type === "image");
+			// The stored part references the media row, which is what the transcript renders.
+			expect(image?.mediaId).toBe(stored.id);
+		} finally {
+			server.stop(true);
 			await lifecycle.stop();
 		}
 	});

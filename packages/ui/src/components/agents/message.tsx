@@ -3,7 +3,10 @@
 
 import { motion, useReducedMotion } from "motion/react";
 import { type ComponentPropsWithRef, createContext, type ReactNode, useContext } from "react";
-import { MessageSideContext } from "@tsukaima/ui/components/agents/message-context";
+import {
+	MessageSideContext,
+	type MessageSide,
+} from "@tsukaima/ui/components/agents/message-context";
 import { EASE_OUT } from "@tsukaima/ui/lib/ease";
 import { useMessages } from "@tsukaima/ui/lib/i18n";
 import { cn } from "@tsukaima/ui/lib/utils";
@@ -40,6 +43,12 @@ export interface MessageProps extends Omit<
 	"children"
 > {
 	from: MessageFrom;
+	/**
+	 * Which side the row hugs. Defaults to the side implied by `from`, and is separate from it
+	 * so a host can lay out a conversation the way its own product reads — a chat app usually
+	 * puts the assistant on the right even though `from` is `"assistant"`.
+	 */
+	align?: MessageSide;
 	/** Plays a trailing-edge pop-up once when this message row mounts. */
 	animateIn?: boolean;
 	children: ReactNode;
@@ -76,6 +85,7 @@ const MESSAGE_POP_UP = {
 
 export function Message({
 	from,
+	align,
 	animateIn = false,
 	children,
 	className,
@@ -90,8 +100,10 @@ export function Message({
 	const reduce = useReducedMotion() ?? false;
 	const t = useMessages("message", messageMessages, labels);
 
+	const side = align ?? (from === "user" ? "end" : "start");
+
 	return (
-		<MessageSideContext.Provider value={from === "user" ? "end" : "start"}>
+		<MessageSideContext.Provider value={side}>
 			<MessageContext.Provider value={{ from }}>
 				<motion.article
 					data-slot="message"
@@ -126,12 +138,12 @@ export function Message({
 					}
 					transition={transition ?? (reduce ? { duration: 0.12 } : MESSAGE_POP_UP)}
 					style={{
-						transformOrigin: from === "user" ? "100% 100%" : "0% 100%",
+						transformOrigin: side === "end" ? "100% 100%" : "0% 100%",
 						...style,
 					}}
 					className={cn(
 						"group/message flex w-full items-start gap-2",
-						from === "user" ? "flex-row-reverse" : "flex-row",
+						side === "end" ? "flex-row-reverse" : "flex-row",
 						className,
 					)}
 					{...props}
@@ -176,14 +188,14 @@ export function MessageAvatar({
 }
 
 export function MessageContent({ className, ...props }: MessageContentProps) {
-	const { from } = useContext(MessageContext);
+	const side = useContext(MessageSideContext) ?? "start";
 
 	return (
 		<div
 			data-slot="message-content"
 			className={cn(
 				"flex min-w-0 flex-1 flex-col gap-1.5",
-				from === "user" ? "items-end" : "items-start",
+				side === "end" ? "items-end" : "items-start",
 				className,
 			)}
 			{...props}
@@ -192,14 +204,14 @@ export function MessageContent({ className, ...props }: MessageContentProps) {
 }
 
 export function MessageHeader({ className, ...props }: MessageHeaderProps) {
-	const { from } = useContext(MessageContext);
+	const side = useContext(MessageSideContext) ?? "start";
 
 	return (
 		<div
 			data-slot="message-header"
 			className={cn(
 				"flex items-center gap-1.5 px-1 text-[11px] leading-none text-muted-foreground",
-				from === "user" ? "justify-end" : "justify-start",
+				side === "end" ? "justify-end" : "justify-start",
 				className,
 			)}
 			{...props}
@@ -208,14 +220,14 @@ export function MessageHeader({ className, ...props }: MessageHeaderProps) {
 }
 
 export function MessageFooter({ className, ...props }: MessageFooterProps) {
-	const { from } = useContext(MessageContext);
+	const side = useContext(MessageSideContext) ?? "start";
 
 	return (
 		<div
 			data-slot="message-footer"
 			className={cn(
 				"flex min-h-5 items-center gap-1 px-1 text-[11px] text-muted-foreground",
-				from === "user" ? "justify-end" : "justify-start",
+				side === "end" ? "justify-end" : "justify-start",
 				className,
 			)}
 			{...props}

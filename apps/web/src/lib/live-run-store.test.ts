@@ -6,6 +6,7 @@ function run(overrides: Partial<LiveRunState> = {}): LiveRunState {
 	return {
 		partialText: undefined,
 		failure: undefined,
+		settled: false,
 		startedAtMs: 1_000,
 		sessionId: "session-1",
 		tools: [],

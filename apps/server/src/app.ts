@@ -1,7 +1,9 @@
 import { Elysia } from "elysia";
 import { RPCHandler } from "@orpc/server/fetch";
 import { ResponseHeadersPlugin } from "@orpc/server/plugins";
+import { media } from "@tsukaima/db";
 import type { TsukaimaPlugin } from "@tsukaima/sdk";
+import { eq } from "drizzle-orm";
 import { appRouter } from "./rpc/index.ts";
 import type { TsukaimaApiContext } from "./rpc/base.ts";
 import { loadConfig, type TsukaimaConfig } from "./config.ts";
@@ -109,6 +111,36 @@ export function createApp(
 				if (denied !== undefined) return denied;
 			}
 			return createLiveEventStream(lifecycle, request, eventStreamOptions);
+		})
+		.get("/media/:mediaId", async ({ params, request, status }) => {
+			if (requireAuthForEvents) {
+				const denied = await eventAuthResponse(auth, request);
+				if (denied !== undefined) return denied;
+			}
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) return status(503, "Database is not ready");
+			const [row] = database
+				.select({ mimeType: media.mimeType, sha256: media.sha256 })
+				.from(media)
+				.where(eq(media.id, params.mediaId))
+				.limit(1)
+				.all();
+			if (row === undefined) return status(404, "Media not found");
+			let bytes: Uint8Array;
+			try {
+				bytes = await lifecycle.media.readBytes(row.sha256);
+			} catch {
+				// The row survived but its bytes are gone; the transcript falls back to the
+				// placeholder instead of showing a broken image.
+				return status(404, "Media bytes not found");
+			}
+			return new Response(bytes, {
+				headers: {
+					"cache-control": "private, max-age=31536000, immutable",
+					"content-length": String(bytes.byteLength),
+					"content-type": row.mimeType,
+				},
+			});
 		})
 		.all(
 			"/api/auth/*",

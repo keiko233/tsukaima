@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runStepsFromEntries, type StepEntry } from "./run-steps";
+import { collectRunSteps, runStepsFromEntries, type StepEntry } from "./run-steps";
 
 const assistant = (id: string, content: readonly unknown[]): StepEntry => ({
 	id,
@@ -169,5 +169,54 @@ describe("run steps from durable entries", () => {
 			assistant("4", [text("still works")]),
 		];
 		expect(runStepsFromEntries(entries, "4")).toEqual([{ kind: "text", text: "still works" }]);
+	});
+
+	// The panel shows the turn's elapsed time. The transcript has no wall clock for the turn, so
+	// the duration is the sum of the per-message `durationMs` the provider reports.
+	test("sums the model and tool time of the turn", () => {
+		const entries: StepEntry[] = [
+			userTurn("1"),
+			{
+				id: "2",
+				kind: "pi.assistant",
+				model: [{ content: [call("c1", "a")], durationMs: 1_200, role: "assistant" }],
+			},
+			{
+				id: "3",
+				kind: "pi.tool-result",
+				model: [
+					{
+						content: [{ text: "done", type: "text" }],
+						durationMs: 300,
+						isError: false,
+						role: "toolResult",
+						toolCallId: "c1",
+						toolName: "a",
+					},
+				],
+			},
+			{
+				id: "4",
+				kind: "pi.assistant",
+				model: [{ content: [text("answer")], durationMs: 500, role: "assistant" }],
+			},
+		];
+		const result = collectRunSteps(entries, "4");
+		expect(result.durationSeconds).toBe(2);
+	});
+
+	test("omits the duration when the entries carry no timing", () => {
+		const entries: StepEntry[] = [userTurn("1"), assistant("2", [text("answer")])];
+		expect(collectRunSteps(entries, "2").durationSeconds).toBeUndefined();
+	});
+
+	test("ignores timing of an earlier turn", () => {
+		const entries: StepEntry[] = [
+			userTurn("1"),
+			{ id: "2", kind: "pi.assistant", model: [{ content: [text("old")], durationMs: 9_000 }] },
+			userTurn("3"),
+			{ id: "4", kind: "pi.assistant", model: [{ content: [text("new")], durationMs: 400 }] },
+		];
+		expect(collectRunSteps(entries, "4").durationSeconds).toBe(0.4);
 	});
 });

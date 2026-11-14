@@ -40,6 +40,7 @@ const liveRunHookSchema = z.object({
 	conversationId: z.string().min(1),
 	failure: z.string().optional(),
 	partialText: z.string().optional(),
+	partialThinking: z.string().optional(),
 	settled: z.boolean(),
 	startedAtMs: z.number().int().nonnegative(),
 	tools: z.array(
@@ -277,9 +278,11 @@ export function createLiveEventStream(
 				if (sessionId === undefined) return;
 				// A settled run publishes `run: null`, which the client uses to clear the
 				// activity view. A failed run keeps its snapshot so the failure stays visible.
-				const { settled, conversationId: _conversationId, ...run } = parsed.data;
+				const { conversationId: _conversationId, ...run } = parsed.data;
 				publish(send, logger, {
-					run: settled && run.failure === undefined ? null : { ...run, sessionId },
+					// A clean settle clears the view; a failed run keeps its snapshot so the failure
+					// stays readable after the run ends.
+					run: run.settled && run.failure === undefined ? null : { ...run, sessionId },
 					sessionId,
 					timestamp: timestamp(),
 					type: "run.state",

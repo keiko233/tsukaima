@@ -15,10 +15,12 @@ import {
 	type LiveState,
 	type RunFailure,
 	type Submission,
+	type UserInput,
 } from "@earendil-works/pi-durable";
 import {
 	type ActivityAggregationPolicy,
 	type ConversationPolicy,
+	type MessagePart,
 	conversationPolicyFromActivityAggregation,
 	conversationPolicySchema,
 	defaultConversationPolicy,
@@ -269,6 +271,14 @@ export interface DurableConversationHostOptions {
 	/** Shared execution lock; defaults to the host-wide lock. */
 	readonly executionLock?: ConversationExecutionLock;
 	/**
+	 * Resolve a message part's bytes for the model, as a data URL or base64 payload. Images the
+	 * model cannot see are just `[image]` placeholders, so a multimodal conversation needs this;
+	 * without it the host falls back to text-only input.
+	 */
+	readonly resolveImage?: (
+		part: MessagePart,
+	) => Promise<{ data: string; mimeType: string } | undefined>;
+	/**
 	 * Observe the in-flight run of a conversation: streamed partial text, tool rounds, and the
 	 * failure of a run that ended without answering. Fired detached from ingestion and from the
 	 * durable commit that produced the change, so a slow consumer never blocks either.
@@ -292,7 +302,10 @@ export type LiveRunSnapshot = {
 	 */
 	readonly settled: boolean;
 	readonly failure: string | undefined;
+	/** Streamed answer text so far. */
 	readonly partialText: string | undefined;
+	/** Streamed reasoning so far, when the provider reports it. */
+	readonly partialThinking: string | undefined;
 	readonly startedAtMs: number;
 	readonly tools: readonly {
 		readonly callId: string;
@@ -330,6 +343,7 @@ function emptyLiveRun(conversationId: string, startedAtMs: number): LiveRunSnaps
 		conversationId,
 		failure: undefined,
 		partialText: undefined,
+		partialThinking: undefined,
 		settled: true,
 		startedAtMs,
 		tools: [],
@@ -353,6 +367,26 @@ function partialTextOf(message: unknown): string | undefined {
 		texts.push(block.text);
 	}
 	const text = texts.join("");
+	return text.length === 0 ? undefined : text;
+}
+
+/**
+ * Streamed reasoning text of an assistant partial. Providers report it as `thinking` blocks
+ * alongside the answer, and it is what makes an in-flight run readable: the tool calls alone
+ * leave the reader guessing what the model is working out.
+ */
+function partialThinkingOf(message: unknown): string | undefined {
+	if (typeof message !== "object" || message === null) return undefined;
+	if (!("content" in message) || !Array.isArray(message.content)) return undefined;
+	const texts: string[] = [];
+	for (const block of message.content as readonly unknown[]) {
+		if (typeof block !== "object" || block === null) continue;
+		if (!("type" in block) || block.type !== "thinking") continue;
+		if (!("thinking" in block) || typeof block.thinking !== "string") continue;
+		if (block.thinking.length === 0) continue;
+		texts.push(block.thinking);
+	}
+	const text = texts.join("\n");
 	return text.length === 0 ? undefined : text;
 }
 
@@ -380,6 +414,7 @@ function toLiveRunSnapshot(
 		conversationId,
 		failure: live.runFailure === undefined ? undefined : runFailureText(live.runFailure),
 		partialText: partialTextOf(live.generation?.message),
+		partialThinking: partialThinkingOf(live.generation?.message),
 		settled: false,
 		startedAtMs,
 		tools,
@@ -553,7 +588,7 @@ export class PiDurableConversationHost {
 				shouldSubmit
 					? {
 							type: "input",
-							content: this.envelopesToText(nextEnvelopes),
+							content: await this.envelopesToInput(nextEnvelopes),
 							entry,
 							requestId: activitySubmissionRequestId(activityId, input.envelope.id),
 							whenBusy: whenBusy === "follow-up" ? "followUp" : whenBusy,
@@ -832,7 +867,7 @@ export class PiDurableConversationHost {
 					},
 				};
 				return conversation.submit(tx, {
-					content: this.envelopesToText(envelopes),
+					content: await this.envelopesToInput(envelopes),
 					entry,
 					requestId: activitySubmissionRequestId(activityId, envelopes[0]?.id ?? "window"),
 					type: "input",
@@ -1089,6 +1124,42 @@ export class PiDurableConversationHost {
 
 	private envelopeToText(envelope: MessageEnvelope): string {
 		return messagePartsText(envelope.parts);
+	}
+
+	/**
+	 * Model input for a batch of envelopes.
+	 *
+	 * Text-only input is the common case and stays a plain string. When the batch carries images
+	 * the caller can resolve, they become image blocks the model actually sees; an image it
+	 * cannot resolve degrades to its `[image]` placeholder rather than an empty message.
+	 */
+	private async envelopesToInput(envelopes: readonly StoredEnvelope[]): Promise<UserInput> {
+		const resolve = this.options.resolveImage;
+		if (resolve === undefined) return this.envelopesToText(envelopes);
+		const images: { data: string; mimeType: string }[] = [];
+		for (const envelope of envelopes) {
+			const parts = Array.isArray(envelope.parts) ? envelope.parts : [];
+			for (const part of parts) {
+				const parsed = messagePartSchema.safeParse(part);
+				if (!parsed.success || parsed.data.type !== "image") continue;
+				try {
+					const resolved = await resolve(parsed.data);
+					if (resolved !== undefined) images.push(resolved);
+				} catch {
+					// An unreadable blob leaves the placeholder in the text; it must not fail the turn.
+				}
+			}
+		}
+		const text = this.envelopesToText(envelopes);
+		if (images.length === 0) return text;
+		return [
+			{ text, type: "text" },
+			...images.map((image) => ({
+				data: image.data,
+				mimeType: image.mimeType,
+				type: "image" as const,
+			})),
+		];
 	}
 
 	private envelopesToText(envelopes: readonly StoredEnvelope[]): string {

@@ -295,6 +295,7 @@
 	"run_steps_empty": "这一轮没有可展示的步骤。",
 	"run_steps_loading": "加载中…",
 	"run_steps_show": "查看处理过程",
+	"run_steps_summary": "处理过程",
 	"save": "保存",
 	"search_chats": "搜索聊天对象和会话",
 	"search_groups": "搜索群组或 ID",

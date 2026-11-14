@@ -9,6 +9,9 @@ mock.module("@/paraglide/messages", () => ({
 		live_run_failed: () => "\u8fd0\u884c\u5931\u8d25",
 		live_run_working: () => "\u601d\u8003\u4e2d\u2026",
 		message_sender_tsukaima: () => "Tsukaima",
+		run_step_thinking: () => "Thinking",
+		run_steps_show: () => "Show steps",
+		run_steps_summary: () => "Steps",
 	},
 }));
 import type { LiveRunState } from "@tsukaima/contracts";
@@ -17,6 +20,7 @@ function run(overrides: Partial<LiveRunState> = {}): LiveRunState {
 	return {
 		partialText: undefined,
 		failure: undefined,
+		settled: false,
 		startedAtMs: 1_000,
 		sessionId: "session-1",
 		tools: [],
@@ -50,7 +54,28 @@ describe("LiveRunMessage", () => {
 	test("renders elapsed seconds from the run start", () => {
 		// 4s of wall clock from `startedAtMs` to `now`.
 		const html = render(run({ startedAtMs: 1_000 }), 5_000);
-		expect(html).toContain("4");
+		expect(html).toContain("4s");
+	});
+
+	// Reasoning streams before the answer exists. Without it a run is a bare spinner, and a
+	// thinking model is indistinguishable from a stuck one.
+	test("streams the model's reasoning while it works", () => {
+		const html = render(run({ partialThinking: "checking the logs first" }));
+		expect(html).toContain("checking the logs first");
+		expect(html).toContain("Thinking");
+	});
+
+	test("shows activity above the answer, not after it", () => {
+		const html = render(run({ partialText: "the answer", partialThinking: "the reasoning" }));
+		// The reasoning row must precede the answer text in document order.
+		expect(html.indexOf("the reasoning")).toBeLessThan(html.indexOf("the answer"));
+	});
+
+	test("keeps the assistant turn on the left", () => {
+		const html = render(run({ partialText: "hi" }));
+		// `flex-row` puts the avatar first and the content after it; the operator's own turns
+		// are the ones that reverse.
+		expect(html).not.toContain("flex-row-reverse");
 	});
 
 	test("renders a tool call as an activity step", () => {

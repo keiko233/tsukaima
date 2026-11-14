@@ -295,6 +295,7 @@
 	"run_steps_empty": "This turn produced no steps to show.",
 	"run_steps_loading": "Loading…",
 	"run_steps_show": "Show steps",
+	"run_steps_summary": "Steps",
 	"save": "Save",
 	"search_chats": "Search chats and sessions",
 	"search_groups": "Search groups or IDs",

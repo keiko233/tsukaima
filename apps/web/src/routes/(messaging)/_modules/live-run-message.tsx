@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
-import { AgentActivity, type AgentActivityItem } from "@tsukaima/ui/components/agents/agent-activity";
+import { ChevronDown, Wrench } from "lucide-react";
+import { useMemo, useState } from "react";
 import {
 	Message,
 	MessageAvatar,
@@ -18,26 +18,6 @@ function elapsedSeconds(startedAtMs: number, now: number): number {
 	return Math.max(0, Math.floor((now - startedAtMs) / 1_000));
 }
 
-/**
- * Turn a live run into the activity rows the shared component renders. Tool calls and streamed
- * text are the two things worth showing; a run that has produced neither yet still renders an
- * empty activity view, which is the "working" state the user asked to see.
- */
-function activityItems(run: LiveRunState): AgentActivityItem[] {
-	const items: AgentActivityItem[] = [];
-	for (const tool of run.tools) {
-		items.push({
-			id: tool.callId,
-			status:
-				tool.status === "done" ? "complete" : tool.status === "running" ? "active" : "pending",
-			type: "step",
-			label: tool.toolName,
-			...(tool.output === undefined ? {} : { meta: tool.output.split("\n").at(-1) ?? "" }),
-		});
-	}
-	return items;
-}
-
 export interface LiveRunMessageProps {
 	run: LiveRunState;
 	/** Wall clock at render time, so the elapsed label ticks with the transcript. */
@@ -45,44 +25,95 @@ export interface LiveRunMessageProps {
 }
 
 /**
- * One in-flight assistant turn, rendered in the same bubble vocabulary as a persisted message so
- * the transcript does not change shape when the answer settles.
+ * One in-flight assistant turn, laid out the way a coding agent shows its work: the activity
+ * stream above, the answer below it, both inside the message the answer will occupy once it
+ * settles.
  *
- * Two signals are shown together, which is what the transcript was missing: the agent's activity
- * (tool rounds, elapsed time, failure) and the answer text as it streams. Before this, a run was
- * invisible until it had fully completed, so a slow model looked like a hung bot.
+ * Activity comes first because it is the *process* that produced the text: reading top-down, the
+ * steps explain the answer instead of trailing it. The reasoning is streamed, so a slow model
+ * looks like a model thinking rather than a hung bot.
  */
 export function LiveRunMessage({ run, now }: LiveRunMessageProps) {
-	const items = useMemo(() => activityItems(run), [run]);
-	const working = run.failure === undefined;
+	const [collapsed, setCollapsed] = useState(false);
+	const working = !run.settled && run.failure === undefined;
 	const partial = run.partialText ?? "";
+	const thinking = run.partialThinking ?? "";
 	const elapsed = elapsedSeconds(run.startedAtMs, now);
-	// A run that answered shows its text; a run with only tool calls shows just the activity.
-	const showActivity = items.length > 0 || working;
+	const hasActivity = thinking.length > 0 || run.tools.length > 0;
+	const expanded = working || !collapsed;
+
+	const tools = useMemo(() => run.tools, [run.tools]);
 
 	return (
-		<Message from="assistant" className="gap-2.5">
+		<Message from="assistant" align="start" className="gap-2.5">
 			<MessageAvatar className="border border-primary/20 bg-primary/10 text-primary">E</MessageAvatar>
 			<MessageContent>
 				<MessageHeader>
 					<span className="font-medium text-foreground">{m.message_sender_tsukaima()}</span>
 					<span aria-hidden="true">·</span>
-					<span className={cn(run.failure === undefined ? "text-primary" : "text-destructive")}>
+					<span className={cn(working ? "text-primary" : "text-destructive")}>
 						{run.failure === undefined ? m.live_run_working() : m.live_run_failed()}
 					</span>
+					{hasActivity ? (
+						<>
+							<span aria-hidden="true">·</span>
+							<button
+								type="button"
+								onClick={() => setCollapsed((value) => !value)}
+								aria-expanded={expanded}
+								disabled={working}
+								className="inline-flex items-center gap-1 rounded outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default"
+							>
+								<span>{expanded ? m.run_steps_summary() : m.run_steps_show()}</span>
+								<ChevronDown
+									aria-hidden="true"
+									className={cn("size-3 transition-transform", expanded && "rotate-180")}
+								/>
+							</button>
+							<span className="tabular-nums text-muted-foreground/60">{elapsed}s</span>
+						</>
+					) : (
+						<span className="tabular-nums text-muted-foreground/60">{elapsed}s</span>
+					)}
 				</MessageHeader>
-				{showActivity ? (
-					<AgentActivity
-						items={items}
-						status={working ? "working" : "complete"}
-						duration={elapsed}
-						collapseOnComplete={false}
-						activeLabel={m.live_run_active_label()}
-						className="max-w-[min(42rem,88%)]"
-					/>
+				{expanded && hasActivity ? (
+					<ul className="flex w-full max-w-[min(42rem,88%)] flex-col items-start gap-1.5">
+						{thinking.length > 0 ? (
+							<li className="flex flex-col items-start gap-0.5">
+								<span className="text-[11px] leading-5 text-muted-foreground">
+									{m.run_step_thinking()}
+								</span>
+								<p className="whitespace-pre-wrap break-words text-left text-[11px] leading-5 text-muted-foreground/80">
+									{thinking}
+									{working ? (
+										<span
+											aria-hidden="true"
+											className="ml-0.5 inline-block h-3 w-[2px] animate-pulse bg-current align-text-bottom"
+										/>
+									) : null}
+								</p>
+							</li>
+						) : null}
+						{tools.map((tool) => (
+							<li key={tool.callId} className="flex flex-col items-start gap-0.5">
+								<span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] leading-5 text-muted-foreground">
+									<Wrench className="size-3 shrink-0" />
+									<span className="font-mono">{tool.toolName}</span>
+									{tool.status === "done" ? null : (
+										<span className="text-primary">{m.live_run_working()}</span>
+									)}
+								</span>
+								{tool.output === undefined || tool.output.length === 0 ? null : (
+									<p className="whitespace-pre-wrap break-words text-left text-[11px] leading-5 text-muted-foreground/80">
+										{tool.output}
+									</p>
+								)}
+							</li>
+						))}
+					</ul>
 				) : null}
 				{run.failure === undefined ? null : (
-					<p className="text-xs text-destructive">{run.failure}</p>
+					<p className="text-left text-[11px] text-destructive">{run.failure}</p>
 				)}
 				{partial.length > 0 ? (
 					<MessageBubble variant="outline" className="max-w-full">
