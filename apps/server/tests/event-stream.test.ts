@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { LiveEvent, MessageEnvelope } from "@tsukaima/contracts";
 import { createApp } from "../src/app.ts";
 import { signIn as signInViaBetterAuth } from "./test-auth.ts";
+import { createSlowStreamingModel } from "@tsukaima/core";
 
 const directories: string[] = [];
 
@@ -176,6 +177,50 @@ describe("authenticated live event stream", () => {
 
 		await first.close();
 		await second.close();
+		auth.stop();
+		await lifecycle.stop();
+	});
+
+	// Regression: a run used to be invisible until it settled, so a slow model looked like a hung
+	// bot. The stream now carries the agent's live state: streamed partial text while it works,
+	// then a null run once the answer is durable.
+	test("publishes live run state while the agent streams", async () => {
+		const directory = await createDirectory();
+		const { app, auth, lifecycle } = createApp(adminEnv(directory), {
+			eventHeartbeatMs: 100,
+			model: createSlowStreamingModel(["The ", "answer ", "streams."], { delayMs: 150 }),
+		});
+		await lifecycle.start();
+		const cookie = await signIn(app);
+		const stream = await openEventStream(app, "/events/stream", cookie);
+		await stream.next("snapshot");
+
+		// Inbound channel traffic aggregates into a burst window (6s by default). The WebUI send
+		// path submits immediately, which is what a live run needs to be observable here.
+		const { createLocalChat, sendMessage } = await import("../src/services/webui.ts");
+		const chat = await createLocalChat(lifecycle, { sessionTitle: "Live", title: "Live" });
+		await sendMessage(lifecycle, { sessionId: chat.sessionId, target: "tsukaima", text: "hello" });
+
+		// Collect run.state frames until the run settles (a null run).
+		const partials: string[] = [];
+		let settled = false;
+		for (let frame = 0; frame < 40 && !settled; frame += 1) {
+			const next = await stream.next("run.state");
+			const event = next.data as LiveEvent & { type: "run.state" };
+			if (event.run === null) {
+				settled = true;
+				break;
+			}
+			expect(event.run.sessionId.length).toBeGreaterThan(0);
+			if (event.run.partialText !== undefined) partials.push(event.run.partialText);
+		}
+
+		expect(settled).toBe(true);
+		// Text must arrive before the run settles, which is the whole point of the feature.
+		expect(partials.length).toBeGreaterThan(0);
+		expect("The answer streams.".startsWith(partials[0]!)).toBe(true);
+
+		await stream.close();
 		auth.stop();
 		await lifecycle.stop();
 	});

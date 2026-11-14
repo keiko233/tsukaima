@@ -4,6 +4,7 @@ import {
 	createRegistry,
 	defineDocFamily,
 	Harness,
+	LiveDoc,
 	type AgentChange,
 	type Conversation,
 	type ConversationId,
@@ -11,6 +12,8 @@ import {
 	type Extension,
 	type Harness as DurableHarness,
 	type JsonObject,
+	type LiveState,
+	type RunFailure,
 	type Submission,
 } from "@earendil-works/pi-durable";
 import {
@@ -51,6 +54,20 @@ type StoredEnvelope = JsonObject & {
  * envelopes persisted before `receivedAtMs` existed. Burst pacing must use the same clock
  * domain as `submittedAtMs`, which is local.
  */
+/**
+ * How often to read a conversation's live run while it is active. Durable commits a partial
+ * answer every `progress.partialIntervalMs` (100ms by default), so a poll at that cadence sees
+ * every committed partial without reading faster than the writer.
+ */
+const LIVE_RUN_POLL_MS = 100;
+
+/**
+ * How long a poller waits for its run to appear before deciding the run already settled. The
+ * activity flush admits the run and the scheduler starts it on a later turn, so the first polls
+ * legitimately see no run.
+ */
+const LIVE_RUN_START_GRACE_MS = 2_000;
+
 const envelopeObservedAtMs = (envelope: StoredEnvelope | undefined): number | undefined =>
 	envelope?.source.receivedAtMs ?? envelope?.source.timestampMs;
 
@@ -251,10 +268,40 @@ export interface DurableConversationHostOptions {
 	readonly policy?: ActivityAggregationPolicy;
 	/** Shared execution lock; defaults to the host-wide lock. */
 	readonly executionLock?: ConversationExecutionLock;
+	/**
+	 * Observe the in-flight run of a conversation: streamed partial text, tool rounds, and the
+	 * failure of a run that ended without answering. Fired detached from ingestion and from the
+	 * durable commit that produced the change, so a slow consumer never blocks either.
+	 */
+	readonly onLiveRun?: (state: LiveRunSnapshot) => void;
 	/** How long a busy run may still be steered before a follow-up is queued. */
 	readonly steerGraceMs?: number;
 	readonly storage: SqliteStorage;
 }
+
+/**
+ * One observation of a conversation's live run, in the local clock domain. `undefined` means the
+ * run settled: the caller clears whatever it was showing.
+ */
+export type LiveRunSnapshot = {
+	readonly conversationId: string;
+	/**
+	 * `true` when the run ended. The WebUI clears its activity view on this, which is why the
+	 * end is explicit rather than inferred from empty fields: a run that has not streamed text
+	 * yet looks identical to one that settled.
+	 */
+	readonly settled: boolean;
+	readonly failure: string | undefined;
+	readonly partialText: string | undefined;
+	readonly startedAtMs: number;
+	readonly tools: readonly {
+		readonly callId: string;
+		readonly output: string | undefined;
+		readonly status: "pending" | "running" | "done";
+		readonly toolName: string;
+	}[];
+	readonly turns: number;
+};
 
 /**
  * Text of an assistant entry, mirroring what a channel reply needs. `undefined` for other
@@ -277,6 +324,69 @@ function assistantEntryText(entry: EntryRecord): string | undefined {
 	return text.length === 0 ? undefined : text;
 }
 
+/** A settled run: nothing to show, and the client clears its activity view. */
+function emptyLiveRun(conversationId: string, startedAtMs: number): LiveRunSnapshot {
+	return {
+		conversationId,
+		failure: undefined,
+		partialText: undefined,
+		settled: true,
+		startedAtMs,
+		tools: [],
+		turns: 0,
+	};
+}
+
+/**
+ * Text of a streamed assistant partial. Durable stores the provider's `AssistantMessage`, whose
+ * text lives in `content` blocks; tool-only partials yield `undefined` rather than an empty
+ * string so the UI can tell "no text yet" from "an empty answer".
+ */
+function partialTextOf(message: unknown): string | undefined {
+	if (typeof message !== "object" || message === null) return undefined;
+	if (!("content" in message) || !Array.isArray(message.content)) return undefined;
+	const texts: string[] = [];
+	for (const block of message.content as readonly unknown[]) {
+		if (typeof block !== "object" || block === null) continue;
+		if (!("type" in block) || block.type !== "text") continue;
+		if (!("text" in block) || typeof block.text !== "string") continue;
+		texts.push(block.text);
+	}
+	const text = texts.join("");
+	return text.length === 0 ? undefined : text;
+}
+
+/** Short, log-safe description of why a run ended without an answer. */
+function runFailureText(failure: RunFailure): string {
+	const detail = failure.detail;
+	return detail === undefined || detail.length === 0
+		? failure.reason
+		: `${failure.reason}: ${detail}`;
+}
+
+/** Flatten durable live state into the snapshot the WebUI renders. */
+function toLiveRunSnapshot(
+	conversationId: string,
+	startedAtMs: number,
+	live: LiveState,
+): LiveRunSnapshot {
+	const tools = (live.tools ?? []).map((slot) => ({
+		callId: slot.callId,
+		output: typeof slot.output === "string" ? slot.output : undefined,
+		status: slot.status,
+		toolName: slot.name,
+	}));
+	return {
+		conversationId,
+		failure: live.runFailure === undefined ? undefined : runFailureText(live.runFailure),
+		partialText: partialTextOf(live.generation?.message),
+		settled: false,
+		startedAtMs,
+		tools,
+		turns: live.run?.turns ?? 0,
+	};
+}
+
 export class PiDurableConversationHost {
 	private harness?: DurableHarness;
 	private readonly model: ModelPort;
@@ -291,6 +401,15 @@ export class PiDurableConversationHost {
 	private readonly dynamicExtensions = new Set<string>();
 	private readonly extensionsEnsured = new Set<string>();
 	private readonly modelToolsSignatures = new Map<string, string>();
+	/** In-flight activity flushes, so `close()` can wait for them before storage goes away. */
+	private readonly pendingFlushes = new Set<Promise<void>>();
+	/** Live-run pollers by conversation, so a settle or a close can stop them. */
+	private readonly liveRuns = new Map<
+		string,
+		{ startedAtMs: number; timer: ReturnType<typeof setInterval> }
+	>();
+	/** Reads already dispatched by a poller, so `close()` waits instead of closing storage under them. */
+	private readonly pendingPolls = new Set<Promise<void>>();
 	private closed = false;
 	readonly registry = createRegistry();
 
@@ -493,6 +612,7 @@ export class PiDurableConversationHost {
 			if (submissionId !== undefined) this.untrackSubmission(conversationId, submissionId);
 			return;
 		}
+		this.watchLiveRun(harness, conversationId);
 		void (async () => {
 			try {
 				const settled = await submission.wait(BACKGROUND_CONTEXT);
@@ -516,6 +636,82 @@ export class PiDurableConversationHost {
 				if (submissionId !== undefined) this.untrackSubmission(conversationId, submissionId);
 			}
 		})();
+	}
+
+	/**
+	 * Watch the `pi.live` document of a conversation and forward each committed change as a
+	 * `LiveRunSnapshot`. Durable already throttles partial answers (`progress.partialIntervalMs`,
+	 * 100ms by default), so this is the same cadence the WebUI needs to render streaming text.
+	 *
+	 * The watch is per conversation and replaced when a new run starts, so a burst of messages
+	 * that produces several runs never accumulates watchers. Failures are swallowed: live state
+	 * is a presentation nicety and must never affect ingestion or the answer path.
+	 */
+	private watchLiveRun(harness: DurableHarness, conversationId: string): void {
+		const onLiveRun = this.options.onLiveRun;
+		if (onLiveRun === undefined) return;
+		// Poll `pi.live` instead of attaching a document watch. `watchDoc` mounts an observer on
+		// the Session line, whose document load can still be queued when the host closes, and
+		// then reaches storage after the caller closed the handle. A snapshot poll is a plain
+		// request/response read: it never leaves a background mount behind, and stopping it is
+		// just clearing a timer.
+		const numericId = Number(conversationId) as ConversationId;
+		const startedAtMs = Date.now();
+		// The run is admitted by the same commit that flushes the activity window, but the
+		// scheduler may not have started it yet when the first polls land. Seeing no run is only
+		// "settled" once a run was actually observed, or after this grace period, otherwise the
+		// poller would stop before the first token and report nothing.
+		let sawRun = false;
+		let stopped = false;
+		const timer = setInterval(() => {
+			if (this.closed || stopped) {
+				this.stopLiveRun(conversationId);
+				return;
+			}
+			const polling = (async () => {
+				try {
+					const live = await harness.snapshot(LiveDoc, numericId, BACKGROUND_CONTEXT);
+					if (this.closed) return;
+					const running = live?.run !== undefined;
+					if (!running && !sawRun && Date.now() - startedAtMs < LIVE_RUN_START_GRACE_MS) {
+						return;
+					}
+					if (!running) {
+						// The run settled. Report a failure first so a client can show it, then clear.
+						stopped = true;
+						if (live?.runFailure !== undefined) {
+							onLiveRun({
+								...emptyLiveRun(conversationId, startedAtMs),
+								failure: runFailureText(live.runFailure),
+							});
+						}
+						this.stopLiveRun(conversationId);
+						if (live?.runFailure === undefined) {
+							onLiveRun(emptyLiveRun(conversationId, startedAtMs));
+						}
+						return;
+					}
+					sawRun = true;
+					onLiveRun(toLiveRunSnapshot(conversationId, startedAtMs, live));
+				} catch {
+					// Live presentation is optional; ingestion and answers must not depend on it.
+					stopped = true;
+					this.stopLiveRun(conversationId);
+				}
+			})();
+			this.pendingPolls.add(polling);
+			void polling.finally(() => this.pendingPolls.delete(polling));
+		}, LIVE_RUN_POLL_MS);
+		timer.unref?.();
+		this.liveRuns.set(conversationId, { startedAtMs, timer });
+	}
+
+	/** Stop polling one conversation's live run. Safe to call when nothing is polling. */
+	private stopLiveRun(conversationId: string): void {
+		const poll = this.liveRuns.get(conversationId);
+		if (poll === undefined) return;
+		this.liveRuns.delete(conversationId);
+		clearInterval(poll.timer);
 	}
 
 	private trackSubmission(conversationId: string, submissionId: string): void {
@@ -548,9 +744,18 @@ export class PiDurableConversationHost {
 		this.clearActivityTimer(conversationId);
 		const timer = setTimeout(() => {
 			this.activityTimers.delete(conversationId);
-			void this.flushActivity(conversationId).catch((error) => {
+			// A close during the delay clears the timer, but a flush already dispatched would
+			// still reach storage after it closed.
+			if (this.closed) return;
+			const flushing = this.flushActivity(conversationId).catch((error: unknown) => {
+				// A flush racing `close()` is expected: the host stops, then storage closes under
+				// it. That race is not a defect worth a log line.
+				if (this.closed) return;
+				if (error instanceof Error && error.message === "SqliteStorage is closed") return;
 				console.error("Failed to flush activity window", error);
 			});
+			this.pendingFlushes.add(flushing);
+			void flushing.finally(() => this.pendingFlushes.delete(flushing));
 		}, delayMs);
 		this.activityTimers.set(conversationId, { timer });
 	}
@@ -568,6 +773,9 @@ export class PiDurableConversationHost {
 	}
 
 	private async flushActivity(conversationId: string): Promise<void> {
+		// A flush queued behind the execution lock can still start after `close()`. Reading the
+		// harness then would reach a closed storage handle.
+		if (this.closed) return;
 		if (this.activityFlushes.has(conversationId)) return;
 		this.activityFlushes.add(conversationId);
 		try {
@@ -583,6 +791,7 @@ export class PiDurableConversationHost {
 
 	private async flushActivityLocked(conversationId: string): Promise<void> {
 		{
+			if (this.closed) return;
 			const harness = await this.openHarness();
 			const numericId = Number(conversationId) as ConversationId;
 			const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
@@ -941,6 +1150,13 @@ export class PiDurableConversationHost {
 		this.closed = true;
 		for (const scheduled of this.activityTimers.values()) clearTimeout(scheduled.timer);
 		this.activityTimers.clear();
+		// Close the Session before the watchers. Ending the Session line makes any document load
+		// still queued on it fail inside the library instead of reaching storage after the caller
+		// closes the handle, which would surface as a spurious "SqliteStorage is closed" error.
+		// Copy the keys: `stopLiveRun` deletes from the map it is iterating.
+		for (const conversationId of Array.from(this.liveRuns.keys())) this.stopLiveRun(conversationId);
+		await Promise.allSettled(Array.from(this.pendingPolls));
+		await Promise.allSettled(Array.from(this.pendingFlushes));
 		if (this.harness) await this.harness.close(BACKGROUND_CONTEXT);
 	}
 }

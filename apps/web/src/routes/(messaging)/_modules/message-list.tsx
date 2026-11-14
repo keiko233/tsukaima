@@ -20,9 +20,11 @@ import {
 	MessageScroller,
 } from "@tsukaima/ui/components/agents/message";
 import type { DeliveryStatus, MessageSummary } from "@/lib/api";
+import type { LiveRunState } from "@tsukaima/contracts";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { formatDateTime, formatTimestamp } from "../../_modules/lib/format";
+import { LiveRunMessage } from "./live-run-message";
 
 function deliveryLabel(status: DeliveryStatus): string {
 	switch (status) {
@@ -128,7 +130,18 @@ function MessageBody({ message }: { message: MessageSummary }) {
 	);
 }
 
-export function MessageList({ messages }: { messages: readonly MessageSummary[] }) {
+export function MessageList({
+	messages,
+	liveRun,
+	now,
+}: {
+	messages: readonly MessageSummary[];
+	/** In-flight assistant turn, appended below the persisted transcript. */
+	liveRun?: LiveRunState | undefined;
+	/** Wall clock used for the live run's elapsed label. */
+	now: number;
+}) {
+	const empty = messages.length === 0 && liveRun === undefined;
 	return (
 		<MessageScroller
 			label={m.tab_chats()}
@@ -138,7 +151,7 @@ export function MessageList({ messages }: { messages: readonly MessageSummary[] 
 			viewportClassName="h-full"
 			contentClassName="mx-auto flex w-full max-w-3xl flex-col gap-4 px-3 py-5 sm:px-6"
 		>
-			{messages.length === 0 ? (
+			{empty ? (
 				<div className="mx-auto flex max-w-sm flex-col items-center px-6 py-20 text-center">
 					<div className="grid size-11 place-items-center rounded-2xl bg-muted text-muted-foreground">
 						<StickyNote className="size-5" />
@@ -146,7 +159,8 @@ export function MessageList({ messages }: { messages: readonly MessageSummary[] 
 					<p className="mt-3 text-sm font-medium">{m.messages_empty()}</p>
 				</div>
 			) : (
-				messages.map((message) => {
+				<>
+					{messages.map((message) => {
 					const self =
 						message.senderExternalId === "webui-admin" ||
 						(message.direction === "outbound" && message.senderKind !== "assistant");
@@ -181,7 +195,9 @@ export function MessageList({ messages }: { messages: readonly MessageSummary[] 
 							</MessageContent>
 						</Message>
 					);
-				})
+					})}
+					{liveRun === undefined ? null : <LiveRunMessage now={now} run={liveRun} />}
+				</>
 			)}
 		</MessageScroller>
 	);
