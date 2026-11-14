@@ -61,6 +61,7 @@ export const openAiCompatiblePlugin: ElainaPlugin = {
 				return config?.enabledModels.map(toPluginModelDescriptor) ?? [];
 			},
 			async embed(request) {
+				const startedAt = performance.now();
 				const raw = ((await context.settings?.get()) ?? {}) as Record<string, unknown>;
 				const config = resolveOpenAiCompatibleConfig(raw);
 				if (config === null) throw new Error("OpenAI-compatible provider is not configured");
@@ -76,27 +77,59 @@ export const openAiCompatiblePlugin: ElainaPlugin = {
 				if (model === undefined) {
 					throw new Error("No enabled embedding model is configured");
 				}
-				const response = await fetch(`${config.baseUrl.replace(/\/$/u, "")}/embeddings`, {
-					body: JSON.stringify({ input: request.texts, model: model.id }),
-					headers: {
-						"content-type": "application/json",
-						authorization: `Bearer ${config.apiKey}`,
-					},
-					method: "POST",
+				context.logger.trace("OpenAI-compatible embedding request", {
+					modelId: model.id,
+					providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
+					textCount: request.texts.length,
+					textPreviewLength: request.texts.reduce((total, text) => total + text.length, 0),
 				});
+				let response: Response;
+				try {
+					response = await fetch(`${config.baseUrl.replace(/\/$/u, "")}/embeddings`, {
+						body: JSON.stringify({ input: request.texts, model: model.id }),
+						headers: {
+							"content-type": "application/json",
+							authorization: `Bearer ${config.apiKey}`,
+						},
+						method: "POST",
+					});
+				} catch (error) {
+					context.logger.error("OpenAI-compatible embedding request failed", {
+						durationMs: Math.round(performance.now() - startedAt),
+						modelId: model.id,
+						providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
+						error,
+					});
+					throw error;
+				}
 				if (!response.ok) {
+					context.logger.warn("OpenAI-compatible embedding request rejected", {
+						durationMs: Math.round(performance.now() - startedAt),
+						modelId: model.id,
+						providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
+						status: response.status,
+					});
 					throw new Error(`Embedding request failed with ${response.status}`);
 				}
 				const payload = (await response.json()) as {
 					data?: readonly { readonly embedding?: readonly number[] }[];
 				};
+				const vectors = (payload.data ?? []).map((item) => item.embedding ?? []);
+				context.logger.debug("OpenAI-compatible embedding completed", {
+					count: request.texts.length,
+					durationMs: Math.round(performance.now() - startedAt),
+					modelId: model.id,
+					providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
+					vectorCount: vectors.length,
+				});
 				return {
 					modelId: model.id,
 					providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
-					vectors: (payload.data ?? []).map((item) => item.embedding ?? []),
+					vectors,
 				};
 			},
 			async transcribeAudio(request) {
+				const startedAt = performance.now();
 				const raw = ((await context.settings?.get()) ?? {}) as Record<string, unknown>;
 				const config = resolveOpenAiCompatibleConfig(raw);
 				if (config === null) throw new Error("OpenAI-compatible provider is not configured");
@@ -120,38 +153,68 @@ export const openAiCompatiblePlugin: ElainaPlugin = {
 						: request.audio instanceof ArrayBuffer
 							? new Uint8Array(request.audio)
 							: request.audio;
-				form.set(
-					"file",
-					new Blob([bytes], { type: request.mimeType ?? "application/octet-stream" }),
-					"audio",
-				);
-				const response = await fetch(`${config.baseUrl.replace(/\/$/u, "")}/audio/transcriptions`, {
-					body: form,
-					headers: { authorization: `Bearer ${config.apiKey}` },
-					method: "POST",
+				const mimeType = request.mimeType ?? "application/octet-stream";
+				form.set("file", new Blob([bytes], { type: mimeType }), "audio");
+				context.logger.trace("OpenAI-compatible transcription request", {
+					bytes: bytes.byteLength,
+					mimeType,
+					modelId: model.id,
+					providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
 				});
+				let response: Response;
+				try {
+					response = await fetch(`${config.baseUrl.replace(/\/$/u, "")}/audio/transcriptions`, {
+						body: form,
+						headers: { authorization: `Bearer ${config.apiKey}` },
+						method: "POST",
+					});
+				} catch (error) {
+					context.logger.error("OpenAI-compatible transcription request failed", {
+						durationMs: Math.round(performance.now() - startedAt),
+						modelId: model.id,
+						providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
+						error,
+					});
+					throw error;
+				}
 				if (!response.ok) {
+					context.logger.warn("OpenAI-compatible transcription request rejected", {
+						durationMs: Math.round(performance.now() - startedAt),
+						modelId: model.id,
+						providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
+						status: response.status,
+					});
 					throw new Error(`Audio transcription failed with ${response.status}`);
 				}
 				const payload = (await response.json()) as {
 					language?: string;
 					text?: string;
 				};
+				const text = payload.text ?? "";
+				context.logger.debug("OpenAI-compatible transcription completed", {
+					durationMs: Math.round(performance.now() - startedAt),
+					language: payload.language,
+					modelId: model.id,
+					providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
+					textChars: text.length,
+				});
 				return {
 					...(payload.language === undefined ? {} : { language: payload.language }),
 					modelId: model.id,
 					providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
-					text: payload.text ?? "",
+					text,
 				};
 			},
 			async createPort(options = {}) {
 				const raw = ((await context.settings?.get()) ?? {}) as Record<string, unknown>;
 				const config = resolveOpenAiCompatibleConfig(raw);
 				if (config === null) throw new Error("OpenAI-compatible provider is not configured");
-				return createOpenAICompatibleModelPort(
+				const portLogger = context.logger.child?.("openai") ?? context.logger;
+				const port = createOpenAICompatibleModelPort(
 					{
 						apiKey: config.apiKey,
 						baseUrl: config.baseUrl,
+						logger: portLogger,
 						...(options.onMessage === undefined
 							? {}
 							: {
@@ -174,6 +237,13 @@ export const openAiCompatiblePlugin: ElainaPlugin = {
 						supportsTools: model.supportsTools,
 					})),
 				);
+				context.logger.debug("OpenAI-compatible model port created", {
+					baseUrl: config.baseUrl,
+					defaultModelId: port.modelId,
+					modelCount: config.enabledModels.length,
+					providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
+				});
+				return port;
 			},
 		});
 		context.logger.info("OpenAI-compatible provider registered");
@@ -183,6 +253,7 @@ export const openAiCompatiblePlugin: ElainaPlugin = {
 			const raw = ((await context.settings?.get()) ?? {}) as Record<string, unknown>;
 			const config = resolveOpenAiCompatibleConfig(raw);
 			if (config === null) {
+				context.logger.debug("OpenAI-compatible settings refreshed", { configured: false });
 				context.ui.setStatus({
 					code: "status_unconfigured",
 					level: "unknown",
@@ -190,6 +261,11 @@ export const openAiCompatiblePlugin: ElainaPlugin = {
 				});
 				return;
 			}
+			context.logger.debug("OpenAI-compatible settings refreshed", {
+				baseUrl: config.baseUrl,
+				configured: true,
+				enabledModels: config.enabledModels.length,
+			});
 			context.ui.setStatus({
 				code: "status_configured",
 				details: { baseUrl: config.baseUrl },
@@ -208,6 +284,7 @@ export const openAiCompatiblePlugin: ElainaPlugin = {
 		});
 		if (unsubscribe !== undefined) unsubscribers.set(context, unsubscribe);
 		context.rpc.register("models.discover", async (input) => {
+			const startedAt = performance.now();
 			const parsed = discoverInputSchema.parse(input);
 			const raw = ((await context.settings?.get()) ?? {}) as Record<string, unknown>;
 			const stored = readOpenAiCompatibleConnection(raw);
@@ -216,12 +293,25 @@ export const openAiCompatiblePlugin: ElainaPlugin = {
 			if (baseUrl === undefined || apiKey === undefined) {
 				throw new Error("Base URL and API key are required before discovering models");
 			}
-			return discoverOpenAiCompatibleModels({ apiKey, baseUrl });
+			context.logger.debug("OpenAI-compatible model discovery started", { baseUrl });
+			const result = await discoverOpenAiCompatibleModels({
+				apiKey,
+				baseUrl,
+				logger: context.logger.child?.("discovery") ?? context.logger,
+			});
+			context.logger.debug("OpenAI-compatible model discovery completed", {
+				baseUrl,
+				discoveredCount: result.models.length,
+				durationMs: Math.round(performance.now() - startedAt),
+			});
+			return result;
 		});
+		context.logger.info("OpenAI-compatible plugin ready");
 	},
 	teardown(context) {
 		unsubscribers.get(context)?.();
 		unsubscribers.delete(context);
+		context.logger.info("OpenAI-compatible plugin stopped");
 		context.ui.setStatus(null);
 	},
 };
