@@ -165,6 +165,7 @@ describe("reply.transform hook", () => {
 				{ channelRef: "sticker-1", type: "sticker" },
 			]);
 			expect(unauthorizedCalled).toBe(false);
+			expect(adapter.sent).toHaveLength(1);
 			expect(adapter.sent.flat()).toEqual([
 				{ text: "hello first second", type: "text" },
 				{ channelRef: "sticker-1", type: "sticker" },
