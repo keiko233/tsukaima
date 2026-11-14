@@ -25,9 +25,11 @@ export {
 export {
 	MigrationRegistry,
 	MigrationRegistryError,
+	assertPluginSqlIsolated,
 	assertPluginSqlNamespaced,
 	compareMigrationVersions,
 	migrationChecksum,
+	pluginMigrationId,
 	pluginSqlPrefix,
 	sanitizePluginId,
 	type AppliedPluginMigration,
@@ -37,6 +39,22 @@ export {
 	type PluginMigrationRunResult,
 	type PluginRollbackOptions,
 } from "./migrations.ts";
+export { loadPluginMigrations, type PluginMigrationsDeclaration } from "./migration-files.ts";
+export {
+	PluginDatabaseStore,
+	wrapPluginSqlConnection,
+	type PluginDatabaseConnection,
+	type PluginDatabaseProvider,
+	type PluginDatabaseStoreOptions,
+	type PluginSqlConnection,
+} from "./plugin-database.ts";
+export {
+	migrateLegacyPluginTables,
+	type LegacyPluginDataOptions,
+	type LegacyPluginDataResult,
+	type LegacyPluginTableImport,
+} from "./legacy-plugin-data.ts";
+export { PluginNamingError } from "./naming.ts";
 export {
 	PluginLifecycleError,
 	PluginLifecycleManager,

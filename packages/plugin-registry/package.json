@@ -7,8 +7,6 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
-		"@tsukaima/db": "workspace:*",
-		"@tsukaima/sdk": "workspace:*",
-		"drizzle-orm": "0.45.4"
+		"@tsukaima/sdk": "workspace:*"
 	}
 }

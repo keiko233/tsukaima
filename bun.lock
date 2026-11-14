@@ -157,9 +157,7 @@
       "name": "@tsukaima/plugin-registry",
       "version": "0.1.0",
       "dependencies": {
-        "@tsukaima/db": "workspace:*",
         "@tsukaima/sdk": "workspace:*",
-        "drizzle-orm": "0.45.4",
       },
     },
     "packages/sdk": {

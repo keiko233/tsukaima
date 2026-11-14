@@ -1,5 +1,6 @@
 import type { PluginManifest } from "@tsukaima/sdk";
-import { MigrationRegistry, MigrationRegistryError } from "./migrations.ts";
+import { loadPluginMigrations } from "./migration-files.ts";
+import { MigrationRegistry, MigrationRegistryError, type PluginMigration } from "./migrations.ts";
 import {
 	PluginRegistry,
 	type InstalledPlugin,
@@ -51,12 +52,10 @@ export interface PluginLifecycleUpgradeOptions {
 	readonly config?: Record<string, unknown>;
 	readonly grantedPermissions?: readonly string[];
 	readonly runMode?: PluginRunMode;
-	/** Explicit migration override (otherwise the manifest's migrations are used). */
-	readonly migrations?: readonly {
-		readonly version: string;
-		readonly sql: string;
-		readonly rollbackSql?: string | undefined;
-	}[];
+	/** Plugin package root used to resolve the manifest's migrations directory. */
+	readonly rootDir?: string;
+	/** Explicit migration override (otherwise the manifest's migrations are loaded). */
+	readonly migrations?: readonly PluginMigration[];
 	readonly dryRunMigrations?: boolean;
 }
 
@@ -129,14 +128,15 @@ export class PluginLifecycleManager {
 		if (this.registry.get(manifest.name) !== undefined) {
 			throw new PluginLifecycleError(`Plugin ${manifest.name} is already installed`);
 		}
-		await this.migrations?.run(
-			manifest.name,
-			options.runMode === "worker" ? [] : manifest.migrations,
-			{ enabled: options.enabled !== false },
-		);
+		const migrations = await this.#migrationsFor(manifest.name, manifest, options);
+		if (options.runMode !== "worker") {
+			await this.migrations?.run(manifest.name, migrations, {
+				enabled: options.enabled !== false,
+			});
+		}
 		const installed = this.registry.install(manifest, {
 			...options,
-			...(options.runMode === undefined && manifest.migrations.length > 0
+			...(options.runMode === undefined && manifest.migrations !== undefined
 				? { runMode: "host" }
 				: {}),
 		});
@@ -295,7 +295,7 @@ export class PluginLifecycleManager {
 			updatedAt: this.#now().toISOString(),
 		};
 		this.#states.set(pluginId, nextState);
-		const migrations = options.migrations ?? manifest.migrations;
+		const migrations = await this.#migrationsFor(pluginId, manifest, options);
 		let rolledBack = false;
 		try {
 			await this.#hooks.stop?.(pluginId);
@@ -319,7 +319,7 @@ export class PluginLifecycleManager {
 					: { grantedPermissions: options.grantedPermissions }),
 				enabled: existing.enabled,
 				...(options.runMode === undefined
-					? manifest.migrations.length > 0
+					? manifest.migrations !== undefined
 						? { runMode: "host" }
 						: {}
 					: { runMode: options.runMode }),
@@ -340,8 +340,12 @@ export class PluginLifecycleManager {
 				await this.#hooks.importStorage?.(pluginId, backup.storage);
 			}
 			if (rolledBack) {
-				await this.migrations
-					?.run(pluginId, existing.manifest.migrations, {})
+				await this.#migrationsFor(
+					pluginId,
+					existing.manifest,
+					options.rootDir === undefined ? {} : { rootDir: options.rootDir },
+				)
+					.then((restoreMigrations) => this.migrations?.run(pluginId, restoreMigrations, {}))
 					.catch(() => undefined);
 			}
 			if (previousState === undefined) this.#states.delete(pluginId);
@@ -354,6 +358,21 @@ export class PluginLifecycleManager {
 						{ cause: error },
 					);
 		}
+	}
+
+	async #migrationsFor(
+		pluginId: string,
+		manifest: PluginManifest,
+		options: { readonly rootDir?: string; readonly migrations?: readonly PluginMigration[] },
+	): Promise<readonly PluginMigration[]> {
+		if (options.migrations !== undefined) return options.migrations;
+		if (manifest.migrations === undefined) return [];
+		if (options.rootDir === undefined) {
+			throw new PluginLifecycleError(
+				`Plugin ${pluginId} declares a migrations directory; pass rootDir to resolve it`,
+			);
+		}
+		return await loadPluginMigrations(options.rootDir, manifest.migrations);
 	}
 
 	#assertApiVersion(manifest: PluginManifest): void {
