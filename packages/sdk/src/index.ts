@@ -125,6 +125,7 @@ export {
 } from "./host.ts";
 export {
 	completePluginModel,
+	createConsolePluginLogger,
 	createPluginContext,
 	createPluginToolsExtension,
 	collectPluginModels,
@@ -134,6 +135,7 @@ export {
 	LocalStorageBridge,
 	LocalToolBridge,
 	LocalUiBridge,
+	normalizePluginLogger,
 	PLUGIN_TOOLS_EXTENSION_NAME,
 	providerSafeToolName,
 	type PluginToolsExtensionOptions,

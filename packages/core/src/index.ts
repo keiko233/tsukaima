@@ -70,6 +70,7 @@ export {
 	withConversationLock,
 } from "./execution-lock.ts";
 export { createFakeModel, createSlowStreamingModel, type ModelPort } from "./model.ts";
+export { createFallbackCoreLogger, previewText, type CoreLogger } from "./logger.ts";
 export {
 	ModelPolicyRouter,
 	ModelUsageLedger,

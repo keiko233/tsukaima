@@ -56,6 +56,7 @@ import {
 	defaultConversationExecutionLock,
 	withConversationLock,
 } from "./execution-lock.ts";
+import { createFallbackCoreLogger, previewText, type CoreLogger } from "./logger.ts";
 import { createFakeModel, type ModelPort } from "./model.ts";
 import { busyDisposition } from "./output-pacing.ts";
 import { shouldCloseActivityWindow } from "./index.ts";
@@ -275,6 +276,11 @@ export interface DurableConversationHostOptions {
 	 * not already select them.
 	 */
 	readonly extensions?: readonly Extension[];
+	/**
+	 * Structured logger for ingestion, activity, answer, and background-turn events. Defaults
+	 * to `createFallbackCoreLogger()`, which reports only errors to `console.error`.
+	 */
+	readonly logger?: CoreLogger;
 	readonly model?: ModelPort;
 	/** Convenience for tests: deterministic fake-model replies, ignored when `model` is set. */
 	readonly responses?: readonly string[];
@@ -497,6 +503,7 @@ function toLiveRunSnapshot(
 export class PiDurableConversationHost {
 	private harness?: DurableHarness;
 	private model: ModelPort;
+	private readonly logger: CoreLogger;
 	private readonly policy: ConversationPolicy;
 	private readonly executionLock: ConversationExecutionLock;
 	private readonly steerGraceMs: number;
@@ -522,6 +529,7 @@ export class PiDurableConversationHost {
 	readonly registry = createRegistry();
 
 	constructor(private readonly options: DurableConversationHostOptions) {
+		this.logger = options.logger ?? createFallbackCoreLogger();
 		this.model =
 			options.model ??
 			createFakeModel(options.responses === undefined ? {} : { responses: options.responses });
@@ -588,6 +596,11 @@ export class PiDurableConversationHost {
 			BACKGROUND_CONTEXT,
 		);
 		if (existingReceipt) {
+			this.logger.debug("Conversation message deduplicated", {
+				activityId: existingReceipt.activityId,
+				conversationId: input.conversationId,
+				messageId: existingReceipt.messageId,
+			});
 			return {
 				activityId: existingReceipt.activityId,
 				deduplicated: true,
@@ -640,6 +653,29 @@ export class PiDurableConversationHost {
 					? "follow-up"
 					: "follow-up");
 		if (shouldSubmit) this.clearActivityTimer(input.conversationId);
+		this.logger.debug("Conversation message appended", {
+			burstSettleMs: pacing.burstSettleMs,
+			busyDisposition: disposition,
+			classification: input.classification,
+			collectOnly: input.collectOnly === true,
+			conversationId: input.conversationId,
+			envelopeCount: nextEnvelopes.length,
+			messageId: input.envelope.id,
+			shouldSubmit,
+			whenBusy,
+		});
+		this.logger.debug(shouldOpen ? "Activity window opened" : "Activity window appended", {
+			activityId,
+			burstSettleMs: pacing.burstSettleMs,
+			classification: input.classification,
+			conversationId: input.conversationId,
+			envelopeCount: nextEnvelopes.length,
+		});
+		this.logger.trace("Conversation envelope appended", {
+			conversationId: input.conversationId,
+			envelopePreview: previewText(this.envelopeToText(input.envelope)),
+			messageId: input.envelope.id,
+		});
 		const submissionId = await conversation.commit(async (tx) => {
 			const receipt = await tx.doc(messageReceiptDoc, conversationId, input.envelope.id, {
 				activityId,
@@ -726,8 +762,14 @@ export class PiDurableConversationHost {
 		const onAnswer = this.options.onAnswer;
 		if (submission === undefined) {
 			if (submissionId !== undefined) this.untrackSubmission(conversationId, submissionId);
+			this.logger.debug("Conversation answer observation skipped", {
+				conversationId,
+				reason: "no-submission",
+				submissionId,
+			});
 			return;
 		}
+		const startedAt = performance.now();
 		this.watchLiveRun(harness, conversationId);
 		void (async () => {
 			try {
@@ -739,15 +781,33 @@ export class PiDurableConversationHost {
 				if (entry === undefined) return;
 				const text = assistantEntryText(entry);
 				if (text === undefined) return;
-				await onAnswer({
-					activityId: activityIdFromSubmissionRequestId(settled.requestId ?? ""),
+				const activityId = activityIdFromSubmissionRequestId(settled.requestId ?? "");
+				const entryId = String(answerId);
+				this.logger.debug("Conversation answer observed", {
+					activityId,
 					conversationId,
-					entryId: String(answerId),
+					durationMs: Math.round(performance.now() - startedAt),
+					entryId,
+					textLength: text.length,
+				});
+				this.logger.trace("Conversation answer preview", {
+					answerPreview: previewText(text),
+					conversationId,
+					entryId,
+				});
+				await onAnswer({
+					activityId,
+					conversationId,
+					entryId,
 					text,
 				});
 			} catch (error) {
 				if (this.closed) return;
-				console.error("Failed to observe conversation answer", error);
+				this.logger.error("Failed to observe conversation answer", {
+					conversationId,
+					error,
+					submissionId,
+				});
 			} finally {
 				if (submissionId !== undefined) this.untrackSubmission(conversationId, submissionId);
 			}
@@ -792,6 +852,12 @@ export class PiDurableConversationHost {
 					if (!running && !sawRun && Date.now() - startedAtMs < LIVE_RUN_START_GRACE_MS) {
 						return;
 					}
+					if (!running && !sawRun) {
+						this.logger.trace("Live run grace period expired without a run", {
+							conversationId,
+							waitedMs: Math.round(Date.now() - startedAtMs),
+						});
+					}
 					if (!running) {
 						// The run settled. Report a failure first so a client can show it, then clear.
 						stopped = true;
@@ -809,8 +875,9 @@ export class PiDurableConversationHost {
 					}
 					sawRun = true;
 					onLiveRun(toLiveRunSnapshot(conversationId, startedAtMs, live));
-				} catch {
+				} catch (error) {
 					// Live presentation is optional; ingestion and answers must not depend on it.
+					this.logger.trace("Live run poll failed", { conversationId, error });
 					stopped = true;
 					this.stopLiveRun(conversationId);
 				}
@@ -868,7 +935,7 @@ export class PiDurableConversationHost {
 				// it. That race is not a defect worth a log line.
 				if (this.closed) return;
 				if (error instanceof Error && error.message === "SqliteStorage is closed") return;
-				console.error("Failed to flush activity window", error);
+				this.logger.error("Failed to flush activity window", { conversationId, error });
 			});
 			this.pendingFlushes.add(flushing);
 			void flushing.finally(() => this.pendingFlushes.delete(flushing));
@@ -906,12 +973,22 @@ export class PiDurableConversationHost {
 	}
 
 	private async flushActivityLocked(conversationId: string): Promise<void> {
+		const startedAt = performance.now();
 		{
-			if (this.closed) return;
+			if (this.closed) {
+				this.logger.debug("Activity flush skipped", { conversationId, reason: "host-closed" });
+				return;
+			}
 			const harness = await this.openHarness();
 			const numericId = Number(conversationId) as ConversationId;
 			const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
-			if (!conversation) return;
+			if (!conversation) {
+				this.logger.debug("Activity flush skipped", {
+					conversationId,
+					reason: "conversation-not-found",
+				});
+				return;
+			}
 			await this.ensureExtensions(conversation, conversationId);
 			await this.ensureAgentModel(conversation, conversationId);
 			const activityId = `${numericId}:activity`;
@@ -922,10 +999,23 @@ export class PiDurableConversationHost {
 				BACKGROUND_CONTEXT,
 			);
 			if (!window || window.status !== "collecting" || window.envelopes.length === 0) {
+				this.logger.debug("Activity flush skipped", {
+					activityId,
+					conversationId,
+					status: window?.status,
+					reason: "no-open-window",
+				});
 				return;
 			}
 			const policy = await this.readPolicy(numericId);
-			if (!policy.enabled) return;
+			if (!policy.enabled) {
+				this.logger.debug("Activity flush skipped", {
+					activityId,
+					conversationId,
+					reason: "conversation-disabled",
+				});
+				return;
+			}
 			const envelopes = window.envelopes;
 			const disposition = busyDisposition(
 				this.activeRunSince(conversationId),
@@ -968,6 +1058,13 @@ export class PiDurableConversationHost {
 				type: "closed",
 			});
 			const submission = await harness.submission(submissionId, BACKGROUND_CONTEXT);
+			this.logger.debug("Activity window flushed", {
+				activityId,
+				conversationId,
+				durationMs: Math.round(performance.now() - startedAt),
+				envelopeCount: envelopes.length,
+				submitted: true,
+			});
 			this.trackSubmission(conversationId, String(submissionId));
 			this.observeAnswer(harness, conversationId, submission, String(submissionId));
 		}
@@ -984,6 +1081,7 @@ export class PiDurableConversationHost {
 	private async submitBackgroundTurnLocked(
 		input: BackgroundTurnInput,
 	): Promise<BackgroundTurnResult> {
+		const startedAt = performance.now();
 		const harness = await this.openHarness();
 		const numericId = Number(input.conversationId) as ConversationId;
 		const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
@@ -994,10 +1092,22 @@ export class PiDurableConversationHost {
 		if (!policy.enabled) throw new Error(`Conversation disabled: ${input.conversationId}`);
 		const activityId = `${numericId}:background`;
 		const requestId = input.requestId ?? `${activityId}:${randomUUID()}`;
+		this.logger.debug("Background turn started", {
+			conversationId: input.conversationId,
+			kind: input.kind,
+			requestId,
+		});
 		const content = [input.context?.trim(), input.prompt.trim()]
 			.filter((value): value is string => value !== undefined && value.length > 0)
 			.join("\n\n");
-		if (content.length === 0) throw new Error("Background turn prompt must not be empty");
+		if (content.length === 0) {
+			this.logger.warn("Background turn skipped", {
+				conversationId: input.conversationId,
+				reason: "empty-prompt",
+				requestId,
+			});
+			throw new Error("Background turn prompt must not be empty");
+		}
 		const submissionId = await conversation.commit(
 			(tx) =>
 				conversation.submit(tx, {
@@ -1018,14 +1128,34 @@ export class PiDurableConversationHost {
 		const submission = await harness.submission(submissionId, BACKGROUND_CONTEXT);
 		const settled = await submission?.wait(BACKGROUND_CONTEXT);
 		if (settled === undefined || settled.type !== "input" || settled.status !== "done") {
+			this.logger.warn("Background turn did not settle", {
+				conversationId: input.conversationId,
+				durationMs: Math.round(performance.now() - startedAt),
+				requestId,
+				status: settled?.status,
+			});
 			throw new Error("Background turn did not settle successfully");
 		}
 		const entry = await harness.commit((tx) => tx.entry(settled.answer), BACKGROUND_CONTEXT);
+		const text = entry === undefined ? "" : (assistantEntryText(entry) ?? "");
+		const entryId = String(settled.answer);
+		this.logger.debug("Background turn done", {
+			conversationId: input.conversationId,
+			durationMs: Math.round(performance.now() - startedAt),
+			entryId,
+			requestId,
+			status: settled.status,
+		});
+		this.logger.trace("Background turn answer preview", {
+			answerPreview: previewText(text),
+			conversationId: input.conversationId,
+			entryId,
+		});
 		return {
 			activityId,
-			entryId: String(settled.answer),
+			entryId,
 			requestId,
-			text: entry === undefined ? "" : (assistantEntryText(entry) ?? ""),
+			text,
 		};
 	}
 
@@ -1049,6 +1179,7 @@ export class PiDurableConversationHost {
 		conversationId: string,
 		instructions?: string,
 	): Promise<CompactConversationResult> {
+		const startedAt = performance.now();
 		const parsedNumeric = Number(conversationId);
 		if (!Number.isSafeInteger(parsedNumeric)) {
 			throw new Error(`Conversation not found: ${conversationId}`);
@@ -1062,6 +1193,10 @@ export class PiDurableConversationHost {
 		await this.ensureExtensions(conversation, conversationId);
 		await this.ensureAgentModel(conversation, conversationId);
 		const trimmed = instructions?.trim();
+		this.logger.debug("Conversation compaction started", {
+			conversationId,
+			hasInstructions: trimmed !== undefined && trimmed.length > 0,
+		});
 		const taskId = await conversation.compact(
 			trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined,
 			BACKGROUND_CONTEXT,
@@ -1069,6 +1204,11 @@ export class PiDurableConversationHost {
 		const settled = await harness.waitForTask(taskId, BACKGROUND_CONTEXT);
 		const outcome = settled.state.outcome;
 		if (outcome.status !== "completed") {
+			this.logger.debug("Conversation compaction finished", {
+				conversationId,
+				durationMs: Math.round(performance.now() - startedAt),
+				status: outcome.status,
+			});
 			if (outcome.status === "failed" || outcome.status === "faulted") {
 				throw new Error(outcome.error.message);
 			}
@@ -1079,11 +1219,20 @@ export class PiDurableConversationHost {
 			const submission = await harness.submission(submissionId, BACKGROUND_CONTEXT);
 			await submission?.wait(BACKGROUND_CONTEXT);
 		}
-		return {
+		const result = {
 			compacted: entryId !== undefined || submissionId !== undefined,
 			entryId: entryId === undefined ? null : String(entryId),
 			submissionId: submissionId === undefined ? null : String(submissionId),
 		};
+		this.logger.debug("Conversation compaction finished", {
+			compacted: result.compacted,
+			conversationId,
+			durationMs: Math.round(performance.now() - startedAt),
+			entryId: result.entryId,
+			status: outcome.status,
+			submissionId: result.submissionId,
+		});
+		return result;
 	}
 
 	async resetConversation(conversationId: string, handoff?: string): Promise<void> {
@@ -1137,6 +1286,11 @@ export class PiDurableConversationHost {
 			}, BACKGROUND_CONTEXT);
 		}
 		await conversation.abort(BACKGROUND_CONTEXT);
+		this.logger.debug("Conversation run aborted", {
+			activityId,
+			closedCollectingWindow: window?.status === "collecting",
+			conversationId,
+		});
 	}
 
 	/**
@@ -1569,7 +1723,11 @@ export class PiDurableConversationHost {
 				}
 				this.extensionsEnsured.add(key);
 			} catch (error) {
-				console.error(`Failed to ensure conversation extension ${extension.name}`, error);
+				this.logger.error("Failed to ensure conversation extension", {
+					conversationId: durableId,
+					error,
+					extension: extension.name,
+				});
 			}
 		}
 	}
@@ -1608,7 +1766,10 @@ export class PiDurableConversationHost {
 			}
 			this.modelsEnsured.add(durableId);
 		} catch (error) {
-			console.error(`Failed to ensure conversation model for ${durableId}`, error);
+			this.logger.error("Failed to ensure conversation model", {
+				conversationId: durableId,
+				error,
+			});
 		}
 	}
 
@@ -1618,7 +1779,12 @@ export class PiDurableConversationHost {
 		try {
 			callback(event);
 		} catch (error) {
-			console.error("Activity event callback failed", error);
+			this.logger.error("Activity event callback failed", {
+				activityId: event.activityId,
+				conversationId: event.conversationId,
+				error,
+				type: event.type,
+			});
 		}
 	}
 

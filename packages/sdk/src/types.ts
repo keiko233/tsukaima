@@ -16,10 +16,12 @@ import type { PluginManifest } from "./manifest.ts";
 import type { PluginPermission } from "./permissions.ts";
 
 export interface PluginLogger {
+	trace(message: string, details?: unknown): void;
 	debug(message: string, details?: unknown): void;
 	info(message: string, details?: unknown): void;
 	warn(message: string, details?: unknown): void;
 	error(message: string, details?: unknown): void;
+	child?(target: string, fields?: Record<string, unknown>): PluginLogger;
 }
 
 export type SerializedValue = unknown;

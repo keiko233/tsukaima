@@ -60,7 +60,7 @@ export type WorkerResponse =
 			readonly type: "stream";
 			readonly requestId?: number;
 			readonly kind: "log" | "progress";
-			readonly level?: "debug" | "info" | "warn" | "error";
+			readonly level?: "trace" | "debug" | "info" | "warn" | "error";
 			readonly message: string;
 			readonly details?: unknown;
 	  }

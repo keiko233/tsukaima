@@ -19,12 +19,14 @@ import {
 	type Usage,
 } from "@earendil-works/pi-ai";
 import type { ModelPort } from "./model.ts";
+import { previewText, type CoreLogger } from "./logger.ts";
 
 export interface OpenAICompatibleConfig {
 	readonly baseUrl: string;
 	readonly apiKey: string;
 	readonly providerId?: string;
 	readonly fetch?: FetchFunction;
+	readonly logger?: CoreLogger;
 	readonly onMessage?: (message: AssistantMessage) => void;
 }
 
@@ -342,6 +344,14 @@ function openAITools(tools: readonly Tool[]): OpenAITool[] {
 	}));
 }
 
+/** Single-line text of one converted request message, for the trace-level request preview. */
+function openAIMessageText(message: OpenAIMessage): string {
+	if (message.role === "tool") return message.content;
+	if (message.role === "assistant") return message.content ?? "";
+	if (typeof message.content === "string") return message.content;
+	return message.content.map((part) => (part.type === "text" ? part.text : "[image]")).join(" ");
+}
+
 export function createOpenAICompatibleStreams(
 	config: OpenAICompatibleConfig,
 	modelConfigs: readonly OpenAICompatibleModelConfig[] = [],
@@ -356,6 +366,9 @@ export function createOpenAICompatibleStreams(
 		context: TranscriptContext,
 		options?: SimpleStreamOptions,
 	): Promise<AssistantMessage> => {
+		const startedAt = performance.now();
+		const logger = config.logger;
+		const providerId = config.providerId ?? model.provider;
 		const modelConfig = configs.get(model.id);
 		const url = `${baseUrl}/chat/completions`;
 		const messages: OpenAIMessage[] = [];
@@ -372,7 +385,14 @@ export function createOpenAICompatibleStreams(
 			options?.maxTokens ?? Number.POSITIVE_INFINITY,
 		);
 		if (!Number.isFinite(maxOutputTokens)) {
-			throw new Error(`Model has no output token limit: ${model.id}`);
+			const error = new Error(`Model has no output token limit: ${model.id}`);
+			logger?.error("OpenAI-compatible request has no output token limit", {
+				providerId,
+				modelId: model.id,
+				durationMs: Math.round(performance.now() - startedAt),
+				error,
+			});
+			throw error;
 		}
 		const apiKeyFromOptions = options?.apiKey ?? apiKey;
 		const reasoningEffort =
@@ -386,6 +406,25 @@ export function createOpenAICompatibleStreams(
 			...(reasoningEffort === undefined ? {} : { reasoning_effort: reasoningEffort }),
 			...(tools.length > 0 ? { tools, tool_choice: options?.toolChoice ?? "auto" } : {}),
 		};
+		logger?.debug("OpenAI-compatible chat completion requested", {
+			providerId,
+			modelId: model.id,
+			messageCount: messages.length,
+			toolCount: tools.length,
+			maxOutputTokens,
+			reasoningEffort,
+		});
+		const lastMessage = messages.findLast(
+			(message) => message.role === "user" || message.role === "tool",
+		);
+		logger?.trace("OpenAI-compatible request detail", {
+			providerId,
+			modelId: model.id,
+			lastMessageRole: lastMessage?.role,
+			lastMessagePreview:
+				lastMessage === undefined ? undefined : previewText(openAIMessageText(lastMessage)),
+			tools: declaredTools.map((tool) => tool.name),
+		});
 		let response: Response;
 		try {
 			response = await fetchImplementation(url, {
@@ -399,29 +438,96 @@ export function createOpenAICompatibleStreams(
 				...(options?.signal === undefined ? {} : { signal: options.signal }),
 			});
 		} catch (error) {
-			throw error instanceof Error && error.name === "AbortError"
-				? error
-				: new Error(
-						`OpenAI-compatible request failed: ${error instanceof Error ? error.message : String(error)}`,
-						{ cause: error },
-					);
+			const durationMs = Math.round(performance.now() - startedAt);
+			if (error instanceof Error && error.name === "AbortError") {
+				logger?.debug("OpenAI-compatible request aborted", {
+					providerId,
+					modelId: model.id,
+					durationMs,
+				});
+				throw error;
+			}
+			const wrapped = new Error(
+				`OpenAI-compatible request failed: ${error instanceof Error ? error.message : String(error)}`,
+				{ cause: error },
+			);
+			logger?.error("OpenAI-compatible request failed", {
+				providerId,
+				modelId: model.id,
+				durationMs,
+				error: wrapped,
+			});
+			throw wrapped;
 		}
 		if (!response.ok) {
-			throw new Error(await readErrorMessage(response));
+			const message = await readErrorMessage(response);
+			logger?.warn("OpenAI-compatible request rejected", {
+				providerId,
+				modelId: model.id,
+				durationMs: Math.round(performance.now() - startedAt),
+				status: response.status,
+				error: message,
+			});
+			throw new Error(message);
 		}
 		let payload: OpenAIResponse;
 		try {
 			payload = (await response.json()) as OpenAIResponse;
 		} catch (error) {
-			throw new Error(
+			const wrapped = new Error(
 				`Invalid JSON from OpenAI-compatible provider: ${error instanceof Error ? error.message : String(error)}`,
 				{ cause: error },
 			);
+			logger?.warn("OpenAI-compatible response was not valid JSON", {
+				providerId,
+				modelId: model.id,
+				durationMs: Math.round(performance.now() - startedAt),
+				status: response.status,
+				error: wrapped,
+			});
+			throw wrapped;
 		}
 		if (!payload.choices?.length) {
-			throw new Error("OpenAI-compatible response contained no choices");
+			const message = "OpenAI-compatible response contained no choices";
+			logger?.warn("OpenAI-compatible response contained no choices", {
+				providerId,
+				modelId: model.id,
+				durationMs: Math.round(performance.now() - startedAt),
+				status: response.status,
+				error: message,
+			});
+			throw new Error(message);
 		}
-		return buildAssistantMessage(model, payload);
+		const assistant = buildAssistantMessage(model, payload);
+		const texts: string[] = [];
+		const thinkingTexts: string[] = [];
+		const calledTools: string[] = [];
+		for (const block of assistant.content) {
+			if (block.type === "text") texts.push(block.text);
+			else if (block.type === "thinking") thinkingTexts.push(block.thinking);
+			else if (block.type === "toolCall") calledTools.push(block.name);
+		}
+		logger?.debug("OpenAI-compatible chat completion completed", {
+			providerId,
+			modelId: model.id,
+			durationMs: Math.round(performance.now() - startedAt),
+			stopReason: assistant.stopReason,
+			rawStopReason: assistant.rawStopReason,
+			inputTokens: assistant.usage.input,
+			outputTokens: assistant.usage.output,
+			cacheRead: assistant.usage.cacheRead,
+			reasoningTokens: assistant.usage.reasoning,
+			toolCallCount: calledTools.length,
+		});
+		logger?.trace("OpenAI-compatible response detail", {
+			providerId,
+			modelId: model.id,
+			textPreview: previewText(texts.join("\n")),
+			reasoningPreview:
+				thinkingTexts.length === 0 ? undefined : previewText(thinkingTexts.join("\n")),
+			toolCalls: calledTools,
+		});
+		return assistant;
 	};
 
 	const stream = (

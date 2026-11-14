@@ -62,6 +62,117 @@ export {
 	toolPayloadTooLarge,
 } from "./policy.ts";
 
+type PluginLoggerLevel = "trace" | "debug" | "info" | "warn" | "error";
+
+type PluginLoggerSink = (level: PluginLoggerLevel, message: string, details: unknown) => void;
+
+function mergeLoggerFields(fields: Record<string, unknown> | undefined, details: unknown): unknown {
+	if (fields === undefined || Object.keys(fields).length === 0) return details;
+	if (details === undefined) return fields;
+	if (isRecord(details)) return { ...fields, ...details };
+	return { ...fields, details };
+}
+
+function createChildPluginLogger(
+	sink: PluginLoggerSink,
+	label: string,
+	fields: Record<string, unknown> | undefined,
+): PluginLogger {
+	const target = label.trim().length > 0 ? label.trim() : "child";
+	const write = (level: PluginLoggerLevel, message: string, details: unknown): void => {
+		sink(level, `[${target}] ${message}`, mergeLoggerFields(fields, details));
+	};
+	return {
+		trace: (message, details) => write("trace", message, details),
+		debug: (message, details) => write("debug", message, details),
+		info: (message, details) => write("info", message, details),
+		warn: (message, details) => write("warn", message, details),
+		error: (message, details) => write("error", message, details),
+		child: (nestedTarget, nestedFields) =>
+			createChildPluginLogger(
+				sink,
+				`${target}.${nestedTarget}`,
+				fields === undefined
+					? nestedFields
+					: nestedFields === undefined
+						? fields
+						: { ...fields, ...nestedFields },
+			),
+	};
+}
+
+function writeConsoleLog(level: PluginLoggerLevel, message: string, details: unknown): void {
+	const args: unknown[] = details === undefined ? [message] : [message, details];
+	switch (level) {
+		case "trace":
+		case "debug": {
+			console.debug(...args);
+			break;
+		}
+		case "info": {
+			console.info(...args);
+			break;
+		}
+		case "warn": {
+			console.warn(...args);
+			break;
+		}
+		case "error": {
+			console.error(...args);
+			break;
+		}
+	}
+}
+
+/**
+ * Default plugin logger. `trace` intentionally maps to `console.debug` so enabling verbose
+ * plugin logging does not require a dedicated console method.
+ */
+export function createConsolePluginLogger(): PluginLogger {
+	return {
+		trace: (message, details) => writeConsoleLog("trace", message, details),
+		debug: (message, details) => writeConsoleLog("debug", message, details),
+		info: (message, details) => writeConsoleLog("info", message, details),
+		warn: (message, details) => writeConsoleLog("warn", message, details),
+		error: (message, details) => writeConsoleLog("error", message, details),
+		child: (target, fields) => createChildPluginLogger(writeConsoleLog, target, fields),
+	};
+}
+
+/**
+ * Completes partial or legacy plugin loggers. A logger without `trace` (for example an older
+ * test double) falls back to `debug` so the SDK can always call `trace` safely.
+ */
+export function normalizePluginLogger(
+	logger: Partial<PluginLogger> & Pick<PluginLogger, "debug" | "info" | "warn" | "error">,
+): PluginLogger {
+	const call = (level: PluginLoggerLevel, message: string, details: unknown): void => {
+		const handler = logger[level];
+		if (typeof handler === "function") {
+			handler.call(logger, message, details);
+			return;
+		}
+		if (level === "trace") {
+			logger.debug.call(logger, message, details);
+			return;
+		}
+		const fallback = logger.error ?? logger.warn ?? logger.info ?? logger.debug;
+		fallback.call(logger, message, details);
+	};
+	const normalized: PluginLogger = {
+		trace: (message, details) => call("trace", message, details),
+		debug: (message, details) => call("debug", message, details),
+		info: (message, details) => call("info", message, details),
+		warn: (message, details) => call("warn", message, details),
+		error: (message, details) => call("error", message, details),
+	};
+	if (typeof logger.child === "function") {
+		const child = logger.child.bind(logger);
+		normalized.child = (target, fields) => normalizePluginLogger(child(target, fields));
+	}
+	return normalized;
+}
+
 export class LocalPluginEventBridge {
 	readonly #handlers = new Map<
 		PluginHookName,
@@ -669,6 +780,10 @@ export interface PluginToolsExtensionOptions {
 	readonly audit?: (entry: AuditEntry) => Promise<void> | void;
 	/** Called only when auditing or a duplicate name fails; never affects the tool result. */
 	readonly logger?: (message: string, error?: unknown) => void;
+	/** Verbose per-invocation diagnostics (start, finish, denial). Failures are swallowed. */
+	readonly debug?: (message: string, fields?: Record<string, unknown>) => void;
+	/** Trace-level per-invocation diagnostics. Failures are swallowed. */
+	readonly trace?: (message: string, fields?: Record<string, unknown>) => void;
 	readonly name?: string;
 	/** Additional policy context or a resolver invoked per tool execution. */
 	readonly policyContext?:
@@ -707,6 +822,16 @@ function warn(
 ): void {
 	try {
 		logger?.(message, error);
+	} catch {}
+}
+
+function toolLog(
+	logger: PluginToolsExtensionOptions["debug"],
+	message: string,
+	fields: Record<string, unknown>,
+): void {
+	try {
+		logger?.(message, fields);
 	} catch {}
 }
 
@@ -762,12 +887,28 @@ export function createPluginToolsExtension(
 				const input = isRecord(args) ? args : {};
 				const conversationId = String(api.conversationId);
 				const invocationContext: ToolInvocationContext = { conversationId };
+				const startedAtMs = Date.now();
+				const logDenied = (reason: string): void => {
+					toolLog(options.debug, "plugin tool invocation denied", {
+						conversationId,
+						durationMs: Date.now() - startedAtMs,
+						ok: false,
+						reason,
+						tool: tool.name,
+					});
+				};
+				toolLog(options.trace, "plugin tool invocation started", {
+					conversationId,
+					inputKeys: Object.keys(input),
+					tool: tool.name,
+				});
 				const policy = resolveToolPolicy(tool);
 				const decision = resolveToolPolicyAccess(tool, {
 					...invocationContext,
 					...(await policyContextFor(tool, invocationContext)),
 				});
 				if (!decision.allowed) {
+					logDenied(decision.reason ?? "denied");
 					await audit({
 						action: "plugin.tool.invoke",
 						payload: { conversationId, tool: tool.name },
@@ -784,6 +925,7 @@ export function createPluginToolsExtension(
 					};
 				}
 				if (toolPayloadTooLarge(tool, input)) {
+					logDenied(`payload_too_large:${policy.maxPayloadBytes}`);
 					await audit({
 						action: "plugin.tool.invoke",
 						payload: { conversationId, tool: tool.name },
@@ -826,6 +968,7 @@ export function createPluginToolsExtension(
 					const outcome = await Promise.race([execution, timeout]);
 					if (!outcome.ok) {
 						if (outcome.reason === "permission_denied") {
+							logDenied(`permission_denied:${outcome.permission}`);
 							await audit({
 								action: "plugin.tool.invoke",
 								payload: { conversationId, tool: tool.name },
@@ -842,6 +985,7 @@ export function createPluginToolsExtension(
 							};
 						}
 						const reason = `${outcome.reason}${outcome.message === undefined ? "" : `:${outcome.message}`}`;
+						logDenied(reason);
 						await audit({
 							action: "plugin.tool.invoke",
 							payload: { conversationId, tool: tool.name },
@@ -864,15 +1008,33 @@ export function createPluginToolsExtension(
 						targetId: tool.name,
 						targetKind: "plugin-tool",
 					});
+					toolLog(options.debug, "plugin tool invocation finished", {
+						conversationId,
+						durationMs: Date.now() - startedAtMs,
+						ok: true,
+						tool: tool.name,
+					});
 					return {
 						output: outcome.result.content.map((part) => ({ text: part.text, type: "text" })),
 					};
 				} catch (error) {
 					const message = errorText(error);
+					const reason = timedOut ? `timeout:${policy.timeoutMs}` : message;
+					toolLog(
+						options.debug,
+						timedOut ? "plugin tool invocation timed out" : "plugin tool invocation failed",
+						{
+							conversationId,
+							durationMs: Date.now() - startedAtMs,
+							ok: false,
+							reason,
+							tool: tool.name,
+						},
+					);
 					await audit({
 						action: "plugin.tool.invoke",
 						payload: { conversationId, tool: tool.name },
-						reason: timedOut ? `timeout:${policy.timeoutMs}` : message,
+						reason,
 						result: "failed",
 						targetId: tool.name,
 						targetKind: "plugin-tool",
@@ -992,7 +1154,10 @@ export interface PluginContextOptions {
 
 export function createPluginContext(options: PluginContextOptions = {}): PluginContext {
 	const storage = options.storage ?? new LocalStorageBridge();
-	const logger = options.logger ?? console;
+	const logger =
+		options.logger === undefined
+			? createConsolePluginLogger()
+			: normalizePluginLogger(options.logger);
 	const events = options.events ?? new LocalPluginEventBridge();
 	const pluginId = options.pluginId ?? "plugin";
 	const manifest =

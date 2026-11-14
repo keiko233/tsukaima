@@ -15,7 +15,8 @@ import {
 
 const chatKindSchema = z.enum(["private", "group", "webui", "task", "plugin"]);
 
-export const logLevelSchema = z.enum(["debug", "info", "warn", "error"]);
+export const logLevels = ["trace", "debug", "info", "warn", "error"] as const;
+export const logLevelSchema = z.enum(logLevels);
 export type LogLevel = z.infer<typeof logLevelSchema>;
 export const deliveryStatusSchema = z.enum([
 	"received",

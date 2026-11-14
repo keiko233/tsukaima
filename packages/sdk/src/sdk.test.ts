@@ -1,10 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
 	LocalModelRegistry,
 	LocalToolBridge,
 	LocalUiBridge,
+	createConsolePluginLogger,
 	createPluginContext,
 	createPluginToolsExtension,
+	normalizePluginLogger,
 	providerSafeToolName,
 } from "./bridges.ts";
 import { pluginManifestSchema } from "./manifest.ts";
@@ -311,6 +313,112 @@ describe("plugin sdk", () => {
 		const result = await extension.tools[0]?.execute({}, { conversationId: 1 }, {});
 		expect(result).toEqual({ output: [{ text: "still here", type: "text" }] });
 		expect(warnings).toHaveLength(1);
+	});
+
+	test("writes trace through console.debug and prefixes child loggers", () => {
+		const debug = spyOn(console, "debug").mockImplementation(() => {});
+		const info = spyOn(console, "info").mockImplementation(() => {});
+		try {
+			const logger = createConsolePluginLogger();
+			logger.trace("trace event", { tool: "sample.echo" });
+			logger.child?.("sample.echo", { pluginId: "sample" })?.debug("child event");
+			logger
+				.child?.("sample", { pluginId: "sample" })
+				?.child?.("nested")
+				?.info("nested event", { ok: true });
+			expect(debug.mock.calls).toEqual([
+				["trace event", { tool: "sample.echo" }],
+				["[sample.echo] child event", { pluginId: "sample" }],
+			]);
+			expect(info.mock.calls).toEqual([
+				["[sample.nested] nested event", { pluginId: "sample", ok: true }],
+			]);
+		} finally {
+			debug.mockRestore();
+			info.mockRestore();
+		}
+	});
+
+	test("falls back from trace to debug for legacy loggers", () => {
+		const records: Array<{
+			readonly level: string;
+			readonly message: string;
+			readonly details?: unknown;
+		}> = [];
+		const normalized = normalizePluginLogger({
+			debug: (message, details) => records.push({ details, level: "debug", message }),
+			error: (message, details) => records.push({ details, level: "error", message }),
+			info: (message, details) => records.push({ details, level: "info", message }),
+			warn: (message, details) => records.push({ details, level: "warn", message }),
+		});
+		normalized.trace("trace entry", { step: 1 });
+		normalized.warn("warn entry");
+		expect(records).toEqual([
+			{ details: { step: 1 }, level: "debug", message: "trace entry" },
+			{ details: undefined, level: "warn", message: "warn entry" },
+		]);
+	});
+
+	test("traces tool starts and debugs finishes, denials, and failures", async () => {
+		const events: Array<{
+			readonly fields: Record<string, unknown>;
+			readonly level: string;
+			readonly message: string;
+		}> = [];
+		const record =
+			(level: "debug" | "trace") => (message: string, fields?: Record<string, unknown>) => {
+				events.push({ fields: fields ?? {}, level, message });
+			};
+		const tool: PluginTool = {
+			description: "Echo",
+			execute: () => ({ content: [] }),
+			name: "sample.echo",
+			parameters: { type: "object" },
+			requiredPermissions: [],
+		};
+		const successful = createPluginToolsExtension(
+			() => [tool],
+			async () => ({ ok: true, result: { content: [{ text: "ok", type: "text" }] } }),
+			{ debug: record("debug"), trace: record("trace") },
+		);
+		await successful.tools[0]?.execute({ text: "hi" }, { conversationId: 7 }, {});
+		expect(events[0]).toEqual({
+			fields: { conversationId: "7", inputKeys: ["text"], tool: "sample.echo" },
+			level: "trace",
+			message: "plugin tool invocation started",
+		});
+		expect(events[1]).toEqual({
+			fields: expect.objectContaining({ conversationId: "7", ok: true, tool: "sample.echo" }),
+			level: "debug",
+			message: "plugin tool invocation finished",
+		});
+		expect(typeof events[1]?.fields.durationMs).toBe("number");
+
+		const denied = createPluginToolsExtension(
+			() => [tool],
+			async () => ({ ok: false, reason: "timeout" }),
+			{ debug: record("debug"), trace: record("trace") },
+		);
+		await denied.tools[0]?.execute({}, { conversationId: 1 }, {});
+		expect(events.at(-1)).toEqual({
+			fields: expect.objectContaining({ ok: false, reason: "timeout", tool: "sample.echo" }),
+			level: "debug",
+			message: "plugin tool invocation denied",
+		});
+
+		const failing = createPluginToolsExtension(
+			() => [tool],
+			async () => {
+				throw new Error("boom");
+			},
+			{ debug: record("debug"), trace: record("trace") },
+		);
+		await failing.tools[0]?.execute({}, { conversationId: 1 }, {});
+		expect(events.at(-1)).toEqual({
+			fields: expect.objectContaining({ ok: false, reason: "boom", tool: "sample.echo" }),
+			level: "debug",
+			message: "plugin tool invocation failed",
+		});
 	});
 
 	test("degrades to no tools when the registry cannot be listed", () => {
