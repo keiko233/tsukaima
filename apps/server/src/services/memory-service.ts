@@ -3,7 +3,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, like, lte, or, sql, type SQL }
 import type { ConversationPolicy, MemoryScope, MemoryStatus } from "@tsukaima/contracts";
 import { conversations, memories, messages, type TsukaimaDatabase } from "@tsukaima/db";
 import type { AuditEntry, PluginPermission, PluginTask } from "@tsukaima/sdk";
-import type { Logger } from "../logging.ts";
+import { previewText, type Logger } from "../logging.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
 import type { PluginTaskService } from "./plugin-task-service.ts";
 
@@ -688,6 +688,12 @@ export class MemoryService {
 					.returning();
 				const memory = updated ?? existing;
 				await this.#recordAudit("memory.merge", memory, "ok");
+				this.#logger.debug("memory merged", {
+					kind: memory.kind,
+					memoryId: memory.id,
+					scope: memory.scope,
+					status: memory.status,
+				});
 				return { memory, merged: true };
 			}
 		}
@@ -743,6 +749,12 @@ export class MemoryService {
 				memoryId: row.id,
 			});
 		}
+		this.#logger.debug("memory created", {
+			kind: row.kind,
+			memoryId: row.id,
+			scope: row.scope,
+			status: row.status,
+		});
 		return { memory: row, merged: false };
 	}
 
@@ -810,6 +822,12 @@ export class MemoryService {
 				memoryId: row.id,
 			});
 		}
+		this.#logger.debug("memory updated", {
+			kind: row.kind,
+			memoryId: row.id,
+			scope: row.scope,
+			status: row.status,
+		});
 		return row;
 	}
 
@@ -842,6 +860,11 @@ export class MemoryService {
 			.returning();
 		if (row === undefined) throw new Error("Memory revoke did not return a row");
 		await this.#recordAudit("memory.revoke", row, "ok");
+		this.#logger.debug("memory revoked", {
+			kind: row.kind,
+			memoryId: row.id,
+			scope: row.scope,
+		});
 		return row;
 	}
 
@@ -889,6 +912,7 @@ export class MemoryService {
 
 	/** Hybrid recall: lexical + cached embeddings + importance/recency/pin, bounded by `limit`. */
 	async recall(input: MemoryRecallInput = {}): Promise<RankedMemory[]> {
+		const startedAt = performance.now();
 		const database = this.#db();
 		const nowDate = this.#now();
 		const now = nowIso(nowDate);
@@ -900,6 +924,12 @@ export class MemoryService {
 		if (input.scopeFilter !== undefined) conditions.push(input.scopeFilter);
 		const base = combine(conditions);
 		const tokens = extractMemoryTokens(input.query ?? "");
+		this.#logger.trace("memory recall started", {
+			conversationId: input.conversationId,
+			limit: input.limit ?? 10,
+			queryPreview: previewText(input.query ?? ""),
+			tokens,
+		});
 		const byId = new Map<string, MemoryRow>();
 		for (const token of tokens) {
 			const pattern = `%${token}%`;
@@ -944,7 +974,16 @@ export class MemoryService {
 			}
 			return right.memory.updatedAt.localeCompare(left.memory.updatedAt);
 		});
-		return ranked.slice(0, Math.max(1, input.limit ?? 10));
+		const selected = ranked.slice(0, Math.max(1, input.limit ?? 10));
+		this.#logger.debug("memory recall completed", {
+			candidateCount: candidates.length,
+			conversationId: input.conversationId,
+			durationMs: Math.round(performance.now() - startedAt),
+			returnedCount: selected.length,
+			tokenCount: tokens.length,
+			usedEmbeddings: vectors.query !== undefined,
+		});
+		return selected;
 	}
 
 	/**
@@ -1212,6 +1251,7 @@ export class MemoryService {
 	async extractForConversation(
 		conversationId: string,
 	): Promise<{ candidates: number; written: number }> {
+		const startedAt = performance.now();
 		const database = this.#db();
 		const session = await this.#session(conversationId);
 		if (session === undefined || this.#policyService === undefined) {
@@ -1295,6 +1335,14 @@ export class MemoryService {
 				"ok",
 			);
 		}
+		this.#logger.debug("memory extraction completed", {
+			candidates: candidates.length,
+			conversationId: session.id,
+			durationMs: Math.round(performance.now() - startedAt),
+			extractor,
+			messageCount: chronological.length,
+			written,
+		});
 		return { candidates: candidates.length, written };
 	}
 

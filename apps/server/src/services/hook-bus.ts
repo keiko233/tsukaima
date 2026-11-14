@@ -28,12 +28,16 @@ export class HookBus {
 	async emit(name: PluginHookName, payload: unknown): Promise<void> {
 		const handlers = this.#handlers.get(name);
 		if (handlers === undefined) return;
+		this.#logger.trace("emitting plugin hook", {
+			handlerCount: handlers.size,
+			hook: name,
+		});
 		for (const handler of handlers) {
 			try {
 				await handler(payload);
 			} catch (error) {
 				this.#logger.warn("plugin hook failed", {
-					error: error instanceof Error ? error.message : String(error),
+					error,
 					hook: name,
 				});
 			}
@@ -45,14 +49,20 @@ export class HookBus {
 	 * value seen by the next handler. A throwing handler is logged and skipped.
 	 */
 	async transform(name: PluginHookName, payload: unknown): Promise<unknown> {
+		const handlers = this.#handlers.get(name);
+		if (handlers === undefined || handlers.size === 0) return payload;
+		this.#logger.trace("transforming plugin hook", {
+			handlerCount: handlers.size,
+			hook: name,
+		});
 		let current = payload;
-		for (const handler of this.#handlers.get(name) ?? []) {
+		for (const handler of handlers) {
 			try {
 				const next = await handler(current);
 				if (next !== undefined) current = next;
 			} catch (error) {
 				this.#logger.warn("plugin transform hook failed", {
-					error: error instanceof Error ? error.message : String(error),
+					error,
 					hook: name,
 				});
 			}

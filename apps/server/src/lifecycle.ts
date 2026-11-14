@@ -37,7 +37,14 @@ import type {
 	MessagePart,
 } from "@tsukaima/contracts";
 import { loadConfig, type TsukaimaConfig } from "./config.ts";
-import { createLogger, LogBuffer, type Logger } from "./logging.ts";
+import {
+	createDailyFileLogSink,
+	createLogger,
+	LogBuffer,
+	previewText,
+	type DailyFileLogSink,
+	type Logger,
+} from "./logging.ts";
 import { readRuntimeSettings, type RuntimeSettings } from "./runtime-settings.ts";
 import { builtinPlugins } from "./plugins/builtin.ts";
 import {
@@ -135,6 +142,9 @@ export class TsukaimaLifecycle {
 	private currentStage = "initialize";
 	private failureReason: string | undefined;
 	private readonly stopListeners = new Set<() => void>();
+	private readonly customLoggerProvided: boolean;
+	private dailyFileSink: DailyFileLogSink | undefined;
+	private removeFileSink: (() => void) | undefined;
 
 	conversationHost: PiDurableConversationHost | undefined;
 	domainDatabase: TsukaimaDatabase | undefined;
@@ -163,9 +173,11 @@ export class TsukaimaLifecycle {
 	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
 		this.config = config;
 		this.logLevel = config.logLevel;
+		this.customLoggerProvided = options?.logger !== undefined;
 		this.logger =
 			options?.logger ??
 			createLogger({
+				capacity: config.logBufferCapacity,
 				level: config.logLevel,
 				target: "tsukaima::server",
 			});
@@ -431,6 +443,25 @@ export class TsukaimaLifecycle {
 	async start(): Promise<void> {
 		this.transition("prepare-directories");
 		await mkdir(join(this.config.dataDir, "blobs"), { recursive: true });
+		if (
+			this.config.logDir !== undefined &&
+			!this.customLoggerProvided &&
+			this.dailyFileSink === undefined
+		) {
+			this.dailyFileSink = createDailyFileLogSink({
+				dir: this.config.logDir,
+				...(this.config.logRetentionDays === undefined
+					? {}
+					: { retentionDays: this.config.logRetentionDays }),
+			});
+			this.removeFileSink = this.logger.addSink(this.dailyFileSink.sink);
+			this.runtimeLog.debug("daily file log sink enabled", {
+				dir: this.config.logDir,
+				...(this.config.logRetentionDays === undefined
+					? {}
+					: { retentionDays: this.config.logRetentionDays }),
+			});
+		}
 		this.transition("durable-storage");
 		this.durableStorage = await openDurableStorage(join(this.config.dataDir, "durable.sqlite"));
 		this.transition("domain-database");
@@ -453,7 +484,15 @@ export class TsukaimaLifecycle {
 		await this.pluginMigrations.migrate(pluginMigrations);
 		this.transition("load-settings");
 		const settings = await readRuntimeSettings(this.domainDatabase);
-		this.setLogLevel(settings.logLevel);
+		if (this.config.logLevelFromEnv) {
+			this.setLogLevel(this.config.logLevel);
+			this.runtimeLog.debug("TSUKAIMA_LOG_LEVEL overrides persisted runtime setting", {
+				envLogLevel: this.config.logLevel,
+				persistedLogLevel: settings.logLevel,
+			});
+		} else {
+			this.setLogLevel(settings.logLevel);
+		}
 
 		// Plugins register model providers during setup, which happens later in startup. The
 		// host therefore prepares plugin surfaces first, then resolves the active provider.
@@ -466,6 +505,7 @@ export class TsukaimaLifecycle {
 		this.conversationHost = new PiDurableConversationHost({
 			contextProvider: this.contextProvider,
 			executionLock: this.executionLock,
+			logger: this.logger.child("tsukaima::core::host"),
 			model,
 			onActivityEvent: (event) => this.forwardActivityEvent(event),
 			onAnswer: async (answer) => {
@@ -521,6 +561,7 @@ export class TsukaimaLifecycle {
 		];
 
 		const conversationHost = this.conversationHost;
+		const toolLog = this.logger.child("tsukaima::server::tools");
 		const pluginTools =
 			conversationHost === undefined
 				? undefined
@@ -529,12 +570,18 @@ export class TsukaimaLifecycle {
 						(name, input, context) => this.pluginHost.invokeTool(name, input, context),
 						{
 							audit: (entry) => this.writeAudit(entry),
+							debug: (message, fields) => {
+								toolLog.debug(message, fields);
+							},
 							logger: (message, error) => {
 								this.runtimeLog.warn(message, {
 									error: error instanceof Error ? error.message : String(error),
 								});
 							},
 							policyContext: (tool, context) => this.pluginHost.toolPolicyContext(tool, context),
+							trace: (message, fields) => {
+								toolLog.trace(message, fields);
+							},
 						},
 					);
 		if (conversationHost !== undefined && pluginTools !== undefined) {
@@ -598,6 +645,11 @@ export class TsukaimaLifecycle {
 		const requestedProviderId = effectiveSettings.modelProviderId;
 		this.providerRestartRequired =
 			requestedProviderId !== undefined && requestedProviderId !== this.activeProviderId;
+		this.runtimeLog.debug("model port refreshed", {
+			modelId: model.modelId,
+			providerId: model.providerId,
+			providerRestartRequired: this.providerRestartRequired,
+		});
 	}
 
 	async applyRuntimeSettings(settings: RuntimeSettings): Promise<void> {
@@ -644,15 +696,29 @@ export class TsukaimaLifecycle {
 			model.models.getModel(model.providerId, modelId ?? model.modelId) ??
 			model.models.getModel(model.providerId, model.modelId);
 		if (selected === undefined) return undefined;
+		const startedAt = performance.now();
+		this.runtimeLog.trace("memory prompt completion started", {
+			modelId: selected.id,
+			promptChars: prompt.length,
+			promptPreview: previewText(prompt),
+			providerId: model.providerId,
+		});
 		const response = await model.models.completeSimple(selected, {
 			messages: [{ content: prompt, role: "user", timestamp: Date.now() }],
 		});
-		return response.content
+		const text = response.content
 			.filter(
 				(part): part is { readonly text: string; readonly type: "text" } => part.type === "text",
 			)
 			.map((part) => part.text)
 			.join("");
+		this.runtimeLog.debug("memory prompt completion finished", {
+			durationMs: Math.round(performance.now() - startedAt),
+			modelId: selected.id,
+			outputChars: text.length,
+			providerId: model.providerId,
+		});
+		return text;
 	}
 
 	/** Embed through the first configured plugin provider; silently degrades when absent. */
@@ -661,6 +727,7 @@ export class TsukaimaLifecycle {
 	): Promise<MemoryEmbeddingOutput | undefined> {
 		try {
 			for (const provider of this.pluginHost.modelProviders()) {
+				const startedAt = performance.now();
 				const result =
 					provider.embed !== undefined
 						? await provider.embed({ texts })
@@ -668,11 +735,21 @@ export class TsukaimaLifecycle {
 							? undefined
 							: await provider.embedding.embed({ texts });
 				if (result !== undefined) {
+					this.runtimeLog.debug("memory texts embedded", {
+						count: texts.length,
+						durationMs: Math.round(performance.now() - startedAt),
+						modelId: result.modelId,
+						providerId: provider.id,
+					});
 					return { modelId: result.modelId, vectors: result.vectors };
 				}
 			}
-		} catch {
+		} catch (error) {
 			// Embedding is optional; callers fall back to lexical/recency ranking.
+			this.runtimeLog.debug("memory embedding degraded to lexical fallback", {
+				count: texts.length,
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 		return undefined;
 	}
@@ -779,6 +856,11 @@ export class TsukaimaLifecycle {
 		if (part.sha256 !== undefined && /^[0-9a-f]{64}$/iu.test(part.sha256)) {
 			const existing = await this.media.findBySha(part.sha256);
 			if (existing !== undefined) {
+				this.runtimeLog.trace("inbound media reused from store", {
+					mediaId: existing.id,
+					sha256: existing.sha256,
+					type: part.type,
+				});
 				return {
 					...part,
 					mediaId: existing.id,
@@ -793,6 +875,12 @@ export class TsukaimaLifecycle {
 			kind: part.type === "sticker" ? "sticker" : "image",
 			...(part.mimeType === undefined ? {} : { mimeType: part.mimeType }),
 			source: "channel",
+		});
+		this.runtimeLog.debug("inbound media stored from channel url", {
+			mediaId: stored.id,
+			mimeType: stored.mimeType,
+			sizeBytes: stored.sizeBytes,
+			type: part.type,
 		});
 		return {
 			...part,
@@ -946,6 +1034,10 @@ export class TsukaimaLifecycle {
 		await this.durableStorage?.close(BACKGROUND_CONTEXT);
 		this.domainDatabase?.$client.close();
 		this.runtimeLog.info("lifecycle stopped");
+		this.removeFileSink?.();
+		this.removeFileSink = undefined;
+		this.dailyFileSink?.close();
+		this.dailyFileSink = undefined;
 	}
 }
 

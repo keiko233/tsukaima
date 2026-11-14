@@ -195,6 +195,13 @@ export class PluginTaskService {
 			.returning();
 		if (row === undefined) throw new Error("Task insert did not return a row");
 		const task = taskFromRow(row);
+		this.#logger?.debug("plugin task created", {
+			conversationId: task.conversationId,
+			dedupeKey: task.dedupeKey,
+			kind: task.kind,
+			pluginId,
+			taskId: task.id,
+		});
 		await this.#hooks?.emit("task.created", task);
 		this.#emit(task.id, { task, type: "created" });
 		return task;
@@ -374,6 +381,12 @@ export class PluginTaskService {
 				await this.#run(taskFromRow(claimed));
 				processed += 1;
 			}
+			if (processed > 0) {
+				this.#logger?.trace("plugin task tick processed", {
+					dueCount: due.length,
+					processed,
+				});
+			}
 			return processed;
 		} finally {
 			this.#ticking = false;
@@ -384,6 +397,14 @@ export class PluginTaskService {
 		const database = this.#requireDatabase();
 		const handler = this.#handlers.get(`${task.pluginId}:${task.kind}`);
 		const logs = [...task.logs, `${new Date().toISOString()} start ${task.kind}`];
+		const startedAt = performance.now();
+		this.#logger?.debug("plugin task started", {
+			attempt: task.attempts + 1,
+			conversationId: task.conversationId,
+			kind: task.kind,
+			pluginId: task.pluginId,
+			taskId: task.id,
+		});
 		const execute = async (): Promise<PluginTaskExecutionResult> => {
 			if (handler === undefined) return { outcome: { noHandler: true } };
 			return (await handler(task)) ?? {};
@@ -413,6 +434,14 @@ export class PluginTaskService {
 				.returning();
 			if (row === undefined) return;
 			const next = taskFromRow(row);
+			this.#logger?.debug("plugin task finished", {
+				durationMs: Math.round(performance.now() - startedAt),
+				kind: task.kind,
+				pluginId: task.pluginId,
+				repeat,
+				status: next.status,
+				taskId: task.id,
+			});
 			this.#emit(task.id, { task: next, type: repeat ? "updated" : "completed" });
 			await this.#hooks?.emit("task.completed", next);
 		} catch (error) {

@@ -28,7 +28,7 @@ import {
 	userAliases,
 } from "@tsukaima/db";
 import type { AuditEntry } from "@tsukaima/sdk";
-import type { Logger } from "../logging.ts";
+import { previewText, type Logger } from "../logging.ts";
 import type { ConversationPacingTracker } from "./conversation-pacing.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
 
@@ -171,6 +171,11 @@ export class ConversationRouter {
 		});
 		messageLog.debug("channel message accepted", {
 			conversationKind: message.conversationKey.kind,
+			partCount: message.parts.length,
+		});
+		messageLog.trace("inbound message content preview", {
+			preview: previewText(messageText(message.parts)),
+			senderId: message.sender.platformId,
 		});
 		try {
 			const host = this.#host();
@@ -226,6 +231,12 @@ export class ConversationRouter {
 				...(replyTarget === undefined ? {} : { replyTarget }),
 			});
 			this.#stats[trigger.classification] += 1;
+			messageLog.debug("conversation trigger classified", {
+				classification: trigger.classification,
+				recentActivity,
+				reason: trigger.reason,
+				sessionId: target.sessionId,
+			});
 
 			if (trigger.classification === "ignored") {
 				await this.#recordIgnored(message, target.sessionId, target.chatObjectId, trigger.reason);
@@ -261,6 +272,12 @@ export class ConversationRouter {
 				}
 				const cooldownMs =
 					this.#pacing?.remainingCooldownMs(target.durableConversationId, policy) ?? 0;
+				messageLog.debug("appending turn to durable conversation", {
+					classification: trigger.classification,
+					collectOnly: cooldownMs > 0,
+					cooldownMs,
+					durableConversationId: target.durableConversationId,
+				});
 				await host.append({
 					classification: trigger.classification,
 					collectOnly: cooldownMs > 0,
@@ -474,6 +491,10 @@ export class ConversationRouter {
 		if (!parsed.success) throw new Error("Invalid channel notice");
 		const value = parsed.data;
 		if (value.noticeType === "typing" && value.details?.persist !== true) {
+			this.#logger.trace("channel typing notice skipped", {
+				channelId: value.channelId,
+				noticeId: value.id,
+			});
 			return { duplicated: false, persisted: false };
 		}
 		const database = this.#requireDatabase();
@@ -520,6 +541,12 @@ export class ConversationRouter {
 			)
 			.limit(1);
 		if (existing.length > 0) {
+			this.#logger.trace("duplicate channel notice ignored", {
+				channelId: value.channelId,
+				noticeId: value.id,
+				noticeType: value.noticeType,
+				sessionId: target.sessionId,
+			});
 			return { duplicated: true, persisted: true, sessionId: target.sessionId };
 		}
 		const now = new Date().toISOString();
@@ -554,6 +581,13 @@ export class ConversationRouter {
 				.set({ updatedAt: now })
 				.where(eq(conversations.id, target.sessionId)),
 		]);
+		this.#logger.debug("channel notice persisted", {
+			channelId: value.channelId,
+			isSelfTarget: value.isSelfTarget ?? false,
+			noticeId: value.id,
+			noticeType: value.noticeType,
+			sessionId: target.sessionId,
+		});
 		return { duplicated: false, persisted: true, sessionId: target.sessionId };
 	}
 

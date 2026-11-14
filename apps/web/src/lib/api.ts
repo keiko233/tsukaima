@@ -10,6 +10,7 @@ import { runtimeUrl } from "./runtime-url";
  * Types are never declared here: they are re-exported from the contract, and the client/router
  * utilities are inferred from it, so the wire surface stays in lockstep with the server.
  */
+export { logLevels } from "@tsukaima/contracts";
 export type {
 	AuthStatus,
 	ChatSummary,

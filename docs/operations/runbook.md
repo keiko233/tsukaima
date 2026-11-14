@@ -57,7 +57,11 @@ Recommended:
 | `TSUKAIMA_WEB_ORIGIN`, `TSUKAIMA_TRUSTED_ORIGINS` | Browser origins accepted by Better Auth. |
 | `TSUKAIMA_TRUSTED_PROXIES` | Reverse proxies whose forwarded client IP headers may be trusted. |
 | `TSUKAIMA_AUTH_SECURE_COOKIES` | Defaults to `true` when `TSUKAIMA_PUBLIC_URL` is HTTPS. |
-| `TSUKAIMA_LOG_LEVEL` | `debug`, `info`, `warn`, or `error`. |
+| `TSUKAIMA_LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, or `error` (overrides persisted DB runtime setting on startup when explicitly set). |
+| `TSUKAIMA_LOG_BUFFER_CAPACITY` | In-memory log ring buffer size (default `5000`). |
+| `TSUKAIMA_LOG_FILE_ENABLED` | Set to `false` to disable daily date-chunked file logs (enabled by default). |
+| `TSUKAIMA_LOG_DIR` | Directory for `tsukaima-YYYY-MM-DD.log` files (default `<data>/logs`). |
+| `TSUKAIMA_LOG_RETENTION_DAYS` | Optional number of days to keep daily log files. |
 | `TSUKAIMA_BACKUP_DRILL_INTERVAL_MS` | Optional scheduled backup drill cadence; unset/`0` disables it. |
 | `TSUKAIMA_BACKUP_DRILL_ROOT` | Optional drill output root (default `<data>/backup-drills`). |
 

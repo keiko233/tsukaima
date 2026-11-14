@@ -98,11 +98,8 @@ describe("admin RPC", () => {
 			logs.entries.every(
 				(entry) =>
 					entry.text.includes("tsukaima::server") ||
-					entry.text.includes("openai-compatible") ||
-					entry.text.includes("proactive-scheduler") ||
-					entry.text.includes("self-iteration") ||
-					entry.text.includes("search-fetch") ||
-					entry.text.includes("sticker-meme"),
+					entry.text.includes("tsukaima::plugin::") ||
+					entry.text.includes("tsukaima::core::"),
 			),
 		).toBe(true);
 

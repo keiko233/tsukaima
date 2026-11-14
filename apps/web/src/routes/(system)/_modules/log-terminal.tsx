@@ -13,11 +13,6 @@ interface LogToken {
 	readonly style: CSSProperties | undefined;
 }
 
-interface LogTokenState {
-	readonly code: string;
-	readonly lines: readonly (readonly LogToken[])[];
-}
-
 let highlighterPromise: Promise<Highlighter> | null = null;
 
 function getHighlighter(): Promise<Highlighter> {
@@ -30,17 +25,31 @@ function getHighlighter(): Promise<Highlighter> {
 	return highlighterPromise;
 }
 
-function useAnsiLogTokens(code: string): readonly (readonly LogToken[])[] | null {
-	const [state, setState] = useState<LogTokenState | null>(null);
+const entryTokenCache = new WeakMap<LogEntry, readonly LogToken[]>();
+
+function toLogTokens(line: readonly { content: string; htmlStyle?: Record<string, string> }[]): readonly LogToken[] {
+	return line.map((token) => ({
+		content: token.content,
+		style:
+			token.htmlStyle === undefined
+				? undefined
+				: ({
+						...token.htmlStyle,
+						"--runtime-log-light-color": token.htmlStyle.color,
+					} as CSSProperties),
+	}));
+}
+
+function useAnsiLogTokens(entries: readonly LogEntry[]): readonly (readonly LogToken[] | undefined)[] {
+	const [version, setVersion] = useState(0);
 
 	useEffect(() => {
-		if (code.length === 0) {
-			setState({ code, lines: [] });
-			return;
-		}
+		const missing = entries.filter((entry) => !entryTokenCache.has(entry));
+		if (missing.length === 0) return;
 		let cancelled = false;
 		void getHighlighter().then((highlighter) => {
 			if (cancelled) return;
+			const code = missing.map((entry) => entry.ansi).join("\n");
 			const result = highlighter.codeToTokens(code, {
 				defaultColor: "light",
 				lang: "ansi",
@@ -49,34 +58,26 @@ function useAnsiLogTokens(code: string): readonly (readonly LogToken[])[] | null
 					light: LIGHT_THEME,
 				},
 			});
-			setState({
-				code,
-				lines: result.tokens.map((line) =>
-					line.map((token) => {
-						const htmlStyle =
-							"htmlStyle" in token
-								? (token.htmlStyle as Record<string, string> | undefined)
-								: undefined;
-						return {
-							content: token.content,
-							style:
-								htmlStyle === undefined
-									? undefined
-									: ({
-											...htmlStyle,
-											"--runtime-log-light-color": htmlStyle.color,
-										} as CSSProperties),
-						};
-					}),
-				),
-			});
+			for (const [index, entry] of missing.entries()) {
+				const line = result.tokens[index] as
+					| readonly { content: string; htmlStyle?: Record<string, string> }[]
+					| undefined;
+				if (line !== undefined) {
+					entryTokenCache.set(entry, toLogTokens(line));
+				}
+			}
+			setVersion((current) => current + 1);
 		});
 		return () => {
 			cancelled = true;
 		};
-	}, [code]);
+	}, [entries]);
 
-	return state?.code === code ? state.lines : null;
+	return useMemo(
+		() => entries.map((entry) => entryTokenCache.get(entry)),
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[entries, version],
+	);
 }
 
 export interface LogTerminalProps {
@@ -88,8 +89,7 @@ export interface LogTerminalProps {
 
 export function LogTerminal({ className, emptyLabel, entries, follow }: LogTerminalProps) {
 	const viewportRef = useRef<HTMLDivElement>(null);
-	const code = useMemo(() => entries.map((entry) => entry.ansi).join("\n"), [entries]);
-	const tokens = useAnsiLogTokens(code);
+	const tokens = useAnsiLogTokens(entries);
 
 	useEffect(() => {
 		if (!follow) return;

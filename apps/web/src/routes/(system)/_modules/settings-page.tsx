@@ -4,14 +4,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@tsukaima/ui/components/motion/select";
-import { orpc, type LogLevel } from "@/lib/api";
+import { logLevels as LOG_LEVELS, orpc, type LogLevel } from "@/lib/api";
 import { applyLocale } from "@/lib/locale";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { getLocale, locales, toLocale, type Locale } from "@/paraglide/runtime";
 import { SystemPage } from "./page-header";
 
-const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
 const LOCALE_LABELS: Record<Locale, string> = {
 	en: "English",
 	"zh-cn": "简体中文",
