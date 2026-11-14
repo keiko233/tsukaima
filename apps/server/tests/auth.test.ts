@@ -453,6 +453,7 @@ describe("admin auth", () => {
 			"requests/get": { requestId: "request-1" },
 			"requests/list": {},
 			"requests/respond": { action: "approve", requestId: "request-1" },
+			"sessions/contextStats": { sessionId: "session-1" },
 			"sessions/create": { chatObjectId: "chat-1", title: "Sample" },
 			"sessions/get": { sessionId: "session-1" },
 			"sessions/messages": { sessionId: "session-1" },

@@ -5,6 +5,7 @@ import {
 	type MessagePart,
 	type MessageSummary as ContractMessageSummary,
 	type RunStep,
+	type SessionContextStats,
 } from "@tsukaima/contracts";
 import {
 	chatObjects,
@@ -229,6 +230,59 @@ export async function getSession(
 		status: row.session.status,
 		title: row.session.title ?? row.session.id,
 		updatedAt: row.session.updatedAt,
+	};
+}
+
+function contextSectionLabel(key: string): string {
+	switch (key) {
+		case "tsukaima-persona":
+			return "Persona";
+		case "tsukaima-policy":
+			return "Policy";
+		case "tsukaima-memory":
+			return "Memories";
+		case "instructions":
+			return "Instructions";
+		case "system":
+			return "System";
+		default:
+			return key;
+	}
+}
+
+export async function getSessionContextStats(
+	lifecycle: TsukaimaLifecycle,
+	sessionId: string,
+): Promise<SessionContextStats | null> {
+	const database = requireDatabase(lifecycle);
+	const host = lifecycle.conversationHost;
+	if (host === undefined) throw new Error("Conversation host is not ready");
+	const [session] = await database
+		.select({ durableConversationId: conversations.durableConversationId })
+		.from(conversations)
+		.where(eq(conversations.id, sessionId))
+		.limit(1);
+	if (session === undefined) return null;
+
+	const policy = await lifecycle.conversationPolicy.effectivePolicy(sessionId);
+	const codingTools = lifecycle.pluginHost.modelToolNames("self-iteration");
+	const omittedTools = policy.capabilities.includes("coding") ? [] : codingTools;
+	const [inspection, contextDetails] = await Promise.all([
+		host.inspectConversationContext(session.durableConversationId, { omittedTools }),
+		lifecycle.contextProvider.inspectContext(session.durableConversationId),
+	]);
+	if (inspection === undefined) return null;
+
+	return {
+		...inspection,
+		memories: contextDetails.memories,
+		personaName: contextDetails.personaName,
+		sections: inspection.sections.map((section) => ({
+			key: section.key,
+			label: contextSectionLabel(section.key),
+			tokens: section.tokens,
+		})),
+		tools: inspection.tools.map((tool) => ({ ...tool })),
 	};
 }
 

@@ -7,6 +7,7 @@ import {
 	diagnosticsDataSchema,
 	type DiagnosticsData,
 	logSnapshotSchema,
+	sessionContextStatsSchema,
 } from "@tsukaima/contracts";
 import { auditLog } from "@tsukaima/db";
 import {
@@ -120,6 +121,14 @@ describe("admin RPC", () => {
 			sessionId: createdChat.sessionId,
 		})) as { id: string; title: string } | null;
 		expect(session).toEqual(expect.objectContaining({ id: createdChat.sessionId, title: "Main" }));
+		const contextStats = sessionContextStatsSchema.parse(
+			await request("admin/sessions/contextStats", { sessionId: createdChat.sessionId }),
+		);
+		expect(contextStats.contextWindow).toBeGreaterThan(0);
+		expect(contextStats.usedTokens).toBeGreaterThanOrEqual(0);
+		expect(
+			await request("admin/sessions/contextStats", { sessionId: "missing-session" }),
+		).toBeNull();
 
 		const plugins = await request("admin/plugins/list");
 		expect(Array.isArray(plugins)).toBe(true);

@@ -6,6 +6,7 @@ import {
 	getGroup,
 	getRequest,
 	getSession,
+	getSessionContextStats,
 	getUser,
 	listChats,
 	listGroups,
@@ -430,6 +431,9 @@ export const adminRouter = {
 		),
 	},
 	sessions: {
+		contextStats: adminBase.admin.sessions.contextStats.handler(async ({ context, input }) =>
+			getSessionContextStats(context.lifecycle, input.sessionId),
+		),
 		create: adminBase.admin.sessions.create.handler(async ({ context, input }) =>
 			createSession(context.lifecycle, input.chatObjectId, input.title),
 		),
