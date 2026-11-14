@@ -15,6 +15,14 @@ export {
 	STICKER_MEME_RPC_PREFIX,
 	stickerMemeManifest,
 } from "./manifest.ts";
+export {
+	createAnimatedConverter,
+	defaultAnimatedConverter,
+	tgsToGif,
+	webmToGif,
+	type AnimatedConversionOptions,
+	type AnimatedConverter,
+} from "./animated.ts";
 export { DEFAULT_LEARNING_SETTINGS, LearningService, type LearningSettings } from "./learning.ts";
 export {
 	bundleFilesResponse,
@@ -22,8 +30,17 @@ export {
 	parsePackManifest,
 	StickerImportService,
 	type StickerExportResult,
+	type StickerImportProgress,
 	type StickerImportReport,
 } from "./import-service.ts";
+export {
+	StickerProgressTracker,
+	type StickerJobKind,
+	type StickerJobProgress,
+	type StickerJobStage,
+	type StickerJobStatus,
+	type StickerProgressUpdate,
+} from "./progress.ts";
 export {
 	createStickerReplyTransform,
 	splitStickerDirectives,
@@ -40,7 +57,32 @@ export {
 	type StickerSearchInput,
 } from "./selection.ts";
 export { registerStickerRpc } from "./rpc.ts";
+export {
+	classifyStickerSemantics,
+	createSemanticClassifier,
+	extractEmojis,
+	HeuristicSemanticClassifier,
+	mergeSemanticProfiles,
+	STICKER_SEMANTIC_CATEGORIES,
+	VisionSemanticClassifier,
+	type SemanticCategory,
+	type SemanticKind,
+	type SemanticLogger,
+	type StickerSemanticClassifier,
+	type StickerSemanticInput,
+	type VisionSemanticOptions,
+} from "./semantic.ts";
 export { registerStickerTools } from "./tools.ts";
+export { TelegramStickerClient, parseTelegramStickerSetReference } from "./telegram.ts";
+export {
+	TelegramStickerImportService,
+	telegramPackId,
+	type TelegramAnimatedFormat,
+	type TelegramImportProgress,
+	type TelegramStickerImportOptions,
+	type TelegramStickerImportReport,
+	type TelegramVideoFormat,
+} from "./telegram-import.ts";
 export * from "./domain.ts";
 
 interface StickerRuntime {
@@ -115,7 +157,12 @@ export const stickerMemePlugin: ElainaPlugin = {
 		const runtime: StickerRuntime = { disposers: [] };
 		runtimes.set(context, runtime);
 		registerStickerTools(context, selection);
-		registerStickerRpc(context, { importService, learning, repository });
+		registerStickerRpc(context, {
+			importService,
+			learning,
+			onSettled: () => updateStatus(context, repository),
+			repository,
+		});
 		runtime.disposers.push(
 			context.events.on("message.received", async (payload) => {
 				try {

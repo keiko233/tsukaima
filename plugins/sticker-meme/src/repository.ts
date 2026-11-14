@@ -1,14 +1,17 @@
 import type { PluginDatabaseApi } from "@elaina/sdk";
 import {
+	EMPTY_SEMANTIC_PROFILE,
 	normalizeLabels,
 	normalizeText,
 	parseJson,
+	parseSemanticProfile,
 	stableId,
 	type StickerItem,
 	type StickerPack,
 	type StickerPackInput,
 	type StickerPackSource,
 	type StickerReviewStatus,
+	type StickerSemanticProfile,
 } from "./domain.ts";
 
 interface PackRow {
@@ -40,6 +43,7 @@ interface ItemRow {
 	review_status: StickerReviewStatus;
 	revoked_at: string | null;
 	score: number;
+	semantic_json: string;
 	source_conversation_id: string | null;
 	updated_at: string;
 	use_count: number;
@@ -69,6 +73,7 @@ export interface StickerItemInput {
 	readonly enabled?: boolean;
 	readonly reviewStatus?: StickerReviewStatus;
 	readonly score?: number;
+	readonly semantic?: StickerSemanticProfile;
 	readonly sourceConversationId?: string | null;
 	readonly revokedAt?: string | null;
 }
@@ -81,6 +86,7 @@ export interface StickerItemPatch {
 	readonly enabled?: boolean;
 	readonly reviewStatus?: StickerReviewStatus;
 	readonly score?: number;
+	readonly semantic?: StickerSemanticProfile;
 	readonly revokedAt?: string | null;
 }
 
@@ -118,6 +124,7 @@ const itemFromRow = (row: ItemRow): StickerItem => ({
 	reviewStatus: row.review_status,
 	revokedAt: row.revoked_at,
 	score: row.score,
+	semantic: parseSemanticProfile(parseJson<unknown>(row.semantic_json, EMPTY_SEMANTIC_PROFILE)),
 	sourceConversationId: row.source_conversation_id,
 	updatedAt: row.updated_at,
 	useCount: row.use_count,
@@ -252,12 +259,13 @@ export class StickerRepository {
 			stableId("item", `${input.packId}:${input.name}:${input.hash}:${input.mediaId ?? ""}`);
 		const keywords = normalizeLabels(input.keywords).values;
 		const emotions = normalizeLabels(input.emotions).values;
+		const semantic = input.semantic ?? EMPTY_SEMANTIC_PROFILE;
 		await this.#database.query(
 			`INSERT INTO plugin_sticker_meme_items
 			(id, pack_id, name, description, keywords_json, emotions_json, mime_type, media_id, hash,
-			 width, height, enabled, review_status, score, use_count, last_used_at,
+			 width, height, enabled, review_status, score, semantic_json, use_count, last_used_at,
 			 source_conversation_id, revoked_at, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				pack_id = excluded.pack_id,
 				name = excluded.name,
@@ -272,6 +280,7 @@ export class StickerRepository {
 				enabled = excluded.enabled,
 				review_status = excluded.review_status,
 				score = excluded.score,
+				semantic_json = excluded.semantic_json,
 				source_conversation_id = excluded.source_conversation_id,
 				revoked_at = excluded.revoked_at,
 				updated_at = excluded.updated_at`,
@@ -290,6 +299,7 @@ export class StickerRepository {
 				input.enabled === false ? 0 : 1,
 				input.reviewStatus ?? "pending",
 				input.score ?? 1,
+				JSON.stringify(semantic),
 				input.sourceConversationId ?? null,
 				input.revokedAt ?? null,
 				now,
@@ -308,10 +318,11 @@ export class StickerRepository {
 			patch.keywords === undefined ? existing.keywords : normalizeLabels(patch.keywords).values;
 		const emotions =
 			patch.emotions === undefined ? existing.emotions : normalizeLabels(patch.emotions).values;
+		const semantic = patch.semantic ?? existing.semantic;
 		await this.#database.query(
 			`UPDATE plugin_sticker_meme_items SET
 				name = ?, description = ?, keywords_json = ?, emotions_json = ?, enabled = ?,
-				review_status = ?, score = ?, revoked_at = ?, updated_at = ?
+				review_status = ?, score = ?, semantic_json = ?, revoked_at = ?, updated_at = ?
 			WHERE id = ?`,
 			[
 				patch.name ?? existing.name,
@@ -321,6 +332,7 @@ export class StickerRepository {
 				(patch.enabled ?? existing.enabled) ? 1 : 0,
 				patch.reviewStatus ?? existing.reviewStatus,
 				patch.score ?? existing.score,
+				JSON.stringify(semantic),
 				patch.revokedAt === undefined ? existing.revokedAt : patch.revokedAt,
 				new Date(this.#now()).toISOString(),
 				id,

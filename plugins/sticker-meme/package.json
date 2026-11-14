@@ -11,7 +11,14 @@
 		"@elaina/sdk": "workspace:*",
 		"@elaina/ui": "workspace:*",
 		"@inlang/paraglide-js": "^3.2.2",
+		"canvas": "^3.2.3",
+		"emojilib": "^4.0.3",
+		"gifenc": "^1.0.3",
+		"grammy": "^1.46.0",
+		"jsdom": "^26.1.0",
+		"lottie-web": "^5.13.0",
 		"lucide-react": "^1.72.0",
+		"openai": "^7.19.0",
 		"zod": "4.6.7"
 	},
 	"devDependencies": {

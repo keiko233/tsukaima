@@ -21,6 +21,7 @@ export interface StickerCandidate {
 	readonly height: number | null;
 	readonly itemId: string;
 	readonly keywords: readonly string[];
+	readonly labels: readonly string[];
 	readonly lastUsedAt: string | null;
 	readonly mimeType: string;
 	readonly name: string;
@@ -62,6 +63,7 @@ function candidate(item: StickerItem, pack: StickerPack): StickerCandidate {
 		height: item.height,
 		itemId: item.id,
 		keywords: [...item.keywords],
+		labels: [...item.semantic.labels],
 		lastUsedAt: item.lastUsedAt,
 		mimeType: item.mimeType,
 		name: sanitizeModelText(item.name),
@@ -81,7 +83,9 @@ function textMatches(item: StickerItem, query: string): boolean {
 	const haystacks = [
 		normalizeLabel(item.name),
 		normalizeLabel(item.description),
+		normalizeLabel(item.semantic.description),
 		...item.keywords.map(normalizeLabel),
+		...item.semantic.labels.map(normalizeLabel),
 	];
 	return haystacks.some((value) => value.includes(normalizedQuery));
 }
@@ -117,7 +121,11 @@ export function rankStickerItem(
 		const keywordScores = item.keywords.map(normalizeLabel);
 		if (keywordScores.includes(query)) score += 100;
 		else if (keywordScores.some((keyword) => keyword.includes(query))) score += 45;
+		const semanticScores = item.semantic.labels.map(normalizeLabel);
+		if (semanticScores.includes(query)) score += 80;
+		else if (semanticScores.some((label) => label.includes(query))) score += 35;
 		if (normalizeLabel(item.description).includes(query)) score += 20;
+		if (normalizeLabel(item.semantic.description).includes(query)) score += 18;
 	}
 	if (emotion.length > 0) score += 40;
 	if (input.personaId !== undefined) {
