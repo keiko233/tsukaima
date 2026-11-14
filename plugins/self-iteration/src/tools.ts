@@ -1,6 +1,7 @@
 import type { PluginContext, ToolInvocationContext, PluginTool, ToolResult } from "@elaina/sdk";
 import type { StructuredEdit } from "@elaina/coding";
 import { SELF_ITERATION_PLUGIN_ID } from "./domain.ts";
+import { elapsedMs, preview, scopedLogger, type ScopedLogger } from "./log.ts";
 import type { SelfIterationService } from "./service.ts";
 
 const text = (value: unknown): ToolResult => ({
@@ -65,21 +66,36 @@ const BASE_POLICY = {
 /** Run one tool, auditing success/failure in addition to the service's own audit entries. */
 async function invoke(
 	context: PluginContext,
+	log: ScopedLogger,
 	name: string,
 	input: Record<string, unknown>,
 	invocation: ToolInvocationContext,
 	run: () => Promise<unknown>,
 ): Promise<ToolResult> {
+	const startedAt = performance.now();
+	const summary = summarize(input);
+	log.trace("tool invoked", {
+		conversationId: invocation.conversationId,
+		input: preview(summary),
+		tool: name,
+		userId: invocation.userId,
+	});
 	try {
 		const result = await run();
 		await context.audit?.record({
 			action: `${name}.invoke`,
 			actorId: invocation.userId ?? "agent",
 			actorKind: invocation.userId === undefined ? "agent" : "user",
-			payload: { conversationId: invocation.conversationId, input: summarize(input) },
+			payload: { conversationId: invocation.conversationId, input: summary },
 			result: "ok",
 			...(typeof input.taskId === "string" ? { targetId: input.taskId } : {}),
 			targetKind: "coding-task",
+		});
+		log.debug("tool completed", {
+			durationMs: elapsedMs(startedAt),
+			outcome: "ok",
+			taskId: typeof input.taskId === "string" ? input.taskId : undefined,
+			tool: name,
 		});
 		return text(result);
 	} catch (error) {
@@ -88,11 +104,17 @@ async function invoke(
 			action: `${name}.invoke`,
 			actorId: invocation.userId ?? "agent",
 			actorKind: invocation.userId === undefined ? "agent" : "user",
-			payload: { conversationId: invocation.conversationId, input: summarize(input) },
+			payload: { conversationId: invocation.conversationId, input: summary },
 			reason: message,
 			result: "failed",
 			...(typeof input.taskId === "string" ? { targetId: input.taskId } : {}),
 			targetKind: "coding-task",
+		});
+		log.error("tool failed", {
+			durationMs: elapsedMs(startedAt),
+			error: message,
+			taskId: typeof input.taskId === "string" ? input.taskId : undefined,
+			tool: name,
 		});
 		return text({ error: message });
 	}
@@ -163,6 +185,8 @@ export function registerSelfIterationTools(
 	context: PluginContext,
 	service: SelfIterationService,
 ): void {
+	const log = scopedLogger(context.logger, "tools");
+
 	context.tools.register(
 		tool(
 			"analyze",
@@ -182,7 +206,7 @@ export function registerSelfIterationTools(
 			["coding.read"],
 			60_000,
 			async (input, invocation) =>
-				invoke(context, "self-iteration.analyze", input, invocation, async () =>
+				invoke(context, log, "self-iteration.analyze", input, invocation, async () =>
 					service.analyze({
 						...taskInput(input, invocation),
 						action: input.action === "search" || input.action === "test" ? input.action : "read",
@@ -218,7 +242,7 @@ export function registerSelfIterationTools(
 			["coding.execute"],
 			60_000,
 			async (input, invocation) =>
-				invoke(context, "self-iteration.worktree", input, invocation, async () =>
+				invoke(context, log, "self-iteration.worktree", input, invocation, async () =>
 					service.worktree({
 						...taskInput(input, invocation),
 						...(stringValue(input, "baseRef") === undefined
@@ -258,7 +282,7 @@ export function registerSelfIterationTools(
 			["coding.execute"],
 			60_000,
 			async (input, invocation) =>
-				invoke(context, "self-iteration.edit", input, invocation, async () => {
+				invoke(context, log, "self-iteration.edit", input, invocation, async () => {
 					const edit = structuredEdit(input);
 					return await service.edit({ ...taskInput(input, invocation), edit });
 				}),
@@ -281,7 +305,7 @@ export function registerSelfIterationTools(
 			["coding.execute"],
 			120_000,
 			async (input, invocation) =>
-				invoke(context, "self-iteration.test", input, invocation, async () =>
+				invoke(context, log, "self-iteration.test", input, invocation, async () =>
 					service.test({
 						...taskInput(input, invocation),
 						args: stringArray(input, "args") ?? [],
@@ -311,7 +335,7 @@ export function registerSelfIterationTools(
 			["coding.execute"],
 			180_000,
 			async (input, invocation) =>
-				invoke(context, "self-iteration.build", input, invocation, async () =>
+				invoke(context, log, "self-iteration.build", input, invocation, async () =>
 					service.build({
 						...taskInput(input, invocation),
 						args: stringArray(input, "args") ?? [],
@@ -331,7 +355,7 @@ export function registerSelfIterationTools(
 			["coding.execute"],
 			60_000,
 			async (input, invocation) =>
-				invoke(context, "self-iteration.diff", input, invocation, async () =>
+				invoke(context, log, "self-iteration.diff", input, invocation, async () =>
 					service.diff(taskInput(input, invocation)),
 				),
 		),
@@ -362,7 +386,7 @@ export function registerSelfIterationTools(
 			["coding.execute", "tasks.create"],
 			60_000,
 			async (input, invocation) =>
-				invoke(context, "self-iteration.propose", input, invocation, async () =>
+				invoke(context, log, "self-iteration.propose", input, invocation, async () =>
 					service.propose({
 						...taskInput(input, invocation),
 						...(stringValue(input, "title") === undefined
@@ -420,7 +444,7 @@ export function registerSelfIterationTools(
 			["coding.read"],
 			30_000,
 			async (input, invocation) =>
-				invoke(context, "self-iteration.status", input, invocation, async () => {
+				invoke(context, log, "self-iteration.status", input, invocation, async () => {
 					const taskId = stringValue(input, "taskId");
 					if (taskId === undefined) throw new Error("taskId_required");
 					const bundle = await service.status(taskId);
@@ -429,7 +453,7 @@ export function registerSelfIterationTools(
 						artifacts: bundle.task.artifacts,
 						deployments: bundle.deployments,
 						diff: bundle.task.artifacts.filter((artifact) => artifact.kind === "diff"),
-						errors: bundle.task.logs.filter((log) => log.level === "error"),
+						errors: bundle.task.logs.filter((entry) => entry.level === "error"),
 						graph: bundle.graph,
 						logs: bundle.task.logs,
 						mode: bundle.task.mode,

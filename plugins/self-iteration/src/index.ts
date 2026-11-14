@@ -5,6 +5,7 @@ import {
 	SELF_ITERATION_PLUGIN_ID,
 } from "./domain.ts";
 import { SELF_ITERATION_MANIFEST } from "./manifest.ts";
+import { elapsedMs } from "./log.ts";
 import { registerSelfIterationRpc } from "./rpc.ts";
 import { SelfIterationService } from "./service.ts";
 import { registerSelfIterationTools } from "./tools.ts";
@@ -54,6 +55,10 @@ async function updateStatus(context: PluginContext, service: SelfIterationServic
 export const selfIterationPlugin: ElainaPlugin = {
 	manifest: SELF_ITERATION_MANIFEST,
 	async setup(context) {
+		const startedAt = performance.now();
+		context.logger.debug("self-iteration setup starting", {
+			pluginId: SELF_ITERATION_PLUGIN_ID,
+		});
 		const binding = context.dependencies?.get<SelfIterationHostBinding>(
 			SELF_ITERATION_HOST_BINDING,
 		);
@@ -77,6 +82,7 @@ export const selfIterationPlugin: ElainaPlugin = {
 		registerSelfIterationRpc(context, service);
 		await updateStatus(context, service);
 		context.logger.info("self-iteration ready", {
+			durationMs: elapsedMs(startedAt),
 			pluginId: SELF_ITERATION_PLUGIN_ID,
 			repositoryRoot: binding.repositoryRoot,
 		});
@@ -84,6 +90,9 @@ export const selfIterationPlugin: ElainaPlugin = {
 	async teardown(context) {
 		runtimes.delete(context);
 		context.ui.setStatus(null);
+		context.logger.debug("self-iteration teardown", {
+			pluginId: SELF_ITERATION_PLUGIN_ID,
+		});
 	},
 };
 
