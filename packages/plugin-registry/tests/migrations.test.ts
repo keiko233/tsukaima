@@ -65,6 +65,25 @@ describe("plugin migration registry", () => {
 		).toHaveLength(1);
 	});
 
+	test("repairs ledger rows recorded under legacy file-stem versions", async () => {
+		const { databases, registry } = await createRegistry();
+		await registry.run("demo", migrations);
+		const database = await databases.open("demo");
+		database.exec(
+			"UPDATE _elaina_plugin_migrations SET version = '1.0.0_create_items' WHERE version = '1.0.0'",
+		);
+		database.exec(
+			"UPDATE _elaina_plugin_migrations SET version = '1.1.0_add_note' WHERE version = '1.1.0'",
+		);
+
+		const result = await registry.run("demo", migrations);
+		expect(result.applied).toEqual([]);
+		expect((await registry.list("demo")).map((record) => record.version)).toEqual([
+			"1.0.0",
+			"1.1.0",
+		]);
+	});
+
 	test("rejects duplicate, regressive, and checksum-drifted versions", async () => {
 		const { registry } = await createRegistry();
 		await expect(registry.run("demo", [migrations[0]!, migrations[0]!])).rejects.toBeInstanceOf(

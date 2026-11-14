@@ -194,7 +194,7 @@ export class MigrationRegistry {
 		return await withMigrationLock(async () => {
 			const database = await this.#databases.open(pluginId);
 			ensureLedger(database);
-			const existing = readLedger(database);
+			const existing = this.#normalizeLegacyVersions(database, validated, readLedger(database));
 			const plan = this.#plan(pluginId, validated, existing);
 			const skipped = validated
 				.filter((migration) => !plan.some((pending) => pending.version === migration.version))
@@ -319,6 +319,56 @@ export class MigrationRegistry {
 				? { targetVersion: versionOrOptions }
 				: (versionOrOptions ?? {}),
 		);
+	}
+
+	/**
+	 * Early plugin builds recorded the whole file stem (or a truncated label) instead of the
+	 * numeric version prefix, then renamed the files. The SQL and checksum were identical, so
+	 * repair those rows by checksum rather than reporting a bogus "older than applied" error or
+	 * re-running a non-idempotent migration.
+	 */
+	#normalizeLegacyVersions(
+		database: PluginDatabaseConnection,
+		migrations: readonly PluginMigration[],
+		existing: readonly LedgerRow[],
+	): readonly LedgerRow[] {
+		const declared = new Set(migrations.map((migration) => migration.version));
+		const versionByChecksum = new Map<string, string>();
+		const ambiguous = new Set<string>();
+		for (const migration of migrations) {
+			const checksum = migrationChecksum(migration.sql);
+			const current = versionByChecksum.get(checksum);
+			if (current !== undefined && current !== migration.version) ambiguous.add(checksum);
+			else versionByChecksum.set(checksum, migration.version);
+		}
+		for (const checksum of ambiguous) versionByChecksum.delete(checksum);
+
+		const present = new Set(existing.map((row) => row.version));
+		const normalized: LedgerRow[] = [];
+		for (const row of existing) {
+			const target = declared.has(row.version) ? undefined : versionByChecksum.get(row.checksum);
+			if (target === undefined || present.has(target)) {
+				normalized.push(row);
+				continue;
+			}
+			// Only relabel a row that is the same version under another spelling. Identical SQL
+			// under a genuinely new version must still run (and fail or apply as usual).
+			const sameVersion = compareMigrationVersions(row.version, target) === 0;
+			const stemAlias =
+				row.version.startsWith(`${target}_`) || target.startsWith(`${row.version}_`);
+			if (!sameVersion && !stemAlias) {
+				normalized.push(row);
+				continue;
+			}
+			database.query(`UPDATE ${LEDGER_TABLE} SET version = ? WHERE version = ?`, [
+				target,
+				row.version,
+			]);
+			present.delete(row.version);
+			present.add(target);
+			normalized.push({ ...row, version: target });
+		}
+		return normalized;
 	}
 
 	#validate(pluginId: string, migrations: readonly PluginMigration[]): readonly PluginMigration[] {
