@@ -1,3 +1,4 @@
+import type { PluginLogger } from "@elaina/sdk";
 import type { ProviderRateLimit } from "./domain.ts";
 
 export type GovernorBlockReason = "cooldown" | "rate_limited";
@@ -28,6 +29,7 @@ interface ProviderState {
 export interface GovernorOptions {
 	readonly cooldownMs: number;
 	readonly failureThreshold: number;
+	readonly logger?: PluginLogger;
 	readonly now?: () => number;
 }
 
@@ -41,12 +43,14 @@ const HOUR = 3_600_000;
 export class ProviderGovernor {
 	readonly #cooldownMs: number;
 	readonly #failureThreshold: number;
+	readonly #logger: PluginLogger | undefined;
 	readonly #now: () => number;
 	readonly #states = new Map<string, ProviderState>();
 
 	constructor(options: GovernorOptions) {
 		this.#cooldownMs = Math.max(1, Math.floor(options.cooldownMs));
 		this.#failureThreshold = Math.max(1, Math.floor(options.failureThreshold));
+		this.#logger = options.logger;
 		this.#now = options.now ?? Date.now;
 	}
 
@@ -55,6 +59,11 @@ export class ProviderGovernor {
 			perHour: Math.max(1, Math.floor(limit.perHour)),
 			perMinute: Math.max(1, Math.floor(limit.perMinute)),
 		};
+		this.#logger?.trace("provider rate limit set", {
+			perHour: this.#state(providerId).limit.perHour,
+			perMinute: this.#state(providerId).limit.perMinute,
+			providerId,
+		});
 	}
 
 	getLimit(providerId: string): ProviderRateLimit {
@@ -66,40 +75,61 @@ export class ProviderGovernor {
 		const now = this.#now();
 		const state = this.#state(providerId);
 		if (state.cooldownUntilMs > now) {
-			return {
-				ok: false,
-				reason: "cooldown",
-				retryAfterMs: state.cooldownUntilMs - now,
-			};
+			const retryAfterMs = state.cooldownUntilMs - now;
+			this.#logger?.trace("provider cooldown wait", {
+				providerId,
+				retryAfterMs,
+				skipReason: "cooldown",
+			});
+			return { ok: false, reason: "cooldown", retryAfterMs };
 		}
 		this.#prune(state, now);
 		const usedMinute = state.hits.filter((hit) => hit > now - MINUTE).length;
 		const usedHour = state.hits.length;
 		const minuteRetry = this.#retryAfter(state, now, MINUTE, state.limit.perMinute);
 		if (usedMinute >= state.limit.perMinute) {
-			return {
-				ok: false,
-				reason: "rate_limited",
-				retryAfterMs: Math.max(1_000, (minuteRetry ?? now) - now),
-			};
+			const retryAfterMs = Math.max(1_000, (minuteRetry ?? now) - now);
+			this.#logger?.trace("provider rate limit wait", {
+				limit: state.limit.perMinute,
+				providerId,
+				retryAfterMs,
+				skipReason: "rate_limited",
+				used: usedMinute,
+				window: "minute",
+			});
+			return { ok: false, reason: "rate_limited", retryAfterMs };
 		}
 		if (usedHour >= state.limit.perHour) {
 			const hourRetry = this.#retryAfter(state, now, HOUR, state.limit.perHour);
-			return {
-				ok: false,
-				reason: "rate_limited",
-				retryAfterMs: Math.max(1_000, (hourRetry ?? now) - now),
-			};
+			const retryAfterMs = Math.max(1_000, (hourRetry ?? now) - now);
+			this.#logger?.trace("provider rate limit wait", {
+				limit: state.limit.perHour,
+				providerId,
+				retryAfterMs,
+				skipReason: "rate_limited",
+				used: usedHour,
+				window: "hour",
+			});
+			return { ok: false, reason: "rate_limited", retryAfterMs };
 		}
 		state.hits.push(now);
+		this.#logger?.trace("provider attempt allowed", {
+			providerId,
+			usedHour: state.hits.length,
+			usedMinute: usedMinute + 1,
+		});
 		return { ok: true };
 	}
 
 	recordSuccess(providerId: string): void {
 		const state = this.#state(providerId);
+		const recovered = state.failures > 0 || state.cooldownUntilMs > 0;
 		state.failures = 0;
 		state.cooldownUntilMs = 0;
 		delete state.lastError;
+		if (recovered) {
+			this.#logger?.debug("provider circuit closed", { providerId });
+		}
 	}
 
 	recordFailure(providerId: string, error: unknown): void {
@@ -108,7 +138,20 @@ export class ProviderGovernor {
 		state.lastError = error instanceof Error ? error.message : String(error);
 		if (state.failures >= this.#failureThreshold) {
 			state.cooldownUntilMs = this.#now() + this.#cooldownMs;
+			// Never log the upstream message here: it is not redacted at this layer.
+			this.#logger?.warn("provider circuit opened", {
+				cooldownMs: this.#cooldownMs,
+				failureThreshold: this.#failureThreshold,
+				failures: state.failures,
+				providerId,
+			});
+			return;
 		}
+		this.#logger?.trace("provider attempt failed", {
+			failures: state.failures,
+			providerId,
+			remainingFailures: this.#failureThreshold - state.failures,
+		});
 	}
 
 	reset(providerId?: string): void {
@@ -118,6 +161,7 @@ export class ProviderGovernor {
 				state.failures = 0;
 				delete state.lastError;
 			}
+			this.#logger?.debug("provider circuits reset", { providers: this.#states.size });
 			return;
 		}
 		const state = this.#states.get(providerId);
@@ -125,6 +169,7 @@ export class ProviderGovernor {
 		state.cooldownUntilMs = 0;
 		state.failures = 0;
 		delete state.lastError;
+		this.#logger?.debug("provider circuit reset", { providerId });
 	}
 
 	status(providerId: string): ProviderRuntimeStatus {

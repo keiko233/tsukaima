@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PluginAuditApi } from "@elaina/sdk";
+import type { PluginAuditApi, PluginLogger } from "@elaina/sdk";
 import { SnapshotCache } from "./cache.ts";
 import {
 	MAX_RESULTS,
@@ -15,6 +15,7 @@ import {
 import { SearchEngine, type SearchAttempt, type SearchOutcome } from "./engine.ts";
 import { DEFAULT_FETCH_POLICY, SafeFetcher, type FetchPolicy } from "./fetch.ts";
 import { ProviderGovernor, type ProviderRuntimeStatus } from "./governor.ts";
+import { elapsedMs, errorSummary, hostOf, sanitizedUrl } from "./logging.ts";
 import { normalizeSearchPolicy, type SearchPolicy } from "./policy.ts";
 import { redactSecretText, redactSecrets } from "./redaction.ts";
 import { SafeFetchError } from "./url-policy.ts";
@@ -51,6 +52,7 @@ export interface SearchFetchServiceOptions {
 	readonly engine: SearchEngine;
 	readonly fetcher: SafeFetcher;
 	readonly governor: ProviderGovernor;
+	readonly logger?: PluginLogger;
 	readonly now?: () => number;
 	readonly onPolicyChange?: (policy: SearchPolicy) => Promise<void> | void;
 	readonly policy: SearchPolicy;
@@ -112,6 +114,7 @@ export class SearchFetchService {
 	readonly #engine: SearchEngine;
 	readonly #fetcher: SafeFetcher;
 	readonly #governor: ProviderGovernor;
+	readonly #logger: PluginLogger | undefined;
 	readonly #now: () => number;
 	readonly #onPolicyChange: ((policy: SearchPolicy) => Promise<void> | void) | undefined;
 	#policy: SearchPolicy;
@@ -123,10 +126,12 @@ export class SearchFetchService {
 		this.#engine = options.engine;
 		this.#fetcher = options.fetcher;
 		this.#governor = options.governor;
+		this.#logger = options.logger;
 		this.#now = options.now ?? Date.now;
 		this.#onPolicyChange = options.onPolicyChange;
 		this.#policy = options.policy;
 		this.#secrets = options.secrets;
+		this.#applyRedactor();
 		this.#applyRuntimePolicy();
 	}
 
@@ -140,12 +145,15 @@ export class SearchFetchService {
 
 	updateSecrets(secrets: readonly string[]): void {
 		this.#secrets = [...secrets];
+		this.#applyRedactor();
+		this.#logger?.debug("search-fetch secrets updated", { configuredKeyCount: secrets.length });
 	}
 
 	async search(
 		raw: unknown,
 		options: { readonly multi?: boolean; readonly providers?: readonly string[] } = {},
 	): Promise<SearchOutcome> {
+		const startedAt = performance.now();
 		const input = normalizeRequest(raw, this.#policy);
 		const outcome = redactOutcome(
 			await this.#engine.search(input, {
@@ -155,6 +163,17 @@ export class SearchFetchService {
 			this.#secrets,
 		);
 		await this.#recordSearch(input, options, outcome);
+		this.#logger?.debug("search completed", {
+			attemptCount: outcome.attempts.length,
+			durationMs: elapsedMs(startedAt),
+			...(outcome.error === undefined ? {} : { error: outcome.error }),
+			maxResults: input.maxResults ?? null,
+			mode: options.multi === true ? "multi" : "fallback",
+			providerIds: outcome.providerIds,
+			queryChars: input.query.length,
+			resultCount: outcome.results.length,
+			status: outcome.status,
+		});
 		return outcome;
 	}
 
@@ -162,7 +181,9 @@ export class SearchFetchService {
 		rawUrl: unknown,
 		conversationId?: string,
 	): Promise<{ readonly fetchId: string } & Awaited<ReturnType<SafeFetcher["fetch"]>>> {
+		const startedAt = performance.now();
 		const url = normalizeText(rawUrl);
+		const host = hostOf(url);
 		try {
 			const result = await this.#fetcher.fetch(url);
 			const fetchId = `snap_${randomUUID()}`;
@@ -195,6 +216,18 @@ export class SearchFetchService {
 				targetId: fetchId,
 				targetKind: "web-page",
 			});
+			this.#logger?.debug("page fetched", {
+				bytes: result.bytes,
+				chars: result.text.length,
+				contentType: result.contentType,
+				durationMs: elapsedMs(startedAt),
+				fetchId,
+				finalHost: safeHost(result.finalUrl),
+				host,
+				httpStatus: result.httpStatus,
+				scoped: conversationId !== undefined,
+				truncated: result.truncated,
+			});
 			return { ...result, fetchId };
 		} catch (error) {
 			const code = error instanceof SafeFetchError ? error.code : "network_error";
@@ -206,6 +239,13 @@ export class SearchFetchService {
 				result: "failed",
 				targetId: safeHost(url),
 				targetKind: "web-page",
+			});
+			this.#logger?.debug("page fetch failed", {
+				code,
+				durationMs: elapsedMs(startedAt),
+				error: redactSecretText(errorSummary(error), this.#secrets),
+				host,
+				target: sanitizedUrl(url),
 			});
 			throw error;
 		}
@@ -230,11 +270,17 @@ export class SearchFetchService {
 		const fetchId = normalizeText(record.fetchId);
 		if (fetchId.length === 0) return undefined;
 		const cached = this.#cache.get(fetchId, conversationId);
-		if (cached === undefined) return undefined;
+		if (cached === undefined) {
+			this.#logger?.debug("snapshot miss", {
+				conversationScoped: conversationId !== undefined,
+				fetchId,
+			});
+			return undefined;
+		}
 		const offset = clampInteger(record.offset, 0, cached.text.length, 0);
 		const maxChars = clampInteger(record.maxChars, 1, 8_000, 4_000);
 		const { text, truncated } = truncate(cached.text.slice(offset), maxChars);
-		return {
+		const result = {
 			fetchId,
 			finalUrl: cached.finalUrl,
 			offset,
@@ -244,6 +290,15 @@ export class SearchFetchService {
 			truncated: truncated || offset + text.length < cached.text.length,
 			url: cached.url,
 		};
+		this.#logger?.debug("snapshot served", {
+			chars: result.text.length,
+			conversationScoped: cached.conversationId !== undefined,
+			fetchId,
+			offset,
+			totalChars: result.totalChars,
+			truncated: result.truncated,
+		});
+		return result;
 	}
 
 	overview(): SearchFetchOverview {
@@ -325,6 +380,13 @@ export class SearchFetchService {
 				priority: nextPriority,
 			}),
 		);
+		this.#logger?.debug("provider updated", {
+			configured: provider.configured !== false,
+			enabled: !disabled.has(providerId),
+			providerId,
+			resetCooldown: record.resetCooldown === true,
+			priority: nextPriority.indexOf(providerId),
+		});
 		return this.overview();
 	}
 
@@ -356,6 +418,10 @@ export class SearchFetchService {
 			patch.languagePools = { ...this.#policy.languagePools, ...recordValue(record.languagePools) };
 		}
 		await this.#commitPolicy(normalizeSearchPolicy({ ...this.#policy, ...patch }));
+		this.#logger?.debug("search policy updated", {
+			changedKeys: Object.keys(patch).toSorted(),
+			clearCooldowns: record.clearCooldowns === true,
+		});
 		return this.#policy;
 	}
 
@@ -365,7 +431,12 @@ export class SearchFetchService {
 
 	cacheClear(raw: unknown): number {
 		const conversationId = normalizeText(recordValue(raw).conversationId);
-		return this.#cache.clear(conversationId.length === 0 ? undefined : conversationId);
+		const removed = this.#cache.clear(conversationId.length === 0 ? undefined : conversationId);
+		this.#logger?.debug("snapshot cache cleared", {
+			conversationScoped: conversationId.length > 0,
+			removed,
+		});
+		return removed;
 	}
 
 	async testQuery(raw: unknown): Promise<TestQueryResult> {
@@ -380,7 +451,7 @@ export class SearchFetchService {
 			},
 			providerId.length === 0 || providerId === "auto" ? {} : { providers: [providerId] },
 		);
-		return {
+		const result: TestQueryResult = {
 			...(outcome.error === undefined ? {} : { error: outcome.error }),
 			latencyMs: this.#now() - startedAt,
 			provider: providerId.length === 0 || providerId === "auto" ? "auto" : providerId,
@@ -388,6 +459,13 @@ export class SearchFetchService {
 			results: redactResults(outcome.results, this.#secrets),
 			status: outcome.status,
 		};
+		this.#logger?.debug("test query completed", {
+			latencyMs: result.latencyMs,
+			provider: result.provider,
+			resultCount: result.resultCount,
+			status: result.status,
+		});
+		return result;
 	}
 
 	redact(value: unknown): unknown {
@@ -397,7 +475,24 @@ export class SearchFetchService {
 	async #commitPolicy(policy: SearchPolicy): Promise<void> {
 		this.#policy = policy;
 		this.#applyRuntimePolicy();
+		this.#logger?.debug("search policy committed", {
+			allowDomains: policy.allowDomains.length,
+			allowedProviders: policy.allowedProviders.length,
+			blockDomains: policy.blockDomains.length,
+			cache: policy.cache,
+			cooldownMs: policy.cooldownMs,
+			disabledProviders: policy.disabledProviders.length,
+			failureThreshold: policy.failureThreshold,
+			maxProviders: policy.maxProviders,
+			maxResults: policy.maxResults,
+			priority: [...policy.priority],
+			searchTimeoutMs: policy.searchTimeoutMs,
+		});
 		await this.#onPolicyChange?.(policy);
+	}
+
+	#applyRedactor(): void {
+		this.#engine.setRedactor((value) => redactSecretText(value, this.#secrets));
 	}
 
 	#applyRuntimePolicy(): void {

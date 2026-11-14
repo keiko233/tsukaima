@@ -1,4 +1,4 @@
-import type { ElainaPlugin, PluginContext } from "@elaina/sdk";
+import type { ElainaPlugin, PluginContext, PluginLogger } from "@elaina/sdk";
 import { SnapshotCache } from "./cache.ts";
 import { recordValue, type SearchProvider } from "./domain.ts";
 import { SearchEngine } from "./engine.ts";
@@ -9,6 +9,7 @@ import {
 	type FetchTransport,
 } from "./fetch.ts";
 import { ProviderGovernor } from "./governor.ts";
+import { childLogger } from "./logging.ts";
 import {
 	SEARCH_FETCH_PLUGIN_ID,
 	SEARCH_FETCH_TRANSPORT_BINDING,
@@ -112,6 +113,15 @@ export {
 export { registerSearchFetchRpc } from "./rpc.ts";
 export { registerSearchFetchTools } from "./tools.ts";
 export { redactSecretText, redactSecrets } from "./redaction.ts";
+export {
+	LOG_PREVIEW_CHARS,
+	childLogger,
+	elapsedMs,
+	errorSummary,
+	hostOf,
+	previewText,
+	sanitizedUrl,
+} from "./logging.ts";
 
 export interface SearchFetchTransportBinding {
 	readonly fetch?: typeof fetch;
@@ -186,6 +196,29 @@ function buildProviders(
 	];
 }
 
+interface PluginLoggers {
+	readonly cache: PluginLogger;
+	readonly engine: PluginLogger;
+	readonly fetch: PluginLogger;
+	readonly governor: PluginLogger;
+	readonly rpc: PluginLogger;
+	readonly service: PluginLogger;
+	readonly tools: PluginLogger;
+}
+
+/** One labelled child per layer so host logs attribute every line to its component. */
+function pluginLoggers(logger: PluginLogger): PluginLoggers {
+	return {
+		cache: childLogger(logger, "cache") ?? logger,
+		engine: childLogger(logger, "engine") ?? logger,
+		fetch: childLogger(logger, "fetch") ?? logger,
+		governor: childLogger(logger, "governor") ?? logger,
+		rpc: childLogger(logger, "rpc") ?? logger,
+		service: childLogger(logger, "service") ?? logger,
+		tools: childLogger(logger, "tools") ?? logger,
+	};
+}
+
 export const searchFetchPlugin: ElainaPlugin = {
 	manifest: searchFetchManifest,
 	async setup(context) {
@@ -195,13 +228,22 @@ export const searchFetchPlugin: ElainaPlugin = {
 		const transport = resolveTransport(context);
 		const secretState = readSecrets(config);
 		const providers = buildProviders(secretState, transport);
+		const loggers = pluginLoggers(context.logger);
 		const governor = new ProviderGovernor({
 			cooldownMs: policy.cooldownMs,
 			failureThreshold: policy.failureThreshold,
+			logger: loggers.governor,
 		});
-		const cache = new SnapshotCache(policy.cache);
-		const engine = new SearchEngine({ fetch: transport.fetch, governor, policy, providers });
+		const cache = new SnapshotCache({ ...policy.cache, logger: loggers.cache });
+		const engine = new SearchEngine({
+			fetch: transport.fetch,
+			governor,
+			logger: loggers.engine,
+			policy,
+			providers,
+		});
 		const fetcher = new SafeFetcher({
+			logger: loggers.fetch,
 			policy: {
 				...DEFAULT_FETCH_POLICY,
 				allowDomains: policy.allowDomains,
@@ -230,6 +272,7 @@ export const searchFetchPlugin: ElainaPlugin = {
 			engine,
 			fetcher,
 			governor,
+			logger: loggers.service,
 			async onPolicyChange(next) {
 				await context.storage.global.set(POLICY_KEY, next);
 				reportStatus();
@@ -237,8 +280,8 @@ export const searchFetchPlugin: ElainaPlugin = {
 			policy,
 			secrets: secretState.secrets,
 		});
-		registerSearchFetchTools(context, service);
-		registerSearchFetchRpc(context, service);
+		registerSearchFetchTools(context, service, loggers.tools);
+		registerSearchFetchRpc(context, service, loggers.rpc);
 		const runtime: SearchFetchRuntime = {};
 		runtimes.set(context, runtime);
 		runtime.unsubscribe = context.settings?.onChange(async (next) => {
@@ -253,20 +296,29 @@ export const searchFetchPlugin: ElainaPlugin = {
 					nextSecrets.tavily.length > 0 ? "tavily:on" : "tavily:off",
 					nextSecrets.serper.length > 0 ? "serper:on" : "serper:off",
 				],
-				secretsConfigured: nextSecrets.secrets.length,
+				configuredKeyCount: nextSecrets.secrets.length,
 			});
 			reportStatus();
 		});
 		reportStatus();
 		context.logger.info("search-fetch ready", {
+			policy: {
+				allowDomains: policy.allowDomains.length,
+				blockDomains: policy.blockDomains.length,
+				maxProviders: policy.maxProviders,
+				maxResults: policy.maxResults,
+			},
 			providers: providers.length,
-			secretsConfigured: readSecrets(config).secrets.length,
+			configuredKeyCount: readSecrets(config).secrets.length,
 		});
 	},
 	teardown(context) {
-		runtimes.get(context)?.unsubscribe?.();
+		const runtime = runtimes.get(context);
+		const unsubscribed = runtime?.unsubscribe !== undefined;
+		runtime?.unsubscribe?.();
 		runtimes.delete(context);
 		context.ui.setStatus(null);
+		context.logger.info("search-fetch torn down", { unsubscribed });
 	},
 };
 

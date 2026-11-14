@@ -1,6 +1,8 @@
 import { lookup } from "node:dns/promises";
+import type { PluginLogger } from "@elaina/sdk";
 import { MAX_FETCH_URL_LENGTH, truncate } from "./domain.ts";
 import { extractHtmlContent } from "./html.ts";
+import { elapsedMs, hostOf, sanitizedUrl } from "./logging.ts";
 import {
 	assertNoDnsRebinding,
 	type DomainPolicy,
@@ -58,10 +60,24 @@ export interface SafeFetchResult {
 }
 
 export interface SafeFetcherOptions {
+	readonly logger?: PluginLogger;
 	readonly now?: () => number;
 	readonly policy: FetchPolicy;
 	readonly transport: FetchTransport;
 }
+
+/** Failures caused by policy, SSRF defenses, or deadlines are loud; upstream faults are not. */
+const WARN_CODES: ReadonlySet<string> = new Set([
+	"blocked_domain",
+	"blocked_host",
+	"blocked_ip",
+	"blocked_scheme",
+	"dns_failure",
+	"dns_rebinding",
+	"redirect_limit",
+	"response_too_large",
+	"timeout",
+]);
 
 type RequestOutcome =
 	| { readonly kind: "redirect"; readonly location: string | null }
@@ -111,11 +127,13 @@ export function createDefaultFetchTransport(): FetchTransport {
  * redirects, MIME allowlist, streaming byte cap, timeout, and bounded text extraction.
  */
 export class SafeFetcher {
+	readonly #logger: PluginLogger | undefined;
 	readonly #now: () => number;
 	#policy: FetchPolicy;
 	readonly #transport: FetchTransport;
 
 	constructor(options: SafeFetcherOptions) {
+		this.#logger = options.logger;
 		this.#now = options.now ?? Date.now;
 		this.#policy = options.policy;
 		this.#transport = options.transport;
@@ -127,22 +145,77 @@ export class SafeFetcher {
 
 	setPolicy(policy: FetchPolicy): void {
 		this.#policy = policy;
+		this.#logger?.trace("fetch policy applied", {
+			allowDomains: policy.allowDomains?.length ?? 0,
+			blockDomains: policy.blockDomains?.length ?? 0,
+			maxBytes: policy.maxBytes,
+			maxRedirects: policy.maxRedirects,
+			timeoutMs: policy.timeoutMs,
+		});
 	}
 
 	async fetch(input: string): Promise<SafeFetchResult> {
+		const startedAt = performance.now();
+		const target = sanitizedUrl(input);
 		if (input.trim().length === 0 || input.length > MAX_FETCH_URL_LENGTH) {
+			this.#logger?.warn("fetch rejected", {
+				durationMs: elapsedMs(startedAt),
+				reason: input.trim().length === 0 ? "missing_url" : "url_too_long",
+				urlChars: input.length,
+			});
 			throw new SafeFetchError("invalid_url", "The URL is missing or too long");
 		}
+		this.#logger?.trace("fetch starting", { target });
+		try {
+			return await this.#runFetch(input, target, startedAt);
+		} catch (error) {
+			this.#logFailure(error, target, startedAt);
+			throw error;
+		}
+	}
+
+	#logFailure(error: unknown, target: string, startedAt: number): void {
+		const code = error instanceof SafeFetchError ? error.code : "network_error";
+		const details = {
+			code,
+			durationMs: elapsedMs(startedAt),
+			host: hostOf(target),
+			target,
+		};
+		if (WARN_CODES.has(code)) {
+			this.#logger?.warn("fetch blocked or timed out", details);
+			return;
+		}
+		this.#logger?.debug("fetch failed", details);
+	}
+
+	async #runFetch(input: string, target: string, startedAt: number): Promise<SafeFetchResult> {
 		let url = validateHttpUrl(input, this.#policy);
 		let redirects = 0;
 		const originalUrl = url.url.toString();
 		while (true) {
+			this.#logger?.trace("fetch dns check", { host: url.url.hostname });
 			const first = await resolvePublicAddresses(url.hostname, this.#transport.resolve);
 			const second = await resolvePublicAddresses(url.hostname, this.#transport.resolve);
 			assertNoDnsRebinding(first, second);
+			this.#logger?.trace("fetch dns verified", {
+				addresses: first.length,
+				host: url.url.hostname,
+			});
 			const outcome = await this.#fetchOnce(url.url);
 			if (outcome.kind === "response") {
 				const extracted = this.#extract(outcome.text, outcome.contentType);
+				this.#logger?.debug("fetch completed", {
+					bytes: outcome.bytes,
+					chars: extracted.text.length,
+					contentType: outcome.contentType,
+					durationMs: elapsedMs(startedAt),
+					finalHost: hostOf(outcome.url),
+					httpStatus: outcome.status,
+					redirects,
+					target,
+					truncated: extracted.truncated,
+				});
 				return {
 					bytes: outcome.bytes,
 					contentType: outcome.contentType,
@@ -170,6 +243,11 @@ export class SafeFetcher {
 			} catch {
 				throw new SafeFetchError("invalid_redirect", "The redirect target is invalid");
 			}
+			this.#logger?.trace("fetch redirect followed", {
+				fromHost: url.url.hostname,
+				redirects,
+				toHost: hostOf(next.toString()),
+			});
 			// Every Location target is fully revalidated, including DNS and IP policy.
 			url = validateHttpUrl(next.toString(), this.#policy);
 		}
