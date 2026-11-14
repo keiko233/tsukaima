@@ -345,7 +345,6 @@ function collectLeaves(value: Record<string, unknown>, path: readonly string[] =
 }
 
 function configRoots(value: unknown): Record<string, unknown>[] {
-	if (!isRecord(value)) return [];
 	const roots: Record<string, unknown>[] = [];
 	const visit = (current: unknown, path: readonly string[]): void => {
 		if (Array.isArray(current)) {

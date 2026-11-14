@@ -839,8 +839,15 @@ export function createPipeline(target: string, options: PipelineOptions = {}): M
 					const importedRecordIds = new Set(ledger.keys());
 
 					await database.transaction(async (transaction) => {
+						// SQLite/Drizzle blows the JS stack on a single statement with tens of
+						// thousands of rows; keep each statement inside parameter limits.
+						const INSERT_BATCH_SIZE = 100;
 						const insert = async (table: SQLiteTable, rows: readonly unknown[]) => {
-							if (rows.length > 0) await transaction.insert(table).values(rows as never);
+							for (let index = 0; index < rows.length; index += INSERT_BATCH_SIZE) {
+								await transaction
+									.insert(table)
+									.values(rows.slice(index, index + INSERT_BATCH_SIZE) as never);
+							}
 						};
 
 						await insert(

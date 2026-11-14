@@ -209,7 +209,7 @@ These are implementation-level decisions, not blockers for starting scaffolding:
 - Phase 6: `search-fetch` multi-provider routing, SSRF-hardened fetching, cache, redaction, tools, and panel are implemented.
 - Phase 7: `proactive-scheduler` durable tasks, gates, decisions, tools, and panel are implemented.
 - Phase 8: `self-iteration` runtime, coding tasks/proposals/approvals, supervised reload, deployments, rollback, tools, and panel are implemented.
-- Phase 9: offline DSH v4 snapshot, parsers, normalize/dry-run/import/verify/rollback pipeline, migration CLI, and backup/restore rollback are implemented; the live DSH cutover has not been executed.
+- Phase 9: offline DSH v4 snapshot, parsers, normalize/dry-run/import/verify/rollback pipeline, migration CLI, and backup/restore rollback are implemented. A real read-only snapshot → dry-run → import → verify rehearsal passed against an isolated lab database; the live DSH cutover has not been executed.
 - Release Readiness: `messages.activity_id` and duplicated RPC schemas are removed, the Playwright WebUI E2E suite exists, CI secret scanning and scheduled SQLite + blob backup/restore drills exist, and the production runbook is written.
 
 Verified baseline (this working tree):
@@ -223,14 +223,29 @@ bun run test:e2e
 
 Observed results: secret scan passes over the tracked tree; WebUI i18n checks, i18n lint, and the
 production build exit `0`; `bun run check` passes lint, formatting, all TypeScript projects, and
-440 tests across 90 files; `bun run test:e2e` passes 5 Chromium specs against the isolated stack.
+520 tests across 96 files; `bun run test:e2e` passes 5 Chromium specs against the isolated stack.
+
+Live DSH rehearsal (this working tree):
+
+- Read-only capture produced 13,222 files / 989 MB with 0 capture errors; 355 structured files were
+  redacted and 91 secret-classified files were replaced by placeholders.
+- Dry-run and import against an isolated lab database mapped 653 conversations (3 group, 5 private,
+  645 webui), 47,514 messages, 1,254 source memories, 112 attachments, 2 personas, 138 settings,
+  6 sticker packs / 339 stickers, and the request/scheduler rows.
+- Every verify check passed (checksums, counts, references, secrets, plugin config, rendering, fake
+  model smoke turn). Re-import returned the original completed run id with identical counts.
+- The rehearsal exposed and fixed captured-snapshot wrapper ingestion, concatenated-volume tar
+  extraction, zstd byte parsing, array-shaped `cordis.patch.yml` mapping, numeric session
+  timestamps, content-block image attachments, per-session NapCat identity suffixes, prompt-derived
+  QQ history parsing, backup-session exclusion, memory-space ID collisions, and large-import
+  statement batching.
 
 ## Next implementation steps
 
 The implementation phases are done. Remaining work is operational:
 
-1. **Phase 9 execution**: run the real DSH v4 snapshot → dry-run → import → verify on a copy, then
-   keep the rollback run id until the cutover is accepted.
+1. **Phase 9 cutover**: freeze DSH, take the final snapshot, repeat dry-run → import → verify on the
+   production copy, and keep the rollback run id until the cutover is accepted.
 2. **NapCat cutover**: connect the production bot account, validate channel diagnostics, and tune
    conversation policies per group.
 3. **Scheduled operations**: enable `ELAINA_BACKUP_DRILL_INTERVAL_MS` in production and alert on
@@ -242,6 +257,13 @@ The full built-in plugin inventory and migration order are tracked in
 
 ## Current known limitations
 
+- QQ inbound history is reconstructed from the NapCat bridge's per-turn `【最近群聊】` context, so a
+  line that never appeared in any context window, or was posted while the bridge was offline, can
+  be missing. Reconstructed inbound timestamps have minute precision and infer the UTC date from the
+  prompt event.
+- WebUI/work transcripts import assistant visible text plus tool calls/results verbatim. This
+  preserves agent history but makes large work conversations (the live rehearsal has 42k+ webui
+  messages); tool outputs can repeat file contents and diagnostic logs.
 - One inbound message is answered when its activity window settles (roughly
   `pacing.burstSettleMs`, 6 s by default), unless a long message or max-wait forces an earlier
   submission. Tune the policy or add an immediate first-message path.

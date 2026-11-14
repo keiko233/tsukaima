@@ -21,6 +21,7 @@ import {
 	type ImportedScheduledTask,
 } from "./schedule-request-import.ts";
 import {
+	type DshV4Message,
 	type DshV4Session,
 	mapDshConversationIdentity,
 	parseSessionV4Bytes,
@@ -634,7 +635,174 @@ function attachmentKind(mimeType: string): NormalizedAttachment["kind"] {
 	return "file";
 }
 
-function normalizeV4Session(session: DshV4Session): {
+function sourceKindOf(message: DshV4Message): string | null {
+	const source = message.source.data.source;
+	if (source && typeof source === "object" && !Array.isArray(source)) {
+		const kind = (source as Record<string, unknown>).kind;
+		if (typeof kind === "string") return kind;
+	}
+	return null;
+}
+
+function externalIdOf(message: DshV4Message): string | null {
+	const external =
+		typeof message.source.data.userId === "string"
+			? message.source.data.userId
+			: typeof message.source.data.senderId === "string"
+				? message.source.data.senderId
+				: null;
+	return external;
+}
+
+interface QqPromptLine {
+	readonly minute: number;
+	readonly nick: string;
+	readonly text: string;
+}
+
+/**
+ * The NapCat bridge injects a fresh prompt every turn: recent QQ chat lines followed by
+ * static instructions. Only the `【最近群聊】` block is real chat history.
+ */
+export function parseQqPromptLines(text: string): QqPromptLine[] {
+	const marker = /【最近群聊[^】]*】\s*\n/.exec(text);
+	if (marker === null) return [];
+	const start = marker.index + marker[0].length;
+	const rest = text.slice(start);
+	// A message may contain blank lines; only a blank line followed by the next `【…】`
+	// instruction section ends the chat block.
+	const end = rest.search(/\n\s*\n【/);
+	const block = end === -1 ? rest : rest.slice(0, end);
+	const lines: QqPromptLine[] = [];
+	let current: { minute: number; nick: string; text: string } | null = null;
+	for (const raw of block.split("\n")) {
+		const line = raw.trimEnd();
+		if (line === "") {
+			if (current !== null) current.text = `${current.text}\n`;
+			continue;
+		}
+		const match = /^(\d{2}):(\d{2})\s+([^:]+):\s?(.*)$/.exec(line);
+		if (match !== null) {
+			if (current !== null) lines.push(current);
+			current = {
+				minute: Number(match[1]) * 60 + Number(match[2]),
+				nick: match[3]!.trim(),
+				text: match[4] ?? "",
+			};
+		} else if (current !== null) {
+			current.text = `${current.text}\n${line}`;
+		}
+	}
+	if (current !== null) lines.push({ ...current, text: current.text.replace(/\n+$/, "") });
+	return lines;
+}
+
+/** DSH writes prompt clock times in the container's UTC clock. */
+function qqMinuteIso(promptMs: number | null, minute: number): string {
+	const base = new Date(promptMs ?? Date.now());
+	const day = Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate());
+	const candidate = day + minute * 60_000;
+	const promptMinute = base.getUTCHours() * 60 + base.getUTCMinutes();
+	return new Date(minute > promptMinute + 5 ? candidate - 86_400_000 : candidate).toISOString();
+}
+
+function splitQqNick(nick: string): { readonly name: string; readonly id: string | null } {
+	const match = /^(.*?)\s*\((\d{4,})\)$/.exec(nick.trim());
+	if (match !== null) return { id: match[2]!, name: match[1]!.trim() };
+	return { id: null, name: nick.trim() };
+}
+
+function mimeTypeForPath(path: string): string {
+	const extension = path.split(".").at(-1)?.toLowerCase();
+	if (extension === "png") return "image/png";
+	if (extension === "gif") return "image/gif";
+	if (extension === "webp") return "image/webp";
+	if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
+	return "application/octet-stream";
+}
+
+function inlineImagePaths(text: string): string[] {
+	return [...text.matchAll(/\[图片[:：]\s*([^\]\n]+)\]/g)]
+		.map((match) => match[1]!.trim())
+		.filter((path) => path !== "" && path !== "已过期");
+}
+
+function stripInlineImagePaths(text: string): string {
+	return text.replace(/\[图片[:：]\s*([^\]\n]+)\]/g, "[图片]");
+}
+
+async function loadQqPeople(
+	entries: readonly SourceEntry[],
+): Promise<Map<string, Map<string, string>>> {
+	const people = new Map<string, Map<string, string>>();
+	for (const entry of entries) {
+		if (!/(?:people-index|cross-recent)\.jsonl$/i.test(entry.path)) continue;
+		const content = await fs.readFile(entry.absolutePath, "utf8").catch(() => "");
+		for (const line of content.split("\n")) {
+			if (line.trim() === "") continue;
+			try {
+				const record = JSON.parse(line) as Record<string, unknown>;
+				const chatKey = record.chatKey;
+				const nick = record.nick;
+				const userId = record.userId;
+				if (typeof chatKey !== "string" || typeof nick !== "string") continue;
+				if (typeof userId !== "string" && typeof userId !== "number") continue;
+				const chat = people.get(chatKey) ?? new Map<string, string>();
+				chat.set(nick, String(userId));
+				people.set(chatKey, chat);
+			} catch {
+				// Malformed history rows are skipped; provenance stays in the snapshot.
+			}
+		}
+	}
+	return people;
+}
+
+async function loadBotAliases(entries: readonly SourceEntry[]): Promise<Set<string>> {
+	const aliases = new Set<string>(["系统", "临时会话"]);
+	for (const entry of entries) {
+		if (!/(?:^|\/)home\/(?:node\/)?\.dsh\/profiles\/[^/]+\/cordis\.patch\.ya?ml$/i.test(entry.path))
+			continue;
+		const content = await fs.readFile(entry.absolutePath, "utf8").catch(() => "");
+		for (const match of content.matchAll(/selfAliases:\s*["']?([^"'\n]+)["']?/g)) {
+			for (const alias of match[1]!.split(",")) {
+				const trimmed = alias.trim();
+				if (trimmed !== "") aliases.add(trimmed);
+			}
+		}
+	}
+	return aliases;
+}
+
+function findMediaEntry(
+	entries: readonly SourceEntry[],
+	path: string,
+	chatDirectory: string,
+): SourceEntry | null {
+	const normalized = path.replaceAll("\\", "/").replace(/^\/+/, "");
+	const candidates = normalized.startsWith("workspace/")
+		? [normalized]
+		: [
+				`workspace/napcat/${chatDirectory}/${normalized}`,
+				`workspace/napcat/${normalized}`,
+				`workspace/${normalized}`,
+				normalized,
+			];
+	for (const candidate of candidates) {
+		const match = entries.find((entry) => entry.path.endsWith(`/${candidate}`));
+		if (match !== undefined) return match;
+	}
+	return null;
+}
+
+function normalizeV4Session(
+	session: DshV4Session,
+	options: {
+		readonly chatObjectId?: string;
+		readonly conversationId?: string;
+		readonly qqChat?: boolean;
+	} = {},
+): {
 	conversation: NormalizedConversation;
 	messages: NormalizedMessage[];
 	users: NormalizedUser[];
@@ -646,9 +814,13 @@ function normalizeV4Session(session: DshV4Session): {
 		workspace: session.workspace,
 	});
 	const createdAt = timestamp(session.createdAt ?? undefined, defaultTime);
-	const updatedAt = timestamp(session.updatedAt ?? session.createdAt ?? undefined, createdAt);
-	const conversationId = canonicalId("conversation", session.id);
-	const chatObjectId = canonicalId("chat", session.id);
+	const conversationId = options.conversationId ?? canonicalId("conversation", session.id);
+	const chatObjectId =
+		options.chatObjectId ??
+		canonicalId(
+			"chat",
+			`${identity.channelId}:${identity.kind}:${identity.platformConversationId}`,
+		);
 	const botId = canonicalId("user", "dsh-assistant");
 	const bot: NormalizedUser = {
 		canonicalId: botId,
@@ -668,25 +840,36 @@ function normalizeV4Session(session: DshV4Session): {
 	const seqToPlatformId = new Map<number, string>();
 	const platformIds = new Set<string>();
 	for (const message of session.messages) {
+		const sourceKind = sourceKindOf(message);
+		const external = externalIdOf(message);
+		if (message.role === "system") continue;
+		if (message.role === "assistant" && message.text.trim() === "") continue;
+		if (options.qqChat) {
+			// QQ inbound text is reconstructed from the plugin prompt context below; the
+			// prompt itself is an agent instruction, not a chat message. Explicitly typed
+			// user messages (source.kind "user" or unknown in fixtures) still count.
+			if (message.role === "user") {
+				if (sourceKind !== null && sourceKind !== "user") continue;
+			} else if (message.role !== "assistant") {
+				continue;
+			}
+		} else if (message.role === "user") {
+			if (sourceKind === "plugin:dsh-napcat") continue;
+			if (sourceKind !== null && sourceKind !== "user") continue;
+		}
 		const senderRole = message.role;
 		let sender = bot;
 		if (senderRole !== "assistant" && senderRole !== "tool") {
-			const external =
-				typeof message.source.data.userId === "string"
-					? message.source.data.userId
-					: typeof message.source.data.senderId === "string"
-						? message.source.data.senderId
-						: null;
-			const sourceId = external ? `user:${external}` : `user:${senderRole}`;
+			const sourceId = external ? `user:${external}` : "user:dsh-admin";
 			sender = {
 				canonicalId: canonicalId("user", sourceId),
 				displayName:
 					typeof message.source.data.senderName === "string"
 						? message.source.data.senderName
-						: (external ?? senderRole),
+						: (external ?? "Admin"),
 				externalId: external,
-				isAdmin: false,
-				kind: senderRole === "system" ? "system" : "human",
+				isAdmin: external === null,
+				kind: "human",
 				platform: external ? "onebot-napcat" : null,
 				sourceHash: sha256String(sourceId),
 				sourceId,
@@ -724,12 +907,7 @@ function normalizeV4Session(session: DshV4Session): {
 			chatObjectId,
 			content: message.text,
 			conversationId,
-			direction:
-				message.role === "assistant" || message.role === "tool"
-					? "outbound"
-					: message.role === "system"
-						? "system"
-						: "inbound",
+			direction: message.role === "assistant" || message.role === "tool" ? "outbound" : "inbound",
 			durableEntryId: `durable_${conversationId}:${platformMessageId}`,
 			ingestedAt: new Date().toISOString(),
 			kind: message.role === "tool" ? "tool" : message.role,
@@ -756,6 +934,9 @@ function normalizeV4Session(session: DshV4Session): {
 			).replyToMessageId = target;
 		}
 	}
+	const updatedAt =
+		messages.at(-1)?.occurredAt ??
+		timestamp(session.updatedAt ?? session.createdAt ?? undefined, createdAt);
 	return {
 		attachments,
 		conversation: {
@@ -771,7 +952,8 @@ function normalizeV4Session(session: DshV4Session): {
 			sourceId: session.id,
 			sourceSystem: DSH_SOURCE,
 			status: identity.isTest ? "archived" : "active",
-			title: session.title || identity.title,
+			title:
+				identity.channelId === "onebot-napcat" ? identity.title : session.title || identity.title,
 			updatedAt,
 		},
 		messages,
@@ -818,6 +1000,52 @@ function normalizePersonaRecord(
 					.map((id) => canonicalId("conversation", id))
 			: [],
 	};
+}
+
+function personasFromConfig(
+	value: unknown,
+	sourceId: string,
+	qqConversationIds: readonly string[],
+): NormalizedPersona[] {
+	const result: NormalizedPersona[] = [];
+	const visit = (node: unknown, path: readonly string[], contextName: string | null): void => {
+		if (Array.isArray(node)) {
+			node.forEach((item, index) => visit(item, [...path, String(index)], contextName));
+			return;
+		}
+		if (!node || typeof node !== "object") return;
+		const record = node as Record<string, unknown>;
+		let name = contextName;
+		if (record.config && typeof record.config === "object") {
+			const config = record.config as Record<string, unknown>;
+			if (typeof config.name === "string") name = config.name;
+		}
+		if (record.id === "persona" && record.config && typeof record.config === "object") {
+			const config = record.config as Record<string, unknown>;
+			if (typeof config.prefix === "string" && config.prefix.trim() !== "") {
+				const personaSourceId = `${sourceId}#persona:${path.join(".")}`;
+				const isQq = /qq/i.test(name ?? "") || /qq/i.test(path.join("."));
+				result.push({
+					behaviorJson: JSON.stringify({
+						complete: config.complete ?? null,
+						includeRuntimeContext: config.includeRuntimeContext ?? null,
+					}),
+					boundConversationIds: isQq ? qqConversationIds : [],
+					canonicalId: canonicalId("persona", personaSourceId),
+					name: name ?? "DSH Persona",
+					promptJson: JSON.stringify(config.prefix),
+					sourceHash: sha256String(stableStringify(config)),
+					sourceId: personaSourceId,
+					sourceSystem: DSH_SOURCE,
+					summary: name ?? "DSH persona prompt",
+					version: 1,
+				});
+			}
+		}
+		for (const [key, child] of Object.entries(record)) visit(child, [...path, key], name);
+	};
+	visit(value, [], null);
+	return result;
 }
 
 function normalizeMemoryRecord(sourceId: string, value: Record<string, unknown>): NormalizedMemory {
@@ -1012,6 +1240,36 @@ function aliasFromUser(user: NormalizedUser): NormalizedUserAlias | null {
 	};
 }
 
+interface QqChatAccumulator {
+	readonly chatKey: string;
+	readonly kind: "group" | "private";
+	readonly platformId: string;
+	readonly conversationId: string;
+	readonly chatObjectId: string;
+	readonly title: string;
+	readonly sessionIds: string[];
+	readonly sourceHashes: string[];
+	readonly messages: NormalizedMessage[];
+	readonly users: Map<string, NormalizedUser>;
+	readonly attachments: Map<string, NormalizedAttachment>;
+	createdAt: string;
+	updatedAt: string;
+}
+
+function earlierIso(left: string, right: string): string {
+	return Date.parse(left) <= Date.parse(right) ? left : right;
+}
+
+function laterIso(left: string, right: string): string {
+	return Date.parse(left) >= Date.parse(right) ? left : right;
+}
+
+function mediaSourcePath(entry: SourceEntry): string {
+	const workspace = entry.path.indexOf("/workspace/");
+	if (workspace >= 0) return entry.path.slice(workspace + 1);
+	return entry.path.split("/").slice(1).join("/");
+}
+
 export async function normalizeSnapshot(source: SnapshotSource): Promise<NormalizeResult> {
 	const inventory = await inspectDshSnapshot(source);
 	const entries = await sourceEntries(source);
@@ -1080,16 +1338,26 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 				}
 			}
 			for (const [index, record] of records.entries()) {
-				const sourceId = typeof record.id === "string" ? record.id : `${basename(path)}:${index}`;
+				const recordId = typeof record.id === "string" ? record.id : String(index);
+				const sourceId = `${path}:${recordId}`;
 				onRecord(sourceId, record);
 			}
 		}
 	};
 
+	const qqChats = new Map<string, QqChatAccumulator>();
+	const [qqPeople, botAliases] = await Promise.all([
+		loadQqPeople(entries),
+		loadBotAliases(entries),
+	]);
+
 	const sessionPaths = inventory.sessions.filter(
 		(path) =>
 			/\.jsonl(?:\.zstd)?$/i.test(path) &&
-			!/(?:^|\/)(?:audit|personas?|memory|settings|stickers?)\//i.test(path),
+			/(?:^|\/)sessions\//i.test(path) &&
+			!/(?:^|\/)(?:audit|personas?|memory|settings|stickers?|backups|aya-snapshot|node_modules)\//i.test(
+				path,
+			),
 	);
 	for (const path of sessionPaths) {
 		const entry = entriesByPath.get(path);
@@ -1120,7 +1388,169 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 			}
 			continue;
 		}
+		const identity = mapDshConversationIdentity({
+			sessionId: parsed.session.id,
+			title: parsed.session.title,
+			workspace: parsed.session.workspace,
+		});
+		if (identity.channelId === "onebot-napcat") {
+			const chatKey = `${identity.kind}:${identity.platformConversationId}`;
+			const conversationId = canonicalId(
+				"conversation",
+				`napcat-${identity.kind}-${identity.platformConversationId}`,
+			);
+			const chatObjectId = canonicalId(
+				"chat",
+				`${identity.channelId}:${identity.kind}:${identity.platformConversationId}`,
+			);
+			const normalized = normalizeV4Session(parsed.session, {
+				chatObjectId,
+				conversationId,
+				qqChat: true,
+			});
+			const createdAt = timestamp(parsed.session.createdAt ?? undefined, defaultTime);
+			const chat: QqChatAccumulator = qqChats.get(chatKey) ?? {
+				attachments: new Map(),
+				chatKey,
+				chatObjectId,
+				conversationId,
+				createdAt,
+				kind: identity.kind === "private" ? "private" : "group",
+				messages: [],
+				platformId: identity.platformConversationId,
+				sessionIds: [],
+				sourceHashes: [],
+				title: identity.title,
+				updatedAt: createdAt,
+				users: new Map(),
+			};
+			chat.sessionIds.push(parsed.session.id);
+			chat.sourceHashes.push(parsed.session.sourceHash);
+			chat.createdAt = earlierIso(chat.createdAt, createdAt);
+			for (const user of normalized.users) chat.users.set(user.canonicalId, user);
+			for (const attachment of normalized.attachments) {
+				chat.attachments.set(attachment.id, attachment);
+			}
+			chat.messages.push(...normalized.messages);
+			chat.updatedAt = laterIso(chat.updatedAt, normalized.conversation.updatedAt);
+			const chatDirectory = `${identity.kind}-${identity.platformConversationId}`;
+			for (const prompt of parsed.session.messages) {
+				if (prompt.role !== "user" || sourceKindOf(prompt) !== "plugin:dsh-napcat") continue;
+				const lines = parseQqPromptLines(prompt.text);
+				const promptMs = prompt.occurredAtMs ?? Date.parse(parsed.session.createdAt ?? "");
+				let lastInbound: NormalizedMessage | null = null;
+				for (const line of lines) {
+					const text = line.text.trim();
+					if (text === "") continue;
+					const author = splitQqNick(line.nick);
+					if (botAliases.has(author.name)) continue;
+					const occurredAt = qqMinuteIso(Number.isFinite(promptMs) ? promptMs : null, line.minute);
+					const numericNick = /^\d{5,}$/.test(author.name) ? author.name : null;
+					const external =
+						author.id ?? numericNick ?? qqPeople.get(chatKey)?.get(author.name) ?? null;
+					const senderSourceId =
+						external === null ? `user:nick:${chatKey}:${author.name}` : `user:${external}`;
+					const senderId = canonicalId("user", senderSourceId);
+					const sender: NormalizedUser = chat.users.get(senderId) ?? {
+						canonicalId: senderId,
+						displayName: author.name,
+						externalId: external,
+						isAdmin: false,
+						kind: "human",
+						platform: "onebot-napcat",
+						sourceHash: sha256String(senderSourceId),
+						sourceId: senderSourceId,
+						sourceSystem: DSH_SOURCE,
+					};
+					chat.users.set(senderId, sender);
+					const platformMessageId = `qq:${chatKey}:${occurredAt}:${sha256String(
+						`${line.nick}\n${text}`,
+					).slice(7, 23)}`;
+					const messageAttachments: string[] = [];
+					for (const referenced of inlineImagePaths(text)) {
+						const found = findMediaEntry(entries, referenced, chatDirectory);
+						if (found === null) continue;
+						const sourcePath = mediaSourcePath(found);
+						const id = canonicalId("media", `${chatKey}:${sourcePath}`);
+						chat.attachments.set(id, {
+							id,
+							kind: "image",
+							mimeType: mimeTypeForPath(sourcePath),
+							sha256: null,
+							sizeBytes: 0,
+							sourceHash: sha256String(sourcePath),
+							sourceId: `${chatKey}:${sourcePath}`,
+							sourcePath,
+						});
+						messageAttachments.push(id);
+					}
+					const inbound: NormalizedMessage = {
+						attachments: messageAttachments,
+						chatObjectId,
+						content: stripInlineImagePaths(text),
+						conversationId,
+						direction: "inbound",
+						durableEntryId: `durable_${conversationId}:${platformMessageId}`,
+						ingestedAt: new Date().toISOString(),
+						kind: "text",
+						occurredAt,
+						platformMessageId,
+						position: 0,
+						replyToMessageId: null,
+						senderDisplayName: sender.displayName,
+						senderExternalId: external,
+						senderUserId: senderId,
+						sourceHash: sha256String(`${line.nick}\n${text}`),
+						sourceId: `${conversationId}:${platformMessageId}`,
+						sourceSystem: DSH_SOURCE,
+					};
+					chat.messages.push(inbound);
+					lastInbound = inbound;
+				}
+				if (lastInbound !== null) {
+					for (const attachment of prompt.attachments) {
+						const sha = attachment.sha256;
+						if (sha === null && attachment.path === null) continue;
+						const found =
+							attachment.path === null
+								? null
+								: findMediaEntry(entries, attachment.path, chatDirectory);
+						const mediaRelative = found === null ? null : mediaSourcePath(found);
+						const id = canonicalId("media", `${chatKey}:${sha ?? mediaRelative ?? attachment.id}`);
+						chat.attachments.set(id, {
+							id,
+							kind: attachmentKind(attachment.mimeType ?? "application/octet-stream"),
+							mimeType: attachment.mimeType ?? "application/octet-stream",
+							sha256: sha,
+							sizeBytes: attachment.sizeBytes ?? 0,
+							sourceHash: sha256String(stableStringify(attachment.raw)),
+							sourceId: `${chatKey}:${sha ?? mediaRelative ?? attachment.id}`,
+							sourcePath: mediaRelative,
+						});
+						if (lastInbound.attachments.includes(id)) continue;
+						lastInbound = {
+							...lastInbound,
+							attachments: [...lastInbound.attachments, id],
+						};
+						const index = chat.messages.findIndex(
+							(message) => message.sourceId === lastInbound?.sourceId,
+						);
+						if (index >= 0) chat.messages[index] = lastInbound;
+					}
+				}
+			}
+			qqChats.set(chatKey, chat);
+			decisions.push({
+				action: "remap",
+				area: "trigger-pacing",
+				reason: `Merged DSH session ${parsed.session.id} into ${chatKey}`,
+				source: path,
+				target: "conversations",
+			});
+			continue;
+		}
 		const normalized = normalizeV4Session(parsed.session);
+		if (normalized.messages.length === 0) continue;
 		for (const user of normalized.users) users.set(user.canonicalId, user);
 		for (const attachment of normalized.attachments) {
 			attachments.set(attachment.id, attachment);
@@ -1136,15 +1566,70 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 		});
 	}
 
+	for (const chat of qqChats.values()) {
+		const bySource = new Map<string, NormalizedMessage>();
+		for (const message of chat.messages) bySource.set(message.sourceId, message);
+		const unique = [...bySource.values()]
+			.toSorted(
+				(left, right) =>
+					left.occurredAt.localeCompare(right.occurredAt) ||
+					left.platformMessageId.localeCompare(right.platformMessageId),
+			)
+			.map((message, position) => ({ ...message, position }));
+		const createdAt =
+			unique.length > 0 ? earlierIso(chat.createdAt, unique[0]!.occurredAt) : chat.createdAt;
+		const updatedAt =
+			unique.length > 0 ? laterIso(chat.updatedAt, unique.at(-1)!.occurredAt) : chat.updatedAt;
+		const conversation: NormalizedConversation = {
+			canonicalId: chat.conversationId,
+			channelId: "onebot-napcat",
+			chatObjectId: chat.chatObjectId,
+			createdAt,
+			durableConversationId: `durable_${chat.conversationId}`,
+			kind: chat.kind,
+			memberUserIds: [...chat.users.keys()],
+			platformConversationId: chat.platformId,
+			sourceHash: sha256String(chat.sourceHashes.toSorted().join("|")),
+			sourceId: `napcat-${chat.kind}-${chat.platformId}`,
+			sourceSystem: DSH_SOURCE,
+			status: "active",
+			title: chat.title,
+			updatedAt,
+		};
+		for (const user of chat.users.values()) users.set(user.canonicalId, user);
+		for (const attachment of chat.attachments.values()) {
+			attachments.set(attachment.id, attachment);
+		}
+		addConversation(conversation);
+		messages.push(...unique);
+		decisions.push({
+			action: "remap",
+			area: "trigger-pacing",
+			reason: `Merged ${chat.sessionIds.length} DSH session(s) into ${chat.chatKey}`,
+			source: `chat:${chat.chatKey}`,
+			target: "conversations",
+		});
+	}
+
 	for (const [id, attachment] of attachments) {
-		if (attachment.sourcePath === null) continue;
-		const requested = attachment.sourcePath.replaceAll("\\", "/");
-		const matches = entries.filter(
-			(entry) =>
-				entry.path.endsWith(`/${requested}`) ||
-				entry.path === requested ||
-				basename(entry.path) === basename(requested),
-		);
+		const sha = attachment.sha256;
+		const matches =
+			attachment.sourcePath === null && sha !== null
+				? entries.filter(
+						(entry) =>
+							/\/attachments\//i.test(entry.path) &&
+							entry.path.toLowerCase().endsWith(`/${sha.toLowerCase()}`),
+					)
+				: (() => {
+						if (attachment.sourcePath === null) return [];
+						const requested = attachment.sourcePath.replaceAll("\\", "/");
+						return entries.filter(
+							(entry) =>
+								entry.path.endsWith(`/${requested}`) ||
+								entry.path === requested ||
+								basename(entry.path) === basename(requested),
+						);
+					})();
 		if (matches.length !== 1) continue;
 		try {
 			const bytes = await fs.readFile(matches[0]!.absolutePath);
@@ -1152,7 +1637,7 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 			attachments.set(id, {
 				...attachment,
 				fileHash,
-				mediaRelativePath: requested,
+				mediaRelativePath: mediaSourcePath(matches[0]!),
 				mediaSourcePath: matches[0]!.absolutePath,
 				sizeBytes: attachment.sizeBytes > 0 ? attachment.sizeBytes : bytes.byteLength,
 			});
@@ -1182,10 +1667,13 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 		const persona = normalizePersonaRecord(sourceId, value);
 		personas.set(persona.canonicalId, persona);
 	});
-	await readRecordFiles(inventory.memory, (sourceId, value) => {
-		const memory = normalizeMemoryRecord(sourceId, value);
-		memories.set(memory.canonicalId, memory);
-	});
+	await readRecordFiles(
+		inventory.memory.filter((path) => !/(?:^|\/)(?:\.mnemon|workspace\/memory)\//i.test(path)),
+		(sourceId, value) => {
+			const memory = normalizeMemoryRecord(sourceId, value);
+			memories.set(memory.canonicalId, memory);
+		},
+	);
 	await readRecordFiles(inventory.stickers, (sourceId, value) => {
 		const sticker = normalizeStickerRecord(sourceId, value);
 		stickers.set(sticker.canonicalId, sticker);
@@ -1209,13 +1697,28 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 
 	const configResults: ConfigMappingResult[] = [];
 	for (const entry of entries) {
-		if (!/(?:^|\/)(?:config\.ya?ml|cordis\.patch\.ya?ml)$/i.test(entry.path)) continue;
+		if (!/(?:^|\/)home\/(?:node\/)?\.dsh\/profiles\/[^/]+\/cordis\.patch\.ya?ml$/i.test(entry.path))
+			continue;
 		try {
 			const text = await fs.readFile(entry.absolutePath, "utf8");
 			const mapped = mapDshConfigText(text, entry.path);
 			configResults.push(mapped);
 			for (const setting of mapped.settings) settings.set(setting.canonicalId, setting);
 			decisions.push(...mapped.entries);
+			const qqConversationIds = [...conversations.values()]
+				.filter((conversation) => conversation.channelId === "onebot-napcat")
+				.map((conversation) => conversation.canonicalId);
+			try {
+				for (const persona of personasFromConfig(
+					Bun.YAML.parse(text) as unknown,
+					entry.path,
+					qqConversationIds,
+				)) {
+					personas.set(persona.canonicalId, persona);
+				}
+			} catch {
+				// Invalid YAML is already reported by the config mapper.
+			}
 		} catch (error) {
 			warnings.push(`Failed to map ${entry.path}: ${String(error)}`);
 		}
