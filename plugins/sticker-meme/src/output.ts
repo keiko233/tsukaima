@@ -1,6 +1,7 @@
 import type { MessagePart } from "@tsukaima/contracts";
 import type { AuditEntry, PluginLogger, PluginMediaApi } from "@tsukaima/sdk";
 import { normalizeText, sanitizeModelText } from "./domain.ts";
+import { elapsedMs, traceLog } from "./logging.ts";
 import { STICKER_MEME_DIRECTIVE_PATTERN } from "./manifest.ts";
 import type { StickerRepository } from "./repository.ts";
 
@@ -22,12 +23,12 @@ export interface StickerReplyTransformResult {
 
 export interface StickerOutputOptions {
 	readonly audit?: { record(entry: AuditEntry): Promise<void> };
-	readonly logger?: PluginLogger;
+	readonly logger?: PluginLogger | undefined;
 	readonly media: PluginMediaApi;
 	readonly repository: StickerRepository;
 }
 
-const normalizeDirectiveText = (text: string): StickerTextPiece[] => {
+const normalizeDirectiveText = (text: string, logger?: PluginLogger): StickerTextPiece[] => {
 	const pattern = new RegExp(STICKER_MEME_DIRECTIVE_PATTERN.source, "gu");
 	const pieces: StickerTextPiece[] = [];
 	let cursor = 0;
@@ -39,15 +40,28 @@ const normalizeDirectiveText = (text: string): StickerTextPiece[] => {
 		cursor = index + match[0].length;
 	}
 	if (cursor < text.length) pieces.push({ text: text.slice(cursor), type: "text" });
-	return pieces.length === 0 ? [{ text, type: "text" }] : pieces;
+	if (pieces.length === 0) {
+		traceLog(logger, "sticker directive parse fallback", {
+			reason: "no_directive",
+			textLength: text.length,
+		});
+		return [{ text, type: "text" }];
+	}
+	traceLog(logger, "sticker directive text parsed", {
+		directiveCount: pieces.filter((piece) => piece.type === "directive").length,
+		pieceCount: pieces.length,
+		textLength: text.length,
+	});
+	return pieces;
 };
 
-export function splitStickerDirectives(text: string): StickerTextPiece[] {
-	return normalizeDirectiveText(text);
+export function splitStickerDirectives(text: string, logger?: PluginLogger): StickerTextPiece[] {
+	return normalizeDirectiveText(text, logger);
 }
 
 /** Replace validated directives with real sticker parts while preserving part order. */
 export function createStickerReplyTransform(options: StickerOutputOptions) {
+	const logger = options.logger;
 	const audit = async (entry: AuditEntry): Promise<void> => {
 		try {
 			await options.audit?.record(entry);
@@ -69,24 +83,37 @@ export function createStickerReplyTransform(options: StickerOutputOptions) {
 		});
 	};
 	return async (payload: unknown): Promise<StickerReplyTransformResult | undefined> => {
-		if (typeof payload !== "object" || payload === null) return undefined;
+		const startedAt = Date.now();
+		if (typeof payload !== "object" || payload === null) {
+			traceLog(logger, "sticker transform skipped", { reason: "invalid_payload" });
+			return undefined;
+		}
 		const input = payload as StickerReplyTransformPayload;
 		const conversationId = normalizeText(input.conversationId ?? input.sessionId);
 		const parts = Array.isArray(input.parts) ? input.parts : [];
-		if (conversationId.length === 0) return undefined;
+		if (conversationId.length === 0) {
+			traceLog(logger, "sticker transform skipped", { reason: "missing_conversation" });
+			return undefined;
+		}
+		let directiveCount = 0;
+		let resolvedCount = 0;
 		const output: MessagePart[] = [];
 		for (const part of parts) {
 			if (part.type !== "text") {
 				output.push(part);
 				continue;
 			}
-			for (const piece of splitStickerDirectives(part.text)) {
+			for (const piece of splitStickerDirectives(part.text, logger)) {
 				if (piece.type === "text") {
 					if (piece.text.length > 0) output.push({ text: piece.text, type: "text" });
 					continue;
 				}
+				directiveCount += 1;
 				const consumed = await options.repository.consumeToken(piece.token, conversationId);
 				if (consumed.failure !== undefined) {
+					traceLog(logger, "sticker directive unresolved", {
+						reason: consumed.failure,
+					});
 					await reject(consumed.failure);
 					output.push({ text: "[sticker unavailable]", type: "text" });
 					continue;
@@ -99,18 +126,30 @@ export function createStickerReplyTransform(options: StickerOutputOptions) {
 					item.revokedAt !== null ||
 					item.reviewStatus !== "approved"
 				) {
+					traceLog(logger, "sticker directive unresolved", {
+						itemId: consumed.itemId ?? null,
+						reason: "item_unavailable",
+					});
 					await reject("item_unavailable", consumed.itemId);
 					output.push({ text: "[sticker unavailable]", type: "text" });
 					continue;
 				}
 				const pack = await options.repository.getPack(item.packId);
 				if (pack === undefined || !pack.enabled) {
+					traceLog(logger, "sticker directive unresolved", {
+						itemId: item.id,
+						reason: "pack_unavailable",
+					});
 					await reject("pack_unavailable", item.id);
 					output.push({ text: "[sticker unavailable]", type: "text" });
 					continue;
 				}
 				const media = await options.media.findById(item.mediaId);
 				if (media === undefined) {
+					traceLog(logger, "sticker directive unresolved", {
+						itemId: item.id,
+						reason: "media_missing",
+					});
 					await reject("media_missing", item.id);
 					output.push({ text: "[sticker unavailable]", type: "text" });
 					continue;
@@ -137,6 +176,7 @@ export function createStickerReplyTransform(options: StickerOutputOptions) {
 					targetId: item.id,
 					targetKind: "sticker-item",
 				});
+				resolvedCount += 1;
 			}
 		}
 		const text = output
@@ -144,6 +184,13 @@ export function createStickerReplyTransform(options: StickerOutputOptions) {
 			.map((part) => part.text)
 			.join("\n")
 			.trim();
+		logger?.debug("sticker reply transform completed", {
+			directiveCount,
+			durationMs: elapsedMs(startedAt),
+			outputParts: output.length,
+			resolvedCount,
+			unresolvedCount: directiveCount - resolvedCount,
+		});
 		return { parts: output, text };
 	};
 }

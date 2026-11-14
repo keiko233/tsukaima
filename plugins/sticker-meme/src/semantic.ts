@@ -453,7 +453,14 @@ export interface StickerSemanticClassifier {
 	classify(input: StickerSemanticInput): Promise<StickerSemanticProfile>;
 }
 
+/**
+ * Minimal logging port used by semantic classifiers. `PluginLogger` satisfies it structurally, so
+ * hosts can pass their logger straight through; `trace`/`debug` stay optional for older loggers.
+ */
 export interface SemanticLogger {
+	debug?(message: string, fields?: Record<string, unknown>): void;
+	error?(message: string, fields?: Record<string, unknown>): void;
+	trace?(message: string, fields?: Record<string, unknown>): void;
 	warn(message: string, fields?: Record<string, unknown>): void;
 }
 
@@ -713,8 +720,20 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 			input.mimeType === undefined ||
 			!input.mimeType.startsWith("image/")
 		) {
+			this.#logger?.trace?.("vision sticker classification skipped", {
+				hasBytes: input.bytes !== undefined && input.bytes.byteLength > 0,
+				mimeType: input.mimeType ?? null,
+				title: input.title ?? null,
+			});
 			return base;
 		}
+		const startedAt = Date.now();
+		this.#logger?.trace?.("vision sticker classification started", {
+			bytes: input.bytes.byteLength,
+			mimeType: input.mimeType,
+			model: this.#model,
+			title: input.title ?? null,
+		});
 		try {
 			const content = await this.#request(input, base);
 			const parsed = visionResponseSchema.safeParse(parseVisionJson(content));
@@ -751,11 +770,20 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 					tones.length > 0 ? tones : labels.filter((id) => categoriesById.get(id)?.kind === "tone"),
 				version: 1,
 			};
-			return mergeSemanticProfiles(base, profile, this.#maxLabels ?? 10);
+			const merged = mergeSemanticProfiles(base, profile, this.#maxLabels ?? 10);
+			this.#logger?.debug?.("vision sticker classification completed", {
+				durationMs: Date.now() - startedAt,
+				labels: merged.labels.length,
+				model: this.#model,
+				source: merged.source,
+			});
+			return merged;
 		} catch (error) {
 			if (this.#onError === "throw") throw error;
 			this.#logger?.warn("vision sticker classification failed; using heuristic profile", {
+				durationMs: Date.now() - startedAt,
 				error: error instanceof Error ? error.message : String(error),
+				model: this.#model,
 			});
 			return base;
 		}
@@ -766,14 +794,24 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 		const base64 = Buffer.from(input.bytes ?? new Uint8Array()).toString("base64");
 		const imageDataUrl = `data:${mimeType};base64,${base64}`;
 		const prompt = promptForVision(input);
+		this.#logger?.trace?.("vision provider request started", {
+			hostModel: this.#complete !== undefined,
+			mimeType,
+			model: this.#model,
+		});
 		if (this.#complete !== undefined) {
-			return await this.#complete({
+			const content = await this.#complete({
 				base64,
 				imageDataUrl,
 				mimeType,
 				model: this.#model,
 				prompt,
 			});
+			this.#logger?.trace?.("vision provider request completed", {
+				contentLength: content.length,
+				model: this.#model,
+			});
+			return content;
 		}
 		if (this.#apiKey === undefined || this.#apiKey.length === 0) {
 			throw new Error("Semantic vision mode requires semanticApiKey and semanticModel");
@@ -804,6 +842,10 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 		if (content.length === 0) {
 			throw new Error(`Vision classifier returned no content (${base.labels.join("-")})`);
 		}
+		this.#logger?.trace?.("vision provider request completed", {
+			contentLength: content.length,
+			model: this.#model,
+		});
 		return content;
 	}
 }
@@ -972,6 +1014,7 @@ export async function resolveSemanticClassifier(
 			"Semantic vision mode requires a configured vision model or semanticApiKey and semanticModel",
 		);
 	}
+	options.logger?.debug?.("semantic classifier resolved", { mode: "heuristic" });
 	return new HeuristicSemanticClassifier();
 }
 
@@ -1003,6 +1046,7 @@ export function createSemanticClassifier(
 	if (mode === "vision") {
 		throw new Error("Semantic vision mode requires semanticApiKey and semanticModel");
 	}
+	logger?.debug?.("semantic classifier created", { mode: "heuristic" });
 	return new HeuristicSemanticClassifier();
 }
 

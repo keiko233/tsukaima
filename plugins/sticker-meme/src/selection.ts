@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AuditEntry, PluginLogger, PluginMediaApi } from "@tsukaima/sdk";
 import { normalizeLabel, sanitizeModelText } from "./domain.ts";
 import type { StickerItem, StickerPack } from "./domain.ts";
+import { elapsedMs, traceLog } from "./logging.ts";
 import type { StickerRepository } from "./repository.ts";
 
 export interface StickerSearchInput {
@@ -44,7 +45,7 @@ export interface StickerChooseResult {
 
 export interface StickerSelectionOptions {
 	readonly audit?: { record(entry: AuditEntry): Promise<void> };
-	readonly logger?: PluginLogger;
+	readonly logger?: PluginLogger | undefined;
 	readonly media: PluginMediaApi;
 	readonly now?: () => number;
 	readonly repository: StickerRepository;
@@ -161,21 +162,84 @@ export class StickerSelectionService {
 	}
 
 	async search(input: StickerSearchInput): Promise<readonly StickerCandidate[]> {
+		const startedAt = Date.now();
 		const packs = new Map((await this.#repository.listPacks()).map((pack) => [pack.id, pack]));
 		const limit = Math.min(MAX_SEARCH_LIMIT, Math.max(1, input.limit ?? 8));
+		traceLog(this.#logger, "sticker search started", {
+			emotion: input.emotion ?? null,
+			limit,
+			packId: input.packId ?? null,
+			personaId: input.personaId ?? null,
+			query: input.query ?? null,
+			tags: input.tags ?? [],
+		});
 		const ranked: { candidate: StickerCandidate; score: number }[] = [];
+		let considered = 0;
+		let skipped = 0;
 		for (const item of await this.#repository.listItems(input.packId)) {
+			considered += 1;
 			const pack = packs.get(item.packId);
-			if (pack === undefined || !pack.enabled) continue;
-			if (!item.enabled || item.revokedAt !== null || item.reviewStatus !== "approved") continue;
-			if (item.mediaId.length === 0) continue;
+			if (pack === undefined || !pack.enabled) {
+				skipped += 1;
+				traceLog(this.#logger, "sticker candidate skipped", {
+					itemId: item.id,
+					packId: item.packId,
+					reason: pack === undefined ? "pack_missing" : "pack_disabled",
+				});
+				continue;
+			}
+			if (!item.enabled || item.revokedAt !== null || item.reviewStatus !== "approved") {
+				skipped += 1;
+				traceLog(this.#logger, "sticker candidate skipped", {
+					itemId: item.id,
+					packId: item.packId,
+					reason: !item.enabled
+						? "item_disabled"
+						: item.revokedAt !== null
+							? "item_revoked"
+							: "item_not_approved",
+				});
+				continue;
+			}
+			if (item.mediaId.length === 0) {
+				skipped += 1;
+				traceLog(this.#logger, "sticker candidate skipped", {
+					itemId: item.id,
+					packId: item.packId,
+					reason: "media_missing",
+				});
+				continue;
+			}
 			const media = await this.#media.findById(item.mediaId);
-			if (media === undefined) continue;
+			if (media === undefined) {
+				skipped += 1;
+				traceLog(this.#logger, "sticker candidate skipped", {
+					itemId: item.id,
+					packId: item.packId,
+					reason: "media_missing",
+				});
+				continue;
+			}
 			const score = rankStickerItem(item, pack, input, this.#now());
-			if (score === undefined) continue;
+			if (score === undefined) {
+				skipped += 1;
+				traceLog(this.#logger, "sticker candidate skipped", {
+					itemId: item.id,
+					packId: item.packId,
+					reason: "no_match",
+				});
+				continue;
+			}
+			traceLog(this.#logger, "sticker candidate scored", {
+				emotion: input.emotion ?? null,
+				itemId: item.id,
+				packId: item.packId,
+				query: input.query ?? null,
+				score,
+			});
 			ranked.push({ candidate: candidate(item, pack), score });
 		}
-		return ranked
+		const candidates = ranked
 			.toSorted(
 				(left, right) =>
 					right.score - left.score ||
@@ -186,15 +250,29 @@ export class StickerSelectionService {
 			)
 			.slice(0, limit)
 			.map((entry) => entry.candidate);
+		this.#logger?.debug("sticker search completed", {
+			candidateCount: candidates.length,
+			considered,
+			durationMs: elapsedMs(startedAt),
+			limit,
+			skipped,
+		});
+		return candidates;
 	}
 
 	async choose(
 		input: StickerSearchInput & { readonly itemId?: string; readonly conversationId?: string },
 	): Promise<StickerChooseResult> {
+		const startedAt = Date.now();
 		const conversationId = input.conversationId?.trim();
 		if (conversationId === undefined || conversationId.length === 0) {
 			throw new Error("A conversation is required to choose a sticker");
 		}
+		traceLog(this.#logger, "sticker choose started", {
+			conversationId,
+			itemId: input.itemId ?? null,
+			query: input.query ?? null,
+		});
 		let item: StickerItem | undefined;
 		let pack: StickerPack | undefined;
 		if (input.itemId !== undefined) {
@@ -209,11 +287,20 @@ export class StickerSelectionService {
 		}
 		if (item === undefined || pack === undefined) {
 			await this.#recordDenied(conversationId, "not_found", input.itemId);
+			this.#logger?.debug("sticker choose failed", {
+				durationMs: elapsedMs(startedAt),
+				reason: "not_found",
+			});
 			throw new Error("No sticker candidate matched");
 		}
 		const denial = await this.#selectable(item, pack);
 		if (denial !== undefined) {
 			await this.#recordDenied(conversationId, denial, item.id);
+			this.#logger?.debug("sticker choose failed", {
+				durationMs: elapsedMs(startedAt),
+				itemId: item.id,
+				reason: denial,
+			});
 			throw new Error(`Sticker is not selectable: ${denial}`);
 		}
 		const token = `st_${randomUUID().replace(/-/gu, "")}`;
@@ -233,8 +320,11 @@ export class StickerSelectionService {
 			targetKind: "sticker-item",
 		});
 		this.#logger?.debug("sticker send token issued", {
+			durationMs: elapsedMs(startedAt),
 			expiresAt,
 			itemId: item.id,
+			packId: pack.id,
+			tokenIssued: true,
 		});
 		return {
 			conversationId,

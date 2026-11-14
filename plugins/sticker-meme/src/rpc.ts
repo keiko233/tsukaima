@@ -1,4 +1,4 @@
-import type { PluginContext } from "@tsukaima/sdk";
+import type { PluginContext, PluginLogger, PluginRpcHandler } from "@tsukaima/sdk";
 import { encodeBase64 } from "./archive.ts";
 import {
 	normalizeLabels,
@@ -8,6 +8,7 @@ import {
 	stickerReviewStatusSchema,
 } from "./domain.ts";
 import type { LearningService } from "./learning.ts";
+import { elapsedMs, logErrorMessage, traceLog } from "./logging.ts";
 import {
 	bundleFilesResponse,
 	filesFromBundle,
@@ -27,8 +28,24 @@ import { TelegramStickerImportService } from "./telegram-import.ts";
 interface ServiceBag {
 	readonly importService: StickerImportService;
 	readonly learning: LearningService;
+	readonly logger?: PluginLogger | undefined;
 	readonly onSettled?: () => Promise<void>;
 	readonly repository: StickerRepository;
+}
+
+function resultCounts(result: unknown): Record<string, number> {
+	if (typeof result !== "object" || result === null) return {};
+	const record = result as Record<string, unknown>;
+	const counts: Record<string, number> = {};
+	for (const key of ["candidates", "categories", "files", "items", "models", "packs", "warnings"]) {
+		const value = record[key];
+		if (Array.isArray(value)) counts[`${key}Count`] = value.length;
+	}
+	for (const key of ["classified", "deduped", "missingMedia", "packs", "skipped", "updated"]) {
+		const value = record[key];
+		if (typeof value === "number") counts[key] = value;
+	}
+	return counts;
 }
 
 const asBoolean = (value: unknown): boolean | undefined =>
@@ -132,6 +149,34 @@ function asItemPatch(input: Record<string, unknown>) {
 /** Registers the admin/WebUI procedure surface. The host adds the plugin-id namespace. */
 export function registerStickerRpc(context: PluginContext, services: ServiceBag): void {
 	const { importService, learning, onSettled, repository } = services;
+	const logger = services.logger ?? context.logger;
+	const rpc = {
+		list(): readonly { readonly method: string }[] {
+			return context.rpc.list();
+		},
+		register(method: string, handler: PluginRpcHandler): () => void {
+			return context.rpc.register(method, async (input) => {
+				const startedAt = Date.now();
+				traceLog(logger, "sticker rpc invoked", { procedure: method });
+				try {
+					const result = await handler(input);
+					logger.debug("sticker rpc completed", {
+						durationMs: elapsedMs(startedAt),
+						procedure: method,
+						...resultCounts(result),
+					});
+					return result;
+				} catch (error) {
+					logger.warn("sticker rpc failed", {
+						durationMs: elapsedMs(startedAt),
+						error: logErrorMessage(error),
+						procedure: method,
+					});
+					throw error;
+				}
+			});
+		},
+	};
 	const tracker = new StickerProgressTracker({
 		context,
 		...(onSettled === undefined ? {} : { onSettled }),
@@ -140,9 +185,9 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		record: Record<string, unknown> = {},
 	): Promise<StickerSemanticClassifier> => await configuredClassifier(context, record);
 
-	context.rpc.register("progress", async () => ({ active: tracker.current() }));
+	rpc.register("progress", async () => ({ active: tracker.current() }));
 
-	context.rpc.register("packs.list", async () => {
+	rpc.register("packs.list", async () => {
 		const packs = await repository.listPacks();
 		const items = await repository.listItems();
 		return {
@@ -153,7 +198,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		};
 	});
 
-	context.rpc.register("packs.save", async (input) => {
+	rpc.register("packs.save", async (input) => {
 		const record = recordValue(input);
 		const name = normalizeText(record.name);
 		if (name.length === 0) throw new Error("Pack name is required");
@@ -173,7 +218,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		});
 	});
 
-	context.rpc.register("packs.toggle", async (input) => {
+	rpc.register("packs.toggle", async (input) => {
 		const record = recordValue(input);
 		const packId = normalizeText(record.packId ?? record.id);
 		if (packId.length === 0) throw new Error("packId is required");
@@ -182,7 +227,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		return pack;
 	});
 
-	context.rpc.register("packs.delete", async (input) => {
+	rpc.register("packs.delete", async (input) => {
 		const record = recordValue(input);
 		const packId = normalizeText(record.packId ?? record.id);
 		if (packId.length === 0) throw new Error("packId is required");
@@ -208,7 +253,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		};
 	});
 
-	context.rpc.register("packs.importDir", async (input) => {
+	rpc.register("packs.importDir", async (input) => {
 		const record = recordValue(input);
 		const directory = normalizeText(record.directory ?? record.path);
 		if (directory.length === 0) throw new Error("directory is required");
@@ -234,7 +279,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		}
 	});
 
-	context.rpc.register("packs.importBundle", async (input) => {
+	rpc.register("packs.importBundle", async (input) => {
 		const record = recordValue(input);
 		const dryRun = record.dryRun === true;
 		const zip = normalizeText(record.bundleBase64 ?? record.zipBase64);
@@ -269,7 +314,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		}
 	});
 
-	context.rpc.register("packs.importDsh", async (input) => {
+	rpc.register("packs.importDsh", async (input) => {
 		const record = recordValue(input);
 		const directory = normalizeText(record.directory ?? record.path);
 		if (directory.length === 0) throw new Error("directory is required");
@@ -294,7 +339,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		}
 	});
 
-	context.rpc.register("telegram.import", async (input) => {
+	rpc.register("telegram.import", async (input) => {
 		const record = recordValue(input);
 		const reference = normalizeText(record.url ?? record.reference ?? record.setName);
 		if (reference.length === 0) throw new Error("Telegram sticker set URL or name is required");
@@ -311,9 +356,10 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 			normalizeText(record.apiBaseUrl) || normalizeText(settings.telegramApiBaseUrl);
 		const client = new TelegramStickerClient({
 			...(apiBaseUrl.length === 0 ? {} : { apiBaseUrl }),
+			logger,
 			token,
 		});
-		const service = new TelegramStickerImportService({ client, media, repository });
+		const service = new TelegramStickerImportService({ client, logger, media, repository });
 		const dryRun = record.dryRun === true;
 		const jobId = tracker.start({ dryRun, kind: "telegram.import", stage: "fetching" });
 		try {
@@ -384,7 +430,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		}
 	});
 
-	context.rpc.register("semantic.reclassify", async (input) => {
+	rpc.register("semantic.reclassify", async (input) => {
 		const record = recordValue(input);
 		const media = context.media;
 		if (media === undefined) throw new Error("Host media bridge is unavailable");
@@ -485,7 +531,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		}
 	});
 
-	context.rpc.register("semantic.models", async () => {
+	rpc.register("semantic.models", async () => {
 		const all = await context.models.listModels();
 		const sorted = [...all].toSorted((left, right) => {
 			const leftVision = isVisionCapablePluginModel(left);
@@ -510,14 +556,14 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		};
 	});
 
-	context.rpc.register("semantic.categories", async () => ({
+	rpc.register("semantic.categories", async () => ({
 		categories: STICKER_SEMANTIC_CATEGORIES.map((category) => ({
 			id: category.id,
 			kind: category.kind,
 		})),
 	}));
 
-	context.rpc.register("packs.export", async (input) => {
+	rpc.register("packs.export", async (input) => {
 		const record = recordValue(input);
 		const packId = normalizeText(record.packId ?? record.id);
 		const result = await importService.exportPacks(packId.length === 0 ? undefined : packId);
@@ -528,14 +574,14 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		};
 	});
 
-	context.rpc.register("items.list", async (input) => {
+	rpc.register("items.list", async (input) => {
 		const record = recordValue(input);
 		const packId = normalizeText(record.packId);
 		const items = await repository.listItems(packId.length === 0 ? undefined : packId);
 		return { items };
 	});
 
-	context.rpc.register("items.update", async (input) => {
+	rpc.register("items.update", async (input) => {
 		const record = recordValue(input);
 		const id = normalizeText(record.id ?? record.itemId);
 		if (id.length === 0) throw new Error("id is required");
@@ -552,7 +598,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		return item;
 	});
 
-	context.rpc.register("candidates.list", async (input) => {
+	rpc.register("candidates.list", async (input) => {
 		const record = recordValue(input);
 		const status = stickerReviewStatusSchema.safeParse(record.status);
 		const items = await repository.listItems();
@@ -563,7 +609,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		};
 	});
 
-	context.rpc.register("candidates.review", async (input) => {
+	rpc.register("candidates.review", async (input) => {
 		const record = recordValue(input);
 		const id = normalizeText(record.id ?? record.itemId);
 		const action = normalizeText(record.action);
@@ -598,7 +644,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		return item;
 	});
 
-	context.rpc.register("stats", async () => {
+	rpc.register("stats", async () => {
 		const stats = await repository.stats();
 		const packs = await repository.listPacks();
 		const items = await repository.listItems();
@@ -615,7 +661,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		};
 	});
 
-	context.rpc.register("learn", async (input) => {
+	rpc.register("learn", async (input) => {
 		const record = recordValue(input);
 		const bytesBase64 = normalizeText(record.bytesBase64 ?? record.base64);
 		const description = typeof record.description === "string" ? record.description : undefined;
@@ -641,7 +687,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		return result;
 	});
 
-	context.rpc.register("preview", async (input) => {
+	rpc.register("preview", async (input) => {
 		const record = recordValue(input);
 		let mediaId = normalizeText(record.mediaId);
 		let mimeType = normalizeText(record.mimeType, "image/png");

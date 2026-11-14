@@ -1,4 +1,6 @@
 import { Api } from "grammy";
+import type { PluginLogger } from "@tsukaima/sdk";
+import { elapsedMs, logErrorMessage, traceLog } from "./logging.ts";
 
 const TELEGRAM_HOSTS = new Set(["t.me", "telegram.me", "telegram.dog", "www.t.me"]);
 const SET_NAME_PATTERN = /^[A-Za-z0-9_]{1,64}$/u;
@@ -34,9 +36,21 @@ export interface TelegramStickerSetReference {
  * Accept the links people actually paste: `https://t.me/addstickers/name`, `tg://addstickers?set=name`,
  * a bare set name, and the `addstickers/name` shorthand.
  */
-export function parseTelegramStickerSetReference(value: string): TelegramStickerSetReference {
+export function parseTelegramStickerSetReference(
+	value: string,
+	logger?: PluginLogger,
+): TelegramStickerSetReference {
 	const input = value.trim();
 	if (input.length === 0) throw new Error("Telegram sticker set link or name is required");
+	const reference = parseReference(input);
+	traceLog(logger, "telegram sticker set reference parsed", {
+		setName: reference.setName,
+		inputKind: /^https?:\/\//iu.test(input) ? "url" : /^tg:\/\//iu.test(input) ? "tg_url" : "name",
+	});
+	return reference;
+}
+
+function parseReference(input: string): TelegramStickerSetReference {
 	if (/^tg:\/\//iu.test(input)) {
 		const url = new URL(input);
 		if (url.hostname.toLowerCase() !== "addstickers") {
@@ -75,6 +89,7 @@ function assertSetName(value: string): void {
 export interface TelegramStickerClientOptions {
 	readonly apiBaseUrl?: string;
 	readonly fetch?: typeof fetch;
+	readonly logger?: PluginLogger | undefined;
 	readonly timeoutSeconds?: number;
 	readonly token: string;
 }
@@ -113,12 +128,14 @@ export class TelegramStickerClient implements TelegramStickerSource {
 	readonly #api: Api;
 	readonly #apiRoot: string;
 	readonly #fetch: typeof fetch;
+	readonly #logger: PluginLogger | undefined;
 	readonly #token: string;
 
 	constructor(options: TelegramStickerClientOptions) {
 		const token = options.token.trim();
 		if (token.length === 0) throw new Error("Telegram bot token is required");
 		this.#token = token;
+		this.#logger = options.logger;
 		this.#apiRoot = normalizeApiBaseUrl(options.apiBaseUrl);
 		this.#fetch = options.fetch ?? fetch;
 		this.#api = new Api(token, {
@@ -129,11 +146,13 @@ export class TelegramStickerClient implements TelegramStickerSource {
 	}
 
 	async getStickerSet(name: string): Promise<TelegramStickerSet> {
+		const startedAt = Date.now();
+		this.#logger?.debug("telegram getStickerSet started", { setName: name });
 		try {
 			const set = await this.#api.getStickerSet(name);
 			const isAnimated = set.stickers.some((sticker) => sticker.is_animated);
 			const isVideo = set.stickers.some((sticker) => sticker.is_video);
-			return {
+			const result: TelegramStickerSet = {
 				isAnimated,
 				isVideo,
 				name: set.name,
@@ -154,19 +173,38 @@ export class TelegramStickerClient implements TelegramStickerSource {
 				...(set.thumbnail === undefined ? {} : { thumbnailFileId: set.thumbnail.file_id }),
 				title: set.title,
 			};
+			this.#logger?.debug("telegram getStickerSet completed", {
+				durationMs: elapsedMs(startedAt),
+				setName: result.name,
+				stickerCount: result.stickers.length,
+			});
+			return result;
 		} catch (error) {
+			this.#logger?.warn("telegram getStickerSet failed", {
+				durationMs: elapsedMs(startedAt),
+				error: logErrorMessage(error),
+				setName: name,
+			});
 			throw telegramError(error);
 		}
 	}
 
 	async downloadFile(fileId: string): Promise<TelegramDownloadedFile> {
+		const startedAt = Date.now();
+		this.#logger?.debug("telegram sticker download started", { fileId });
 		let file;
 		try {
 			file = await this.#api.getFile(fileId);
 		} catch (error) {
+			this.#logger?.warn("telegram sticker download failed", {
+				durationMs: elapsedMs(startedAt),
+				error: logErrorMessage(error),
+				fileId,
+			});
 			throw telegramError(error);
 		}
 		if (file.file_path === undefined || file.file_path.length === 0) {
+			this.#logger?.warn("telegram sticker download has no file path", { fileId });
 			throw new Error("Telegram did not return a download path for this sticker");
 		}
 		const url = `${this.#apiRoot}/file/bot${this.#token}/${file.file_path}`;
@@ -174,16 +212,33 @@ export class TelegramStickerClient implements TelegramStickerSource {
 		try {
 			response = await this.#fetch(url);
 		} catch (error) {
+			this.#logger?.warn("telegram sticker download failed", {
+				durationMs: elapsedMs(startedAt),
+				error: logErrorMessage(error),
+				fileId,
+			});
 			throw new Error(
 				`Telegram file download failed: ${error instanceof Error ? error.message : String(error)}`,
 				{ cause: error },
 			);
 		}
 		if (!response.ok) {
+			this.#logger?.warn("telegram sticker download failed", {
+				durationMs: elapsedMs(startedAt),
+				fileId,
+				status: response.status,
+			});
 			throw new Error(`Telegram file download failed with HTTP ${response.status}`);
 		}
+		const bytes = new Uint8Array(await response.arrayBuffer());
+		this.#logger?.debug("telegram sticker download completed", {
+			bytes: bytes.byteLength,
+			durationMs: elapsedMs(startedAt),
+			fileId,
+			filePath: file.file_path,
+		});
 		return {
-			bytes: new Uint8Array(await response.arrayBuffer()),
+			bytes,
 			filePath: file.file_path,
 			...(file.file_size === undefined ? {} : { fileSize: file.file_size }),
 		};

@@ -1,7 +1,9 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
+import type { PluginLogger } from "@tsukaima/sdk";
 import { safeRelativePath } from "./domain.ts";
+import { elapsedMs } from "./logging.ts";
 
 export interface ImportFile {
 	readonly path: string;
@@ -34,7 +36,9 @@ function readEntry(
 }
 
 /** Read a ZIP archive into path -> bytes pairs without writing it to disk. */
-export function readZipEntries(data: Uint8Array): ImportFile[] {
+export function readZipEntries(data: Uint8Array, logger?: PluginLogger): ImportFile[] {
+	const startedAt = Date.now();
+	logger?.info("ZIP archive read started", { bytes: data.byteLength });
 	let directoryOffset = data.length - 22;
 	while (directoryOffset >= 0 && readUint32(data, directoryOffset) !== endOfDirectorySignature) {
 		directoryOffset -= 1;
@@ -76,11 +80,20 @@ export function readZipEntries(data: Uint8Array): ImportFile[] {
 		});
 		offset += 46 + nameLength + extraLength + commentLength;
 	}
+	logger?.info("ZIP archive read completed", {
+		durationMs: elapsedMs(startedAt),
+		fileCount: files.length,
+	});
 	return files;
 }
 
 /** Read a pack directory recursively; only regular files with safe relative names are kept. */
-export async function readDirectoryFiles(directory: string): Promise<ImportFile[]> {
+export async function readDirectoryFiles(
+	directory: string,
+	logger?: PluginLogger,
+): Promise<ImportFile[]> {
+	const startedAt = Date.now();
+	logger?.info("sticker pack directory scan started", { directory });
 	const files: ImportFile[] = [];
 	const walk = async (current: string, prefix: string): Promise<void> => {
 		const entries = await fs.readdir(current, { withFileTypes: true });
@@ -99,6 +112,11 @@ export async function readDirectoryFiles(directory: string): Promise<ImportFile[
 		}
 	};
 	await walk(directory, "");
+	logger?.info("sticker pack directory scan completed", {
+		directory,
+		durationMs: elapsedMs(startedAt),
+		fileCount: files.length,
+	});
 	return files;
 }
 
