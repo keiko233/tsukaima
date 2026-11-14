@@ -9,7 +9,9 @@ import {
 	DSH_CONFIG_AREAS,
 	importDshMemory,
 	importDshSchedulesAndRequests,
+	inspectDshSnapshot,
 	mapDshConfigText,
+	normalizeSnapshot,
 	parseDshMemePacks,
 	parseSessionV4Bytes,
 	parseSessionV4File,
@@ -140,6 +142,71 @@ describe("offline DSH snapshot capture", () => {
 	});
 });
 
+describe("captured snapshot ingestion", () => {
+	test("remote script extracts each volume as its own tar stream", () => {
+		const script = buildSnapshotRemoteScript({
+			container: "synthetic-container",
+			host: "synthetic-ssh-host",
+			project: "/synthetic/project",
+		});
+		// A tar extractor stops at the first end-of-archive marker, so concatenated volume
+		// archives must never share one extractor.
+		expect(script).toContain('tar -C / -cf - "${path#/}" | tar -C /out/snapshot -xf -');
+		expect(script).not.toContain("done | tar");
+	});
+
+	test("reads only files/ from a captured snapshot and never parses its inventory as sessions", async () => {
+		const snapshot = join(root, "captured");
+		const sessionDir = join(
+			snapshot,
+			"files/dsh/home/node/.dsh/sessions/--workspace--/session-captured",
+		);
+		await fs.mkdir(sessionDir, { recursive: true });
+		await fs.writeFile(
+			join(sessionDir, "session.v4.jsonl"),
+			[
+				JSON.stringify(sessionRecord({ id: "session-captured" })),
+				JSON.stringify(event("user/message", 1, { text: "hello", userId: "qq_10001" })),
+				JSON.stringify(event("assistant/message", 2, { text: "hi" })),
+			].join("\n"),
+		);
+		await fs.writeFile(join(snapshot, "manifest.json"), JSON.stringify({ version: 1, files: [] }));
+		await fs.writeFile(
+			join(snapshot, "files.jsonl"),
+			`${JSON.stringify({ path: "dsh/home/node/.dsh/sessions/inventory-row", size: 1 })}\n`,
+		);
+		await fs.writeFile(join(snapshot, "errors.jsonl"), "");
+		const source: SnapshotSource = [[snapshot, "snapshot"]];
+		const inventory = await inspectDshSnapshot(source);
+		expect(inventory.sessions.some((path) => path.endsWith("session.v4.jsonl"))).toBe(true);
+		expect(inventory.sessions.some((path) => path.endsWith("files.jsonl"))).toBe(false);
+		const normalized = await normalizeSnapshot(source);
+		expect(normalized.database.conversations).toHaveLength(1);
+		expect(normalized.database.conversations[0]?.sourceId).toBe("session-captured");
+		expect(normalized.database.messages.length).toBeGreaterThanOrEqual(2);
+	});
+
+	test("excludes browser profile and session projection caches by default", async () => {
+		const source = join(root, "source");
+		await fs.mkdir(join(source, "home/node/.dsh/chrome-profile/Default"), { recursive: true });
+		await fs.mkdir(join(source, "home/node/.dsh/storages/session_projcache"), { recursive: true });
+		await fs.mkdir(join(source, "home/node/.dsh/sessions"), { recursive: true });
+		await fs.writeFile(join(source, "home/node/.dsh/chrome-profile/Default/Preferences"), "{}");
+		await fs.writeFile(
+			join(source, "home/node/.dsh/storages/session_projcache/sessions.json"),
+			"{}",
+		);
+		await fs.writeFile(join(source, "home/node/.dsh/sessions/keep.jsonl"), "{}");
+		const result = await captureSnapshot({
+			output: join(root, "out"),
+			sources: [[source, "dsh"]],
+		});
+		expect(result.manifest.files.map((file) => file.path)).toEqual([
+			"dsh/home/node/.dsh/sessions/keep.jsonl",
+		]);
+	});
+});
+
 describe("DSH session v4 streaming parser", () => {
 	test("decompresses zstd, resumes after malformed records, and preserves unknown fields", async () => {
 		const lines = [
@@ -179,6 +246,22 @@ describe("DSH session v4 streaming parser", () => {
 		expect(parsed.session?.attachments[0]?.path).toBe("media/synthetic.png");
 		expect(parsed.session?.messages[1]?.references.some((ref) => ref.targetSeq === 1)).toBe(true);
 		expect(parsed.session?.unknownHeaderFields).toContain("customHeader");
+	});
+
+	test("parseSessionV4Bytes decompresses zstd frames instead of parsing them as text", async () => {
+		const lines = [
+			JSON.stringify(sessionRecord({ id: "session-bytes-zstd" })),
+			JSON.stringify(event("user/message", 1, { text: "hello", userId: "qq_10001" })),
+			JSON.stringify(event("assistant/message", 2, { text: "hi" })),
+		];
+		const compressed = Bun.zstdCompressSync(Buffer.from(lines.join("\n")));
+		const parsed = await parseSessionV4Bytes(compressed, {
+			sessionIdFallback: "session-bytes-zstd",
+		});
+		expect(parsed.session?.version).toBe(4);
+		expect(parsed.session?.messages).toHaveLength(2);
+		expect(parsed.diagnostics.malformedRecords).toBe(0);
+		expect(parsed.diagnostics.errors).toHaveLength(0);
 	});
 
 	test("reports unsupported schema versions explicitly instead of importing them", async () => {

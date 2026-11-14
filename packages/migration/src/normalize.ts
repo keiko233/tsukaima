@@ -4,7 +4,7 @@ import { isCredentialLikeKey } from "./dsh-baseline.ts";
 import { redactSecrets } from "./secrets.ts";
 import { DSH_SOURCE, inspectDshSnapshot, type SnapshotSource } from "./dsh-inspect.ts";
 import { sha256Bytes, sha256String, stableStringify } from "./fs.ts";
-import { listFiles } from "./fs.ts";
+import { listFiles, resolveSnapshotRoot } from "./fs.ts";
 import { readZip } from "./zip.ts";
 import {
 	mergeDecisionReports,
@@ -463,10 +463,11 @@ async function sourceEntries(source: SnapshotSource): Promise<SourceEntry[]> {
 	for (const [root, label] of source) {
 		const stats = await fs.stat(root);
 		if (stats.isDirectory()) {
-			for (const file of await listFiles(root)) {
+			const dataRoot = await resolveSnapshotRoot(root);
+			for (const file of await listFiles(dataRoot)) {
 				entries.push({
 					absolutePath: file,
-					path: `${label}/${relative(root, file).replaceAll("\\", "/")}`,
+					path: `${label}/${relative(dataRoot, file).replaceAll("\\", "/")}`,
 				});
 			}
 		} else if (stats.isFile()) {
@@ -483,7 +484,7 @@ async function readTextSource(source: SnapshotSource, path: string): Promise<str
 	if (!sourcePath) {
 		return "";
 	}
-	const localPath = join(sourcePath, entryName);
+	const localPath = join(await resolveSnapshotRoot(sourcePath), entryName);
 	if (sourcePath.toLowerCase().endsWith(".zip")) {
 		const files = Object.entries(await readZip(sourcePath));
 		return files.find(([name]) => name === entryName)?.[1] ?? "";

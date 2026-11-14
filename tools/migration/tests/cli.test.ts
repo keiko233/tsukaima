@@ -50,6 +50,25 @@ describe("migration CLI", () => {
 		}
 	});
 
+	test("dry-run --plan writes the plan file that import consumes", async () => {
+		const directory = await fs.mkdtemp(join(root, "tests/cli-plan-"));
+		try {
+			const planPath = join(directory, "nested/plan.json");
+			const result = Bun.spawnSync(
+				["bun", "run", cli, "dry-run", "--source", baselineFixture, "--plan", planPath],
+				{ cwd: root, env: auditEnvironment() },
+			);
+			expect(result.exitCode).toBe(0);
+			const stdoutPlan = JSON.parse(result.stdout.toString());
+			const filePlan = JSON.parse(await fs.readFile(planPath, "utf8"));
+			expect(filePlan).toEqual(stdoutPlan);
+			expect(filePlan).toHaveProperty("importOrder");
+			expect(filePlan).toHaveProperty("sourceCounts");
+		} finally {
+			await fs.rm(directory, { force: true, recursive: true });
+		}
+	});
+
 	test("emits the ten-part baseline from a local snapshot with CLI target flags", async () => {
 		const result = Bun.spawnSync(
 			[

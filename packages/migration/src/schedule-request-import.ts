@@ -2,7 +2,7 @@ import type { SnapshotSource } from "./dsh-inspect.ts";
 import { promises as fs } from "node:fs";
 import { relative } from "node:path";
 import type { DecisionEntry } from "./decision.ts";
-import { listFiles, sha256String, stableStringify } from "./fs.ts";
+import { listFiles, resolveSnapshotRoot, sha256String, stableStringify } from "./fs.ts";
 import { conversationIdForPlatformKey } from "./memory-import.ts";
 import { mapDshConversationIdentity } from "./session-v4.ts";
 
@@ -341,10 +341,11 @@ async function sourceFiles(
 	for (const [root, label] of source) {
 		const stats = await fs.stat(root).catch(() => null);
 		if (stats?.isDirectory()) {
-			for (const file of await listFiles(root)) {
+			const dataRoot = await resolveSnapshotRoot(root);
+			for (const file of await listFiles(dataRoot)) {
 				files.push({
 					absolutePath: file,
-					path: `${label}/${relative(root, file).replaceAll("\\", "/")}`,
+					path: `${label}/${relative(dataRoot, file).replaceAll("\\", "/")}`,
 				});
 			}
 		} else if (stats?.isFile()) {

@@ -40,6 +40,20 @@ export async function listFiles(root: string): Promise<string[]> {
 	return files;
 }
 
+/**
+ * Resolve a source directory to the tree that holds actual DSH data. A captured snapshot
+ * directory (`manifest.json` + `files/`) keeps the source tree under `files/`; its own
+ * manifest and inventory JSONL are metadata and must never be parsed as DSH records.
+ */
+export async function resolveSnapshotRoot(path: string): Promise<string> {
+	const [manifest, filesDir] = await Promise.all([
+		fs.stat(join(path, "manifest.json")).catch(() => null),
+		fs.stat(join(path, "files")).catch(() => null),
+	]);
+	if (manifest?.isFile() && filesDir?.isDirectory()) return join(path, "files");
+	return path;
+}
+
 export function stableStringify(value: unknown): string {
 	if (Array.isArray(value)) {
 		return `[${value.map(stableStringify).join(",")}]`;

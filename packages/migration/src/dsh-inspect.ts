@@ -1,6 +1,6 @@
 import { basename, relative } from "node:path";
 import { promises as fs } from "node:fs";
-import { listFiles, sha256File, sha256String } from "./fs.ts";
+import { listFiles, resolveSnapshotRoot, sha256File, sha256String } from "./fs.ts";
 import { readZip } from "./zip.ts";
 
 export const DSH_SOURCE = "dsh" as const;
@@ -47,8 +47,9 @@ async function loadSnapshotFiles(source: SnapshotSource): Promise<{
 	for (const [path, label] of source) {
 		const stats = await fs.stat(path);
 		if (stats.isDirectory()) {
-			for (const file of await listFiles(path)) {
-				const snapshotPath = `${label}/${relative(path, file).replaceAll("\\", "/")}`;
+			const root = await resolveSnapshotRoot(path);
+			for (const file of await listFiles(root)) {
+				const snapshotPath = `${label}/${relative(root, file).replaceAll("\\", "/")}`;
 				files.push({
 					path: snapshotPath,
 					source: path,
