@@ -1,9 +1,10 @@
 # Database design
 
-Tsukaima has two SQLite databases with separate ownership and migration paths:
+Tsukaima has three layers of SQLite storage with separate ownership and migration paths:
 
 1. `durable.sqlite` — owned by `pi-durable`.
 2. `domain.sqlite` — owned by Drizzle and application services.
+3. `plugins/<plugin-id>.sqlite` — owned by one plugin each.
 
 They may live in the same data directory but must not be accessed as one database. No SQL joins cross the boundary. Cross-database references are resolved in domain services.
 
@@ -17,11 +18,65 @@ data/
   domain.sqlite
   domain.sqlite-wal
   domain.sqlite-shm
+  plugins/
+    sticker_meme.sqlite
+    proactive_scheduler.sqlite
+    <sanitized-plugin-id>.sqlite
   blobs/
     <first two sha256 bytes>/<full sha256>
 ```
 
 `blobs/` stores attachments and imported media. File names are content hashes. Metadata lives in `domain.sqlite`.
+
+## Plugin databases
+
+Every plugin with a migrations declaration owns one SQLite file under `data/plugins/`. The file
+name is the sanitized plugin id (`sticker-meme` becomes `sticker_meme.sqlite`), so two plugin ids
+that would collide are rejected instead of sharing a file.
+
+Plugin databases:
+
+- are opened, migrated, and closed by the host (`PluginDatabaseStore`), not by the plugin;
+- contain their own `_tsukaima_plugin_migrations` ledger, so deleting the file removes the schema
+  and its migration history together;
+- may use any table names because isolation is by file, not by the old `plugin_<id>_` prefix
+  (existing plugins keep their prefixed names for compatibility);
+- may not `ATTACH`/`DETACH` another database or `VACUUM INTO` a file;
+- are only exposed to `host`-mode plugins; worker plugins use `storage` and RPC.
+
+### Plugin migration files
+
+Migrations live next to the plugin, not in `tsukaima.plugin.json`. The manifest only declares the
+directory:
+
+```json
+"migrations": { "directory": "migrations" }
+```
+
+```text
+plugins/sticker-meme/
+  migrations/
+    0001_packs.sql
+    0001_packs.down.sql
+    0002_items.sql
+    0002_items.down.sql
+    ...
+```
+
+A file named `<version>_<name>.sql` has the version before the first underscore (`0001`). Files
+are applied in numeric-aware order. `<version>_<name>.down.sql` is the rollback plan. Checksums are
+recorded in the plugin database; editing an applied migration fails startup until it is rolled
+back or the plugin database is recreated.
+
+### Moving from the shared database
+
+Older versions created `plugin_<sanitized-id>_*` tables in `domain.sqlite`. On startup, after a
+plugin database is migrated, the host looks for those legacy tables. Tables that exist in the new
+plugin schema are copied with the intersection of their columns, then dropped from the domain
+database. Tables without a matching plugin table are left in place and logged as orphaned, so a
+renamed or removed table is never silently discarded. The legacy `plugin_migrations` ledger rows
+for that plugin are deleted after a successful move. The import is idempotent: a crash between
+copy and drop is repaired on the next startup.
 
 ## Durable database
 

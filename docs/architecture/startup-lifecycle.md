@@ -76,6 +76,11 @@ Steps:
 
 The migration runner must be embedded in the app startup path, not left as a manual deployment command. A separate CLI may exist for development, but production startup is authoritative.
 
+Immediately after core migrations, the lifecycle loads each enabled plugin's declared migration
+directory, opens `data/plugins/<sanitized-id>.sqlite`, applies pending plugin migrations, and moves
+any legacy `plugin_<id>_*` tables out of `domain.sqlite`. A plugin migration failure fails startup
+before any plugin `setup()` runs.
+
 Migration rules:
 
 - run migrations synchronously during boot
@@ -138,7 +143,7 @@ plugin directories.
 1. Parse and validate each manifest with Zod.
 2. Install into the domain plugin registry with granted permissions and a run mode.
 3. Build each plugin's `PluginContext` from host services (channels, settings, requests,
-   audit, hooks, logger).
+   audit, hooks, logger, and the plugin's own database handle when it declared migrations).
 4. Run `setup(context)` in the host process (or a worker for worker-mode plugins) and wait
    for completion.
 5. Record plugin status and let plugins register channels, tools, hooks, and UI.
