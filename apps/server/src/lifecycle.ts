@@ -20,6 +20,7 @@ import {
 import {
 	auditLog,
 	conversations,
+	media,
 	type ElainaDatabase,
 	migrateDomainDatabase,
 	openDomainDatabase,
@@ -29,7 +30,12 @@ import { eq } from "drizzle-orm";
 import { createPluginToolsExtension, type AuditEntry, type ElainaPlugin } from "@elaina/sdk";
 import { MigrationRegistry, type PluginMigrationPlan } from "@elaina/plugin-registry";
 import { runBackupDrill as executeBackupDrill, type BackupDrillReport } from "@elaina/migration";
-import type { ChannelNotice, ChannelRequest, MessageEnvelope } from "@elaina/contracts";
+import type {
+	ChannelNotice,
+	ChannelRequest,
+	MessageEnvelope,
+	MessagePart,
+} from "@elaina/contracts";
 import { loadConfig, type ElainaConfig } from "./config.ts";
 import { createLogger, LogBuffer, type Logger } from "./logging.ts";
 import { readRuntimeSettings, type RuntimeSettings } from "./runtime-settings.ts";
@@ -224,6 +230,7 @@ export class ElainaLifecycle {
 			audit: (entry) => this.writeAudit(entry),
 			database: () => this.domainDatabase,
 			host: () => this.conversationHost,
+			ingestMedia: (part) => this.ingestInboundMedia(part),
 			logger: this.runtimeLog,
 			onInboundTrigger: (conversationId) =>
 				this.replyDispatcher.cancelPendingOutput(conversationId),
@@ -459,6 +466,23 @@ export class ElainaLifecycle {
 				await this.replyDispatcher.handleAnswer(answer);
 			},
 			onLiveRun: (state) => this.forwardLiveRun(state),
+			resolveImage: async (part) => {
+				if (part.type !== "image") return undefined;
+				// Only bytes already in the media store can be shown to the model. A part that only
+				// carries a remote URL has not been fetched, so it stays a placeholder rather than
+				// blocking the turn on an outbound request.
+				const sha256 = part.sha256 ?? (await this.mediaShaFor(part.mediaId));
+				if (sha256 === undefined) return undefined;
+				try {
+					const bytes = await this.media.readBytes(sha256);
+					return {
+						data: Buffer.from(bytes).toString("base64"),
+						mimeType: part.mimeType ?? "image/png",
+					};
+				} catch {
+					return undefined;
+				}
+			},
 			storage: this.durableStorage,
 		});
 		const persistedSessions = await this.domainDatabase
@@ -695,6 +719,51 @@ export class ElainaLifecycle {
 			.limit(1)
 			.all();
 		return row?.id;
+	}
+
+	/**
+	 * Store an inbound media part's bytes and rewrite the part to reference them.
+	 *
+	 * Channels hand over a remote URL or a platform file reference; nothing else fetches it. Until
+	 * the bytes land in the media store, the transcript has nothing to render and the model only
+	 * sees a placeholder.
+	 */
+	private async ingestInboundMedia(part: MessagePart): Promise<MessagePart> {
+		if (part.type !== "image" && part.type !== "sticker") return part;
+		// Already content-addressed: the bytes are here.
+		if (part.sha256 !== undefined && /^[0-9a-f]{64}$/iu.test(part.sha256)) {
+			const existing = await this.media.findBySha(part.sha256);
+			if (existing !== undefined) {
+				return { ...part, mediaId: existing.id, sha256: existing.sha256 };
+			}
+		}
+		if (part.sourceUrl === undefined) return part;
+		const stored = await this.media.storeFromUrl(part.sourceUrl, {
+			kind: part.type === "sticker" ? "sticker" : "image",
+			...(part.mimeType === undefined ? {} : { mimeType: part.mimeType }),
+			source: "channel",
+		});
+		return {
+			...part,
+			mediaId: stored.id,
+			mimeType: stored.mimeType,
+			sha256: stored.sha256,
+			sizeBytes: stored.sizeBytes,
+		};
+	}
+
+	/** Content hash behind a media row, for parts that reference bytes by id. */
+	private async mediaShaFor(mediaId: string | undefined): Promise<string | undefined> {
+		if (mediaId === undefined) return undefined;
+		const database = this.domainDatabase;
+		if (database === undefined) return undefined;
+		const [row] = database
+			.select({ sha256: media.sha256 })
+			.from(media)
+			.where(eq(media.id, mediaId))
+			.limit(1)
+			.all();
+		return row?.sha256;
 	}
 
 	/**

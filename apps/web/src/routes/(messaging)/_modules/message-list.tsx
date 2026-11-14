@@ -23,6 +23,7 @@ import type { DeliveryStatus, MessageSummary } from "@/lib/api";
 import type { LiveRunState } from "@elaina/contracts";
 import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
+import { runtimeUrl } from "@/lib/runtime-url";
 import { formatDateTime, formatTimestamp } from "../../_modules/lib/format";
 import { LiveRunMessage } from "./live-run-message";
 import { RunSteps } from "./run-steps";
@@ -98,9 +99,36 @@ function partLabel(part: MessageSummary["parts"][number]): string {
 	}
 }
 
+type MediaPart = Extract<MessageSummary["parts"][number], { type: "image" | "sticker" }>;
+
+/** Images and stickers render as pictures; the rest stay labelled chips. */
+function isInlineImage(part: MessageSummary["parts"][number]): part is MediaPart {
+	return (part.type === "image" || part.type === "sticker") && part.mediaId !== undefined;
+}
+
+function InlineMedia({ part }: { part: MediaPart }) {
+	if (part.mediaId === undefined) return null;
+	const alt = partLabel(part);
+	return (
+		// Not `next/image`: the bytes are served by the host with an immutable cache header, and
+		// the intrinsic size is unknown until the fetch lands.
+		<img
+			src={runtimeUrl(`/media/${encodeURIComponent(part.mediaId)}`)}
+			alt={alt}
+			loading="lazy"
+			className="max-h-80 max-w-full rounded-lg border border-border object-contain"
+			{...(part.width !== undefined && part.height !== undefined
+				? { height: part.height, width: part.width }
+				: {})}
+		/>
+	);
+}
+
 function MessageBody({ message }: { message: MessageSummary }) {
 	const textParts = message.parts.filter((part) => part.type === "text" && part.text);
 	const mediaParts = message.parts.filter((part) => part.type !== "text");
+	const inlineParts = mediaParts.filter((part) => isInlineImage(part));
+	const chipParts = mediaParts.filter((part) => !isInlineImage(part));
 	return (
 		<div className="space-y-1.5">
 			{textParts.length > 0 ? (
@@ -108,9 +136,16 @@ function MessageBody({ message }: { message: MessageSummary }) {
 					{textParts.map((part) => (part.type === "text" ? part.text : "")).join("")}
 				</p>
 			) : null}
-			{mediaParts.length > 0 ? (
+			{inlineParts.length > 0 ? (
 				<div className="flex flex-wrap gap-1.5">
-					{mediaParts.map((part, index) => (
+					{inlineParts.map((part, index) => (
+						<InlineMedia key={`${part.type}-${index}`} part={part} />
+					))}
+				</div>
+			) : null}
+			{chipParts.length > 0 ? (
+				<div className="flex flex-wrap gap-1.5">
+					{chipParts.map((part, index) => (
 						<span
 							key={`${part.type}-${index}`}
 							className="inline-flex items-center gap-1 rounded-lg bg-background/60 px-2 py-1 text-[11px] text-muted-foreground"
@@ -165,12 +200,20 @@ export function MessageList({
 			) : (
 				<>
 					{messages.map((message) => {
-					const self =
-						message.senderExternalId === "webui-admin" ||
-						(message.direction === "outbound" && message.senderKind !== "assistant");
 					const assistant = message.senderKind === "assistant";
+					// Only the WebUI operator sits on the right: it drives the bot directly, so its
+					// turns read as "mine". Everyone else — the assistant and the people in the
+					// chat — stays on the left.
+					const self = message.senderKind === "system";
 					return (
-						<Message key={message.id} from={self ? "user" : "assistant"} className="gap-2.5">
+						<Message
+							key={message.id}
+							from={self ? "user" : "assistant"}
+							// The operator's own turns sit on the right, the assistant on the left;
+							// `from` keeps its semantic meaning for the aria label and bubble variant.
+							align={self ? "end" : "start"}
+							className="gap-2.5"
+						>
 							<MessageAvatar
 								className={cn(assistant && "border border-primary/20 bg-primary/10 text-primary")}
 							>
@@ -184,14 +227,15 @@ export function MessageList({
 										{formatTimestamp(message.occurredAt)}
 									</time>
 								</MessageHeader>
+								{/* Steps come first: they explain the answer rather than trailing it. */}
+								{assistant && message.durableEntryId !== null ? (
+									<RunSteps entryId={message.durableEntryId} sessionId={sessionId} />
+								) : null}
 								<MessageBubble variant={assistant ? "outline" : "soft"} className="max-w-full">
 									<MessageBubbleContent className="max-w-[min(42rem,88%)]">
 										<MessageBody message={message} />
 									</MessageBubbleContent>
 								</MessageBubble>
-								{assistant && message.durableEntryId !== null ? (
-									<RunSteps entryId={message.durableEntryId} sessionId={sessionId} />
-								) : null}
 								{self ? (
 									<MessageFooter>
 										<span className={deliveryClass(message.deliveryStatus)}>

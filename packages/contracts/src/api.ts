@@ -644,8 +644,12 @@ export type LiveToolCall = z.infer<typeof liveToolCallSchema>;
 export const liveRunStateSchema = z.object({
 	/** Committed partial of the in-flight response; grows as the model streams. */
 	partialText: z.string().optional(),
+	/** Committed reasoning so far, when the provider reports it. */
+	partialThinking: z.string().optional(),
 	/** Why the newest run ended without an answer, so a client can show it after the run ends. */
 	failure: z.string().optional(),
+	/** `true` once the run ended, so the client can stop showing it as in flight. */
+	settled: z.boolean(),
 	/** Run start, used for the elapsed-time label. */
 	startedAtMs: z.number().int().nonnegative(),
 	sessionId: z.string().min(1),
@@ -705,6 +709,12 @@ export const runStepSchema = z.discriminatedUnion("kind", [
 export type RunStep = z.infer<typeof runStepSchema>;
 
 export const runStepsSchema = z.object({
+	/**
+	 * Total time the turn spent in the model and its tools, in seconds. The durable transcript
+	 * records per-message durations, not a wall clock for the turn, so this is their sum; it is
+	 * absent when the entries carry no timing.
+	 */
+	durationSeconds: z.number().nonnegative().optional(),
 	/** Steps in transcript order. Empty when the turn produced none worth showing. */
 	steps: z.array(runStepSchema),
 });

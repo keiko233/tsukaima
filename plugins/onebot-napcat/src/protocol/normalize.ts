@@ -108,25 +108,13 @@ const displayMedia = (
 	type: "image" | "sticker",
 ): MessagePart | undefined => {
 	const data = segment.data ?? {};
-	const rawHash = asString(data.sha256) ?? asString(data.hash);
-	const url = asString(data.url);
-	const file = asString(data.file);
-	const fileId = asString(data.file_id);
-	const path = asString(data.path);
-	const reference =
-		rawHash !== undefined && MEDIA_HASH_PATTERN.test(rawHash)
-			? rawHash
-			: (url ?? file ?? path ?? fileId);
-	const hasStructuredReference =
-		(rawHash !== undefined && MEDIA_HASH_PATTERN.test(rawHash)) ||
-		asString(data.url) !== undefined ||
-		asString(data.file_id) !== undefined ||
-		asString(data.path) !== undefined;
-	const refs = hasStructuredReference ? mediaReferences(segment) : {};
+	// `sha256` must hold a content hash and nothing else. A URL or a file id is not a hash, and
+	// storing one there made downstream code treat an un-fetched remote image as if its bytes
+	// were already local — the WebUI rendered nothing and the model saw only a placeholder.
+	const refs = mediaReferences(segment);
 	const previewText = sanitizeText(asString(data.summary) ?? asString(data.name) ?? undefined);
 	const common = {
 		...refs,
-		...(reference === undefined ? {} : { sha256: reference }),
 		...(asString(data.mime_type) === undefined ? {} : { mimeType: asString(data.mime_type) }),
 		...(asNumber(data.size) === undefined ? {} : { sizeBytes: asNumber(data.size) }),
 		...(asNumber(data.width) === undefined ? {} : { width: asNumber(data.width) }),

@@ -8,17 +8,11 @@ mock.module("@/paraglide/messages", () => ({
 		run_steps_empty: () => "No steps.",
 		run_steps_loading: () => "Loading…",
 		run_steps_show: () => "Show steps",
+		run_steps_summary: () => "Steps",
 	},
 }));
 
-const { toActivityItems } = await import("./run-step-items");
-
-/** Narrow to the step variant, which is the only one this module produces. */
-function stepOf(item: unknown) {
-	if (typeof item !== "object" || item === null) throw new Error("expected a step item");
-	if (!("type" in item) || item.type !== "step") throw new Error("expected a step item");
-	return item as { label?: unknown; meta?: unknown; status?: unknown };
-}
+const { toStepRows } = await import("./run-step-items");
 
 const tool = (overrides: Partial<Extract<RunStep, { kind: "tool" }>> = {}): RunStep => ({
 	argumentsText: '{"q":"x"}',
@@ -29,50 +23,72 @@ const tool = (overrides: Partial<Extract<RunStep, { kind: "tool" }>> = {}): RunS
 	...overrides,
 });
 
+const labels = (steps: readonly RunStep[]) =>
+	toStepRows(steps)
+		.filter((row) => row.label !== null)
+		.map((row) => JSON.stringify(row.label));
+
+const bodies = (steps: readonly RunStep[]) =>
+	toStepRows(steps)
+		.filter((row) => row.body !== undefined)
+		.map((row) => String(row.body));
+
 describe("run step rows", () => {
-	test("renders a tool call with its arguments and output", () => {
-		const item = stepOf(toActivityItems([tool()])[0]);
-		expect(item.status).toBe("complete");
-		expect(JSON.stringify(item.label)).toContain("web_search");
-		expect(JSON.stringify(item.meta)).toContain("hit");
+	test("puts reasoning in its own row above its body", () => {
+		const rows = toStepRows([{ kind: "thinking", text: "let me check the logs" }]);
+		expect(rows).toHaveLength(2);
+		expect(JSON.stringify(rows[0]?.label)).toContain("Thinking");
+		expect(rows[1]?.body).toBe("let me check the logs");
 	});
 
-	test("renders reasoning as its own row", () => {
-		const item = stepOf(toActivityItems([{ kind: "thinking", text: "let me check" }])[0]);
-		expect(JSON.stringify(item.label)).toContain("Thinking");
-		expect(JSON.stringify(item.meta)).toContain("let me check");
+	test("renders a tool call and its output as separate rows", () => {
+		const rows = toStepRows([tool()]);
+		expect(rows).toHaveLength(2);
+		expect(JSON.stringify(rows[0]?.label)).toContain("web_search");
+		expect(JSON.stringify(rows[0]?.label)).toContain("q");
+		expect(rows[1]?.body).toBe("hit");
 	});
 
-	test("marks a failing tool", () => {
-		const item = stepOf(toActivityItems([tool({ isError: true, output: "not found" })])[0]);
-		expect(JSON.stringify(item.meta)).toContain("not found");
-		expect(JSON.stringify(item.label)).toContain("destructive");
+	test("marks a failing tool and its output as errors", () => {
+		const rows = toStepRows([tool({ isError: true, output: "not found" })]);
+		expect(rows.every((row) => row.isError === true)).toBe(true);
+		expect(rows[1]?.body).toBe("not found");
 	});
 
-	// The answer already renders in the bubble below; repeating it as a step would duplicate it.
+	// A call that produced nothing should not leave an empty body row behind.
+	test("omits the output row for a tool with no output", () => {
+		expect(toStepRows([tool({ output: "" })])).toHaveLength(1);
+	});
+
+	// The answer already renders in the bubble; repeating it as a step would duplicate it.
 	test("omits answer text because the bubble already shows it", () => {
-		expect(toActivityItems([{ kind: "text", text: "the answer" }])).toEqual([]);
+		expect(toStepRows([{ kind: "text", text: "the answer" }])).toEqual([]);
 	});
 
-	test("renders a run failure as a step", () => {
-		const item = stepOf(toActivityItems([{ detail: "model_error: 500", kind: "failure" }])[0]);
-		expect(JSON.stringify(item.label)).toContain("Run failed");
-		expect(JSON.stringify(item.meta)).toContain("model_error: 500");
+	test("renders a run failure as a labelled row with its detail", () => {
+		const rows = toStepRows([{ detail: "model_error: 500", kind: "failure" }]);
+		expect(JSON.stringify(rows[0]?.label)).toContain("Run failed");
+		expect(rows[1]?.body).toBe("model_error: 500");
 	});
 
 	test("keeps step order as the model produced it", () => {
-		const items = toActivityItems([
+		const order = labels([
 			{ kind: "thinking", text: "first" },
 			tool({ toolName: "a" }),
-			{ kind: "thinking", text: "second" },
 			tool({ toolName: "b" }),
 		]);
-		expect(items).toHaveLength(4);
-		expect(JSON.stringify(stepOf(items[1]).label)).toContain('"a"');
-		expect(JSON.stringify(stepOf(items[3]).label)).toContain('"b"');
+		expect(order[0]).toContain("Thinking");
+		expect(order[1]).toContain('"a"');
+		expect(order[2]).toContain('"b"');
+	});
+
+	test("preserves newlines in reasoning text", () => {
+		expect(bodies([{ kind: "thinking", text: "line one\nline two" }])[0]).toContain(
+			"line one\nline two",
+		);
 	});
 
 	test("returns no rows for an empty step list", () => {
-		expect(toActivityItems([])).toEqual([]);
+		expect(toStepRows([])).toEqual([]);
 	});
 });

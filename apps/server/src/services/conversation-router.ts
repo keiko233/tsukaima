@@ -6,7 +6,7 @@ import {
 	type PiDurableConversationHost,
 	type ResolvedReplyTarget,
 } from "@elaina/core";
-import type { ConversationPolicy } from "@elaina/contracts";
+import type { ConversationPolicy, MessagePart } from "@elaina/contracts";
 import {
 	channelNoticeSchema,
 	conversationPolicySchema,
@@ -52,6 +52,12 @@ export interface ConversationRouterOptions {
 	/** Rate limit for ignored-trigger audit rows, per channel/conversation key. */
 	readonly ignoredAuditIntervalMs?: number;
 	readonly logger: Logger;
+	/**
+	 * Store an inbound media part's bytes and return the part rewritten to reference them.
+	 * Without this an inbound image keeps only its remote URL, so nothing renders and the model
+	 * sees a placeholder.
+	 */
+	readonly ingestMedia?: (part: MessagePart) => Promise<MessagePart>;
 	readonly onInboundTrigger?: (durableConversationId: string) => void;
 	readonly pacing?: ConversationPacingTracker;
 	readonly policy?: ConversationPolicyService;
@@ -107,6 +113,7 @@ export class ConversationRouter {
 	readonly #policy: ConversationPolicyService | undefined;
 	readonly #ingesting = new Set<string>();
 	readonly #ignoredAuditAt = new Map<string, number>();
+	readonly #ingestMedia: ((part: MessagePart) => Promise<MessagePart>) | undefined;
 	readonly #stats = {
 		ambient: 0,
 		direct: 0,
@@ -120,6 +127,7 @@ export class ConversationRouter {
 		this.#database = options.database;
 		this.#host = options.host;
 		this.#ignoredAuditIntervalMs = options.ignoredAuditIntervalMs ?? 60_000;
+		this.#ingestMedia = options.ingestMedia;
 		this.#logger = options.logger;
 		this.#onInboundTrigger = options.onInboundTrigger;
 		this.#pacing = options.pacing;
@@ -367,6 +375,24 @@ export class ConversationRouter {
 		},
 	): Promise<void> {
 		const message = input.envelope;
+		// Fetch media bytes before persisting, so the stored part references local bytes. This is
+		// best-effort: a failed fetch must not drop the message.
+		const parts =
+			this.#ingestMedia === undefined
+				? message.parts
+				: await Promise.all(
+						message.parts.map(async (part) => {
+							try {
+								return await this.#ingestMedia!(part);
+							} catch (error) {
+								this.#logger.warn("inbound media could not be stored", {
+									error: error instanceof Error ? error.message : String(error),
+									type: part.type,
+								});
+								return part;
+							}
+						}),
+					);
 		const now = new Date().toISOString();
 		// Local clock only: outbound rows are stamped from `Date.now()` and both share this
 		// ordering key, so a remote platform timestamp here would reorder the transcript.
@@ -375,14 +401,14 @@ export class ConversationRouter {
 			.insert(messages)
 			.values({
 				chatObjectId: input.target.chatObjectId,
-				contentText: messageText(message.parts),
+				contentText: messageText(parts),
 				conversationId: input.target.sessionId,
 				direction: "inbound",
 				id: randomUUID(),
 				ingestedAt: now,
 				kind: message.channelKind,
 				occurredAt,
-				partsJson: JSON.stringify(message.parts),
+				partsJson: JSON.stringify(parts),
 				platformMessageId: message.source.messageId ?? message.id,
 				rawRefJson: JSON.stringify(message),
 				...(message.target?.replyToEnvelopeId === undefined

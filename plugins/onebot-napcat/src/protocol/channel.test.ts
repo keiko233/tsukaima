@@ -143,8 +143,11 @@ test("normalizes private messages and rejects invalid events", () => {
 		mentions: [{ id: "10001" }],
 		parts: [
 			{ text: "hello ", type: "text" },
-			{ sha256: "sticker.png", type: "sticker" },
-			{ sha256: "https://example.test/image.png", type: "image" },
+			// A file name and a URL are not content hashes: they belong in `channelRef` and
+			// `sourceUrl`, so downstream code cannot mistake an un-fetched remote image for bytes
+			// it already has locally.
+			{ channelRef: "onebot:face:unknown", type: "sticker" },
+			{ sourceUrl: "https://example.test/image.png", type: "image" },
 		],
 		raw: privateEvent,
 		sender: { displayName: "Keiko", id: "10001", platformId: "10001" },
@@ -250,7 +253,10 @@ test("accepts inbound events through the channel", async () => {
 	sockets[0]?.emit("message", [JSON.stringify(groupEvent)]);
 	sockets[0]?.emit("message", [JSON.stringify({ post_type: "meta_event" })]);
 	expect(envelopes).toHaveLength(2);
-	expect(envelopes[0]?.parts).toContainEqual({ sha256: "sticker.png", type: "sticker" });
+	expect(envelopes[0]?.parts).toContainEqual({
+		channelRef: "onebot:face:unknown",
+		type: "sticker",
+	});
 	expect(envelopes[1]?.conversationKey).toEqual({ groupId: "555", kind: "group", peerId: "10001" });
 });
 
