@@ -119,13 +119,21 @@ export function createFakeModel(options: FakeModelOptions = {}): ModelPort {
  */
 export function createSlowStreamingModel(
 	chunks: readonly string[],
-	options: { delayMs?: number; modelId?: string } = {},
+	options: {
+		delayMs?: number;
+		modelId?: string;
+		/** Observe the context the host sends, so a test can assert on image blocks. */
+		onContext?: (context: unknown) => void;
+		/** Declare image input, so a test can exercise the vision path. Defaults to text-only. */
+		supportsImage?: boolean;
+	} = {},
 ): ModelPort {
 	const delayMs = options.delayMs ?? 40;
 	const providerId = "slow-test";
 	const modelId = options.modelId ?? "slow-test-model";
 
-	const stream = (model: { api: string; id: string; provider: string }) => {
+	const stream = (model: { api: string; id: string; provider: string }, context?: unknown) => {
+		options.onContext?.(context);
 		const output = createAssistantMessageEventStream();
 		void (async () => {
 			output.push({
@@ -175,7 +183,7 @@ export function createSlowStreamingModel(
 				contextWindow: 128_000,
 				cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
 				id: modelId,
-				input: ["text"],
+				input: options.supportsImage ? ["text", "image"] : ["text"],
 				maxTokens: 8_000,
 				name: "Slow streaming test model",
 				provider: providerId,

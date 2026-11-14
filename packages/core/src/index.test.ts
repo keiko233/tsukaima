@@ -254,4 +254,70 @@ describe("PiDurableConversationHost", () => {
 			await rm(directory, { force: true, recursive: true });
 		}
 	});
+
+	test("passes resolved image blocks to vision models and withholds them from text-only models", async () => {
+		const visionContent = await runImageTurnWithVision(true);
+		expect(visionContent).toEqual([
+			{ text: "look at this [image]", type: "text" },
+			{ data: "AQID", mimeType: "image/png", type: "image" },
+		]);
+
+		const textOnlyContent = await runImageTurnWithVision(false);
+		expect(textOnlyContent).toBe("look at this [image]");
+	});
 });
+
+async function runImageTurnWithVision(supportsImage: boolean) {
+	const directory = await mkdtemp(join(tmpdir(), "elaina-core-image-"));
+	try {
+		const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+		let observedContext:
+			| {
+					messages?: readonly {
+						role?: string;
+						content?: unknown;
+					}[];
+			  }
+			| undefined;
+		const answers: string[] = [];
+		const host = new PiDurableConversationHost({
+			model: createSlowStreamingModel(["seen"], {
+				delayMs: 5,
+				onContext: (context) => {
+					observedContext = context as typeof observedContext;
+				},
+				supportsImage,
+			}),
+			onAnswer: (answer) => {
+				answers.push(answer.text);
+			},
+			resolveImage: async (part) =>
+				part.type === "image" ? { data: "AQID", mimeType: "image/png" } : undefined,
+			storage,
+		});
+		const conversationId = await host.createConversation();
+		const now = Date.now();
+		await host.append({
+			conversationId,
+			envelope: {
+				...envelope("img-turn", "look at this"),
+				parts: [
+					{ text: "look at this", type: "text" },
+					{ mediaId: "media-1", mimeType: "image/png", type: "image" },
+				],
+				source: { messageId: "img-turn", receivedAtMs: now, timestampMs: now },
+			},
+			forceSubmit: true,
+			submittedAtMs: now,
+		});
+		for (let step = 0; step < 40 && answers.length === 0; step += 1) {
+			await Bun.sleep(25);
+		}
+		expect(answers).toEqual(["seen"]);
+		await host.close();
+		await storage.close(BACKGROUND_CONTEXT);
+		return observedContext?.messages?.find((message) => message.role === "user")?.content;
+	} finally {
+		await rm(directory, { force: true, recursive: true });
+	}
+}

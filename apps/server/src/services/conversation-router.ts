@@ -36,6 +36,7 @@ export interface ConversationIngestResult {
 	readonly chatObjectId: string;
 	readonly classification: TriggerDecision;
 	readonly duplicated: boolean;
+	readonly envelope?: MessageEnvelope;
 	readonly ignored: boolean;
 	readonly sessionId: string;
 }
@@ -243,6 +244,10 @@ export class ConversationRouter {
 			}
 
 			const sender = await this.resolveIdentity(message);
+			// Fetch media bytes before durable append and persistence so both the model turn input
+			// (which resolves local blobs via `mediaId`/`sha256`) and the persisted transcript see
+			// the local media reference. Best-effort: a failed fetch keeps the original part.
+			const hydratedMessage = await this.#hydrateInboundMedia(message);
 			if (trigger.classification !== "ambient") {
 				this.#onInboundTrigger?.(target.durableConversationId);
 				await this.#policy?.ensureHostPolicy(target.sessionId, target.durableConversationId);
@@ -260,12 +265,14 @@ export class ConversationRouter {
 					classification: trigger.classification,
 					collectOnly: cooldownMs > 0,
 					conversationId: target.durableConversationId,
-					envelope: message,
+					envelope: hydratedMessage,
 					submittedAtMs: Date.now(),
 					triggerContext: buildTriggerContext({
 						classification: trigger.classification,
 						result: trigger,
-						...(message.sender.isBot === undefined ? {} : { senderIsBot: message.sender.isBot }),
+						...(hydratedMessage.sender.isBot === undefined
+							? {}
+							: { senderIsBot: hydratedMessage.sender.isBot }),
 					}),
 				});
 				if (cooldownMs > 0) {
@@ -274,7 +281,7 @@ export class ConversationRouter {
 			}
 			await this.#persistInbound(database, {
 				classification: trigger.classification,
-				envelope: message,
+				envelope: hydratedMessage,
 				sender,
 				target,
 			});
@@ -288,12 +295,32 @@ export class ConversationRouter {
 				chatObjectId: target.chatObjectId,
 				classification: trigger.classification,
 				duplicated: false,
+				envelope: hydratedMessage,
 				ignored: false,
 				sessionId: target.sessionId,
 			};
 		} finally {
 			this.#ingesting.delete(ingestionKey);
 		}
+	}
+
+	async #hydrateInboundMedia(envelope: MessageEnvelope): Promise<MessageEnvelope> {
+		if (this.#ingestMedia === undefined) return envelope;
+		const ingestMedia = this.#ingestMedia;
+		const parts = await Promise.all(
+			envelope.parts.map(async (part) => {
+				try {
+					return await ingestMedia(part);
+				} catch (error) {
+					this.#logger.warn("inbound media could not be stored", {
+						error: error instanceof Error ? error.message : String(error),
+						type: part.type,
+					});
+					return part;
+				}
+			}),
+		);
+		return { ...envelope, parts };
 	}
 
 	async #recordIgnored(
@@ -375,24 +402,7 @@ export class ConversationRouter {
 		},
 	): Promise<void> {
 		const message = input.envelope;
-		// Fetch media bytes before persisting, so the stored part references local bytes. This is
-		// best-effort: a failed fetch must not drop the message.
-		const parts =
-			this.#ingestMedia === undefined
-				? message.parts
-				: await Promise.all(
-						message.parts.map(async (part) => {
-							try {
-								return await this.#ingestMedia!(part);
-							} catch (error) {
-								this.#logger.warn("inbound media could not be stored", {
-									error: error instanceof Error ? error.message : String(error),
-									type: part.type,
-								});
-								return part;
-							}
-						}),
-					);
+		const parts = message.parts;
 		const now = new Date().toISOString();
 		// Local clock only: outbound rows are stamped from `Date.now()` and both share this
 		// ordering key, so a remote platform timestamp here would reorder the transcript.

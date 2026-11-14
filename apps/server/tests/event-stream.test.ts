@@ -225,3 +225,54 @@ describe("authenticated live event stream", () => {
 		await lifecycle.stop();
 	});
 });
+
+describe("authenticated media bytes", () => {
+	// The transcript renders `<img src="/media/:id">`; without this route every image is a broken
+	// icon even though the bytes are stored.
+	test("serves stored bytes to a signed-in viewer", async () => {
+		const directory = await createDirectory();
+		const { app, auth, lifecycle } = createApp(adminEnv(directory));
+		await lifecycle.start();
+		try {
+			const stored = await lifecycle.media.store({
+				bytes: Uint8Array.from([0x89, 0x50, 0x4e, 0x47]),
+				kind: "image",
+				mimeType: "image/png",
+				source: "channel",
+			});
+
+			const anonymous = await app.handle(new Request(`http://localhost/media/${stored.id}`));
+			expect(anonymous.status).toBe(401);
+
+			const cookie = await signIn(app);
+			const response = await app.handle(
+				new Request(`http://localhost/media/${stored.id}`, { headers: { cookie } }),
+			);
+			expect(response.status).toBe(200);
+			expect(response.headers.get("content-type")).toBe("image/png");
+			expect(response.headers.get("cache-control")).toContain("immutable");
+			expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+				Uint8Array.from([0x89, 0x50, 0x4e, 0x47]),
+			);
+		} finally {
+			auth.stop();
+			await lifecycle.stop();
+		}
+	});
+
+	test("404s for an unknown media id", async () => {
+		const directory = await createDirectory();
+		const { app, auth, lifecycle } = createApp(adminEnv(directory));
+		await lifecycle.start();
+		try {
+			const cookie = await signIn(app);
+			const response = await app.handle(
+				new Request("http://localhost/media/does-not-exist", { headers: { cookie } }),
+			);
+			expect(response.status).toBe(404);
+		} finally {
+			auth.stop();
+			await lifecycle.stop();
+		}
+	});
+});

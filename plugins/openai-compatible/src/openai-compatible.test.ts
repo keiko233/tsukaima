@@ -186,6 +186,53 @@ describe("openai-compatible plugin", () => {
 		});
 	});
 
+	test("discovers capabilities from modalities.input, display_name, reasoning, and tool_call", async () => {
+		const fetch = mock(async () =>
+			Response.json({
+				data: [
+					{
+						display_name: "Free Mixed",
+						id: "group/free-mixed",
+						modalities: { input: ["text", "image", "audio", "video"], output: ["text"] },
+						reasoning: true,
+						reasoning_levels: ["high"],
+						supported_parameters: ["tools", "tool_choice", "reasoning"],
+						tool_call: true,
+					},
+					{
+						id: "qwen3-plain",
+						input_modalities: ["text"],
+						reasoning: false,
+						tool_call: false,
+					},
+				],
+			}),
+		);
+		const result = await discoverOpenAiCompatibleModels({
+			apiKey: "test-key",
+			baseUrl: "https://models.example/v1",
+			fetch: fetch as unknown as typeof globalThis.fetch,
+		});
+
+		expect(result.models[0]).toMatchObject({
+			defaultReasoningLevel: "high",
+			id: "group/free-mixed",
+			name: "Free Mixed",
+			reasoningLevels: ["high"],
+			supportsAudio: true,
+			supportsImage: true,
+			supportsReasoning: true,
+			supportsTools: true,
+		});
+		expect(result.models[1]).toMatchObject({
+			id: "qwen3-plain",
+			supportsAudio: false,
+			supportsImage: false,
+			supportsReasoning: false,
+			supportsTools: false,
+		});
+	});
+
 	test("maps model flags to the shared plugin catalog vocabulary", () => {
 		const first = resolveOpenAiCompatibleConfig({
 			apiKey: "test-key",

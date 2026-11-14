@@ -113,10 +113,11 @@ const displayMedia = (
 	// were already local — the WebUI rendered nothing and the model saw only a placeholder.
 	const refs = mediaReferences(segment);
 	const previewText = sanitizeText(asString(data.summary) ?? asString(data.name) ?? undefined);
+	const size = asNumber(data.size) ?? asNumber(data.file_size);
 	const common = {
 		...refs,
 		...(asString(data.mime_type) === undefined ? {} : { mimeType: asString(data.mime_type) }),
-		...(asNumber(data.size) === undefined ? {} : { sizeBytes: asNumber(data.size) }),
+		...(size === undefined ? {} : { sizeBytes: size }),
 		...(asNumber(data.width) === undefined ? {} : { width: asNumber(data.width) }),
 		...(asNumber(data.height) === undefined ? {} : { height: asNumber(data.height) }),
 		...(previewText === undefined ? {} : { previewText }),
