@@ -59,6 +59,20 @@ export interface ConversationRouterOptions {
 
 export const messageText = messagePartsText;
 
+/**
+ * Ordering key for the domain timeline. Every row that reaches the timeline must use the same
+ * clock domain, so this is always local receipt time.
+ *
+ * Platform timestamps are NOT a safe ordering key: a remote OneBot host runs its own clock and
+ * nothing guarantees it agrees with this process. NapCat hosts are commonly a few tens of
+ * seconds off, and an inbound message stamped in the future sorts *after* the assistant reply it
+ * caused, which reads as a scrambled transcript. Outbound rows are written from `Date.now()`,
+ * so mixing platform time into the same column splits the timeline across two clock domains.
+ *
+ * The platform timestamp stays available as evidence on `raw_ref_json`.
+ */
+const timelineAt = (now: string): string => now;
+
 const noticeSummary = (notice: ChannelNotice): string => {
 	const actor = notice.actorDisplayName ?? notice.actorId ?? "unknown";
 	const target = notice.targetUserId ?? notice.targetMessageId;
@@ -353,10 +367,10 @@ export class ConversationRouter {
 		},
 	): Promise<void> {
 		const message = input.envelope;
-		const occurredAt = new Date(
-			message.source.timestampMs > 0 ? message.source.timestampMs : Date.now(),
-		).toISOString();
 		const now = new Date().toISOString();
+		// Local clock only: outbound rows are stamped from `Date.now()` and both share this
+		// ordering key, so a remote platform timestamp here would reorder the transcript.
+		const occurredAt = timelineAt(now);
 		await database
 			.insert(messages)
 			.values({
@@ -451,7 +465,11 @@ export class ConversationRouter {
 				isBot: false,
 				platformId: actorId ?? "system",
 			},
-			source: { messageId: value.id, timestampMs: value.occurredAtMs },
+			source: {
+				messageId: value.id,
+				receivedAtMs: Date.now(),
+				timestampMs: value.occurredAtMs,
+			},
 		};
 		const sender = actorId === undefined ? undefined : await this.resolveIdentity(envelope);
 		const target = await this.resolveSession(envelope, sender?.displayName ?? displayName);
@@ -468,10 +486,8 @@ export class ConversationRouter {
 		if (existing.length > 0) {
 			return { duplicated: true, persisted: true, sessionId: target.sessionId };
 		}
-		const occurredAt = new Date(
-			value.occurredAtMs > 0 ? value.occurredAtMs : Date.now(),
-		).toISOString();
 		const now = new Date().toISOString();
+		const occurredAt = timelineAt(now);
 		await database
 			.insert(messages)
 			.values({

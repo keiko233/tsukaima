@@ -28,6 +28,13 @@ export const messageEnvelopeSchema = z.object({
 	source: z.object({
 		messageId: z.string().min(1).optional(),
 		timestampMs: z.number().int().nonnegative(),
+		/**
+		 * Local clock time at which this process observed the event. Ordering and burst pacing use
+		 * this instead of `timestampMs`, because `timestampMs` comes from the remote platform's
+		 * clock and nothing guarantees the two agree. Optional so older stored envelopes and
+		 * channel-agnostic producers keep working; consumers fall back to `timestampMs`.
+		 */
+		receivedAtMs: z.number().int().nonnegative().optional(),
 		sequence: z.number().int().nonnegative().optional(),
 	}),
 	target: z

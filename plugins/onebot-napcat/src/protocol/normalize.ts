@@ -633,7 +633,11 @@ const buildEnvelope = (
 		sender,
 		source: {
 			messageId,
+			// Platform clock. Kept as evidence; never used for ordering.
 			timestampMs: Number.isSafeInteger(event.time) && event.time >= 0 ? event.time * 1_000 : 0,
+			// Local clock. The OneBot host runs its own clock, so this is the only value that can
+			// be compared against outbound rows written from `Date.now()`.
+			receivedAtMs: Date.now(),
 		},
 		target:
 			typeof replyId !== "string" && typeof replyId !== "number"
