@@ -223,15 +223,18 @@ bun run test:e2e
 
 Observed results: secret scan passes over the tracked tree; WebUI i18n checks, i18n lint, and the
 production build exit `0`; `bun run check` passes lint, formatting, all TypeScript projects, and
-520 tests across 96 files; `bun run test:e2e` passes 5 Chromium specs against the isolated stack.
+521 tests across 96 files; `bun run test:e2e` passes 5 Chromium specs against the isolated stack.
 
 Live DSH rehearsal (this working tree):
 
 - Read-only capture produced 13,222 files / 989 MB with 0 capture errors; 355 structured files were
   redacted and 91 secret-classified files were replaced by placeholders.
-- Dry-run and import against an isolated lab database mapped 653 conversations (3 group, 5 private,
-  645 webui), 47,514 messages, 1,254 source memories, 112 attachments, 2 personas, 138 settings,
-  6 sticker packs / 339 stickers, and the request/scheduler rows.
+- Dry-run and import against an isolated lab database mapped 648 conversations (3 group, 5 private,
+  640 webui), 51,398 messages, 1,254 source memories, 287 attachments, 2 personas, 138 settings,
+  6 sticker packs / 339 stickers, 26 users, and the request/scheduler rows. QQ chat history now
+  includes the NapCat history dump, every `recent.jsonl` window (including backups and pending
+  rebuilds), `cross-recent.jsonl`, archived history rows, and successful control-session send
+  tool calls; assistant reports from non-chat sessions are not treated as chat.
 - Every verify check passed (checksums, counts, references, secrets, plugin config, rendering, fake
   model smoke turn). Re-import returned the original completed run id with identical counts.
 - The rehearsal exposed and fixed captured-snapshot wrapper ingestion, concatenated-volume tar
@@ -257,10 +260,11 @@ The full built-in plugin inventory and migration order are tracked in
 
 ## Current known limitations
 
-- QQ inbound history is reconstructed from the NapCat bridge's per-turn `【最近群聊】` context, so a
-  line that never appeared in any context window, or was posted while the bridge was offline, can
-  be missing. Reconstructed inbound timestamps have minute precision and infer the UTC date from the
-  prompt event.
+- QQ history is merged from several incomplete sources: OneBot history dumps, per-chat
+  `recent.jsonl` windows, backup/pending copies, `cross-recent.jsonl`, session prompt context, and
+  successful send tool calls. Anything older than all of those (or posted while every recorder was
+  down) can still be missing. Prompt-derived inbound timestamps have minute precision and infer the
+  UTC date from the prompt event; OneBot/recent rows keep exact timestamps.
 - WebUI/work transcripts import assistant visible text plus tool calls/results verbatim. This
   preserves agent history but makes large work conversations (the live rehearsal has 42k+ webui
   messages); tool outputs can repeat file contents and diagnostic logs.
