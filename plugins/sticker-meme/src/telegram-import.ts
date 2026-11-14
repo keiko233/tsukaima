@@ -1,4 +1,4 @@
-import type { PluginMediaApi } from "@elaina/sdk";
+import type { PluginLogger, PluginMediaApi } from "@elaina/sdk";
 import { createAnimatedConverter, type AnimatedConverter } from "./animated.ts";
 import {
 	EMPTY_SEMANTIC_PROFILE,
@@ -12,6 +12,7 @@ import {
 	type StickerSemanticProfile,
 } from "./domain.ts";
 import type { StickerImportReport } from "./import-service.ts";
+import { elapsedMs, logErrorMessage, traceLog } from "./logging.ts";
 import type { StickerRepository } from "./repository.ts";
 import { classifyStickerSemantics, type StickerSemanticClassifier } from "./semantic.ts";
 import {
@@ -60,6 +61,7 @@ export interface TelegramStickerImportOptions {
 export interface TelegramStickerImportServiceOptions {
 	readonly client: TelegramStickerSource;
 	readonly converter?: AnimatedConverter;
+	readonly logger?: PluginLogger | undefined;
 	readonly media: PluginMediaApi;
 	readonly repository: StickerRepository;
 }
@@ -123,12 +125,14 @@ function withTelegramContext(
 export class TelegramStickerImportService {
 	readonly #client: TelegramStickerSource;
 	readonly #converter: AnimatedConverter;
+	readonly #logger: PluginLogger | undefined;
 	readonly #media: PluginMediaApi;
 	readonly #repository: StickerRepository;
 
 	constructor(options: TelegramStickerImportServiceOptions) {
 		this.#client = options.client;
-		this.#converter = options.converter ?? createAnimatedConverter();
+		this.#logger = options.logger;
+		this.#converter = options.converter ?? createAnimatedConverter({ logger: options.logger });
 		this.#media = options.media;
 		this.#repository = options.repository;
 	}
@@ -137,7 +141,7 @@ export class TelegramStickerImportService {
 		reference: string,
 		options: TelegramStickerImportOptions = {},
 	): Promise<TelegramStickerImportReport> {
-		const parsed = parseTelegramStickerSetReference(reference);
+		const parsed = parseTelegramStickerSetReference(reference, this.#logger);
 		return await this.importSet(parsed.setName, parsed.sourceUrl, options);
 	}
 
@@ -146,6 +150,11 @@ export class TelegramStickerImportService {
 		sourceUrl: string,
 		options: TelegramStickerImportOptions = {},
 	): Promise<TelegramStickerImportReport> {
+		const startedAt = Date.now();
+		this.#logger?.info("telegram sticker import started", {
+			dryRun: options.dryRun === true,
+			setName,
+		});
 		options.onProgress?.({
 			classified: 0,
 			current: 0,
@@ -158,6 +167,15 @@ export class TelegramStickerImportService {
 		const warnings: string[] = [];
 		const selection = selectStickers(set, options, warnings);
 		const skipped = set.stickers.length - selection.length;
+		this.#logger?.debug("telegram sticker set fetched", {
+			animated: set.isAnimated,
+			durationMs: elapsedMs(startedAt),
+			selectedCount: selection.length,
+			setName: set.name,
+			skipped,
+			stickerCount: set.stickers.length,
+			video: set.isVideo,
+		});
 		const classifier = options.classifier;
 		options.onProgress?.({
 			classified: 0,
@@ -168,10 +186,27 @@ export class TelegramStickerImportService {
 			total: selection.length,
 		});
 		if (options.dryRun === true) {
-			return await this.#dryRun(set, selection, packId, classifier, warnings, sourceUrl, options);
+			const report = await this.#dryRun(
+				set,
+				selection,
+				packId,
+				classifier,
+				warnings,
+				sourceUrl,
+				options,
+			);
+			this.#logger?.info("telegram sticker import completed", {
+				durationMs: elapsedMs(startedAt),
+				dryRun: true,
+				items: report.items,
+				setName,
+				skipped: report.skipped,
+				warnings: report.warnings.length,
+			});
+			return report;
 		}
 		await this.#savePack(set, packId, sourceUrl);
-		return await this.#importStickers(
+		const report = await this.#importStickers(
 			set,
 			selection,
 			packId,
@@ -180,6 +215,18 @@ export class TelegramStickerImportService {
 			sourceUrl,
 			options,
 		);
+		this.#logger?.info("telegram sticker import completed", {
+			classified: report.classified,
+			deduped: report.deduped,
+			durationMs: elapsedMs(startedAt),
+			dryRun: false,
+			items: report.items,
+			missingMedia: report.missingMedia,
+			setName,
+			skipped: report.skipped,
+			warnings: report.warnings.length,
+		});
+		return report;
 	}
 
 	async #savePack(set: TelegramStickerSet, packId: string, sourceUrl: string): Promise<void> {
@@ -281,6 +328,14 @@ export class TelegramStickerImportService {
 			const name = telegramItemName(set.name, entry.index);
 			const itemLabel = entry.sticker.emoji ? `${name} ${entry.sticker.emoji}` : name;
 			const itemId = stableId("item", `telegram:${set.name}:${entry.sticker.fileUniqueId}`);
+			traceLog(this.#logger, "telegram sticker import item started", {
+				fileId: entry.fileId ?? null,
+				index: entry.index,
+				itemId,
+				itemName: name,
+				kind: entry.kind,
+				packId,
+			});
 			const emit = (stage: TelegramImportProgress["stage"], current = offset) => {
 				options.onProgress?.({
 					classified,
@@ -322,6 +377,11 @@ export class TelegramStickerImportService {
 					warnings.push(
 						`sticker ${name} download failed: ${error instanceof Error ? error.message : String(error)}`,
 					);
+					this.#logger?.warn("telegram sticker download failed", {
+						error: logErrorMessage(error),
+						itemId,
+						itemName: name,
+					});
 				}
 			}
 			if (downloaded === undefined && entry.fallbackFileId !== undefined) {
@@ -333,9 +393,19 @@ export class TelegramStickerImportService {
 					warnings.push(
 						`sticker ${name} thumbnail download failed: ${error instanceof Error ? error.message : String(error)}`,
 					);
+					this.#logger?.warn("telegram sticker thumbnail download failed", {
+						error: logErrorMessage(error),
+						itemId,
+						itemName: name,
+					});
 				}
 			}
 			if (downloaded === undefined) {
+				traceLog(this.#logger, "telegram sticker import item skipped", {
+					itemId,
+					itemName: name,
+					reason: "no_media",
+				});
 				await missing("has no downloadable media");
 				continue;
 			}
@@ -357,13 +427,28 @@ export class TelegramStickerImportService {
 					warnings.push(
 						`sticker ${name} could not be converted and was imported as a still thumbnail`,
 					);
+					this.#logger?.warn("telegram sticker conversion fell back to thumbnail", {
+						itemId,
+						itemName: name,
+						kind: entry.kind,
+					});
 				} catch (error) {
 					warnings.push(
 						`sticker ${name} thumbnail fallback failed: ${error instanceof Error ? error.message : String(error)}`,
 					);
+					this.#logger?.warn("telegram sticker thumbnail fallback failed", {
+						error: logErrorMessage(error),
+						itemId,
+						itemName: name,
+					});
 				}
 			}
 			if (prepared === undefined) {
+				traceLog(this.#logger, "telegram sticker import item skipped", {
+					itemId,
+					itemName: name,
+					reason: "conversion_failed",
+				});
 				await missing("could not be converted or thumbnailed");
 				continue;
 			}
@@ -409,6 +494,15 @@ export class TelegramStickerImportService {
 				reviewStatus: options.reviewStatus ?? "approved",
 				semantic: withContext,
 				width: entry.sticker.width,
+			});
+			traceLog(this.#logger, "telegram sticker import item saved", {
+				bytes: prepared.bytes.byteLength,
+				deduped: existing !== undefined,
+				itemId,
+				itemName: name,
+				mimeType: prepared.mimeType,
+				packId,
+				semanticSource: withContext.source,
 			});
 			emit("saving", offset + 1);
 		}
@@ -468,6 +562,10 @@ export class TelegramStickerImportService {
 				warnings.push(
 					`sticker ${name} TGS conversion failed: ${error instanceof Error ? error.message : String(error)}`,
 				);
+				this.#logger?.warn("telegram TGS conversion failed", {
+					error: logErrorMessage(error),
+					itemName: name,
+				});
 				return undefined;
 			}
 		}
@@ -495,6 +593,10 @@ export class TelegramStickerImportService {
 			warnings.push(
 				`sticker ${name} webm conversion failed: ${error instanceof Error ? error.message : String(error)}`,
 			);
+			this.#logger?.warn("telegram webm conversion failed", {
+				error: logErrorMessage(error),
+				itemName: name,
+			});
 		}
 		warnings.push(`sticker ${name} was kept as webm because GIF conversion was unavailable`);
 		return {

@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { PluginMediaApi, PluginMediaSource } from "@elaina/sdk";
+import type { PluginLogger, PluginMediaApi, PluginMediaSource } from "@elaina/sdk";
 import {
 	decodeBase64,
 	encodeBase64,
@@ -26,6 +26,7 @@ import {
 	type StickerReviewStatus,
 	type StickerSemanticProfile,
 } from "./domain.ts";
+import { elapsedMs, logErrorMessage, traceLog } from "./logging.ts";
 import { StickerRepository } from "./repository.ts";
 import type { StickerSemanticClassifier } from "./semantic.ts";
 
@@ -252,16 +253,19 @@ export interface StickerImportProgress {
 }
 
 export interface StickerImportServiceOptions {
+	readonly logger?: PluginLogger | undefined;
 	readonly media: PluginMediaApi;
 	readonly repository: StickerRepository;
 }
 
 /** Directory, ZIP/bundle, and DSH meme-pack imports plus portable exports. */
 export class StickerImportService {
+	readonly #logger: PluginLogger | undefined;
 	readonly #media: PluginMediaApi;
 	readonly #repository: StickerRepository;
 
 	constructor(options: StickerImportServiceOptions) {
+		this.#logger = options.logger;
 		this.#media = options.media;
 		this.#repository = options.repository;
 	}
@@ -275,14 +279,39 @@ export class StickerImportService {
 		readonly onProgress?: (progress: StickerImportProgress) => void;
 		readonly source?: PluginMediaSource;
 	}): Promise<StickerImportReport> {
-		const parsed = parsePackManifest(input.manifest, input.fallbackName ?? "Imported pack");
-		return await this.importPacks(parsed.packs, input.files, {
-			...(input.classifier === undefined ? {} : { classifier: input.classifier }),
+		const startedAt = Date.now();
+		this.#logger?.info("sticker bundle import started", {
 			dryRun: input.dryRun === true,
-			...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
+			fallbackName: input.fallbackName ?? "Imported pack",
+			fileCount: input.files.length,
 			source: input.source ?? "webui",
-			warnings: parsed.warnings,
 		});
+		const parsed = parsePackManifest(input.manifest, input.fallbackName ?? "Imported pack");
+		try {
+			const report = await this.importPacks(parsed.packs, input.files, {
+				...(input.classifier === undefined ? {} : { classifier: input.classifier }),
+				dryRun: input.dryRun === true,
+				...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
+				source: input.source ?? "webui",
+				warnings: parsed.warnings,
+			});
+			this.#logger?.info("sticker bundle import completed", {
+				deduped: report.deduped,
+				durationMs: elapsedMs(startedAt),
+				dryRun: report.dryRun,
+				items: report.items,
+				missingMedia: report.missingMedia,
+				packs: report.packs,
+				warnings: report.warnings.length,
+			});
+			return report;
+		} catch (error) {
+			this.#logger?.warn("sticker bundle import failed", {
+				durationMs: elapsedMs(startedAt),
+				error: logErrorMessage(error),
+			});
+			throw error;
+		}
 	}
 
 	async importZip(input: {
@@ -292,11 +321,26 @@ export class StickerImportService {
 		readonly onProgress?: (progress: StickerImportProgress) => void;
 		readonly source?: PluginMediaSource;
 	}): Promise<StickerImportReport> {
-		const files = readZipEntries(input.bytes);
+		const startedAt = Date.now();
+		this.#logger?.info("ZIP sticker import started", {
+			bytes: input.bytes.byteLength,
+			dryRun: input.dryRun === true,
+		});
+		const files = readZipEntries(input.bytes, this.#logger);
 		const manifestFile =
 			files.find((file) => file.path === "manifest.json") ??
 			files.find((file) => file.path.endsWith("/manifest.json"));
-		if (manifestFile === undefined) throw new Error("ZIP archive has no manifest.json");
+		if (manifestFile === undefined) {
+			this.#logger?.warn("ZIP sticker import failed", {
+				durationMs: elapsedMs(startedAt),
+				error: "manifest.json is missing",
+			});
+			throw new Error("ZIP archive has no manifest.json");
+		}
+		this.#logger?.debug("ZIP sticker import manifest located", {
+			entryCount: files.length,
+			manifestPath: manifestFile.path,
+		});
 		const manifest = parseJson<unknown>(new TextDecoder().decode(manifestFile.bytes), undefined);
 		if (manifest === undefined) throw new Error("ZIP manifest.json is invalid");
 		const prefix = manifestFile.path.slice(0, -"manifest.json".length);
@@ -324,9 +368,17 @@ export class StickerImportService {
 		readonly onProgress?: (progress: StickerImportProgress) => void;
 		readonly source?: PluginMediaSource;
 	}): Promise<StickerImportReport> {
-		const files = await readDirectoryFiles(input.directory);
+		this.#logger?.info("sticker directory import started", {
+			directory: input.directory,
+			dryRun: input.dryRun === true,
+		});
+		const files = await readDirectoryFiles(input.directory, this.#logger);
 		const manifestFile = findFile(files, "manifest.json");
 		if (manifestFile === undefined) throw new Error("Directory has no manifest.json");
+		this.#logger?.debug("sticker directory import manifest located", {
+			directory: input.directory,
+			entryCount: files.length,
+		});
 		const manifest = parseJson<unknown>(new TextDecoder().decode(manifestFile.bytes), undefined);
 		if (manifest === undefined) throw new Error("Directory manifest.json is invalid");
 		return await this.importBundle({
@@ -349,8 +401,17 @@ export class StickerImportService {
 		readonly dryRun?: boolean;
 		readonly onProgress?: (progress: StickerImportProgress) => void;
 	}): Promise<StickerImportReport> {
-		const allFiles = await readDirectoryFiles(input.directory);
+		this.#logger?.info("DSH sticker directory import started", {
+			directory: input.directory,
+			dryRun: input.dryRun === true,
+		});
+		const allFiles = await readDirectoryFiles(input.directory, this.#logger);
 		const manifests = allFiles.filter((file) => /(?:^|\/)manifest\.json$/u.test(file.path));
+		this.#logger?.debug("DSH sticker directory scanned", {
+			directory: input.directory,
+			entryCount: allFiles.length,
+			manifestCount: manifests.length,
+		});
 		const reports: StickerImportReport[] = [];
 		if (manifests.length === 0) {
 			const fallback = await this.importBundle({
@@ -394,6 +455,10 @@ export class StickerImportService {
 	}
 
 	async exportPacks(packId?: string): Promise<StickerExportResult> {
+		const startedAt = Date.now();
+		this.#logger?.info("sticker pack export started", {
+			packId: packId ?? null,
+		});
 		const allPacks = await this.#repository.listPacks();
 		const packs = packId === undefined ? allPacks : allPacks.filter((pack) => pack.id === packId);
 		const files: ImportFile[] = [];
@@ -415,8 +480,19 @@ export class StickerImportService {
 						path = `items/${item.mediaId.slice(0, 16)}.${fileExtension(item.mimeType, item.hash)}`;
 						files.push({ bytes, path });
 						mediaPaths.set(item.mediaId, path);
-					} catch {
+						traceLog(this.#logger, "sticker export media written", {
+							bytes: bytes.byteLength,
+							itemId: item.id,
+							mediaId: item.mediaId,
+							path,
+						});
+					} catch (error) {
 						warnings.push(`item ${item.id} media is unavailable and was skipped`);
+						this.#logger?.warn("sticker export media unavailable", {
+							error: logErrorMessage(error),
+							itemId: item.id,
+							mediaId: item.mediaId,
+						});
 						continue;
 					}
 				}
@@ -447,6 +523,12 @@ export class StickerImportService {
 				tags: [...pack.tags],
 			});
 		}
+		this.#logger?.info("sticker pack export completed", {
+			durationMs: elapsedMs(startedAt),
+			fileCount: files.length,
+			packCount: exportedPacks.length,
+			warnings: warnings.length,
+		});
 		return {
 			files,
 			manifest: { format: "elaina-sticker-pack", packs: exportedPacks, version: 1 },
@@ -465,6 +547,7 @@ export class StickerImportService {
 			readonly warnings: readonly string[];
 		},
 	): Promise<StickerImportReport> {
+		const startedAt = Date.now();
 		const warnings = [...options.warnings];
 		const packIds: string[] = [];
 		const totalItems = packs.reduce((sum, pack) => sum + pack.items.length, 0);
@@ -472,6 +555,12 @@ export class StickerImportService {
 		let classified = 0;
 		let deduped = 0;
 		let missingMedia = 0;
+		this.#logger?.debug("sticker import packs started", {
+			dryRun: options.dryRun,
+			itemCount: totalItems,
+			packCount: packs.length,
+			source: options.source,
+		});
 		for (const manifestPack of packs) {
 			const pack = options.dryRun
 				? {
@@ -488,6 +577,12 @@ export class StickerImportService {
 						tags: manifestPack.tags,
 					});
 			packIds.push(pack.id);
+			this.#logger?.debug("sticker import pack prepared", {
+				dryRun: options.dryRun,
+				itemCount: manifestPack.items.length,
+				packId: pack.id,
+				packName: manifestPack.name,
+			});
 			for (const manifestItem of manifestPack.items) {
 				const emit = (stage: StickerImportProgress["stage"], currentCount: number) => {
 					options.onProgress?.({
@@ -506,6 +601,11 @@ export class StickerImportService {
 				if (file === undefined) {
 					missingMedia += 1;
 					warnings.push(`item ${manifestItem.name} has no matching media file`);
+					traceLog(this.#logger, "sticker import item skipped", {
+						itemName: manifestItem.name,
+						packId: pack.id,
+						reason: "missing_media",
+					});
 					if (!options.dryRun) {
 						await this.#repository.upsertItem({
 							description: manifestItem.description,
@@ -528,6 +628,13 @@ export class StickerImportService {
 				const hash = sha256Bytes(file.bytes);
 				const existing = await this.#media.findBySha(hash);
 				if (existing !== undefined) deduped += 1;
+				traceLog(this.#logger, "sticker import item prepared", {
+					bytes: file.bytes.byteLength,
+					deduped: existing !== undefined,
+					itemName: manifestItem.name,
+					packId: pack.id,
+					path: file.path,
+				});
 				if (options.dryRun) {
 					emit("saving", items);
 					continue;
@@ -542,8 +649,13 @@ export class StickerImportService {
 							title: manifestPack.name,
 						});
 						if (semantic.source !== "none") classified += 1;
-					} catch {
+					} catch (error) {
 						warnings.push(`semantic classification failed for ${manifestItem.name}`);
+						this.#logger?.warn("sticker import semantic classification failed", {
+							error: logErrorMessage(error),
+							itemName: manifestItem.name,
+							packId: pack.id,
+						});
 					}
 				}
 				const profile = semantic ?? EMPTY_SEMANTIC_PROFILE;
@@ -579,6 +691,17 @@ export class StickerImportService {
 				emit("saving", items);
 			}
 		}
+		this.#logger?.debug("sticker import packs completed", {
+			classified,
+			deduped,
+			durationMs: elapsedMs(startedAt),
+			dryRun: options.dryRun,
+			itemCount: items,
+			missingMedia,
+			packCount: packs.length,
+			source: options.source,
+			warnings: warnings.length,
+		});
 		return {
 			deduped,
 			dryRun: options.dryRun,

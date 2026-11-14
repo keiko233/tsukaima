@@ -16,6 +16,7 @@ import {
 	stableId,
 	type StickerItem,
 } from "./domain.ts";
+import { elapsedMs, traceLog } from "./logging.ts";
 import type { StickerItemInput, StickerRepository } from "./repository.ts";
 
 export interface LearningSettings {
@@ -37,7 +38,7 @@ export const DEFAULT_LEARNING_SETTINGS: LearningSettings = {
 export interface LearningServiceOptions {
 	readonly audit?: { record(entry: AuditEntry): Promise<void> };
 	readonly config?: PluginConfig;
-	readonly logger?: PluginLogger;
+	readonly logger?: PluginLogger | undefined;
 	readonly media: PluginMediaApi;
 	readonly now?: () => number;
 	readonly repository: StickerRepository;
@@ -130,12 +131,25 @@ export class LearningService {
 	}
 
 	async learn(input: LearnInput): Promise<LearnedCandidate> {
+		const startedAt = Date.now();
 		const settings = await this.settings();
 		const source = input.source ?? "learned";
 		if (!settings.enabled && source === "learned") {
+			this.#logger?.debug("sticker candidate skipped", {
+				packId: input.packId ?? null,
+				reason: "disabled",
+				source,
+				status: "disabled",
+			});
 			return { item: placeholderItem(input, "learned"), reason: "disabled" };
 		}
 		if (source === "generated" && !settings.allowGenerated) {
+			this.#logger?.debug("sticker candidate skipped", {
+				packId: input.packId ?? null,
+				reason: "policy",
+				source,
+				status: "rejected",
+			});
 			return { item: placeholderItem(input, "generated"), reason: "policy" };
 		}
 		let bytes: Uint8Array | undefined;
@@ -154,16 +168,39 @@ export class LearningService {
 			}
 		}
 		if (bytes === undefined || bytes.byteLength === 0) {
+			this.#logger?.debug("sticker candidate skipped", {
+				mediaId: input.mediaId ?? null,
+				packId: input.packId ?? null,
+				reason: "missing_media",
+				source,
+				status: "missing_media",
+			});
 			return { item: placeholderItem(input, source), reason: "missing_media" };
 		}
 		await this.#purge(settings);
 		const hash = sha256Bytes(bytes);
 		const duplicates = await this.#repository.findItemsByHash(hash);
 		if (duplicates.length >= settings.duplicateThreshold) {
+			this.#logger?.debug("sticker candidate skipped", {
+				durationMs: elapsedMs(startedAt),
+				itemId: duplicates[0]?.id ?? null,
+				packId: duplicates[0]?.packId ?? input.packId ?? null,
+				reason: "duplicate",
+				source,
+				status: "duplicate",
+			});
 			return { item: duplicates[0] ?? placeholderItem(input, source), reason: "duplicate" };
 		}
 		const since = startOfDay(this.#now());
 		if ((await this.#repository.countItemsSince(since)) >= settings.dailyCap) {
+			this.#logger?.debug("sticker candidate skipped", {
+				durationMs: elapsedMs(startedAt),
+				dailyCap: settings.dailyCap,
+				packId: input.packId ?? null,
+				reason: "daily_cap",
+				source,
+				status: "daily_cap",
+			});
 			return { item: placeholderItem(input, source), reason: "daily_cap" };
 		}
 		const pack = await this.#learnedPack(input.packId);
@@ -198,7 +235,14 @@ export class LearningService {
 			targetId: item.id,
 			targetKind: "sticker-item",
 		});
-		this.#logger?.debug("sticker candidate learned", { itemId: item.id, source });
+		this.#logger?.debug("sticker candidate learned", {
+			durationMs: elapsedMs(startedAt),
+			itemId: item.id,
+			mediaId: item.mediaId,
+			packId: pack.id,
+			source,
+			status: item.reviewStatus,
+		});
 		return { item };
 	}
 
@@ -207,15 +251,31 @@ export class LearningService {
 		const envelope = recordValue(record.envelope);
 		const parts = Array.isArray(envelope.parts) ? envelope.parts : [];
 		const sessionId = normalizeText(record.sessionId ?? record.chatObjectId);
-		for (const rawPart of parts) {
+		traceLog(this.#logger, "sticker envelope inspected", {
+			partCount: parts.length,
+			sessionId: sessionId.length === 0 ? null : sessionId,
+		});
+		for (const [index, rawPart] of parts.entries()) {
 			const part = recordValue(rawPart);
-			if (part.type !== "sticker" && part.type !== "image") continue;
 			const learnable = part.modelReadable === true || part.learnable === true;
+			const channelRef = normalizeText(part.channelRef);
+			const mediaId = normalizeText(part.mediaId);
+			const sha256 = normalizeText(part.sha256);
+			const inspectable = part.type === "sticker" || part.type === "image";
+			traceLog(this.#logger, "sticker envelope part inspected", {
+				eligible: inspectable && learnable,
+				hasChannelRef: channelRef.length > 0,
+				hasMediaId: mediaId.length > 0,
+				hasSha256: sha256.length > 0,
+				index,
+				learnable,
+				partType: normalizeText(part.type, "unknown"),
+				reason: !inspectable ? "unsupported_part" : !learnable ? "not_learnable" : undefined,
+			});
+			if (!inspectable) continue;
 			if (!learnable) continue;
 			let bytes: Uint8Array | undefined;
-			const channelRef = normalizeText(part.channelRef);
 			if (channelRef.length > 0) bytes = decodeMediaRef(channelRef);
-			const mediaId = normalizeText(part.mediaId);
 			if (bytes === undefined && mediaId.length > 0) {
 				try {
 					bytes = await this.#media.readBytes(mediaId);
@@ -223,7 +283,6 @@ export class LearningService {
 					bytes = undefined;
 				}
 			}
-			const sha256 = normalizeText(part.sha256);
 			if (bytes === undefined && sha256.length > 0) {
 				const stored = await this.#media.findBySha(sha256);
 				if (stored !== undefined) {
@@ -234,7 +293,21 @@ export class LearningService {
 					}
 				}
 			}
-			if (bytes === undefined) continue;
+			if (bytes === undefined) {
+				traceLog(this.#logger, "sticker envelope part skipped", {
+					hasChannelRef: channelRef.length > 0,
+					hasMediaId: mediaId.length > 0,
+					hasSha256: sha256.length > 0,
+					index,
+					reason: "no_bytes",
+				});
+				continue;
+			}
+			traceLog(this.#logger, "sticker envelope part captured", {
+				bytes: bytes.byteLength,
+				index,
+				partType: normalizeText(part.type, "unknown"),
+			});
 			return await this.learn({
 				bytesBase64: Buffer.from(bytes).toString("base64"),
 				...(normalizeText(part.previewText).length === 0

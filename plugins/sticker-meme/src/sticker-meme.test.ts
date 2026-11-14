@@ -9,7 +9,9 @@ import {
 	LocalModelRegistry,
 	pluginManifestSchema,
 	type AuditEntry,
+	type PluginContext,
 	type PluginDatabaseApi,
+	type PluginLogger,
 	type PluginMediaApi,
 	type PluginMediaRecord,
 	type PluginMediaStoreInput,
@@ -23,6 +25,7 @@ import { stickerMemeManifest } from "./manifest.ts";
 import { createStickerReplyTransform } from "./output.ts";
 import { StickerProgressTracker } from "./progress.ts";
 import { StickerRepository } from "./repository.ts";
+import { registerStickerRpc } from "./rpc.ts";
 import { StickerSelectionService } from "./selection.ts";
 import {
 	classifyStickerSemantics,
@@ -37,6 +40,7 @@ import {
 	type TelegramStickerSource,
 } from "./telegram.ts";
 import { TelegramStickerImportService, type TelegramImportProgress } from "./telegram-import.ts";
+import { registerStickerTools } from "./tools.ts";
 
 const directories: string[] = [];
 
@@ -120,6 +124,50 @@ function createDatabase(): PluginDatabaseApi {
 
 const bytes = (value: string): Uint8Array => new TextEncoder().encode(value);
 const b64 = (value: string): string => Buffer.from(value).toString("base64");
+
+type LogLevel = "debug" | "error" | "info" | "trace" | "warn";
+
+interface CapturedLog {
+	readonly details: unknown;
+	readonly level: LogLevel;
+	readonly message: string;
+}
+
+function createLogCapture(): { entries: CapturedLog[]; logger: PluginLogger } {
+	const entries: CapturedLog[] = [];
+	const build = (
+		target: string | undefined,
+		fields: Record<string, unknown> | undefined,
+	): PluginLogger => {
+		const write = (level: LogLevel) => (message: string, details?: unknown) => {
+			const merged =
+				fields === undefined
+					? details
+					: {
+							...fields,
+							...(typeof details === "object" && details !== null ? details : {}),
+						};
+			entries.push({
+				details: merged,
+				level,
+				message: target === undefined ? message : `[${target}] ${message}`,
+			});
+		};
+		return {
+			child: (nestedTarget, nestedFields) =>
+				build(
+					target === undefined ? nestedTarget : `${target}.${nestedTarget}`,
+					fields === undefined ? nestedFields : { ...fields, ...nestedFields },
+				),
+			debug: write("debug"),
+			error: write("error"),
+			info: write("info"),
+			trace: write("trace"),
+			warn: write("warn"),
+		};
+	};
+	return { entries, logger: build(undefined, undefined) };
+}
 
 function baseFixture() {
 	const database = createDatabase();
@@ -1349,5 +1397,455 @@ describe("sticker semantic classification", () => {
 		await expect(
 			resolveSemanticClassifier({ semanticMode: "vision" }, { models: textOnlyRegistry }),
 		).rejects.toThrow("Semantic vision mode requires a configured vision model");
+	});
+});
+
+describe("sticker debug logging", () => {
+	test("emits trace scoring and debug search/choose results", async () => {
+		const fixture = baseFixture();
+		const { entries, logger } = createLogCapture();
+		await fixture.repository.savePack({ id: "pack-main", name: "Main" });
+		await seedItem(fixture.repository, fixture.media, {
+			emotions: ["joy"],
+			id: "happy",
+			keywords: ["happy"],
+		});
+		const selection = new StickerSelectionService({
+			logger,
+			media: fixture.media,
+			repository: fixture.repository,
+		});
+		const results = await selection.search({ emotion: "joy", query: "happy" });
+		expect(results.map((candidate) => candidate.itemId)).toEqual(["happy"]);
+		const scored = entries.find(
+			(entry) => entry.level === "trace" && entry.message === "sticker candidate scored",
+		);
+		expect(scored?.details).toMatchObject({ itemId: "happy", score: expect.any(Number) });
+		const searched = entries.find(
+			(entry) => entry.level === "debug" && entry.message === "sticker search completed",
+		);
+		expect(searched?.details).toMatchObject({
+			candidateCount: 1,
+			durationMs: expect.any(Number),
+		});
+
+		const choice = await selection.choose({ conversationId: "conversation-1", itemId: "happy" });
+		expect(choice.itemId).toBe("happy");
+		const issued = entries.find(
+			(entry) => entry.level === "debug" && entry.message === "sticker send token issued",
+		);
+		expect(issued?.details).toMatchObject({
+			durationMs: expect.any(Number),
+			itemId: "happy",
+			packId: "pack-main",
+			tokenIssued: true,
+		});
+	});
+
+	test("emits debug candidate capture and trace envelope inspection", async () => {
+		const fixture = baseFixture();
+		const { entries, logger } = createLogCapture();
+		const learning = new LearningService({
+			logger,
+			media: fixture.media,
+			repository: fixture.repository,
+		});
+		const learned = await learning.learn({
+			bytesBase64: b64("logged-candidate"),
+			name: "Logged candidate",
+			source: "admin",
+		});
+		const captured = entries.find(
+			(entry) => entry.level === "debug" && entry.message === "sticker candidate learned",
+		);
+		expect(captured?.details).toMatchObject({
+			durationMs: expect.any(Number),
+			itemId: learned.item.id,
+			packId: learned.item.packId,
+			status: "pending",
+		});
+
+		const duplicate = await learning.learn({
+			bytesBase64: b64("logged-candidate"),
+			name: "Duplicate",
+			source: "admin",
+		});
+		expect(duplicate.reason).toBe("duplicate");
+		expect(
+			entries.some(
+				(entry) =>
+					entry.level === "debug" &&
+					entry.message === "sticker candidate skipped" &&
+					(entry.details as { reason?: string }).reason === "duplicate",
+			),
+		).toBe(true);
+
+		const inbound = await learning.learnFromEnvelope({
+			envelope: {
+				parts: [
+					{
+						channelRef: `base64://${b64("logged-envelope")}`,
+						modelReadable: true,
+						type: "sticker",
+					},
+				],
+			},
+			sessionId: "session-logged",
+		});
+		expect(inbound?.item.reviewStatus).toBe("pending");
+		expect(
+			entries.some(
+				(entry) => entry.level === "trace" && entry.message === "sticker envelope part inspected",
+			),
+		).toBe(true);
+		expect(
+			entries.some(
+				(entry) => entry.level === "trace" && entry.message === "sticker envelope part captured",
+			),
+		).toBe(true);
+	});
+
+	test("emits trace directive parsing and debug transform counts", async () => {
+		const fixture = baseFixture();
+		const { entries, logger } = createLogCapture();
+		await fixture.repository.savePack({ id: "pack-main", name: "Main" });
+		await seedItem(fixture.repository, fixture.media, { id: "fresh" });
+		const selection = new StickerSelectionService({
+			media: fixture.media,
+			repository: fixture.repository,
+		});
+		const choice = await selection.choose({ conversationId: "conversation-1", itemId: "fresh" });
+		const transform = createStickerReplyTransform({
+			logger,
+			media: fixture.media,
+			repository: fixture.repository,
+		});
+		const transformed = await transform({
+			conversationId: "conversation-1",
+			parts: [
+				{ text: `before [[sticker:${choice.sendToken}]] after`, type: "text" },
+				{ text: "no directive here", type: "text" },
+				{ text: "", type: "text" },
+			],
+		});
+		expect(transformed?.parts).toHaveLength(4);
+		const parsed = entries.find(
+			(entry) => entry.level === "trace" && entry.message === "sticker directive text parsed",
+		);
+		expect(parsed?.details).toMatchObject({ directiveCount: 1, pieceCount: 3 });
+		expect(
+			entries.some(
+				(entry) => entry.level === "trace" && entry.message === "sticker directive parse fallback",
+			),
+		).toBe(true);
+		const completed = entries.find(
+			(entry) => entry.level === "debug" && entry.message === "sticker reply transform completed",
+		);
+		expect(completed?.details).toMatchObject({
+			directiveCount: 1,
+			durationMs: expect.any(Number),
+			resolvedCount: 1,
+			unresolvedCount: 0,
+		});
+	});
+
+	test("emits info/debug/trace import logs with counts", async () => {
+		const fixture = baseFixture();
+		const { entries, logger } = createLogCapture();
+		const service = new StickerImportService({
+			logger,
+			media: fixture.media,
+			repository: fixture.repository,
+		});
+		const report = await service.importBundle({
+			files: [{ bytes: bytes("logged-import"), path: "a.png" }],
+			manifest: {
+				items: [{ file: "a.png", id: "logged-item", name: "Logged" }],
+				name: "Logged pack",
+			},
+		});
+		expect(report.items).toBe(1);
+		expect(
+			entries.some(
+				(entry) => entry.level === "info" && entry.message === "sticker bundle import started",
+			),
+		).toBe(true);
+		expect(
+			entries.some(
+				(entry) => entry.level === "info" && entry.message === "sticker bundle import completed",
+			),
+		).toBe(true);
+		const completed = entries.find(
+			(entry) => entry.level === "debug" && entry.message === "sticker import packs completed",
+		);
+		expect(completed?.details).toMatchObject({
+			durationMs: expect.any(Number),
+			itemCount: 1,
+			packCount: 1,
+		});
+		expect(
+			entries.some(
+				(entry) => entry.level === "trace" && entry.message === "sticker import item prepared",
+			),
+		).toBe(true);
+
+		const exported = await service.exportPacks();
+		expect(exported.files.length).toBe(1);
+		expect(
+			entries.some(
+				(entry) => entry.level === "info" && entry.message === "sticker pack export completed",
+			),
+		).toBe(true);
+	});
+
+	test("never logs telegram bot tokens or semantic api keys", async () => {
+		const fixture = baseFixture();
+		const { entries, logger } = createLogCapture();
+		const token = "123456789:fake-bot-token-fixture";
+		const apiKey = "sk-fake-api-key-fixture";
+		const fakeFetch = (async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.includes("/getStickerSet")) {
+				return Response.json({
+					ok: true,
+					result: {
+						name: "logged_set",
+						sticker_type: "regular",
+						stickers: [
+							{
+								file_id: "file-1",
+								file_unique_id: "unique-1",
+								height: 512,
+								is_animated: false,
+								is_video: false,
+								type: "regular",
+								width: 512,
+							},
+						],
+						title: "Logged set",
+					},
+				});
+			}
+			if (url.includes("/getFile")) {
+				return Response.json({
+					ok: true,
+					result: {
+						file_id: "file-1",
+						file_path: "stickers/file_1.webp",
+						file_size: 4,
+						file_unique_id: "unique-1",
+					},
+				});
+			}
+			return new Response(bytes("webp"));
+		}) as typeof fetch;
+		const client = new TelegramStickerClient({
+			apiBaseUrl: "https://api.test",
+			fetch: fakeFetch,
+			logger,
+			token,
+		});
+		const set = await client.getStickerSet("logged_set");
+		expect(set.stickers).toHaveLength(1);
+		const file = await client.downloadFile("file-1");
+		expect(file.filePath).toBe("stickers/file_1.webp");
+
+		const failingClient = new TelegramStickerClient({
+			apiBaseUrl: "https://api.test",
+			fetch: (async (input: string | URL | Request) => {
+				if (String(input).includes("/getFile")) {
+					return Response.json({
+						ok: true,
+						result: {
+							file_id: "file-1",
+							file_path: "stickers/file_1.webp",
+							file_size: 4,
+							file_unique_id: "unique-1",
+						},
+					});
+				}
+				throw new Error(`boom https://api.test/file/bot${token}/stickers/file_1.webp`);
+			}) as typeof fetch,
+			logger,
+			token,
+		});
+		await expect(failingClient.downloadFile("file-1")).rejects.toThrow(
+			"Telegram file download failed",
+		);
+
+		const classifier = new VisionSemanticClassifier({
+			apiKey,
+			complete: async () =>
+				JSON.stringify({ description: "calm", labels: ["calm"], confidence: 0.9 }),
+			logger,
+			model: "vision-logged",
+		});
+		const profile = await classifier.classify({
+			bytes: bytes("image"),
+			mimeType: "image/png",
+			title: "Logged",
+		});
+		expect(profile.source).toBe("merged");
+
+		const serialized = JSON.stringify(entries);
+		expect(serialized).not.toContain("SECRET_BOT_TOKEN");
+		expect(serialized).not.toContain("SECRET_API_KEY");
+		expect(serialized).not.toContain("123456789:");
+		expect(
+			entries.some(
+				(entry) => entry.level === "debug" && entry.message === "telegram getStickerSet completed",
+			),
+		).toBe(true);
+		expect(
+			entries.some(
+				(entry) =>
+					entry.level === "debug" &&
+					entry.message.includes("vision sticker classification completed"),
+			),
+		).toBe(true);
+		expect(
+			entries.some(
+				(entry) =>
+					entry.level === "warn" &&
+					entry.message === "telegram sticker download failed" &&
+					String((entry.details as { error?: string }).error).includes("/bot[REDACTED]/"),
+			),
+		).toBe(true);
+		expect(fixture.repository).toBeDefined();
+	});
+
+	test("logs animated conversion format and duration", async () => {
+		const { entries, logger } = createLogCapture();
+		const converter = createAnimatedConverter({
+			logger,
+			tgs: async () => bytes("tgs-gif"),
+			webm: async () => bytes("webm-gif"),
+		});
+		await converter.convertTgs(bytes("tgs"));
+		await converter.convertWebm(bytes("webm"));
+		const completed = entries.filter(
+			(entry) =>
+				entry.level === "debug" && entry.message === "animated sticker conversion completed",
+		);
+		expect(completed).toHaveLength(2);
+		expect(completed[0]?.details).toMatchObject({
+			durationMs: expect.any(Number),
+			format: "gif",
+			source: "tgs",
+		});
+		expect(completed[1]?.details).toMatchObject({ format: "gif", source: "webm" });
+	});
+
+	test("logs tool invocations with counts", async () => {
+		const fixture = baseFixture();
+		const { entries, logger } = createLogCapture();
+		await fixture.repository.savePack({ id: "pack-main", name: "Main" });
+		await seedItem(fixture.repository, fixture.media, {
+			emotions: ["joy"],
+			id: "tool-item",
+			keywords: ["happy"],
+		});
+		const selection = new StickerSelectionService({
+			logger,
+			media: fixture.media,
+			repository: fixture.repository,
+		});
+		const registered: {
+			execute(input: Record<string, unknown>, invocation: unknown): Promise<unknown>;
+			name: string;
+		}[] = [];
+		const context = {
+			logger,
+			tools: {
+				register: (tool: {
+					execute(input: Record<string, unknown>, invocation: unknown): Promise<unknown>;
+					name: string;
+				}) => {
+					registered.push(tool);
+					return () => {};
+				},
+			},
+		} as unknown as PluginContext;
+		registerStickerTools(context, selection, logger);
+		const searchTool = registered.find((tool) => tool.name === "sticker-meme.search");
+		expect(searchTool).toBeDefined();
+		await searchTool?.execute({ query: "happy" }, { conversationId: "conversation-1" });
+		const chooseTool = registered.find((tool) => tool.name === "sticker-meme.choose");
+		await chooseTool?.execute({ itemId: "tool-item" }, { conversationId: "conversation-1" });
+		const calls = entries.filter(
+			(entry) => entry.level === "trace" && entry.message === "sticker tool invoked",
+		);
+		expect(calls.length).toBeGreaterThanOrEqual(2);
+		const searchCompleted = entries.find(
+			(entry) =>
+				entry.level === "debug" &&
+				entry.message === "sticker tool completed" &&
+				(entry.details as { tool?: string }).tool === "sticker-meme.search",
+		);
+		expect(searchCompleted?.details).toMatchObject({
+			candidateCount: 1,
+			durationMs: expect.any(Number),
+		});
+		const chooseCompleted = entries.find(
+			(entry) =>
+				entry.level === "debug" &&
+				entry.message === "sticker tool completed" &&
+				(entry.details as { tool?: string }).tool === "sticker-meme.choose",
+		);
+		expect(chooseCompleted?.details).toMatchObject({
+			chosenId: "tool-item",
+			durationMs: expect.any(Number),
+			tokenIssued: true,
+		});
+	});
+
+	test("logs rpc invocations with duration and result counts", async () => {
+		const fixture = baseFixture();
+		const { entries, logger } = createLogCapture();
+		const handlers = new Map<string, (input: unknown) => Promise<unknown> | unknown>();
+		const context = {
+			logger,
+			rpc: {
+				list: () => [],
+				register: (method: string, handler: (input: unknown) => Promise<unknown> | unknown) => {
+					handlers.set(method, handler);
+					return () => {};
+				},
+			},
+		} as unknown as PluginContext;
+		const importService = new StickerImportService({
+			logger,
+			media: fixture.media,
+			repository: fixture.repository,
+		});
+		const learning = new LearningService({
+			logger,
+			media: fixture.media,
+			repository: fixture.repository,
+		});
+		registerStickerRpc(context, {
+			importService,
+			learning,
+			logger,
+			repository: fixture.repository,
+		});
+		const stats = handlers.get("stats");
+		expect(stats).toBeDefined();
+		await stats?.({});
+		expect(
+			entries.some(
+				(entry) =>
+					entry.level === "trace" &&
+					entry.message === "sticker rpc invoked" &&
+					(entry.details as { procedure?: string }).procedure === "stats",
+			),
+		).toBe(true);
+		const completed = entries.find(
+			(entry) =>
+				entry.level === "debug" &&
+				entry.message === "sticker rpc completed" &&
+				(entry.details as { procedure?: string }).procedure === "stats",
+		);
+		expect(completed?.details).toMatchObject({ durationMs: expect.any(Number) });
 	});
 });

@@ -5,7 +5,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
+import type { PluginLogger } from "@elaina/sdk";
 import type { Canvas as NodeCanvas } from "canvas";
+import { elapsedMs, logErrorMessage } from "./logging.ts";
 
 export interface AnimatedConversionOptions {
 	/** Output FPS. Defaults to 15 and is capped by the source frame rate. */
@@ -96,102 +98,131 @@ function loadLottieScript(): vm.Script {
 export async function tgsToGif(
 	bytes: Uint8Array,
 	options: AnimatedConversionOptions = {},
+	logger?: PluginLogger,
 ): Promise<Uint8Array> {
 	return await serialize(async () => {
-		const { Canvas, loadImage } = await import("canvas");
-		const { applyPalette, GIFEncoder, quantize } = await import("gifenc");
-		const animationData = JSON.parse(gunzipSync(bytes).toString("utf8")) as {
-			fr?: number;
-			h?: number;
-			w?: number;
-		};
-		const sourceWidth = Math.max(1, Number(animationData.w) || 512);
-		const sourceHeight = Math.max(1, Number(animationData.h) || 512);
-		const requestedWidth = clamp(options.width, sourceWidth, 1, MAX_SIZE);
-		const width = Math.min(sourceWidth, requestedWidth);
-		const height = Math.max(
-			1,
-			Math.min(
-				MAX_SIZE,
-				options.height === undefined
-					? Math.round((sourceHeight / sourceWidth) * width)
-					: clamp(options.height, sourceHeight, 1, MAX_SIZE),
-			),
-		);
-		const { JSDOM } = (await import("jsdom")) as unknown as {
-			JSDOM: new (html: string, options: { pretendToBeVisual: boolean }) => { window: JsdomWindow };
-		};
-		const { window } = new JSDOM("", { pretendToBeVisual: true });
-		const jsdomDocument = window.document;
-		const originalCreateElement = jsdomDocument.createElement;
-		jsdomDocument.createElement = (name: string) =>
-			name === "canvas" ? new Canvas(300, 150) : originalCreateElement.call(jsdomDocument, name);
+		const startedAt = Date.now();
+		logger?.info("TGS animated sticker conversion started", {
+			bytes: bytes.byteLength,
+			fps: options.fps,
+			maxFrames: options.maxFrames,
+			width: options.width,
+		});
 		try {
-			const context = vm.createContext({
-				Canvas: Canvas as unknown as NodeCanvas,
-				clearInterval,
-				clearTimeout,
-				console,
-				document: jsdomDocument,
-				loadImage,
-				navigator: window.navigator,
-				requestAnimationFrame: window.requestAnimationFrame?.bind(window),
-				cancelAnimationFrame: window.cancelAnimationFrame?.bind(window),
-				self: window,
-				setInterval,
-				setTimeout,
-				window,
-			});
-			loadLottieScript().runInContext(context);
-			const lottie = (context as { lottie?: JsdomWindow["lottie"] }).lottie;
-			if (lottie === undefined) throw new Error("Lottie renderer did not initialize");
-			window.lottie = lottie;
-			const sourceCanvas = new Canvas(sourceWidth, sourceHeight);
-			const sourceContext = sourceCanvas.getContext("2d");
-			const outputCanvas = new Canvas(width, height);
-			const outputContext = outputCanvas.getContext("2d");
-			const animation = lottie.loadAnimation({
-				animationData,
-				renderer: "canvas",
-				rendererSettings: { clearCanvas: true, context: sourceContext },
-			});
+			const { Canvas, loadImage } = await import("canvas");
+			const { applyPalette, GIFEncoder, quantize } = await import("gifenc");
+			const animationData = JSON.parse(gunzipSync(bytes).toString("utf8")) as {
+				fr?: number;
+				h?: number;
+				w?: number;
+			};
+			const sourceWidth = Math.max(1, Number(animationData.w) || 512);
+			const sourceHeight = Math.max(1, Number(animationData.h) || 512);
+			const requestedWidth = clamp(options.width, sourceWidth, 1, MAX_SIZE);
+			const width = Math.min(sourceWidth, requestedWidth);
+			const height = Math.max(
+				1,
+				Math.min(
+					MAX_SIZE,
+					options.height === undefined
+						? Math.round((sourceHeight / sourceWidth) * width)
+						: clamp(options.height, sourceHeight, 1, MAX_SIZE),
+				),
+			);
+			const { JSDOM } = (await import("jsdom")) as unknown as {
+				JSDOM: new (
+					html: string,
+					options: { pretendToBeVisual: boolean },
+				) => { window: JsdomWindow };
+			};
+			const { window } = new JSDOM("", { pretendToBeVisual: true });
+			const jsdomDocument = window.document;
+			const originalCreateElement = jsdomDocument.createElement;
+			jsdomDocument.createElement = (name: string) =>
+				name === "canvas" ? new Canvas(300, 150) : originalCreateElement.call(jsdomDocument, name);
 			try {
-				const sourceFps = Math.max(1, Number(animationData.fr) || 30);
-				const totalFrames = Math.max(1, Math.floor(animation.totalFrames || 1));
-				const fps = Math.min(sourceFps, clamp(options.fps, DEFAULT_FPS, 1, MAX_FPS));
-				const maxFrames = clamp(options.maxFrames, DEFAULT_MAX_FRAMES, 1, MAX_MAX_FRAMES);
-				const durationSeconds = totalFrames / sourceFps;
-				const frameCount = Math.max(1, Math.min(maxFrames, Math.round(durationSeconds * fps)));
-				const delay = Math.max(20, Math.round(1000 / fps));
-				const gif = GIFEncoder();
-				for (let frame = 0; frame < frameCount; frame += 1) {
-					const timeSeconds = (frame / frameCount) * durationSeconds;
-					animation.goToAndStop(timeSeconds * sourceFps, true);
-					await waitForRender();
-					outputContext.clearRect(0, 0, width, height);
-					outputContext.drawImage(sourceCanvas, 0, 0, width, height);
-					const pixels = outputContext.getImageData(0, 0, width, height).data;
-					const palette = quantize(pixels, 256, {
-						clearAlpha: true,
-						format: "rgba4444",
-						oneBitAlpha: true,
+				const context = vm.createContext({
+					Canvas: Canvas as unknown as NodeCanvas,
+					clearInterval,
+					clearTimeout,
+					console,
+					document: jsdomDocument,
+					loadImage,
+					navigator: window.navigator,
+					requestAnimationFrame: window.requestAnimationFrame?.bind(window),
+					cancelAnimationFrame: window.cancelAnimationFrame?.bind(window),
+					self: window,
+					setInterval,
+					setTimeout,
+					window,
+				});
+				loadLottieScript().runInContext(context);
+				const lottie = (context as { lottie?: JsdomWindow["lottie"] }).lottie;
+				if (lottie === undefined) throw new Error("Lottie renderer did not initialize");
+				window.lottie = lottie;
+				const sourceCanvas = new Canvas(sourceWidth, sourceHeight);
+				const sourceContext = sourceCanvas.getContext("2d");
+				const outputCanvas = new Canvas(width, height);
+				const outputContext = outputCanvas.getContext("2d");
+				const animation = lottie.loadAnimation({
+					animationData,
+					renderer: "canvas",
+					rendererSettings: { clearCanvas: true, context: sourceContext },
+				});
+				try {
+					const sourceFps = Math.max(1, Number(animationData.fr) || 30);
+					const totalFrames = Math.max(1, Math.floor(animation.totalFrames || 1));
+					const fps = Math.min(sourceFps, clamp(options.fps, DEFAULT_FPS, 1, MAX_FPS));
+					const maxFrames = clamp(options.maxFrames, DEFAULT_MAX_FRAMES, 1, MAX_MAX_FRAMES);
+					const durationSeconds = totalFrames / sourceFps;
+					const frameCount = Math.max(1, Math.min(maxFrames, Math.round(durationSeconds * fps)));
+					const delay = Math.max(20, Math.round(1000 / fps));
+					const gif = GIFEncoder();
+					for (let frame = 0; frame < frameCount; frame += 1) {
+						const timeSeconds = (frame / frameCount) * durationSeconds;
+						animation.goToAndStop(timeSeconds * sourceFps, true);
+						await waitForRender();
+						outputContext.clearRect(0, 0, width, height);
+						outputContext.drawImage(sourceCanvas, 0, 0, width, height);
+						const pixels = outputContext.getImageData(0, 0, width, height).data;
+						const palette = quantize(pixels, 256, {
+							clearAlpha: true,
+							format: "rgba4444",
+							oneBitAlpha: true,
+						});
+						const index = applyPalette(pixels, palette, "rgba4444");
+						const transparentIndex = palette.findIndex((color) => color[3] === 0);
+						gif.writeFrame(index, width, height, {
+							delay,
+							palette,
+							...(frame === 0 ? { repeat: 0 } : {}),
+							...(transparentIndex < 0 ? {} : { transparent: true, transparentIndex }),
+						});
+					}
+					gif.finish();
+					const encoded = gif.bytes();
+					logger?.debug("TGS animated sticker conversion completed", {
+						bytes: encoded.byteLength,
+						durationMs: elapsedMs(startedAt),
+						format: "gif",
+						frameCount,
+						height,
+						width,
 					});
-					const index = applyPalette(pixels, palette, "rgba4444");
-					const transparentIndex = palette.findIndex((color) => color[3] === 0);
-					gif.writeFrame(index, width, height, {
-						delay,
-						palette,
-						...(frame === 0 ? { repeat: 0 } : {}),
-						...(transparentIndex < 0 ? {} : { transparent: true, transparentIndex }),
-					});
+					return encoded;
+				} finally {
+					animation.destroy();
 				}
-				gif.finish();
-				return gif.bytes();
 			} finally {
-				animation.destroy();
+				window.close();
 			}
-		} finally {
-			window.close();
+		} catch (error) {
+			logger?.warn("TGS animated sticker conversion failed", {
+				bytes: bytes.byteLength,
+				durationMs: elapsedMs(startedAt),
+				error: logErrorMessage(error),
+			});
+			throw error;
 		}
 	});
 }
@@ -229,9 +260,22 @@ export async function webmToGif(
 	bytes: Uint8Array,
 	options: AnimatedConversionOptions = {},
 	ffmpegPath?: string,
+	logger?: PluginLogger,
 ): Promise<Uint8Array | undefined> {
 	const ffmpeg = findFfmpeg(ffmpegPath);
-	if (ffmpeg === undefined) return undefined;
+	if (ffmpeg === undefined) {
+		logger?.debug("ffmpeg unavailable; webm sticker will stay as webm", {
+			bytes: bytes.byteLength,
+		});
+		return undefined;
+	}
+	const startedAt = Date.now();
+	logger?.info("webm animated sticker conversion started", {
+		bytes: bytes.byteLength,
+		fps: options.fps,
+		maxFrames: options.maxFrames,
+		width: options.width,
+	});
 	const directory = await mkdtemp(join(tmpdir(), "elaina-sticker-webm-"));
 	try {
 		const input = join(directory, "input.webm");
@@ -241,25 +285,42 @@ export async function webmToGif(
 		const maxFrames = clamp(options.maxFrames, DEFAULT_MAX_FRAMES, 1, MAX_MAX_FRAMES);
 		const width = clamp(options.width, 512, 32, MAX_SIZE);
 		const filter = `fps=${fps},scale=${width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=reserve_transparent=1[p];[s1][p]paletteuse=alpha_threshold=128`;
-		await run(ffmpeg, [
-			"-hide_banner",
-			"-loglevel",
-			"error",
-			"-y",
-			"-i",
-			input,
-			"-vf",
-			filter,
-			"-frames:v",
-			String(maxFrames),
-			"-loop",
-			"0",
-			"-f",
-			"gif",
-			output,
-		]);
+		try {
+			await run(ffmpeg, [
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-i",
+				input,
+				"-vf",
+				filter,
+				"-frames:v",
+				String(maxFrames),
+				"-loop",
+				"0",
+				"-f",
+				"gif",
+				output,
+			]);
+		} catch (error) {
+			logger?.warn("webm animated sticker conversion failed", {
+				bytes: bytes.byteLength,
+				durationMs: elapsedMs(startedAt),
+				error: logErrorMessage(error),
+			});
+			throw error;
+		}
 		const result = new Uint8Array(await readFile(output));
 		if (result.byteLength === 0) throw new Error("ffmpeg produced an empty GIF");
+		logger?.debug("webm animated sticker conversion completed", {
+			bytes: result.byteLength,
+			durationMs: elapsedMs(startedAt),
+			format: "gif",
+			fps,
+			maxFrames,
+			width,
+		});
 		return result;
 	} finally {
 		await rm(directory, { force: true, recursive: true });
@@ -275,6 +336,7 @@ export const defaultAnimatedConverter: AnimatedConverter = {
 export function createAnimatedConverter(
 	input: {
 		readonly ffmpegPath?: string;
+		readonly logger?: PluginLogger | undefined;
 		readonly tgs?: (bytes: Uint8Array, options?: AnimatedConversionOptions) => Promise<Uint8Array>;
 		readonly webm?: (
 			bytes: Uint8Array,
@@ -282,10 +344,55 @@ export function createAnimatedConverter(
 		) => Promise<Uint8Array | undefined>;
 	} = {},
 ): AnimatedConverter {
+	const logger = input.logger;
+	const customTgs = input.tgs;
+	const customWebm = input.webm;
 	return {
 		available: true,
-		convertTgs: input.tgs ?? (async (bytes, options) => await tgsToGif(bytes, options)),
-		convertWebm:
-			input.webm ?? (async (bytes, options) => await webmToGif(bytes, options, input.ffmpegPath)),
+		convertTgs: async (bytes, options) => {
+			if (customTgs === undefined) return await tgsToGif(bytes, options, logger);
+			const startedAt = Date.now();
+			try {
+				const result = await customTgs(bytes, options);
+				logger?.debug("animated sticker conversion completed", {
+					bytes: result.byteLength,
+					durationMs: elapsedMs(startedAt),
+					format: "gif",
+					source: "tgs",
+				});
+				return result;
+			} catch (error) {
+				logger?.warn("animated sticker conversion failed", {
+					durationMs: elapsedMs(startedAt),
+					error: logErrorMessage(error),
+					format: "gif",
+					source: "tgs",
+				});
+				throw error;
+			}
+		},
+		convertWebm: async (bytes, options) => {
+			if (customWebm === undefined)
+				return await webmToGif(bytes, options, input.ffmpegPath, logger);
+			const startedAt = Date.now();
+			try {
+				const result = await customWebm(bytes, options);
+				logger?.debug("animated sticker conversion completed", {
+					bytes: result?.byteLength ?? 0,
+					durationMs: elapsedMs(startedAt),
+					format: result === undefined ? "none" : "gif",
+					source: "webm",
+				});
+				return result;
+			} catch (error) {
+				logger?.warn("animated sticker conversion failed", {
+					durationMs: elapsedMs(startedAt),
+					error: logErrorMessage(error),
+					format: "gif",
+					source: "webm",
+				});
+				throw error;
+			}
+		},
 	};
 }

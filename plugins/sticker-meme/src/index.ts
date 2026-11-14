@@ -2,6 +2,7 @@ import type { ElainaPlugin, PluginContext } from "@elaina/sdk";
 import { recordValue } from "./domain.ts";
 import { StickerImportService } from "./import-service.ts";
 import { LearningService } from "./learning.ts";
+import { childLogger, logErrorMessage } from "./logging.ts";
 import { stickerMemeManifest, STICKER_MEME_PLUGIN_ID } from "./manifest.ts";
 import { createStickerReplyTransform } from "./output.ts";
 import { StickerRepository } from "./repository.ts";
@@ -120,10 +121,14 @@ async function updateStatus(context: PluginContext, repository: StickerRepositor
 export const stickerMemePlugin: ElainaPlugin = {
 	manifest: stickerMemeManifest,
 	async setup(context) {
+		context.logger.info("sticker-meme setup started");
 		const database = context.database;
 		const media = context.media;
 		if (database === undefined || media === undefined) {
-			context.logger.error("sticker-meme requires host-mode database and media access");
+			context.logger.error("sticker-meme requires host-mode database and media access", {
+				hasDatabase: database !== undefined,
+				hasMedia: media !== undefined,
+			});
 			context.ui.setStatus({
 				code: "host_requirements_missing",
 				level: "error",
@@ -131,11 +136,17 @@ export const stickerMemePlugin: ElainaPlugin = {
 			});
 			return;
 		}
+		const selectionLogger = childLogger(context.logger, "selection");
+		const learningLogger = childLogger(context.logger, "learning");
+		const outputLogger = childLogger(context.logger, "output");
+		const importLogger = childLogger(context.logger, "import");
+		const toolsLogger = childLogger(context.logger, "tools");
+		const rpcLogger = childLogger(context.logger, "rpc");
 		const repository = new StickerRepository(database);
-		const importService = new StickerImportService({ media, repository });
+		const importService = new StickerImportService({ logger: importLogger, media, repository });
 		const selection = new StickerSelectionService({
 			...(context.audit === undefined ? {} : { audit: context.audit }),
-			logger: context.logger,
+			logger: selectionLogger,
 			media,
 			repository,
 			tokenTtlMs: readTtl((await context.settings?.get()) ?? {}),
@@ -143,23 +154,24 @@ export const stickerMemePlugin: ElainaPlugin = {
 		const learning = new LearningService({
 			...(context.audit === undefined ? {} : { audit: context.audit }),
 			config: context.config,
-			logger: context.logger,
+			logger: learningLogger,
 			media,
 			repository,
 			...(context.settings === undefined ? {} : { settings: context.settings }),
 		});
 		const transform = createStickerReplyTransform({
 			...(context.audit === undefined ? {} : { audit: context.audit }),
-			logger: context.logger,
+			logger: outputLogger,
 			media,
 			repository,
 		});
 		const runtime: StickerRuntime = { disposers: [] };
 		runtimes.set(context, runtime);
-		registerStickerTools(context, selection);
+		registerStickerTools(context, selection, toolsLogger);
 		registerStickerRpc(context, {
 			importService,
 			learning,
+			...(rpcLogger === undefined ? {} : { logger: rpcLogger }),
 			onSettled: () => updateStatus(context, repository),
 			repository,
 		});
@@ -190,14 +202,28 @@ export const stickerMemePlugin: ElainaPlugin = {
 	},
 	teardown(context) {
 		const runtime = runtimes.get(context);
-		runtime?.unsubscribe?.();
+		const disposerCount = runtime?.disposers.length ?? 0;
+		try {
+			runtime?.unsubscribe?.();
+		} catch (error) {
+			context.logger.warn("sticker-meme settings unsubscribe failed", {
+				error: logErrorMessage(error),
+			});
+		}
+		let disposeFailures = 0;
 		for (const dispose of runtime?.disposers ?? []) {
 			try {
 				dispose();
-			} catch {}
+			} catch (error) {
+				disposeFailures += 1;
+				context.logger.warn("sticker-meme disposer failed", {
+					error: logErrorMessage(error),
+				});
+			}
 		}
 		runtimes.delete(context);
 		context.ui.setStatus(null);
+		context.logger.info("sticker-meme teardown completed", { disposeFailures, disposerCount });
 	},
 };
 

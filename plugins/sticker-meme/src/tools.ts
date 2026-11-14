@@ -1,4 +1,5 @@
-import type { PluginContext, ToolResult } from "@elaina/sdk";
+import type { PluginContext, PluginLogger, ToolResult } from "@elaina/sdk";
+import { elapsedMs, traceLog } from "./logging.ts";
 import type { StickerSearchInput, StickerSelectionService } from "./selection.ts";
 
 const text = (value: string): ToolResult => ({ content: [{ text: value, type: "text" }] });
@@ -45,12 +46,25 @@ const searchInput = (input: Record<string, unknown>): StickerSearchInput => {
 export function registerStickerTools(
 	context: PluginContext,
 	selection: StickerSelectionService,
+	logger?: PluginLogger,
 ): void {
+	const log = logger ?? context.logger;
 	context.tools.register({
 		description:
 			"Search approved, enabled stickers by semantic text, emotion, persona, pack, or tags.",
 		async execute(input) {
-			const candidates = await selection.search(searchInput(input));
+			const startedAt = Date.now();
+			const search = searchInput(input);
+			traceLog(log, "sticker tool invoked", {
+				...search,
+				tool: "sticker-meme.search",
+			});
+			const candidates = await selection.search(search);
+			log.debug("sticker tool completed", {
+				candidateCount: candidates.length,
+				durationMs: elapsedMs(startedAt),
+				tool: "sticker-meme.search",
+			});
 			return text(
 				JSON.stringify({
 					candidates,
@@ -77,15 +91,33 @@ export function registerStickerTools(
 		description:
 			"Choose one approved sticker and issue a single-use, short-lived, conversation-bound send token. Use the returned directive verbatim in the final reply.",
 		async execute(input, invocation) {
+			const startedAt = Date.now();
 			const conversationId = invocation.conversationId;
 			if (conversationId === undefined || conversationId.trim().length === 0) {
+				log.debug("sticker tool rejected", {
+					durationMs: elapsedMs(startedAt),
+					reason: "missing_conversation",
+					tool: "sticker-meme.choose",
+				});
 				return text("A conversation is required to choose a sticker.");
 			}
 			const itemId = asString(input, "itemId");
+			const search = searchInput(input);
+			traceLog(log, "sticker tool invoked", {
+				...search,
+				itemId: itemId ?? null,
+				tool: "sticker-meme.choose",
+			});
 			const result = await selection.choose({
-				...searchInput(input),
+				...search,
 				conversationId,
 				...(itemId === undefined ? {} : { itemId }),
+			});
+			log.debug("sticker tool completed", {
+				chosenId: result.itemId,
+				durationMs: elapsedMs(startedAt),
+				tokenIssued: true,
+				tool: "sticker-meme.choose",
 			});
 			return text(JSON.stringify(result));
 		},
