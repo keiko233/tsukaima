@@ -1,5 +1,7 @@
 import type {
 	PluginAuditApi,
+	PluginCacheApi,
+	PluginCacheSetOptions,
 	PluginHookName,
 	PluginManifest,
 	PluginPermission,
@@ -35,6 +37,7 @@ export interface BunPluginWorkerOptions {
 	/** Host-mediated capabilities; workers never receive direct database handles. */
 	readonly host?: {
 		readonly audit?: PluginAuditApi;
+		readonly cache?: PluginCacheApi;
 		readonly storage?: PluginStorage;
 	};
 	readonly hostCall?: (method: string, args: readonly unknown[]) => Promise<unknown> | unknown;
@@ -355,6 +358,7 @@ export class BunPluginWorker implements PluginWorkerChannel {
 
 	async #routeHostCall(method: string, args: readonly unknown[]): Promise<unknown> {
 		const storage = this.#options.host?.storage;
+		const cache = this.#options.host?.cache;
 		const audit = this.#options.host?.audit;
 		switch (method) {
 			case "storage.global.get":
@@ -369,6 +373,21 @@ export class BunPluginWorker implements PluginWorkerChannel {
 			case "storage.conversation.set":
 				if (storage === undefined) throw new Error("Durable host storage is unavailable");
 				return await storage.conversation.set(String(args[0]), String(args[1]), args[2]);
+			case "cache.get":
+				if (cache === undefined) throw new Error("Host cache is unavailable");
+				return await cache.get(String(args[0]));
+			case "cache.set":
+				if (cache === undefined) throw new Error("Host cache is unavailable");
+				return await cache.set(String(args[0]), args[1], (args[2] ?? {}) as PluginCacheSetOptions);
+			case "cache.delete":
+				if (cache === undefined) throw new Error("Host cache is unavailable");
+				return await cache.delete(String(args[0]));
+			case "cache.has":
+				if (cache === undefined) throw new Error("Host cache is unavailable");
+				return await cache.has(String(args[0]));
+			case "cache.publish":
+				if (cache === undefined) throw new Error("Host cache is unavailable");
+				return await cache.publish(String(args[0]), args[1]);
 			case "audit.record":
 				if (audit === undefined) throw new Error("Host audit is unavailable");
 				return await audit.record(args[0] as Parameters<PluginAuditApi["record"]>[0]);

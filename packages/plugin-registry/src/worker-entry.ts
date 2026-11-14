@@ -1,10 +1,13 @@
 import { pathToFileURL } from "node:url";
 import {
 	createPluginContext,
+	hasPermission,
 	pluginManifestSchema,
 	PluginRuntime,
 	type ElainaPlugin,
 	type PluginAuditApi,
+	type PluginCacheApi,
+	type PluginCacheSetOptions,
 	type PluginLogger,
 	type PluginStorage,
 } from "@elaina/sdk";
@@ -82,6 +85,31 @@ function createWorkerStorage(): PluginStorage {
 	};
 }
 
+function createWorkerCache(): PluginCacheApi {
+	return {
+		get: async <T = unknown>(key: string) => (await hostCall("cache.get", [key])) as T | undefined,
+		set: async (key: string, value: unknown, options: PluginCacheSetOptions = {}) => {
+			await hostCall("cache.set", [key, value, options]);
+		},
+		delete: async (key: string) => (await hostCall("cache.delete", [key])) as boolean,
+		has: async (key: string) => (await hostCall("cache.has", [key])) as boolean,
+		getOrSet: async <T = unknown>(
+			key: string,
+			factory: () => Promise<T> | T,
+			options: PluginCacheSetOptions = {},
+		) => {
+			const existing = (await hostCall("cache.get", [key])) as T | undefined;
+			if (existing !== undefined) return existing;
+			const value = await factory();
+			await hostCall("cache.set", [key, value, options]);
+			return value;
+		},
+		publish: async (channel: string, payload: unknown) => {
+			await hostCall("cache.publish", [channel, payload]);
+		},
+	};
+}
+
 function createWorkerAudit(): PluginAuditApi {
 	return {
 		record: async (entry) => {
@@ -123,11 +151,16 @@ async function initialize(message: InitMessageWithProtocol): Promise<void> {
 		throw new Error(`Plugin module must export a plugin with setup(): ${message.modulePath}`);
 	}
 	const manifest = pluginManifestSchema.parse(message.manifest);
+	const cachePermission =
+		hasPermission(message.grantedPermissions, "cache.read") ||
+		hasPermission(message.grantedPermissions, "cache.write") ||
+		hasPermission(message.grantedPermissions, "cache.publish");
 	const context = createPluginContext({
 		audit: createWorkerAudit(),
 		config: message.config,
 		grantedPermissions: message.grantedPermissions,
 		logger: createWorkerLogger(),
+		...(cachePermission ? { cache: createWorkerCache() } : {}),
 		manifest,
 		pluginId: message.pluginId,
 		storage: createWorkerStorage(),

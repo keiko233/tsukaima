@@ -40,6 +40,8 @@ import type {
 	PluginModelQuery,
 	PluginMediaApi,
 	PluginModelRegistry,
+	PluginCacheApi,
+	PluginCacheSetOptions,
 	PluginRpcHandler,
 	PluginRpcRegistry,
 	PluginStorage,
@@ -1109,6 +1111,68 @@ export class LocalStorageBridge implements PluginStorage {
 	};
 }
 
+/**
+ * In-memory plugin cache used by unit tests and embedders. The production host substitutes a
+ * KV-backed bridge with the same shape, so plugin code does not change when it runs for real.
+ */
+export class LocalCacheBridge implements PluginCacheApi {
+	readonly #entries = new Map<string, { expiresAt?: number; value: unknown }>();
+	readonly #listeners = new Map<string, Set<(payload: unknown) => void>>();
+
+	async get<T = unknown>(key: string): Promise<T | undefined> {
+		const entry = this.#entries.get(key);
+		if (entry === undefined) return undefined;
+		if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
+			this.#entries.delete(key);
+			return undefined;
+		}
+		return entry.value as T;
+	}
+
+	async set(key: string, value: unknown, options: PluginCacheSetOptions = {}): Promise<void> {
+		this.#entries.set(
+			key,
+			options.ttlMs === undefined || options.ttlMs <= 0
+				? { value }
+				: { expiresAt: Date.now() + options.ttlMs, value },
+		);
+	}
+
+	async delete(key: string): Promise<boolean> {
+		return this.#entries.delete(key);
+	}
+
+	async has(key: string): Promise<boolean> {
+		return (await this.get(key)) !== undefined;
+	}
+
+	async getOrSet<T = unknown>(
+		key: string,
+		factory: () => Promise<T> | T,
+		options?: PluginCacheSetOptions,
+	): Promise<T> {
+		const existing = await this.get<T>(key);
+		if (existing !== undefined) return existing;
+		const value = await factory();
+		await this.set(key, value, options);
+		return value;
+	}
+
+	async publish(channel: string, payload: unknown): Promise<void> {
+		for (const handler of this.#listeners.get(channel) ?? []) handler(payload);
+	}
+
+	subscribe(channel: string, handler: (payload: unknown) => void): () => void {
+		const handlers = this.#listeners.get(channel) ?? new Set();
+		handlers.add(handler);
+		this.#listeners.set(channel, handlers);
+		return () => {
+			handlers.delete(handler);
+			if (handlers.size === 0) this.#listeners.delete(channel);
+		};
+	}
+}
+
 export class LocalConfigBridge implements PluginConfig {
 	readonly #values: Map<string, unknown>;
 
@@ -1132,6 +1196,7 @@ export interface PluginContextOptions {
 	config?: Record<string, unknown>;
 	logger?: PluginLogger;
 	storage?: PluginStorage;
+	cache?: PluginCacheApi;
 	conversation?: {
 		read(): Promise<readonly MessageEnvelope[]>;
 	};
@@ -1168,6 +1233,15 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 			name: pluginId,
 			version: "0.0.0",
 		});
+	const granted = options.grantedPermissions ?? manifest.permissions;
+	const cache =
+		options.cache ??
+		(granted.some(
+			(permission) =>
+				permission === "*" || permission === "cache" || permission.startsWith("cache."),
+		)
+			? new LocalCacheBridge()
+			: undefined);
 	const tools = new LocalToolBridge(pluginId, options.grantedPermissions ?? manifest.permissions);
 	const ui = new LocalUiBridge({
 		grantedPermissions: options.grantedPermissions ?? manifest.permissions,
@@ -1188,6 +1262,7 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 		config: new LocalConfigBridge(options.config ?? {}),
 		logger,
 		storage,
+		...(cache === undefined ? {} : { cache }),
 		conversation: options.conversation ?? { read: async () => [] },
 		...(options.conversations ? { conversations: options.conversations } : {}),
 		events,
