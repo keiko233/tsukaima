@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk";
+import type { PluginMigration } from "./migrations.ts";
 import { validatePluginConfig } from "./config.ts";
 
 export type PluginRunMode = "host" | "worker";
@@ -16,6 +17,10 @@ export interface InstallPluginOptions {
 	config?: Record<string, unknown>;
 	enabled?: boolean;
 	grantedPermissions?: readonly string[];
+	/** Plugin package root, used to resolve manifest-declared migration files. */
+	rootDir?: string;
+	/** Explicit migrations, overriding the manifest's migration directory. */
+	migrations?: readonly PluginMigration[];
 	runMode?: PluginRunMode;
 }
 

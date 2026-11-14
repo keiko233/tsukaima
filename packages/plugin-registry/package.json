@@ -7,8 +7,6 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
-		"@elaina/db": "workspace:*",
-		"@elaina/sdk": "workspace:*",
-		"drizzle-orm": "0.45.4"
+		"@elaina/sdk": "workspace:*"
 	}
 }

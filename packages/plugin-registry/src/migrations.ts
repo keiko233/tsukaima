@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, sql as sqlRaw } from "drizzle-orm";
-import { pluginMigrations, type ElainaDatabase } from "@elaina/db";
+import {
+	PluginNamingError,
+	assertPluginSqlIsolated,
+	pluginSqlPrefix,
+	sanitizePluginId,
+} from "./naming.ts";
+import type { PluginDatabaseConnection, PluginDatabaseProvider } from "./plugin-database.ts";
 
 export interface PluginMigration {
 	readonly version: string;
@@ -54,23 +59,23 @@ export class MigrationRegistryError extends Error {
 }
 
 export interface MigrationRegistryOptions {
-	readonly database: ElainaDatabase | (() => ElainaDatabase | undefined);
+	readonly databases: PluginDatabaseProvider;
+	readonly now?: () => Date;
 }
 
-/** Stable sanitation used for `plugin_<sanitized_id>_*` object prefixes. */
-export function sanitizePluginId(pluginId: string): string {
-	const value = pluginId
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9_]+/gu, "_")
-		.replace(/^_+|_+$/gu, "");
-	if (value.length === 0) throw new MigrationRegistryError("Plugin id cannot be sanitized");
-	return value;
+const LEDGER_TABLE = "_elaina_plugin_migrations";
+
+interface LedgerRow {
+	readonly applied_at: string;
+	readonly checksum: string;
+	readonly duration_ms: number;
+	readonly rollback_sql: string | null;
+	readonly version: string;
 }
 
-export function pluginSqlPrefix(pluginId: string): string {
-	return `plugin_${sanitizePluginId(pluginId)}_`;
-}
+/** Stable sanitation used for plugin database file names and legacy object prefixes. */
+export { pluginSqlPrefix, sanitizePluginId };
+export { assertPluginSqlIsolated, assertPluginSqlIsolated as assertPluginSqlNamespaced };
 
 export function migrationChecksum(sql: string): string {
 	return createHash("sha256").update(sql).digest("hex");
@@ -103,64 +108,6 @@ export function compareMigrationVersions(left: string, right: string): number {
 	return 0;
 }
 
-function unquoteIdentifier(value: string): string {
-	return value.replace(/^[`"[]/u, "").replace(/[`"\]]$/u, "");
-}
-
-/**
- * Validate that every DDL target uses the plugin's prefix. This is intentionally conservative:
- * plugin migrations may not create, alter, or drop core tables or another plugin's objects.
- */
-export function assertPluginSqlNamespaced(sql: string, pluginId: string): void {
-	if (/\b(?:attach|detach)\s+database\b/iu.test(sql)) {
-		throw new MigrationRegistryError(
-			`Plugin ${pluginId} migrations may not attach or detach databases`,
-		);
-	}
-	const prefix = pluginSqlPrefix(pluginId);
-	const identifier = '([`"\\[]?[A-Za-z0-9_.-]+[`"\\]]?)';
-	const ddl = new RegExp(
-		String.raw`\b(?:create|alter|drop)\s+(?:(?:virtual|temp|temporary)\s+)?(?:table|index|view|trigger)\s+(?:if\s+(?:not\s+)?exists\s+)?${identifier}`,
-		"giu",
-	);
-	for (const match of sql.matchAll(ddl)) {
-		const name = unquoteIdentifier(match[1] ?? "");
-		if (!name.startsWith(prefix)) {
-			throw new MigrationRegistryError(
-				`Plugin ${pluginId} migration object ${name} must start with ${prefix}`,
-			);
-		}
-	}
-	const indexTarget =
-		/\bcreate\s+(?:unique\s+)?index\s+(?:if\s+not\s+exists\s+)?[^\s]+\s+on\s+([`"[]?[A-Za-z0-9_.-]+[`"\]]?)/giu;
-	for (const match of sql.matchAll(indexTarget)) {
-		const name = unquoteIdentifier(match[1] ?? "");
-		if (!name.startsWith(prefix)) {
-			throw new MigrationRegistryError(
-				`Plugin ${pluginId} index target ${name} must start with ${prefix}`,
-			);
-		}
-	}
-	const writes =
-		/\b(?:insert\s+into|update|delete\s+from|from|join|references)\s+([`"[]?[A-Za-z0-9_.-]+[`"\]]?)/giu;
-	for (const match of sql.matchAll(writes)) {
-		const name = unquoteIdentifier(match[1] ?? "");
-		// DML continuation keywords (`UPDATE ... SET`, `INSERT ... VALUES`, `RETURNING`, ...)
-		// are syntax, not target objects, and must not be mistaken for table references.
-		if (
-			name.startsWith(prefix) ||
-			/^(?:as|conflict|default|do|else|end|from|into|null|on|returning|select|set|then|values|when|where)$/iu.test(
-				name,
-			)
-		) {
-			continue;
-		}
-		throw new MigrationRegistryError(
-			`Plugin ${pluginId} migration may only reference ${prefix}* objects (saw ${name})`,
-		);
-	}
-}
-
 let migrationQueue: Promise<unknown> = Promise.resolve();
 
 async function withMigrationLock<T>(task: () => Promise<T>): Promise<T> {
@@ -173,36 +120,60 @@ async function withMigrationLock<T>(task: () => Promise<T>): Promise<T> {
 	return await current;
 }
 
-function rowsToApplied(row: {
-	appliedAt: string;
-	checksum: string;
-	durationMs: number;
-	pluginId: string;
-	rollbackSql: string | null;
-	version: string;
-}): AppliedPluginMigration {
+function rowToApplied(pluginId: string, row: LedgerRow): AppliedPluginMigration {
 	return {
-		appliedAt: row.appliedAt,
+		appliedAt: row.applied_at,
 		checksum: row.checksum,
-		durationMs: row.durationMs,
-		pluginId: row.pluginId,
+		durationMs: row.duration_ms,
+		pluginId,
 		version: row.version,
-		...(row.rollbackSql === null ? {} : { rollbackSql: row.rollbackSql }),
+		...(row.rollback_sql === null ? {} : { rollbackSql: row.rollback_sql }),
 	};
 }
 
+function ensureLedger(database: PluginDatabaseConnection): void {
+	database.exec(
+		`CREATE TABLE IF NOT EXISTS ${LEDGER_TABLE} (
+	version TEXT PRIMARY KEY NOT NULL,
+	checksum TEXT NOT NULL,
+	rollback_sql TEXT,
+	applied_at TEXT NOT NULL,
+	duration_ms INTEGER NOT NULL
+);`,
+	);
+}
+
+function readLedger(database: PluginDatabaseConnection): readonly LedgerRow[] {
+	return database.query<LedgerRow>(
+		`SELECT version, checksum, rollback_sql, applied_at, duration_ms FROM ${LEDGER_TABLE}`,
+	);
+}
+
+function assertIsolated(sql: string, pluginId: string): void {
+	try {
+		assertPluginSqlIsolated(sql, pluginId);
+	} catch (error) {
+		if (error instanceof PluginNamingError) {
+			throw new MigrationRegistryError(error.message, { cause: error });
+		}
+		throw error;
+	}
+}
+
 /**
- * Applies plugin-owned journals after `migrateDomainDatabase` and before `prepare()`.
- * SQLite transactions plus the process-wide queue serialize concurrent plugin starts.
+ * Applies plugin-owned journals inside each plugin's own SQLite file.
+ *
+ * The ledger lives in that file too, so a plugin database is self-contained and deleting it
+ * removes both its schema and its migration history. The process-wide queue serializes plugin
+ * starts, and every migration batch runs in one SQLite transaction.
  */
 export class MigrationRegistry {
-	readonly #database: () => ElainaDatabase | undefined;
+	readonly #databases: PluginDatabaseProvider;
+	readonly #now: () => Date;
 
 	constructor(options: MigrationRegistryOptions) {
-		this.#database =
-			typeof options.database === "function"
-				? options.database
-				: () => options.database as ElainaDatabase;
+		this.#databases = options.databases;
+		this.#now = options.now ?? (() => new Date());
 	}
 
 	async run(
@@ -210,64 +181,51 @@ export class MigrationRegistry {
 		migrations: readonly PluginMigration[],
 		options: PluginMigrationApplyOptions = {},
 	): Promise<PluginMigrationRunResult> {
-		if (options.enabled === false || options.dryRun === true) {
-			const validated = this.#validate(pluginId, migrations);
-			if (options.enabled === false) {
-				return {
-					applied: [],
-					dryRun: false,
-					pending: [],
-					pluginId,
-					skipped: validated.map((migration) => migration.version),
-				};
-			}
-			const database = this.#requireDatabase();
-			return await withMigrationLock(async () => {
-				const existing = await this.#appliedRows(database, pluginId);
-				const plan = this.#plan(pluginId, validated, existing);
+		const validated = this.#validate(pluginId, migrations);
+		if (options.enabled === false) {
+			return {
+				applied: [],
+				dryRun: false,
+				pending: [],
+				pluginId,
+				skipped: validated.map((migration) => migration.version),
+			};
+		}
+		return await withMigrationLock(async () => {
+			const database = await this.#databases.open(pluginId);
+			ensureLedger(database);
+			const existing = readLedger(database);
+			const plan = this.#plan(pluginId, validated, existing);
+			const skipped = validated
+				.filter((migration) => !plan.some((pending) => pending.version === migration.version))
+				.map((migration) => migration.version);
+			if (options.dryRun === true) {
 				return {
 					applied: [],
 					dryRun: true,
 					pending: plan.map((migration) => migration.version),
 					pluginId,
-					skipped: validated
-						.filter((migration) => !plan.includes(migration))
-						.map((migration) => migration.version),
+					skipped,
 				};
-			});
-		}
-		const database = this.#requireDatabase();
-		const validated = this.#validate(pluginId, migrations);
-		return await withMigrationLock(async () => {
-			const existing = await this.#appliedRows(database, pluginId);
-			const plan = this.#plan(pluginId, validated, existing);
-			const skipped = validated
-				.filter((migration) => !plan.some((pending) => pending.version === migration.version))
-				.map((migration) => migration.version);
+			}
 			if (plan.length === 0) {
 				return { applied: [], dryRun: false, pending: [], pluginId, skipped };
 			}
 			const applied: AppliedPluginMigration[] = [];
 			try {
-				await database.transaction((tx) => {
+				database.transaction(() => {
 					for (const migration of plan) {
 						const startedAt = Date.now();
-						tx.run(sqlRaw.raw(migration.sql));
+						database.exec(migration.sql);
 						const durationMs = Math.max(0, Date.now() - startedAt);
-						const appliedAt = new Date().toISOString();
+						const appliedAt = this.#now().toISOString();
 						const checksum = migrationChecksum(migration.sql);
-						tx.insert(pluginMigrations)
-							.values({
-								appliedAt,
-								checksum,
-								durationMs,
-								id: randomUUID(),
-								pluginId,
-								rollbackSql: migration.rollbackSql ?? null,
-								status: "applied",
-								version: migration.version,
-							})
-							.run();
+						database.query(
+							`INSERT INTO ${LEDGER_TABLE}
+	(version, checksum, rollback_sql, applied_at, duration_ms)
+	VALUES (?, ?, ?, ?, ?)`,
+							[migration.version, checksum, migration.rollbackSql ?? null, appliedAt, durationMs],
+						);
 						applied.push({
 							appliedAt,
 							checksum,
@@ -309,35 +267,27 @@ export class MigrationRegistry {
 		return results;
 	}
 
-	async list(pluginId?: string): Promise<readonly AppliedPluginMigration[]> {
-		const database = this.#requireDatabase();
-		const rows =
-			pluginId === undefined
-				? await database.select().from(pluginMigrations)
-				: await database
-						.select()
-						.from(pluginMigrations)
-						.where(eq(pluginMigrations.pluginId, pluginId));
-		return rows.map(rowsToApplied);
+	async list(pluginId: string): Promise<readonly AppliedPluginMigration[]> {
+		const database = await this.#databases.open(pluginId);
+		ensureLedger(database);
+		return readLedger(database).map((row) => rowToApplied(pluginId, row));
 	}
 
 	async rollbackPlugin(
 		pluginId: string,
 		options: PluginRollbackOptions = {},
 	): Promise<readonly string[]> {
-		const database = this.#requireDatabase();
 		return await withMigrationLock(async () => {
-			const rows = await database
-				.select()
-				.from(pluginMigrations)
-				.where(eq(pluginMigrations.pluginId, pluginId));
-			const ordered = rows
-				.map(rowsToApplied)
+			const database = await this.#databases.open(pluginId);
+			ensureLedger(database);
+			const ordered = readLedger(database)
+				.map((row) => rowToApplied(pluginId, row))
 				.toSorted((a, b) => compareMigrationVersions(b.version, a.version));
 			let selected = ordered;
 			if (options.targetVersion !== undefined) {
+				const targetVersion = options.targetVersion;
 				selected = ordered.filter(
-					(row) => compareMigrationVersions(row.version, options.targetVersion as string) >= 0,
+					(row) => compareMigrationVersions(row.version, targetVersion) >= 0,
 				);
 			}
 			if (options.limit !== undefined) selected = selected.slice(0, Math.max(0, options.limit));
@@ -347,19 +297,12 @@ export class MigrationRegistry {
 					`Plugin ${pluginId} does not have a rollback plan for every applied version`,
 				);
 			}
-			await database.transaction((tx) => {
+			database.transaction(() => {
 				for (const row of selected) {
 					if (row.rollbackSql === undefined) continue;
-					assertPluginSqlNamespaced(row.rollbackSql, pluginId);
-					tx.run(sqlRaw.raw(row.rollbackSql));
-					tx.delete(pluginMigrations)
-						.where(
-							and(
-								eq(pluginMigrations.pluginId, pluginId),
-								eq(pluginMigrations.version, row.version),
-							),
-						)
-						.run();
+					assertIsolated(row.rollbackSql, pluginId);
+					database.exec(row.rollbackSql);
+					database.query(`DELETE FROM ${LEDGER_TABLE} WHERE version = ?`, [row.version]);
 				}
 			});
 			return selected.map((row) => row.version);
@@ -394,9 +337,9 @@ export class MigrationRegistry {
 					`Plugin ${pluginId} migration ${migration.version} checksum does not match its SQL`,
 				);
 			}
-			assertPluginSqlNamespaced(migration.sql, pluginId);
+			assertIsolated(migration.sql, pluginId);
 			if (migration.rollbackSql !== undefined) {
-				assertPluginSqlNamespaced(migration.rollbackSql, pluginId);
+				assertIsolated(migration.rollbackSql, pluginId);
 			}
 		}
 		return sorted;
@@ -433,23 +376,9 @@ export class MigrationRegistry {
 		}
 		return plan;
 	}
+}
 
-	async #appliedRows(
-		database: ElainaDatabase,
-		pluginId: string,
-	): Promise<readonly { checksum: string; version: string }[]> {
-		return await database
-			.select({
-				checksum: pluginMigrations.checksum,
-				version: pluginMigrations.version,
-			})
-			.from(pluginMigrations)
-			.where(eq(pluginMigrations.pluginId, pluginId));
-	}
-
-	#requireDatabase(): ElainaDatabase {
-		const database = this.#database();
-		if (database === undefined) throw new MigrationRegistryError("Domain database is not ready");
-		return database;
-	}
+/** Stable identifier used by callers that need a random ledger value. */
+export function pluginMigrationId(): string {
+	return randomUUID();
 }
