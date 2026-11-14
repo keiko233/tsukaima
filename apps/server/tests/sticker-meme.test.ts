@@ -609,4 +609,149 @@ describe("sticker-meme host integration", () => {
 			await lifecycle.stop();
 		}
 	});
+	test("finishes Telegram media import first and tracks deferred semantic work as its own job", async () => {
+		const onebot = createOneBotTransportSpy();
+		const lifecycle = await createLifecycle(onebot);
+		const chatRequests: string[] = [];
+		const server = Bun.serve({
+			async fetch(request) {
+				const url = new URL(request.url);
+				if (url.pathname.endsWith("/getStickerSet")) {
+					return Response.json({
+						ok: true,
+						result: {
+							name: "myadestes_3_hanazono_serena",
+							sticker_type: "regular",
+							stickers: [
+								{
+									emoji: "😭",
+									file_id: "file-sad",
+									file_unique_id: "unique-sad",
+									height: 512,
+									is_animated: false,
+									is_video: false,
+									type: "regular",
+									width: 512,
+								},
+							],
+							title: "Serena",
+						},
+					});
+				}
+				if (url.pathname.endsWith("/getFile")) {
+					return Response.json({
+						ok: true,
+						result: { file_id: "file-sad", file_path: "stickers/sad.webp" },
+					});
+				}
+				if (url.pathname.startsWith("/file/bot")) {
+					return new Response(new TextEncoder().encode("telegram-webp-bytes"), {
+						headers: { "content-type": "image/webp" },
+					});
+				}
+				if (url.pathname === "/v1/chat/completions") {
+					const body = (await request.json()) as { model: string };
+					chatRequests.push(body.model);
+					return Response.json({
+						id: "chatcmpl-deferred",
+						object: "chat.completion",
+						created: Math.floor(Date.now() / 1_000),
+						model: body.model,
+						choices: [
+							{
+								index: 0,
+								message: {
+									role: "assistant",
+									content: JSON.stringify({
+										confidence: 0.91,
+										description: `Deferred vision via ${body.model}`,
+										emotions: ["sad"],
+										keywords: ["deferred"],
+										labels: ["sad", "cry"],
+									}),
+								},
+								finish_reason: "stop",
+							},
+						],
+					});
+				}
+				return new Response("not found", { status: 404 });
+			},
+			port: 0,
+		});
+		try {
+			await lifecycle.updatePluginConfig("openai-compatible", {
+				apiKey: "provider-test-key",
+				baseUrl: `${server.url.origin}/v1`,
+				models: [{ enabled: true, id: "vision-beta", name: "Vision Beta", supportsImage: true }],
+			});
+			await lifecycle.updatePluginConfig("sticker-meme", {
+				semanticMode: "vision",
+				semanticModel: "vision-beta",
+				semanticProviderId: "openai-compatible",
+				telegramApiBaseUrl: server.url.origin,
+				telegramBotToken: "123:test-token",
+			});
+			const importReport = (await lifecycle.pluginHost.invokeRpc("sticker-meme.telegram.import", {
+				deferSemantic: true,
+				dryRun: false,
+				url: "https://t.me/addstickers/myadestes_3_hanazono_serena",
+			})) as { classified: number; items: number; semanticDeferred?: boolean };
+			expect(importReport).toMatchObject({
+				classified: 0,
+				items: 1,
+				semanticDeferred: true,
+			});
+
+			const progress = (await lifecycle.pluginHost.invokeRpc("sticker-meme.progress", {})) as {
+				active: { kind: string; status: string } | null;
+				jobs: readonly { kind: string; status: string }[];
+			};
+			const kinds = progress.jobs.map((job) => job.kind);
+			expect(kinds).toContain("telegram.import");
+			expect(kinds).toContain("semantic.reclassify");
+			expect(progress.active).not.toBeNull();
+
+			let description = "";
+			for (let attempt = 0; attempt < 100; attempt += 1) {
+				const items = (await lifecycle.pluginHost.invokeRpc("sticker-meme.items.list", {})) as {
+					items: readonly { description: string }[];
+				};
+				description = items.items[0]?.description ?? "";
+				if (description.length > 0 && description.startsWith("Deferred vision")) break;
+				await new Promise((resolve) => {
+					setTimeout(resolve, 20);
+				});
+			}
+			expect(description).toBe("Deferred vision via vision-beta");
+			expect(chatRequests).toEqual(["vision-beta"]);
+
+			const settledProgress = (await lifecycle.pluginHost.invokeRpc(
+				"sticker-meme.progress",
+				{},
+			)) as {
+				jobs: readonly {
+					classified: number;
+					current: number;
+					kind: string;
+					stage: string;
+					status: string;
+					total: number | null;
+				}[];
+			};
+			const semanticJob = settledProgress.jobs.find((job) => job.kind === "semantic.reclassify");
+			expect(semanticJob).toMatchObject({
+				classified: 1,
+				current: 1,
+				stage: "done",
+				status: "completed",
+				total: 1,
+			});
+			const importJob = settledProgress.jobs.find((job) => job.kind === "telegram.import");
+			expect(importJob).toMatchObject({ stage: "done", status: "completed" });
+		} finally {
+			server.stop(true);
+			await lifecycle.stop();
+		}
+	});
 });

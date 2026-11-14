@@ -18,7 +18,12 @@ import {
 } from "@elaina/sdk";
 import { readZipEntries } from "./archive.ts";
 import { createAnimatedConverter, tgsToGif, webmToGif } from "./animated.ts";
-import { normalizeLabels, safeRelativePath, type StickerItem } from "./domain.ts";
+import {
+	normalizeLabels,
+	safeRelativePath,
+	type StickerItem,
+	type StickerSemanticProfile,
+} from "./domain.ts";
 import { StickerImportService } from "./import-service.ts";
 import { LearningService, type LearningSettings } from "./learning.ts";
 import { stickerMemeManifest } from "./manifest.ts";
@@ -1095,6 +1100,190 @@ describe("telegram sticker import", () => {
 		expect(tracker.current()?.error).toContain("/bot[REDACTED]/getFile");
 		expect(tracker.current()?.error).not.toContain("SECRET_TOKEN");
 		expect(settled).toBe(2);
+	});
+});
+
+const delay = (ms: number): Promise<void> =>
+	new Promise((resolve) => {
+		setTimeout(resolve, ms);
+	});
+
+describe("sticker import concurrency", () => {
+	// oxlint-disable-next-line unicorn/consistent-function-scoping
+	function concurrencyFixture(
+		options: { readonly count?: number; readonly delayMs?: number } = {},
+	) {
+		const count = options.count ?? 6;
+		const delayMs = options.delayMs ?? 25;
+		const stickers = Array.from({ length: count }, (_, index) => ({
+			emoji: "😭",
+			fileId: `file-${index}`,
+			fileUniqueId: `unique-${index}`,
+			height: 512,
+			isAnimated: false,
+			isVideo: false,
+			type: "regular" as const,
+			width: 512,
+		}));
+		const stats = {
+			activeDownloads: 0,
+			downloaded: 0,
+			overlap: false,
+			peakClassifiers: 0,
+			peakDownloads: 0,
+		};
+		const client: TelegramStickerSource = {
+			async downloadFile(fileId: string) {
+				stats.activeDownloads += 1;
+				stats.peakDownloads = Math.max(stats.peakDownloads, stats.activeDownloads);
+				await delay(delayMs);
+				stats.activeDownloads -= 1;
+				stats.downloaded += 1;
+				return { bytes: bytes(`payload-${fileId}`), filePath: `${fileId}.webp` };
+			},
+			async getStickerSet() {
+				return {
+					isAnimated: false,
+					isVideo: false,
+					name: "concurrency_set",
+					stickerType: "regular",
+					stickers,
+					title: "Concurrency",
+				};
+			},
+		};
+		let activeClassifiers = 0;
+		const classifier = {
+			name: "vision:test",
+			async classify(): Promise<StickerSemanticProfile> {
+				if (stats.activeDownloads > 0 && stats.downloaded < count) stats.overlap = true;
+				activeClassifiers += 1;
+				stats.peakClassifiers = Math.max(stats.peakClassifiers, activeClassifiers);
+				await delay(delayMs);
+				activeClassifiers -= 1;
+				return {
+					confidence: 0.9,
+					description: "delayed vision",
+					emotions: ["sad"],
+					intents: [],
+					keywords: ["vision"],
+					labels: ["sad"],
+					source: "vision",
+					tones: [],
+					version: 1,
+				};
+			},
+		};
+		const fixture = baseFixture();
+		const service = new TelegramStickerImportService({ client, ...fixture });
+		return { ...fixture, classifier, count, service, stats };
+	}
+
+	test("overlaps parallel imports with parallel semantic classification and honors both bounds", async () => {
+		const setup = concurrencyFixture();
+		const events: TelegramImportProgress[] = [];
+		const report = await setup.service.importReference("concurrency_set", {
+			classifier: setup.classifier,
+			dryRun: false,
+			importConcurrency: 2,
+			onProgress: (progress) => events.push(progress),
+			semanticConcurrency: 2,
+		});
+		const items = await setup.repository.listItems();
+		expect(report).toMatchObject({ classified: 6, items: 6, missingMedia: 0 });
+		expect(items).toHaveLength(6);
+		expect(items.every((item) => item.semantic.source === "vision")).toBe(true);
+		expect(items.every((item) => item.description.includes("delayed vision"))).toBe(true);
+		expect(setup.stats.peakDownloads).toBe(2);
+		expect(setup.stats.peakClassifiers).toBe(2);
+		expect(setup.stats.overlap).toBe(true);
+		expect(events.at(-1)).toMatchObject({ classified: 6, current: 6, total: 6 });
+	});
+
+	test("defers semantic classification when asked and keeps heuristic writes single-write", async () => {
+		const deferredSetup = concurrencyFixture({ count: 3 });
+		const deferredReport = await deferredSetup.service.importReference("concurrency_set", {
+			classifier: deferredSetup.classifier,
+			deferSemantic: true,
+			dryRun: false,
+			importConcurrency: 3,
+			semanticConcurrency: 1,
+		});
+		expect(deferredReport).toMatchObject({
+			classified: 0,
+			items: 3,
+			semanticDeferred: true,
+		});
+		const deferredItems = await deferredSetup.repository.listItems();
+		expect(deferredItems.every((item) => item.semantic.source === "heuristic")).toBe(true);
+		expect(deferredSetup.stats.peakClassifiers).toBe(0);
+
+		const heuristicSetup = concurrencyFixture({ count: 4, delayMs: 5 });
+		let upserts = 0;
+		let updates = 0;
+		const repository = heuristicSetup.repository;
+		const upsertItem = repository.upsertItem.bind(repository);
+		const updateItem = repository.updateItem.bind(repository);
+		repository.upsertItem = async (input) => {
+			upserts += 1;
+			return await upsertItem(input);
+		};
+		repository.updateItem = async (id, patch) => {
+			updates += 1;
+			return await updateItem(id, patch);
+		};
+		const heuristicReport = await heuristicSetup.service.importReference("concurrency_set", {
+			dryRun: false,
+			importConcurrency: 2,
+			semanticConcurrency: 2,
+		});
+		expect(heuristicReport).toMatchObject({ classified: 4, items: 4 });
+		expect(upserts).toBe(4);
+		expect(updates).toBe(0);
+		expect(heuristicSetup.stats.peakDownloads).toBe(2);
+	});
+
+	test("tracks telemetry for several concurrent jobs and settles only when all finish", async () => {
+		const statuses: Array<{ code: string; summary?: string }> = [];
+		let settled = 0;
+		const tracker = new StickerProgressTracker({
+			context: {
+				ui: {
+					setStatus: (status: { code: string; summary?: string }) => statuses.push(status),
+				},
+			} as never,
+			onSettled: async () => {
+				settled += 1;
+			},
+		});
+		const importJobId = tracker.start({
+			kind: "telegram.import",
+			stage: "downloading",
+			total: 4,
+		});
+		const semanticJobId = tracker.start({
+			kind: "semantic.reclassify",
+			stage: "classifying",
+			total: 2,
+		});
+		expect(tracker.jobs().map((job) => job.kind)).toEqual([
+			"semantic.reclassify",
+			"telegram.import",
+		]);
+		expect(tracker.current()?.id).toBe(semanticJobId);
+		tracker.update(importJobId, { classified: 1, current: 1 });
+		tracker.update(semanticJobId, { classified: 1, current: 1 });
+		expect(tracker.jobs()).toHaveLength(2);
+		await tracker.complete(importJobId, { classified: 4, current: 4, total: 4 });
+		expect(settled).toBe(0);
+		expect(tracker.current()?.id).toBe(semanticJobId);
+		expect(tracker.jobs().find((job) => job.id === importJobId)?.status).toBe("completed");
+		expect(statuses.some((status) => status.code === "job_running")).toBe(true);
+		await tracker.complete(semanticJobId, { classified: 2, current: 2, total: 2 });
+		expect(settled).toBe(1);
+		expect(tracker.jobs()).toHaveLength(2);
+		expect(tracker.current()?.id).toBe(semanticJobId);
+		expect(tracker.current()).toMatchObject({ stage: "done", status: "completed" });
 	});
 });
 
