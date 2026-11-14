@@ -8,9 +8,16 @@ import type {
 	ChannelHistoryItem,
 	ChannelHistoryOptions,
 	OutboundTarget,
+	PluginLogger,
 	SendOptions,
 } from "@tsukaima/sdk";
 import type { WebSocket as BunWebSocket, WebSocketOptions } from "bun";
+import {
+	createSafeLogger,
+	safeEndpoint,
+	segmentTypeCounts,
+	singleLinePreview,
+} from "../logging.ts";
 import {
 	normalizeOneBotEvent,
 	normalizeOneBotEventAsync,
@@ -32,8 +39,10 @@ import type {
 } from "./types.ts";
 
 type PendingAction = {
+	action: string;
 	reject: (error: Error) => void;
 	resolve: (data: unknown) => void;
+	startedAtMs: number;
 	timer: ReturnType<typeof setTimeout>;
 };
 
@@ -47,6 +56,7 @@ type NormalizeHookOptions = {
 	readonly forwardMaxChars?: number | undefined;
 	readonly forwardMaxNodes?: number | undefined;
 	readonly forwardTimeoutMs?: number | undefined;
+	readonly logger?: PluginLogger | undefined;
 };
 
 const DEFAULT_ACTION_TIMEOUT_MS = 5_000;
@@ -180,6 +190,23 @@ const textOfSegments = (segments: unknown): string => {
 		.trim();
 };
 
+/** Trace-scale inbound frame summary: post type, segment counts, and a bounded text preview. */
+const inboundSummary = (event: OneBotEvent): Record<string, unknown> => {
+	const segments = event.message ?? [];
+	const textPreview = singleLinePreview(textOfSegments(segments));
+	return {
+		postType: event.post_type,
+		...(event.message_type === undefined ? {} : { messageType: event.message_type }),
+		...(event.notice_type === undefined ? {} : { noticeType: event.notice_type }),
+		...(event.sub_type === undefined ? {} : { subType: event.sub_type }),
+		...(event.request_type === undefined ? {} : { requestType: event.request_type }),
+		...(event.message_id === undefined ? {} : { messageId: String(event.message_id) }),
+		segmentCount: segments.length,
+		...(segments.length === 0 ? {} : { segmentTypes: segmentTypeCounts(segments) }),
+		...(textPreview === undefined ? {} : { textPreview }),
+	};
+};
+
 const historyItem = (raw: unknown): ChannelHistoryItem | undefined => {
 	if (typeof raw !== "object" || raw === null) return undefined;
 	const record = raw as Record<string, unknown>;
@@ -237,13 +264,16 @@ export class OneBotChannel {
 	private transport: OneBotTransport | undefined;
 	private transportFactory: OneBotTransportFactory;
 	private readonly audioRateLimiter: OneBotIntervalRateLimiter | undefined;
+	private readonly logger: PluginLogger;
 
 	constructor(
 		config: OneBotConfig,
 		transportFactory?: OneBotTransportFactory,
 		reverseServerFactory?: OneBotReverseServerFactory,
+		logger?: PluginLogger,
 	) {
 		this.config = config;
+		this.logger = createSafeLogger(logger);
 		this.transportFactory = transportFactory ?? defaultTransportFactory;
 		this.reverseServerFactory = reverseServerFactory ?? bunReverseServerFactory;
 		const interval =
@@ -251,7 +281,9 @@ export class OneBotChannel {
 			(typeof config.pttToText === "object" ? config.pttToText.minIntervalMs : undefined) ??
 			0;
 		this.audioRateLimiter =
-			config.audioTranscribe === undefined ? undefined : new OneBotIntervalRateLimiter(interval);
+			config.audioTranscribe === undefined
+				? undefined
+				: new OneBotIntervalRateLimiter(interval, this.logger.child?.("rate-limit") ?? this.logger);
 	}
 
 	get diagnostics(): OneBotChannelDiagnostics {
@@ -298,10 +330,9 @@ export class OneBotChannel {
 		options?: SendOptions,
 	): Promise<unknown> {
 		const segments = this.outboundSegments(parts, options);
-		return this.action("send_group_msg", {
-			group_id: groupId,
-			message: segments instanceof Promise ? await segments : segments,
-		});
+		const resolved = segments instanceof Promise ? await segments : segments;
+		this.logOutbound("send_group_msg", groupId, resolved);
+		return this.action("send_group_msg", { group_id: groupId, message: resolved });
 	}
 
 	async sendPrivate(
@@ -310,14 +341,18 @@ export class OneBotChannel {
 		options?: SendOptions,
 	): Promise<unknown> {
 		const segments = this.outboundSegments(parts, options);
-		return this.action("send_private_msg", {
-			message: segments instanceof Promise ? await segments : segments,
-			user_id: userId,
-		});
+		const resolved = segments instanceof Promise ? await segments : segments;
+		this.logOutbound("send_private_msg", userId, resolved);
+		return this.action("send_private_msg", { message: resolved, user_id: userId });
 	}
 
 	async sendForward(target: OutboundTarget, parts: readonly MessagePart[]): Promise<unknown> {
 		const node = { data: { content: toSegments(parts) }, type: "node" };
+		this.logOutbound(
+			target.kind === "group" ? "send_group_forward_msg" : "send_private_forward_msg",
+			target.platformConversationId,
+			node.data.content,
+		);
 		return target.kind === "group"
 			? this.action("send_group_forward_msg", {
 					group_id: target.platformConversationId,
@@ -516,6 +551,10 @@ export class OneBotChannel {
 
 	async start(): Promise<void> {
 		this.stopped = false;
+		this.logger.debug("OneBot channel starting", {
+			endpoint: this.endpointForLog(),
+			mode: this.mode,
+		});
 		if (this.mode === "reverse") {
 			await this.startReverse();
 			return;
@@ -532,12 +571,36 @@ export class OneBotChannel {
 			clearTimeout(this.reconnectTimer);
 			this.reconnectTimer = undefined;
 		}
+		this.logger.debug("OneBot channel stopping", {
+			inFlightActions: this.pending.size,
+			mode: this.mode,
+		});
 		this.transport?.close();
 		this.transport = undefined;
 		void this.reverseServer?.stop();
 		this.reverseServer = undefined;
 		this.failPending(closeError());
 		this.transition("closed");
+	}
+
+	private endpointForLog(): string | undefined {
+		return this.mode === "reverse"
+			? `ws-reverse://${this.config.host ?? DEFAULT_REVERSE_HOST}:${this.config.port ?? DEFAULT_REVERSE_PORT}`
+			: safeEndpoint(this.config.url);
+	}
+
+	/**
+	 * Outbound wire summary. Only segment types/counts and a bounded text preview are logged,
+	 * never media references or headers that could carry credentials.
+	 */
+	private logOutbound(action: string, target: string, segments: readonly OneBotSegment[]): void {
+		this.logger.trace("OneBot outbound message", {
+			action,
+			segmentCount: segments.length,
+			segmentTypes: segmentTypeCounts(segments),
+			target,
+			textPreview: singleLinePreview(textOfSegments(segments)),
+		});
 	}
 
 	private outboundSegments(
@@ -574,21 +637,35 @@ export class OneBotChannel {
 		if (this.config.resolveMedia !== undefined) {
 			try {
 				const file = await this.config.resolveMedia(part);
-				if (file !== undefined && file.length > 0) return { ...part, channelRef: file };
-			} catch {
+				if (file !== undefined && file.length > 0) {
+					this.logger.trace("OneBot outbound media resolved", {
+						partType: part.type,
+						resolved: true,
+					});
+					return { ...part, channelRef: file };
+				}
+				this.logger.debug("OneBot outbound media unresolved", { partType: part.type });
+			} catch (error) {
+				this.logger.warn("OneBot outbound media resolution failed", {
+					error: error instanceof Error ? error.message : String(error),
+					partType: part.type,
+				});
 				// Fall through to the safe text downgrade below.
 			}
 		}
 		const label = part.type === "sticker" ? "sticker" : part.type;
+		this.logger.debug("OneBot outbound part downgraded", { partType: part.type });
 		return { text: `[${label} unavailable]`, type: "text" };
 	}
 
 	private async startReverse(): Promise<void> {
 		const host = this.config.host ?? DEFAULT_REVERSE_HOST;
 		const port = this.config.port ?? DEFAULT_REVERSE_PORT;
+		const reverseLogger = this.logger.child?.("reverse") ?? this.logger;
 		const server = this.reverseServerFactory({
 			...(this.config.accessToken === undefined ? {} : { accessToken: this.config.accessToken }),
 			host,
+			logger: reverseLogger,
 			onConnection: (transport, info) => {
 				this.origin = info.origin;
 				this.remoteAddress = info.remoteAddress;
@@ -599,6 +676,12 @@ export class OneBotChannel {
 				this.lastEventAtMs = Date.now();
 				this.origin = info.origin;
 				this.remoteAddress = info.remoteAddress;
+				// `info.reason` is a fixed enum; the presented token is never part of it.
+				this.logger.warn("OneBot reverse connection rejected", {
+					...(info.origin === undefined ? {} : { origin: info.origin }),
+					...(info.remoteAddress === undefined ? {} : { remoteAddress: info.remoteAddress }),
+					reason: info.reason,
+				});
 			},
 			...(this.config.path === undefined ? {} : { path: this.config.path }),
 			port,
@@ -609,6 +692,7 @@ export class OneBotChannel {
 		if (this.config.port !== started.port) {
 			this.config = { ...this.config, port: started.port };
 		}
+		this.logger.debug("OneBot reverse channel listening", { host, port: started.port });
 	}
 
 	private attachTransport(transport: OneBotTransport, fromReverse: boolean): void {
@@ -616,18 +700,32 @@ export class OneBotChannel {
 		transport.on("open", () => {
 			this.attempts = 0;
 			this.transition("open");
+			this.logger.info("OneBot WebSocket connected", {
+				endpoint: this.endpointForLog(),
+				mode: this.mode,
+				...(this.origin === undefined ? {} : { origin: this.origin }),
+				...(this.remoteAddress === undefined ? {} : { remoteAddress: this.remoteAddress }),
+			});
 		});
 		transport.on("message", (data) => {
 			this.handleMessage(data);
 		});
 		transport.on("error", () => {
 			this.lastErrorClass = "connect";
+			this.logger.warn("OneBot WebSocket error", { mode: this.mode });
 		});
 		transport.on("close", () => {
 			if (this.transport === transport) this.transport = undefined;
 			this.origin = undefined;
 			this.remoteAddress = undefined;
+			const failedActions = this.pending.size;
 			this.failPending(closeError());
+			this.logger.info("OneBot WebSocket disconnected", {
+				failedActions,
+				mode: this.mode,
+				reason: fromReverse ? "reverse-client-closed" : "transport-closed",
+				stopped: this.stopped,
+			});
 			if (this.stopped) return;
 			if (fromReverse) {
 				this.lastErrorClass = "disconnect";
@@ -669,15 +767,26 @@ export class OneBotChannel {
 			parsed = JSON.parse(data);
 		} catch {
 			this.lastErrorClass = "unknown";
+			this.logger.warn("OneBot malformed frame ignored", {
+				bytes: typeof data === "string" ? data.length : 0,
+				reason: "unparseable-json",
+			});
 			return;
 		}
 		if (this.handleResponse(parsed)) {
 			return;
 		}
-		if (typeof parsed !== "object" || parsed === null) return;
+		if (typeof parsed !== "object" || parsed === null) {
+			this.logger.warn("OneBot malformed frame ignored", {
+				bytes: typeof data === "string" ? data.length : 0,
+				reason: "non-object-json",
+			});
+			return;
+		}
 		const event = parsed as OneBotEvent;
+		this.logger.trace("OneBot inbound frame", inboundSummary(event));
 		if (event.post_type === "notice") {
-			const notice = normalizeOneBotNotice(event, this.config);
+			const notice = normalizeOneBotNotice(event, this.config, this.logger);
 			if (notice !== undefined) {
 				this.eventCount += 1;
 				this.lastEventAtMs = notice.occurredAtMs;
@@ -686,7 +795,7 @@ export class OneBotChannel {
 			return;
 		}
 		if (event.post_type === "request") {
-			const request = normalizeOneBotRequest(event, this.config);
+			const request = normalizeOneBotRequest(event, this.config, this.logger);
 			if (request !== undefined) {
 				this.eventCount += 1;
 				this.lastEventAtMs = request.receivedAtMs;
@@ -705,10 +814,13 @@ export class OneBotChannel {
 			) ||
 			segments.some((segment) => segment.type === "forward" && this.config.forwardExpand !== false);
 		if (wantsAsync) {
+			this.logger.trace("OneBot inbound event needs async enrichment", {
+				segmentTypes: segmentTypeCounts(segments),
+			});
 			void this.handleMessageAsync(event);
 			return;
 		}
-		const envelope = normalizeOneBotEvent(event, this.config);
+		const envelope = normalizeOneBotEvent(event, this.config, this.logger);
 		if (envelope === undefined) return;
 		this.eventCount += 1;
 		this.lastEventAtMs = envelope.source.timestampMs;
@@ -722,8 +834,11 @@ export class OneBotChannel {
 			this.eventCount += 1;
 			this.lastEventAtMs = envelope.source.timestampMs;
 			this.messageHandler?.(envelope);
-		} catch {
+		} catch (error) {
 			this.lastErrorClass = "unknown";
+			this.logger.warn("OneBot async normalization failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 
@@ -747,6 +862,7 @@ export class OneBotChannel {
 			forwardMaxChars: forward?.maxChars,
 			forwardMaxNodes: forward?.maxNodes,
 			forwardTimeoutMs: forward?.timeoutMs,
+			logger: this.logger,
 		};
 	}
 
@@ -763,10 +879,22 @@ export class OneBotChannel {
 		const echo = typeof response.echo === "string" ? response.echo : undefined;
 		if (echo === undefined) return false;
 		const pending = this.pending.get(echo);
-		if (pending === undefined) return false;
+		if (pending === undefined) {
+			this.logger.trace("OneBot echo correlation missed", { echo });
+			return false;
+		}
 		clearTimeout(pending.timer);
 		this.pending.delete(echo);
-		if (response.retcode === 0) {
+		this.logger.trace("OneBot echo correlated", { action: pending.action, echo });
+		const ok = response.retcode === 0;
+		this.logger.debug("OneBot action completed", {
+			action: pending.action,
+			durationMs: Date.now() - pending.startedAtMs,
+			echo,
+			ok,
+			retcode: response.retcode,
+		});
+		if (ok) {
 			pending.resolve(response.data);
 		} else {
 			pending.reject(new Error(`OneBot action failed: ${String(response.retcode)}`));
@@ -777,6 +905,10 @@ export class OneBotChannel {
 	private action(action: string, params: Record<string, unknown>): Promise<unknown> {
 		const transport = this.transport;
 		if (transport === undefined || this.stopped) {
+			this.logger.debug("OneBot action rejected", {
+				action,
+				reason: this.stopped ? "stopped" : "not-connected",
+			});
 			return Promise.reject(closeError());
 		}
 		const echo = `echo-${this.nextEchoId++}`;
@@ -785,9 +917,16 @@ export class OneBotChannel {
 			const timer = setTimeout(() => {
 				this.pending.delete(echo);
 				this.lastErrorClass = "action-timeout";
+				this.logger.warn("OneBot action timed out", { action, echo, timeoutMs });
 				reject(actionTimeoutError(action));
 			}, timeoutMs);
-			this.pending.set(echo, { reject, resolve, timer });
+			this.pending.set(echo, { action, reject, resolve, startedAtMs: Date.now(), timer });
+			this.logger.debug("OneBot action sent", {
+				action,
+				echo,
+				inFlightActions: this.pending.size,
+				timeoutMs,
+			});
 			transport.send(JSON.stringify({ action, echo, params }));
 		});
 	}
@@ -802,7 +941,15 @@ export class OneBotChannel {
 				lastError = error;
 				const message = error instanceof Error ? error.message : String(error);
 				if (/timeout|closed/iu.test(message) === false) throw error;
-				if (attempt < READ_RETRY_ATTEMPTS - 1) await sleep(READ_RETRY_DELAY_MS);
+				if (attempt < READ_RETRY_ATTEMPTS - 1) {
+					this.logger.debug("OneBot read action retry", {
+						action,
+						attempt: attempt + 1,
+						delayMs: READ_RETRY_DELAY_MS,
+						error: message,
+					});
+					await sleep(READ_RETRY_DELAY_MS);
+				}
 			}
 		}
 		throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -823,17 +970,23 @@ export class OneBotChannel {
 		let failed = false;
 		try {
 			this.attempts += 1;
+			const delayMs = Math.round(this.reconnectDelay());
+			this.logger.debug("OneBot reconnect scheduled", { attempt: this.attempts, delayMs });
 			await new Promise<void>((resolve) => {
-				this.reconnectTimer = setTimeout(resolve, this.reconnectDelay());
+				this.reconnectTimer = setTimeout(resolve, delayMs);
 				this.reconnectTimer.unref?.();
 			});
 			this.reconnectTimer = undefined;
 			if (!this.stopped) {
 				try {
 					await this.connect();
-				} catch {
+				} catch (error) {
 					failed = true;
 					this.lastErrorClass = "connect";
+					this.logger.warn("OneBot reconnect attempt failed", {
+						attempt: this.attempts,
+						error: error instanceof Error ? error.message : String(error),
+					});
 				}
 			}
 		} finally {

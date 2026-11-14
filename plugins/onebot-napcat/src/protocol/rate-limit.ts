@@ -1,3 +1,6 @@
+import type { PluginLogger } from "@tsukaima/sdk";
+import { createSafeLogger } from "../logging.ts";
+
 /**
  * Small deterministic interval limiter used for optional speech-to-text calls. The limit is
  * enforced both globally and per chat so one busy group cannot starve private transcription
@@ -5,11 +8,13 @@
  */
 export class OneBotIntervalRateLimiter {
 	readonly #chatLast = new Map<string, number>();
+	readonly #logger: PluginLogger;
 	readonly #minIntervalMs: number;
 	#globalLast = -Infinity;
 
-	constructor(minIntervalMs: number) {
+	constructor(minIntervalMs: number, logger?: PluginLogger) {
 		this.#minIntervalMs = Math.max(0, minIntervalMs);
+		this.#logger = createSafeLogger(logger);
 	}
 
 	tryAcquire(chatKey: string, nowMs = Date.now()): boolean {
@@ -19,10 +24,25 @@ export class OneBotIntervalRateLimiter {
 			return true;
 		}
 		const lastChat = this.#chatLast.get(chatKey) ?? -Infinity;
-		if (nowMs - this.#globalLast < this.#minIntervalMs) return false;
-		if (nowMs - lastChat < this.#minIntervalMs) return false;
+		if (nowMs - this.#globalLast < this.#minIntervalMs) {
+			this.#logger.debug("OneBot enrichment rate limited", {
+				chatKey,
+				minIntervalMs: this.#minIntervalMs,
+				scope: "global",
+			});
+			return false;
+		}
+		if (nowMs - lastChat < this.#minIntervalMs) {
+			this.#logger.debug("OneBot enrichment rate limited", {
+				chatKey,
+				minIntervalMs: this.#minIntervalMs,
+				scope: "chat",
+			});
+			return false;
+		}
 		this.#globalLast = nowMs;
 		this.#chatLast.set(chatKey, nowMs);
+		this.#logger.trace("OneBot enrichment rate limit acquired", { chatKey });
 		return true;
 	}
 }
