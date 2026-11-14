@@ -20,6 +20,7 @@ export const plugin: TsukaimaPlugin = {
 					targetId: "worker-key",
 					targetKind: "worker-test",
 				});
+				context.logger.trace("storage traced", { step: "read" });
 				context.logger.info("storage completed");
 				return { content: [{ text: String(read), type: "text" }] };
 			},

@@ -42,7 +42,7 @@ function post(message: unknown): void {
 
 function postStream(
 	kind: "log" | "progress",
-	level: "debug" | "info" | "warn" | "error" | undefined,
+	level: "trace" | "debug" | "info" | "warn" | "error" | undefined,
 	message: string,
 	details?: unknown,
 ): void {
@@ -91,7 +91,7 @@ function createWorkerAudit(): PluginAuditApi {
 }
 
 function writeStreamLog(
-	level: "debug" | "info" | "warn" | "error",
+	level: "trace" | "debug" | "info" | "warn" | "error",
 	message: string,
 	details?: unknown,
 ): void {
@@ -100,6 +100,7 @@ function writeStreamLog(
 
 function createWorkerLogger(): PluginLogger {
 	return {
+		trace: (message, details) => writeStreamLog("trace", message, details),
 		debug: (message, details) => writeStreamLog("debug", message, details),
 		error: (message, details) => writeStreamLog("error", message, details),
 		info: (message, details) => writeStreamLog("info", message, details),

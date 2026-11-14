@@ -48,8 +48,8 @@ function createWorker(
 		readonly maxQueuedRequests?: number;
 		readonly maxRestarts?: number;
 		readonly onCrash?: (error: Error, restarts: number) => void;
-		readonly onLog?: (entry: { message: string }) => void;
-		readonly onProgress?: (entry: { message: string }) => void;
+		readonly onLog?: (entry: { message: string; level?: string }) => void;
+		readonly onProgress?: (entry: { message: string; level?: string }) => void;
 		readonly requestTimeoutMs?: number;
 		readonly storage?: PluginStorage;
 		readonly audit?: (entry: AuditEntry) => void;
@@ -84,11 +84,15 @@ describe("mature Bun plugin worker contract", () => {
 		expect(PLUGIN_WORKER_PROTOCOL_VERSION).toBe("1");
 		const { storage, values } = memoryStorage();
 		const audits: AuditEntry[] = [];
-		const logs: string[] = [];
+		const logs: Array<{ message: string; level?: string }> = [];
 		const progress: string[] = [];
 		const worker = createWorker({
 			audit: (entry) => audits.push(entry),
-			onLog: (entry) => logs.push(entry.message),
+			onLog: (entry) =>
+				logs.push({
+					...(entry.level === undefined ? {} : { level: entry.level }),
+					message: entry.message,
+				}),
 			onProgress: (entry) => progress.push(entry.message),
 			storage,
 		});
@@ -104,7 +108,8 @@ describe("mature Bun plugin worker contract", () => {
 			expect(audits).toEqual([
 				expect.objectContaining({ action: "worker.storage", targetId: "worker-key" }),
 			]);
-			expect(logs).toContain("storage completed");
+			expect(logs.map((entry) => entry.message)).toContain("storage completed");
+			expect(logs).toContainEqual({ level: "trace", message: "storage traced" });
 			expect(progress).toContain("tool started");
 			expect(progress).toContain("tool finished");
 		} finally {
