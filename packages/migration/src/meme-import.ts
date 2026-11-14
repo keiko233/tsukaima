@@ -2,7 +2,13 @@ import { Database } from "bun:sqlite";
 import { promises as fs } from "node:fs";
 import { basename, join, relative } from "node:path";
 import type { SnapshotSource } from "./dsh-inspect.ts";
-import { listFiles, sha256Bytes, sha256String, stableStringify } from "./fs.ts";
+import {
+	listFiles,
+	resolveSnapshotRoot,
+	sha256Bytes,
+	sha256String,
+	stableStringify,
+} from "./fs.ts";
 import type { DecisionEntry } from "./decision.ts";
 
 export interface ImportedMemeItem {
@@ -234,10 +240,11 @@ export async function parseDshMemePacks(source: SnapshotSource): Promise<MemeImp
 	for (const [root, label] of source) {
 		const stats = await fs.stat(root).catch(() => null);
 		if (stats?.isDirectory()) {
-			for (const file of await listFiles(root)) {
+			const dataRoot = await resolveSnapshotRoot(root);
+			for (const file of await listFiles(dataRoot)) {
 				files.push({
 					absolutePath: file,
-					path: `${label}/${relative(root, file).replaceAll("\\", "/")}`,
+					path: `${label}/${relative(dataRoot, file).replaceAll("\\", "/")}`,
 				});
 			}
 		} else if (stats?.isFile()) {

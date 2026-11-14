@@ -46,6 +46,8 @@ export const DEFAULT_SNAPSHOT_EXCLUDES = [
 	"pnpm-store",
 	"pnpm-cache",
 	"yarn-cache",
+	"chrome-profile",
+	"session_projcache",
 	"logs",
 	"*.log",
 ] as const;
@@ -467,11 +469,14 @@ if [ -n "$container" ]; then
 	# never mutated: the archive is streamed to stdout and extracted locally.
 	docker run --rm --volumes-from "$container:ro" -v "$tmp:/out" alpine:3 sh -c '
 		set -e
+		# Each volume is archived and extracted as its own tar stream: an extractor stops at
+		# the first end-of-archive marker, so concatenated archives would silently drop all
+		# but the first volume.
 		for path in /home/node/.dsh /workspace; do
 			if [ -e "$path" ]; then
-				tar -C / -cf - "${"$"}{path#/}"
+				tar -C / -cf - "${"$"}{path#/}" | tar -C /out/snapshot -xf -
 			fi
-		done | tar -C /out/snapshot -xf -
+		done
 	' >/dev/null
 else
 	test -d "$project"

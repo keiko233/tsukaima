@@ -617,12 +617,52 @@ export async function parseSessionV4Text(
 	return parseRecords(chunks(), options);
 }
 
+function decompressionFailure(error: unknown): ParsedSessionFile {
+	return {
+		diagnostics: {
+			bytesRead: 0,
+			errors: [
+				{
+					code: "decompression_failed",
+					line: 0,
+					message: error instanceof Error ? error.message : String(error),
+					offset: 0,
+					resumable: false,
+				},
+			],
+			lastOffset: 0,
+			malformedRecords: 0,
+			recordsDropped: 0,
+			recordsRead: 0,
+			supported: false,
+			unknownRecordTypes: [],
+			version: null,
+		},
+		session: null,
+		textMode: false,
+	};
+}
+
+/** zstd frame magic: 0x28 0xB5 0x2F 0xFD. */
+function isZstdFrame(bytes: Uint8Array): boolean {
+	return bytes[0] === 0x28 && bytes[1] === 0xb5 && bytes[2] === 0x2f && bytes[3] === 0xfd;
+}
+
 export async function parseSessionV4Bytes(
 	bytes: Uint8Array,
 	options: SessionParseOptions = {},
 ): Promise<ParsedSessionFile> {
 	async function* chunks(): AsyncGenerator<Uint8Array> {
 		yield bytes;
+	}
+	// Callers (including the normalize pipeline) hand us raw `.jsonl.zstd` file bytes;
+	// detect the frame magic so compressed sessions are never parsed as binary text.
+	if (isZstdFrame(bytes)) {
+		try {
+			return await parseRecords(decompressZstd(chunks()), options);
+		} catch (error) {
+			return decompressionFailure(error);
+		}
 	}
 	return parseRecords(chunks(), options);
 }
@@ -635,29 +675,7 @@ export async function parseSessionV4File(
 		try {
 			return await parseRecords(decompressZstd(bytesFromFile(path)), options);
 		} catch (error) {
-			return {
-				diagnostics: {
-					bytesRead: 0,
-					errors: [
-						{
-							code: "decompression_failed",
-							line: 0,
-							message: error instanceof Error ? error.message : String(error),
-							offset: 0,
-							resumable: false,
-						},
-					],
-					lastOffset: 0,
-					malformedRecords: 0,
-					recordsDropped: 0,
-					recordsRead: 0,
-					supported: false,
-					unknownRecordTypes: [],
-					version: null,
-				},
-				session: null,
-				textMode: false,
-			};
+			return decompressionFailure(error);
 		}
 	}
 	return parseRecords(bytesFromFile(path), options);

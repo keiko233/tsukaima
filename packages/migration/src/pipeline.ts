@@ -43,7 +43,7 @@ import {
 	type RecordCounts,
 } from "./normalize.ts";
 import { collectSecretValues, redactSecrets } from "./secrets.ts";
-import { sha256Bytes, sha256String, stableStringify } from "./fs.ts";
+import { resolveSnapshotRoot, sha256Bytes, sha256String, stableStringify } from "./fs.ts";
 import { insertProactiveSchedulerData, insertStickerMemeData } from "./plugin-tables.ts";
 import { runFakeMigrationSmokeTurn, type FakeModelAdapter, type SmokeTurnResult } from "./smoke.ts";
 
@@ -165,6 +165,11 @@ function settingsRecord(setting: NormalizedSetting): {
 	};
 }
 
+/** The server's blob store addresses bytes by bare 64-char hex (`MediaService.blobPath`). */
+function bareSha256(value: string): string {
+	return value.startsWith("sha256:") ? value.slice("sha256:".length) : value;
+}
+
 function mediaRecord(source: NormalizedSticker | NormalizedAttachment): {
 	id: string;
 	kind: "image" | "sticker" | "audio" | "video" | "file";
@@ -179,7 +184,7 @@ function mediaRecord(source: NormalizedSticker | NormalizedAttachment): {
 			id: source.mediaId ?? source.canonicalId,
 			kind: "sticker",
 			mimeType: source.mimeType,
-			sha256: source.fileHash ? `sha256:${source.fileHash}` : source.sourceHash,
+			sha256: bareSha256(source.fileHash ?? source.sourceHash),
 			sizeBytes: source.sizeBytes,
 			source: "migration",
 			metadataJson: JSON.stringify({
@@ -193,7 +198,7 @@ function mediaRecord(source: NormalizedSticker | NormalizedAttachment): {
 		id: source.id,
 		kind: source.kind,
 		mimeType: source.mimeType,
-		sha256: source.fileHash ? `sha256:${source.fileHash}` : (source.sha256 ?? source.sourceHash),
+		sha256: bareSha256(source.fileHash ?? source.sha256 ?? source.sourceHash),
 		sizeBytes: source.sizeBytes,
 		source: "migration",
 		metadataJson: JSON.stringify({ sourceId: source.sourceId, sourcePath: source.sourcePath }),
@@ -452,11 +457,12 @@ async function collectSourceSecretValues(source: SnapshotSource): Promise<string
 		}
 	};
 	for (const [root] of source) {
-		const stats = await fs.stat(root).catch(() => null);
-		if (stats?.isDirectory()) await visit(root);
+		const dataRoot = await resolveSnapshotRoot(root);
+		const stats = await fs.stat(dataRoot).catch(() => null);
+		if (stats?.isDirectory()) await visit(dataRoot);
 		else if (stats?.isFile()) {
-			const content = await fs.readFile(root, "utf8").catch(() => "");
-			const parsed = /\.ya?ml$/i.test(root)
+			const content = await fs.readFile(dataRoot, "utf8").catch(() => "");
+			const parsed = /\.ya?ml$/i.test(dataRoot)
 				? Bun.YAML.parse(content)
 				: (() => {
 						try {

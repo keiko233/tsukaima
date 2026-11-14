@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { promises as fs } from "node:fs";
+import { dirname } from "node:path";
 import {
 	captureSnapshot,
 	createPipeline,
@@ -208,12 +210,15 @@ async function main(): Promise<number> {
 		return 0;
 	}
 	if (options.command === "normalize" || options.command === "dry-run" || options.dryRun) {
-		writeJson(
-			await createPipeline(
-				`sqlite:${options.target ?? ":memory:"}`,
-				pipelineOptions(options),
-			).dryRun(source),
-		);
+		const plan = await createPipeline(
+			`sqlite:${options.target ?? ":memory:"}`,
+			pipelineOptions(options),
+		).dryRun(source);
+		if (options.planFile) {
+			await fs.mkdir(dirname(options.planFile), { recursive: true });
+			await fs.writeFile(options.planFile, `${JSON.stringify(plan, null, "\t")}\n`);
+		}
+		writeJson(plan);
 		return 0;
 	}
 	if (options.command === "import" && !options.dryRun) {

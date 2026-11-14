@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { promises as fs } from "node:fs";
 import { basename } from "node:path";
 import type { SnapshotSource } from "./dsh-inspect.ts";
-import { listFiles } from "./fs.ts";
+import { listFiles, resolveSnapshotRoot } from "./fs.ts";
 import { sha256String, stableStringify } from "./fs.ts";
 import type { DecisionEntry } from "./decision.ts";
 import { isCredentialLikeKey, sanitizeMemorySpace } from "./dsh-baseline.ts";
@@ -128,10 +128,11 @@ function sourceFiles(source: SnapshotSource): Promise<SourceFile[]> {
 		for (const [root, label] of source) {
 			const stats = await fs.stat(root).catch(() => null);
 			if (stats?.isDirectory()) {
-				for (const file of await listFiles(root)) {
+				const dataRoot = await resolveSnapshotRoot(root);
+				for (const file of await listFiles(dataRoot)) {
 					files.push({
 						absolutePath: file,
-						path: `${label}/${file.slice(root.length + 1).replaceAll("\\", "/")}`,
+						path: `${label}/${file.slice(dataRoot.length + 1).replaceAll("\\", "/")}`,
 					});
 				}
 			} else if (stats?.isFile()) {
