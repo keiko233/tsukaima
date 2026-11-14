@@ -3,14 +3,34 @@ import {
 	pluginManifestSchema,
 	type TsukaimaPlugin,
 	type PluginContext,
+	type PluginLogger,
 	type PluginTool,
 	type ToolInvocationContext,
 	type ToolResult,
 } from "@tsukaima/sdk";
+import { previewText } from "../logging.ts";
 import type { MemoryService } from "../services/memory-service.ts";
 import { MEMORY_SERVICE_BINDING } from "../services/memory-service.ts";
 
 const MAX_RECALL_LIMIT = 20;
+const MAX_PREVIEW_LENGTH = 120;
+
+/**
+ * Plugin tools log under `tsukaima::plugin::memory::tools`; `child` is optional in the SDK,
+ * so fall back to the plugin-scoped logger when a host does not provide it.
+ */
+function toolsLogger(context: PluginContext): PluginLogger {
+	return context.logger.child?.("tools") ?? context.logger;
+}
+
+/** Bounded single-line preview for `trace` fields; never log raw multiline content. */
+function preview(value: string | undefined): string | undefined {
+	return value === undefined ? undefined : previewText(value, MAX_PREVIEW_LENGTH);
+}
+
+function elapsedMs(startedAt: number): number {
+	return Math.round(performance.now() - startedAt);
+}
 
 function text(value: string): ToolResult {
 	return { content: [{ text: value, type: "text" }] };
@@ -54,19 +74,51 @@ function allowlistMatches(toolName: string, allowlist: readonly string[]): boole
 
 async function resolveMemoryTool(
 	context: PluginContext,
+	log: PluginLogger,
 	invocation: ToolInvocationContext,
 	toolName: string,
 ): Promise<ResolvedMemoryTool | string> {
 	const service = context.dependencies?.get<MemoryService>(MEMORY_SERVICE_BINDING);
-	if (service === undefined) return "Memory service is not available.";
 	const durableConversationId = invocation.conversationId;
-	if (durableConversationId === undefined) return "Memory tools require a conversation.";
+	if (service === undefined) {
+		log.warn("memory tool denied", {
+			conversationId: durableConversationId,
+			reason: "service_unavailable",
+			tool: toolName,
+		});
+		return "Memory service is not available.";
+	}
+	if (durableConversationId === undefined) {
+		log.warn("memory tool denied", { reason: "conversation_missing", tool: toolName });
+		return "Memory tools require a conversation.";
+	}
 	const session = await service.sessionByDurableId(durableConversationId);
-	if (session === undefined) return "Conversation not found.";
+	if (session === undefined) {
+		log.warn("memory tool denied", {
+			conversationId: durableConversationId,
+			reason: "session_missing",
+			tool: toolName,
+		});
+		return "Conversation not found.";
+	}
 	const policy = await service.policyForConversation(session.id);
-	if (policy === undefined) return "Conversation policy not available.";
+	if (policy === undefined) {
+		log.warn("memory tool denied", {
+			conversationId: durableConversationId,
+			reason: "policy_missing",
+			sessionId: session.id,
+			tool: toolName,
+		});
+		return "Conversation policy not available.";
+	}
 	const allowedTools = policy.pacing.allowedTools;
 	if (allowedTools !== undefined && !allowlistMatches(toolName, allowedTools)) {
+		log.warn("memory tool denied", {
+			conversationId: durableConversationId,
+			reason: "conversation_tool_denied",
+			sessionId: session.id,
+			tool: toolName,
+		});
 		await context.audit?.record({
 			action: "memory.tool.denied",
 			actorKind: "agent",
@@ -77,6 +129,12 @@ async function resolveMemoryTool(
 		return "Memory tools are not allowed in this conversation.";
 	}
 	if (policy.memoryEnabled === false) {
+		log.warn("memory tool denied", {
+			conversationId: durableConversationId,
+			reason: "memory_disabled",
+			sessionId: session.id,
+			tool: toolName,
+		});
 		await context.audit?.record({
 			action: "memory.tool.denied",
 			actorKind: "agent",
@@ -113,15 +171,22 @@ function effectiveWrite(
 	return { scope, status: reviewRequired ? "pending" : "active" };
 }
 
-function recallTool(context: PluginContext): PluginTool {
+function recallTool(context: PluginContext, log: PluginLogger): PluginTool {
 	return {
 		description: "Recall relevant long-term memories for this conversation.",
 		execute: async (input, invocation) => {
-			const resolved = await resolveMemoryTool(context, invocation, "memory.recall");
-			if (typeof resolved === "string") return text(resolved);
+			const startedAt = performance.now();
 			const query = inputString(input, "query") ?? "";
 			const requested = inputNumber(input, "limit");
 			const limit = Math.min(MAX_RECALL_LIMIT, Math.max(1, requested ?? 8));
+			const resolved = await resolveMemoryTool(context, log, invocation, "memory.recall");
+			if (typeof resolved === "string") return text(resolved);
+			log.trace("memory.recall start", {
+				conversationId: invocation.conversationId,
+				limit,
+				query: preview(query),
+				sessionId: resolved.session.id,
+			});
 			const ranked = await resolved.service.recordSearch(resolved.session.id, query, limit * 2);
 			const visible = ranked
 				.filter(
@@ -129,6 +194,14 @@ function recallTool(context: PluginContext): PluginTool {
 						resolved.policy.sharedMemoryEnabled !== false || entry.memory.visibility !== "shared",
 				)
 				.slice(0, limit);
+			log.debug("memory.recall complete", {
+				candidateCount: ranked.length,
+				conversationId: invocation.conversationId,
+				durationMs: elapsedMs(startedAt),
+				limit,
+				resultCount: visible.length,
+				sessionId: resolved.session.id,
+			});
 			if (visible.length === 0) return text("No relevant memories.");
 			return text(
 				visible
@@ -152,18 +225,48 @@ function recallTool(context: PluginContext): PluginTool {
 	};
 }
 
-function saveTool(context: PluginContext): PluginTool {
+function saveTool(context: PluginContext, log: PluginLogger): PluginTool {
 	return {
 		description:
 			"Save a durable memory (preference, fact, person, todo, event, setting, or summary).",
 		execute: async (input, invocation) => {
-			const resolved = await resolveMemoryTool(context, invocation, "memory.save");
+			const startedAt = performance.now();
+			const resolved = await resolveMemoryTool(context, log, invocation, "memory.save");
 			if (typeof resolved === "string") return text(resolved);
 			const summary = inputString(input, "summary");
-			if (summary === undefined) return text("summary is required");
+			if (summary === undefined) {
+				log.debug("memory.save rejected", {
+					conversationId: invocation.conversationId,
+					durationMs: elapsedMs(startedAt),
+					reason: "summary_required",
+					sessionId: resolved.session.id,
+					tool: "memory.save",
+				});
+				return text("summary is required");
+			}
 			const kind = inputString(input, "kind") ?? "fact";
 			const requestedScope = inputScope(input);
 			const target = effectiveWrite(resolved, requestedScope);
+			log.trace("memory.save start", {
+				conversationId: invocation.conversationId,
+				kind,
+				scope: target.scope,
+				sessionId: resolved.session.id,
+				summary: preview(summary),
+			});
+			if (requestedScope !== undefined && requestedScope !== target.scope) {
+				const sharedWriteBlocked =
+					resolved.session.kind === "group" && resolved.policy.sharedMemoryWriteEnabled === false;
+				log.debug("memory.save scope adjusted", {
+					conversationId: invocation.conversationId,
+					kind,
+					reason: sharedWriteBlocked ? "shared_write_disabled" : "scope_restricted",
+					requestedScope,
+					scope: target.scope,
+					sessionId: resolved.session.id,
+					status: target.status,
+				});
+			}
 			const result = await resolved.service.create({
 				confidence: Math.min(1, Math.max(0, inputNumber(input, "confidence") ?? 0.7)),
 				content: inputString(input, "content") ?? summary,
@@ -178,6 +281,16 @@ function saveTool(context: PluginContext): PluginTool {
 				status: target.status,
 				summary,
 				...(target.scope === "global" ? { visibility: "shared" } : { visibility: "private" }),
+			});
+			log.debug("memory.save complete", {
+				conversationId: invocation.conversationId,
+				durationMs: elapsedMs(startedAt),
+				kind: result.memory.kind,
+				memoryId: result.memory.id,
+				merged: result.merged,
+				scope: result.memory.scope,
+				sessionId: resolved.session.id,
+				status: result.memory.status,
 			});
 			return text(
 				`Memory ${result.merged ? "merged" : "saved"}: ${result.memory.id} (${result.memory.scope}/${result.memory.kind}, ${result.memory.status})`,
@@ -205,17 +318,53 @@ function saveTool(context: PluginContext): PluginTool {
 	};
 }
 
-function updateTool(context: PluginContext): PluginTool {
+function updateTool(context: PluginContext, log: PluginLogger): PluginTool {
 	return {
 		description: "Update a durable memory owned by this conversation.",
 		execute: async (input, invocation) => {
-			const resolved = await resolveMemoryTool(context, invocation, "memory.update");
+			const startedAt = performance.now();
+			const resolved = await resolveMemoryTool(context, log, invocation, "memory.update");
 			if (typeof resolved === "string") return text(resolved);
 			const id = inputString(input, "id");
-			if (id === undefined) return text("id is required");
+			const summary = inputString(input, "summary");
+			log.trace("memory.update start", {
+				conversationId: invocation.conversationId,
+				id,
+				sessionId: resolved.session.id,
+				summary: preview(summary),
+			});
+			if (id === undefined) {
+				log.debug("memory.update rejected", {
+					conversationId: invocation.conversationId,
+					durationMs: elapsedMs(startedAt),
+					reason: "id_required",
+					sessionId: resolved.session.id,
+					tool: "memory.update",
+				});
+				return text("id is required");
+			}
 			const existing = await resolved.service.get(id);
-			if (existing === undefined) return text("Memory not found.");
+			if (existing === undefined) {
+				log.debug("memory.update rejected", {
+					conversationId: invocation.conversationId,
+					durationMs: elapsedMs(startedAt),
+					memoryId: id,
+					reason: "not_found",
+					sessionId: resolved.session.id,
+					tool: "memory.update",
+				});
+				return text("Memory not found.");
+			}
 			if (!ownedBySession(existing, resolved.session.id)) {
+				log.warn("memory.update denied", {
+					conversationId: invocation.conversationId,
+					durationMs: elapsedMs(startedAt),
+					memoryId: id,
+					ownerConversationId: existing.conversationId,
+					reason: "not_owned",
+					scope: existing.scope,
+					sessionId: resolved.session.id,
+				});
 				return text("That memory belongs to another conversation.");
 			}
 			if (
@@ -223,9 +372,16 @@ function updateTool(context: PluginContext): PluginTool {
 				resolved.session.kind === "group" &&
 				resolved.policy.sharedMemoryWriteEnabled === false
 			) {
+				log.warn("memory.update denied", {
+					conversationId: invocation.conversationId,
+					durationMs: elapsedMs(startedAt),
+					memoryId: id,
+					reason: "shared_write_disabled",
+					scope: existing.scope,
+					sessionId: resolved.session.id,
+				});
 				return text("Shared memory writes are disabled for this conversation.");
 			}
-			const summary = inputString(input, "summary");
 			if (summary !== undefined) {
 				const result = await resolved.service.update({
 					...(inputString(input, "content") === undefined
@@ -246,8 +402,24 @@ function updateTool(context: PluginContext): PluginTool {
 					...(inputString(input, "kind") === undefined ? {} : { kind: inputString(input, "kind") }),
 					summary,
 				});
+				log.debug("memory.update complete", {
+					conversationId: invocation.conversationId,
+					durationMs: elapsedMs(startedAt),
+					memoryId: result.id,
+					scope: result.scope,
+					sessionId: resolved.session.id,
+					status: result.status,
+				});
 				return text(`Memory updated: ${result.id} (${result.status})`);
 			}
+			log.debug("memory.update rejected", {
+				conversationId: invocation.conversationId,
+				durationMs: elapsedMs(startedAt),
+				memoryId: id,
+				reason: "summary_required",
+				sessionId: resolved.session.id,
+				tool: "memory.update",
+			});
 			return text("summary is required for memory.update");
 		},
 		name: "memory.update",
@@ -269,17 +441,51 @@ function updateTool(context: PluginContext): PluginTool {
 	};
 }
 
-function forgetTool(context: PluginContext): PluginTool {
+function forgetTool(context: PluginContext, log: PluginLogger): PluginTool {
 	return {
 		description: "Forget a durable memory owned by this conversation (tombstone retained).",
 		execute: async (input, invocation) => {
-			const resolved = await resolveMemoryTool(context, invocation, "memory.forget");
+			const startedAt = performance.now();
+			const resolved = await resolveMemoryTool(context, log, invocation, "memory.forget");
 			if (typeof resolved === "string") return text(resolved);
 			const id = inputString(input, "id");
-			if (id === undefined) return text("id is required");
+			log.trace("memory.forget start", {
+				conversationId: invocation.conversationId,
+				id,
+				sessionId: resolved.session.id,
+			});
+			if (id === undefined) {
+				log.debug("memory.forget rejected", {
+					conversationId: invocation.conversationId,
+					durationMs: elapsedMs(startedAt),
+					reason: "id_required",
+					sessionId: resolved.session.id,
+					tool: "memory.forget",
+				});
+				return text("id is required");
+			}
 			const existing = await resolved.service.get(id);
-			if (existing === undefined) return text("Memory not found.");
+			if (existing === undefined) {
+				log.debug("memory.forget rejected", {
+					conversationId: invocation.conversationId,
+					durationMs: elapsedMs(startedAt),
+					memoryId: id,
+					reason: "not_found",
+					sessionId: resolved.session.id,
+					tool: "memory.forget",
+				});
+				return text("Memory not found.");
+			}
 			if (!ownedBySession(existing, resolved.session.id)) {
+				log.warn("memory.forget denied", {
+					conversationId: invocation.conversationId,
+					durationMs: elapsedMs(startedAt),
+					memoryId: id,
+					ownerConversationId: existing.conversationId,
+					reason: "not_owned",
+					scope: existing.scope,
+					sessionId: resolved.session.id,
+				});
 				return text("That memory belongs to another conversation.");
 			}
 			if (
@@ -287,9 +493,25 @@ function forgetTool(context: PluginContext): PluginTool {
 				resolved.session.kind === "group" &&
 				resolved.policy.sharedMemoryWriteEnabled === false
 			) {
+				log.warn("memory.forget denied", {
+					conversationId: invocation.conversationId,
+					durationMs: elapsedMs(startedAt),
+					memoryId: id,
+					reason: "shared_write_disabled",
+					scope: existing.scope,
+					sessionId: resolved.session.id,
+				});
 				return text("Shared memory writes are disabled for this conversation.");
 			}
 			const result = await resolved.service.revoke(id);
+			log.debug("memory.forget complete", {
+				conversationId: invocation.conversationId,
+				durationMs: elapsedMs(startedAt),
+				memoryId: result.id,
+				scope: result.scope,
+				sessionId: resolved.session.id,
+				status: result.status,
+			});
 			return text(`Memory forgotten: ${result.id}`);
 		},
 		name: "memory.forget",
@@ -317,13 +539,19 @@ export const memoryPlugin: TsukaimaPlugin = {
 		version: "0.1.0",
 	}),
 	setup(context) {
-		for (const tool of [
-			recallTool(context),
-			saveTool(context),
-			updateTool(context),
-			forgetTool(context),
-		]) {
+		const log = toolsLogger(context);
+		const tools = [
+			recallTool(context, log),
+			saveTool(context, log),
+			updateTool(context, log),
+			forgetTool(context, log),
+		];
+		for (const tool of tools) {
 			context.tools.register(tool);
 		}
+		context.logger.info("memory plugin ready", {
+			count: tools.length,
+			tools: tools.map((tool) => tool.name),
+		});
 	},
 };
