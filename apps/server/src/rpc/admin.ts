@@ -1,6 +1,8 @@
 import { conversations, modelPolicies, type memories } from "@elaina/db";
 import { adminBase, type ElainaApiContext } from "./base.ts";
 import {
+	abortSessionRun,
+	compactSessionContext,
 	createLocalChat,
 	createSession,
 	getGroup,
@@ -14,6 +16,7 @@ import {
 	listRequests,
 	listRunSteps,
 	listUsers,
+	resetSessionContext,
 	respondToRequest,
 	sendMessage,
 	setReceivingSession,
@@ -431,6 +434,15 @@ export const adminRouter = {
 		),
 	},
 	sessions: {
+		abort: adminBase.admin.sessions.abort.handler(async ({ context, input }) =>
+			abortSessionRun(context.lifecycle, input.sessionId),
+		),
+		compact: adminBase.admin.sessions.compact.handler(async ({ context, input }) =>
+			compactSessionContext(context.lifecycle, {
+				...(input.instructions === undefined ? {} : { instructions: input.instructions }),
+				sessionId: input.sessionId,
+			}),
+		),
 		contextStats: adminBase.admin.sessions.contextStats.handler(async ({ context, input }) =>
 			getSessionContextStats(context.lifecycle, input.sessionId),
 		),
@@ -443,6 +455,13 @@ export const adminRouter = {
 		messages: adminBase.admin.sessions.messages.handler(async ({ context, input }) =>
 			listMessages(context.lifecycle, input.sessionId),
 		),
+		resetContext: adminBase.admin.sessions.resetContext.handler(async ({ context, input }) => {
+			await resetSessionContext(context.lifecycle, {
+				...(input.handoff === undefined ? {} : { handoff: input.handoff }),
+				sessionId: input.sessionId,
+			});
+			return { ok: true };
+		}),
 		runSteps: adminBase.admin.sessions.runSteps.handler(async ({ context, input }) =>
 			listRunSteps(context.lifecycle, input),
 		),

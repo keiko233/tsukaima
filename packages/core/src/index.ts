@@ -48,6 +48,7 @@ export {
 	type AppendConversationResult,
 	type BackgroundTurnInput,
 	type BackgroundTurnResult,
+	type CompactConversationResult,
 	type ConversationAnswer,
 	type ConversationContextInspection,
 	type DurableConversationHostOptions,

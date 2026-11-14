@@ -382,6 +382,12 @@ export interface ConversationContextInspection {
 	readonly usedTokens: number;
 }
 
+export interface CompactConversationResult {
+	readonly compacted: boolean;
+	readonly entryId: string | null;
+	readonly submissionId: string | null;
+}
+
 /**
  * Text of an assistant entry, mirroring what a channel reply needs. `undefined` for other
  * entry kinds or an answer with no text blocks.
@@ -1037,6 +1043,100 @@ export class PiDurableConversationHost {
 			BACKGROUND_CONTEXT,
 		);
 		return [...page.items].toReversed();
+	}
+
+	async compactConversation(
+		conversationId: string,
+		instructions?: string,
+	): Promise<CompactConversationResult> {
+		const parsedNumeric = Number(conversationId);
+		if (!Number.isSafeInteger(parsedNumeric)) {
+			throw new Error(`Conversation not found: ${conversationId}`);
+		}
+		const harness = await this.openHarness();
+		const numericId = parsedNumeric as ConversationId;
+		const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
+		if (conversation === undefined) {
+			throw new Error(`Conversation not found: ${conversationId}`);
+		}
+		await this.ensureExtensions(conversation, conversationId);
+		await this.ensureAgentModel(conversation, conversationId);
+		const trimmed = instructions?.trim();
+		const taskId = await conversation.compact(
+			trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined,
+			BACKGROUND_CONTEXT,
+		);
+		const settled = await harness.waitForTask(taskId, BACKGROUND_CONTEXT);
+		const outcome = settled.state.outcome;
+		if (outcome.status !== "completed") {
+			if (outcome.status === "failed" || outcome.status === "faulted") {
+				throw new Error(outcome.error.message);
+			}
+			throw new Error(outcome.reason ?? `Compaction ${outcome.status}`);
+		}
+		const { entryId, submissionId } = outcome.result;
+		if (submissionId !== undefined) {
+			const submission = await harness.submission(submissionId, BACKGROUND_CONTEXT);
+			await submission?.wait(BACKGROUND_CONTEXT);
+		}
+		return {
+			compacted: entryId !== undefined || submissionId !== undefined,
+			entryId: entryId === undefined ? null : String(entryId),
+			submissionId: submissionId === undefined ? null : String(submissionId),
+		};
+	}
+
+	async resetConversation(conversationId: string, handoff?: string): Promise<void> {
+		const parsedNumeric = Number(conversationId);
+		if (!Number.isSafeInteger(parsedNumeric)) {
+			throw new Error(`Conversation not found: ${conversationId}`);
+		}
+		const harness = await this.openHarness();
+		const numericId = parsedNumeric as ConversationId;
+		const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
+		if (conversation === undefined) {
+			throw new Error(`Conversation not found: ${conversationId}`);
+		}
+		await this.ensureExtensions(conversation, conversationId);
+		await this.ensureAgentModel(conversation, conversationId);
+		const trimmed = handoff?.trim();
+		await conversation.reset(
+			trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined,
+			BACKGROUND_CONTEXT,
+		);
+	}
+
+	async abortConversation(conversationId: string): Promise<void> {
+		const parsedNumeric = Number(conversationId);
+		if (!Number.isSafeInteger(parsedNumeric)) {
+			throw new Error(`Conversation not found: ${conversationId}`);
+		}
+		const harness = await this.openHarness();
+		const numericId = parsedNumeric as ConversationId;
+		const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
+		if (conversation === undefined) {
+			throw new Error(`Conversation not found: ${conversationId}`);
+		}
+		this.clearActivityTimer(conversationId);
+		const activityId = `${numericId}:activity`;
+		const window = await harness.snapshot(
+			activityWindowDoc,
+			numericId,
+			activityId,
+			BACKGROUND_CONTEXT,
+		);
+		if (window?.status === "collecting") {
+			await conversation.commit(async (tx) => {
+				const document = await tx.doc(activityWindowDoc, numericId, activityId, {
+					conversationId: numericId,
+					envelopes: window.envelopes,
+					openedAtMs: window.openedAtMs,
+				});
+				document.status = "closed";
+				document.closedAtMs = Date.now();
+			}, BACKGROUND_CONTEXT);
+		}
+		await conversation.abort(BACKGROUND_CONTEXT);
 	}
 
 	/**

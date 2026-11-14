@@ -126,6 +126,7 @@ function AccordionGroup({ children, count, label, open, onToggle }: AccordionGro
 }
 
 export interface ContextPanelContentProps {
+	embedded?: boolean;
 	errorMessage?: string;
 	isError?: boolean;
 	isFetching?: boolean;
@@ -137,6 +138,7 @@ export interface ContextPanelContentProps {
 }
 
 export function ContextPanelContent({
+	embedded = false,
 	errorMessage,
 	isError = false,
 	isFetching = false,
@@ -199,41 +201,45 @@ export function ContextPanelContent({
 					},
 				].filter((segment) => segment.tokens > 0);
 
+	const refreshButton = onRefresh ? (
+		<Button
+			type="button"
+			variant="ghost"
+			size="icon"
+			onClick={onRefresh}
+			aria-label={m.context_refresh()}
+			title={m.context_refresh()}
+			className="size-7 rounded-md text-muted-foreground hover:text-foreground"
+		>
+			<RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
+		</Button>
+	) : null;
+
 	return (
 		<div className="flex h-full min-h-0 flex-col">
-			<div className="flex items-center justify-between gap-2 px-4 pt-3.5 pb-2">
-				<h2 className="text-[13px] font-medium text-muted-foreground">{m.context_title()}</h2>
-				<div className="flex items-center gap-0.5">
-					{onRefresh ? (
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon"
-							onClick={onRefresh}
-							aria-label={m.context_refresh()}
-							title={m.context_refresh()}
-							className="size-7 rounded-md text-muted-foreground hover:text-foreground"
-						>
-							<RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
-						</Button>
-					) : null}
-					{onClose ? (
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon"
-							onClick={onClose}
-							aria-label={m.context_close()}
-							title={m.context_close()}
-							className="size-7 rounded-md text-muted-foreground hover:text-foreground"
-						>
-							<X className="size-3.5" />
-						</Button>
-					) : null}
+			{embedded ? null : (
+				<div className="flex items-center justify-between gap-2 px-4 pt-3.5 pb-2">
+					<h2 className="text-[13px] font-medium text-muted-foreground">{m.context_title()}</h2>
+					<div className="flex items-center gap-0.5">
+						{refreshButton}
+						{onClose ? (
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon"
+								onClick={onClose}
+								aria-label={m.context_close()}
+								title={m.context_close()}
+								className="size-7 rounded-md text-muted-foreground hover:text-foreground"
+							>
+								<X className="size-3.5" />
+							</Button>
+						) : null}
+					</div>
 				</div>
-			</div>
+			)}
 
-			<div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+			<div className={cn("min-h-0 flex-1 overflow-y-auto px-4 pb-4", embedded && "pt-3")}>
 				{isPending ? (
 					<div className="py-8 text-center text-xs text-muted-foreground">{m.loading()}</div>
 				) : isError ? (
@@ -248,16 +254,19 @@ export function ContextPanelContent({
 					<div className="py-8 text-center text-xs text-muted-foreground">{m.context_empty()}</div>
 				) : (
 					<div>
-						<div className="flex items-baseline justify-between gap-2">
+						<div className="flex items-center justify-between gap-2">
 							<span className="text-[15px] font-medium tabular-nums text-foreground">
 								{m.context_used_headline({
 									percent: formatHeadlinePercent(stats.usedPercent, stats.contextWindow),
 								})}
 							</span>
-							<span className="text-[12px] tabular-nums text-muted-foreground">
-								{formatCompactTokens(stats.usedTokens)} /{" "}
-								{stats.contextWindow > 0 ? formatCompactTokens(stats.contextWindow) : "—"}
-							</span>
+							<div className="flex items-center gap-1">
+								<span className="text-[12px] tabular-nums text-muted-foreground">
+									{formatCompactTokens(stats.usedTokens)} /{" "}
+									{stats.contextWindow > 0 ? formatCompactTokens(stats.contextWindow) : "—"}
+								</span>
+								{embedded ? refreshButton : null}
+							</div>
 						</div>
 
 						<div

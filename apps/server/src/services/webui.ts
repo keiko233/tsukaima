@@ -6,6 +6,8 @@ import {
 	type MessageSummary as ContractMessageSummary,
 	type RunStep,
 	type SessionContextStats,
+	type SessionsAbortResult,
+	type SessionsCompactResult,
 } from "@elaina/contracts";
 import {
 	chatObjects,
@@ -284,6 +286,88 @@ export async function getSessionContextStats(
 		})),
 		tools: inspection.tools.map((tool) => ({ ...tool })),
 	};
+}
+
+export async function compactSessionContext(
+	lifecycle: ElainaLifecycle,
+	input: { instructions?: string; sessionId: string },
+): Promise<SessionsCompactResult> {
+	const database = requireDatabase(lifecycle);
+	const host = lifecycle.conversationHost;
+	if (host === undefined) throw new Error("Conversation host is not ready");
+	const [session] = await database
+		.select({ durableConversationId: conversations.durableConversationId })
+		.from(conversations)
+		.where(eq(conversations.id, input.sessionId))
+		.limit(1);
+	if (session === undefined) throw new Error("Session not found");
+	const result = await host.compactConversation(session.durableConversationId, input.instructions);
+	await lifecycle.writeAudit({
+		action: "session.compact",
+		actorKind: "user",
+		payload: {
+			compacted: result.compacted,
+			hasInstructions: (input.instructions?.trim().length ?? 0) > 0,
+		},
+		result: "ok",
+		targetId: input.sessionId,
+		targetKind: "session",
+	});
+	return result;
+}
+
+export async function resetSessionContext(
+	lifecycle: ElainaLifecycle,
+	input: { handoff?: string; sessionId: string },
+): Promise<void> {
+	const database = requireDatabase(lifecycle);
+	const host = lifecycle.conversationHost;
+	if (host === undefined) throw new Error("Conversation host is not ready");
+	const [session] = await database
+		.select({ durableConversationId: conversations.durableConversationId })
+		.from(conversations)
+		.where(eq(conversations.id, input.sessionId))
+		.limit(1);
+	if (session === undefined) throw new Error("Session not found");
+	await host.resetConversation(session.durableConversationId, input.handoff);
+	await lifecycle.writeAudit({
+		action: "session.reset-context",
+		actorKind: "user",
+		payload: {
+			hasHandoff: (input.handoff?.trim().length ?? 0) > 0,
+		},
+		result: "ok",
+		targetId: input.sessionId,
+		targetKind: "session",
+	});
+}
+
+export async function abortSessionRun(
+	lifecycle: ElainaLifecycle,
+	sessionId: string,
+): Promise<SessionsAbortResult> {
+	const database = requireDatabase(lifecycle);
+	const host = lifecycle.conversationHost;
+	if (host === undefined) throw new Error("Conversation host is not ready");
+	const [session] = await database
+		.select({ durableConversationId: conversations.durableConversationId })
+		.from(conversations)
+		.where(eq(conversations.id, sessionId))
+		.limit(1);
+	if (session === undefined) throw new Error("Session not found");
+	const cancelledPendingOutput = lifecycle.replyDispatcher.cancelPendingOutput(
+		session.durableConversationId,
+	);
+	await host.abortConversation(session.durableConversationId);
+	await lifecycle.writeAudit({
+		action: "session.abort",
+		actorKind: "user",
+		payload: { cancelledPendingOutput },
+		result: "ok",
+		targetId: sessionId,
+		targetKind: "session",
+	});
+	return { cancelledPendingOutput, ok: true };
 }
 
 export async function createLocalChat(

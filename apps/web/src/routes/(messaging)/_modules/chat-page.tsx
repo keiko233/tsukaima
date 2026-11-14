@@ -12,12 +12,16 @@ import { m } from "@/paraglide/messages";
 import { useMediaQuery } from "../../_modules/hooks/use-media-query";
 import { useShellNavigation } from "../../_modules/shell/admin-shell";
 import { Avatar, InlineError } from "../../_modules/shell/primitives";
-import { ContextPanel } from "./context-panel";
-import { ConversationPolicyPanel } from "./conversation-policy-panel";
 import { MessageComposer } from "./message-composer";
 import { MessageList } from "./message-list";
+import {
+	SessionInspectorSidebar,
+	storedInspectorTab,
+	type InspectorTab,
+} from "./session-inspector-sidebar";
 
 const CONTEXT_PANEL_KEY = "elaina.webui.context-panel";
+const INSPECTOR_TAB_KEY = "elaina.webui.inspector-tab";
 
 function storedContextOpen(): boolean {
 	try {
@@ -57,6 +61,7 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 	const wideContextPane = useMediaQuery("(min-width: 1024px)");
 	const [desktopContextOpen, setDesktopContextOpen] = useState<boolean>(() => storedContextOpen());
 	const [drawerContextOpen, setDrawerContextOpen] = useState(false);
+	const [inspectorTab, setInspectorTab] = useState<InspectorTab>(() => storedInspectorTab());
 	const liveRun = useLiveRun(sessionId);
 	// The live run's elapsed label is a wall clock, not the render time of a message. Tick it only
 	// while a run is active so an idle transcript never re-renders.
@@ -74,6 +79,13 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 			// Ignore storage errors in restricted environments.
 		}
 	}, [desktopContextOpen]);
+	useEffect(() => {
+		try {
+			localStorage.setItem(INSPECTOR_TAB_KEY, inspectorTab);
+		} catch {
+			// Ignore storage errors in restricted environments.
+		}
+	}, [inspectorTab]);
 	useEffect(() => {
 		setDrawerContextOpen(false);
 	}, [sessionId, wideContextPane]);
@@ -226,7 +238,6 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 					</div>
 				</div>
 				<div className="flex shrink-0 items-center gap-2">
-					<ConversationPolicyPanel chatObjectId={detail.chat.id} sessionId={detail.id} />
 					<Button
 						type="button"
 						variant={contextOpen ? "secondary" : "outline"}
@@ -236,7 +247,13 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 						onClick={toggleContextPanel}
 					>
 						<PanelRight className="size-4" />
-						<span className="hidden sm:inline">{m.context_action()}</span>
+						<span className="hidden sm:inline">{m.inspector_action()}</span>
+						{liveRun !== undefined ? (
+							<span
+								aria-hidden="true"
+								className="size-1.5 animate-pulse rounded-full bg-amber-500"
+							/>
+						) : null}
 					</Button>
 				</div>
 			</header>
@@ -287,13 +304,15 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 
 				{wideContextPane && desktopContextOpen ? (
 					<aside
-						aria-label={m.context_title()}
-						className="w-[292px] shrink-0 border-l border-border bg-card/35 xl:w-[308px] dark:bg-[#181818]"
+						aria-label={m.inspector_title()}
+						className="w-[320px] shrink-0 border-l border-border bg-card/35 xl:w-[350px] dark:bg-[#181818]"
 					>
-						<ContextPanel
-							enabled
-							sessionId={sessionId}
+						<SessionInspectorSidebar
+							activeTab={inspectorTab}
+							isRunning={liveRun !== undefined}
 							onClose={() => setDesktopContextOpen(false)}
+							onTabChange={setInspectorTab}
+							session={detail}
 						/>
 					</aside>
 				) : null}
@@ -303,18 +322,20 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 				<div className="fixed inset-0 z-40 flex justify-end">
 					<button
 						type="button"
-						aria-label={m.context_close()}
+						aria-label={m.inspector_close()}
 						onClick={() => setDrawerContextOpen(false)}
 						className="absolute inset-0 bg-black/40 backdrop-blur-[1px]"
 					/>
 					<aside
-						aria-label={m.context_title()}
-						className="relative z-10 h-full w-[310px] max-w-[85vw] border-l border-border bg-background shadow-xl dark:bg-[#181818]"
+						aria-label={m.inspector_title()}
+						className="relative z-10 h-full w-[340px] max-w-[90vw] border-l border-border bg-background shadow-xl dark:bg-[#181818]"
 					>
-						<ContextPanel
-							enabled
-							sessionId={sessionId}
+						<SessionInspectorSidebar
+							activeTab={inspectorTab}
+							isRunning={liveRun !== undefined}
 							onClose={() => setDrawerContextOpen(false)}
+							onTabChange={setInspectorTab}
+							session={detail}
 						/>
 					</aside>
 				</div>
