@@ -313,7 +313,10 @@ function requestFromRecord(
 	);
 	return {
 		accountId: string(record.accountId ?? record.account_id) ?? "migration",
-		channelId: string(record.channelId ?? record.channel_id) ?? "onebot-napcat",
+		channelId: (() => {
+			const explicit = string(record.channelId ?? record.channel_id);
+			return explicit === null || explicit === "onebot-napcat" ? "onebot" : explicit;
+		})(),
 		comment: string(record.comment ?? record.message),
 		createdAt,
 		errorMessage: string(record.error ?? record.errorMessage),

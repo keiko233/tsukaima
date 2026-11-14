@@ -792,7 +792,7 @@ export function mapDshConversationIdentity(input: {
 		/(?:^|[-_:])napcat-(?:archive-|interject-)?group[-_:](\d+)/i.exec(id);
 	if (group?.[1]) {
 		return {
-			channelId: "onebot-napcat",
+			channelId: "onebot",
 			isTest: false,
 			isWorkspaceOnly: false,
 			kind: "group",
@@ -805,7 +805,7 @@ export function mapDshConversationIdentity(input: {
 		/^group[-_:](.+)$/i.exec(id);
 	if (groupFallback?.[1]) {
 		return {
-			channelId: "onebot-napcat",
+			channelId: "onebot",
 			isTest: false,
 			isWorkspaceOnly: false,
 			kind: "group",
@@ -818,7 +818,7 @@ export function mapDshConversationIdentity(input: {
 		/(?:^|[-_:])napcat-(?:archive-|interject-)?private[-_:](\d+)/i.exec(id);
 	if (privateChat?.[1]) {
 		return {
-			channelId: "onebot-napcat",
+			channelId: "onebot",
 			isTest: false,
 			isWorkspaceOnly: false,
 			kind: "private",
@@ -831,7 +831,7 @@ export function mapDshConversationIdentity(input: {
 		/^private[-_:](.+)$/i.exec(id);
 	if (privateFallback?.[1]) {
 		return {
-			channelId: "onebot-napcat",
+			channelId: "onebot",
 			isTest: false,
 			isWorkspaceOnly: false,
 			kind: "private",

@@ -265,6 +265,83 @@ describe("PiDurableConversationHost", () => {
 		const textOnlyContent = await runImageTurnWithVision(false);
 		expect(textOnlyContent).toBe("look at this [image]");
 	});
+
+	test("updates existing conversations when setModel switches provider or after reopening storage", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "elaina-core-model-sync-"));
+		const dbPath = join(directory, "durable.sqlite");
+		try {
+			const answers: string[] = [];
+			const storage = await openDurableStorage(dbPath);
+			const host = new PiDurableConversationHost({
+				model: createFakeModel(),
+				onAnswer: (answer) => {
+					answers.push(answer.text);
+				},
+				storage,
+			});
+			const conversationId = await host.createConversation();
+			await host.append({
+				conversationId,
+				envelope: {
+					...envelope("turn-1", "before config"),
+					source: { messageId: "turn-1", receivedAtMs: 1_000, timestampMs: 1_000 },
+				},
+				forceSubmit: true,
+				submittedAtMs: 1_000,
+			});
+			for (let step = 0; step < 40 && answers.length < 1; step += 1) {
+				await Bun.sleep(25);
+			}
+			expect(answers).toEqual(["ok"]);
+
+			host.setModel(createSlowStreamingModel(["live-switched"], { delayMs: 5 }));
+			await host.append({
+				conversationId,
+				envelope: {
+					...envelope("turn-2", "after config"),
+					source: { messageId: "turn-2", receivedAtMs: 2_000, timestampMs: 2_000 },
+				},
+				forceSubmit: true,
+				submittedAtMs: 2_000,
+			});
+			for (let step = 0; step < 40 && answers.length < 2; step += 1) {
+				await Bun.sleep(25);
+			}
+			expect(answers).toEqual(["ok", "live-switched"]);
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+
+			const restartedStorage = await openDurableStorage(dbPath);
+			const restartedAnswers: string[] = [];
+			const restartedHost = new PiDurableConversationHost({
+				model: createSlowStreamingModel(["after-restart"], {
+					delayMs: 5,
+					modelId: "restarted-model",
+				}),
+				onAnswer: (answer) => {
+					restartedAnswers.push(answer.text);
+				},
+				storage: restartedStorage,
+			});
+			await restartedHost.append({
+				conversationId,
+				envelope: {
+					...envelope("turn-3", "after restart"),
+					source: { messageId: "turn-3", receivedAtMs: 3_000, timestampMs: 3_000 },
+				},
+				forceSubmit: true,
+				submittedAtMs: 3_000,
+			});
+			for (let step = 0; step < 40 && restartedAnswers.length < 1; step += 1) {
+				await Bun.sleep(25);
+			}
+			expect(restartedAnswers).toEqual(["after-restart"]);
+			await restartedHost.close();
+			await restartedStorage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
 });
 
 async function runImageTurnWithVision(supportsImage: boolean) {

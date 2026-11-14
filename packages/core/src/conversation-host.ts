@@ -424,7 +424,7 @@ function toLiveRunSnapshot(
 
 export class PiDurableConversationHost {
 	private harness?: DurableHarness;
-	private readonly model: ModelPort;
+	private model: ModelPort;
 	private readonly policy: ConversationPolicy;
 	private readonly executionLock: ConversationExecutionLock;
 	private readonly steerGraceMs: number;
@@ -435,6 +435,7 @@ export class PiDurableConversationHost {
 	private readonly extensions = new Map<string, Extension>();
 	private readonly dynamicExtensions = new Set<string>();
 	private readonly extensionsEnsured = new Set<string>();
+	private readonly modelsEnsured = new Set<string>();
 	private readonly modelToolsSignatures = new Map<string, string>();
 	/** In-flight activity flushes, so `close()` can wait for them before storage goes away. */
 	private readonly pendingFlushes = new Set<Promise<void>>();
@@ -469,6 +470,12 @@ export class PiDurableConversationHost {
 		if (options.extensions !== undefined) this.installExtensions(options.extensions);
 	}
 
+	/** Replace the active model port at runtime and mark existing conversations for model sync. */
+	setModel(model: ModelPort): void {
+		this.model = model;
+		this.modelsEnsured.clear();
+	}
+
 	async createConversation(): Promise<string> {
 		const harness = await this.openHarness();
 		const extensions = [...this.extensions.values()];
@@ -483,6 +490,7 @@ export class PiDurableConversationHost {
 			},
 			BACKGROUND_CONTEXT,
 		);
+		this.modelsEnsured.add(String(conversation.id));
 		return String(conversation.id);
 	}
 
@@ -500,6 +508,7 @@ export class PiDurableConversationHost {
 		const conversation = await harness.conversation(conversationId, BACKGROUND_CONTEXT);
 		if (!conversation) throw new Error(`Conversation not found: ${input.conversationId}`);
 		await this.ensureExtensions(conversation, input.conversationId);
+		await this.ensureAgentModel(conversation, input.conversationId);
 		const existingReceipt = await harness.snapshot(
 			messageReceiptDoc,
 			conversationId,
@@ -832,6 +841,7 @@ export class PiDurableConversationHost {
 			const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
 			if (!conversation) return;
 			await this.ensureExtensions(conversation, conversationId);
+			await this.ensureAgentModel(conversation, conversationId);
 			const activityId = `${numericId}:activity`;
 			const window = await harness.snapshot(
 				activityWindowDoc,
@@ -907,6 +917,7 @@ export class PiDurableConversationHost {
 		const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
 		if (!conversation) throw new Error(`Conversation not found: ${input.conversationId}`);
 		await this.ensureExtensions(conversation, input.conversationId);
+		await this.ensureAgentModel(conversation, input.conversationId);
 		const policy = await this.readPolicy(numericId);
 		if (!policy.enabled) throw new Error(`Conversation disabled: ${input.conversationId}`);
 		const activityId = `${numericId}:background`;
@@ -1112,6 +1123,37 @@ export class PiDurableConversationHost {
 		}
 	}
 
+	/**
+	 * Keep existing durable conversations aligned with the active model provider. Conversations
+	 * created while the server was unconfigured (using `fake-deterministic`) or before a
+	 * provider/model change would otherwise fail `GenerationTask` with `failNoModel` or keep
+	 * replying with the deterministic fake model.
+	 */
+	private async ensureAgentModel(conversation: Conversation, durableId: string): Promise<void> {
+		if (this.modelsEnsured.has(durableId)) return;
+		try {
+			const agent = await conversation.agent(BACKGROUND_CONTEXT);
+			const current = agent.model;
+			const resolved =
+				current === undefined
+					? undefined
+					: this.model.models.getModel(current.provider, current.modelId);
+			if (
+				current === undefined ||
+				current.provider !== this.model.providerId ||
+				resolved === undefined
+			) {
+				await conversation.configure(
+					{ model: { modelId: this.model.modelId, provider: this.model.providerId } },
+					BACKGROUND_CONTEXT,
+				);
+			}
+			this.modelsEnsured.add(durableId);
+		} catch (error) {
+			console.error(`Failed to ensure conversation model for ${durableId}`, error);
+		}
+	}
+
 	private emitActivityEvent(event: ActivityWindowEvent): void {
 		const callback = this.options.onActivityEvent;
 		if (callback === undefined) return;
@@ -1224,7 +1266,7 @@ export class PiDurableConversationHost {
 		if (this.harness) return this.harness;
 		this.harness = await Harness.open(
 			this.options.storage,
-			{ models: this.model.models, registry: this.registry },
+			{ models: () => this.model.models, registry: this.registry },
 			BACKGROUND_CONTEXT,
 		);
 		return this.harness;

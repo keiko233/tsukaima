@@ -1,7 +1,7 @@
 import type { NormalizedConversation, NormalizedMessage } from "./normalize.ts";
 
 export interface FakeOneBotEnvelope {
-	readonly channelId: "onebot-napcat";
+	readonly channelId: "onebot";
 	readonly channelKind: "onebot-v11";
 	readonly conversationKey: {
 		readonly kind: "private" | "group" | "webui" | "task" | "plugin";
@@ -45,7 +45,7 @@ export function createFakeOneBotEnvelope(input: {
 	>;
 }): FakeOneBotEnvelope {
 	return {
-		channelId: "onebot-napcat",
+		channelId: "onebot",
 		channelKind: "onebot-v11",
 		conversationKey: {
 			id: input.conversation.platformConversationId,
