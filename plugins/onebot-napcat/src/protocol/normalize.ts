@@ -567,10 +567,25 @@ const mentionList = (segments: readonly OneBotSegment[] | undefined) => {
 	return mentions;
 };
 
+/**
+ * Pick the best available display name. NapCat sends `card: ""` for friends without a
+ * remark and `null` for some accounts, and both are valid platform payloads. A blank name
+ * would fail the envelope contract (`displayName` requires >= 1 char) and silently drop the
+ * whole message, so every candidate is trimmed and empty values are skipped.
+ */
+const nonEmpty = (value: string | undefined): string | undefined => {
+	if (value === undefined) return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+};
+
 const senderName = (event: OneBotEvent): string => {
 	const sender = event.sender;
 	return (
-		sender?.card ?? sender?.nickname ?? asString(sender?.user_id ?? event.user_id) ?? "unknown"
+		nonEmpty(sender?.card) ??
+		nonEmpty(sender?.nickname) ??
+		asString(sender?.user_id ?? event.user_id) ??
+		"unknown"
 	);
 };
 
