@@ -1,6 +1,6 @@
 "use client";
 
-import type { LiveRunState } from "@tsukaima/contracts";
+import type { LiveRunPatch, LiveRunState } from "@tsukaima/contracts";
 import { useSyncExternalStore } from "react";
 
 /**
@@ -22,15 +22,56 @@ const listeners = new Set<Listener>();
 /** A settled run publishes `run: null`, which clears the entry. */
 export function setLiveRun(sessionId: string, run: LiveRunState | null): void {
 	const previous = runs.get(sessionId);
-	if (run === null) {
+	if (run === null || (run.settled && run.failure === undefined)) {
 		if (previous === undefined) return;
 		runs.delete(sessionId);
 	} else {
+		// A snapshot read from the KV cache can race a delta that was published just before it.
+		// The revision is monotonic per session, so an older snapshot never overwrites a newer run.
+		if (
+			previous?.revision !== undefined &&
+			run.revision !== undefined &&
+			run.revision < previous.revision
+		) {
+			return;
+		}
 		// Skip a write that changes nothing: `partialText` is the only field that moves during a
 		// generation, so comparing the whole object keeps identical commits from re-rendering.
 		if (previous !== undefined && sameRun(previous, run)) return;
 		runs.set(sessionId, run);
 	}
+	for (const listener of listeners) listener();
+}
+
+/**
+ * Apply one incremental run commit. A browser that already renders the run only receives the
+ * fields that moved, so a 100ms text commit stays small even when the answer is long.
+ */
+export function applyRunDelta(sessionId: string, patch: LiveRunPatch, revision: number): void {
+	const previous = runs.get(sessionId);
+	if (previous?.revision !== undefined && revision <= previous.revision) return;
+	const base: LiveRunState =
+		previous ??
+		({
+			sessionId,
+			settled: false,
+			startedAtMs: Date.now(),
+			tools: [],
+			turns: 0,
+		} satisfies LiveRunState);
+	const { failure, ...fields } = patch;
+	const next: LiveRunState = {
+		...base,
+		...fields,
+		...(failure === undefined ? {} : failure === null ? { failure: undefined } : { failure }),
+		revision,
+	};
+	if (next.settled && next.failure === undefined) {
+		clearLiveRun(sessionId);
+		return;
+	}
+	if (sameRun(base, next)) return;
+	runs.set(sessionId, next);
 	for (const listener of listeners) listener();
 }
 
@@ -46,6 +87,9 @@ function sameRun(a: LiveRunState, b: LiveRunState): boolean {
 	return (
 		a.failure === b.failure &&
 		a.partialText === b.partialText &&
+		a.partialThinking === b.partialThinking &&
+		a.phase === b.phase &&
+		a.revision === b.revision &&
 		a.startedAtMs === b.startedAtMs &&
 		a.turns === b.turns &&
 		a.tools.length === b.tools.length &&

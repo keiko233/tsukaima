@@ -558,7 +558,7 @@ export async function listRunSteps(
 		.limit(1);
 	if (session === undefined) throw new Error("Session not found");
 	const entries = await host.listEntries(session.durableConversationId, 500);
-	return collectRunSteps(
+	const durable = collectRunSteps(
 		entries.map((entry) => ({
 			data: entry.data,
 			id: String(entry.id),
@@ -567,6 +567,22 @@ export async function listRunSteps(
 		})),
 		input.entryId,
 	);
+	// `pi.live` is cleared when a run settles, and some providers do not copy reasoning into
+	// the durable assistant entry. The KV cache kept the final live process chain keyed by the
+	// durable answer id, so the transcript can still show what the agent thought and ran.
+	const cached = await lifecycle.liveRuns.final(input.entryId);
+	if (cached === undefined) return durable;
+	const durationSeconds = durable.durationSeconds ?? cached.durationSeconds;
+	const withDuration = durationSeconds === undefined ? {} : { durationSeconds };
+	const cachedThinking = cached.steps.filter((step) => step.kind === "thinking");
+	const durableHasThinking = durable.steps.some((step) => step.kind === "thinking");
+	if (durable.steps.length === 0) {
+		return { ...withDuration, steps: [...cached.steps] };
+	}
+	if (!durableHasThinking && cachedThinking.length > 0) {
+		return { ...withDuration, steps: [...cachedThinking, ...durable.steps] };
+	}
+	return durable;
 }
 
 export async function sendMessage(

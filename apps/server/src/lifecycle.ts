@@ -26,6 +26,7 @@ import {
 	openDomainDatabase,
 } from "@tsukaima/db";
 import { BACKGROUND_CONTEXT, openDurableStorage, type SqliteStorage } from "@tsukaima/durable";
+import { KeyvCache } from "@tsukaima/cache";
 import { eq } from "drizzle-orm";
 import { createPluginToolsExtension, type AuditEntry, type TsukaimaPlugin } from "@tsukaima/sdk";
 import { MigrationRegistry, type PluginMigrationPlan } from "@tsukaima/plugin-registry";
@@ -70,6 +71,7 @@ import { PluginStatusStore } from "./services/plugin-status.ts";
 import { PluginStorageStore } from "./services/plugin-storage.ts";
 import { PluginTaskService } from "./services/plugin-task-service.ts";
 import { ReplyDispatcher } from "./services/reply-dispatcher.ts";
+import { LiveRunCache } from "./services/live-run-cache.ts";
 import { RequestService } from "./services/request-service.ts";
 
 /**
@@ -118,6 +120,8 @@ export class TsukaimaLifecycle {
 	readonly config: TsukaimaConfig;
 	readonly startedAtMs = Date.now();
 	readonly backupDrills: BackupDrillScheduler;
+	/** Redis-like KV layer: durable TTL values, bounded streams, and a process-local bus. */
+	readonly cache: KeyvCache;
 	readonly channels: ChannelRegistry;
 	readonly contextProvider: DrizzleContextProvider;
 	readonly conversationPacing: ConversationPacingTracker;
@@ -151,6 +155,7 @@ export class TsukaimaLifecycle {
 	durableStorage: SqliteStorage | undefined;
 	lastProcessingError: Error | undefined;
 	logLevel: TsukaimaConfig["logLevel"];
+	readonly liveRuns: LiveRunCache;
 	readonly logs: LogBuffer;
 	readonly logger: Logger;
 	readonly modelUsageLedger = new ModelUsageLedger();
@@ -184,6 +189,15 @@ export class TsukaimaLifecycle {
 		this.logs = this.logger.buffer;
 		this.plugins = options?.plugins ?? builtinPlugins;
 		this.runtimeLog = this.logger.child("tsukaima::server::lifecycle");
+		this.cache = new KeyvCache({
+			onError: (error) => {
+				this.runtimeLog.warn("cache operation failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			},
+			path: join(config.dataDir, "cache.sqlite"),
+		});
+		this.liveRuns = new LiveRunCache(this.cache);
 		this.backupDrillRoot = options?.backupDrill?.root ?? config.backupDrillRoot;
 		this.modelOverride = options?.model;
 		this.backupDrills = new BackupDrillScheduler({
@@ -342,6 +356,7 @@ export class TsukaimaLifecycle {
 		this.pluginHost = new PluginHost({
 			audit: (entry) => this.writeAudit(entry),
 			bindings: pluginBindings,
+			cache: this.cache,
 			channels: this.channels,
 			conversationCapabilities: (conversationId) =>
 				this.conversationPolicy.capabilitiesForDurableConversation(conversationId),
@@ -509,6 +524,15 @@ export class TsukaimaLifecycle {
 			model,
 			onActivityEvent: (event) => this.forwardActivityEvent(event),
 			onAnswer: async (answer) => {
+				const sessionId = this.sessionIdForDurableConversation(answer.conversationId);
+				if (sessionId !== undefined) {
+					await this.liveRuns.finalizeAnswer(sessionId, answer.entryId).catch((error: unknown) => {
+						this.runtimeLog.warn("failed to store final run steps", {
+							entryId: answer.entryId,
+							error: error instanceof Error ? error.message : String(error),
+						});
+					});
+				}
 				await this.replyDispatcher.handleAnswer(answer);
 			},
 			onLiveRun: (state) => this.forwardLiveRun(state),
@@ -912,6 +936,14 @@ export class TsukaimaLifecycle {
 	 */
 	private forwardLiveRun(state: LiveRunSnapshot): void {
 		this.hooks.emitDetached("agent.activity", state);
+		const sessionId = this.sessionIdForDurableConversation(state.conversationId);
+		if (sessionId === undefined) return;
+		void this.liveRuns.record(sessionId, state).catch((error: unknown) => {
+			this.runtimeLog.warn("failed to store live run state", {
+				conversationId: state.conversationId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
 	}
 
 	/**
@@ -1031,6 +1063,8 @@ export class TsukaimaLifecycle {
 		this.replyDispatcher.stopPendingReconciliation();
 		await this.pluginHost.stop();
 		await this.conversationHost?.close();
+		await this.liveRuns.close();
+		await this.cache.close();
 		await this.durableStorage?.close(BACKGROUND_CONTEXT);
 		this.domainDatabase?.$client.close();
 		this.runtimeLog.info("lifecycle stopped");

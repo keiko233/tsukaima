@@ -201,24 +201,64 @@ describe("authenticated live event stream", () => {
 		const chat = await createLocalChat(lifecycle, { sessionTitle: "Live", title: "Live" });
 		await sendMessage(lifecycle, { sessionId: chat.sessionId, target: "tsukaima", text: "hello" });
 
-		// Collect run.state frames until the run settles (a null run).
+		// Collect run.delta frames until the run settles. A delta carries only the fields that
+		// moved, so this also proves the stream is incremental rather than a full snapshot per tick.
 		const partials: string[] = [];
+		const phases = new Set<string>();
 		let settled = false;
 		for (let frame = 0; frame < 40 && !settled; frame += 1) {
-			const next = await stream.next("run.state");
-			const event = next.data as LiveEvent & { type: "run.state" };
-			if (event.run === null) {
-				settled = true;
-				break;
-			}
-			expect(event.run.sessionId.length).toBeGreaterThan(0);
-			if (event.run.partialText !== undefined) partials.push(event.run.partialText);
+			const next = await stream.next("run.delta");
+			const event = next.data as LiveEvent & { type: "run.delta" };
+			expect(event.sessionId.length).toBeGreaterThan(0);
+			if (event.patch.phase !== undefined) phases.add(event.patch.phase);
+			if (event.patch.partialText !== undefined) partials.push(event.patch.partialText);
+			if (event.patch.settled === true) settled = true;
 		}
 
 		expect(settled).toBe(true);
 		// Text must arrive before the run settles, which is the whole point of the feature.
 		expect(partials.length).toBeGreaterThan(0);
+		expect(phases.size).toBeGreaterThan(0);
 		expect("The answer streams.".startsWith(partials[0]!)).toBe(true);
+
+		await stream.close();
+		auth.stop();
+		await lifecycle.stop();
+	});
+
+	// A browser opened after a run started used to see nothing until the next poll. The KV cache
+	// now hands the new connection a snapshot of every in-flight run before any delta.
+	test("replays an active run snapshot from the KV cache on connect", async () => {
+		const directory = await createDirectory();
+		const { app, auth, lifecycle } = createApp(adminEnv(directory), {
+			eventHeartbeatMs: 1_000,
+			model: createSlowStreamingModel(["one ", "two ", "three ", "four"], { delayMs: 200 }),
+		});
+		await lifecycle.start();
+		const cookie = await signIn(app);
+		const { createLocalChat, sendMessage } = await import("../src/services/webui.ts");
+		const chat = await createLocalChat(lifecycle, {
+			sessionTitle: "Reconnect",
+			title: "Reconnect",
+		});
+		await sendMessage(lifecycle, { sessionId: chat.sessionId, target: "tsukaima", text: "hello" });
+
+		let active: Awaited<ReturnType<typeof lifecycle.liveRuns.snapshots>>[number] | undefined;
+		for (let attempt = 0; attempt < 20 && active === undefined; attempt += 1) {
+			await Bun.sleep(50);
+			active = (await lifecycle.liveRuns.snapshots()).find(
+				(state) => state.sessionId === chat.sessionId,
+			);
+		}
+		expect(active).toBeDefined();
+
+		const stream = await openEventStream(app, "/events/stream", cookie);
+		const event = await stream.next("run.state");
+		expect(event.data).toMatchObject({
+			run: { sessionId: chat.sessionId },
+			sessionId: chat.sessionId,
+			type: "run.state",
+		});
 
 		await stream.close();
 		auth.stop();

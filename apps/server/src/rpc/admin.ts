@@ -106,10 +106,20 @@ export const adminRouter = {
 		}),
 		status: adminBase.admin.diagnostics.status.handler(async ({ context }) => {
 			const lifecycle = context.lifecycle;
+			const cache = lifecycle.liveRuns.stats();
 			return {
 				...(lifecycle.lastProcessingError === undefined
 					? {}
 					: { lastError: lifecycle.lastProcessingError.message }),
+				cache: {
+					deletes: cache.deletes,
+					gets: cache.gets,
+					hits: cache.hits,
+					misses: cache.misses,
+					publishes: cache.publishes,
+					sets: cache.sets,
+					streamAppends: cache.streamAppends,
+				},
 				channels: lifecycle.channels.statuses().map((status) => ({
 					configured: status.configured ?? true,
 					connected: status.connected,
