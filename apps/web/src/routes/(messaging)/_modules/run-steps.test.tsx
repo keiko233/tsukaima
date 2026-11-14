@@ -25,8 +25,8 @@ const tool = (overrides: Partial<Extract<RunStep, { kind: "tool" }>> = {}): RunS
 
 const labels = (steps: readonly RunStep[]) =>
 	toStepRows(steps)
-		.filter((row) => row.label !== null)
-		.map((row) => JSON.stringify(row.label));
+		.filter((row) => row.node !== undefined || row.label !== null)
+		.map((row) => JSON.stringify(row.node ?? row.label));
 
 const bodies = (steps: readonly RunStep[]) =>
 	toStepRows(steps)
@@ -41,22 +41,22 @@ describe("run step rows", () => {
 		expect(rows[1]?.body).toBe("let me check the logs");
 	});
 
-	test("renders a tool call and its output as separate rows", () => {
+	test("renders a tool call as one expandable row carrying arguments and output", () => {
 		const rows = toStepRows([tool()]);
-		expect(rows).toHaveLength(2);
-		expect(JSON.stringify(rows[0]?.label)).toContain("web_search");
-		expect(JSON.stringify(rows[0]?.label)).toContain("q");
-		expect(rows[1]?.body).toBe("hit");
+		expect(rows).toHaveLength(1);
+		expect(JSON.stringify(rows[0]?.node)).toContain("web_search");
+		expect(JSON.stringify(rows[0]?.node)).toContain("q");
+		expect(JSON.stringify(rows[0]?.node)).toContain("hit");
 	});
 
 	test("marks a failing tool and its output as errors", () => {
 		const rows = toStepRows([tool({ isError: true, output: "not found" })]);
 		expect(rows.every((row) => row.isError === true)).toBe(true);
-		expect(rows[1]?.body).toBe("not found");
+		expect(JSON.stringify(rows[0]?.node)).toContain("not found");
 	});
 
-	// A call that produced nothing should not leave an empty body row behind.
-	test("omits the output row for a tool with no output", () => {
+	// A call that produced nothing still renders its header, with no output in the card.
+	test("keeps a single row for a tool with no output", () => {
 		expect(toStepRows([tool({ output: "" })])).toHaveLength(1);
 	});
 

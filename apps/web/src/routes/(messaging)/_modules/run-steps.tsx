@@ -62,35 +62,37 @@ export function RunSteps({ entryId, sessionId }: { entryId: string; sessionId: s
 			{open && rows.length > 0 ? (
 				<ul className="mt-1.5 flex w-full max-w-[min(42rem,88%)] flex-col items-start gap-1.5">
 					{rows.map((row) => (
-						<li key={row.id} className="flex flex-col items-start gap-0.5">
-							{row.label === null ? null : (
-								<span
-									className={cn(
-										"inline-flex min-w-0 items-center gap-1.5 text-[11px] leading-5",
-										row.isError ? "text-destructive" : "text-muted-foreground",
+						<li key={row.id} className="flex w-full min-w-0 flex-col items-start gap-0.5">
+							{row.node ?? (
+								<>
+									{row.label === null ? null : (
+										<span
+											className={cn(
+												"inline-flex min-w-0 max-w-full items-center gap-1.5 text-[11px] leading-5",
+												row.isError ? "text-destructive" : "text-muted-foreground",
+											)}
+										>
+											{row.label}
+										</span>
 									)}
-								>
-									{row.label}
-								</span>
-							)}
-							{row.body === undefined ? null : (
-								<p
-									className={cn(
-										"whitespace-pre-wrap break-words text-left text-[11px] leading-5",
-										row.isError ? "text-destructive" : "text-muted-foreground/80",
+									{row.body === undefined ? null : (
+										<p
+											className={cn(
+												"max-w-full whitespace-pre-wrap break-words text-left text-[11px] leading-5",
+												row.isError ? "text-destructive" : "text-muted-foreground/80",
+											)}
+										>
+											{row.body}
+										</p>
 									)}
-								>
-									{row.body}
-								</p>
+								</>
 							)}
 						</li>
 					))}
 				</ul>
 			) : null}
 			{open && query.isFetched && rows.length === 0 ? (
-				<p className="mt-1 text-left text-[11px] text-muted-foreground">
-					{m.run_steps_empty()}
-				</p>
+				<p className="mt-1 text-left text-[11px] text-muted-foreground">{m.run_steps_empty()}</p>
 			) : null}
 		</div>
 	);

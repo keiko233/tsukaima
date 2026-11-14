@@ -1,7 +1,7 @@
-import { CircleAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import type { RunStep } from "@elaina/contracts";
 import { m } from "@/paraglide/messages";
+import { ToolCallRow } from "./tool-call-row";
 
 /**
  * One display row of a completed turn.
@@ -16,35 +16,27 @@ export interface RunStepRow {
 	/** Marks the row and its body as a failure. */
 	readonly isError?: boolean;
 	readonly label: ReactNode;
+	/** Full-width interactive content rendered instead of the label/body pair (tool calls). */
+	readonly node?: ReactNode;
 }
 
-/** A tool call as one row: the name, its arguments, and (as a separate row) its output. */
+/** A tool call as one expandable row: header preview, full arguments and output in a card. */
 function toolRows(step: Extract<RunStep, { kind: "tool" }>, index: number): RunStepRow[] {
-	const rows: RunStepRow[] = [
+	return [
 		{
 			id: `tool-${index}`,
 			isError: step.isError,
-			label: (
-				<span className="inline-flex min-w-0 items-center gap-1.5">
-					<Wrench className="size-3 shrink-0" />
-					<span className="shrink-0 font-mono">{step.toolName}</span>
-					{step.argumentsText.length > 0 ? (
-						<span className="truncate text-muted-foreground">{step.argumentsText}</span>
-					) : null}
-					{step.isError ? <CircleAlert className="size-3 shrink-0 text-destructive" /> : null}
-				</span>
+			label: null,
+			node: (
+				<ToolCallRow
+					argumentsText={step.argumentsText}
+					isError={step.isError}
+					output={step.output}
+					toolName={step.toolName}
+				/>
 			),
 		},
 	];
-	if (step.output.length > 0) {
-		rows.push({
-			body: step.output,
-			id: `tool-output-${index}`,
-			isError: step.isError,
-			label: null,
-		});
-	}
-	return rows;
 }
 
 /**
