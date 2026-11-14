@@ -91,22 +91,30 @@ async function loadSnapshotFiles(source: SnapshotSource): Promise<{
 	return { files, textFiles };
 }
 
+function isSessionPath(path: string): boolean {
+	const normalized = path.replaceAll("\\", "/");
+	if (/(?:^|\/)(?:node_modules|backups)\//i.test(normalized)) return false;
+	if (!/(?:^|\/)sessions\//i.test(normalized)) return false;
+	return /\.jsonl(?:\.zst(?:d)?)?$/i.test(normalized);
+}
+
 export async function inspectDshSnapshot(source: SnapshotSource): Promise<SnapshotInventory> {
 	const { files, textFiles } = await loadSnapshotFiles(source);
 	const pathGroups = (pattern: RegExp): string[] =>
 		[...textFiles.keys()]
 			.filter((path) => pattern.test(path))
 			.toSorted((a, b) => a.localeCompare(b));
-	const sessions = [
-		...new Set([
-			...pathGroups(/(^|\/)sessions?\/|\.jsonl$/i),
-			...files.filter((file) => /\.jsonl\.zst(?:d)?$/i.test(file.path)).map((file) => file.path),
-		]),
-	].toSorted((left, right) => left.localeCompare(right));
-	const personas = pathGroups(/personas?\.json$|personas?\//i);
-	const memory = pathGroups(/memor(y|ies)\.json$|memor(y|ies)\//i);
-	const stickers = pathGroups(/stickers?\.json$|stickers?|memes?\//i);
-	const settings = pathGroups(/settings?\.json$|plugins?\.json$|profiles?\//i);
+	const allPaths = [...new Set([...textFiles.keys(), ...files.map((file) => file.path)])];
+	const sessions = allPaths
+		.filter(isSessionPath)
+		.toSorted((left, right) => left.localeCompare(right));
+	const personas = pathGroups(/(?:^|\/)(?:personas?)\/(?!.*node_modules).*\.(?:json|jsonl)$/i);
+	const memory = pathGroups(/(?:^|\/)(?:memory|\.mnemon)\/(?!.*node_modules).*\.(?:json|jsonl)$/i);
+	// Real meme packs are parsed from their manifests/index DBs by the meme importer.
+	const stickers = pathGroups(/(?:^|\/)stickers?\/(?!.*node_modules).*\.(?:json|jsonl)$/i);
+	const settings = pathGroups(
+		/(?:^|\/)home\/(?:node\/)?\.dsh\/profiles\/[^/]+\/cordis\.patch\.ya?ml$|(?:^|\/)settings?\/(?!.*node_modules).*\.json$|(?:^|\/)config\.ya?ml$/i,
+	);
 	const warnings: string[] = [];
 	const roots = source.map(([, label]) => label);
 	if (!sessions.length) {

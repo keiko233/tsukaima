@@ -126,6 +126,18 @@ function numberOrNull(value: unknown): number | null {
 	return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/** DSH headers mix ISO strings and epoch milliseconds; both become ISO in the parsed model. */
+function isoFrom(value: unknown): string | null {
+	if (typeof value === "number" && Number.isFinite(value)) {
+		return new Date(value < 1e12 ? value * 1000 : value).toISOString();
+	}
+	if (typeof value === "string" && value !== "") {
+		const date = new Date(value);
+		if (!Number.isNaN(date.getTime())) return date.toISOString();
+	}
+	return null;
+}
+
 function asNumberArray(value: unknown): number[] {
 	if (!Array.isArray(value)) return [];
 	return value.filter((item): item is number => typeof item === "number" && Number.isFinite(item));
@@ -149,6 +161,60 @@ function textFrom(value: unknown): string {
 		if (Array.isArray(value.content)) return textFrom(value.content);
 	}
 	return "";
+}
+
+/** Only user-visible text blocks: reasoning and tool-call blocks are agent internals. */
+function visibleTextFrom(value: unknown): string {
+	if (typeof value === "string") return value;
+	if (Array.isArray(value)) {
+		return value
+			.filter(isRecord)
+			.filter((block) => block.type === "text" || block.type === undefined)
+			.map((block) => (typeof block.text === "string" ? block.text : ""))
+			.filter((text) => text !== "")
+			.join("\n");
+	}
+	if (isRecord(value)) {
+		if (Array.isArray(value.content)) return visibleTextFrom(value.content);
+		if (value.type === "text" || (value.type === undefined && typeof value.text === "string")) {
+			return typeof value.text === "string" ? value.text : "";
+		}
+	}
+	return "";
+}
+
+function shaFrom(value: string | null): string | null {
+	if (value === null) return null;
+	const bare = value.startsWith("sha256:") ? value.slice("sha256:".length) : value;
+	return /^[0-9a-f]{64}$/i.test(bare) ? bare.toLowerCase() : null;
+}
+
+/** Image/file content blocks carry their attachment under `block.attachment`. */
+function attachmentsFromBlocks(value: unknown, fallbackPrefix: string): DshV4Attachment[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((item, index) => {
+		if (!isRecord(item)) return [];
+		const attachment = isRecord(item.attachment) ? item.attachment : null;
+		if (attachment === null) return [];
+		const rawId = stringOrNull(
+			attachment.attachmentId ?? attachment.id ?? attachment.mediaId ?? attachment.sha256,
+		);
+		const path = stringOrNull(attachment.path ?? attachment.file ?? attachment.filePath);
+		const name = stringOrNull(attachment.name ?? attachment.fileName ?? attachment.file_name);
+		return [
+			{
+				id: rawId ?? `${fallbackPrefix}:content:${index}`,
+				mimeType: stringOrNull(attachment.mediaType ?? attachment.mimeType ?? attachment.mime_type),
+				name: name ?? path?.split("/").at(-1) ?? null,
+				path,
+				raw: attachment,
+				sha256: shaFrom(rawId ?? stringOrNull(attachment.sha256)),
+				sizeBytes: numberOrNull(
+					attachment.bytes ?? attachment.sizeBytes ?? attachment.size_bytes ?? attachment.size,
+				),
+			},
+		];
+	});
 }
 
 function attachmentsFrom(value: unknown, fallbackPrefix: string): DshV4Attachment[] {
@@ -234,17 +300,33 @@ function messageFromEnvelope(envelope: DshV4Envelope): DshV4Message | null {
 	if (role === null) return null;
 	const data = envelope.data;
 	const toolName = stringOrNull(data.name ?? data.tool ?? data.toolName);
+	const messagePayload = isRecord(data.message) ? data.message : null;
+	const contentBlocks = Array.isArray(messagePayload?.content)
+		? messagePayload.content
+		: Array.isArray(data.content)
+			? data.content
+			: [];
 	const text =
-		textFrom(data.text ?? data.content ?? data.message ?? data.result ?? data.arguments) ||
+		(role === "assistant"
+			? visibleTextFrom(messagePayload?.content ?? data.content) || visibleTextFrom(data.text)
+			: textFrom(data.text ?? data.content ?? data.message ?? data.result ?? data.arguments)) ||
 		(toolName === null ? "" : toolName);
 	const id =
-		stringOrNull(data.id ?? data.messageId ?? data.message_id ?? data.callId) ??
-		`${envelope.type}:${envelope.seq ?? envelope.index}`;
-	return {
-		attachments: attachmentsFrom(
+		stringOrNull(
+			data.id ?? data.messageId ?? data.message_id ?? data.callId ?? messagePayload?.id,
+		) ?? `${envelope.type}:${envelope.seq ?? envelope.index}`;
+	const attachments = [
+		...attachmentsFrom(
 			data.attachments ?? data.media ?? data.files,
 			`${envelope.seq ?? envelope.index}`,
 		),
+		...attachmentsFromBlocks(contentBlocks, `${envelope.seq ?? envelope.index}`),
+	];
+	const uniqueAttachments = [
+		...new Map(attachments.map((attachment) => [attachment.id, attachment])).values(),
+	];
+	return {
+		attachments: uniqueAttachments,
 		eventType: envelope.type,
 		id,
 		kind: role === "tool" ? "tool" : role,
@@ -488,10 +570,14 @@ function finalizeSession(
 		),
 		version,
 	};
+	const lastEventTime = envelopes
+		.map((envelope) => envelope.time)
+		.filter((time): time is number => time !== null)
+		.at(-1);
 	return {
 		agentPreset: stringOrNull(header.agentPreset ?? header.preset),
 		attachments,
-		createdAt: stringOrNull(header.createdAt ?? header.created_at),
+		createdAt: isoFrom(header.createdAt ?? header.created_at ?? header.time),
 		diagnostics: fullDiagnostics,
 		envelopes,
 		id,
@@ -516,7 +602,8 @@ function finalizeSession(
 					].includes(key),
 			)
 			.toSorted((left, right) => left.localeCompare(right)),
-		updatedAt: stringOrNull(header.updatedAt ?? header.updated_at),
+		updatedAt:
+			isoFrom(header.updatedAt ?? header.updated_at) ?? isoFrom(lastEventTime ?? undefined),
 		version,
 		workspace: stringOrNull(header.cwd) ?? options.workspace ?? null,
 	};
@@ -698,7 +785,11 @@ export function mapDshConversationIdentity(input: {
 	readonly type?: string | null;
 }): DshConversationIdentity {
 	const id = input.sessionId;
-	const group = /(?:^|[-_:])napcat-group-(.+)$/i.exec(id) ?? /^(group[_:].+)$/i.exec(id);
+	// Session directories append a random suffix and a `-rN` generation
+	// (`napcat-group-118023883-wujhlyc-r1`); the chat key is only the leading id.
+	const group =
+		/^(?:napcat-archive-)?(?:group|napcat-group)[-_:](\d+)/i.exec(id) ??
+		/(?:^|[-_:])napcat-(?:archive-)?group[-_:](\d+)/i.exec(id);
 	if (group?.[1]) {
 		return {
 			channelId: "onebot-napcat",
@@ -706,10 +797,25 @@ export function mapDshConversationIdentity(input: {
 			isWorkspaceOnly: false,
 			kind: "group",
 			platformConversationId: group[1],
-			title: input.title ?? `Group ${group[1]}`,
+			title: `Group ${group[1]}`,
 		};
 	}
-	const privateChat = /(?:^|[-_:])napcat-private-(.+)$/i.exec(id) ?? /^private[_:](.+)$/i.exec(id);
+	const groupFallback =
+		/^(?:napcat-archive-)?(?:group|napcat-group)[-_:]([a-z0-9_]+)$/i.exec(id) ??
+		/^group[-_:](.+)$/i.exec(id);
+	if (groupFallback?.[1]) {
+		return {
+			channelId: "onebot-napcat",
+			isTest: false,
+			isWorkspaceOnly: false,
+			kind: "group",
+			platformConversationId: groupFallback[1],
+			title: `Group ${groupFallback[1]}`,
+		};
+	}
+	const privateChat =
+		/^(?:napcat-archive-)?(?:private|napcat-private)[-_:](\d+)/i.exec(id) ??
+		/(?:^|[-_:])napcat-(?:archive-)?private[-_:](\d+)/i.exec(id);
 	if (privateChat?.[1]) {
 		return {
 			channelId: "onebot-napcat",
@@ -717,7 +823,20 @@ export function mapDshConversationIdentity(input: {
 			isWorkspaceOnly: false,
 			kind: "private",
 			platformConversationId: privateChat[1],
-			title: input.title ?? `Private ${privateChat[1]}`,
+			title: `Private ${privateChat[1]}`,
+		};
+	}
+	const privateFallback =
+		/^(?:napcat-archive-)?(?:private|napcat-private)[-_:]([a-z0-9_]+)$/i.exec(id) ??
+		/^private[-_:](.+)$/i.exec(id);
+	if (privateFallback?.[1]) {
+		return {
+			channelId: "onebot-napcat",
+			isTest: false,
+			isWorkspaceOnly: false,
+			kind: "private",
+			platformConversationId: privateFallback[1],
+			title: `Private ${privateFallback[1]}`,
 		};
 	}
 	const test = /test/i.test(id) || /test/i.test(input.workspace ?? "");

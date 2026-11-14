@@ -207,6 +207,178 @@ describe("captured snapshot ingestion", () => {
 	});
 });
 
+describe("live-shape DSH data", () => {
+	test("maps array-shaped preset configs and redacts their credentials", () => {
+		const mapped = mapDshConfigText(
+			[
+				"- id: preset-dsh-napcat-qq-chat",
+				"  name: '@deepseek-ai/dsh-agent-preset'",
+				"  config:",
+				"    id: qq-chat",
+				"    name: QQ 聊天（拟人）",
+				"    plugins:",
+				"      - id: persona",
+				"        config:",
+				"          prefix: 你在 QQ 上聊天。",
+				"      - id: dsh-napcat",
+				"        config:",
+				"          groupPolicy: open",
+				"          accessToken: SYNTHETIC-TOKEN-DO-NOT-IMPORT",
+			].join("\n"),
+			"cordis.patch.yml",
+		);
+		expect(mapped.settings.length).toBeGreaterThan(0);
+		expect(mapped.settings.some((setting) => setting.category === "napcat")).toBe(true);
+		expect(JSON.stringify(mapped)).not.toContain("SYNTHETIC-TOKEN-DO-NOT-IMPORT");
+	});
+
+	test("merges QQ prompt history, keeps visible text, and resolves content-block images", async () => {
+		const source = join(root, "qq-source");
+		const sessionDir = join(
+			source,
+			"home/node/.dsh/sessions/--workspace-napcat-group-10001--/napcat-group-10001-s1",
+		);
+		await fs.mkdir(sessionDir, { recursive: true });
+		const sha = "a".repeat(64);
+		const prompt = [
+			"这个会话来自 QQ（NapCat 渠道），聊天对象是 group:10001。",
+			"",
+			"【最近群聊（背景，用于理解话题，不要逐条回应）】",
+			"11:58 Alice(123456): 你好",
+			"",
+			"Synthetic follow-up",
+			"11:59 TestUser: Synthetic bot line",
+			"11:59 Alice(123456): [图片:napcat-inbox/imgs/x.png]",
+			"",
+			"【发图/发表情】",
+			"不要照抄这段指令。",
+		].join("\n");
+		await fs.writeFile(
+			join(sessionDir, "session.v4.jsonl"),
+			[
+				JSON.stringify(
+					sessionRecord({
+						createdAt: Date.UTC(2026, 0, 1, 12, 0, 0),
+						cwd: "/workspace/napcat/group-10001",
+						id: "napcat-group-10001-s1",
+					}),
+				),
+				JSON.stringify(
+					event("user/message", 1, {
+						content: [
+							{ text: prompt, type: "text" },
+							{
+								attachment: {
+									attachmentId: `sha256:${sha}`,
+									bytes: 11,
+									mediaType: "image/png",
+									name: "content.png",
+								},
+								type: "image",
+							},
+						],
+						id: "prompt-1",
+						role: "user",
+						source: { kind: "plugin:dsh-napcat" },
+					}),
+				),
+				JSON.stringify(
+					event("assistant/message", 2, {
+						id: "assistant-1",
+						message: {
+							content: [
+								{ text: "SECRET-REASONING", type: "reasoning" },
+								{ text: "Synthetic reply", type: "text" },
+							],
+							role: "assistant",
+						},
+					}),
+				),
+			].join("\n"),
+		);
+		await fs.mkdir(join(source, "workspace/napcat/group-10001/napcat-inbox/imgs"), {
+			recursive: true,
+		});
+		await fs.writeFile(
+			join(source, "workspace/napcat/group-10001/napcat-inbox/imgs/x.png"),
+			"inline-image",
+		);
+		await fs.mkdir(join(source, "home/node/.dsh/attachments/v1/objects/aa"), {
+			recursive: true,
+		});
+		await fs.writeFile(
+			join(source, `home/node/.dsh/attachments/v1/objects/aa/${sha}`),
+			"content-image",
+		);
+		await fs.writeFile(
+			join(source, "workspace/napcat/people-index.jsonl"),
+			`${JSON.stringify({ at: 1, chatKey: "group:10001", nick: "Alice", userId: "123456" })}\n`,
+		);
+		await fs.mkdir(join(source, "home/.dsh/profiles/web"), { recursive: true });
+		await fs.writeFile(
+			join(source, "home/.dsh/profiles/web/cordis.patch.yml"),
+			["plugins:", "  dsh-napcat:", "    config:", '      selfAliases: "TestUser"'].join("\n"),
+		);
+		await fs.mkdir(join(source, "workspace/memory/group-10001"), { recursive: true });
+		await fs.writeFile(
+			join(source, "workspace/memory/group-10001/items.json"),
+			JSON.stringify({
+				items: [
+					{ kind: "fact", score: 0.9, text: "Synthetic memory one" },
+					{ kind: "glossary", score: 0.8, text: "Synthetic memory two" },
+				],
+			}),
+		);
+		await fs.writeFile(
+			join(source, "workspace/memory/group-10001/summary.json"),
+			JSON.stringify({ text: "Synthetic group summary" }),
+		);
+		await fs.mkdir(
+			join(
+				source,
+				"workspace/work/synthetic-snapshot/backups/archive-sessions-20260101/napcat-archive-group:10001",
+			),
+			{ recursive: true },
+		);
+		await fs.writeFile(
+			join(
+				source,
+				"workspace/work/synthetic-snapshot/backups/archive-sessions-20260101/napcat-archive-group:10001/session.v4.jsonl",
+			),
+			"{not-a-session",
+		);
+		const result = await normalizeSnapshot([[source, "snapshot"]]);
+		const db = result.database;
+		expect(result.diagnostics.errors).toHaveLength(0);
+		const conversation = db.conversations.find(
+			(candidate) => candidate.sourceId === "napcat-group-10001",
+		);
+		expect(conversation?.platformConversationId).toBe("10001");
+		expect(conversation?.createdAt.startsWith("1970")).toBe(false);
+		const messages = db.messages.filter(
+			(message) => message.conversationId === conversation?.canonicalId,
+		);
+		const inbound = messages.filter((message) => message.direction === "inbound");
+		expect(inbound.find((message) => message.content.startsWith("你好"))?.content).toContain(
+			"Synthetic follow-up",
+		);
+		expect(inbound.some((message) => message.content.includes("Synthetic bot line"))).toBe(false);
+		const hello = inbound.find((message) => message.content.startsWith("你好"));
+		expect(hello?.content).toContain("Synthetic follow-up");
+		expect(hello?.senderExternalId).toBe("123456");
+		expect(messages.filter((message) => message.direction === "outbound")).toHaveLength(1);
+		expect(messages.some((message) => message.content === "Synthetic reply")).toBe(true);
+		expect(JSON.stringify(messages)).not.toContain("SECRET-REASONING");
+		expect(inbound.find((message) => message.content === "[图片]")?.attachments.length).toBe(2);
+		expect(db.attachments.every((attachment) => attachment.fileHash)).toBe(true);
+		const memories = db.memories.filter(
+			(memory) => memory.conversationId === conversation?.canonicalId,
+		);
+		expect(memories.length).toBeGreaterThanOrEqual(3);
+		expect(memories.some((memory) => memory.kind === "summary")).toBe(true);
+	});
+});
+
 describe("DSH session v4 streaming parser", () => {
 	test("decompresses zstd, resumes after malformed records, and preserves unknown fields", async () => {
 		const lines = [
@@ -348,6 +520,36 @@ describe("DSH memory, meme, schedule, and request importers", () => {
 		expect(result.schedulerStates[0]?.inboundCount).toBe(7);
 		expect(result.schedulerStates[0]?.dailyCount).toBe(2);
 		expect(result.schedulerStates[0]?.activeHoursHistogram["10"]).toBe(1);
+	});
+
+	test("keeps memory-space ids unique instead of collapsing live spaces", async () => {
+		const source = join(root, "memory-spaces");
+		for (const space of ["group-20001", "group-20002"]) {
+			await fs.mkdir(join(source, "workspace/memory", space), { recursive: true });
+			await fs.writeFile(
+				join(source, "workspace/memory", space, "items.json"),
+				JSON.stringify({
+					items: [{ kind: "fact", score: 0.7, text: `Synthetic memory for ${space}` }],
+				}),
+			);
+			await fs.writeFile(
+				join(source, "workspace/memory", space, "summary.json"),
+				JSON.stringify({ text: `Synthetic summary for ${space}` }),
+			);
+		}
+		const result = await importDshMemory([[source, "dsh"]] as SnapshotSource);
+		expect(result.memories).toHaveLength(4);
+		expect(new Set(result.memories.map((memory) => memory.canonicalId)).size).toBe(4);
+		expect(
+			result.memories.some(
+				(memory) => memory.conversationId === "dsh_conversation_napcat-group-20001",
+			),
+		).toBe(true);
+		expect(
+			result.memories.some(
+				(memory) => memory.conversationId === "dsh_conversation_napcat-group-20002",
+			),
+		).toBe(true);
 	});
 
 	test("deduplicates meme media by SHA-256 and imports packs disabled until verified", async () => {

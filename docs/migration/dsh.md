@@ -162,6 +162,28 @@ Settings are translated, not copied:
 
 The migration report lists settings with no direct equivalent for manual decision.
 
+## Rehearsal status
+
+The kit has been run against a real read-only capture of the current deployment (13,222 files,
+989 MB, 0 capture errors). The isolated lab import mapped 653 conversations, 47,514 messages,
+1,254 source memories, 112 attachments, 2 personas, 138 settings, and 6 sticker packs; every
+`verify` check passed and a second import was idempotent. The live cutover has not run yet.
+
+Live-shape handling now includes:
+
+- captured snapshot wrappers are unwrapped to `files/` before parsing, so inventory JSONL is never
+  treated as session data;
+- remote volume archives are extracted one volume at a time;
+- zstd session bytes are decompressed before NDJSON parsing;
+- array-shaped `cordis.patch.yml` preset files are mapped, including the QQ persona preset;
+- session header epoch timestamps and content-block image attachments are preserved;
+- NapCat session suffixes are normalized so one group/private chat maps to one chat object;
+- QQ inbound history is reconstructed from the bridge's `【最近群聊】` prompt context, with bot
+  aliases, nick suffixes, cached images, and duplicate context windows handled;
+- archived session copies outside the canonical session store are ignored;
+- `workspace/memory/<space>` items and summaries are imported without collapsing space IDs; and
+- large imports are inserted in bounded statements.
+
 ## Cutover
 
 1. Complete snapshot/inspect/normalize/dry-run.

@@ -58,6 +58,12 @@ interface SourceFile {
 	readonly absolutePath: string;
 }
 
+/** Preserve the real memory space in IDs; the baseline sanitizer is for reports only. */
+function importSpace(raw: string): string {
+	const cleaned = raw.replace(/[^a-zA-Z0-9_-]/g, "_");
+	return cleaned === "" ? "custom" : cleaned;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -103,6 +109,9 @@ export function conversationIdForSpace(space: string): string {
 	}
 	if (space.startsWith("napcat-private-")) {
 		return canonicalId("conversation", space);
+	}
+	if (/^(?:group|private)[-_]/.test(space)) {
+		return canonicalId("conversation", `napcat-${space}`);
 	}
 	if (space.startsWith("workspace-")) {
 		return canonicalId("conversation", space);
@@ -302,8 +311,8 @@ export async function importDshMemory(
 		const match = /(?:^|\/)\.mnemon\/data\/([^/]+)\/mnemon\.db$/i.exec(file.path);
 		if (match?.[1]) {
 			const rawSpace = match[1];
-			const space = sanitizeMemorySpace(rawSpace);
-			spaces.add(space);
+			const space = importSpace(rawSpace);
+			spaces.add(sanitizeMemorySpace(rawSpace));
 			const tableNames = tables(file.absolutePath);
 			for (const table of tableNames) {
 				if (!/insight|memor|item|document|note/i.test(table)) continue;
@@ -375,6 +384,75 @@ export async function importDshMemory(
 			});
 			continue;
 		}
+		const workspaceMemory = /(?:^|\/)workspace\/memory\/([^/]+)\/(items|summary)\.json$/i.exec(
+			file.path,
+		);
+		if (workspaceMemory !== null) {
+			const rawSpace = workspaceMemory[1]!;
+			const space = importSpace(rawSpace);
+			spaces.add(sanitizeMemorySpace(rawSpace));
+			const conversationSpace = /^(?:group|private)[-_]/.test(rawSpace)
+				? `napcat-${rawSpace}`
+				: rawSpace;
+			const conversationId = conversationIdForSpace(conversationSpace);
+			try {
+				const parsed = JSON.parse(await fs.readFile(file.absolutePath, "utf8")) as unknown;
+				if (workspaceMemory[2]!.toLowerCase() === "items") {
+					const entries = isRecord(parsed) && Array.isArray(parsed.items) ? parsed.items : [];
+					for (const [index, entry] of entries.entries()) {
+						if (!isRecord(entry)) continue;
+						const memory = memoryFromRow({
+							conversationSpace,
+							databasePath: file.absolutePath,
+							index,
+							row: entry,
+							space,
+							table: "items",
+						});
+						if (memory !== null) {
+							const score = number(entry.score);
+							memories.push({
+								...memory,
+								confidence: score ?? memory.confidence,
+								importance: score ?? memory.importance,
+								kind: string(entry.kind ?? entry.type) ?? memory.kind,
+							});
+						}
+					}
+				} else {
+					const content =
+						isRecord(parsed) && typeof parsed.text === "string" ? parsed.text.trim() : "";
+					if (content !== "") {
+						const sourceId = `memory-store:${rawSpace}:summary`;
+						const updatedAt = isRecord(parsed)
+							? toIso(parsed.updatedAt, new Date(now()).toISOString())
+							: new Date(now()).toISOString();
+						memories.push({
+							canonicalId: canonicalId("memory", sourceId),
+							confidence: 1,
+							content,
+							conversationId,
+							createdAt: updatedAt,
+							importance: 0.8,
+							kind: "summary",
+							provenance: { path: file.path, space },
+							scope: conversationId === "" ? "global" : "conversation",
+							sourceHash: sha256String(content),
+							sourceId,
+							subjectUserId: "",
+							summary: content.slice(0, 240),
+							updatedAt,
+						});
+					}
+				}
+			} catch (error) {
+				warnings.push(`Failed to parse ${file.path}: ${String(error)}`);
+			}
+			continue;
+		}
+		// Other files in a memory store (space.json, archive.json, recent.jsonl, memory.md,
+		// .mnemon internals) are either handled above or are not standalone memories.
+		if (/(?:^|\/)workspace\/memory\/[^/]+\//i.test(file.path)) continue;
 		if (
 			/(?:^|\/)(?:shared-memory|cross-recent|cross-memory|memory)\.(?:json|jsonl|md)$/i.test(
 				file.path,
