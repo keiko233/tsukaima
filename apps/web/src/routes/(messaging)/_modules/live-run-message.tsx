@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Wrench } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
 	Message,
@@ -13,6 +13,7 @@ import {
 import type { LiveRunState } from "@tsukaima/contracts";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
+import { ToolCallRow } from "./tool-call-row";
 
 function elapsedSeconds(startedAtMs: number, now: number): number {
 	return Math.max(0, Math.floor((now - startedAtMs) / 1_000));
@@ -46,7 +47,9 @@ export function LiveRunMessage({ run, now }: LiveRunMessageProps) {
 
 	return (
 		<Message from="assistant" align="start" className="gap-2.5">
-			<MessageAvatar className="border border-primary/20 bg-primary/10 text-primary">E</MessageAvatar>
+			<MessageAvatar className="border border-primary/20 bg-primary/10 text-primary">
+				E
+			</MessageAvatar>
 			<MessageContent>
 				<MessageHeader>
 					<span className="font-medium text-foreground">{m.message_sender_tsukaima()}</span>
@@ -79,11 +82,11 @@ export function LiveRunMessage({ run, now }: LiveRunMessageProps) {
 				{expanded && hasActivity ? (
 					<ul className="flex w-full max-w-[min(42rem,88%)] flex-col items-start gap-1.5">
 						{thinking.length > 0 ? (
-							<li className="flex flex-col items-start gap-0.5">
+							<li className="flex w-full min-w-0 flex-col items-start gap-0.5">
 								<span className="text-[11px] leading-5 text-muted-foreground">
 									{m.run_step_thinking()}
 								</span>
-								<p className="whitespace-pre-wrap break-words text-left text-[11px] leading-5 text-muted-foreground/80">
+								<p className="max-w-full whitespace-pre-wrap break-words text-left text-[11px] leading-5 text-muted-foreground/80">
 									{thinking}
 									{working ? (
 										<span
@@ -95,19 +98,16 @@ export function LiveRunMessage({ run, now }: LiveRunMessageProps) {
 							</li>
 						) : null}
 						{tools.map((tool) => (
-							<li key={tool.callId} className="flex flex-col items-start gap-0.5">
-								<span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] leading-5 text-muted-foreground">
-									<Wrench className="size-3 shrink-0" />
-									<span className="font-mono">{tool.toolName}</span>
-									{tool.status === "done" ? null : (
-										<span className="text-primary">{m.live_run_working()}</span>
-									)}
-								</span>
-								{tool.output === undefined || tool.output.length === 0 ? null : (
-									<p className="whitespace-pre-wrap break-words text-left text-[11px] leading-5 text-muted-foreground/80">
-										{tool.output}
-									</p>
-								)}
+							<li key={tool.callId} className="w-full min-w-0">
+								<ToolCallRow
+									badge={
+										tool.status === "done" ? null : (
+											<span className="shrink-0 text-primary">{m.live_run_working()}</span>
+										)
+									}
+									output={tool.output}
+									toolName={tool.toolName}
+								/>
 							</li>
 						))}
 					</ul>
