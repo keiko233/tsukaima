@@ -339,6 +339,12 @@ export class ElainaLifecycle {
 			logger: this.logger,
 			migrations: this.pluginMigrations,
 			media: this.media,
+			onModelMessage: (message, pluginId) => {
+				this.modelUsageLedger.record(
+					message as Parameters<typeof this.modelUsageLedger.record>[0],
+					`plugin:${pluginId}`,
+				);
+			},
 			plugins: this.plugins,
 			requests: this.requestService,
 			settings: this.pluginSettings,

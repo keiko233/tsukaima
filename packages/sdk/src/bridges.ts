@@ -30,8 +30,12 @@ import type {
 	PluginEmbeddingRequest,
 	PluginEmbeddingResult,
 	PluginMigrationsApi,
+	PluginModelCompleteMessage,
+	PluginModelCompleteRequest,
+	PluginModelCompleteResult,
 	PluginModelDescriptor,
 	PluginModelInfo,
+	PluginModelMessageContentPart,
 	PluginModelProvider,
 	PluginModelQuery,
 	PluginMediaApi,
@@ -266,6 +270,10 @@ export class LocalModelRegistry implements PluginModelRegistry {
 		return models.find((model) => model.id === modelId);
 	}
 
+	async complete(request: PluginModelCompleteRequest): Promise<PluginModelCompleteResult> {
+		return await completePluginModel(this.#providers, request);
+	}
+
 	async embed(request: PluginEmbeddingRequest): Promise<PluginEmbeddingResult> {
 		const providers = this.#providersFor(request.modelId, "embedding");
 		for (const provider of providers) {
@@ -312,6 +320,220 @@ export class LocalModelRegistry implements PluginModelRegistry {
 			);
 		});
 	}
+}
+
+interface StructuralModelCollection {
+	getModel?(providerId: string, modelId: string): unknown;
+	getModels?(providerId: string): readonly unknown[];
+	completeSimple?(
+		model: unknown,
+		context: {
+			readonly messages: readonly unknown[];
+			readonly systemPrompt?: string;
+		},
+		options?: {
+			readonly maxTokens?: number;
+			readonly signal?: AbortSignal;
+			readonly temperature?: number;
+		},
+	): Promise<{
+		readonly content?: readonly { readonly text?: string; readonly type?: string }[];
+		readonly errorMessage?: string;
+		readonly stopReason?: string;
+	}>;
+}
+
+function messageText(content: PluginModelCompleteMessage["content"]): string {
+	if (typeof content === "string") return content;
+	return content
+		.filter((part): part is Extract<PluginModelMessageContentPart, { readonly type: "text" }> => {
+			return part.type === "text";
+		})
+		.map((part) => part.text)
+		.join("");
+}
+
+function toPortMessages(
+	messages: readonly PluginModelCompleteMessage[],
+	providerId: string,
+	modelId: string,
+): { readonly messages: readonly unknown[]; readonly systemPrompt?: string } {
+	const systemParts: string[] = [];
+	const converted: unknown[] = [];
+	const timestamp = Date.now();
+	for (const message of messages) {
+		if (message.role === "system") {
+			const text = messageText(message.content).trim();
+			if (text.length > 0) systemParts.push(text);
+			continue;
+		}
+		if (message.role === "user") {
+			converted.push({
+				content:
+					typeof message.content === "string"
+						? message.content
+						: message.content.map((part) =>
+								part.type === "text"
+									? { text: part.text, type: "text" as const }
+									: { data: part.data, mimeType: part.mimeType, type: "image" as const },
+							),
+				role: "user" as const,
+				timestamp,
+			});
+			continue;
+		}
+		converted.push({
+			api: "openai-compatible",
+			content: [{ text: messageText(message.content), type: "text" as const }],
+			model: modelId,
+			provider: providerId,
+			role: "assistant" as const,
+			stopReason: "stop",
+			timestamp,
+			usage: {
+				cacheRead: 0,
+				cacheWrite: 0,
+				cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+				input: 0,
+				output: 0,
+				totalTokens: 0,
+			},
+		});
+	}
+	const systemPrompt = systemParts.join("\n\n");
+	return {
+		messages: converted,
+		...(systemPrompt.length > 0 ? { systemPrompt } : {}),
+	};
+}
+
+async function resolveCompletionTarget(
+	providers: ReadonlyMap<string, PluginModelProvider>,
+	request: PluginModelCompleteRequest,
+): Promise<{ readonly modelId?: string; readonly provider: PluginModelProvider }> {
+	if (request.providerId !== undefined) {
+		const provider = providers.get(request.providerId);
+		if (provider === undefined) {
+			throw new Error(`Model provider ${request.providerId} is not registered`);
+		}
+		if ((await provider.isConfigured?.()) === false) {
+			throw new Error(`Model provider ${request.providerId} is not configured`);
+		}
+		if (provider.listModels !== undefined) {
+			const descriptors = await provider.listModels();
+			if (request.modelId !== undefined) {
+				const matched = descriptors.find((descriptor) => descriptor.id === request.modelId);
+				if (matched === undefined) {
+					throw new Error(
+						`Model ${request.modelId} is not enabled on provider ${request.providerId}`,
+					);
+				}
+				return { modelId: matched.id, provider };
+			}
+			const matched =
+				descriptors.find(
+					(descriptor) =>
+						(request.capability === undefined ||
+							descriptor.capabilities.includes(request.capability)) &&
+						(request.input === undefined || (descriptor.input?.includes(request.input) ?? false)),
+				) ?? descriptors[0];
+			if (matched === undefined) {
+				throw new Error(`Provider ${request.providerId} has no enabled matching models`);
+			}
+			return { modelId: matched.id, provider };
+		}
+		return {
+			...(request.modelId === undefined ? {} : { modelId: request.modelId }),
+			provider,
+		};
+	}
+
+	const configuredProviders: PluginModelProvider[] = [];
+	for (const provider of providers.values()) {
+		if ((await provider.isConfigured?.()) === false) continue;
+		configuredProviders.push(provider);
+	}
+
+	if (request.modelId !== undefined) {
+		const allModels = await collectPluginModels(configuredProviders);
+		const matched = allModels.find((model) => model.id === request.modelId);
+		if (matched !== undefined) {
+			const provider = providers.get(matched.providerId);
+			if (provider !== undefined) return { modelId: matched.id, provider };
+		}
+		const fallback = configuredProviders.find((provider) => provider.listModels === undefined);
+		if (fallback !== undefined) {
+			return { modelId: request.modelId, provider: fallback };
+		}
+		throw new Error(`Model ${request.modelId} is not available from any configured provider`);
+	}
+
+	const matchingModels = await collectPluginModels(configuredProviders, {
+		...(request.capability === undefined ? {} : { capability: request.capability }),
+		...(request.input === undefined ? {} : { input: request.input }),
+	});
+	const firstMatch = matchingModels[0];
+	if (firstMatch !== undefined) {
+		const provider = providers.get(firstMatch.providerId);
+		if (provider !== undefined) return { modelId: firstMatch.id, provider };
+	}
+	const fallback = configuredProviders.find((provider) => provider.listModels === undefined);
+	if (fallback !== undefined) return { provider: fallback };
+	throw new Error("No matching model is configured");
+}
+
+/** Runs a text or multimodal completion through a registered model provider and model. */
+export async function completePluginModel(
+	providers: ReadonlyMap<string, PluginModelProvider>,
+	request: PluginModelCompleteRequest,
+	options: { readonly onMessage?: (message: unknown) => void } = {},
+): Promise<PluginModelCompleteResult> {
+	if (request.signal?.aborted === true) {
+		throw new Error("Model request aborted");
+	}
+	const { modelId, provider } = await resolveCompletionTarget(providers, request);
+	if (provider.complete !== undefined) {
+		return await provider.complete({
+			...request,
+			...(modelId === undefined ? {} : { modelId }),
+			providerId: provider.id,
+		});
+	}
+	const port = await provider.createPort(
+		options.onMessage === undefined ? {} : { onMessage: options.onMessage },
+	);
+	const models = port.models as StructuralModelCollection | undefined;
+	const targetModelId = modelId ?? port.modelId;
+	const selected =
+		models?.getModel?.(port.providerId, targetModelId) ??
+		(modelId === undefined ? models?.getModels?.(port.providerId)?.[0] : undefined);
+	if (selected === undefined || typeof models?.completeSimple !== "function") {
+		throw new Error(`Model ${targetModelId} is unavailable on provider ${provider.id}`);
+	}
+	const response = await models.completeSimple(
+		selected,
+		toPortMessages(request.messages, port.providerId, targetModelId),
+		{
+			...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
+			...(request.signal === undefined ? {} : { signal: request.signal }),
+			...(request.temperature === undefined ? {} : { temperature: request.temperature }),
+		},
+	);
+	if (response.stopReason === "error" || response.stopReason === "aborted") {
+		throw new Error(response.errorMessage ?? `Model request ${response.stopReason}`);
+	}
+	const text = (response.content ?? [])
+		.filter(
+			(part): part is { readonly text: string; readonly type: "text" } =>
+				part.type === "text" && typeof part.text === "string",
+		)
+		.map((part) => part.text)
+		.join("");
+	return {
+		modelId: targetModelId,
+		providerId: provider.id,
+		text,
+	};
 }
 
 /**

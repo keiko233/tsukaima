@@ -39,8 +39,12 @@ export type {
 	PluginMediaSource,
 	PluginMediaStoreInput,
 	PluginModelDescriptor,
+	PluginModelCompleteMessage,
+	PluginModelCompleteRequest,
+	PluginModelCompleteResult,
 	PluginModelInfo,
 	PluginModelInputModality,
+	PluginModelMessageContentPart,
 	PluginModelPort,
 	PluginModelProvider,
 	PluginEmbeddingPort,
@@ -120,6 +124,7 @@ export {
 	hasChannelCapability,
 } from "./host.ts";
 export {
+	completePluginModel,
 	createPluginContext,
 	createPluginToolsExtension,
 	collectPluginModels,
