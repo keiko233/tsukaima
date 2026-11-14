@@ -456,6 +456,7 @@ describe("admin auth", () => {
 			"sessions/create": { chatObjectId: "chat-1", title: "Sample" },
 			"sessions/get": { sessionId: "session-1" },
 			"sessions/messages": { sessionId: "session-1" },
+			"sessions/runSteps": { entryId: "entry-1", sessionId: "session-1" },
 			"sessions/send": { sessionId: "session-1", target: "elaina", text: "hello" },
 			"sessions/setReceiving": { sessionId: "session-1" },
 			"sessions/update": { sessionId: "session-1" },

@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
-import { messagePartSchema, type MessagePart } from "@elaina/contracts";
+import {
+	messagePartSchema,
+	type MessagePart,
+	type MessageSummary as ContractMessageSummary,
+	type RunStep,
+} from "@elaina/contracts";
 import {
 	chatObjects,
 	conversationMembers,
@@ -12,6 +17,7 @@ import {
 	users,
 } from "@elaina/db";
 import type { ElainaLifecycle } from "../lifecycle.ts";
+import { runStepsFromEntries } from "./run-steps.ts";
 
 type ChatKind = "private" | "group" | "webui" | "task" | "plugin";
 
@@ -42,21 +48,11 @@ export interface ChatSummary {
 	updatedAt: string;
 }
 
-export interface MessageSummary {
-	contentText: string;
-	direction: "inbound" | "outbound" | "system";
-	deliveryStatus: "received" | "pending" | "accepted" | "sent" | "failed" | "uncertain";
-	id: string;
-	kind: string;
-	occurredAt: string;
-	parts: MessagePart[];
-	platformMessageId: string | null;
-	replyToMessageId: string | null;
-	senderDisplayName: string;
-	senderExternalId: string | null;
-	senderKind: "human" | "bot" | "assistant" | "system";
-	triggerClassification: "ambient" | "direct" | "soft";
-}
+/**
+ * The contract's shape, not a hand-written copy. A local redeclaration silently drifted from the
+ * schema the WebUI parses, so a field added on one side was invisible to the other.
+ */
+export type MessageSummary = ContractMessageSummary;
 
 export interface SessionDetail {
 	channelId: string | null;
@@ -101,6 +97,7 @@ function toMessageSummary(row: MessageRow): MessageSummary {
 		contentText: row.contentText ?? "",
 		direction: row.direction,
 		deliveryStatus: row.deliveryStatus,
+		durableEntryId: row.durableEntryId,
 		id: row.id,
 		kind: row.kind,
 		occurredAt: row.occurredAt,
@@ -398,6 +395,40 @@ export async function listMessages(
 		.where(eq(messages.conversationId, sessionId))
 		.orderBy(asc(messages.occurredAt));
 	return rows.map(toMessageSummary);
+}
+
+/**
+ * Steps of one completed assistant turn, read from the durable transcript.
+ *
+ * The live `pi.live` document only exists while a run is in flight, so a transcript that wants
+ * to keep showing the agent's work after the answer lands has to read the durable entries. The
+ * caller identifies the turn by the assistant message's `durableEntryId`.
+ */
+export async function listRunSteps(
+	lifecycle: ElainaLifecycle,
+	input: { entryId: string; sessionId: string },
+): Promise<{ steps: RunStep[] }> {
+	const database = requireDatabase(lifecycle);
+	const host = lifecycle.conversationHost;
+	if (host === undefined) throw new Error("Conversation host is not ready");
+	const [session] = await database
+		.select({ durableConversationId: conversations.durableConversationId })
+		.from(conversations)
+		.where(eq(conversations.id, input.sessionId))
+		.limit(1);
+	if (session === undefined) throw new Error("Session not found");
+	const entries = await host.listEntries(session.durableConversationId, 500);
+	return {
+		steps: runStepsFromEntries(
+			entries.map((entry) => ({
+				data: entry.data,
+				id: String(entry.id),
+				kind: entry.kind,
+				model: entry.model,
+			})),
+			input.entryId,
+		),
+	};
 }
 
 export async function sendMessage(

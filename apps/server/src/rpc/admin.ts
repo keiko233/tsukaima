@@ -11,6 +11,7 @@ import {
 	listGroups,
 	listMessages,
 	listRequests,
+	listRunSteps,
 	listUsers,
 	respondToRequest,
 	sendMessage,
@@ -437,6 +438,9 @@ export const adminRouter = {
 		),
 		messages: adminBase.admin.sessions.messages.handler(async ({ context, input }) =>
 			listMessages(context.lifecycle, input.sessionId),
+		),
+		runSteps: adminBase.admin.sessions.runSteps.handler(async ({ context, input }) =>
+			listRunSteps(context.lifecycle, input),
 		),
 		send: adminBase.admin.sessions.send.handler(async ({ context, input }) => {
 			try {

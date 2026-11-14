@@ -25,6 +25,7 @@ import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { formatDateTime, formatTimestamp } from "../../_modules/lib/format";
 import { LiveRunMessage } from "./live-run-message";
+import { RunSteps } from "./run-steps";
 
 function deliveryLabel(status: DeliveryStatus): string {
 	switch (status) {
@@ -134,8 +135,11 @@ export function MessageList({
 	messages,
 	liveRun,
 	now,
+	sessionId,
 }: {
 	messages: readonly MessageSummary[];
+	/** Session the messages belong to, needed to expand a turn's steps. */
+	sessionId: string;
 	/** In-flight assistant turn, appended below the persisted transcript. */
 	liveRun?: LiveRunState | undefined;
 	/** Wall clock used for the live run's elapsed label. */
@@ -185,6 +189,9 @@ export function MessageList({
 										<MessageBody message={message} />
 									</MessageBubbleContent>
 								</MessageBubble>
+								{assistant && message.durableEntryId !== null ? (
+									<RunSteps entryId={message.durableEntryId} sessionId={sessionId} />
+								) : null}
 								{self ? (
 									<MessageFooter>
 										<span className={deliveryClass(message.deliveryStatus)}>
