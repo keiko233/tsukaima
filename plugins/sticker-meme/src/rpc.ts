@@ -1,6 +1,8 @@
 import type { PluginContext, PluginLogger, PluginRpcHandler } from "@tsukaima/sdk";
+import pLimit from "p-limit";
 import { encodeBase64 } from "./archive.ts";
 import {
+	clampConcurrency,
 	normalizeLabels,
 	normalizeText,
 	recordValue,
@@ -86,6 +88,14 @@ function settingBoolean(record: Record<string, unknown>, key: string, fallback: 
 function settingNumber(record: Record<string, unknown>, key: string, fallback: number): number {
 	const value = asNumber(record[key]);
 	return value === undefined ? fallback : value;
+}
+
+function concurrencySetting(
+	record: Record<string, unknown>,
+	settings: Record<string, unknown>,
+	key: "importConcurrency" | "semanticConcurrency",
+): number {
+	return clampConcurrency(asNumber(record[key]) ?? asNumber(settings[key]));
 }
 
 function enumValue<T extends string>(value: string, allowed: readonly T[], fallback: T): T {
@@ -185,7 +195,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		record: Record<string, unknown> = {},
 	): Promise<StickerSemanticClassifier> => await configuredClassifier(context, record);
 
-	rpc.register("progress", async () => ({ active: tracker.current() }));
+	rpc.register("progress", async () => ({ active: tracker.current(), jobs: tracker.jobs() }));
 
 	rpc.register("packs.list", async () => {
 		const packs = await repository.listPacks();
@@ -257,6 +267,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		const record = recordValue(input);
 		const directory = normalizeText(record.directory ?? record.path);
 		if (directory.length === 0) throw new Error("directory is required");
+		const settings = recordValue((await context.settings?.get()) ?? {});
 		const dryRun = record.dryRun === true;
 		const jobId = tracker.start({ dryRun, kind: "packs.importDir", stage: "fetching" });
 		try {
@@ -264,7 +275,9 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 				classifier: await importClassifier(record),
 				directory,
 				dryRun,
+				importConcurrency: concurrencySetting(record, settings, "importConcurrency"),
 				onProgress: (progress) => tracker.update(jobId, progress),
+				semanticConcurrency: concurrencySetting(record, settings, "semanticConcurrency"),
 				source: "webui",
 			});
 			await tracker.complete(jobId, {
@@ -281,7 +294,10 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 
 	rpc.register("packs.importBundle", async (input) => {
 		const record = recordValue(input);
+		const settings = recordValue((await context.settings?.get()) ?? {});
 		const dryRun = record.dryRun === true;
+		const importConcurrency = concurrencySetting(record, settings, "importConcurrency");
+		const semanticConcurrency = concurrencySetting(record, settings, "semanticConcurrency");
 		const zip = normalizeText(record.bundleBase64 ?? record.zipBase64);
 		const jobId = tracker.start({ dryRun, kind: "packs.importBundle", stage: "fetching" });
 		try {
@@ -291,15 +307,19 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 							bytes: new Uint8Array(Buffer.from(zip, "base64")),
 							classifier: await importClassifier(record),
 							dryRun,
+							importConcurrency,
 							onProgress: (progress) => tracker.update(jobId, progress),
+							semanticConcurrency,
 							source: "webui",
 						})
 					: await importService.importBundle({
 							classifier: await importClassifier(record),
 							dryRun,
 							files: filesFromBundle(asFiles(record.files)),
+							importConcurrency,
 							manifest: record.manifest ?? record,
 							onProgress: (progress) => tracker.update(jobId, progress),
+							semanticConcurrency,
 							source: "webui",
 						});
 			await tracker.complete(jobId, {
@@ -318,6 +338,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		const record = recordValue(input);
 		const directory = normalizeText(record.directory ?? record.path);
 		if (directory.length === 0) throw new Error("directory is required");
+		const settings = recordValue((await context.settings?.get()) ?? {});
 		const dryRun = record.dryRun === true;
 		const jobId = tracker.start({ dryRun, kind: "packs.importDsh", stage: "fetching" });
 		try {
@@ -325,7 +346,9 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 				classifier: await importClassifier(record),
 				directory,
 				dryRun,
+				importConcurrency: concurrencySetting(record, settings, "importConcurrency"),
 				onProgress: (progress) => tracker.update(jobId, progress),
+				semanticConcurrency: concurrencySetting(record, settings, "semanticConcurrency"),
 			});
 			await tracker.complete(jobId, {
 				current: report.items,
@@ -339,173 +362,91 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		}
 	});
 
-	rpc.register("telegram.import", async (input) => {
-		const record = recordValue(input);
-		const reference = normalizeText(record.url ?? record.reference ?? record.setName);
-		if (reference.length === 0) throw new Error("Telegram sticker set URL or name is required");
-		const media = context.media;
-		if (media === undefined) throw new Error("Host media bridge is unavailable");
-		const settings = recordValue((await context.settings?.get()) ?? {});
-		const token = normalizeText(record.token) || normalizeText(settings.telegramBotToken);
-		if (token.length === 0) {
-			throw new Error(
-				"Telegram bot token is not configured. Set telegramBotToken or TSUKAIMA_TELEGRAM_BOT_TOKEN.",
-			);
-		}
-		const apiBaseUrl =
-			normalizeText(record.apiBaseUrl) || normalizeText(settings.telegramApiBaseUrl);
-		const client = new TelegramStickerClient({
-			...(apiBaseUrl.length === 0 ? {} : { apiBaseUrl }),
-			logger,
-			token,
-		});
-		const service = new TelegramStickerImportService({ client, logger, media, repository });
-		const dryRun = record.dryRun === true;
-		const jobId = tracker.start({ dryRun, kind: "telegram.import", stage: "fetching" });
+	/**
+	 * Classifies stored items with a bounded worker pool. Runs as its own tracked job so it can
+	 * execute concurrently with imports instead of blocking them.
+	 */
+	const reclassifySemantics = async (
+		jobId: string,
+		record: Record<string, unknown>,
+	): Promise<{ classifier: string; skipped: number; updated: number }> => {
 		try {
-			const report = await service.importReference(reference, {
-				animatedFormat: enumValue(
-					normalizeText(record.animatedFormat) ||
-						normalizeText(settings.telegramAnimatedFormat, "gif"),
-					["gif", "thumbnail"] as const,
-					"gif",
-				),
-				animatedFps: settingNumber(
-					record,
-					"animatedFps",
-					settingNumber(settings, "telegramAnimatedFps", 15),
-				),
-				animatedMaxFrames: settingNumber(
-					record,
-					"animatedMaxFrames",
-					settingNumber(settings, "telegramAnimatedMaxFrames", 50),
-				),
-				classifier: await importClassifier(record),
-				dryRun,
-				includeAnimated: settingBoolean(
-					record,
-					"includeAnimated",
-					settingBoolean(settings, "telegramIncludeAnimated", true),
-				),
-				includeVideo: settingBoolean(
-					record,
-					"includeVideo",
-					settingBoolean(settings, "telegramIncludeVideo", true),
-				),
-				maxStickers: Math.floor(
-					settingNumber(record, "maxStickers", settingNumber(settings, "telegramMaxStickers", 200)),
-				),
-				onProgress: (progress) => tracker.update(jobId, progress),
-				videoFormat: enumValue(
-					normalizeText(record.videoFormat) || normalizeText(settings.telegramVideoFormat, "gif"),
-					["gif", "thumbnail", "webm"] as const,
-					"gif",
-				),
+			const media = context.media;
+			if (media === undefined) throw new Error("Host media bridge is unavailable");
+			const mediaApi = media;
+			const packId = normalizeText(record.packId);
+			const settings = recordValue((await context.settings?.get()) ?? {});
+			const semanticConcurrency = concurrencySetting(record, settings, "semanticConcurrency");
+			const packs = new Map((await repository.listPacks()).map((pack) => [pack.id, pack]));
+			const items = await repository.listItems(packId.length === 0 ? undefined : packId);
+			const targetTitle = packId.length > 0 ? packs.get(packId)?.name : undefined;
+			tracker.update(jobId, {
+				...(targetTitle === undefined ? {} : { packTitle: targetTitle }),
+				current: 0,
+				stage: "classifying",
+				total: items.length,
 			});
-			await context.audit?.record({
-				action: "sticker.telegram.imported",
-				actorKind: "user",
-				payload: {
-					deduped: report.deduped,
-					dryRun: report.dryRun,
-					items: report.items,
-					setName: report.setName,
-					skipped: report.skipped,
-				},
-				result: "ok",
-				targetId: report.setName,
-				targetKind: "telegram-sticker-set",
-			});
-			await tracker.complete(jobId, {
-				classified: report.classified,
-				current: report.items,
-				packTitle: report.title,
-				skipped: report.skipped,
-				total: report.items,
-			});
-			return report;
-		} catch (error) {
-			await tracker.fail(jobId, error);
-			throw error;
-		}
-	});
-
-	rpc.register("semantic.reclassify", async (input) => {
-		const record = recordValue(input);
-		const media = context.media;
-		if (media === undefined) throw new Error("Host media bridge is unavailable");
-		const packId = normalizeText(record.packId);
-		const packs = new Map((await repository.listPacks()).map((pack) => [pack.id, pack]));
-		const items = await repository.listItems(packId.length === 0 ? undefined : packId);
-		const targetTitle = packId.length > 0 ? packs.get(packId)?.name : undefined;
-		const jobId = tracker.start({
-			kind: "semantic.reclassify",
-			...(targetTitle === undefined ? {} : { packTitle: targetTitle }),
-			stage: "classifying",
-			total: items.length,
-		});
-		try {
 			const classifier = await importClassifier(record);
+			const limit = pLimit(semanticConcurrency);
 			let updated = 0;
 			let skipped = 0;
-			for (const [index, item] of items.entries()) {
+			let processed = 0;
+			await limit.map(items, async (item) => {
 				tracker.update(jobId, {
 					classified: updated,
-					current: index,
+					current: processed,
 					currentItem: item.name,
 					skipped,
 					stage: "classifying",
-					total: items.length,
 				});
-				if (item.mediaId.length === 0) {
-					skipped += 1;
-					tracker.update(jobId, { classified: updated, current: index + 1, skipped });
-					continue;
-				}
-				const isImage = item.mimeType.startsWith("image/");
-				if (!isImage && item.mimeType !== "video/webm") {
-					skipped += 1;
-					tracker.update(jobId, { classified: updated, current: index + 1, skipped });
-					continue;
-				}
 				let bytes: Uint8Array | undefined;
-				if (isImage) {
-					try {
-						bytes = await media.readBytes(item.mediaId);
-					} catch {
-						skipped += 1;
-						tracker.update(jobId, { classified: updated, current: index + 1, skipped });
-						continue;
+				let classify = false;
+				if (item.mediaId.length > 0) {
+					const isImage = item.mimeType.startsWith("image/");
+					if (isImage || item.mimeType === "video/webm") {
+						classify = true;
+						if (isImage) {
+							try {
+								bytes = await mediaApi.readBytes(item.mediaId);
+							} catch {
+								classify = false;
+							}
+						}
 					}
 				}
-				const profile = await classifier.classify({
-					...(bytes === undefined ? {} : { bytes }),
-					...(item.semantic.emoji === undefined ? {} : { emoji: item.semantic.emoji }),
-					mimeType: item.mimeType,
-					title: packs.get(item.packId)?.name ?? item.name,
-				});
+				if (!classify) {
+					skipped += 1;
+				} else {
+					const profile = await classifier.classify({
+						...(bytes === undefined ? {} : { bytes }),
+						...(item.semantic.emoji === undefined ? {} : { emoji: item.semantic.emoji }),
+						mimeType: item.mimeType,
+						title: packs.get(item.packId)?.name ?? item.name,
+					});
+					tracker.update(jobId, {
+						classified: updated,
+						current: processed,
+						currentItem: item.name,
+						skipped,
+						stage: "saving",
+					});
+					await repository.updateItem(item.id, {
+						description: profile.description,
+						emotions: [...item.emotions, ...profile.emotions],
+						keywords: [...item.keywords, ...profile.keywords],
+						semantic: profile,
+					});
+					updated += 1;
+				}
+				processed += 1;
 				tracker.update(jobId, {
 					classified: updated,
-					current: index,
+					current: processed,
 					currentItem: item.name,
 					skipped,
 					stage: "saving",
 				});
-				await repository.updateItem(item.id, {
-					description: profile.description,
-					emotions: [...item.emotions, ...profile.emotions],
-					keywords: [...item.keywords, ...profile.keywords],
-					semantic: profile,
-				});
-				updated += 1;
-				tracker.update(jobId, {
-					classified: updated,
-					current: index + 1,
-					currentItem: item.name,
-					skipped,
-					stage: "saving",
-				});
-			}
+			});
 			await context.audit?.record({
 				action: "sticker.semantic.reclassified",
 				actorKind: "user",
@@ -529,6 +470,122 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 			await tracker.fail(jobId, error);
 			throw error;
 		}
+	};
+
+	rpc.register("telegram.import", async (input) => {
+		const record = recordValue(input);
+		const reference = normalizeText(record.url ?? record.reference ?? record.setName);
+		if (reference.length === 0) throw new Error("Telegram sticker set URL or name is required");
+		const media = context.media;
+		if (media === undefined) throw new Error("Host media bridge is unavailable");
+		const settings = recordValue((await context.settings?.get()) ?? {});
+		const token = normalizeText(record.token) || normalizeText(settings.telegramBotToken);
+		if (token.length === 0) {
+			throw new Error(
+				"Telegram bot token is not configured. Set telegramBotToken or TSUKAIMA_TELEGRAM_BOT_TOKEN.",
+			);
+		}
+		const apiBaseUrl =
+			normalizeText(record.apiBaseUrl) || normalizeText(settings.telegramApiBaseUrl);
+		const client = new TelegramStickerClient({
+			...(apiBaseUrl.length === 0 ? {} : { apiBaseUrl }),
+			logger,
+			token,
+		});
+		const service = new TelegramStickerImportService({ client, logger, media, repository });
+		const dryRun = record.dryRun === true;
+		const deferSemantic = record.deferSemantic === true || record.backgroundSemantic === true;
+		const jobId = tracker.start({ dryRun, kind: "telegram.import", stage: "fetching" });
+		try {
+			const report = await service.importReference(reference, {
+				animatedFormat: enumValue(
+					normalizeText(record.animatedFormat) ||
+						normalizeText(settings.telegramAnimatedFormat, "gif"),
+					["gif", "thumbnail"] as const,
+					"gif",
+				),
+				animatedFps: settingNumber(
+					record,
+					"animatedFps",
+					settingNumber(settings, "telegramAnimatedFps", 15),
+				),
+				animatedMaxFrames: settingNumber(
+					record,
+					"animatedMaxFrames",
+					settingNumber(settings, "telegramAnimatedMaxFrames", 50),
+				),
+				classifier: await importClassifier(record),
+				deferSemantic,
+				dryRun,
+				importConcurrency: concurrencySetting(record, settings, "importConcurrency"),
+				includeAnimated: settingBoolean(
+					record,
+					"includeAnimated",
+					settingBoolean(settings, "telegramIncludeAnimated", true),
+				),
+				includeVideo: settingBoolean(
+					record,
+					"includeVideo",
+					settingBoolean(settings, "telegramIncludeVideo", true),
+				),
+				maxStickers: Math.floor(
+					settingNumber(record, "maxStickers", settingNumber(settings, "telegramMaxStickers", 200)),
+				),
+				onProgress: (progress) => tracker.update(jobId, progress),
+				semanticConcurrency: concurrencySetting(record, settings, "semanticConcurrency"),
+				videoFormat: enumValue(
+					normalizeText(record.videoFormat) || normalizeText(settings.telegramVideoFormat, "gif"),
+					["gif", "thumbnail", "webm"] as const,
+					"gif",
+				),
+			});
+			await context.audit?.record({
+				action: "sticker.telegram.imported",
+				actorKind: "user",
+				payload: {
+					deduped: report.deduped,
+					dryRun: report.dryRun,
+					items: report.items,
+					setName: report.setName,
+					skipped: report.skipped,
+				},
+				result: "ok",
+				targetId: report.setName,
+				targetKind: "telegram-sticker-set",
+			});
+			if (!dryRun && report.semanticDeferred === true && report.packIds[0] !== undefined) {
+				const semanticJobId = tracker.start({
+					kind: "semantic.reclassify",
+					packTitle: report.title,
+					stage: "classifying",
+				});
+				void reclassifySemantics(semanticJobId, { ...record, packId: report.packIds[0] }).catch(
+					(error) => {
+						logger.warn("sticker deferred semantic classification failed", {
+							error: logErrorMessage(error),
+							packId: report.packIds[0],
+						});
+					},
+				);
+			}
+			await tracker.complete(jobId, {
+				classified: report.classified,
+				current: report.items,
+				packTitle: report.title,
+				skipped: report.skipped,
+				total: report.items,
+			});
+			return report;
+		} catch (error) {
+			await tracker.fail(jobId, error);
+			throw error;
+		}
+	});
+
+	rpc.register("semantic.reclassify", async (input) => {
+		const record = recordValue(input);
+		const jobId = tracker.start({ kind: "semantic.reclassify", stage: "classifying" });
+		return await reclassifySemantics(jobId, record);
 	});
 
 	rpc.register("semantic.models", async () => {

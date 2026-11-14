@@ -123,6 +123,11 @@ export function stableId(prefix: string, value: string): string {
 	return `${prefix}-${createHash("sha256").update(value).digest("hex").slice(0, 16)}`;
 }
 
+/** Clamps a user-supplied worker count into a safe range for import/semantic pools. */
+export function clampConcurrency(value: number | undefined, fallback = 4): number {
+	return Math.max(1, Math.min(16, Math.floor(value ?? fallback)));
+}
+
 export function sha256Bytes(bytes: Uint8Array): string {
 	return createHash("sha256").update(bytes).digest("hex");
 }
