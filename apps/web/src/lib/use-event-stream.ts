@@ -5,6 +5,7 @@ import { liveEventSchema, type LiveEvent } from "@elaina/contracts";
 import type { PluginRow } from "@elaina/contracts";
 import { useEffect } from "react";
 import { orpc } from "./api";
+import { setLiveRun } from "./live-run-store";
 import { runtimeUrl } from "./runtime-url";
 
 const EVENT_STREAM_URL = runtimeUrl("/events/stream");
@@ -18,6 +19,7 @@ const EVENT_TYPES = [
 	"before.reply",
 	"after.reply",
 	"plugin.status",
+	"run.state",
 ] as const;
 
 function refreshConversation(queryClient: QueryClient, sessionId?: string): void {
@@ -90,6 +92,14 @@ function applyLiveEvent(queryClient: QueryClient, event: LiveEvent): void {
 				orpc.admin.plugins.list.queryKey(),
 				rows.map((row) => (row.id === event.pluginId ? { ...row, status: event.status } : row)),
 			);
+			return;
+		}
+		case "run.state": {
+			// High-frequency streamed state: written to its own store so a 100ms partial does not
+			// invalidate the transcript, the chat list, and diagnostics on every token.
+			setLiveRun(event.sessionId, event.run);
+			// A run settling is the moment the answer becomes a durable message, so refresh then.
+			if (event.run === null) refreshConversation(queryClient, event.sessionId);
 			return;
 		}
 	}

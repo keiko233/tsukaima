@@ -109,3 +109,105 @@ export function createFakeModel(options: FakeModelOptions = {}): ModelPort {
 
 	return { models, modelId, providerId };
 }
+
+/**
+ * A provider that streams `chunks` one at a time with a real delay.
+ *
+ * The deterministic fake model resolves in a microtask, which is far faster than the durable
+ * `progress.partialIntervalMs` commit cadence. Any test that asserts on streamed partial text
+ * needs a model that stays in flight long enough for those commits to land.
+ */
+export function createSlowStreamingModel(
+	chunks: readonly string[],
+	options: { delayMs?: number; modelId?: string } = {},
+): ModelPort {
+	const delayMs = options.delayMs ?? 40;
+	const providerId = "slow-test";
+	const modelId = options.modelId ?? "slow-test-model";
+
+	const stream = (model: { api: string; id: string; provider: string }) => {
+		const output = createAssistantMessageEventStream();
+		void (async () => {
+			output.push({
+				partial: { ...testAssistantMessage(model, ""), content: [], stopReason: "pending" },
+				type: "start",
+			});
+			output.push({
+				contentIndex: 0,
+				partial: { ...testAssistantMessage(model, ""), content: [] },
+				type: "text_start",
+			});
+			let accumulated = "";
+			for (const chunk of chunks) {
+				await Bun.sleep(delayMs);
+				accumulated += chunk;
+				output.push({
+					contentIndex: 0,
+					delta: chunk,
+					partial: testAssistantMessage(model, accumulated),
+					type: "text_delta",
+				});
+			}
+			output.push({
+				content: accumulated,
+				contentIndex: 0,
+				partial: testAssistantMessage(model, accumulated),
+				type: "text_end",
+			});
+			output.push({
+				message: testAssistantMessage(model, accumulated),
+				reason: "stop",
+				type: "done",
+			});
+			output.end(testAssistantMessage(model, accumulated));
+		})();
+		return output;
+	};
+
+	const provider = createProvider({
+		api: { stream, streamSimple: stream } as never,
+		auth: { apiKey: { name: "test", resolve: async () => ({ auth: {} }) } },
+		id: providerId,
+		models: [
+			{
+				api: "slow-test",
+				baseUrl: "slow-test://local",
+				contextWindow: 128_000,
+				cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+				id: modelId,
+				input: ["text"],
+				maxTokens: 8_000,
+				name: "Slow streaming test model",
+				provider: providerId,
+				reasoning: false,
+			},
+		],
+	});
+	const models = createModels();
+	models.setProvider(provider);
+	return { modelId, models, providerId };
+}
+
+/** A provider-shaped assistant message for the slow test model. */
+function testAssistantMessage(
+	model: { api: string; id: string; provider: string },
+	text: string,
+): AssistantMessage {
+	return {
+		api: model.api as never,
+		content: [{ text, type: "text" as const }],
+		model: model.id,
+		provider: model.provider,
+		role: "assistant" as const,
+		stopReason: "stop" as const,
+		timestamp: Date.now(),
+		usage: {
+			cacheRead: 0,
+			cacheWrite: 0,
+			cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+			input: 0,
+			output: 0,
+			totalTokens: 0,
+		},
+	};
+}

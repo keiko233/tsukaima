@@ -608,6 +608,50 @@ export const livePluginStatusEventSchema = liveEventTimestampSchema.extend({
 });
 export type LivePluginStatusEvent = z.infer<typeof livePluginStatusEventSchema>;
 
+// ─── Live agent run ─────────────────────────────────────────────────────────
+
+/**
+ * One tool call of the current round, as the WebUI shows it while a run is active. Mirrors the
+ * durable `ToolSlot` presentation but flattens it to what a viewer needs: identity, status, and
+ * the retained output tail.
+ */
+export const liveToolCallSchema = z.object({
+	callId: z.string().min(1),
+	/** Retained running output; bounded by the durable output buffer, never the full stream. */
+	output: z.string().optional(),
+	status: z.enum(["pending", "running", "done"]),
+	toolName: z.string().min(1),
+});
+export type LiveToolCall = z.infer<typeof liveToolCallSchema>;
+
+/**
+ * The in-flight run of one conversation: enough for an agent-style activity view. Every field
+ * but `sessionId` is optional because a run has phases: it starts before the model streams a
+ * first token, may spend time in tool rounds, and may fail without ever answering.
+ */
+export const liveRunStateSchema = z.object({
+	/** Committed partial of the in-flight response; grows as the model streams. */
+	partialText: z.string().optional(),
+	/** Why the newest run ended without an answer, so a client can show it after the run ends. */
+	failure: z.string().optional(),
+	/** Run start, used for the elapsed-time label. */
+	startedAtMs: z.number().int().nonnegative(),
+	sessionId: z.string().min(1),
+	/** Tool calls of the current round, in call order. */
+	tools: z.array(liveToolCallSchema),
+	/** Assistant turns completed so far, which bounds the run. */
+	turns: z.number().int().nonnegative(),
+});
+export type LiveRunState = z.infer<typeof liveRunStateSchema>;
+
+export const liveRunEventSchema = liveEventTimestampSchema.extend({
+	/** Present while a run is active or just failed; absent once the run settled cleanly. */
+	run: liveRunStateSchema.nullable(),
+	sessionId: z.string().min(1),
+	type: z.literal("run.state"),
+});
+export type LiveRunEvent = z.infer<typeof liveRunEventSchema>;
+
 export const liveEventSchema = z.discriminatedUnion("type", [
 	liveSnapshotEventSchema,
 	liveHeartbeatEventSchema,
@@ -617,6 +661,7 @@ export const liveEventSchema = z.discriminatedUnion("type", [
 	liveBeforeReplyEventSchema,
 	liveAfterReplyEventSchema,
 	livePluginStatusEventSchema,
+	liveRunEventSchema,
 ]);
 export type LiveEvent = z.infer<typeof liveEventSchema>;
 

@@ -539,6 +539,7 @@ export type PluginHookName =
 	| "message.received"
 	| "activity.opened"
 	| "activity.closed"
+	| "agent.activity"
 	| "before.agent"
 	| "before.reply"
 	| "reply.transform"

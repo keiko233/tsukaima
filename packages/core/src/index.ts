@@ -50,6 +50,7 @@ export {
 	type BackgroundTurnResult,
 	type ConversationAnswer,
 	type DurableConversationHostOptions,
+	type LiveRunSnapshot,
 } from "./conversation-host.ts";
 export {
 	CONTEXT_EXTENSION_NAME,
@@ -65,7 +66,7 @@ export {
 	defaultConversationExecutionLock,
 	withConversationLock,
 } from "./execution-lock.ts";
-export { createFakeModel, type ModelPort } from "./model.ts";
+export { createFakeModel, createSlowStreamingModel, type ModelPort } from "./model.ts";
 export {
 	ModelPolicyRouter,
 	ModelUsageLedger,

@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PiDurableConversationHost } from "./conversation-host.ts";
-import { createFakeModel } from "./model.ts";
+import { createFakeModel, createSlowStreamingModel } from "./model.ts";
 
 const envelope = (id: string, text: string) => ({
 	channelId: "test",
@@ -163,6 +163,89 @@ describe("PiDurableConversationHost", () => {
 				});
 				await Bun.sleep(20);
 			}
+			const entries = await host.listEntries(conversationId);
+			expect(entries.some((entry) => entry.kind === "pi.assistant")).toBe(true);
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	// The WebUI shows an agent-style activity view while a run is in flight, which needs the
+	// streamed partial from the durable `pi.live` document. Before `onLiveRun` existed a slow
+	// model was indistinguishable from a hung bot: nothing appeared until the answer settled.
+	test("streams partial answer text while a run is in flight", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "elaina-core-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const snapshots: string[] = [];
+			const host = new PiDurableConversationHost({
+				model: createSlowStreamingModel(["The ", "answer ", "streams ", "out."], { delayMs: 140 }),
+				onLiveRun: (state) => {
+					if (state.partialText !== undefined) snapshots.push(state.partialText);
+				},
+				storage,
+			});
+			const conversationId = await host.createConversation();
+			const now = Date.now();
+			await host.append({
+				conversationId,
+				envelope: {
+					...envelope("live-1", "hi"),
+					source: { messageId: "live-1", receivedAtMs: now, timestampMs: now },
+				},
+				forceSubmit: true,
+				submittedAtMs: now,
+			});
+			// Four 140ms chunks: wait well past the stream plus the throttled commit that follows.
+			await Bun.sleep(1_200);
+
+			expect(snapshots.length).toBeGreaterThan(1);
+			// Text must grow monotonically, never jump straight to the final answer.
+			for (let index = 1; index < snapshots.length; index += 1) {
+				expect(snapshots[index]!.startsWith(snapshots[index - 1]!)).toBe(true);
+			}
+			// The poll samples committed partials, so the last observation trails the final text
+			// by up to one poll interval: it must still be a prefix of the answer, never a jump
+			// straight to the end.
+			expect(snapshots.at(-1)!.length).toBeLessThan("The answer streams out.".length);
+			expect("The answer streams out.".startsWith(snapshots.at(-1)!)).toBe(true);
+			// `close()` detaches the live watch and the harness before storage closes.
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("clears the live run once the answer settles", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "elaina-core-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const states: (string | undefined)[] = [];
+			const host = new PiDurableConversationHost({
+				model: createSlowStreamingModel(["done"], { delayMs: 140 }),
+				onLiveRun: (state) => states.push(state.partialText),
+				storage,
+			});
+			const conversationId = await host.createConversation();
+			const now = Date.now();
+			await host.append({
+				conversationId,
+				envelope: {
+					...envelope("live-2", "hi"),
+					source: { messageId: "live-2", receivedAtMs: now, timestampMs: now },
+				},
+				forceSubmit: true,
+				submittedAtMs: now,
+			});
+			// One 40ms chunk: wait past the stream, the throttled commit, and the settle report.
+			await Bun.sleep(1_200);
+
+			// The final observation is the settled state: no partial text, so the UI clears it.
+			expect(states.length).toBeGreaterThan(0);
+			expect(states.at(-1)).toBeUndefined();
 			const entries = await host.listEntries(conversationId);
 			expect(entries.some((entry) => entry.kind === "pi.assistant")).toBe(true);
 			await host.close();

@@ -49,8 +49,10 @@ describe("host", () => {
 				whenBusy: "follow-up",
 			});
 			console.log("fourth", fourth);
-			await storage.close(BACKGROUND_CONTEXT);
+			// Close the host first: it owns the harness and the activity-flush timers, which
+			// would otherwise reach storage after the handle closed.
 			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
 		} finally {
 			await rm(directory, { force: true, recursive: true });
 		}

@@ -30,6 +30,8 @@ export interface CreateAppOptions {
 	readonly backupDrill?: LifecycleOptions["backupDrill"] | undefined;
 	/** Test seam; production should keep SSE authenticated. */
 	readonly eventHeartbeatMs?: number;
+	/** Test or embedding override for the model catalog and provider. */
+	readonly model?: LifecycleOptions["model"] | undefined;
 	/** Opaque host bindings consumed by built-in plugins in tests or embedders. */
 	readonly pluginBindings?: ReadonlyMap<string, unknown>;
 	/** Overrides the built-in plugin set (tests and future plugin sources). */

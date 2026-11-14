@@ -2,9 +2,11 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Circle, MessageCircle } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Button } from "@elaina/ui/components/motion/button";
 import { orpc, type DeliveryStatus } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
+import { useLiveRun } from "@/lib/live-run-store";
 import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { useShellNavigation } from "../../_modules/shell/admin-shell";
@@ -40,6 +42,16 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 	const toast = useToast();
 	const queryClient = useQueryClient();
 	const { mobile, showSidebar } = useShellNavigation();
+	const liveRun = useLiveRun(sessionId);
+	// The live run's elapsed label is a wall clock, not the render time of a message. Tick it only
+	// while a run is active so an idle transcript never re-renders.
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (liveRun === undefined) return;
+		setNow(Date.now());
+		const timer = setInterval(() => setNow(Date.now()), 1_000);
+		return () => clearInterval(timer);
+	}, [liveRun === undefined]);
 	const session = useQuery(orpc.admin.sessions.get.queryOptions({ input: { sessionId } }));
 	const messages = useQuery(orpc.admin.sessions.messages.queryOptions({ input: { sessionId } }));
 	const diagnostics = useQuery(orpc.admin.diagnostics.status.queryOptions());
@@ -198,7 +210,7 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 						/>
 					</div>
 				) : (
-					<MessageList messages={messages.data ?? []} />
+					<MessageList liveRun={liveRun} messages={messages.data ?? []} now={now} />
 				)}
 			</div>
 

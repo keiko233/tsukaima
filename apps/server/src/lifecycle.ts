@@ -8,6 +8,7 @@ import {
 	PiDurableConversationHost,
 	createFakeModel,
 	type ActivityWindowEvent,
+	type LiveRunSnapshot,
 	type ModelPort,
 	type ModelPolicy,
 } from "@elaina/core";
@@ -24,6 +25,7 @@ import {
 	openDomainDatabase,
 } from "@elaina/db";
 import { BACKGROUND_CONTEXT, openDurableStorage, type SqliteStorage } from "@elaina/durable";
+import { eq } from "drizzle-orm";
 import { createPluginToolsExtension, type AuditEntry, type ElainaPlugin } from "@elaina/sdk";
 import { MigrationRegistry, type PluginMigrationPlan } from "@elaina/plugin-registry";
 import { runBackupDrill as executeBackupDrill, type BackupDrillReport } from "@elaina/migration";
@@ -77,7 +79,7 @@ export interface LifecycleOptions {
 	readonly env?: Record<string, string | undefined>;
 	readonly logger?: Logger;
 	/** Test or embedding override for the model catalog and provider. */
-	readonly model?: ModelPort;
+	readonly model?: ModelPort | undefined;
 	/** Opaque host bindings consumed by built-in plugins in tests or embedders. */
 	readonly pluginBindings?: ReadonlyMap<string, unknown>;
 	/** Overrides the built-in plugin set (tests and future plugin sources). */
@@ -456,6 +458,7 @@ export class ElainaLifecycle {
 			onAnswer: async (answer) => {
 				await this.replyDispatcher.handleAnswer(answer);
 			},
+			onLiveRun: (state) => this.forwardLiveRun(state),
 			storage: this.durableStorage,
 		});
 		const persistedSessions = await this.domainDatabase
@@ -674,6 +677,33 @@ export class ElainaLifecycle {
 			this.lastProcessingError = error instanceof Error ? error : new Error(String(error));
 			throw error;
 		}
+	}
+
+	/**
+	 * Resolve a durable conversation id to its domain session id. Runs on the request path of the
+	 * live event stream, which is why it reads the already-open domain database synchronously
+	 * instead of going through an async service. `undefined` means the conversation has no domain
+	 * session, so there is nothing for the WebUI to attach the run to.
+	 */
+	sessionIdForDurableConversation(durableConversationId: string): string | undefined {
+		const database = this.domainDatabase;
+		if (database === undefined) return undefined;
+		const [row] = database
+			.select({ id: conversations.id })
+			.from(conversations)
+			.where(eq(conversations.durableConversationId, durableConversationId))
+			.limit(1)
+			.all();
+		return row?.id;
+	}
+
+	/**
+	 * Forward durable live-run state to plugin hooks. Failing handlers never affect the run
+	 * (`HookBus.emit` catches per handler). `conversationId` here is the durable id; the event
+	 * stream resolves it to a domain session id before publishing.
+	 */
+	private forwardLiveRun(state: LiveRunSnapshot): void {
+		this.hooks.emitDetached("agent.activity", state);
 	}
 
 	/**

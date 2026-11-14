@@ -36,6 +36,23 @@ const replyHookSchema = z.object({
 	text: z.string(),
 });
 
+const liveRunHookSchema = z.object({
+	conversationId: z.string().min(1),
+	failure: z.string().optional(),
+	partialText: z.string().optional(),
+	settled: z.boolean(),
+	startedAtMs: z.number().int().nonnegative(),
+	tools: z.array(
+		z.object({
+			callId: z.string().min(1),
+			output: z.string().optional(),
+			status: z.enum(["pending", "running", "done"]),
+			toolName: z.string().min(1),
+		}),
+	),
+	turns: z.number().int().nonnegative(),
+});
+
 const afterReplyHookSchema = replyHookSchema.extend({
 	deliveryStatus: z.enum(["sent", "failed", "uncertain", "pending", "received", "accepted"]),
 });
@@ -245,6 +262,27 @@ export function createLiveEventStream(
 					...parsed.data,
 					timestamp: timestamp(),
 					type: "after.reply",
+				});
+			}),
+			hooks.on("agent.activity", (payload) => {
+				const parsed = liveRunHookSchema.safeParse(payload);
+				if (!parsed.success) {
+					logger?.warn("dropped invalid agent.activity hook payload");
+					return;
+				}
+				// The hook carries the durable conversation id; the WebUI keys conversations by domain
+				// session id, so resolve before publishing. A run for a conversation with no session
+				// yet (created outside the domain tables) simply has no viewer.
+				const sessionId = lifecycle.sessionIdForDurableConversation(parsed.data.conversationId);
+				if (sessionId === undefined) return;
+				// A settled run publishes `run: null`, which the client uses to clear the
+				// activity view. A failed run keeps its snapshot so the failure stays visible.
+				const { settled, conversationId: _conversationId, ...run } = parsed.data;
+				publish(send, logger, {
+					run: settled && run.failure === undefined ? null : { ...run, sessionId },
+					sessionId,
+					timestamp: timestamp(),
+					type: "run.state",
 				});
 			}),
 		];
