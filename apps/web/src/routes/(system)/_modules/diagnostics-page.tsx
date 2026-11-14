@@ -123,6 +123,14 @@ export function DiagnosticsPage() {
 								<dt className="text-xs text-muted-foreground">{m.diagnostics_log_level_label()}</dt>
 								<dd className="mt-1 font-mono">{diagnostics.logLevel}</dd>
 							</div>
+							{diagnostics.cache === undefined ? null : (
+								<div className="min-w-0">
+									<dt className="text-xs text-muted-foreground">{m.diagnostics_cache_label()}</dt>
+									<dd className="mt-1 font-mono tabular-nums">
+										{diagnostics.cache.hits} / {diagnostics.cache.gets} · {diagnostics.cache.sets}
+									</dd>
+								</div>
+							)}
 							<div className="min-w-0">
 								<dt className="text-xs text-muted-foreground">
 									{m.diagnostics_usage_input_label()}

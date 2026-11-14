@@ -460,6 +460,17 @@ export const modelPolicySchema = z.object({
 export type ModelPolicy = z.infer<typeof modelPolicySchema>;
 
 export const diagnosticsDataSchema = z.object({
+	cache: z
+		.object({
+			deletes: z.number().int(),
+			gets: z.number().int(),
+			hits: z.number().int(),
+			misses: z.number().int(),
+			publishes: z.number().int(),
+			sets: z.number().int(),
+			streamAppends: z.number().int(),
+		})
+		.optional(),
 	channels: z.array(
 		z.object({
 			connected: z.boolean(),
@@ -725,11 +736,22 @@ export const liveToolCallSchema = z.object({
 export type LiveToolCall = z.infer<typeof liveToolCallSchema>;
 
 /**
+ * The coarse phase of an in-flight run. The WebUI shows it as a status line even before the
+ * model has streamed text, so a slow first token no longer looks like a hung bot.
+ */
+export const liveRunPhaseSchema = z.enum(["queued", "thinking", "tools", "writing", "settled"]);
+export type LiveRunPhase = z.infer<typeof liveRunPhaseSchema>;
+
+/**
  * The in-flight run of one conversation: enough for an agent-style activity view. Every field
  * but `sessionId` is optional because a run has phases: it starts before the model streams a
  * first token, may spend time in tool rounds, and may fail without ever answering.
  */
 export const liveRunStateSchema = z.object({
+	/** Coarse stage used for the live status label. */
+	phase: liveRunPhaseSchema.optional(),
+	/** Monotonic revision of this session's run state, used to order snapshots and deltas. */
+	revision: z.number().int().nonnegative().optional(),
 	/** Committed partial of the in-flight response; grows as the model streams. */
 	partialText: z.string().optional(),
 	/** Committed reasoning so far, when the provider reports it. */
@@ -748,6 +770,23 @@ export const liveRunStateSchema = z.object({
 });
 export type LiveRunState = z.infer<typeof liveRunStateSchema>;
 
+/**
+ * One change of a live run. Only fields that moved are present, so a 100ms text commit sends
+ * the new committed text instead of the whole run: tool state and thinking are repeated only
+ * when they actually changed. `failure: null` explicitly clears a previous failure.
+ */
+export const liveRunPatchSchema = z.object({
+	failure: z.string().nullable().optional(),
+	partialText: z.string().optional(),
+	partialThinking: z.string().optional(),
+	phase: liveRunPhaseSchema.optional(),
+	revision: z.number().int().nonnegative().optional(),
+	settled: z.boolean().optional(),
+	tools: z.array(liveToolCallSchema).optional(),
+	turns: z.number().int().nonnegative().optional(),
+});
+export type LiveRunPatch = z.infer<typeof liveRunPatchSchema>;
+
 export const liveRunEventSchema = liveEventTimestampSchema.extend({
 	/** Present while a run is active or just failed; absent once the run settled cleanly. */
 	run: liveRunStateSchema.nullable(),
@@ -755,6 +794,19 @@ export const liveRunEventSchema = liveEventTimestampSchema.extend({
 	type: z.literal("run.state"),
 });
 export type LiveRunEvent = z.infer<typeof liveRunEventSchema>;
+
+/**
+ * A browser that is already rendering a run applies this immediately. A browser that
+ * reconnects receives `run.state` snapshots from the KV cache first, so deltas never have to
+ * rebuild a run from nothing.
+ */
+export const liveRunDeltaEventSchema = liveEventTimestampSchema.extend({
+	patch: liveRunPatchSchema,
+	revision: z.number().int().nonnegative(),
+	sessionId: z.string().min(1),
+	type: z.literal("run.delta"),
+});
+export type LiveRunDeltaEvent = z.infer<typeof liveRunDeltaEventSchema>;
 
 // ─── Persisted run steps ────────────────────────────────────────────────────
 
@@ -818,6 +870,7 @@ export const liveEventSchema = z.discriminatedUnion("type", [
 	liveAfterReplyEventSchema,
 	livePluginStatusEventSchema,
 	liveRunEventSchema,
+	liveRunDeltaEventSchema,
 ]);
 export type LiveEvent = z.infer<typeof liveEventSchema>;
 

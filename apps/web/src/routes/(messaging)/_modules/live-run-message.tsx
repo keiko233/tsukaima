@@ -10,13 +10,30 @@ import {
 	MessageContent,
 	MessageHeader,
 } from "@elaina/ui/components/agents/message";
-import type { LiveRunState } from "@elaina/contracts";
+import type { LiveRunPhase, LiveRunState } from "@elaina/contracts";
 import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { ToolCallRow } from "./tool-call-row";
 
 function elapsedSeconds(startedAtMs: number, now: number): number {
 	return Math.max(0, Math.floor((now - startedAtMs) / 1_000));
+}
+
+function phaseLabel(phase: LiveRunPhase | undefined, working: boolean): string {
+	if (!working) return m.live_run_phase_settled();
+	switch (phase) {
+		case "thinking":
+			return m.live_run_phase_thinking();
+		case "tools":
+			return m.live_run_phase_tools();
+		case "writing":
+			return m.live_run_phase_writing();
+		case "settled":
+			return m.live_run_phase_settled();
+		case "queued":
+		case undefined:
+			return m.live_run_phase_queued();
+	}
 }
 
 export interface LiveRunMessageProps {
@@ -55,7 +72,7 @@ export function LiveRunMessage({ run, now }: LiveRunMessageProps) {
 					<span className="font-medium text-foreground">{m.message_sender_elaina()}</span>
 					<span aria-hidden="true">·</span>
 					<span className={cn(working ? "text-primary" : "text-destructive")}>
-						{run.failure === undefined ? m.live_run_working() : m.live_run_failed()}
+						{run.failure === undefined ? phaseLabel(run.phase, working) : m.live_run_failed()}
 					</span>
 					{hasActivity ? (
 						<>

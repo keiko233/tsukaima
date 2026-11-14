@@ -452,5 +452,11 @@
 	"users_empty_title": "暂无用户",
 	"users_no_results": "没有匹配的用户。",
 	"welcome_description": "侧栏按聊天对象组织会话。选择会话后在此查看消息。",
-	"welcome_title": "选择一个聊天开始"
+	"welcome_title": "选择一个聊天开始",
+	"live_run_phase_queued": "等待模型…",
+	"live_run_phase_thinking": "思考中…",
+	"live_run_phase_tools": "执行工具…",
+	"live_run_phase_writing": "输出中…",
+	"live_run_phase_settled": "完成",
+	"diagnostics_cache_label": "KV 缓存（命中 / 读取 · 写入）"
 }

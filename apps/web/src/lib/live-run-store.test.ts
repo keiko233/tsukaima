@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { LiveRunState } from "@elaina/contracts";
-import { clearLiveRun, getLiveRun, setLiveRun, subscribeLiveRuns } from "./live-run-store";
+import {
+	applyRunDelta,
+	clearLiveRun,
+	getLiveRun,
+	setLiveRun,
+	subscribeLiveRuns,
+} from "./live-run-store";
 
 function run(overrides: Partial<LiveRunState> = {}): LiveRunState {
 	return {
@@ -64,6 +70,37 @@ describe("live run store", () => {
 		} finally {
 			unsubscribe();
 		}
+	});
+
+	test("merges incremental deltas and ignores an older revision", () => {
+		setLiveRun("session-1", run({ partialText: "a", revision: 1 }));
+		applyRunDelta("session-1", { partialText: "ab", phase: "writing", revision: 2 }, 2);
+		expect(getLiveRun("session-1")).toMatchObject({
+			partialText: "ab",
+			phase: "writing",
+			revision: 2,
+		});
+		// A reconnect snapshot read after the delta must not rewind the view.
+		applyRunDelta("session-1", { partialText: "a", revision: 1 }, 1);
+		expect(getLiveRun("session-1")?.partialText).toBe("ab");
+	});
+
+	test("clears on a settled delta and keeps a failed one", () => {
+		setLiveRun("session-1", run({ partialText: "done", revision: 1 }));
+		applyRunDelta("session-1", { settled: true, revision: 2 }, 2);
+		expect(getLiveRun("session-1")).toBeUndefined();
+
+		setLiveRun("session-1", run({ partialText: "half", revision: 3 }));
+		applyRunDelta(
+			"session-1",
+			{ failure: "model_error: upstream 500", settled: true, revision: 4 },
+			4,
+		);
+		expect(getLiveRun("session-1")).toMatchObject({
+			failure: "model_error: upstream 500",
+			partialText: "half",
+			settled: true,
+		});
 	});
 
 	test("tracks tool calls and failures", () => {
