@@ -1,3 +1,4 @@
+import type { PluginLogger } from "@tsukaima/sdk";
 import {
 	createOpenAiCompatibleModel,
 	openAiCompatibleReasoningLevelSchema,
@@ -9,6 +10,7 @@ export interface DiscoveryOptions {
 	readonly apiKey: string;
 	readonly baseUrl: string;
 	readonly fetch?: typeof fetch;
+	readonly logger?: PluginLogger;
 }
 
 export interface DiscoveredModels {
@@ -188,8 +190,13 @@ function parseModel(record: ModelRecord): OpenAiCompatibleModel | undefined {
 export async function discoverOpenAiCompatibleModels(
 	options: DiscoveryOptions,
 ): Promise<DiscoveredModels> {
+	const startedAt = performance.now();
+	const logger = options.logger;
 	const fetchImplementation = options.fetch ?? fetch;
-	const response = await fetchImplementation(`${normalizeBaseUrl(options.baseUrl)}/models`, {
+	const baseUrl = normalizeBaseUrl(options.baseUrl);
+	const logBaseUrl = { baseUrl };
+	logger?.trace("Discovering OpenAI-compatible models", logBaseUrl);
+	const response = await fetchImplementation(`${baseUrl}/models`, {
 		headers: {
 			accept: "application/json",
 			authorization: `Bearer ${options.apiKey}`,
@@ -198,6 +205,12 @@ export async function discoverOpenAiCompatibleModels(
 	});
 	if (!response.ok) {
 		const detail = (await response.text().catch(() => "")).slice(0, 500);
+		logger?.warn("OpenAI-compatible model discovery was rejected", {
+			...logBaseUrl,
+			detail: detail.length === 0 ? undefined : detail,
+			durationMs: Math.round(performance.now() - startedAt),
+			status: response.status,
+		});
 		throw new Error(
 			`Model discovery failed (${response.status})${detail.length === 0 ? "" : `: ${detail}`}`,
 		);
@@ -206,6 +219,12 @@ export async function discoverOpenAiCompatibleModels(
 	try {
 		payload = (await response.json()) as ModelsResponse;
 	} catch (error) {
+		logger?.warn("OpenAI-compatible model discovery returned invalid JSON", {
+			...logBaseUrl,
+			durationMs: Math.round(performance.now() - startedAt),
+			error,
+			status: response.status,
+		});
 		throw new Error(
 			`Model discovery returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
 			{ cause: error },
@@ -225,5 +244,10 @@ export async function discoverOpenAiCompatibleModels(
 		seen.add(model.id);
 		models.push(model);
 	}
+	logger?.debug("OpenAI-compatible model discovery completed", {
+		...logBaseUrl,
+		discoveredCount: models.length,
+		durationMs: Math.round(performance.now() - startedAt),
+	});
 	return { models };
 }
