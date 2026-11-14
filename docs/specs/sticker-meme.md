@@ -120,11 +120,15 @@ Exports contain manifests and media, but never user content or secrets.
 Model-facing tools (namespaced under `sticker-meme`):
 
 1. `sticker-meme.search` — text/emotion/persona filtered candidates and metadata, including
-   semantic labels.
+   semantic labels and the owning pack name.
 2. `sticker-meme.choose` — chooses one candidate and returns a transient send token.
 
 Selection uses exact keyword, normalized text, semantic labels, emotion, persona, recent usage,
-score, enabled state, and pack preference. No deprecated packs or revoked items are selectable.
+score, enabled state, and pack preference. Pack filters accept a pack id, display name, or tag,
+so a pack imported during a live conversation is discoverable immediately. Query terms separated
+by spaces or commas are alternatives, and taxonomy aliases are expanded in both directions, so
+`ExamplePerson 丰川` or `疑惑` reach items whose stored labels are English. No deprecated packs or revoked
+items are selectable.
 
 Send tokens are single-use, short TTL, conversation-bound, and audited.
 

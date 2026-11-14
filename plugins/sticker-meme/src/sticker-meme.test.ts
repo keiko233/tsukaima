@@ -544,6 +544,50 @@ describe("sticker selection and send tokens", () => {
 		expect(JSON.stringify(results)).not.toContain("/tmp/");
 	});
 
+	test("finds a freshly imported pack by name, tag, and localized emotion", async () => {
+		const setup = await setupSelection();
+		await setup.repository.savePack({
+			id: "pack-sakiko",
+			name: "Example Sticker Pack",
+			tags: ["telegram", "regular"],
+		});
+		const item = await seedItem(setup.repository, setup.media, {
+			emotions: ["happy"],
+			id: "sakiko-hug",
+			keywords: ["hug"],
+			packId: "pack-sakiko",
+		});
+		const byName = await setup.selection.search({ query: "Example Sticker Pack" });
+		expect(byName.map((candidate) => candidate.itemId)).toContain(item.id);
+		expect(byName.find((candidate) => candidate.itemId === item.id)?.packName).toBe(
+			"Example Sticker Pack",
+		);
+		// Models send several aliases at once; every term is an alternative, not a phrase.
+		const byAliases = await setup.selection.search({
+			query: "ExamplePerson ExamplePerson example-alias example-alias alice",
+		});
+		expect(byAliases.map((candidate) => candidate.itemId)).toContain(item.id);
+		const bySynonyms = await setup.selection.search({ query: "抱抱 拥抱 hug" });
+		expect(bySynonyms.map((candidate) => candidate.itemId)).toContain(item.id);
+		// Taxonomy terms also translate: a Chinese query reaches items labelled in English.
+		const confused = await seedItem(setup.repository, setup.media, {
+			id: "confused",
+			keywords: ["confused"],
+		});
+		const byTranslatedTerm = await setup.selection.search({ query: "疑惑" });
+		expect(byTranslatedTerm.map((candidate) => candidate.itemId)).toContain(confused.id);
+		expect(await setup.selection.search({ query: "不存在的词 另一个词" })).toEqual([]);
+		for (const input of [
+			{ packId: "Example Sticker Pack" },
+			{ packId: "telegram" },
+			{ emotion: "开心" },
+			{ emotion: "joy" },
+		]) {
+			const results = await setup.selection.search(input);
+			expect(results.map((candidate) => candidate.itemId)).toContain(item.id);
+		}
+	});
+
 	test("issues single-use, conversation-bound, short-TTL tokens and audits them", async () => {
 		const setup = await setupSelection();
 		const choice = await setup.selection.choose({
