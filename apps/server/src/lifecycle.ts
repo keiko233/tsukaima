@@ -486,10 +486,24 @@ export class TsukaimaLifecycle {
 			storage: this.durableStorage,
 		});
 		const persistedSessions = await this.domainDatabase
-			.select({ durableConversationId: conversations.durableConversationId })
+			.select({
+				durableConversationId: conversations.durableConversationId,
+				id: conversations.id,
+			})
 			.from(conversations);
 		for (const session of persistedSessions) {
-			await this.conversationHost.resumeActivityWindow(session.durableConversationId);
+			// Imported DSH conversations carry a `durable_...` marker rather than a Pi numeric
+			// conversation id. Create a real durable conversation once and remember it so future
+			// inbound turns, WebUI sends, and policy sync can address it.
+			let durableConversationId = session.durableConversationId;
+			if (!/^\d+$/.test(durableConversationId)) {
+				durableConversationId = await this.conversationHost.createConversation();
+				await this.domainDatabase
+					.update(conversations)
+					.set({ durableConversationId, updatedAt: new Date().toISOString() })
+					.where(eq(conversations.id, session.id));
+			}
+			await this.conversationHost.resumeActivityWindow(durableConversationId);
 		}
 		const models = model.models.getModels(model.providerId);
 		this.modelRouter = new ModelPolicyRouter(models);
