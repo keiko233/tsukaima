@@ -480,8 +480,9 @@ export interface PluginMigrationsApi {
 }
 
 /**
- * A namespaced SQL handle for `host`-mode plugins. Every object must be prefixed with
- * `plugin_<sanitizedId>_`; the host rejects cross-plugin/core access.
+ * SQL handle for a plugin-owned SQLite database. Each plugin gets its own file under the data
+ * directory, so statements cannot reach core tables or another plugin's data. `prefix` remains
+ * available for plugins that keep the legacy `plugin_<sanitizedId>_` naming convention.
  */
 export interface PluginDatabaseApi {
 	exec(sql: string): Promise<void>;

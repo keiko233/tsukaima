@@ -7,6 +7,11 @@ export type PluginTeardown = (context: PluginContext) => Promise<void> | void;
 
 export interface ElainaPlugin {
 	manifest: PluginContext["manifest"];
+	/**
+	 * Absolute plugin package root. The host resolves manifest-declared paths such as the
+	 * migrations directory against this directory.
+	 */
+	rootDir?: string;
 	prepare?: PluginPrepare;
 	setup: PluginSetup;
 	teardown?: PluginTeardown;
