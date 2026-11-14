@@ -17,10 +17,15 @@ function setup() {
 
 function snapshot(overrides: Partial<LiveRunSnapshot> = {}): LiveRunSnapshot {
 	return {
+		attempt: undefined,
 		conversationId: "1",
+		draftTools: [],
 		failure: undefined,
+		generationStartedAtMs: undefined,
+		model: undefined,
 		partialText: undefined,
 		partialThinking: undefined,
+		retry: undefined,
 		settled: false,
 		startedAtMs: 1_000,
 		tools: [],
@@ -51,6 +56,117 @@ describe("LiveRunCache", () => {
 		expect(second).not.toHaveProperty("turns");
 	});
 
+	test("accumulates model calls, reasoning, and tool rounds into one activity chain", async () => {
+		const { live } = setup();
+		const model = { modelId: "model-1", providerId: "provider-1" };
+		await live.record("session-1", snapshot({ attempt: 1, generationStartedAtMs: 1_100, model }));
+		await live.record(
+			"session-1",
+			snapshot({
+				attempt: 1,
+				generationStartedAtMs: 1_100,
+				model,
+				partialThinking: "I should search.",
+			}),
+		);
+		await live.record(
+			"session-1",
+			snapshot({
+				attempt: 1,
+				draftTools: [
+					{
+						argumentsText: '{"query":"elaina"}',
+						callId: "call-1",
+						toolName: "web_search",
+					},
+				],
+				generationStartedAtMs: 1_100,
+				model,
+				partialThinking: "I should search.",
+			}),
+		);
+		await live.record(
+			"session-1",
+			snapshot({
+				tools: [
+					{
+						argumentsText: '{"query":"elaina"}',
+						callId: "call-1",
+						output: "two hits",
+						status: "running",
+						toolName: "web_search",
+					},
+				],
+				turns: 1,
+			}),
+		);
+
+		// The tool round is still live, but the model call and its reasoning are already steps.
+		let state = await live.snapshot("session-1");
+		expect(state?.steps).toMatchObject([
+			{ attempt: 1, call: 1, kind: "model", modelId: "model-1", status: "done" },
+			{ kind: "thinking", text: "I should search." },
+		]);
+
+		// The next model request closes the tool round and opens model call 2.
+		await live.record(
+			"session-1",
+			snapshot({ attempt: 1, generationStartedAtMs: 2_000, model, turns: 1 }),
+		);
+		state = await live.snapshot("session-1");
+		expect(state?.steps).toMatchObject([
+			{ kind: "model", status: "done" },
+			{ kind: "thinking", text: "I should search." },
+			{
+				argumentsText: '{"query":"elaina"}',
+				kind: "tool",
+				output: "two hits",
+				toolName: "web_search",
+			},
+			{ attempt: 1, call: 2, kind: "model", status: "running" },
+		]);
+
+		// A retry is a new attempt after the failed row, not a replacement of it.
+		await live.record(
+			"session-1",
+			snapshot({
+				attempt: 1,
+				generationStartedAtMs: 2_000,
+				model,
+				retry: { at: 2_500, error: "upstream 500" },
+				turns: 1,
+			}),
+		);
+		await live.record(
+			"session-1",
+			snapshot({ attempt: 2, generationStartedAtMs: 2_600, model, turns: 1 }),
+		);
+		state = await live.snapshot("session-1");
+		expect(state?.steps).toMatchObject([
+			{ kind: "model", status: "done" },
+			{ kind: "thinking" },
+			{ kind: "tool" },
+			{ attempt: 1, call: 2, error: "upstream 500", kind: "model", status: "retry" },
+			{ attempt: 2, call: 3, kind: "model", status: "running" },
+		]);
+
+		// The final answer closes the last model call and keeps it in the cached process chain.
+		await live.record(
+			"session-1",
+			snapshot({
+				attempt: 2,
+				generationStartedAtMs: 2_600,
+				partialText: "Here is the answer.",
+				model,
+				settled: true,
+				turns: 1,
+			}),
+		);
+		const final = await live.finalizeAnswer("session-1", "entry-1");
+		expect(final?.steps.at(-1)).toMatchObject({ kind: "text", text: "Here is the answer." });
+		expect(final?.steps.some((step) => step.kind === "model")).toBe(true);
+	});
+
 	test("lists only in-flight runs and removes a settled run from reconnect snapshots", async () => {
 		const { live } = setup();
 		await live.record("session-1", snapshot({ partialText: "working" }));
@@ -65,11 +181,19 @@ describe("LiveRunCache", () => {
 			snapshot({
 				partialThinking: "I should search.",
 				partialText: "Here is the answer.",
-				tools: [{ callId: "call-1", output: "search hit", status: "done", toolName: "web_search" }],
+				tools: [
+					{
+						argumentsText: '{"query":"x"}',
+						callId: "call-1",
+						output: "search hit",
+						status: "done",
+						toolName: "web_search",
+					},
+				],
 			}),
 		);
 		const final = await live.finalizeAnswer("session-1", "entry-42");
-		expect(final?.steps.map((step) => step.kind)).toEqual(["thinking", "tool", "text"]);
+		expect(final?.steps.map((step) => step.kind)).toEqual(["thinking", "text", "tool"]);
 		expect(await live.final("entry-42")).toEqual(final);
 	});
 
@@ -82,7 +206,7 @@ describe("LiveRunCache", () => {
 		// The core host reports an empty settled snapshot before the durable answer callback.
 		await live.record("session-1", snapshot({ settled: true }));
 		const final = await live.finalizeAnswer("session-1", "entry-43");
-		expect(final?.steps.map((step) => step.kind)).toEqual(["thinking", "text"]);
+		expect(final?.steps.map((step) => step.kind)).toEqual(["model", "thinking", "text"]);
 	});
 
 	test("replays deltas after a revision", async () => {

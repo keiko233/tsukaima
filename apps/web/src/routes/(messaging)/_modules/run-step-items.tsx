@@ -47,8 +47,33 @@ function toolRows(step: Extract<RunStep, { kind: "tool" }>, index: number): RunS
  */
 export function toStepRows(steps: readonly RunStep[]): RunStepRow[] {
 	const rows: RunStepRow[] = [];
+	// A plain answer is not a process worth expanding. Model-call rows only add value when the
+	// turn also reasoned, ran a tool, or failed.
+	const showModelCalls = steps.some(
+		(step) => step.kind === "thinking" || step.kind === "tool" || step.kind === "failure",
+	);
 	steps.forEach((step, index) => {
 		switch (step.kind) {
+			case "model": {
+				if (!showModelCalls) return;
+				const status =
+					step.status === "running"
+						? m.live_run_model_running()
+						: step.status === "retry"
+							? m.live_run_model_retry()
+							: step.status === "failed"
+								? m.live_run_model_failed()
+								: undefined;
+				const meta = [step.modelId ?? step.providerId, status, step.error]
+					.filter((part): part is string => part !== undefined && part.length > 0)
+					.join(" · ");
+				rows.push({
+					...(meta.length === 0 ? {} : { body: meta }),
+					id: `model-${index}`,
+					label: m.run_step_model({ call: step.call }),
+				});
+				return;
+			}
 			case "thinking":
 				rows.push({ id: `thinking-${index}`, label: m.run_step_thinking() });
 				rows.push({ body: step.text, id: `thinking-body-${index}`, label: null });

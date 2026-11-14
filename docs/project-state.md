@@ -67,9 +67,16 @@ This file is the cross-session handoff record. Update it whenever implementation
   the `.` in the author-facing `<pluginId>.<tool>` name; routing and audit keep the original name.
 - Live updates use `GET /events/stream` (SSE) and require the admin session cookie exactly like
   oRPC. It publishes `snapshot`, `heartbeat`, `message.received`, `activity.opened`,
-  `activity.closed`, `before.reply`, and `after.reply`. The WebUI keeps one `EventSource`, validates
-  each frame with `liveEventSchema`, and invalidates the affected TanStack Query keys instead of
-  polling. `GET /events/logs` is authenticated the same way.
+  `activity.closed`, `before.reply`, `after.reply`, and the live agent run frames `run.state` and
+  `run.delta`. The WebUI keeps one `EventSource`, validates each frame with `liveEventSchema`, and
+  invalidates the affected TanStack Query keys instead of polling. `GET /events/logs` is
+  authenticated the same way.
+- The live agent view keeps a complete call chain: `LiveRunCache` folds successive `pi.live`
+  snapshots into model-call, reasoning, and tool steps spanning every round, while the current
+  round streams through `partialThinking`, `draftTools`, and `tools`. The OpenAI-compatible
+  provider consumes the provider's SSE stream as it arrives, so text and reasoning no longer wait
+  for the full completion. Retries expose the attempt and backoff instead of reverting to a bare
+  "waiting for model" label.
 - Plugin configuration lives in the domain `meta` table under `plugin-config:<pluginId>` with `manifest.configEnv` fallbacks. `/admin/settings` exposes only host settings (`logLevel`, active `modelProviderId`) plus generic plugin config views; the former `onebot*` and `openAi*` wire aliases are gone.
 - `adminBase` authenticates every admin procedure and audits only procedures whose contract metadata says `audit: true`. Mutations are declared in `packages/contracts/src/api.ts`; successful and failed calls both produce an `admin.rpc` row, and adding a new mutation cannot silently bypass audit by forgetting a path list.
 - Plugin host surfaces now include `models.registerProvider`, `rpc.register`, and `ui.register` aggregation. The model provider factory can report `isConfigured()`; the lifecycle falls back to the deterministic fake model when the provider is absent, unconfigured, or fails to build.

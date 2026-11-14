@@ -103,6 +103,55 @@ describe("live run store", () => {
 		});
 	});
 
+	test("merges the call chain and clears a retry", () => {
+		setLiveRun(
+			"session-1",
+			run({
+				attempt: 1,
+				revision: 1,
+				retry: { at: 2_000, error: "upstream 500" },
+				steps: [
+					{
+						attempt: 1,
+						call: 1,
+						endedAtMs: 1_500,
+						kind: "model",
+						startedAtMs: 1_000,
+						status: "retry",
+					},
+				],
+			}),
+		);
+		applyRunDelta(
+			"session-1",
+			{
+				attempt: 2,
+				draftTools: [{ callId: "call-1", toolName: "web_search" }],
+				phase: "tool_calls",
+				retry: null,
+				revision: 2,
+				steps: [
+					{
+						attempt: 1,
+						call: 1,
+						endedAtMs: 1_500,
+						kind: "model",
+						startedAtMs: 1_000,
+						status: "retry",
+					},
+					{ attempt: 2, call: 2, kind: "model", startedAtMs: 2_000, status: "running" },
+				],
+			},
+			2,
+		);
+		const stored = getLiveRun("session-1");
+		expect(stored?.attempt).toBe(2);
+		expect(stored?.retry).toBeUndefined();
+		expect(stored?.draftTools).toHaveLength(1);
+		expect(stored?.steps).toHaveLength(2);
+		expect(stored?.phase).toBe("tool_calls");
+	});
+
 	test("tracks tool calls and failures", () => {
 		setLiveRun(
 			"session-1",

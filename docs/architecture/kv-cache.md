@@ -68,13 +68,25 @@ rewinds.
 
 `liveRunState.phase` gives the UI a status before the first token:
 
-- `queued`: run admitted, no reasoning or text yet
+- `queued`: run admitted, the model request has not produced content yet
+- `retry`: the run is waiting out the provider's backoff before the next attempt
 - `thinking`: reasoning is streaming
+- `tool_calls`: the model is still emitting a tool call's arguments
 - `writing`: answer text is streaming
 - `tools`: at least one tool is pending or running
 - `settled`: the run ended
 
-This is what makes a slow model look like a model working rather than a hung bot.
+The state also carries the pieces a complete call flow needs: `attempt`, `model`, `retry`,
+`draftTools` (calls the model is still emitting), and `steps` (finished model calls, reasoning,
+and tool calls). `LiveRunCache` builds `steps` with a `LiveRunTimeline`, so a tool round does not
+erase the reasoning that produced it and a new model request does not erase the previous round's
+tools. Current-round partials stay in `partialText`, `partialThinking`, and `tools`, which keeps
+the high-frequency text commit small.
+
+The OpenAI-compatible provider streams SSE deltas instead of buffering the full completion and
+replaying it. A provider that ignores `stream: true` and answers with JSON still works through
+the same event stream. That is what makes `thinking`/`writing` arrive while the model is actually
+producing them rather than after the request has already completed.
 
 ### Reconnect and expiry
 
@@ -86,7 +98,8 @@ phantom activity row.
 
 `pi.live` is cleared when a run settles, and some providers do not copy reasoning into the
 durable assistant entry. When the durable answer arrives, `LiveRunCache.finalizeAnswer()` stores
-the last non-empty run state as `run.final.<entryId>`.
+the last non-empty run state as `run.final.<entryId>`. Its `steps` come from the same timeline, so
+the cached chain includes every model call and tool round, not only the final partial.
 
 `admin.sessions.runSteps` reads the durable transcript first, then falls back to that final
 process chain. If the durable entries have no reasoning, cached thinking steps are prepended.
@@ -143,6 +156,7 @@ through the lifecycle warning path and never fail message processing.
 ## Tests
 
 - `packages/cache/tests/cache.test.ts`: TTL, namespaces, persistence, locking, bus, streams.
-- `apps/server/tests/live-run-cache.test.ts`: deltas, reconnect snapshots, final process chain.
+- `apps/server/tests/live-run-cache.test.ts`: deltas, reconnect snapshots, per-round call chain,
+  retries, final process chain.
 - `apps/server/tests/plugin-cache.test.ts`: plugin namespacing and permissions.
 - `apps/server/tests/event-stream.test.ts`: live `run.delta` streaming over SSE.
