@@ -6,6 +6,8 @@ import {
 	type MessageEnvelope,
 	type MessagePart,
 } from "@elaina/contracts";
+import type { PluginLogger } from "@elaina/sdk";
+import { createSafeLogger, segmentTypeCounts, singleLinePreview } from "../logging.ts";
 import type { OneBotIntervalRateLimiter } from "./rate-limit.ts";
 import type {
 	OneBotAudioTranscribe,
@@ -382,10 +384,41 @@ type NormalizeOptions = {
 	readonly forwardMaxChars?: number | undefined;
 	readonly forwardMaxNodes?: number | undefined;
 	readonly forwardTimeoutMs?: number | undefined;
+	readonly logger?: PluginLogger | undefined;
 	readonly now?: (() => number) | undefined;
 };
 
-const syncPart = (segment: OneBotSegment): MessagePart | undefined => {
+const segmentText = (segments: readonly OneBotSegment[]): string =>
+	segments
+		.map((segment) =>
+			segment.type === "text" ? (asString(segment.data?.text) ?? "") : `[${segment.type}]`,
+		)
+		.join("");
+
+/** Trace summary shared by the sync and async normalizers; payload stays out of the log. */
+const traceNormalized = (
+	logger: PluginLogger,
+	event: OneBotEvent,
+	parts: readonly MessagePart[],
+	path: "sync" | "async",
+): void => {
+	const segments = event.message ?? [];
+	const textPreview = singleLinePreview(segmentText(segments));
+	logger.trace("OneBot inbound event normalized", {
+		partCount: parts.length,
+		partTypes: segmentTypeCounts(parts),
+		path,
+		postType: event.post_type,
+		...(event.message_type === undefined ? {} : { messageType: event.message_type }),
+		segmentTypes: segmentTypeCounts(segments),
+		...(textPreview === undefined ? {} : { textPreview }),
+	});
+};
+
+const syncPart = (
+	segment: OneBotSegment,
+	logger: PluginLogger = createSafeLogger(undefined),
+): MessagePart | undefined => {
 	switch (segment.type) {
 		case "text":
 			return textPart(segment);
@@ -413,6 +446,7 @@ const syncPart = (segment: OneBotSegment): MessagePart | undefined => {
 		case "at":
 			return undefined;
 		default:
+			logger.debug("OneBot segment preserved as channel-native", { segmentType: segment.type });
 			return unknownPart(segment);
 	}
 };
@@ -442,13 +476,16 @@ const transcribeAudio = async (
 	chatKey: string,
 ): Promise<MessagePart> => {
 	if (options.audioTranscribe === undefined) return part;
+	const logger = createSafeLogger(options.logger);
 	if (options.audioRateLimiter?.tryAcquire(chatKey, options.now?.() ?? Date.now()) === false) {
+		logger.debug("OneBot audio transcription rate limited", { chatKey });
 		return {
 			...part,
 			previewText: "voice message (transcription rate limited)",
 			transcriptStatus: "fallback",
 		};
 	}
+	const startedAtMs = Date.now();
 	try {
 		const timeoutMs = Math.min(
 			MAX_STT_TIMEOUT_MS,
@@ -463,14 +500,28 @@ const transcribeAudio = async (
 			typeof result === "string" ? result : (result.transcript ?? result.text ?? "").trim();
 		const status = typeof result === "string" ? "ok" : (result.status ?? "ok");
 		if (transcript.length === 0 || status !== "ok") {
+			logger.debug("OneBot audio transcription unavailable", {
+				durationMs: Date.now() - startedAtMs,
+				status,
+				transcriptChars: transcript.length,
+			});
 			return {
 				...part,
 				previewText: "voice message (transcription unavailable)",
 				transcriptStatus: status === "skipped" ? "skipped" : "fallback",
 			};
 		}
+		logger.debug("OneBot audio transcription completed", {
+			durationMs: Date.now() - startedAtMs,
+			status,
+			transcriptChars: transcript.length,
+		});
 		return { ...part, transcript, transcriptStatus: "ok" };
-	} catch {
+	} catch (error) {
+		logger.warn("OneBot audio transcription failed", {
+			durationMs: Date.now() - startedAtMs,
+			error: error instanceof Error ? error.message : String(error),
+		});
 		return {
 			...part,
 			previewText: "voice message (transcription failed)",
@@ -485,6 +536,8 @@ const attachVideoFrames = async (
 	options: NormalizeOptions,
 ): Promise<MessagePart> => {
 	if (options.extractVideoFrames === undefined) return part;
+	const logger = createSafeLogger(options.logger);
+	const startedAtMs = Date.now();
 	try {
 		const frames = await withTimeout(
 			Promise.resolve(options.extractVideoFrames(input)),
@@ -494,8 +547,17 @@ const attachVideoFrames = async (
 		const bounded = frames.slice(0, MAX_VIDEO_FRAMES).filter((frame) => {
 			return frame.mediaId !== undefined || frame.sha256 !== undefined;
 		});
+		logger.debug("OneBot video frame extraction completed", {
+			durationMs: Date.now() - startedAtMs,
+			frames: bounded.length,
+			truncated: frames.length > bounded.length,
+		});
 		return bounded.length === 0 ? part : { ...part, frames: bounded };
-	} catch {
+	} catch (error) {
+		logger.warn("OneBot video frame extraction failed", {
+			durationMs: Date.now() - startedAtMs,
+			error: error instanceof Error ? error.message : String(error),
+		});
 		return part;
 	}
 };
@@ -504,22 +566,39 @@ const expandForward = async (
 	segment: OneBotSegment,
 	options: NormalizeOptions,
 ): Promise<MessagePart> => {
+	const logger = createSafeLogger(options.logger);
 	const maxChars = options.forwardMaxChars ?? MAX_FORWARD_CHARS;
 	const maxNodes = options.forwardMaxNodes ?? MAX_FORWARD_NODES;
 	const id = asString(segment.data?.id) ?? asString(segment.data?.file_id);
 	const inline = forwardContentNodes(segment);
-	if (inline.length > 0) return forwardPart(segment, inline, { maxChars, maxNodes });
+	if (inline.length > 0) {
+		logger.debug("OneBot forward bundle expanded inline", { nodeCount: inline.length });
+		return forwardPart(segment, inline, { maxChars, maxNodes });
+	}
 	if (id === undefined || options.fetchForward === undefined) {
+		logger.debug("OneBot forward expansion skipped", {
+			reason: id === undefined ? "missing-id" : "no-fetch-hook",
+		});
 		return forwardPart(segment, undefined, { maxChars, maxNodes });
 	}
+	const startedAtMs = Date.now();
 	try {
 		const raw = await withTimeout(
 			Promise.resolve(options.fetchForward(id)),
 			Math.min(MAX_FORWARD_TIMEOUT_MS, Math.max(100, options.forwardTimeoutMs ?? 5_000)),
 			"forward expansion",
 		);
-		return forwardPart(segment, parseForwardNodes(raw), { maxChars, maxNodes });
-	} catch {
+		const nodes = parseForwardNodes(raw);
+		logger.debug("OneBot forward expansion completed", {
+			durationMs: Date.now() - startedAtMs,
+			nodeCount: nodes.length,
+		});
+		return forwardPart(segment, nodes, { maxChars, maxNodes });
+	} catch (error) {
+		logger.warn("OneBot forward expansion failed", {
+			durationMs: Date.now() - startedAtMs,
+			error: error instanceof Error ? error.message : String(error),
+		});
 		return forwardPart(segment, undefined, { maxChars, maxNodes }, "forward expansion failed");
 	}
 };
@@ -536,10 +615,13 @@ export function parseForwardNodes(raw: unknown): OneBotForwardNode[] {
 	return messages.map((entry) => forwardNode(entry));
 }
 
-const normalizedParts = (segments: readonly OneBotSegment[]): MessagePart[] => {
+const normalizedParts = (
+	segments: readonly OneBotSegment[],
+	logger?: PluginLogger,
+): MessagePart[] => {
 	const parts: MessagePart[] = [];
 	for (const segment of segments) {
-		const part = syncPart(segment);
+		const part = syncPart(segment, createSafeLogger(logger));
 		if (part !== undefined) parts.push(part);
 	}
 	return parts;
@@ -645,9 +727,25 @@ const chatKeyFor = (event: OneBotEvent): string => {
 export const normalizeOneBotEvent = (
 	event: OneBotEvent,
 	config: { botAccountId: string; channelId: string },
+	logger?: PluginLogger,
 ): MessageEnvelope | undefined => {
-	if (event.message === undefined) return undefined;
-	return buildEnvelope(event, config, normalizedParts(event.message));
+	const safeLogger = createSafeLogger(logger);
+	if (event.message === undefined) {
+		safeLogger.debug("OneBot event has no message payload", { postType: event.post_type });
+		return undefined;
+	}
+	const parts = normalizedParts(event.message, safeLogger);
+	const envelope = buildEnvelope(event, config, parts);
+	if (envelope === undefined) {
+		safeLogger.debug("OneBot event not ingestable", {
+			partCount: parts.length,
+			postType: event.post_type,
+			...(event.message_type === undefined ? {} : { messageType: event.message_type }),
+		});
+		return undefined;
+	}
+	traceNormalized(safeLogger, event, parts, "sync");
+	return envelope;
 };
 
 /**
@@ -659,11 +757,15 @@ export const normalizeOneBotEventAsync = async (
 	config: { botAccountId: string; channelId: string },
 	options: NormalizeOptions = {},
 ): Promise<MessageEnvelope | undefined> => {
-	if (event.message === undefined) return undefined;
+	const logger = createSafeLogger(options.logger);
+	if (event.message === undefined) {
+		logger.debug("OneBot event has no message payload", { postType: event.post_type });
+		return undefined;
+	}
 	const chatKey = chatKeyFor(event);
 	const parts: MessagePart[] = [];
 	for (const segment of event.message) {
-		let part = syncPart(segment);
+		let part = syncPart(segment, logger);
 		if (part === undefined) continue;
 		if (segment.type === "forward") {
 			part = await expandForward(segment, options);
@@ -697,7 +799,17 @@ export const normalizeOneBotEventAsync = async (
 		}
 		parts.push(part);
 	}
-	return buildEnvelope(event, config, parts);
+	const envelope = buildEnvelope(event, config, parts);
+	if (envelope === undefined) {
+		logger.debug("OneBot event not ingestable", {
+			partCount: parts.length,
+			postType: event.post_type,
+			...(event.message_type === undefined ? {} : { messageType: event.message_type }),
+		});
+		return undefined;
+	}
+	traceNormalized(logger, event, parts, "async");
+	return envelope;
 };
 
 const noticeType = (event: OneBotEvent): ChannelNoticeType => {
@@ -746,8 +858,13 @@ const noticeDetails = (event: OneBotEvent): Record<string, unknown> => {
 export const normalizeOneBotNotice = (
 	event: OneBotEvent,
 	config: { botAccountId: string; channelId: string },
+	logger?: PluginLogger,
 ): ChannelNotice | undefined => {
-	if (event.post_type !== "notice") return undefined;
+	const safeLogger = createSafeLogger(logger);
+	if (event.post_type !== "notice") {
+		safeLogger.trace("OneBot notice ignored", { postType: event.post_type });
+		return undefined;
+	}
 	const type = noticeType(event);
 	const actorId = asString(
 		event.user_id ?? (event.notice_type === "notify" ? event.target_id : undefined),
@@ -761,7 +878,13 @@ export const normalizeOneBotNotice = (
 		targetUserId !== undefined &&
 		(targetUserId === config.botAccountId || targetUserId === asString(event.self_id));
 	const peerId = groupId ?? actorId ?? targetUserId;
-	if (peerId === undefined) return undefined;
+	if (peerId === undefined) {
+		safeLogger.debug("OneBot notice dropped without a peer", {
+			noticeType: event.notice_type,
+			subType: event.sub_type,
+		});
+		return undefined;
+	}
 	const idParts = [
 		event.notice_type ?? "notice",
 		event.sub_type ?? "",
@@ -797,13 +920,31 @@ export const normalizeOneBotNotice = (
 export const normalizeOneBotRequest = (
 	event: OneBotEvent,
 	config: { botAccountId: string; channelId: string },
+	logger?: PluginLogger,
 ): ChannelRequest | undefined => {
-	if (event.post_type !== "request" || event.flag === undefined) return undefined;
-	if (event.request_type !== "friend" && event.request_type !== "group") return undefined;
+	const safeLogger = createSafeLogger(logger);
+	if (event.post_type !== "request" || event.flag === undefined) {
+		safeLogger.trace("OneBot request ignored", { postType: event.post_type });
+		return undefined;
+	}
+	if (event.request_type !== "friend" && event.request_type !== "group") {
+		safeLogger.debug("OneBot request dropped with unknown type", {
+			requestType: event.request_type,
+		});
+		return undefined;
+	}
 	const requesterId = asString(event.user_id);
-	if (requesterId === undefined) return undefined;
+	if (requesterId === undefined) {
+		safeLogger.debug("OneBot request dropped without a requester", {
+			requestType: event.request_type,
+		});
+		return undefined;
+	}
 	const groupId = asString(event.group_id);
-	if (event.request_type === "group" && groupId === undefined) return undefined;
+	if (event.request_type === "group" && groupId === undefined) {
+		safeLogger.debug("OneBot group request dropped without a group", { requesterId });
+		return undefined;
+	}
 	const subType = asString(event.sub_type);
 	const kind =
 		event.request_type === "friend"
@@ -812,6 +953,7 @@ export const normalizeOneBotRequest = (
 				? "group-invite"
 				: "group-add";
 	const accountId = asString(event.self_id) ?? config.botAccountId;
+	safeLogger.debug("OneBot request normalized", { kind, requesterId });
 	return {
 		accountId,
 		channelId: config.channelId,

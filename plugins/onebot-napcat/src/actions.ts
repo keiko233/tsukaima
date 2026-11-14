@@ -8,6 +8,7 @@ import type {
 } from "@elaina/sdk";
 import type { OneBotChannelAdapter } from "./adapter.ts";
 import type { OneBotPluginConfig } from "./config.ts";
+import { createSafeLogger } from "./logging.ts";
 
 export type OneBotActionActor = {
 	readonly actorId?: string;
@@ -149,7 +150,7 @@ export class OneBotActionFacade {
 		this.#audit = options.audit;
 		this.#getAdapter = options.getAdapter;
 		this.#getSettings = options.getSettings;
-		this.#logger = options.logger;
+		this.#logger = createSafeLogger(options.logger);
 	}
 
 	async run(
@@ -161,26 +162,53 @@ export class OneBotActionFacade {
 		const data = asRecord(input);
 		const targetId = this.#targetId(method, data);
 		const action = `onebot-napcat.${method}`;
+		const startedAtMs = Date.now();
+		this.#logger.trace("OneBot action invoked", {
+			action,
+			actorKind: actor.actorKind ?? "plugin",
+			method,
+			...(targetId === undefined ? {} : { targetId }),
+		});
 		const adapter = this.#getAdapter();
 		if (adapter === undefined) {
 			await this.#recordDenied(action, descriptor, actor, targetId, "channel-unavailable");
+			this.#logCompletion(action, method, targetId, startedAtMs, "channel-unavailable");
 			return { ok: false, reason: "channel-unavailable" };
 		}
 		const denial = this.#authorize(descriptor, method, data, actor);
 		if (denial !== undefined) {
 			await this.#recordDenied(action, descriptor, actor, targetId, denial);
+			this.#logCompletion(action, method, targetId, startedAtMs, denial);
 			return { ok: false, reason: denial };
 		}
 		try {
 			const result = await this.#execute(adapter, method, data);
 			await this.#record(action, descriptor, actor, targetId, "ok");
+			this.#logCompletion(action, method, targetId, startedAtMs);
 			return { ok: true, result };
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
 			this.#logger.warn("OneBot action failed", { action, reason });
 			await this.#record(action, descriptor, actor, targetId, "failed", reason);
+			this.#logCompletion(action, method, targetId, startedAtMs, reason);
 			return { ok: false, reason };
 		}
+	}
+
+	#logCompletion(
+		action: string,
+		method: OneBotActionMethod,
+		targetId: string | undefined,
+		startedAtMs: number,
+		reason?: string,
+	): void {
+		this.#logger.debug("OneBot action finished", {
+			action,
+			durationMs: Date.now() - startedAtMs,
+			method,
+			...(reason === undefined ? {} : { reason }),
+			...(targetId === undefined ? {} : { targetId }),
+		});
 	}
 
 	#authorize(

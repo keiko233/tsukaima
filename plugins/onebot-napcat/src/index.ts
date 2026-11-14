@@ -8,6 +8,7 @@ import {
 } from "./actions.ts";
 import { OneBotChannelAdapter } from "./adapter.ts";
 import { oneBotPluginConfigSchema, resolveOneBotState, type OneBotPluginConfig } from "./config.ts";
+import { safeEndpoint } from "./logging.ts";
 import { oneBotNapCatManifest } from "./manifest.ts";
 import type {
 	OneBotAudioTranscribe,
@@ -96,7 +97,7 @@ const TOOL_PARAMETERS = {
 const endpointFor = (config: OneBotConfig): string =>
 	config.mode === "reverse"
 		? `ws-reverse://${config.host ?? "127.0.0.1"}:${config.port ?? 3002}`
-		: (config.url ?? "");
+		: (safeEndpoint(config.url) ?? "");
 
 function createStatus(
 	adapter: OneBotChannelAdapter,
@@ -140,6 +141,11 @@ function configWithHooks(context: PluginContext, config: OneBotConfig): OneBotCo
 	);
 	const media = context.media;
 	const pttEnabled = config.pttToText !== false;
+	context.logger.debug("OneBot host hooks resolved", {
+		audioTranscribe: audioTranscribe !== undefined && pttEnabled,
+		extractVideoFrames: extractVideoFrames !== undefined,
+		mediaBridge: media !== undefined,
+	});
 	return {
 		...config,
 		...(audioTranscribe === undefined || !pttEnabled ? {} : { audioTranscribe }),
@@ -149,14 +155,30 @@ function configWithHooks(context: PluginContext, config: OneBotConfig): OneBotCo
 			: {
 					resolveMedia: async (part) => {
 						if (part.type === "text" || part.type === "channel-native") return undefined;
+						const startedAtMs = Date.now();
 						const stored =
 							part.mediaId === undefined
 								? part.sha256 === undefined
 									? undefined
 									: await media.findBySha(part.sha256)
 								: await media.findById(part.mediaId);
-						if (stored === undefined) return undefined;
+						if (stored === undefined) {
+							// A local part with no stored bytes degrades to text; record which lookup missed.
+							context.logger.trace("OneBot outbound media lookup missed", {
+								durationMs: Date.now() - startedAtMs,
+								hasMediaId: part.mediaId !== undefined,
+								hasSha256: part.sha256 !== undefined,
+								partType: part.type,
+							});
+							return undefined;
+						}
 						const bytes = await media.readBytes(stored.id);
+						context.logger.trace("OneBot outbound media resolved", {
+							bytes: bytes.length,
+							durationMs: Date.now() - startedAtMs,
+							mediaId: stored.id,
+							partType: part.type,
+						});
 						return `base64://${Buffer.from(bytes).toString("base64")}`;
 					},
 				}),
@@ -171,8 +193,22 @@ async function applySettings(
 	const parsed = oneBotPluginConfigSchema.parse(raw ?? {});
 	const resolved = resolveOneBotState(parsed);
 	runtime.settings = resolved.settings;
-	if (resolved.key === runtime.key) return;
+	if (resolved.key === runtime.key) {
+		// The restart key embeds the access token; log only what changed, never the key itself.
+		context.logger.debug("OneBot settings unchanged; keeping the live channel", {
+			channelId: resolved.channelId,
+			mode: resolved.channel?.mode ?? "forward",
+			restart: false,
+		});
+		return;
+	}
 	runtime.key = resolved.key;
+	context.logger.debug("OneBot connection settings changed; recreating the adapter", {
+		channelId: resolved.channelId,
+		hadAdapter: runtime.adapter !== undefined,
+		mode: resolved.channel?.mode ?? "forward",
+		restart: true,
+	});
 
 	await runtime.adapter?.stop();
 	runtime.dispose?.();
@@ -203,7 +239,7 @@ async function applySettings(
 	const adapter = new OneBotChannelAdapter({
 		channelId: resolved.channelId,
 		config: channelConfig,
-		logger: context.logger,
+		logger: context.logger.child?.("adapter") ?? context.logger,
 		...(reverseServerFactory === undefined ? {} : { reverseServerFactory }),
 		...(transportFactory === undefined ? {} : { transportFactory }),
 		onStateChange: (state) => {
@@ -222,7 +258,7 @@ async function applySettings(
 		audit: context.audit,
 		getAdapter: () => runtime.adapter,
 		getSettings: () => runtime.settings,
-		logger: context.logger,
+		logger: context.logger.child?.("actions") ?? context.logger,
 	});
 	context.logger.info("starting OneBot channel", {
 		endpoint: endpointFor(channelConfig),
@@ -294,6 +330,9 @@ export const oneBotNapCatPlugin: ElainaPlugin = {
 		registerTools(context, runtime);
 		registerRpcs(context, runtime);
 		context.rpc.register("reconnect", async () => {
+			context.logger.debug("OneBot reconnect requested", {
+				channelId: runtime.settings.channelId ?? "onebot",
+			});
 			const raw = (await context.settings?.get()) ?? {};
 			runtime.key = undefined;
 			await apply(raw);
@@ -303,6 +342,11 @@ export const oneBotNapCatPlugin: ElainaPlugin = {
 	async teardown(context) {
 		const runtime = runtimes.get(context);
 		if (runtime === undefined) return;
+		context.logger.info("OneBot plugin teardown", {
+			channelId: runtime.settings.channelId ?? "onebot",
+			connected: runtime.adapter?.diagnostics().connected ?? false,
+			events: runtime.adapter?.diagnostics().eventCount ?? 0,
+		});
 		runtime.unsubscribe?.();
 		await runtime.adapter?.stop();
 		runtime.dispose?.();

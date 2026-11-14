@@ -1,4 +1,5 @@
 import type { ServerWebSocket } from "bun";
+import { createSafeLogger } from "../logging.ts";
 import type {
 	OneBotReverseConnectionInfo,
 	OneBotReverseServer,
@@ -52,6 +53,7 @@ type SocketData = {
 export const bunReverseServerFactory: OneBotReverseServerFactory = (
 	options: OneBotReverseServerOptions,
 ): OneBotReverseServer => {
+	const logger = createSafeLogger(options.logger);
 	let server: ReturnType<typeof Bun.serve<SocketData>> | undefined;
 	const path = options.path;
 	const listeningSockets = new Set<ServerWebSocket<SocketData>>();
@@ -61,6 +63,11 @@ export const bunReverseServerFactory: OneBotReverseServerFactory = (
 			return server?.port ?? options.port;
 		},
 		async start() {
+			logger.debug("OneBot reverse listener starting", {
+				host: options.host,
+				path: path ?? "/",
+				port: options.port,
+			});
 			server = Bun.serve<SocketData>({
 				fetch(request, bunServer) {
 					const url = new URL(request.url);
@@ -73,9 +80,21 @@ export const bunReverseServerFactory: OneBotReverseServerFactory = (
 						...(remoteAddress === undefined ? {} : { remoteAddress }),
 					};
 					if (path !== undefined && url.pathname !== path) {
+						logger.debug("OneBot reverse request path rejected", {
+							path: url.pathname,
+							expectedPath: path,
+							...info,
+						});
 						return new Response("Not found", { status: 404 });
 					}
 					if (!isReverseAccessAllowed(request.headers, url, options.accessToken)) {
+						// Reason + presence flags only: the bearer/query token itself never reaches a log.
+						logger.warn("OneBot reverse connection rejected", {
+							hasAuthorizationHeader: request.headers.has("authorization"),
+							hasQueryToken: url.searchParams.has("access_token"),
+							...info,
+							reason: "unauthorized",
+						});
 						options.onRejected?.({ ...info, reason: "unauthorized" });
 						return new Response("Unauthorized", {
 							headers: { "content-type": "text/plain; charset=utf-8" },
@@ -85,6 +104,7 @@ export const bunReverseServerFactory: OneBotReverseServerFactory = (
 					if (bunServer.upgrade(request, { data: { info, transport: undefined } })) {
 						return undefined;
 					}
+					logger.warn("OneBot reverse upgrade failed", { ...info, reason: "upgrade-failed" });
 					options.onRejected?.({ ...info, reason: "upgrade-failed" });
 					return new Response("Upgrade required", { status: 426 });
 				},
@@ -93,10 +113,13 @@ export const bunReverseServerFactory: OneBotReverseServerFactory = (
 				websocket: {
 					close(socket) {
 						listeningSockets.delete(socket);
+						logger.info("OneBot reverse client closed", { ...socket.data.info });
 						socket.data.transport?.notifyClose();
 					},
 					message(socket, message) {
-						socket.data.transport?.send(String(message));
+						const data = String(message);
+						logger.trace("OneBot reverse frame received", { bytes: data.length });
+						socket.data.transport?.send(data);
 					},
 					open(socket) {
 						const listeners: Partial<Record<keyof OneBotTransportEvents, unknown>> = {};
@@ -115,15 +138,21 @@ export const bunReverseServerFactory: OneBotReverseServerFactory = (
 						};
 						socket.data.transport = transport;
 						listeningSockets.add(socket);
+						logger.info("OneBot reverse client accepted", { ...socket.data.info });
 						options.onConnection(transport, socket.data.info);
 						const openListener = listeners.open;
 						if (typeof openListener === "function") openListener();
 					},
 				},
 			});
+			logger.debug("OneBot reverse listener ready", {
+				host: options.host,
+				port: server.port ?? options.port,
+			});
 			return { port: server.port ?? options.port };
 		},
 		async stop() {
+			logger.debug("OneBot reverse listener stopping", { clients: listeningSockets.size });
 			for (const socket of listeningSockets) {
 				try {
 					socket.close();

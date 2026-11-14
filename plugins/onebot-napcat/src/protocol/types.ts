@@ -1,4 +1,5 @@
 import type { ChannelNotice, MessageEnvelope, MessagePart } from "@elaina/contracts";
+import type { PluginLogger } from "@elaina/sdk";
 
 export type OneBotEvent = {
 	time: number;
@@ -161,6 +162,8 @@ export type OneBotReverseServerOptions = {
 	readonly path?: string;
 	readonly port: number;
 	readonly accessToken?: string;
+	/** Optional; the server never logs the token, only rejection reasons. */
+	readonly logger?: PluginLogger;
 	readonly onConnection: (transport: OneBotTransport, info: OneBotReverseConnectionInfo) => void;
 	readonly onRejected?: (info: OneBotReverseConnectionInfo & { reason: string }) => void;
 };

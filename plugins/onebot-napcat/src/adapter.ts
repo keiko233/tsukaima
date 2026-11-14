@@ -22,6 +22,7 @@ import type {
 	OneBotReverseServerFactory,
 	OneBotTransportFactory,
 } from "./protocol/types.ts";
+import { createSafeLogger, safeEndpoint, scopedLogger } from "./logging.ts";
 
 export const ONEBOT_CHANNEL_KIND = "onebot-v11";
 
@@ -95,7 +96,7 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 	constructor(options: OneBotChannelAdapterOptions) {
 		this.id = options.channelId;
 		this.#config = options.config;
-		this.#logger = options.logger;
+		this.#logger = createSafeLogger(options.logger);
 		this.#reverseServerFactory = options.reverseServerFactory;
 		this.#transportFactory = options.transportFactory;
 		this.#onStateChange = options.onStateChange;
@@ -147,33 +148,59 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 	 * a misconfigured channel degrades the server rather than failing startup.
 	 */
 	async start(): Promise<void> {
+		const startedAtMs = Date.now();
+		this.#logger.debug("OneBot adapter starting", {
+			channelId: this.id,
+			endpoint:
+				this.#config.mode === "reverse"
+					? `ws-reverse://${this.#config.host ?? "127.0.0.1"}:${this.#config.port ?? 3002}`
+					: safeEndpoint(this.#config.url),
+			mode: this.#config.mode ?? "forward",
+		});
 		try {
 			const channel = new OneBotChannel(
 				this.#config,
 				this.#transportFactory,
 				this.#reverseServerFactory,
+				scopedLogger(this.#logger, "channel"),
 			);
 			channel.onMessage((envelope) => this.#envelopeHandler?.(envelope));
 			channel.onNotice((notice) => this.#noticeHandler?.(notice));
 			channel.onRequest((request) => this.#requestHandler?.(request));
 			channel.onStateChange((state) => {
-				if (state === "open") this.#onStateChange?.("connected");
-				if (state === "closed") this.#onStateChange?.("disconnected");
+				if (state === "open") {
+					this.#logger.info("OneBot adapter connected", { channelId: this.id });
+					this.#onStateChange?.("connected");
+				}
+				if (state === "closed") {
+					this.#logger.info("OneBot adapter disconnected", { channelId: this.id });
+					this.#onStateChange?.("disconnected");
+				}
 			});
 			this.#channel = channel;
 			await channel.start();
 			this.#restartRequired = false;
+			this.#logger.debug("OneBot adapter started", {
+				channelId: this.id,
+				durationMs: Date.now() - startedAtMs,
+				state: channel.diagnostics.state,
+			});
 		} catch (error) {
 			this.#restartRequired = true;
 			this.#logger.error("OneBot channel failed to start", {
+				durationMs: Date.now() - startedAtMs,
 				error: error instanceof Error ? error.message : String(error),
 				mode: this.#config.mode ?? "forward",
-				url: this.#config.url,
+				url: safeEndpoint(this.#config.url),
 			});
 		}
 	}
 
 	async stop(): Promise<void> {
+		this.#logger.debug("OneBot adapter stopping", {
+			channelId: this.id,
+			inFlightActions: this.#channel?.inFlightActions ?? 0,
+		});
 		this.#channel?.stop();
 		this.#channel = undefined;
 	}
@@ -187,11 +214,39 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 		if (channel === undefined || !channel.diagnostics.connected) {
 			throw new Error(`Channel ${this.id} is not connected`);
 		}
-		const result =
-			target.kind === "group"
-				? await channel.sendGroup(target.platformConversationId, parts, options)
-				: await channel.sendPrivate(target.platformConversationId, parts, options);
-		return toSendResult(result);
+		const startedAtMs = Date.now();
+		this.#logger.trace("OneBot adapter send started", {
+			channelId: this.id,
+			partCount: parts.length,
+			peer: target.platformConversationId,
+			targetKind: target.kind,
+		});
+		try {
+			const result =
+				target.kind === "group"
+					? await channel.sendGroup(target.platformConversationId, parts, options)
+					: await channel.sendPrivate(target.platformConversationId, parts, options);
+			const sendResult = toSendResult(result);
+			this.#logger.debug("OneBot adapter send completed", {
+				durationMs: Date.now() - startedAtMs,
+				partCount: parts.length,
+				peer: target.platformConversationId,
+				...(sendResult.platformMessageId === undefined
+					? {}
+					: { platformMessageId: sendResult.platformMessageId }),
+				targetKind: target.kind,
+			});
+			return sendResult;
+		} catch (error) {
+			this.#logger.warn("OneBot adapter send failed", {
+				durationMs: Date.now() - startedAtMs,
+				error: error instanceof Error ? error.message : String(error),
+				partCount: parts.length,
+				peer: target.platformConversationId,
+				targetKind: target.kind,
+			});
+			throw error;
+		}
 	}
 
 	async sendTyping(target: OutboundTarget, typing: boolean): Promise<void> {
@@ -209,14 +264,30 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 	}
 
 	async lookupMessage(platformMessageId: string): Promise<ChannelHistoryItem | undefined> {
-		return this.#channel?.lookupMessage(platformMessageId);
+		const startedAtMs = Date.now();
+		const item = await this.#channel?.lookupMessage(platformMessageId);
+		this.#logger.debug("OneBot adapter message lookup completed", {
+			durationMs: Date.now() - startedAtMs,
+			found: item !== undefined,
+			platformMessageId,
+		});
+		return item;
 	}
 
 	async readHistory(
 		target: OutboundTarget,
 		options?: ChannelHistoryOptions,
 	): Promise<readonly ChannelHistoryItem[]> {
-		return (await this.#channel?.readHistory(target, options)) ?? [];
+		const startedAtMs = Date.now();
+		const items = (await this.#channel?.readHistory(target, options)) ?? [];
+		this.#logger.debug("OneBot adapter history read completed", {
+			durationMs: Date.now() - startedAtMs,
+			items: items.length,
+			limit: options?.limit,
+			peer: target.platformConversationId,
+			targetKind: target.kind,
+		});
+		return items;
 	}
 
 	async resolveRequest(request: ChannelRequest, decision: ChannelRequestDecision): Promise<void> {
@@ -225,14 +296,25 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 			throw new Error(`Channel ${this.id} is not connected`);
 		}
 		const approve = decision.action === "approve";
+		const startedAtMs = Date.now();
+		this.#logger.debug("OneBot adapter request resolution started", {
+			approve,
+			channelId: this.id,
+			requestKind: request.kind,
+		});
 		if (request.kind === "friend") {
 			await channel.setFriendAddRequest(
 				request.flag,
 				approve,
 				approve ? decision.reason : undefined,
 			);
-			return;
+		} else {
+			await channel.setGroupAddRequest(request.flag, request.subType, approve, decision.reason);
 		}
-		await channel.setGroupAddRequest(request.flag, request.subType, approve, decision.reason);
+		this.#logger.debug("OneBot adapter request resolution completed", {
+			approve,
+			durationMs: Date.now() - startedAtMs,
+			requestKind: request.kind,
+		});
 	}
 }
