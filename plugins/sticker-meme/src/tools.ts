@@ -51,7 +51,7 @@ export function registerStickerTools(
 	const log = logger ?? context.logger;
 	context.tools.register({
 		description:
-			"Search approved, enabled stickers by semantic text, emotion, persona, pack, or tags.",
+			"Search approved, enabled stickers by semantic text, emotion, persona, pack name/id, or tags. Space- or comma-separated query terms are treated as alternatives (OR). Newly imported packs are available immediately; omit filters to browse the most relevant stickers first.",
 		async execute(input) {
 			const startedAt = Date.now();
 			const search = searchInput(input);
@@ -75,11 +75,23 @@ export function registerStickerTools(
 		name: "sticker-meme.search",
 		parameters: {
 			properties: {
-				emotion: { type: "string" },
+				emotion: {
+					description:
+						"Emotion id or a natural-language alias, for example happy or 开心. Comma-separate to allow any of several.",
+					type: "string",
+				},
 				limit: { maximum: 25, minimum: 1, type: "integer" },
-				packId: { type: "string" },
+				packId: {
+					description:
+						"Pack id, display name, or tag. Newly imported packs are searchable immediately by name.",
+					type: "string",
+				},
 				personaId: { type: "string" },
-				query: { type: "string" },
+				query: {
+					description:
+						"Any of several names, characters, emotions, or keywords. Separate alternatives with spaces or commas.",
+					type: "string",
+				},
 				tags: { items: { type: "string" }, type: "array" },
 			},
 			type: "object",
@@ -128,7 +140,11 @@ export function registerStickerTools(
 				itemId: { type: "string" },
 				packId: { type: "string" },
 				personaId: { type: "string" },
-				query: { type: "string" },
+				query: {
+					description:
+						"Any of several names, characters, emotions, or keywords. Separate alternatives with spaces or commas.",
+					type: "string",
+				},
 				tags: { items: { type: "string" }, type: "array" },
 			},
 			type: "object",

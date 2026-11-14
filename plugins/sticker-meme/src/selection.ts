@@ -4,6 +4,7 @@ import { normalizeLabel, sanitizeModelText } from "./domain.ts";
 import type { StickerItem, StickerPack } from "./domain.ts";
 import { elapsedMs, traceLog } from "./logging.ts";
 import type { StickerRepository } from "./repository.ts";
+import { STICKER_SEMANTIC_CATEGORIES } from "./semantic.ts";
 
 export interface StickerSearchInput {
 	readonly emotion?: string;
@@ -27,6 +28,7 @@ export interface StickerCandidate {
 	readonly mimeType: string;
 	readonly name: string;
 	readonly packId: string;
+	readonly packName: string;
 	readonly personaIds: readonly string[];
 	readonly reviewStatus: string;
 	readonly score: number;
@@ -55,6 +57,58 @@ export interface StickerSelectionOptions {
 const MAX_SEARCH_LIMIT = 25;
 const RECENT_COOLDOWN_MS = 5 * 60_000;
 
+/**
+ * Emotion inputs arrive from a live model, not a closed enum form. Map every taxonomy term
+ * (including Chinese/Japanese aliases) back to its canonical id so `开心` still matches items
+ * classified as `happy`.
+ */
+const EMOTION_ALIASES = new Map<string, string>();
+const QUERY_ALIASES = new Map<string, readonly string[]>();
+for (const category of STICKER_SEMANTIC_CATEGORIES) {
+	const terms = [...new Set([category.id, ...category.terms].map(normalizeLabel).filter(Boolean))];
+	for (const term of terms) {
+		QUERY_ALIASES.set(term, [...new Set([...(QUERY_ALIASES.get(term) ?? []), ...terms])]);
+		if (category.kind === "emotion" && !EMOTION_ALIASES.has(term)) {
+			EMOTION_ALIASES.set(term, category.id);
+		}
+	}
+}
+
+function requestedEmotions(value: string | undefined): ReadonlySet<string> {
+	const result = new Set<string>();
+	for (const entry of (value ?? "").split(/[,，]/u)) {
+		const key = normalizeLabel(entry);
+		if (key.length === 0) continue;
+		result.add(EMOTION_ALIASES.get(key) ?? key);
+	}
+	return result;
+}
+
+const canonicalEmotion = (value: string): string => {
+	const key = normalizeLabel(value);
+	return EMOTION_ALIASES.get(key) ?? key;
+};
+
+/** Resolve a pack reference by id, display name, or tag; partial names also match. */
+function resolvePackFilter(
+	packs: readonly StickerPack[],
+	reference: string,
+): ReadonlySet<string> | undefined {
+	const normalized = normalizeLabel(reference);
+	if (normalized.length === 0) return undefined;
+	const matches = (pack: StickerPack, exact: boolean): boolean => {
+		const name = normalizeLabel(pack.name);
+		const tags = pack.tags.map(normalizeLabel);
+		if (exact) {
+			return pack.id === reference || name === normalized || tags.includes(normalized);
+		}
+		return name.includes(normalized) || tags.some((tag) => tag.includes(normalized));
+	};
+	const exact = packs.filter((pack) => matches(pack, true));
+	const matched = exact.length > 0 ? exact : packs.filter((pack) => matches(pack, false));
+	return new Set(matched.map((pack) => pack.id));
+}
+
 function candidate(item: StickerItem, pack: StickerPack): StickerCandidate {
 	return {
 		description: sanitizeModelText(item.description),
@@ -69,6 +123,7 @@ function candidate(item: StickerItem, pack: StickerPack): StickerCandidate {
 		mimeType: item.mimeType,
 		name: sanitizeModelText(item.name),
 		packId: item.packId,
+		packName: sanitizeModelText(pack.name),
 		personaIds: [...pack.personaIds],
 		reviewStatus: item.reviewStatus,
 		score: item.score,
@@ -78,17 +133,21 @@ function candidate(item: StickerItem, pack: StickerPack): StickerCandidate {
 	};
 }
 
-function textMatches(item: StickerItem, query: string): boolean {
-	const normalizedQuery = normalizeLabel(query);
-	if (normalizedQuery.length === 0) return true;
-	const haystacks = [
-		normalizeLabel(item.name),
-		normalizeLabel(item.description),
-		normalizeLabel(item.semantic.description),
-		...item.keywords.map(normalizeLabel),
-		...item.semantic.labels.map(normalizeLabel),
-	];
-	return haystacks.some((value) => value.includes(normalizedQuery));
+/**
+ * Models often send several synonyms or keywords separated by spaces/commas. Treat each term as
+ * an alternative (OR) instead of requiring the entire phrase to appear verbatim.
+ */
+const QUERY_SEPARATOR = /[\s,，、/|]+/u;
+
+function queryTokens(query: string | undefined): readonly string[] {
+	if (query === undefined) return [];
+	const tokens = new Set<string>();
+	for (const entry of query.split(QUERY_SEPARATOR)) {
+		const token = normalizeLabel(entry);
+		if (token.length === 0) continue;
+		for (const alias of QUERY_ALIASES.get(token) ?? [token]) tokens.add(alias);
+	}
+	return [...tokens];
 }
 
 /**
@@ -101,34 +160,60 @@ export function rankStickerItem(
 	input: StickerSearchInput,
 	now = Date.now(),
 ): number | undefined {
-	const query = normalizeLabel(input.query ?? "");
-	if (!textMatches(item, query)) return undefined;
-	const emotion = normalizeLabel(input.emotion ?? "");
-	if (emotion.length > 0 && !item.emotions.some((value) => value === emotion)) {
+	const tokens = queryTokens(input.query);
+	const name = normalizeLabel(item.name);
+	const description = normalizeLabel(item.description);
+	const semanticDescription = normalizeLabel(item.semantic.description);
+	const packName = normalizeLabel(pack.name);
+	const keywords = item.keywords.map(normalizeLabel);
+	const labels = item.semantic.labels.map(normalizeLabel);
+	const packTags = pack.tags.map(normalizeLabel);
+	const haystacks = [
+		name,
+		description,
+		semanticDescription,
+		packName,
+		...keywords,
+		...labels,
+		...packTags,
+	];
+	const matched = tokens.filter((token) => haystacks.some((value) => value.includes(token)));
+	if (tokens.length > 0 && matched.length === 0) return undefined;
+	const emotions = requestedEmotions(input.emotion);
+	if (emotions.size > 0 && !item.emotions.some((value) => emotions.has(canonicalEmotion(value)))) {
 		return undefined;
 	}
-	if (input.packId !== undefined && item.packId !== input.packId) return undefined;
 	if (input.personaId !== undefined && pack.personaIds.length > 0) {
 		if (!pack.personaIds.includes(input.personaId)) return undefined;
 	}
 	const tags = (input.tags ?? []).map(normalizeLabel).filter(Boolean);
-	if (tags.length > 0 && !tags.every((tag) => pack.tags.includes(tag))) return undefined;
-
+	if (tags.length > 0 && !tags.every((tag) => packTags.includes(tag))) return undefined;
 	let score = item.score;
-	if (query.length > 0) {
-		const name = normalizeLabel(item.name);
-		if (name === query) score += 120;
-		else if (name.includes(query)) score += 60;
-		const keywordScores = item.keywords.map(normalizeLabel);
-		if (keywordScores.includes(query)) score += 100;
-		else if (keywordScores.some((keyword) => keyword.includes(query))) score += 45;
-		const semanticScores = item.semantic.labels.map(normalizeLabel);
-		if (semanticScores.includes(query)) score += 80;
-		else if (semanticScores.some((label) => label.includes(query))) score += 35;
-		if (normalizeLabel(item.description).includes(query)) score += 20;
-		if (normalizeLabel(item.semantic.description).includes(query)) score += 18;
+	let tokenScore = 0;
+	for (const token of matched) {
+		let current = 0;
+		if (name === token) current = 120;
+		else if (name.includes(token)) current = 60;
+		if (keywords.includes(token)) current = Math.max(current, 100);
+		else if (keywords.some((keyword) => keyword.includes(token))) {
+			current = Math.max(current, 45);
+		}
+		if (labels.includes(token)) current = Math.max(current, 80);
+		else if (labels.some((label) => label.includes(token))) {
+			current = Math.max(current, 35);
+		}
+		if (description.includes(token)) current = Math.max(current, 20);
+		if (semanticDescription.includes(token)) current = Math.max(current, 18);
+		if (packName === token) current = Math.max(current, 180);
+		else if (packName.includes(token)) current = Math.max(current, 120);
+		else if (packTags.some((tag) => tag.includes(token))) {
+			current = Math.max(current, 60);
+		}
+		tokenScore += current;
 	}
-	if (emotion.length > 0) score += 40;
+	// Several distinct terms matching is stronger evidence than one synonym hitting.
+	score += Math.min(400, tokenScore);
+	if (emotions.size > 0) score += 40;
 	if (input.personaId !== undefined) {
 		score += pack.personaIds.includes(input.personaId) ? 25 : 5;
 	}
@@ -163,21 +248,48 @@ export class StickerSelectionService {
 
 	async search(input: StickerSearchInput): Promise<readonly StickerCandidate[]> {
 		const startedAt = Date.now();
-		const packs = new Map((await this.#repository.listPacks()).map((pack) => [pack.id, pack]));
+		const packList = await this.#repository.listPacks();
+		const packs = new Map(packList.map((pack) => [pack.id, pack]));
+		const packFilter =
+			input.packId === undefined ? undefined : resolvePackFilter(packList, input.packId);
 		const limit = Math.min(MAX_SEARCH_LIMIT, Math.max(1, input.limit ?? 8));
 		traceLog(this.#logger, "sticker search started", {
 			emotion: input.emotion ?? null,
 			limit,
 			packId: input.packId ?? null,
+			packMatches: packFilter === undefined ? null : packFilter.size,
 			personaId: input.personaId ?? null,
 			query: input.query ?? null,
 			tags: input.tags ?? [],
 		});
+		if (packFilter !== undefined && packFilter.size === 0) {
+			this.#logger?.debug("sticker search completed", {
+				candidateCount: 0,
+				considered: 0,
+				durationMs: elapsedMs(startedAt),
+				limit,
+				skipped: 0,
+			});
+			return [];
+		}
 		const ranked: { candidate: StickerCandidate; score: number }[] = [];
 		let considered = 0;
 		let skipped = 0;
-		for (const item of await this.#repository.listItems(input.packId)) {
+		// A resolved pack reference may cover several packs (partial name/tag match); in that
+		// case scan all items and filter below instead of issuing one query per pack.
+		const singlePackId =
+			packFilter !== undefined && packFilter.size === 1 ? [...packFilter][0] : undefined;
+		for (const item of await this.#repository.listItems(singlePackId)) {
 			considered += 1;
+			if (packFilter !== undefined && !packFilter.has(item.packId)) {
+				skipped += 1;
+				traceLog(this.#logger, "sticker candidate skipped", {
+					itemId: item.id,
+					packId: item.packId,
+					reason: "pack_filter",
+				});
+				continue;
+			}
 			const pack = packs.get(item.packId);
 			if (pack === undefined || !pack.enabled) {
 				skipped += 1;
