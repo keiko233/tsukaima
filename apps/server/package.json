@@ -16,6 +16,7 @@
 		"@elaina-plugin/search-fetch": "workspace:*",
 		"@elaina-plugin/self-iteration": "workspace:*",
 		"@elaina-plugin/sticker-meme": "workspace:*",
+		"@elaina/cache": "workspace:*",
 		"@elaina/coding": "workspace:*",
 		"@elaina/contracts": "workspace:*",
 		"@elaina/core": "workspace:*",
