@@ -1,7 +1,13 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { PluginLogger, PluginMediaApi, PluginMediaSource } from "@elaina/sdk";
+import pLimit from "p-limit";
+import type {
+	PluginLogger,
+	PluginMediaApi,
+	PluginMediaRecord,
+	PluginMediaSource,
+} from "@elaina/sdk";
 import {
 	decodeBase64,
 	encodeBase64,
@@ -10,6 +16,7 @@ import {
 	type ImportFile,
 } from "./archive.ts";
 import {
+	clampConcurrency,
 	EMPTY_SEMANTIC_PROFILE,
 	fileExtension,
 	inferMimeType,
@@ -28,7 +35,7 @@ import {
 } from "./domain.ts";
 import { elapsedMs, logErrorMessage, traceLog } from "./logging.ts";
 import { StickerRepository } from "./repository.ts";
-import type { StickerSemanticClassifier } from "./semantic.ts";
+import { isHeuristicSemanticClassifier, type StickerSemanticClassifier } from "./semantic.ts";
 
 export interface StickerImportReport {
 	readonly deduped: number;
@@ -276,7 +283,9 @@ export class StickerImportService {
 		readonly manifest: unknown;
 		readonly dryRun?: boolean;
 		readonly fallbackName?: string;
+		readonly importConcurrency?: number;
 		readonly onProgress?: (progress: StickerImportProgress) => void;
+		readonly semanticConcurrency?: number;
 		readonly source?: PluginMediaSource;
 	}): Promise<StickerImportReport> {
 		const startedAt = Date.now();
@@ -291,7 +300,13 @@ export class StickerImportService {
 			const report = await this.importPacks(parsed.packs, input.files, {
 				...(input.classifier === undefined ? {} : { classifier: input.classifier }),
 				dryRun: input.dryRun === true,
+				...(input.importConcurrency === undefined
+					? {}
+					: { importConcurrency: input.importConcurrency }),
 				...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
+				...(input.semanticConcurrency === undefined
+					? {}
+					: { semanticConcurrency: input.semanticConcurrency }),
 				source: input.source ?? "webui",
 				warnings: parsed.warnings,
 			});
@@ -318,7 +333,9 @@ export class StickerImportService {
 		readonly bytes: Uint8Array;
 		readonly classifier?: StickerSemanticClassifier;
 		readonly dryRun?: boolean;
+		readonly importConcurrency?: number;
 		readonly onProgress?: (progress: StickerImportProgress) => void;
+		readonly semanticConcurrency?: number;
 		readonly source?: PluginMediaSource;
 	}): Promise<StickerImportReport> {
 		const startedAt = Date.now();
@@ -355,8 +372,14 @@ export class StickerImportService {
 			...(input.classifier === undefined ? {} : { classifier: input.classifier }),
 			dryRun: input.dryRun === true,
 			files: relativeFiles,
+			...(input.importConcurrency === undefined
+				? {}
+				: { importConcurrency: input.importConcurrency }),
 			manifest,
 			...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
+			...(input.semanticConcurrency === undefined
+				? {}
+				: { semanticConcurrency: input.semanticConcurrency }),
 			source: input.source ?? "webui",
 		});
 	}
@@ -365,7 +388,9 @@ export class StickerImportService {
 		readonly classifier?: StickerSemanticClassifier;
 		readonly directory: string;
 		readonly dryRun?: boolean;
+		readonly importConcurrency?: number;
 		readonly onProgress?: (progress: StickerImportProgress) => void;
+		readonly semanticConcurrency?: number;
 		readonly source?: PluginMediaSource;
 	}): Promise<StickerImportReport> {
 		this.#logger?.info("sticker directory import started", {
@@ -385,8 +410,14 @@ export class StickerImportService {
 			...(input.classifier === undefined ? {} : { classifier: input.classifier }),
 			dryRun: input.dryRun === true,
 			files,
+			...(input.importConcurrency === undefined
+				? {}
+				: { importConcurrency: input.importConcurrency }),
 			manifest,
 			...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
+			...(input.semanticConcurrency === undefined
+				? {}
+				: { semanticConcurrency: input.semanticConcurrency }),
 			source: input.source ?? "webui",
 		});
 	}
@@ -399,7 +430,9 @@ export class StickerImportService {
 		readonly classifier?: StickerSemanticClassifier;
 		readonly directory: string;
 		readonly dryRun?: boolean;
+		readonly importConcurrency?: number;
 		readonly onProgress?: (progress: StickerImportProgress) => void;
+		readonly semanticConcurrency?: number;
 	}): Promise<StickerImportReport> {
 		this.#logger?.info("DSH sticker directory import started", {
 			directory: input.directory,
@@ -418,16 +451,23 @@ export class StickerImportService {
 				...(input.classifier === undefined ? {} : { classifier: input.classifier }),
 				dryRun: input.dryRun === true,
 				files: allFiles,
+				...(input.importConcurrency === undefined
+					? {}
+					: { importConcurrency: input.importConcurrency }),
 				manifest: {
 					items: allFiles.filter((file) => /\.(?:gif|jpe?g|png|webp)$/iu.test(file.path)),
 					name: "DSH meme pack",
 				},
 				...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
+				...(input.semanticConcurrency === undefined
+					? {}
+					: { semanticConcurrency: input.semanticConcurrency }),
 				source: "migration",
 			});
 			return fallback;
 		}
-		for (const manifestFile of manifests) {
+		const importLimit = pLimit(clampConcurrency(input.importConcurrency));
+		const packReports = await importLimit.map(manifests, async (manifestFile) => {
 			const prefix = manifestFile.path.slice(0, -"manifest.json".length);
 			const files = allFiles
 				.filter((file) => file.path.startsWith(prefix))
@@ -440,17 +480,23 @@ export class StickerImportService {
 			const items = memes.length > 0 ? memes : (manifest.items ?? manifest.memes ?? []);
 			const fallbackName =
 				normalizeText(manifest.name) || prefix.split("/").filter(Boolean).at(-1) || "DSH meme pack";
-			const report = await this.importBundle({
+			return await this.importBundle({
 				...(input.classifier === undefined ? {} : { classifier: input.classifier }),
 				dryRun: input.dryRun === true,
 				fallbackName,
 				files,
+				...(input.importConcurrency === undefined
+					? {}
+					: { importConcurrency: input.importConcurrency }),
 				manifest: { ...manifest, items },
 				...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
+				...(input.semanticConcurrency === undefined
+					? {}
+					: { semanticConcurrency: input.semanticConcurrency }),
 				source: "migration",
 			});
-			reports.push(report);
-		}
+		});
+		reports.push(...packReports);
 		return mergeReports(reports);
 	}
 
@@ -542,26 +588,63 @@ export class StickerImportService {
 		options: {
 			readonly classifier?: StickerSemanticClassifier;
 			readonly dryRun: boolean;
+			readonly importConcurrency?: number;
 			readonly onProgress?: (progress: StickerImportProgress) => void;
+			readonly semanticConcurrency?: number;
 			readonly source: PluginMediaSource;
 			readonly warnings: readonly string[];
 		},
 	): Promise<StickerImportReport> {
 		const startedAt = Date.now();
 		const warnings = [...options.warnings];
-		const packIds: string[] = [];
+		const classifier = options.classifier;
+		const heuristicOnly = isHeuristicSemanticClassifier(classifier);
 		const totalItems = packs.reduce((sum, pack) => sum + pack.items.length, 0);
+		const importLimit = pLimit(clampConcurrency(options.importConcurrency));
+		const semanticLimit = pLimit(clampConcurrency(options.semanticConcurrency));
+		const semanticTasks: Promise<void>[] = [];
+		const storeCache = new Map<string, Promise<PluginMediaRecord>>();
 		let items = 0;
 		let classified = 0;
 		let deduped = 0;
 		let missingMedia = 0;
 		this.#logger?.debug("sticker import packs started", {
 			dryRun: options.dryRun,
+			importConcurrency: importLimit.concurrency,
 			itemCount: totalItems,
 			packCount: packs.length,
+			semanticConcurrency: semanticLimit.concurrency,
 			source: options.source,
 		});
-		for (const manifestPack of packs) {
+		const storeMedia = (
+			hash: string,
+			file: ImportFile,
+			manifestItem: ManifestItem,
+		): Promise<PluginMediaRecord> => {
+			const pending = storeCache.get(hash);
+			if (pending !== undefined) {
+				deduped += 1;
+				return pending;
+			}
+			const created = (async (): Promise<PluginMediaRecord> => {
+				const existing = await this.#media.findBySha(hash);
+				if (existing !== undefined) {
+					deduped += 1;
+					return existing;
+				}
+				return await this.#media.store({
+					bytes: file.bytes,
+					...(manifestItem.height === undefined ? {} : { height: manifestItem.height }),
+					kind: "sticker",
+					mimeType: manifestItem.mimeType,
+					source: options.source,
+					...(manifestItem.width === undefined ? {} : { width: manifestItem.width }),
+				});
+			})();
+			storeCache.set(hash, created);
+			return created;
+		};
+		const savedPacks = await importLimit.map(packs, async (manifestPack) => {
 			const pack = options.dryRun
 				? {
 						id: manifestPack.id ?? stableId("pack", manifestPack.name),
@@ -576,79 +659,139 @@ export class StickerImportService {
 						source: manifestPack.source,
 						tags: manifestPack.tags,
 					});
-			packIds.push(pack.id);
 			this.#logger?.debug("sticker import pack prepared", {
 				dryRun: options.dryRun,
 				itemCount: manifestPack.items.length,
 				packId: pack.id,
 				packName: manifestPack.name,
 			});
-			for (const manifestItem of manifestPack.items) {
-				const emit = (stage: StickerImportProgress["stage"], currentCount: number) => {
-					options.onProgress?.({
-						classified,
-						current: currentCount,
-						currentItem: manifestItem.name,
-						packTitle: manifestPack.name,
-						skipped: missingMedia,
-						stage,
-						total: totalItems,
-					});
-				};
-				emit("downloading", items);
-				items += 1;
-				const file = findFile(files, manifestItem.file);
-				if (file === undefined) {
-					missingMedia += 1;
-					warnings.push(`item ${manifestItem.name} has no matching media file`);
-					traceLog(this.#logger, "sticker import item skipped", {
-						itemName: manifestItem.name,
+			return { manifestPack, pack };
+		});
+		const packIds = savedPacks.map((entry) => entry.pack.id);
+		const entries = savedPacks.flatMap(({ manifestPack, pack }) =>
+			manifestPack.items.map((manifestItem) => ({ manifestItem, manifestPack, pack })),
+		);
+		await importLimit.map(entries, async ({ manifestItem, manifestPack, pack }) => {
+			const emit = (stage: StickerImportProgress["stage"], currentCount: number) => {
+				options.onProgress?.({
+					classified,
+					current: currentCount,
+					currentItem: manifestItem.name,
+					packTitle: manifestPack.name,
+					skipped: missingMedia,
+					stage,
+					total: totalItems,
+				});
+			};
+			emit("downloading", items);
+			items += 1;
+			const file = findFile(files, manifestItem.file);
+			if (file === undefined) {
+				missingMedia += 1;
+				warnings.push(`item ${manifestItem.name} has no matching media file`);
+				traceLog(this.#logger, "sticker import item skipped", {
+					itemName: manifestItem.name,
+					packId: pack.id,
+					reason: "missing_media",
+				});
+				if (!options.dryRun) {
+					await this.#repository.upsertItem({
+						description: manifestItem.description,
+						emotions: manifestItem.emotions,
+						enabled: false,
+						hash: manifestItem.hash ?? fallbackItemId(pack.id, manifestItem),
+						...(manifestItem.id === undefined ? {} : { id: manifestItem.id }),
+						keywords: manifestItem.keywords,
+						mimeType: manifestItem.mimeType,
+						name: manifestItem.name,
 						packId: pack.id,
-						reason: "missing_media",
+						reviewStatus: manifestItem.reviewStatus ?? defaultReviewStatus(manifestPack.source),
+						score: manifestItem.score,
+						...(manifestItem.semantic === undefined ? {} : { semantic: manifestItem.semantic }),
 					});
-					if (!options.dryRun) {
-						await this.#repository.upsertItem({
-							description: manifestItem.description,
-							emotions: manifestItem.emotions,
-							enabled: false,
-							hash: manifestItem.hash ?? fallbackItemId(pack.id, manifestItem),
-							...(manifestItem.id === undefined ? {} : { id: manifestItem.id }),
-							keywords: manifestItem.keywords,
-							mimeType: manifestItem.mimeType,
-							name: manifestItem.name,
-							packId: pack.id,
-							reviewStatus: manifestItem.reviewStatus ?? defaultReviewStatus(manifestPack.source),
-							score: manifestItem.score,
-							...(manifestItem.semantic === undefined ? {} : { semantic: manifestItem.semantic }),
-						});
-					}
-					emit("saving", items);
-					continue;
 				}
-				const hash = sha256Bytes(file.bytes);
-				const existing = await this.#media.findBySha(hash);
-				if (existing !== undefined) deduped += 1;
+				emit("saving", items);
+				return;
+			}
+			const hash = sha256Bytes(file.bytes);
+			if (options.dryRun) {
+				if ((await this.#media.findBySha(hash)) !== undefined) deduped += 1;
 				traceLog(this.#logger, "sticker import item prepared", {
 					bytes: file.bytes.byteLength,
-					deduped: existing !== undefined,
 					itemName: manifestItem.name,
 					packId: pack.id,
 					path: file.path,
 				});
-				if (options.dryRun) {
-					emit("saving", items);
-					continue;
+				emit("saving", items);
+				return;
+			}
+			const stored = await storeMedia(hash, file, manifestItem);
+			traceLog(this.#logger, "sticker import item prepared", {
+				bytes: file.bytes.byteLength,
+				itemName: manifestItem.name,
+				packId: pack.id,
+				path: file.path,
+			});
+			let profile = manifestItem.semantic;
+			if (profile === undefined && heuristicOnly && classifier !== undefined) {
+				emit("classifying", items);
+				try {
+					profile = await classifier.classify({
+						bytes: file.bytes,
+						mimeType: manifestItem.mimeType,
+						title: manifestPack.name,
+					});
+					if (profile.source !== "none") classified += 1;
+				} catch (error) {
+					warnings.push(`semantic classification failed for ${manifestItem.name}`);
+					this.#logger?.warn("sticker import semantic classification failed", {
+						error: logErrorMessage(error),
+						itemName: manifestItem.name,
+						packId: pack.id,
+					});
 				}
-				let semantic = manifestItem.semantic;
-				if (semantic === undefined && options.classifier !== undefined) {
-					emit("classifying", items - 1);
+			}
+			const resolved = profile ?? EMPTY_SEMANTIC_PROFILE;
+			emit("saving", items);
+			const item = await this.#repository.upsertItem({
+				description:
+					manifestItem.description.length > 0 ? manifestItem.description : resolved.description,
+				emotions: normalizeLabels([...manifestItem.emotions, ...resolved.emotions]).values,
+				enabled: manifestItem.enabled,
+				hash,
+				height: manifestItem.height ?? stored.height,
+				...(manifestItem.id === undefined ? {} : { id: manifestItem.id }),
+				keywords: normalizeLabels([...manifestItem.keywords, ...resolved.keywords]).values,
+				mediaId: stored.id,
+				mimeType: manifestItem.mimeType || stored.mimeType,
+				name: manifestItem.name,
+				packId: pack.id,
+				reviewStatus: manifestItem.reviewStatus ?? defaultReviewStatus(manifestPack.source),
+				score: manifestItem.score,
+				semantic: resolved,
+				width: manifestItem.width ?? stored.width,
+			});
+			if (manifestItem.semantic !== undefined || classifier === undefined || heuristicOnly) return;
+			const semanticClassifier = classifier;
+			semanticTasks.push(
+				semanticLimit(async () => {
+					emit("classifying", items);
 					try {
-						semantic = await options.classifier.classify({
+						const semantic = await semanticClassifier.classify({
 							bytes: file.bytes,
 							mimeType: manifestItem.mimeType,
 							title: manifestPack.name,
 						});
 						if (semantic.source !== "none") classified += 1;
+						await this.#repository.updateItem(item.id, {
+							description:
+								manifestItem.description.length > 0
+									? manifestItem.description
+									: semantic.description,
+							emotions: normalizeLabels([...manifestItem.emotions, ...semantic.emotions]).values,
+							keywords: normalizeLabels([...manifestItem.keywords, ...semantic.keywords]).values,
+							semantic,
+						});
 					} catch (error) {
 						warnings.push(`semantic classification failed for ${manifestItem.name}`);
 						this.#logger?.warn("sticker import semantic classification failed", {
@@ -657,40 +800,11 @@ export class StickerImportService {
 							packId: pack.id,
 						});
 					}
-				}
-				const profile = semantic ?? EMPTY_SEMANTIC_PROFILE;
-				const stored =
-					existing ??
-					(await this.#media.store({
-						bytes: file.bytes,
-						...(manifestItem.height === undefined ? {} : { height: manifestItem.height }),
-						kind: "sticker",
-						mimeType: manifestItem.mimeType,
-						source: options.source,
-						...(manifestItem.width === undefined ? {} : { width: manifestItem.width }),
-					}));
-				emit("saving", items - 1);
-				await this.#repository.upsertItem({
-					description:
-						manifestItem.description.length > 0 ? manifestItem.description : profile.description,
-					emotions: normalizeLabels([...manifestItem.emotions, ...profile.emotions]).values,
-					enabled: manifestItem.enabled,
-					hash,
-					height: manifestItem.height ?? stored.height,
-					...(manifestItem.id === undefined ? {} : { id: manifestItem.id }),
-					keywords: normalizeLabels([...manifestItem.keywords, ...profile.keywords]).values,
-					mediaId: stored.id,
-					mimeType: manifestItem.mimeType || stored.mimeType,
-					name: manifestItem.name,
-					packId: pack.id,
-					reviewStatus: manifestItem.reviewStatus ?? defaultReviewStatus(manifestPack.source),
-					score: manifestItem.score,
-					semantic: profile,
-					width: manifestItem.width ?? stored.width,
-				});
-				emit("saving", items);
-			}
-		}
+					emit("saving", items);
+				}),
+			);
+		});
+		await Promise.all(semanticTasks);
 		this.#logger?.debug("sticker import packs completed", {
 			classified,
 			deduped,

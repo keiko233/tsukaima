@@ -593,6 +593,16 @@ export class HeuristicSemanticClassifier implements StickerSemanticClassifier {
 	}
 }
 
+/**
+ * True when classification is deterministic and cheap enough to run inline with imports, so the
+ * pipeline can skip a redundant second database write for the same item.
+ */
+export function isHeuristicSemanticClassifier(
+	classifier: StickerSemanticClassifier | undefined,
+): boolean {
+	return classifier === undefined || classifier instanceof HeuristicSemanticClassifier;
+}
+
 export function mergeSemanticProfiles(
 	base: StickerSemanticProfile,
 	override: StickerSemanticProfile,

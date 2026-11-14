@@ -1,6 +1,8 @@
-import type { PluginLogger, PluginMediaApi } from "@elaina/sdk";
+import pLimit from "p-limit";
+import type { PluginLogger, PluginMediaApi, PluginMediaRecord } from "@elaina/sdk";
 import { createAnimatedConverter, type AnimatedConverter } from "./animated.ts";
 import {
+	clampConcurrency,
 	EMPTY_SEMANTIC_PROFILE,
 	inferMimeType,
 	normalizeLabel,
@@ -14,7 +16,11 @@ import {
 import type { StickerImportReport } from "./import-service.ts";
 import { elapsedMs, logErrorMessage, traceLog } from "./logging.ts";
 import type { StickerRepository } from "./repository.ts";
-import { classifyStickerSemantics, type StickerSemanticClassifier } from "./semantic.ts";
+import {
+	classifyStickerSemantics,
+	isHeuristicSemanticClassifier,
+	type StickerSemanticClassifier,
+} from "./semantic.ts";
 import {
 	parseTelegramStickerSetReference,
 	type TelegramSticker,
@@ -28,6 +34,7 @@ export type TelegramVideoFormat = "gif" | "thumbnail" | "webm";
 export interface TelegramStickerImportReport extends StickerImportReport {
 	readonly classified: number;
 	readonly classifier: string;
+	readonly semanticDeferred?: boolean;
 	readonly setName: string;
 	readonly skipped: number;
 	readonly sourceUrl: string;
@@ -49,12 +56,16 @@ export interface TelegramStickerImportOptions {
 	readonly animatedFps?: number;
 	readonly animatedMaxFrames?: number;
 	readonly classifier?: StickerSemanticClassifier;
+	/** Finish after media import and let the caller run semantic classification separately. */
+	readonly deferSemantic?: boolean;
 	readonly dryRun?: boolean;
+	readonly importConcurrency?: number;
 	readonly includeAnimated?: boolean;
 	readonly includeVideo?: boolean;
 	readonly maxStickers?: number;
 	readonly onProgress?: (progress: TelegramImportProgress) => void;
 	readonly reviewStatus?: StickerReviewStatus;
+	readonly semanticConcurrency?: number;
 	readonly videoFormat?: TelegramVideoFormat;
 }
 
@@ -259,13 +270,15 @@ export class TelegramStickerImportService {
 		options: TelegramStickerImportOptions,
 	): Promise<TelegramStickerImportReport> {
 		const skipped = set.stickers.length - selection.length;
+		const semanticLimit = pLimit(clampConcurrency(options.semanticConcurrency));
 		let classified = 0;
-		for (const [offset, entry] of selection.entries()) {
+		let completed = 0;
+		await semanticLimit.map(selection, async (entry) => {
 			const name = telegramItemName(set.name, entry.index);
 			const itemLabel = entry.sticker.emoji ? `${name} ${entry.sticker.emoji}` : name;
 			options.onProgress?.({
 				classified,
-				current: offset,
+				current: completed,
 				currentItem: itemLabel,
 				packTitle: set.title,
 				skipped,
@@ -282,16 +295,17 @@ export class TelegramStickerImportService {
 				warnings,
 			);
 			if (profile.source !== "none") classified += 1;
+			completed += 1;
 			options.onProgress?.({
 				classified,
-				current: offset + 1,
+				current: completed,
 				currentItem: itemLabel,
 				packTitle: set.title,
 				skipped,
 				stage: "classifying",
 				total: selection.length,
 			});
-		}
+		});
 		appendFormatWarnings(selection, warnings, options);
 		appendSkippedWarning(set, selection, warnings);
 		return {
@@ -321,10 +335,65 @@ export class TelegramStickerImportService {
 		options: TelegramStickerImportOptions,
 	): Promise<TelegramStickerImportReport> {
 		const skipped = set.stickers.length - selection.length;
+		const importLimit = pLimit(clampConcurrency(options.importConcurrency));
+		const semanticLimit = pLimit(clampConcurrency(options.semanticConcurrency));
+		const heuristicOnly = isHeuristicSemanticClassifier(classifier);
+		const deferSemantic = options.deferSemantic === true && !heuristicOnly;
+		const runSemanticStage = !heuristicOnly && !deferSemantic;
+		const semanticTasks: Promise<void>[] = [];
+		const storeCache = new Map<string, Promise<PluginMediaRecord>>();
 		let deduped = 0;
 		let missingMedia = 0;
 		let classified = 0;
-		for (const [offset, entry] of selection.entries()) {
+		let saved = 0;
+
+		const emit = (
+			stage: TelegramImportProgress["stage"],
+			current = saved,
+			currentItem?: string,
+		): void => {
+			options.onProgress?.({
+				classified,
+				current,
+				...(currentItem === undefined ? {} : { currentItem }),
+				packTitle: set.title,
+				skipped,
+				stage,
+				total: selection.length,
+			});
+		};
+
+		/** Serializes dedupe lookup + store per SHA so concurrent duplicates reuse one media row. */
+		const storeMedia = (
+			hash: string,
+			prepared: PreparedMedia,
+			entry: SelectedSticker,
+		): Promise<PluginMediaRecord> => {
+			const pending = storeCache.get(hash);
+			if (pending !== undefined) {
+				deduped += 1;
+				return pending;
+			}
+			const created = (async (): Promise<PluginMediaRecord> => {
+				const existing = await this.#media.findBySha(hash);
+				if (existing !== undefined) {
+					deduped += 1;
+					return existing;
+				}
+				return await this.#media.store({
+					bytes: prepared.bytes,
+					height: entry.sticker.height,
+					kind: "sticker",
+					mimeType: prepared.mimeType,
+					source: "webui",
+					width: entry.sticker.width,
+				});
+			})();
+			storeCache.set(hash, created);
+			return created;
+		};
+
+		await importLimit.map(selection, async (entry) => {
 			const name = telegramItemName(set.name, entry.index);
 			const itemLabel = entry.sticker.emoji ? `${name} ${entry.sticker.emoji}` : name;
 			const itemId = stableId("item", `telegram:${set.name}:${entry.sticker.fileUniqueId}`);
@@ -336,17 +405,6 @@ export class TelegramStickerImportService {
 				kind: entry.kind,
 				packId,
 			});
-			const emit = (stage: TelegramImportProgress["stage"], current = offset) => {
-				options.onProgress?.({
-					classified,
-					current,
-					currentItem: itemLabel,
-					packTitle: set.title,
-					skipped,
-					stage,
-					total: selection.length,
-				});
-			};
 			const missing = async (reason: string): Promise<void> => {
 				missingMedia += 1;
 				warnings.push(`sticker ${name} ${reason}`);
@@ -363,10 +421,11 @@ export class TelegramStickerImportService {
 					reviewStatus: options.reviewStatus ?? "approved",
 					semantic: EMPTY_SEMANTIC_PROFILE,
 				});
-				emit("saving", offset + 1);
+				saved += 1;
+				emit("saving", saved, itemLabel);
 			};
 
-			emit("downloading");
+			emit("downloading", saved, itemLabel);
 			let downloaded: DownloadedMedia | undefined;
 			let primaryDownload = true;
 			if (entry.fileId !== undefined) {
@@ -407,11 +466,11 @@ export class TelegramStickerImportService {
 					reason: "no_media",
 				});
 				await missing("has no downloadable media");
-				continue;
+				return;
 			}
 
 			if (primaryDownload && (entry.kind === "tgs" || entry.kind === "webm")) {
-				emit("converting");
+				emit("converting", saved, itemLabel);
 			}
 			let prepared = primaryDownload
 				? await this.#prepare(entry, downloaded, options, warnings, name)
@@ -450,67 +509,121 @@ export class TelegramStickerImportService {
 					reason: "conversion_failed",
 				});
 				await missing("could not be converted or thumbnailed");
-				continue;
+				return;
 			}
 
 			const hash = sha256Bytes(prepared.bytes);
-			const existing = await this.#media.findBySha(hash);
-			if (existing !== undefined) deduped += 1;
-			const stored =
-				existing ??
-				(await this.#media.store({
-					bytes: prepared.bytes,
-					height: entry.sticker.height,
-					kind: "sticker",
-					mimeType: prepared.mimeType,
-					source: "webui",
-					width: entry.sticker.width,
-				}));
-			emit("classifying");
-			const profile = await this.#classify(
-				prepared.bytes,
-				entry.sticker.emoji,
-				set.title,
-				entry.index,
-				prepared.mimeType,
-				classifier,
-				warnings,
-			);
-			const withContext = withTelegramContext(profile, prepared);
-			if (withContext.source !== "none") classified += 1;
-			emit("saving");
-			await this.#repository.upsertItem({
-				description: withContext.description,
-				emotions: withContext.emotions,
+			const stored = await storeMedia(hash, prepared, entry);
+			const common = {
 				enabled: true,
 				hash,
 				height: entry.sticker.height,
 				id: itemId,
-				keywords: withContext.keywords,
 				mediaId: stored.id,
 				mimeType: prepared.mimeType,
 				name,
 				packId,
 				reviewStatus: options.reviewStatus ?? "approved",
-				semantic: withContext,
 				width: entry.sticker.width,
-			});
-			traceLog(this.#logger, "telegram sticker import item saved", {
-				bytes: prepared.bytes.byteLength,
-				deduped: existing !== undefined,
-				itemId,
-				itemName: name,
-				mimeType: prepared.mimeType,
-				packId,
-				semanticSource: withContext.source,
-			});
-			emit("saving", offset + 1);
-		}
+			} as const;
+			if (heuristicOnly) {
+				emit("classifying", saved, itemLabel);
+				const profile = withTelegramContext(
+					await this.#classify(
+						prepared.bytes,
+						entry.sticker.emoji,
+						set.title,
+						entry.index,
+						prepared.mimeType,
+						classifier,
+						warnings,
+					),
+					prepared,
+				);
+				if (profile.source !== "none") classified += 1;
+				await this.#repository.upsertItem({
+					...common,
+					description: profile.description,
+					emotions: profile.emotions,
+					keywords: profile.keywords,
+					semantic: profile,
+				});
+				traceLog(this.#logger, "telegram sticker import item saved", {
+					bytes: prepared.bytes.byteLength,
+					itemId,
+					itemName: name,
+					mimeType: prepared.mimeType,
+					packId,
+					semanticSource: profile.source,
+				});
+			} else {
+				// Persist a usable heuristic baseline immediately; the semantic pool enriches it.
+				const baseline = withTelegramContext(
+					classifyStickerSemantics({
+						...(entry.sticker.emoji === undefined ? {} : { emoji: entry.sticker.emoji }),
+						title: set.title,
+					}),
+					prepared,
+				);
+				await this.#repository.upsertItem({
+					...common,
+					description: baseline.description,
+					emotions: baseline.emotions,
+					keywords: baseline.keywords,
+					semantic: baseline,
+				});
+				traceLog(this.#logger, "telegram sticker import item saved", {
+					bytes: prepared.bytes.byteLength,
+					itemId,
+					itemName: name,
+					mimeType: prepared.mimeType,
+					packId,
+					semanticSource: baseline.source,
+				});
+			}
+			saved += 1;
+			emit("saving", saved, itemLabel);
+			if (!runSemanticStage) return;
+			semanticTasks.push(
+				semanticLimit(async () => {
+					emit("classifying", saved, itemLabel);
+					const profile = withTelegramContext(
+						await this.#classify(
+							prepared.bytes,
+							entry.sticker.emoji,
+							set.title,
+							entry.index,
+							prepared.mimeType,
+							classifier,
+							warnings,
+						),
+						prepared,
+					);
+					if (profile.source !== "none") classified += 1;
+					await this.#repository.updateItem(itemId, {
+						description: profile.description,
+						emotions: profile.emotions,
+						keywords: profile.keywords,
+						semantic: profile,
+					});
+					emit("saving", saved, itemLabel);
+				}),
+			);
+		});
+		await Promise.all(semanticTasks);
 		const stillCount = selection.filter((entry) => entry.kind === "thumbnail").length;
 		if (stillCount > 0) {
 			warnings.push(`${stillCount} animated or video sticker(s) use still thumbnails`);
 		}
 		appendSkippedWarning(set, selection, warnings);
+		options.onProgress?.({
+			classified,
+			current: selection.length,
+			packTitle: set.title,
+			skipped,
+			stage: "saving",
+			total: selection.length,
+		});
 		return {
 			classified,
 			classifier: classifier?.name ?? "none",
@@ -520,6 +633,7 @@ export class TelegramStickerImportService {
 			missingMedia,
 			packIds: [packId],
 			packs: 1,
+			...(deferSemantic ? { semanticDeferred: true } : {}),
 			setName: set.name,
 			skipped,
 			sourceUrl,

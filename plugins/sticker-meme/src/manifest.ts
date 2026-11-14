@@ -97,6 +97,14 @@ export const stickerMemeManifest: PluginManifest = pluginManifestSchema.parse({
 	},
 	configSchema: {
 		properties: {
+			importConcurrency: {
+				description:
+					"Parallel workers for media import (download, convert, dedupe, store). Higher values import faster.",
+				title: "Import concurrency",
+				maximum: 16,
+				minimum: 1,
+				type: "integer",
+			},
 			learning: {
 				properties: {
 					allowGenerated: { type: "boolean" },
@@ -117,6 +125,14 @@ export const stickerMemeManifest: PluginManifest = pluginManifestSchema.parse({
 					"Base URL for the vision model endpoint, for example https://api.openai.com/v1.",
 				title: "Semantic model base URL",
 				type: "string",
+			},
+			semanticConcurrency: {
+				description:
+					"Parallel workers for semantic classification. Runs concurrently with media import.",
+				title: "Semantic concurrency",
+				maximum: 16,
+				minimum: 1,
+				type: "integer",
 			},
 			semanticMaxLabels: {
 				description: "Maximum semantic labels stored per sticker.",
