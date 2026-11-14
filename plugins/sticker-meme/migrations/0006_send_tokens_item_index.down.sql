@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS plugin_sticker_meme_send_tokens_item_idx;

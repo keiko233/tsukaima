@@ -17,7 +17,6 @@
 	"tools": [],
 	"hooks": [],
 	"ui": [],
-	"migrations": [],
 	"configSchema": {
 		"properties": {
 			"repositoryRoot": { "type": "string" },

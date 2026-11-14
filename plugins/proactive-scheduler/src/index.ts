@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import type { TsukaimaPlugin, PluginContext } from "@tsukaima/sdk";
 import {
 	PROACTIVE_SCHEDULER_RUN_KIND,
@@ -68,6 +69,7 @@ async function updateStatus(
 
 export const proactiveSchedulerPlugin: TsukaimaPlugin = {
 	manifest: proactiveSchedulerManifest,
+	rootDir: fileURLToPath(new URL("../", import.meta.url)),
 	async setup(context) {
 		const database = context.database;
 		const tasks = context.tasks;

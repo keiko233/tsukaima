@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import type { TsukaimaPlugin, PluginContext } from "@tsukaima/sdk";
 import { recordValue } from "./domain.ts";
 import { StickerImportService } from "./import-service.ts";
@@ -120,6 +121,7 @@ async function updateStatus(context: PluginContext, repository: StickerRepositor
 
 export const stickerMemePlugin: TsukaimaPlugin = {
 	manifest: stickerMemeManifest,
+	rootDir: fileURLToPath(new URL("../", import.meta.url)),
 	async setup(context) {
 		context.logger.info("sticker-meme setup started");
 		const database = context.database;

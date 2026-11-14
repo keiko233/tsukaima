@@ -42,7 +42,6 @@ export const searchFetchManifest: PluginManifest = pluginManifestSchema.parse({
 	},
 	hooks: [],
 	kind: "builtin",
-	migrations: [],
 	name: SEARCH_FETCH_PLUGIN_ID,
 	permissions: [
 		"ui.panel",
