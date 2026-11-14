@@ -74,3 +74,38 @@ test.describe("built-in plugin panels", () => {
 		expect(errors).toEqual([]);
 	});
 });
+
+test.describe("onebot settings panel", () => {
+	test("labels and explains every config field in the active locale", async ({ page }) => {
+		await openAuthenticatedPage(page);
+		const stack = await readStackRuntime();
+		const errors = captureBrowserErrors(page);
+
+		await page.goto(new URL("/plugins/onebot-napcat", stack.webUrl).toString());
+		await page.getByRole("tab", { name: "Settings" }).click();
+
+		// Field labels come from the plugin catalog, never from the raw schema key.
+		await expect(page.getByText("WebSocket URL", { exact: true })).toBeVisible();
+		await expect(page.getByText("Access token", { exact: true })).toBeVisible();
+		await expect(page.getByText("Connection mode", { exact: true })).toBeVisible();
+		await expect(page.getByText("Reply with a quote", { exact: true })).toBeVisible();
+		await expect(page.getByText("Reconnect backoff", { exact: true })).toBeVisible();
+
+		// Every field explains itself, and the sections group related settings.
+		await expect(
+			page.getByText("NapCat forward WebSocket address", { exact: false }),
+		).toBeVisible();
+		await expect(page.getByText("Message handling", { exact: true })).toBeVisible();
+		await expect(page.getByText("Permissions", { exact: true })).toBeVisible();
+
+		for (const key of ["wsUrl", "accessToken", "adminUsers", "forwardExpand", "pttToText"]) {
+			await expect(page.getByText(key, { exact: true })).toHaveCount(0);
+		}
+
+		await page.screenshot({
+			fullPage: true,
+			path: ".test-data/e2e/onebot-settings.png",
+		});
+		expect(errors).toEqual([]);
+	});
+});

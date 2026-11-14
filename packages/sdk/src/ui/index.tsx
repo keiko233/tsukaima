@@ -3,7 +3,7 @@
 export { Alert, CodeBlock, EmptyState, Field, KeyValueList, PluginPage, PluginSection, PluginToolbar, ProgressBar, RelativeTime, Skeleton, Spinner, Stat, StatGrid, StatusBadge, StatusDot } from "./components.tsx";
 export type { FieldProps } from "./components.tsx";
 export { PluginConfigForm } from "./config-form.tsx";
-export type { PluginConfigFormProps } from "./config-form.tsx";
+export type { PluginConfigFormProps, PluginConfigGroup } from "./config-form.tsx";
 export {
 	PluginPanelProvider,
 	usePluginConfig,

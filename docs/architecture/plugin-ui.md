@@ -25,16 +25,16 @@ The current plugin surface has three gaps:
 
 ## 2. Decisions at a glance
 
-| Area | Decision |
-| --- | --- |
-| Navigation | `/plugins` becomes a two-pane route: plugin list on the left, selected plugin on the right. Deep-linkable as `/plugins/$pluginId`. |
-| Trusted UI | Built-in and first-party plugins may ship a React panel that is bundled into the admin app at build time. |
+| Area           | Decision                                                                                                                                                                                                                   |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Navigation     | `/plugins` becomes a two-pane route: plugin list on the left, selected plugin on the right. Deep-linkable as `/plugins/$pluginId`.                                                                                         |
+| Trusted UI     | Built-in and first-party plugins may ship a React panel that is bundled into the admin app at build time.                                                                                                                  |
 | Third-party UI | A third-party plugin may ship a React panel, but only when it is built into the admin bundle from the workspace. Opening it shows a confirmation warning first; runtime-installed plugins still fall back to data-only UI. |
-| UI kit | `@tsukaima/sdk/ui` exports a curated React kit that uses the host theme tokens. It is the only supported visual layer for plugin panels. |
-| Status | `context.ui.setStatus()` publishes a validated, bounded snapshot. The host stores it, includes it in `admin.plugins.list`, and streams `plugin.status` live events. |
-| i18n | `@tsukaima/sdk/i18n` binds a plugin's Paraglide-compiled messages to the host locale. A runtime-dictionary fallback exists for plugins without a build step. |
-| Config | The existing JSON-schema config form moves into the shared kit and is reused by the fallback page and by custom panels. |
-| Isolation | Each panel is wrapped in an error boundary and loaded lazily. One plugin cannot blank the admin page. |
+| UI kit         | `@tsukaima/sdk/ui` exports a curated React kit that uses the host theme tokens. It is the only supported visual layer for plugin panels.                                                                                     |
+| Status         | `context.ui.setStatus()` publishes a validated, bounded snapshot. The host stores it, includes it in `admin.plugins.list`, and streams `plugin.status` live events.                                                        |
+| i18n           | `@tsukaima/sdk/i18n` binds a plugin's Paraglide-compiled messages to the host locale. A runtime-dictionary fallback exists for plugins without a build step.                                                                 |
+| Config         | The existing JSON-schema config form moves into the shared kit and is reused by the fallback page and by custom panels.                                                                                                    |
+| Isolation      | Each panel is wrapped in an error boundary and loaded lazily. One plugin cannot blank the admin page.                                                                                                                      |
 
 ## 3. Trust model
 
@@ -45,12 +45,12 @@ write or review.
 
 Three tiers are defined:
 
-| Tier | Who | Mechanism | Status |
-| --- | --- | --- | --- |
-| Built-in panel | Built-in and first-party plugins | Build-time import of `src/ui.tsx`, same React tree | Implemented |
-| Warned panel | Third-party plugin that ships a panel in the workspace bundle | Same build-time import, gated behind a confirmation modal | Implemented |
-| Declarative UI | Third-party plugin without a bundled panel | Manifest `ui` entries rendered by host components; actions are namespaced RPC | Generic fallback page |
-| Sandboxed panel | Runtime-installed third-party plugin | `<iframe sandbox>` with a scoped postMessage bridge and no admin cookie | Future work |
+| Tier            | Who                                                           | Mechanism                                                                     | Status                |
+| --------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------- |
+| Built-in panel  | Built-in and first-party plugins                              | Build-time import of `src/ui.tsx`, same React tree                            | Implemented           |
+| Warned panel    | Third-party plugin that ships a panel in the workspace bundle | Same build-time import, gated behind a confirmation modal                     | Implemented           |
+| Declarative UI  | Third-party plugin without a bundled panel                    | Manifest `ui` entries rendered by host components; actions are namespaced RPC | Generic fallback page |
+| Sandboxed panel | Runtime-installed third-party plugin                          | `<iframe sandbox>` with a scoped postMessage bridge and no admin cookie       | Future work           |
 
 All internal plugins are expected to provide a panel. A third-party plugin that ships a panel is
 treated as untrusted code: the page shows a modal that explains the panel runs with the admin
@@ -272,11 +272,46 @@ The kit exports a presentational form driven by the manifest's `configSchema`:
   secretKeys={plugin.secretKeys}
   saving={config.saving}
   onSave={config.save}
+  translate={(key) => i18n.t(key)}
+  groups={[
+    { titleKey: "group_connection", keys: ["mode", "wsUrl", "accessToken"] },
+    { titleKey: "group_behaviour", keys: ["replyAsQuote", "splitMaxChars"] },
+  ]}
   labels={{ save: i18n.t("save"), configured: i18n.t("configured") }}
 />
 ```
 
 The host wrapper supplies the oRPC mutation; the plugin does not need to know the API shape.
+
+Supported field shapes: `string`, `number`/`integer`, `boolean`, string `enum`, arrays of
+strings (edited as a comma-separated list), nested `object` with scalar properties, and
+`anyOf`/`oneOf` `boolean | { … }` unions (rendered as a switch whose object branch appears when
+the switch is on). Any other shape renders the current JSON with an explanation instead of
+being silently dropped.
+
+Every field must be labelled and explained. The schema carries the copy, not the form:
+
+```json
+{
+  "type": "string",
+  "title": "WebSocket URL",
+  "titleKey": "config_ws_url",
+  "description": "NapCat forward WebSocket address…",
+  "descriptionKey": "config_ws_url_hint"
+}
+```
+
+- `title`/`description` are the English fallback shown by the host's generic plugin page.
+- `titleKey`/`descriptionKey` are keys in the plugin's own Paraglide catalog; `translate`
+  resolves them, and a key that is missing from the catalog falls back to the literal.
+- `enumLabels` maps each `enum` value to a message key, so a mode reads "Forward (Tsukaima
+  connects out)" instead of the raw value.
+- `default` is used as the enum placeholder and as the initial switch state, so an unset
+  field never renders as an empty "Select".
+- Arrays of strings, numbers, and nested object properties accept the same three keys.
+
+A field that the runtime does not read yet (for example a legacy key kept for migration)
+must say so in its `description` rather than implying that it takes effect.
 
 ## 6. Host API
 
@@ -559,28 +594,28 @@ The kit lives under `packages/sdk/src/ui`. It must not import `@/` aliases, app 
 app's React Query client. It depends only on React, the host theme tokens, and its own styles.
 This keeps the kit usable from a plugin workspace package without pulling in the app shell.
 
-| Component | Purpose |
-| --- | --- |
-| `PluginPage` | Panel page shell: title, description, actions, content spacing |
-| `PluginSection` | Titled content card |
-| `PluginToolbar` | Right-aligned action row |
-| `StatusBadge` / `StatusDot` | Status level with label and optional stale marker |
-| `ProgressBar` | Determinate or indeterminate progress |
-| `Stat` / `StatGrid` | Metric tiles |
-| `KeyValueList` | Definition list for details |
-| `DataTable` | Typed columns, empty state, row actions |
-| `EmptyState` | Icon, title, description, optional action |
-| `Alert` | Info/success/warning/danger banner |
-| `Button` / `IconButton` | Primary, secondary, ghost, danger; loading state |
-| `Field` | Label, hint, error, required marker |
-| `Input` / `TextArea` / `SecretInput` / `NumberInput` | Form controls |
-| `Switch` / `Select` / `Checkbox` | Boolean and choice controls |
-| `Tabs` | Simple accessible tab list for panels |
-| `CodeBlock` / `LogView` | Read-only diagnostics |
-| `Spinner` / `Skeleton` | Loading states |
-| `RelativeTime` | Locale-aware timestamp |
-| `PluginConfigForm` | JSON-schema config form |
-| `usePluginPanel` / `usePluginRpc` / `usePluginConfig` / `usePluginI18n` / `usePluginToast` | Context hooks |
+| Component                                                                                  | Purpose                                                        |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| `PluginPage`                                                                               | Panel page shell: title, description, actions, content spacing |
+| `PluginSection`                                                                            | Titled content card                                            |
+| `PluginToolbar`                                                                            | Right-aligned action row                                       |
+| `StatusBadge` / `StatusDot`                                                                | Status level with label and optional stale marker              |
+| `ProgressBar`                                                                              | Determinate or indeterminate progress                          |
+| `Stat` / `StatGrid`                                                                        | Metric tiles                                                   |
+| `KeyValueList`                                                                             | Definition list for details                                    |
+| `DataTable`                                                                                | Typed columns, empty state, row actions                        |
+| `EmptyState`                                                                               | Icon, title, description, optional action                      |
+| `Alert`                                                                                    | Info/success/warning/danger banner                             |
+| `Button` / `IconButton`                                                                    | Primary, secondary, ghost, danger; loading state               |
+| `Field`                                                                                    | Label, hint, error, required marker                            |
+| `Input` / `TextArea` / `SecretInput` / `NumberInput`                                       | Form controls                                                  |
+| `Switch` / `Select` / `Checkbox`                                                           | Boolean and choice controls                                    |
+| `Tabs`                                                                                     | Simple accessible tab list for panels                          |
+| `CodeBlock` / `LogView`                                                                    | Read-only diagnostics                                          |
+| `Spinner` / `Skeleton`                                                                     | Loading states                                                 |
+| `RelativeTime`                                                                             | Locale-aware timestamp                                         |
+| `PluginConfigForm`                                                                         | JSON-schema config form                                        |
+| `usePluginPanel` / `usePluginRpc` / `usePluginConfig` / `usePluginI18n` / `usePluginToast` | Context hooks                                                  |
 
 Rules:
 
