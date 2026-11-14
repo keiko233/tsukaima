@@ -5,10 +5,12 @@ import { orpc } from "@/lib/api";
 import { ContextPanelContent } from "./context-panel-view";
 
 export function ContextPanel({
+	embedded = false,
 	enabled,
 	onClose,
 	sessionId,
 }: {
+	embedded?: boolean;
 	enabled: boolean;
 	onClose?: () => void;
 	sessionId: string;
@@ -20,6 +22,7 @@ export function ContextPanel({
 
 	return (
 		<ContextPanelContent
+			embedded={embedded}
 			errorMessage={query.error?.message}
 			isError={query.isError}
 			isFetching={query.isFetching}

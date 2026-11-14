@@ -307,6 +307,39 @@ describe("admin conversation policy and persona RPC", () => {
 					(row) => row.action === "admin.rpc" && row.payloadJson?.includes("policies/update"),
 				),
 			).toBe(true);
+
+			const compactResult = (await request("admin/sessions/compact", {
+				instructions: "Focus on summary",
+				sessionId: chat.sessionId,
+			})) as { compacted: boolean; entryId: string | null; submissionId: string | null };
+			expect(compactResult).toEqual({
+				compacted: false,
+				entryId: null,
+				submissionId: null,
+			});
+
+			const resetResult = (await request("admin/sessions/resetContext", {
+				handoff: "Start fresh",
+				sessionId: chat.sessionId,
+			})) as { ok: boolean };
+			expect(resetResult).toEqual({ ok: true });
+
+			const statsAfterReset = sessionContextStatsSchema.parse(
+				await request("admin/sessions/contextStats", { sessionId: chat.sessionId }),
+			);
+			expect(statsAfterReset.messageCount).toBe(1);
+
+			const abortResult = (await request("admin/sessions/abort", {
+				sessionId: chat.sessionId,
+			})) as { cancelledPendingOutput: boolean; ok: boolean };
+			expect(abortResult).toEqual({ cancelledPendingOutput: false, ok: true });
+
+			const updatedAudits = await database.select().from(auditLog);
+			for (const action of ["session.compact", "session.reset-context", "session.abort"]) {
+				expect(updatedAudits.some((row) => row.action === action && row.result === "ok")).toBe(
+					true,
+				);
+			}
 		} finally {
 			await lifecycle.stop();
 		}

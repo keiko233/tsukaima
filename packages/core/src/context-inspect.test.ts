@@ -130,4 +130,80 @@ describe("inspectConversationContext", () => {
 			await rm(directory, { force: true, recursive: true });
 		}
 	});
+
+	test("compacts long context, resets context head with handoff, and aborts pending activity", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-commands-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const host = new PiDurableConversationHost({
+				responses: [
+					"reply-1",
+					"reply-2",
+					"reply-3",
+					"reply-4",
+					"Compacted summary of earlier turns.",
+				],
+				storage,
+			});
+
+			const conversationId = await host.createConversation();
+			await host.append({
+				conversationId,
+				envelope: envelope("short-1", "hi there"),
+				forceSubmit: true,
+				submittedAtMs: 1,
+			});
+
+			// Small history fits inside keepRecentTokens, so compaction is a no-op.
+			const noopCompact = await host.compactConversation(conversationId);
+			expect(noopCompact.compacted).toBe(false);
+			expect(noopCompact.entryId).toBeNull();
+			expect(noopCompact.submissionId).toBeNull();
+
+			// Append large turns so total context exceeds keepRecentTokens.
+			const largeChunk = "alpha beta gamma delta ".repeat(1_500);
+			for (let idx = 1; idx <= 3; idx += 1) {
+				await host.append({
+					conversationId,
+					envelope: envelope(`big-${idx}`, `${idx}: ${largeChunk}`),
+					forceSubmit: true,
+					submittedAtMs: idx + 1,
+				});
+			}
+
+			// Wait for the turns to finish running before compacting.
+			for (let attempt = 0; attempt < 50; attempt += 1) {
+				const stats = await host.inspectConversationContext(conversationId);
+				if ((stats?.messageCount ?? 0) >= 8) break;
+				await Bun.sleep(20);
+			}
+
+			const compacted = await host.compactConversation(conversationId, "Keep key facts");
+			expect(compacted.compacted).toBe(true);
+			expect(compacted.submissionId).not.toBeNull();
+
+			const postCompact = await host.inspectConversationContext(conversationId);
+			expect(postCompact?.compacted).toBe(true);
+
+			// Reset context with handoff: UI entries stay, active context starts from handoff.
+			await host.resetConversation(conversationId, "Resume cleanly from here");
+			const postReset = await host.inspectConversationContext(conversationId);
+			expect(postReset?.compacted).toBe(false);
+			expect(postReset?.messageCount).toBe(1);
+
+			// Pending burst collection is cleared by abortConversation.
+			await host.append({
+				collectOnly: true,
+				conversationId,
+				envelope: envelope("queued-1", "pending burst"),
+				submittedAtMs: 100,
+			});
+			await host.abortConversation(conversationId);
+
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
 });

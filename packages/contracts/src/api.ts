@@ -574,6 +574,16 @@ export const requestsRespondInputSchema = z.object({
 	requestId: z.string().min(1),
 });
 
+export const sessionsCompactInputSchema = z.object({
+	instructions: z.string().trim().max(2_000).optional(),
+	sessionId: z.string().min(1),
+});
+
+export const sessionsResetContextInputSchema = z.object({
+	handoff: z.string().trim().max(4_000).optional(),
+	sessionId: z.string().min(1),
+});
+
 export const sessionsCreateInputSchema = z.object({
 	chatObjectId: z.string().min(1),
 	title: z.string().trim().min(1).max(120),
@@ -600,6 +610,19 @@ const createLocalChatOutputSchema = z.object({
 
 const createSessionOutputSchema = z.object({ id: z.string() });
 const okSchema = z.object({ ok: z.literal(true) });
+
+export const sessionsCompactOutputSchema = z.object({
+	compacted: z.boolean(),
+	entryId: z.string().nullable(),
+	submissionId: z.string().nullable(),
+});
+export type SessionsCompactResult = z.infer<typeof sessionsCompactOutputSchema>;
+
+export const sessionsAbortOutputSchema = z.object({
+	cancelledPendingOutput: z.boolean(),
+	ok: z.literal(true),
+});
+export type SessionsAbortResult = z.infer<typeof sessionsAbortOutputSchema>;
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
@@ -1136,6 +1159,11 @@ export const appContract = oc.router({
 			respond: oc.input(requestsRespondInputSchema).output(requestRowSchema).meta({ audit: true }),
 		},
 		sessions: {
+			abort: oc.input(sessionIdInputSchema).output(sessionsAbortOutputSchema).meta({ audit: true }),
+			compact: oc
+				.input(sessionsCompactInputSchema)
+				.output(sessionsCompactOutputSchema)
+				.meta({ audit: true }),
 			contextStats: oc.input(sessionIdInputSchema).output(sessionContextStatsSchema.nullable()),
 			create: oc
 				.input(sessionsCreateInputSchema)
@@ -1143,6 +1171,10 @@ export const appContract = oc.router({
 				.meta({ audit: true }),
 			get: oc.input(sessionIdInputSchema).output(sessionDetailSchema.nullable()),
 			messages: oc.input(sessionIdInputSchema).output(z.array(messageSummarySchema)),
+			resetContext: oc
+				.input(sessionsResetContextInputSchema)
+				.output(okSchema)
+				.meta({ audit: true }),
 			runSteps: oc.input(runStepsInputSchema).output(runStepsSchema),
 			send: oc.input(sessionsSendInputSchema).output(messageSummarySchema).meta({ audit: true }),
 			setReceiving: oc.input(sessionIdInputSchema).output(okSchema).meta({ audit: true }),
