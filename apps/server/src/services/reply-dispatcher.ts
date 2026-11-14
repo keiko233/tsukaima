@@ -264,22 +264,18 @@ export class ReplyDispatcher {
 		let parts: MessagePart[];
 		let plan: DeliveryPlanItem[];
 		if (hasMedia) {
-			// Media-bearing transforms keep their exact text/media order. Each text part is
-			// normalized independently so delivery still yields paced newline units.
+			// Media-bearing transforms keep their exact text/media order in one outbound message,
+			// matching the single row the WebUI renders. Newline pacing only applies to text-only
+			// replies; splitting here would turn one rendered bubble into several QQ messages.
 			const normalizedParts: MessagePart[] = [];
-			plan = [];
 			for (const part of transformed.parts) {
 				if (part.type !== "text") {
 					normalizedParts.push(part);
-					plan.push({ parts: [part] });
 					continue;
 				}
 				const partOutput = prepareOutboundText(part.text, policy.pacing);
 				if (partOutput.text.length > 0) {
 					normalizedParts.push({ text: partOutput.text, type: "text" });
-				}
-				for (const unit of partOutput.units) {
-					plan.push({ parts: [{ text: unit, type: "text" }] });
 				}
 			}
 			if (normalizedParts.length === 0) {
@@ -290,6 +286,7 @@ export class ReplyDispatcher {
 				return { deliveryStatus: "skipped", reason: "empty_output" };
 			}
 			parts = normalizedParts;
+			plan = [{ parts: normalizedParts }];
 			text = normalizedParts
 				.filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
 				.map((part) => part.text)
