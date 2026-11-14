@@ -43,3 +43,50 @@ describe("plugin worker lifecycle", () => {
 		await worker.stop();
 	});
 });
+
+describe("union and enum config schemas", () => {
+	const unionManifest = pluginManifestSchema.parse({
+		apiVersion: "1",
+		configSchema: {
+			properties: {
+				mode: { enum: ["forward", "reverse"], type: "string" },
+				pttToText: {
+					anyOf: [
+						{ type: "boolean" },
+						{
+							properties: { timeoutMs: { type: "number" } },
+							type: "object",
+						},
+					],
+				},
+			},
+			type: "object",
+		},
+		kind: "builtin",
+		name: "union-config",
+		permissions: [],
+		version: "0.1.0",
+	});
+
+	test("accepts every branch of a union and rejects values outside it", () => {
+		expect(
+			new PluginRegistry().install(unionManifest, {
+				config: { mode: "reverse", pttToText: false },
+			}).config,
+		).toEqual({ mode: "reverse", pttToText: false });
+		expect(
+			new PluginRegistry().install(unionManifest, { config: { pttToText: { timeoutMs: 500 } } })
+				.config,
+		).toEqual({ pttToText: { timeoutMs: 500 } });
+		expect(() =>
+			new PluginRegistry().install(unionManifest, { config: { pttToText: "yes" } }),
+		).toThrow(PluginRegistryError);
+	});
+
+	test("rejects an enum value that is not listed", () => {
+		const registry = new PluginRegistry();
+		expect(() => registry.install(unionManifest, { config: { mode: "sideways" } })).toThrow(
+			PluginRegistryError,
+		);
+	});
+});

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PluginI18n } from "@elaina/sdk/i18n";
 import { PluginPanelProvider, type PluginSummary } from "@elaina/sdk/ui";
+import { oneBotNapCatManifest } from "../../../../plugins/onebot-napcat/src/manifest.ts";
 import oneBotUi from "../../../../plugins/onebot-napcat/src/ui.tsx";
 import openAiUi from "../../../../plugins/openai-compatible/src/ui.tsx";
 import proactiveUi from "../../../../plugins/proactive-scheduler/src/ui.tsx";
@@ -53,8 +54,12 @@ function renderPanel(
 	definition: PluginUiModuleDefinition,
 	i18n: PluginI18n = fakeI18n(),
 	pluginValue: PluginSummary = plugin,
+	panelId?: string,
 ): string {
-	const panel = definition.panels[0];
+	const panel =
+		panelId === undefined
+			? definition.panels[0]
+			: definition.panels.find((candidate) => candidate.id === panelId);
 	if (panel === undefined) throw new Error("no panel");
 	const Panel = panel.component;
 	return renderToStaticMarkup(
@@ -86,6 +91,29 @@ describe("built-in plugin panels", () => {
 		expect(html).toContain("1284");
 		const zh = renderPanel(oneBotUi, oneBotI18n.bind("zh-cn"));
 		expect(zh).toContain("通道状态");
+	});
+
+	test("renders the onebot settings panel with translated field labels and hints", () => {
+		const settingsPlugin: PluginSummary = {
+			...plugin,
+			config: { mode: "forward", wsUrl: "ws://napcat.test:3001" },
+			configSchema: oneBotNapCatManifest.configSchema,
+			secretKeys: oneBotNapCatManifest.secretKeys,
+		};
+		const en = renderPanel(oneBotUi, oneBotI18n.bind("en"), settingsPlugin, "settings");
+		expect(en).toContain("WebSocket URL");
+		expect(en).toContain("NapCat forward WebSocket address");
+		expect(en).toContain("Reply with a quote");
+		expect(en).toContain("Reconnect backoff");
+		expect(en).toContain("Connection");
+		// The raw schema key is never used as a visible label.
+		expect(en).not.toContain(">wsUrl<");
+		const zh = renderPanel(oneBotUi, oneBotI18n.bind("zh-cn"), settingsPlugin, "settings");
+		expect(zh).toContain("WebSocket 地址");
+		expect(zh).toContain("以引用方式回复");
+		expect(zh).toContain("重连退避");
+		expect(zh).toContain("连接");
+		expect(zh).not.toContain(">wsUrl<");
 	});
 
 	test("renders the openai-compatible provider panel", () => {

@@ -55,7 +55,11 @@ const PANEL_ICONS: Record<PluginPanelIcon, ReactNode> = {
 type UiState =
 	| { readonly state: "loading" }
 	| { readonly state: "none" }
-	| { readonly state: "ready"; readonly definition: PluginUiModuleDefinition; readonly i18n: PluginI18n | null }
+	| {
+			readonly state: "ready";
+			readonly definition: PluginUiModuleDefinition;
+			readonly i18n: PluginI18n | null;
+	  }
 	| { readonly state: "error"; readonly error: string };
 
 function statusLevelLabel(plugin: PluginRow): string {
@@ -144,9 +148,7 @@ export function PluginStatusPanel({
 					<div className="space-y-1">
 						{message ? <p className="text-sm">{message}</p> : null}
 						{status.message ? (
-							<p className="whitespace-pre-wrap text-xs text-muted-foreground">
-								{status.message}
-							</p>
+							<p className="whitespace-pre-wrap text-xs text-muted-foreground">{status.message}</p>
 						) : null}
 						<p className="text-[11px] text-muted-foreground">
 							{stale ? `${m.plugins_status_stale()} · ` : ""}
@@ -212,10 +214,7 @@ function ManifestPanel({ plugin }: { plugin: PluginRow }) {
 		) : (
 			<span className="flex flex-wrap gap-1">
 				{items.map((item) => (
-					<code
-						key={item}
-						className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]"
-					>
+					<code key={item} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
 						{item}
 					</code>
 				))}
@@ -253,11 +252,7 @@ class PanelBoundary extends Component<
 			<Alert tone="danger" title={m.plugins_panel_error()}>
 				<div className="space-y-2">
 					<p className="font-mono text-[11px]">{this.state.error}</p>
-					<Button
-						size="sm"
-						variant="secondary"
-						onClick={() => this.setState({ error: null })}
-					>
+					<Button size="sm" variant="secondary" onClick={() => this.setState({ error: null })}>
 						{m.plugins_panel_retry()}
 					</Button>
 				</div>
@@ -369,8 +364,7 @@ export function PluginDetail({ plugin }: { plugin: PluginRow }) {
 			.then((module) => {
 				if (cancelled) return;
 				const definition = (module as { readonly default: PluginUiModuleDefinition }).default;
-				const i18n =
-					definition.i18n === undefined ? null : definition.i18n.bind(getLocale());
+				const i18n = definition.i18n === undefined ? null : definition.i18n.bind(getLocale());
 				setUi({ definition, i18n, state: "ready" });
 				if (plugin.kind === "third-party") setWarningOpen(true);
 			})
@@ -475,9 +469,7 @@ export function PluginDetail({ plugin }: { plugin: PluginRow }) {
 						</Button>
 					</div>
 				</div>
-				{plugin.enabled !== 1 ? (
-					<Alert tone="warning">{m.plugins_enabled_hint()}</Alert>
-				) : null}
+				{plugin.enabled !== 1 ? <Alert tone="warning">{m.plugins_enabled_hint()}</Alert> : null}
 			</header>
 
 			{ui.state === "loading" ? <Skeleton className="h-40 w-full" /> : null}
@@ -535,6 +527,7 @@ export function PluginDetail({ plugin }: { plugin: PluginRow }) {
 								empty: m.plugins_config_empty(),
 								save: m.settings_save(),
 								unset: m.plugins_config_unset(),
+								unsupported: m.plugins_config_unsupported(),
 							}}
 							onSave={async (patch) => {
 								await updateConfig.mutateAsync({ config: patch, pluginId: plugin.id });
@@ -543,6 +536,7 @@ export function PluginDetail({ plugin }: { plugin: PluginRow }) {
 							schema={plugin.configSchema}
 							secretKeys={plugin.secretKeys}
 							secretsSet={plugin.secretsSet}
+							translate={t === null ? undefined : (key: string) => t.t(key)}
 							value={plugin.config}
 						/>
 					</PluginSection>

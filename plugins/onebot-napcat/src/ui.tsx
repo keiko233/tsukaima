@@ -57,10 +57,7 @@ function ConnectionPanel() {
 					{ label: i18nValue.t("reconnects"), value: String(metrics.reconnects ?? "—") },
 					{
 						label: i18nValue.t("endpoint"),
-						value:
-							typeof details.endpoint === "string"
-								? details.endpoint
-								: plugin.runMode,
+						value: typeof details.endpoint === "string" ? details.endpoint : plugin.runMode,
 					},
 				]}
 			/>
@@ -73,9 +70,41 @@ function SettingsPanel() {
 	const { plugin } = usePluginPanel();
 	const config = usePluginConfig();
 	return (
-		<PluginPage title={i18nValue.t("panel_settings")}>
+		<PluginPage description={i18nValue.t("settings_hint")} title={i18nValue.t("panel_settings")}>
 			<PluginSection title={plugin.name}>
 				<PluginConfigForm
+					groups={[
+						{
+							keys: ["mode", "wsUrl", "accessToken", "host", "port", "channelId", "botAccountId"],
+							titleKey: "group_connection",
+						},
+						{
+							keys: [
+								"replyAsQuote",
+								"splitMaxChars",
+								"sendIntervalMs",
+								"pendingGraceMs",
+								"pttToText",
+								"forwardExpand",
+							],
+							titleKey: "group_behaviour",
+						},
+						{
+							keys: [
+								"groupManage",
+								"selfManage",
+								"deleteGroupFile",
+								"rawActionAllowlist",
+								"adminUsers",
+								"adminTitles",
+							],
+							titleKey: "group_permissions",
+						},
+						{
+							keys: ["reconnect", "actionTimeoutMs"],
+							titleKey: "group_network",
+						},
+					]}
 					labels={{
 						configured: i18nValue.t("configured"),
 						save: i18nValue.t("save"),
@@ -86,6 +115,7 @@ function SettingsPanel() {
 					schema={plugin.configSchema}
 					secretKeys={plugin.secretKeys}
 					secretsSet={config.secretsSet}
+					translate={(key) => i18nValue.t(key)}
 					value={config.value}
 				/>
 			</PluginSection>

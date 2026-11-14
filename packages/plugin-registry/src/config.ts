@@ -7,6 +7,22 @@ function validateJsonSchema(value: unknown, input: unknown, path: string): void 
 		throw new PluginRegistryError(`Invalid JSON schema at ${path || "root"}`);
 	}
 	const schema = value as Record<string, unknown>;
+	const branches = schema.anyOf ?? schema.oneOf;
+	if (Array.isArray(branches) && branches.length > 0) {
+		// Union shapes (for example `boolean | { … }`) pass when any branch accepts the value.
+		const accepted = branches.some((branch) => {
+			try {
+				validateJsonSchema(branch, input, path);
+				return true;
+			} catch {
+				return false;
+			}
+		});
+		if (!accepted) {
+			throw new PluginRegistryError(`Config key "${path}" has an invalid type`);
+		}
+		return;
+	}
 	const type = schema.type;
 	const types = typeof type === "string" ? [type] : Array.isArray(type) ? type : [];
 	if (types.includes("object")) {
@@ -54,6 +70,10 @@ function validateJsonSchema(value: unknown, input: unknown, path: string): void 
 	);
 	if (!matches) {
 		throw new PluginRegistryError(`Config key "${path}" has an invalid type`);
+	}
+	const allowed = schema.enum;
+	if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(input)) {
+		throw new PluginRegistryError(`Config key "${path}" is not one of the allowed values`);
 	}
 }
 

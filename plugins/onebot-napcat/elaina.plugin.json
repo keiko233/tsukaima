@@ -25,33 +25,62 @@
 		"type": "object",
 		"properties": {
 			"accessToken": {
-				"type": "string"
+				"type": "string",
+				"title": "Access token",
+				"titleKey": "config_access_token",
+				"description": "Token NapCat requires for this connection. Falls back to ELAINA_ONEBOT_ACCESS_TOKEN when empty.",
+				"descriptionKey": "config_access_token_hint"
 			},
 			"actionTimeoutMs": {
-				"type": "number"
+				"type": "number",
+				"title": "Action timeout (ms)",
+				"titleKey": "config_action_timeout",
+				"description": "How long one NapCat API call may take before it fails. Defaults to 5000.",
+				"descriptionKey": "config_action_timeout_hint"
 			},
 			"adminTitles": {
 				"items": {
 					"type": "string"
 				},
-				"type": "array"
+				"type": "array",
+				"title": "Admin group titles",
+				"titleKey": "config_admin_titles",
+				"description": "Group member titles that count as administrators. Reserved for the legacy configuration; the runtime does not read it yet.",
+				"descriptionKey": "config_admin_titles_hint"
 			},
 			"adminUsers": {
 				"items": {
 					"type": "string"
 				},
-				"type": "array"
+				"type": "array",
+				"title": "Admin user ids",
+				"titleKey": "config_admin_users",
+				"description": "OneBot user ids allowed to run destructive actions such as group management and raw calls.",
+				"descriptionKey": "config_admin_users_hint"
 			},
 			"botAccountId": {
-				"type": "string"
+				"type": "string",
+				"title": "Bot account id",
+				"titleKey": "config_bot_account",
+				"description": "The bot's own account id, used to recognise its own messages. Defaults to elaina-server.",
+				"descriptionKey": "config_bot_account_hint"
 			},
 			"channelId": {
-				"type": "string"
+				"type": "string",
+				"title": "Channel id",
+				"titleKey": "config_channel_id",
+				"description": "Identifier for this channel instance. Incoming events and chat objects are stored under it; defaults to onebot.",
+				"descriptionKey": "config_channel_id_hint"
 			},
 			"deleteGroupFile": {
-				"type": "boolean"
+				"type": "boolean",
+				"title": "Allow deleting group files",
+				"titleKey": "config_delete_group_file",
+				"description": "Allow administrators to delete files from NapCat group storage.",
+				"descriptionKey": "config_delete_group_file_hint"
 			},
 			"forwardExpand": {
+				"default": true,
 				"anyOf": [
 					{
 						"type": "boolean"
@@ -59,36 +88,78 @@
 					{
 						"properties": {
 							"maxChars": {
-								"type": "number"
+								"type": "number",
+								"title": "Max characters",
+								"titleKey": "config_forward_max_chars",
+								"description": "Character budget for one expanded bundle.",
+								"descriptionKey": "config_forward_max_chars_hint"
 							},
 							"maxNodes": {
-								"type": "number"
+								"type": "number",
+								"title": "Max nodes",
+								"titleKey": "config_forward_max_nodes",
+								"description": "Maximum number of nested messages to expand.",
+								"descriptionKey": "config_forward_max_nodes_hint"
 							},
 							"timeoutMs": {
-								"type": "number"
+								"type": "number",
+								"title": "Timeout (ms)",
+								"titleKey": "config_forward_timeout",
+								"description": "How long fetching one forwarded bundle may take.",
+								"descriptionKey": "config_forward_timeout_hint"
 							}
 						},
 						"type": "object"
 					}
-				]
+				],
+				"title": "Expand forwarded chats",
+				"titleKey": "config_forward_expand",
+				"description": "Download and expand forwarded message bundles before the model sees them. Enable it, or switch it off to keep only the summary node.",
+				"descriptionKey": "config_forward_expand_hint"
 			},
 			"groupManage": {
-				"type": "boolean"
+				"type": "boolean",
+				"title": "Allow group management",
+				"titleKey": "config_group_manage",
+				"description": "Allow administrators to run group actions: mute, kick, rename, card, title, and whole-group mute.",
+				"descriptionKey": "config_group_manage_hint"
 			},
 			"host": {
-				"type": "string"
+				"type": "string",
+				"title": "Reverse listen host",
+				"titleKey": "config_host",
+				"description": "Interface the reverse WebSocket server binds to. Reverse mode only; defaults to 127.0.0.1.",
+				"descriptionKey": "config_host_hint"
 			},
 			"mode": {
+				"default": "forward",
 				"enum": ["forward", "reverse"],
-				"type": "string"
+				"type": "string",
+				"title": "Connection mode",
+				"titleKey": "config_mode",
+				"enumLabels": {
+					"forward": "config_mode_forward",
+					"reverse": "config_mode_reverse"
+				},
+				"description": "Forward: Elaina dials NapCat. Reverse: NapCat dials Elaina. Defaults to forward.",
+				"descriptionKey": "config_mode_hint"
 			},
 			"pendingGraceMs": {
-				"type": "number"
+				"type": "number",
+				"title": "Pending delivery grace (ms)",
+				"titleKey": "config_pending_grace",
+				"description": "Grace period in milliseconds before an unconfirmed delivery is reconciled. Defaults to 15000.",
+				"descriptionKey": "config_pending_grace_hint"
 			},
 			"port": {
-				"type": "number"
+				"type": "number",
+				"title": "Reverse listen port",
+				"titleKey": "config_port",
+				"description": "Port the reverse WebSocket server listens on. Reverse mode only; defaults to 3002.",
+				"descriptionKey": "config_port_hint"
 			},
 			"pttToText": {
+				"default": true,
 				"anyOf": [
 					{
 						"type": "boolean"
@@ -96,50 +167,102 @@
 					{
 						"properties": {
 							"minIntervalMs": {
-								"type": "number"
+								"type": "number",
+								"title": "Min interval (ms)",
+								"titleKey": "config_ptt_min_interval",
+								"description": "Minimum gap between two transcriptions.",
+								"descriptionKey": "config_ptt_min_interval_hint"
 							},
 							"timeoutMs": {
-								"type": "number"
+								"type": "number",
+								"title": "Timeout (ms)",
+								"titleKey": "config_ptt_timeout",
+								"description": "How long one transcription may take.",
+								"descriptionKey": "config_ptt_timeout_hint"
 							}
 						},
 						"type": "object"
 					}
-				]
+				],
+				"title": "Transcribe voice messages",
+				"titleKey": "config_ptt",
+				"description": "Turn voice messages into text when a transcriber is available. Enable it, or switch it off to ignore voice content.",
+				"descriptionKey": "config_ptt_hint"
 			},
 			"rawActionAllowlist": {
 				"items": {
 					"type": "string"
 				},
-				"type": "array"
+				"type": "array",
+				"title": "Raw action allowlist",
+				"titleKey": "config_raw_allowlist",
+				"description": "Raw OneBot action names the agent may call through rawAction. Empty disables raw calls entirely.",
+				"descriptionKey": "config_raw_allowlist_hint"
 			},
 			"reconnect": {
 				"properties": {
 					"initialDelayMs": {
-						"type": "number"
+						"type": "number",
+						"title": "Initial delay (ms)",
+						"titleKey": "config_reconnect_initial",
+						"description": "First retry delay. Defaults to 1000.",
+						"descriptionKey": "config_reconnect_initial_hint"
 					},
 					"jitterRatio": {
-						"type": "number"
+						"type": "number",
+						"title": "Jitter ratio",
+						"titleKey": "config_reconnect_jitter",
+						"description": "Random spread applied to each delay, between 0 and 1. Defaults to 0.1.",
+						"descriptionKey": "config_reconnect_jitter_hint"
 					},
 					"maxDelayMs": {
-						"type": "number"
+						"type": "number",
+						"title": "Max delay (ms)",
+						"titleKey": "config_reconnect_max",
+						"description": "Upper bound for the retry delay. Defaults to 30000.",
+						"descriptionKey": "config_reconnect_max_hint"
 					}
 				},
-				"type": "object"
+				"type": "object",
+				"title": "Reconnect backoff",
+				"titleKey": "config_reconnect",
+				"description": "Exponential backoff used while NapCat is unreachable.",
+				"descriptionKey": "config_reconnect_hint"
 			},
 			"replyAsQuote": {
-				"type": "boolean"
+				"type": "boolean",
+				"title": "Reply with a quote",
+				"titleKey": "config_reply_as_quote",
+				"description": "Quote the message being answered instead of sending a standalone reply.",
+				"descriptionKey": "config_reply_as_quote_hint"
 			},
 			"selfManage": {
-				"type": "boolean"
+				"type": "boolean",
+				"title": "Allow bot account changes",
+				"titleKey": "config_self_manage",
+				"description": "Allow administrators to change the bot account itself: avatar, profile, long nickname, online status.",
+				"descriptionKey": "config_self_manage_hint"
 			},
 			"sendIntervalMs": {
-				"type": "number"
+				"type": "number",
+				"title": "Delay between chunks (ms)",
+				"titleKey": "config_send_interval",
+				"description": "Delay in milliseconds between consecutive reply chunks. Defaults to 400.",
+				"descriptionKey": "config_send_interval_hint"
 			},
 			"splitMaxChars": {
-				"type": "number"
+				"type": "number",
+				"title": "Max characters per chunk",
+				"titleKey": "config_split_max_chars",
+				"description": "Maximum characters per reply chunk; longer replies are split. Defaults to 2000.",
+				"descriptionKey": "config_split_max_chars_hint"
 			},
 			"wsUrl": {
-				"type": "string"
+				"type": "string",
+				"title": "WebSocket URL",
+				"titleKey": "config_ws_url",
+				"description": "NapCat forward WebSocket address, for example ws://127.0.0.1:3001. Falls back to ELAINA_ONEBOT_WS_URL when empty.",
+				"descriptionKey": "config_ws_url_hint"
 			}
 		}
 	},
