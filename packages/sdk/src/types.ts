@@ -150,6 +150,32 @@ export interface PluginModelPort {
 	readonly models: unknown;
 }
 
+export type PluginModelMessageContentPart =
+	| { readonly type: "text"; readonly text: string }
+	| { readonly type: "image"; readonly data: string; readonly mimeType: string };
+
+export interface PluginModelCompleteMessage {
+	readonly role: "system" | "user" | "assistant";
+	readonly content: string | readonly PluginModelMessageContentPart[];
+}
+
+export interface PluginModelCompleteRequest {
+	readonly providerId?: string;
+	readonly modelId?: string;
+	readonly messages: readonly PluginModelCompleteMessage[];
+	readonly capability?: string;
+	readonly input?: PluginModelInputModality;
+	readonly maxTokens?: number;
+	readonly temperature?: number;
+	readonly signal?: AbortSignal;
+}
+
+export interface PluginModelCompleteResult {
+	readonly modelId: string;
+	readonly providerId: string;
+	readonly text: string;
+}
+
 export interface PluginEmbeddingRequest {
 	readonly modelId?: string;
 	readonly texts: readonly string[];
@@ -193,6 +219,10 @@ export interface PluginModelProvider {
 	createPort(options?: {
 		readonly onMessage?: (message: unknown) => void;
 	}): PluginModelPort | Promise<PluginModelPort>;
+	/** Optional text/multimodal completion handler. */
+	complete?(
+		request: PluginModelCompleteRequest,
+	): Promise<PluginModelCompleteResult> | PluginModelCompleteResult;
 	/** Optional embedding port (`embedding` capability). */
 	embed?(request: PluginEmbeddingRequest): Promise<PluginEmbeddingResult> | PluginEmbeddingResult;
 	/** Object-shaped embedding port alias. */
@@ -213,6 +243,8 @@ export interface PluginModelRegistry {
 	listModels(query?: PluginModelQuery): Promise<readonly PluginModelInfo[]>;
 	/** Find one enabled model by id, preferring the requested provider when supplied. */
 	findModel(modelId: string, providerId?: string): Promise<PluginModelInfo | undefined>;
+	/** Run text or multimodal completion through the selected provider and model. */
+	complete(request: PluginModelCompleteRequest): Promise<PluginModelCompleteResult>;
 	/** Run embedding through the selected provider/model capability port. */
 	embed(request: PluginEmbeddingRequest): Promise<PluginEmbeddingResult>;
 	/** Object-shaped alias for `embed`. */

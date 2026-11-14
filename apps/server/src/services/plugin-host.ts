@@ -1,4 +1,5 @@
 import {
+	completePluginModel,
 	createPluginContext,
 	collectPluginModels,
 	hasPermission,
@@ -9,6 +10,7 @@ import {
 	type PluginContext,
 	type PluginEvents,
 	type PluginManifest,
+	type PluginModelCompleteRequest,
 	type PluginModelInfo,
 	type PluginModelProvider,
 	type PluginModelQuery,
@@ -52,6 +54,7 @@ export interface PluginHostOptions {
 	readonly conversationCapabilities?: (conversationId: string) => Promise<readonly string[]>;
 	readonly hooks: HookBus;
 	readonly logger: Logger;
+	readonly onModelMessage?: (message: unknown, pluginId: string) => void;
 	readonly plugins: readonly TsukaimaPlugin[];
 	readonly requests: RequestService;
 	readonly settings: PluginSettingsStore;
@@ -777,8 +780,23 @@ export class PluginHost {
 					this.#modelProviders.values(),
 					providerId === undefined ? {} : { providerId },
 				);
-				return catalog.find((model) => model.id === modelId);
+				const found = catalog.find((model) => model.id === modelId);
+				if (found === undefined) return undefined;
+				const ownerId = this.#modelProviderOwners.get(found.providerId);
+				return ownerId === undefined ? found : { ...found, pluginId: ownerId };
 			},
+			complete: async (request: PluginModelCompleteRequest) =>
+				await completePluginModel(
+					this.#modelProviders,
+					request,
+					this.#options.onModelMessage === undefined
+						? {}
+						: {
+								onMessage: (message) => {
+									this.#options.onModelMessage?.(message, pluginId);
+								},
+							},
+				),
 			embed: async (request: Parameters<NonNullable<PluginModelProvider["embed"]>>[0]) => {
 				for (const provider of this.#modelProviders.values()) {
 					if (provider.embed !== undefined) return await provider.embed(request);

@@ -71,4 +71,124 @@ describe("model capability ports", () => {
 			}),
 		).toEqual({ modelId: "stt-1", providerId: "provider", text: "hello" });
 	});
+
+	test("routes multimodal completions through provider.complete and port.completeSimple", async () => {
+		const models = new LocalModelRegistry();
+		const capturedPortCalls: Array<{
+			modelId: string;
+			systemPrompt?: string;
+			messages: unknown[];
+		}> = [];
+		models.registerProvider({
+			complete: ({ modelId, providerId }) => ({
+				modelId: modelId ?? "direct-default",
+				providerId: providerId ?? "direct",
+				text: `direct:${modelId}`,
+			}),
+			createPort: () => {
+				throw new Error("port not used when complete() is provided");
+			},
+			id: "direct",
+			listModels: () => [
+				{
+					capabilities: ["vision"],
+					id: "direct-vision",
+					input: ["text", "image"],
+				},
+			],
+		});
+		models.registerProvider({
+			createPort: () => ({
+				modelId: "port-chat",
+				models: {
+					completeSimple: async (
+						model: { readonly id: string },
+						context: { readonly systemPrompt?: string; readonly messages: unknown[] },
+					) => {
+						capturedPortCalls.push({
+							messages: context.messages,
+							modelId: model.id,
+							...(context.systemPrompt === undefined ? {} : { systemPrompt: context.systemPrompt }),
+						});
+						if (model.id === "port-fail") {
+							return {
+								errorMessage: "Upstream 429",
+								stopReason: "error",
+							};
+						}
+						return {
+							content: [{ text: `port:${model.id}`, type: "text" }],
+							stopReason: "stop",
+						};
+					},
+					getModel: (_providerId: string, modelId: string) =>
+						modelId === "port-vision" || modelId === "port-fail" ? { id: modelId } : undefined,
+				},
+				providerId: "port-provider",
+			}),
+			id: "port-provider",
+			listModels: () => [
+				{ capabilities: ["vision"], id: "port-vision", input: ["text", "image"] },
+				{ capabilities: ["basic-chat"], id: "port-fail", input: ["text"] },
+			],
+		});
+
+		const directResult = await models.complete({
+			messages: [{ content: "hi", role: "user" }],
+			modelId: "direct-vision",
+			providerId: "direct",
+		});
+		expect(directResult).toEqual({
+			modelId: "direct-vision",
+			providerId: "direct",
+			text: "direct:direct-vision",
+		});
+
+		const portResult = await models.complete({
+			messages: [
+				{ content: "System instruction", role: "system" },
+				{
+					content: [
+						{ text: "Describe sticker", type: "text" },
+						{ data: "aGVsbG8=", mimeType: "image/webp", type: "image" },
+					],
+					role: "user",
+				},
+			],
+			modelId: "port-vision",
+			providerId: "port-provider",
+		});
+		expect(portResult).toEqual({
+			modelId: "port-vision",
+			providerId: "port-provider",
+			text: "port:port-vision",
+		});
+		expect(capturedPortCalls[0]).toMatchObject({
+			modelId: "port-vision",
+			systemPrompt: "System instruction",
+		});
+		expect(capturedPortCalls[0]?.messages[0]).toMatchObject({
+			content: [
+				{ text: "Describe sticker", type: "text" },
+				{ data: "aGVsbG8=", mimeType: "image/webp", type: "image" },
+			],
+			role: "user",
+		});
+
+		await expect(
+			models.complete({
+				messages: [{ content: "fail", role: "user" }],
+				modelId: "port-fail",
+				providerId: "port-provider",
+			}),
+		).rejects.toThrow("Upstream 429");
+
+		await expect(
+			models.complete({
+				messages: [{ content: "missing", role: "user" }],
+				modelId: "does-not-exist",
+				providerId: "port-provider",
+			}),
+		).rejects.toThrow("not enabled");
+	});
 });
