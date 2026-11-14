@@ -98,6 +98,70 @@ export const sessionDetailSchema = z.object({
 });
 export type SessionDetail = z.infer<typeof sessionDetailSchema>;
 
+export const sessionContextSectionSchema = z.object({
+	key: z.string(),
+	label: z.string(),
+	tokens: z.number().int().nonnegative(),
+});
+export type SessionContextSection = z.infer<typeof sessionContextSectionSchema>;
+
+export const sessionContextToolSchema = z.object({
+	deferred: z.boolean(),
+	description: z.string(),
+	name: z.string(),
+	tokens: z.number().int().nonnegative(),
+});
+export type SessionContextTool = z.infer<typeof sessionContextToolSchema>;
+
+export const sessionContextMemoryItemSchema = z.object({
+	id: z.string().nullable(),
+	kind: z.string(),
+	scope: z.string(),
+	summary: z.string(),
+	tier: z.enum(["recent", "warm", "long-term"]),
+});
+export type SessionContextMemoryItem = z.infer<typeof sessionContextMemoryItemSchema>;
+
+export const sessionContextStatsSchema = z.object({
+	autocompact: z.object({
+		backgroundTokens: z.number().int().nonnegative(),
+		bufferTokens: z.number().int().nonnegative(),
+		enabled: z.boolean(),
+		keepRecentTokens: z.number().int().nonnegative(),
+	}),
+	categories: z.object({
+		memoriesTokens: z.number().int().nonnegative(),
+		messagesTokens: z.number().int().nonnegative(),
+		otherSystemTokens: z.number().int().nonnegative(),
+		personaTokens: z.number().int().nonnegative(),
+		policyTokens: z.number().int().nonnegative(),
+		toolsTokens: z.number().int().nonnegative(),
+	}),
+	compacted: z.boolean(),
+	contextWindow: z.number().int().nonnegative(),
+	deferredToolsTokens: z.number().int().nonnegative(),
+	freeSpaceTokens: z.number().int().nonnegative(),
+	measuredUsageTokens: z.number().int().nonnegative().nullable(),
+	memories: z.object({
+		enabled: z.boolean(),
+		items: z.array(sessionContextMemoryItemSchema),
+		recentCount: z.number().int().nonnegative(),
+		warmTopics: z.array(z.string()),
+	}),
+	messageCount: z.number().int().nonnegative(),
+	model: z.object({
+		modelId: z.string(),
+		providerId: z.string(),
+	}),
+	personaName: z.string().nullable(),
+	sections: z.array(sessionContextSectionSchema),
+	tokenSource: z.enum(["usage", "estimated"]),
+	tools: z.array(sessionContextToolSchema),
+	usedPercent: z.number().nonnegative(),
+	usedTokens: z.number().int().nonnegative(),
+});
+export type SessionContextStats = z.infer<typeof sessionContextStatsSchema>;
+
 // ─── Raw domain rows ─────────────────────────────────────────────────────────
 
 export const conversationRowSchema = z.object({
@@ -1072,6 +1136,7 @@ export const appContract = oc.router({
 			respond: oc.input(requestsRespondInputSchema).output(requestRowSchema).meta({ audit: true }),
 		},
 		sessions: {
+			contextStats: oc.input(sessionIdInputSchema).output(sessionContextStatsSchema.nullable()),
 			create: oc
 				.input(sessionsCreateInputSchema)
 				.output(createSessionOutputSchema)

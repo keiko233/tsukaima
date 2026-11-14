@@ -1,7 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { Tool } from "@earendil-works/pi-ai";
 import {
+	calculateContextTokens,
+	estimateMessageTokens,
+	estimateTextTokens,
+} from "@earendil-works/pi-ai/utils/estimate";
+import { contentText } from "@earendil-works/pi-ai/utils/text";
+import { toToolDeclaration } from "@earendil-works/pi-ai/utils/transcript";
+import {
+	AgentDoc,
+	CompactionEntry,
 	createRegistry,
+	DEFAULT_COMPACTION_POLICY,
 	defineDocFamily,
 	Harness,
 	LiveDoc,
@@ -15,6 +26,7 @@ import {
 	type LiveState,
 	type RunFailure,
 	type Submission,
+	type ToolRegistration,
 	type UserInput,
 } from "@earendil-works/pi-durable";
 import {
@@ -32,7 +44,13 @@ import {
 	type TriggerClassification,
 } from "@elaina/contracts";
 import type { SqliteStorage } from "@elaina/durable";
-import { createContextExtension, type ContextPromptProvider } from "./context.ts";
+import {
+	createContextExtension,
+	MEMORY_SECTION_KEY,
+	PERSONA_SECTION_KEY,
+	POLICY_SECTION_KEY,
+	type ContextPromptProvider,
+} from "./context.ts";
 import {
 	ConversationExecutionLock,
 	defaultConversationExecutionLock,
@@ -315,6 +333,54 @@ export type LiveRunSnapshot = {
 	}[];
 	readonly turns: number;
 };
+
+export interface InspectConversationContextOptions {
+	/**
+	 * Tool names excluded by domain policy when `pi.agent.modelTools` has not been synced yet
+	 * (for example, coding tools on a session that has not received a routed turn yet).
+	 */
+	readonly omittedTools?: readonly string[];
+}
+
+export interface ConversationContextInspection {
+	readonly autocompact: {
+		readonly backgroundTokens: number;
+		readonly bufferTokens: number;
+		readonly enabled: boolean;
+		readonly keepRecentTokens: number;
+	};
+	readonly categories: {
+		readonly memoriesTokens: number;
+		readonly messagesTokens: number;
+		readonly otherSystemTokens: number;
+		readonly personaTokens: number;
+		readonly policyTokens: number;
+		readonly toolsTokens: number;
+	};
+	readonly compacted: boolean;
+	readonly contextWindow: number;
+	readonly deferredToolsTokens: number;
+	readonly freeSpaceTokens: number;
+	readonly measuredUsageTokens: number | null;
+	readonly messageCount: number;
+	readonly model: {
+		readonly modelId: string;
+		readonly providerId: string;
+	};
+	readonly sections: readonly {
+		readonly key: string;
+		readonly tokens: number;
+	}[];
+	readonly tokenSource: "usage" | "estimated";
+	readonly tools: readonly {
+		readonly deferred: boolean;
+		readonly description: string;
+		readonly name: string;
+		readonly tokens: number;
+	}[];
+	readonly usedPercent: number;
+	readonly usedTokens: number;
+}
 
 /**
  * Text of an assistant entry, mirroring what a channel reply needs. `undefined` for other
@@ -971,6 +1037,298 @@ export class PiDurableConversationHost {
 			BACKGROUND_CONTEXT,
 		);
 		return [...page.items].toReversed();
+	}
+
+	/**
+	 * Inspect the active model context breakdown of one durable conversation without mutating
+	 * durable state. Uses pi-durable's active context view (post-compaction/reset head),
+	 * resolved agent tools/sections, compaction reserve policy, and pi-ai token accounting.
+	 */
+	async inspectConversationContext(
+		conversationId: string,
+		options: InspectConversationContextOptions = {},
+	): Promise<ConversationContextInspection | undefined> {
+		const parsedNumeric = Number(conversationId);
+		if (!Number.isSafeInteger(parsedNumeric)) return undefined;
+		const harness = await this.openHarness();
+		const numericId = parsedNumeric as ConversationId;
+		const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
+		if (conversation === undefined) return undefined;
+
+		const [agent, agentState, view] = await Promise.all([
+			conversation.agent(BACKGROUND_CONTEXT),
+			harness.snapshot(AgentDoc, numericId, BACKGROUND_CONTEXT),
+			conversation.context(BACKGROUND_CONTEXT),
+		]);
+
+		const agentModelRef = agent.model;
+		const useHostModel =
+			agentModelRef === undefined ||
+			agentModelRef.provider !== this.model.providerId ||
+			this.model.models.getModel(agentModelRef.provider, agentModelRef.modelId) === undefined;
+		const modelRef = useHostModel
+			? { modelId: this.model.modelId, provider: this.model.providerId }
+			: agentModelRef;
+		const resolvedModel = this.model.models.getModel(modelRef.provider, modelRef.modelId);
+		const contextWindow = resolvedModel?.contextWindow ?? 0;
+
+		const modelKey = `${modelRef.provider}/${modelRef.modelId}`;
+		const compactionSettings = agent.compaction;
+		const modelOverride = compactionSettings?.modelOverrides?.[modelKey];
+		const autocompactEnabled =
+			modelOverride?.enabled ??
+			(compactionSettings?.enabled === false ? false : DEFAULT_COMPACTION_POLICY.enabled);
+		const reserveTokens =
+			modelOverride?.reserveTokens ??
+			compactionSettings?.reserveTokens ??
+			DEFAULT_COMPACTION_POLICY.reserveTokens;
+		const keepRecentTokens =
+			modelOverride?.keepRecentTokens ??
+			compactionSettings?.keepRecentTokens ??
+			DEFAULT_COMPACTION_POLICY.keepRecentTokens;
+		const backgroundTokens =
+			modelOverride?.backgroundTokens ??
+			compactionSettings?.backgroundTokens ??
+			DEFAULT_COMPACTION_POLICY.backgroundTokens;
+		const bufferTokens = autocompactEnabled
+			? Math.min(reserveTokens, contextWindow > 0 ? contextWindow : reserveTokens)
+			: 0;
+
+		const { offeredTools, deferredTools } = this.resolveInspectTools(
+			agent.extensions,
+			agent.tools,
+			agent.deferred,
+			agentState,
+			options.omittedTools,
+		);
+		const offeredDecls: Tool[] = offeredTools.map((tool) => toToolDeclaration(tool));
+		const deferredDecls: Tool[] = deferredTools.map((tool) => toToolDeclaration(tool));
+		const toolsTokens =
+			offeredDecls.length === 0 ? 0 : estimateTextTokens(JSON.stringify(offeredDecls));
+		const deferredToolsTokens =
+			deferredDecls.length === 0 ? 0 : estimateTextTokens(JSON.stringify(deferredDecls));
+		const toolItems = [
+			...offeredDecls.map((decl) => ({
+				deferred: false,
+				description: decl.description,
+				name: decl.name,
+				tokens: estimateTextTokens(JSON.stringify(decl)),
+			})),
+			...deferredDecls.map((decl) => ({
+				deferred: true,
+				description: decl.description,
+				name: decl.name,
+				tokens: estimateTextTokens(JSON.stringify(decl)),
+			})),
+		];
+
+		const shownSections = new Map<string, string>();
+		const rawSystemParts: string[] = [];
+		for (const message of view.messages) {
+			if (message.role !== "system") continue;
+			const raw = contentText(message.content).trim();
+			if (raw.length > 0) rawSystemParts.push(raw);
+			if (message.sections !== undefined) {
+				for (const [key, value] of Object.entries(message.sections)) {
+					if (value === null) shownSections.delete(key);
+					else shownSections.set(key, value);
+				}
+			}
+		}
+
+		const resolvedSections = new Map<string, string>(shownSections);
+		const contextProvider = this.options.contextProvider;
+		if (contextProvider !== undefined) {
+			const [personaRaw, policyRaw, memoriesRaw] = await Promise.all([
+				contextProvider.renderPersona(conversationId).catch(() => undefined),
+				contextProvider.renderPolicy?.(conversationId).catch(() => undefined),
+				contextProvider.renderMemories(conversationId).catch(() => undefined),
+			]);
+			const applyProviderSection = (key: string, value: string | undefined) => {
+				if (value === undefined || value.trim().length === 0) {
+					resolvedSections.delete(key);
+				} else {
+					resolvedSections.set(key, `<${key}>\n${value}\n</${key}>`);
+				}
+			};
+			applyProviderSection(PERSONA_SECTION_KEY, personaRaw);
+			if (contextProvider.renderPolicy !== undefined) {
+				applyProviderSection(POLICY_SECTION_KEY, policyRaw);
+			}
+			applyProviderSection(MEMORY_SECTION_KEY, memoriesRaw);
+		}
+		if (agent.instructions !== undefined && agent.instructions.trim().length > 0) {
+			resolvedSections.set(
+				"instructions",
+				`<instructions>\n${agent.instructions}\n</instructions>`,
+			);
+		}
+
+		let personaTokens = 0;
+		let policyTokens = 0;
+		let memoriesTokens = 0;
+		let otherSystemTokens =
+			rawSystemParts.length === 0 ? 0 : estimateTextTokens(rawSystemParts.join("\n\n"));
+		const sectionItems: { key: string; tokens: number }[] = [];
+		for (const [key, text] of resolvedSections) {
+			const tokens = estimateTextTokens(text);
+			if (tokens <= 0) continue;
+			sectionItems.push({ key, tokens });
+			if (key === PERSONA_SECTION_KEY) personaTokens += tokens;
+			else if (key === POLICY_SECTION_KEY) policyTokens += tokens;
+			else if (key === MEMORY_SECTION_KEY) memoriesTokens += tokens;
+			else otherSystemTokens += tokens;
+		}
+		if (rawSystemParts.length > 0) {
+			const rawTokens = estimateTextTokens(rawSystemParts.join("\n\n"));
+			if (rawTokens > 0) sectionItems.unshift({ key: "system", tokens: rawTokens });
+		}
+
+		const nonSystemMessages = view.messages.filter((message) => message.role !== "system");
+		const estimatedMessagesTokens = nonSystemMessages.reduce(
+			(sum, message) => sum + estimateMessageTokens(message),
+			0,
+		);
+		const afterHead = view.head?.id;
+		let measuredAssistant:
+			| Extract<(typeof view.messages)[number], { role: "assistant" }>
+			| undefined;
+		for (
+			let index = view.entries.length - 1;
+			index >= 0 && measuredAssistant === undefined;
+			index--
+		) {
+			const entry = view.entries[index];
+			if (entry === undefined) continue;
+			if (afterHead !== undefined && entry.id <= afterHead) continue;
+			const contribution = view.contributions[index] ?? [];
+			for (let msgIndex = contribution.length - 1; msgIndex >= 0; msgIndex--) {
+				const candidate = contribution[msgIndex];
+				if (candidate?.role === "assistant" && calculateContextTokens(candidate.usage) > 0) {
+					measuredAssistant = candidate;
+					break;
+				}
+			}
+		}
+
+		const measuredUsageTokens =
+			measuredAssistant === undefined ? null : calculateContextTokens(measuredAssistant.usage);
+		const estimatedSystemTotal =
+			toolsTokens + personaTokens + policyTokens + memoriesTokens + otherSystemTokens;
+
+		let messagesTokens = estimatedMessagesTokens;
+		let usedTokens = estimatedSystemTotal + messagesTokens;
+		let tokenSource: "usage" | "estimated" = "estimated";
+
+		if (measuredAssistant !== undefined && measuredUsageTokens !== null) {
+			const measuredIndex = view.messages.lastIndexOf(measuredAssistant);
+			const trailingTokens =
+				measuredIndex < 0
+					? 0
+					: view.messages
+							.slice(measuredIndex + 1)
+							.filter((message) => message.role !== "system")
+							.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+			const measuredTotal = measuredUsageTokens + trailingTokens;
+			if (measuredTotal >= estimatedSystemTotal) {
+				messagesTokens = measuredTotal - estimatedSystemTotal;
+				usedTokens = measuredTotal;
+				tokenSource = "usage";
+			}
+		}
+
+		const freeSpaceTokens =
+			contextWindow > 0 ? Math.max(0, contextWindow - usedTokens - bufferTokens) : 0;
+		const usedPercent = contextWindow > 0 ? Math.min(100, (usedTokens / contextWindow) * 100) : 0;
+
+		return {
+			autocompact: {
+				backgroundTokens,
+				bufferTokens,
+				enabled: autocompactEnabled,
+				keepRecentTokens,
+			},
+			categories: {
+				memoriesTokens,
+				messagesTokens,
+				otherSystemTokens,
+				personaTokens,
+				policyTokens,
+				toolsTokens,
+			},
+			compacted: view.head?.kind === CompactionEntry.kind,
+			contextWindow,
+			deferredToolsTokens,
+			freeSpaceTokens,
+			measuredUsageTokens,
+			messageCount: nonSystemMessages.length,
+			model: {
+				modelId: modelRef.modelId,
+				providerId: modelRef.provider,
+			},
+			sections: sectionItems,
+			tokenSource,
+			tools: toolItems,
+			usedPercent,
+			usedTokens,
+		};
+	}
+
+	private resolveInspectTools(
+		agentExtensions: readonly Extension[],
+		agentOffered: readonly ToolRegistration[],
+		agentDeferred: readonly ToolRegistration[],
+		agentState:
+			| {
+					tools?: string[] | { remove: string[] };
+					modelTools?: string[] | { remove?: string[]; add?: string[] };
+			  }
+			| undefined,
+		omittedTools?: readonly string[],
+	): { offeredTools: ToolRegistration[]; deferredTools: ToolRegistration[] } {
+		const selectedNames = new Set(agentExtensions.map((extension) => extension.name));
+		const omittedWhenUnsynced =
+			agentState?.modelTools === undefined ? new Set(omittedTools ?? []) : new Set<string>();
+
+		const offeredMap = new Map<string, ToolRegistration>();
+		const deferredMap = new Map<string, ToolRegistration>();
+		for (const tool of agentOffered) {
+			if (!omittedWhenUnsynced.has(tool.name)) offeredMap.set(tool.name, tool);
+		}
+		for (const tool of agentDeferred) {
+			if (!omittedWhenUnsynced.has(tool.name)) deferredMap.set(tool.name, tool);
+		}
+
+		for (const extension of this.extensions.values()) {
+			if (selectedNames.has(extension.name)) continue;
+			for (const tool of extension.tools ?? []) {
+				if (tool.callers !== undefined && !tool.callers.includes("model")) continue;
+				if (Array.isArray(agentState?.tools)) {
+					if (!agentState.tools.includes(tool.name)) continue;
+				} else if (agentState?.tools?.remove.includes(tool.name)) {
+					continue;
+				}
+				const modelTools = agentState?.modelTools;
+				if (Array.isArray(modelTools)) {
+					if (!modelTools.includes(tool.name)) continue;
+					offeredMap.set(tool.name, tool);
+					continue;
+				}
+				if (modelTools?.remove?.includes(tool.name) || omittedWhenUnsynced.has(tool.name)) {
+					continue;
+				}
+				if (tool.deferred === true && !modelTools?.add?.includes(tool.name)) {
+					deferredMap.set(tool.name, tool);
+				} else {
+					offeredMap.set(tool.name, tool);
+				}
+			}
+		}
+
+		return {
+			deferredTools: [...deferredMap.values()],
+			offeredTools: [...offeredMap.values()],
+		};
 	}
 
 	async resumeActivityWindow(conversationId: string): Promise<void> {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, Circle, MessageCircle } from "lucide-react";
+import { ChevronLeft, Circle, MessageCircle, PanelRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@elaina/ui/components/motion/button";
 import { orpc, type DeliveryStatus } from "@/lib/api";
@@ -9,11 +9,23 @@ import { errorMessage, useToast } from "@/lib/toast";
 import { useLiveRun } from "@/lib/live-run-store";
 import { cn } from "@elaina/ui/lib/utils";
 import { m } from "@/paraglide/messages";
+import { useMediaQuery } from "../../_modules/hooks/use-media-query";
 import { useShellNavigation } from "../../_modules/shell/admin-shell";
 import { Avatar, InlineError } from "../../_modules/shell/primitives";
+import { ContextPanel } from "./context-panel";
 import { ConversationPolicyPanel } from "./conversation-policy-panel";
 import { MessageComposer } from "./message-composer";
 import { MessageList } from "./message-list";
+
+const CONTEXT_PANEL_KEY = "elaina.webui.context-panel";
+
+function storedContextOpen(): boolean {
+	try {
+		return localStorage.getItem(CONTEXT_PANEL_KEY) !== "closed";
+	} catch {
+		return true;
+	}
+}
 
 function deliveryNotice(status: DeliveryStatus): string {
 	switch (status) {
@@ -42,6 +54,9 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 	const toast = useToast();
 	const queryClient = useQueryClient();
 	const { mobile, showSidebar } = useShellNavigation();
+	const wideContextPane = useMediaQuery("(min-width: 1024px)");
+	const [desktopContextOpen, setDesktopContextOpen] = useState<boolean>(() => storedContextOpen());
+	const [drawerContextOpen, setDrawerContextOpen] = useState(false);
 	const liveRun = useLiveRun(sessionId);
 	// The live run's elapsed label is a wall clock, not the render time of a message. Tick it only
 	// while a run is active so an idle transcript never re-renders.
@@ -52,6 +67,26 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 		const timer = setInterval(() => setNow(Date.now()), 1_000);
 		return () => clearInterval(timer);
 	}, [liveRun === undefined]);
+	useEffect(() => {
+		try {
+			localStorage.setItem(CONTEXT_PANEL_KEY, desktopContextOpen ? "open" : "closed");
+		} catch {
+			// Ignore storage errors in restricted environments.
+		}
+	}, [desktopContextOpen]);
+	useEffect(() => {
+		setDrawerContextOpen(false);
+	}, [sessionId, wideContextPane]);
+
+	const contextOpen = wideContextPane ? desktopContextOpen : drawerContextOpen;
+	const toggleContextPanel = () => {
+		if (wideContextPane) {
+			setDesktopContextOpen((current) => !current);
+		} else {
+			setDrawerContextOpen((current) => !current);
+		}
+	};
+
 	const session = useQuery(orpc.admin.sessions.get.queryOptions({ input: { sessionId } }));
 	const messages = useQuery(orpc.admin.sessions.messages.queryOptions({ input: { sessionId } }));
 	const diagnostics = useQuery(orpc.admin.diagnostics.status.queryOptions());
@@ -76,6 +111,9 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 				await Promise.all([
 					queryClient.invalidateQueries({
 						queryKey: orpc.admin.sessions.messages.key({ input: { sessionId } }),
+					}),
+					queryClient.invalidateQueries({
+						queryKey: orpc.admin.sessions.contextStats.key({ input: { sessionId } }),
 					}),
 					queryClient.invalidateQueries({ queryKey: orpc.admin.chats.key() }),
 				]);
@@ -187,49 +225,100 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 						) : null}
 					</div>
 				</div>
-				<ConversationPolicyPanel chatObjectId={detail.chat.id} sessionId={detail.id} />
+				<div className="flex shrink-0 items-center gap-2">
+					<ConversationPolicyPanel chatObjectId={detail.chat.id} sessionId={detail.id} />
+					<Button
+						type="button"
+						variant={contextOpen ? "secondary" : "outline"}
+						size="sm"
+						className="shrink-0"
+						aria-pressed={contextOpen}
+						onClick={toggleContextPanel}
+					>
+						<PanelRight className="size-4" />
+						<span className="hidden sm:inline">{m.context_action()}</span>
+					</Button>
+				</div>
 			</header>
 
-			{archived ? (
-				<div className="border-b border-border bg-muted/40 px-5 py-2 text-xs text-muted-foreground">
-					{m.session_archived_notice()}
-				</div>
-			) : null}
+			<div className="flex min-h-0 flex-1">
+				<div className="flex min-w-0 flex-1 flex-col">
+					{archived ? (
+						<div className="border-b border-border bg-muted/40 px-5 py-2 text-xs text-muted-foreground">
+							{m.session_archived_notice()}
+						</div>
+					) : null}
 
-			<div className="relative min-h-0 flex-1">
-				{messages.isPending ? (
-					<div className="grid h-full place-items-center text-sm text-muted-foreground">
-						{m.loading()}
+					<div className="relative min-h-0 flex-1">
+						{messages.isPending ? (
+							<div className="grid h-full place-items-center text-sm text-muted-foreground">
+								{m.loading()}
+							</div>
+						) : messages.isError ? (
+							<div className="grid h-full place-items-center">
+								<InlineError
+									message={messages.error.message}
+									onRetry={() => void messages.refetch()}
+									retryLabel={m.retry()}
+								/>
+							</div>
+						) : (
+							<MessageList
+								liveRun={liveRun}
+								messages={messages.data ?? []}
+								now={now}
+								sessionId={sessionId}
+							/>
+						)}
 					</div>
-				) : messages.isError ? (
-					<div className="grid h-full place-items-center">
-						<InlineError
-							message={messages.error.message}
-							onRetry={() => void messages.refetch()}
-							retryLabel={m.retry()}
+
+					{archived ? null : (
+						<MessageComposer
+							key={detail.id}
+							channelConnected={channelConnected}
+							disabled={detail.chat.status !== "active"}
+							externalEligible={externalEligible}
+							onSend={(input) => send.mutateAsync({ ...input, sessionId })}
+							sending={send.isPending}
+							sessionId={detail.id}
 						/>
-					</div>
-				) : (
-					<MessageList
-						liveRun={liveRun}
-						messages={messages.data ?? []}
-						now={now}
-						sessionId={sessionId}
-					/>
-				)}
+					)}
+				</div>
+
+				{wideContextPane && desktopContextOpen ? (
+					<aside
+						aria-label={m.context_title()}
+						className="w-[292px] shrink-0 border-l border-border bg-card/35 xl:w-[308px] dark:bg-[#181818]"
+					>
+						<ContextPanel
+							enabled
+							sessionId={sessionId}
+							onClose={() => setDesktopContextOpen(false)}
+						/>
+					</aside>
+				) : null}
 			</div>
 
-			{archived ? null : (
-				<MessageComposer
-					key={detail.id}
-					channelConnected={channelConnected}
-					disabled={detail.chat.status !== "active"}
-					externalEligible={externalEligible}
-					onSend={(input) => send.mutateAsync({ ...input, sessionId })}
-					sending={send.isPending}
-					sessionId={detail.id}
-				/>
-			)}
+			{!wideContextPane && drawerContextOpen ? (
+				<div className="fixed inset-0 z-40 flex justify-end">
+					<button
+						type="button"
+						aria-label={m.context_close()}
+						onClick={() => setDrawerContextOpen(false)}
+						className="absolute inset-0 bg-black/40 backdrop-blur-[1px]"
+					/>
+					<aside
+						aria-label={m.context_title()}
+						className="relative z-10 h-full w-[310px] max-w-[85vw] border-l border-border bg-background shadow-xl dark:bg-[#181818]"
+					>
+						<ContextPanel
+							enabled
+							sessionId={sessionId}
+							onClose={() => setDrawerContextOpen(false)}
+						/>
+					</aside>
+				</div>
+			) : null}
 		</div>
 	);
 }

@@ -9,6 +9,7 @@ import { createApp } from "../src/app.ts";
 import {
 	createLocalChat,
 	createSession,
+	getSessionContextStats,
 	listChats,
 	listMessages,
 	listRequests,
@@ -162,6 +163,62 @@ describe("WebUI chat and session service", () => {
 			await expect(lifecycle.resolveChannelRequest(request.id, "approve")).rejects.toThrow(
 				"Channel onebot-test is not registered",
 			);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("computes session context stats with messages, memories, and capability-gated coding tools", async () => {
+		const lifecycle = await createLifecycle();
+		try {
+			const chat = await createLocalChat(lifecycle, {
+				sessionTitle: "Context",
+				title: "Context chat",
+			});
+			expect(await getSessionContextStats(lifecycle, "missing-session")).toBeNull();
+
+			await sendMessage(lifecycle, {
+				sessionId: chat.sessionId,
+				target: "elaina",
+				text: "Remember that my favorite drink is Darjeeling tea.",
+			});
+			await waitFor(async () => {
+				const rows = await listMessages(lifecycle, chat.sessionId);
+				return rows.some((message) => message.senderKind === "assistant") ? rows : undefined;
+			});
+
+			const withoutCoding = await getSessionContextStats(lifecycle, chat.sessionId);
+			expect(withoutCoding).not.toBeNull();
+			if (withoutCoding === null) throw new Error("Expected context stats");
+			expect(withoutCoding.messageCount).toBeGreaterThanOrEqual(2);
+			expect(withoutCoding.categories.messagesTokens).toBeGreaterThan(0);
+			expect(withoutCoding.categories.policyTokens).toBeGreaterThan(0);
+			expect(withoutCoding.categories.memoriesTokens).toBeGreaterThan(0);
+			expect(withoutCoding.memories.enabled).toBe(true);
+			expect(withoutCoding.memories.recentCount).toBeGreaterThanOrEqual(1);
+			const codingTools = lifecycle.pluginHost.modelToolNames("self-iteration");
+			for (const toolName of codingTools) {
+				expect(withoutCoding.tools.some((tool) => tool.name === toolName)).toBe(false);
+			}
+
+			const currentPolicy = await lifecycle.conversationPolicy.effectivePolicy(chat.sessionId);
+			await lifecycle.conversationPolicy.update({
+				policy: {
+					...currentPolicy,
+					capabilities: [...new Set([...currentPolicy.capabilities, "coding"])],
+				},
+				scope: "conversation",
+				conversationId: chat.sessionId,
+			});
+			const withCoding = await getSessionContextStats(lifecycle, chat.sessionId);
+			expect(withCoding).not.toBeNull();
+			if (withCoding === null) throw new Error("Expected context stats with coding");
+			if (codingTools.length > 0) {
+				expect(withCoding.tools.some((tool) => codingTools.includes(tool.name))).toBe(true);
+				expect(withCoding.categories.toolsTokens).toBeGreaterThanOrEqual(
+					withoutCoding.categories.toolsTokens,
+				);
+			}
 		} finally {
 			await lifecycle.stop();
 		}

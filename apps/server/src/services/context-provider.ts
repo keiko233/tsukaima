@@ -92,6 +92,24 @@ function stringList(value: unknown): string[] {
 		: [];
 }
 
+export interface ContextMemoryInspectionItem {
+	readonly id: string | null;
+	readonly kind: string;
+	readonly scope: string;
+	readonly summary: string;
+	readonly tier: "recent" | "warm" | "long-term";
+}
+
+export interface ContextInspectionDetails {
+	readonly memories: {
+		readonly enabled: boolean;
+		readonly items: ContextMemoryInspectionItem[];
+		readonly recentCount: number;
+		readonly warmTopics: string[];
+	};
+	readonly personaName: string | null;
+}
+
 export class DrizzleContextProvider implements ContextPromptProvider {
 	readonly #budgetChars: number;
 	readonly #database: () => ElainaDatabase | undefined;
@@ -182,38 +200,155 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 
 	async renderMemories(durableConversationId: string): Promise<string | undefined> {
 		try {
-			const database = this.#database();
-			if (database === undefined) return undefined;
-			const session = await this.#resolveSession(database, durableConversationId);
-			const policy =
-				session === undefined
-					? await this.#policyService.effectivePolicy()
-					: await this.#policyService.effectivePolicy(session.sessionId);
-			if (policy.memoryEnabled === false) return undefined;
-
-			const recent = await this.#recentMessages(database, session?.sessionId);
-			const warm =
-				session === undefined ? undefined : await this.#memoryService.warmState(session.sessionId);
-			const scopeFilter = await this.#scopeFilter(database, session, policy);
-			const query = [
-				...recent.map((row) => row.contentText ?? ""),
-				...(warm === undefined ? [] : [String(warm.evidence.topic ?? "")]),
-			].join("\n");
-			const ranked =
-				scopeFilter === undefined
-					? []
-					: await this.#memoryService.recall({
-							...(session === undefined ? {} : { conversationId: session.sessionId }),
-							limit: Math.max(this.#memoryTopK * 3, this.#memoryTopK),
-							query,
-							scopeFilter,
-						});
-			const longTerm = ranked.filter((entry) => entry.memory.id !== warm?.memory.id);
-			return this.#format({ policy, recent, warm, ranked: longTerm });
+			const collected = await this.#collectMemories(durableConversationId);
+			if (collected === undefined || !collected.enabled) return undefined;
+			return this.#format({
+				policy: collected.policy,
+				ranked: collected.longTerm,
+				recent: collected.recent,
+				warm: collected.warm,
+			});
 		} catch (error) {
 			this.#logger.warn("memory context unavailable", { error: errorMessage(error) });
 			return undefined;
 		}
+	}
+
+	/**
+	 * Read-only inspection of the persona binding and memory recall tiers for a durable
+	 * conversation, matching the exact filters used by {@link renderPersona} and {@link renderMemories}.
+	 */
+	async inspectContext(durableConversationId: string): Promise<ContextInspectionDetails> {
+		const empty: ContextInspectionDetails = {
+			memories: { enabled: false, items: [], recentCount: 0, warmTopics: [] },
+			personaName: null,
+		};
+		try {
+			const database = this.#database();
+			if (database === undefined) return empty;
+			const session = await this.#resolveSession(database, durableConversationId);
+			const persona =
+				session === undefined
+					? undefined
+					: await this.#policyService.personaForSession({
+							...session,
+							conversationId: session.sessionId,
+						});
+			const personaName = persona?.name ?? null;
+			const collected = await this.#collectMemories(durableConversationId, session);
+			if (collected === undefined || !collected.enabled) {
+				return {
+					memories: { enabled: false, items: [], recentCount: 0, warmTopics: [] },
+					personaName,
+				};
+			}
+
+			const warmTopics =
+				collected.warm === undefined
+					? []
+					: (() => {
+							const listed = stringList(collected.warm.evidence.topic);
+							if (listed.length > 0) return listed;
+							const raw = String(collected.warm.evidence.topic ?? "").trim();
+							return raw.length > 0 ? [raw] : [];
+						})();
+
+			const items: ContextMemoryInspectionItem[] = [];
+			if (collected.warm !== undefined) {
+				const warmSummary =
+					collected.warm.memory.summary.trim() ||
+					collected.warm.memory.content.trim() ||
+					warmTopics.join(", ");
+				if (warmSummary.length > 0) {
+					items.push({
+						id: collected.warm.memory.id,
+						kind: collected.warm.memory.kind,
+						scope: collected.warm.memory.scope,
+						summary: warmSummary.replace(/\s+/gu, " ").slice(0, MEMORY_SNIPPET_LIMIT),
+						tier: "warm",
+					});
+				}
+			}
+			for (const entry of collected.longTerm.slice(0, this.#memoryTopK)) {
+				const summary = (entry.memory.summary.trim() || entry.memory.content.trim())
+					.replace(/\s+/gu, " ")
+					.slice(0, MEMORY_SNIPPET_LIMIT);
+				if (summary.length === 0) continue;
+				items.push({
+					id: entry.memory.id,
+					kind: entry.memory.kind,
+					scope: entry.memory.scope,
+					summary,
+					tier: "long-term",
+				});
+			}
+			const nonEmptyRecent = collected.recent.filter(
+				(row) => (row.contentText ?? "").trim().length > 0,
+			);
+			const memoryBudget = this.#budgetChars - this.#personaBudget;
+			if (memoryBudget >= RECENT_TIER_MIN_BUDGET) {
+				for (const row of nonEmptyRecent) {
+					const text = snippet(row.contentText ?? "", RECENT_SNIPPET_LIMIT);
+					if (text.length === 0) continue;
+					items.push({
+						id: row.id,
+						kind: row.direction,
+						scope: "recent",
+						summary: text,
+						tier: "recent",
+					});
+				}
+			}
+
+			return {
+				memories: {
+					enabled: true,
+					items,
+					recentCount: nonEmptyRecent.length,
+					warmTopics,
+				},
+				personaName,
+			};
+		} catch (error) {
+			this.#logger.warn("context inspection unavailable", { error: errorMessage(error) });
+			return empty;
+		}
+	}
+
+	async #collectMemories(
+		durableConversationId: string,
+		resolvedSession?: { chatKind: string; chatObjectId: string | null; sessionId: string },
+	) {
+		const database = this.#database();
+		if (database === undefined) return undefined;
+		const session =
+			resolvedSession ?? (await this.#resolveSession(database, durableConversationId));
+		const policy =
+			session === undefined
+				? await this.#policyService.effectivePolicy()
+				: await this.#policyService.effectivePolicy(session.sessionId);
+		if (policy.memoryEnabled === false) {
+			return { enabled: false as const, policy };
+		}
+		const recent = await this.#recentMessages(database, session?.sessionId);
+		const warm =
+			session === undefined ? undefined : await this.#memoryService.warmState(session.sessionId);
+		const scopeFilter = await this.#scopeFilter(database, session, policy);
+		const query = [
+			...recent.map((row) => row.contentText ?? ""),
+			...(warm === undefined ? [] : [String(warm.evidence.topic ?? "")]),
+		].join("\n");
+		const ranked =
+			scopeFilter === undefined
+				? []
+				: await this.#memoryService.recall({
+						...(session === undefined ? {} : { conversationId: session.sessionId }),
+						limit: Math.max(this.#memoryTopK * 3, this.#memoryTopK),
+						query,
+						scopeFilter,
+					});
+		const longTerm = ranked.filter((entry) => entry.memory.id !== warm?.memory.id);
+		return { enabled: true as const, longTerm, policy, recent, warm };
 	}
 
 	async #scopeFilter(

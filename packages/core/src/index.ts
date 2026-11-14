@@ -49,7 +49,9 @@ export {
 	type BackgroundTurnInput,
 	type BackgroundTurnResult,
 	type ConversationAnswer,
+	type ConversationContextInspection,
 	type DurableConversationHostOptions,
+	type InspectConversationContextOptions,
 	type LiveRunSnapshot,
 } from "./conversation-host.ts";
 export {
