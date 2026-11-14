@@ -193,12 +193,26 @@ describe("built-in plugin panels", () => {
 			id: "sticker-meme",
 			name: "sticker-meme",
 			permissions: ["ui.panel", "media.read", "media.write"],
+			secretKeys: ["telegramBotToken"],
 		};
 		const html = renderPanel(stickerUi, stickerI18n.bind("en"), stickerPlugin);
 		expect(html).toContain("Sticker library");
 		expect(html).toContain("No sticker packs yet");
+		expect(html).toContain("Telegram bot token");
+		expect(html).toContain("Bot token");
+		expect(html).toContain("Animated format");
+		expect(html).toContain("Video format");
+		expect(html).toContain("Classification model");
+		expect(html).toContain("Auto (configured vision model)");
+		expect(html).toContain("Save model settings");
 		const zh = renderPanel(stickerUi, stickerI18n.bind("zh-cn"), stickerPlugin);
 		expect(zh).toContain("表情包素材库");
 		expect(zh).toContain("还没有表情包");
+		expect(zh).toContain("Telegram 机器人 Token");
+		expect(zh).toContain("动态表情格式");
+		expect(zh).toContain("视频表情格式");
+		expect(zh).toContain("分类模型");
+		expect(zh).toContain("自动（使用已配置的视觉模型）");
+		expect(zh).toContain("保存模型设置");
 	});
 });
