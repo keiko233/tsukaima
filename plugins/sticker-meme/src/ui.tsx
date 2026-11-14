@@ -12,6 +12,7 @@ import {
 	Spinner,
 	StatGrid,
 	Switch,
+	cn,
 	definePluginUi,
 	usePluginConfig,
 	usePluginI18n,
@@ -19,7 +20,19 @@ import {
 	usePluginRpc,
 	usePluginToast,
 } from "@tsukaima/sdk/ui";
-import { Download, RefreshCw, Save, Send, Sparkles, Trash2, Upload } from "lucide-react";
+import {
+	ChevronRight,
+	Download,
+	Pencil,
+	RefreshCw,
+	Save,
+	Send,
+	Sparkles,
+	Trash2,
+	Upload,
+	X,
+} from "lucide-react";
+import pLimit from "p-limit";
 import { useEffect, useRef, useState } from "react";
 import { i18n } from "./i18n.ts";
 import { STICKER_MEME_PLUGIN_ID } from "./manifest.ts";
@@ -164,6 +177,7 @@ interface JobProgressRow {
 
 interface ProgressResponse {
 	readonly active: JobProgressRow | null;
+	readonly jobs?: readonly JobProgressRow[];
 }
 
 type SemanticMode = "auto" | "heuristic" | "vision";
@@ -183,11 +197,7 @@ const decodeModelOption = (
 	}
 	try {
 		const parsed = JSON.parse(value) as unknown;
-		if (
-			Array.isArray(parsed) &&
-			typeof parsed[0] === "string" &&
-			typeof parsed[1] === "string"
-		) {
+		if (Array.isArray(parsed) && typeof parsed[0] === "string" && typeof parsed[1] === "string") {
 			return { modelId: parsed[1], providerId: parsed[0] };
 		}
 	} catch {}
@@ -201,9 +211,14 @@ const list = (value: string): string[] =>
 		.map((entry) => entry.trim())
 		.filter((entry) => entry.length > 0);
 const join = (values: readonly string[]): string => values.join(", ");
+const clampWorkerCount = (value: string, fallback: number): number => {
+	const parsed = Number.parseInt(value, 10);
+	return Number.isFinite(parsed) ? Math.max(1, Math.min(16, parsed)) : fallback;
+};
 const telegramSetName = (pack: StickerPack): string | undefined => {
 	const telegram = pack.metadata.telegram;
-	if (typeof telegram !== "object" || telegram === null || Array.isArray(telegram)) return undefined;
+	if (typeof telegram !== "object" || telegram === null || Array.isArray(telegram))
+		return undefined;
 	const name = (telegram as Record<string, unknown>).name;
 	return typeof name === "string" && name.length > 0 ? name : undefined;
 };
@@ -260,90 +275,15 @@ function JobProgressCard({ job }: { job: JobProgressRow }) {
 	);
 }
 
-function PackCard({
-	onChanged,
-	pack,
-}: {
-	onChanged: () => Promise<void>;
-	pack: PackRow;
-}) {
-	const t = usePluginI18n();
-	const rpc = usePluginRpc();
-	const toast = usePluginToast();
-	const [name, setName] = useState(pack.name);
-	const [tags, setTags] = useState(join(pack.tags));
-	const [personas, setPersonas] = useState(join(pack.personaIds));
-	const [saving, setSaving] = useState(false);
-	const telegramName = telegramSetName(pack);
-	const save = async () => {
-		setSaving(true);
-		try {
-			await rpc.call(rpcName("packs.save"), {
-				enabled: pack.enabled,
-				id: pack.id,
-				name,
-				personaIds: list(personas),
-				source: pack.source,
-				tags: list(tags),
-			});
-			toast.success(t.t("save_success"));
-			await onChanged();
-		} catch (error) {
-			toast.error(t.t("save_failed"), String(error));
-		} finally {
-			setSaving(false);
-		}
-	};
-	return (
-		<div className="rounded-xl border border-border bg-background/40 p-3">
-			<div className="flex flex-wrap items-start justify-between gap-2">
-				<div className="min-w-0">
-					<div className="truncate text-sm font-medium">{pack.name}</div>
-					<div className="text-[11px] text-muted-foreground">
-						{t.t(`source_${pack.source}`)} · {t.t("pack_items", { count: String(pack.itemCount) })}
-						{telegramName === undefined
-							? ""
-							: ` · ${t.t("telegram_pack_meta", { name: telegramName })}`}
-					</div>
-				</div>
-				<Switch
-					ariaLabel={t.t("pack_enabled")}
-					checked={pack.enabled}
-					onCheckedChange={() => {
-						void rpc
-							.call(rpcName("packs.toggle"), { enabled: !pack.enabled, packId: pack.id })
-							.then(onChanged)
-							.catch((error: unknown) => toast.error(t.t("save_failed"), String(error)));
-					}}
-				/>
-			</div>
-			<div className="mt-3 grid gap-2 sm:grid-cols-3">
-				<Field label={t.t("pack_name")}>
-					<Input value={name} onChange={setName} />
-				</Field>
-				<Field label={t.t("pack_tags")}>
-					<Input value={tags} onChange={setTags} />
-				</Field>
-				<Field label={t.t("pack_personas")}>
-					<Input value={personas} onChange={setPersonas} />
-				</Field>
-			</div>
-			<div className="mt-2 flex justify-end">
-				<Button loading={saving} leadingIcon={<Save />} size="xs" onClick={() => void save()}>
-					{t.t("save_pack")}
-				</Button>
-			</div>
-		</div>
-	);
-}
-
-function ItemCard({
+function StickerInspector({
 	item,
 	onChanged,
+	onClose,
 	preview,
 }: {
 	item: ItemRow;
 	onChanged: () => Promise<void>;
+	onClose: () => void;
 	preview?: string;
 }) {
 	const t = usePluginI18n();
@@ -355,6 +295,7 @@ function ItemCard({
 	const [emotions, setEmotions] = useState(join(item.emotions));
 	const [score, setScore] = useState(String(item.score));
 	const [saving, setSaving] = useState(false);
+	const missing = item.mediaId.length === 0 || item.revokedAt !== null;
 	const save = async () => {
 		setSaving(true);
 		try {
@@ -374,46 +315,62 @@ function ItemCard({
 			setSaving(false);
 		}
 	};
-	const missing = item.mediaId.length === 0 || item.revokedAt !== null;
+	const toggleEnabled = async () => {
+		try {
+			await rpc.call(rpcName("items.update"), { enabled: !item.enabled, id: item.id });
+			await onChanged();
+		} catch (error) {
+			toast.error(t.t("save_failed"), String(error));
+		}
+	};
 	return (
-		<div className="space-y-2 rounded-xl border border-border bg-background/40 p-3">
-			<div className="flex items-start justify-between gap-2">
-				<div className="flex min-w-0 items-center gap-2">
-					{preview === undefined ? (
-						<div className="flex size-14 shrink-0 items-center justify-center rounded-lg border border-border text-[10px] text-muted-foreground">
-							{t.t("item_preview")}
-						</div>
-					) : (
-						<img
-							alt={item.name}
-							className="size-14 shrink-0 rounded-lg border border-border object-contain"
-							src={`data:${item.mimeType};base64,${preview}`}
-						/>
-					)}
+		<div className="mt-3 space-y-3 rounded-xl border border-border bg-background/60 p-3">
+			<div className="flex flex-wrap items-start justify-between gap-2">
+				<div className="flex min-w-0 items-center gap-3">
+					<div className="flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border">
+						{preview === undefined ? (
+							<span className="text-[10px] text-muted-foreground">{t.t("item_preview")}</span>
+						) : (
+							<img
+								alt={item.name}
+								className="size-full object-contain"
+								src={`data:${item.mimeType};base64,${preview}`}
+							/>
+						)}
+					</div>
 					<div className="min-w-0">
 						<div className="truncate text-sm font-medium">{item.name}</div>
 						<div className="text-[11px] text-muted-foreground">
 							{t.t(`status_${item.reviewStatus}`)} ·{" "}
 							{t.t("item_usage", { count: String(item.useCount) })} · {item.score}
-							{item.semantic === undefined || item.semantic.labels.length === 0
-								? ""
-								: ` · ${t.t("semantic_source")}: ${item.semantic.labels.slice(0, 4).join(", ")}`}
 						</div>
+						{item.semantic === undefined || item.semantic.labels.length === 0 ? null : (
+							<div className="mt-1 flex flex-wrap gap-1">
+								{item.semantic.labels.slice(0, 6).map((label) => (
+									<span
+										key={label}
+										className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary"
+									>
+										{label}
+									</span>
+								))}
+							</div>
+						)}
 						{missing ? (
 							<div className="text-[11px] text-warning">{t.t("status_missing")}</div>
 						) : null}
 					</div>
 				</div>
-				<Switch
-					ariaLabel={t.t("item_enabled")}
-					checked={item.enabled}
-					onCheckedChange={() => {
-						void rpc
-							.call(rpcName("items.update"), { enabled: !item.enabled, id: item.id })
-							.then(onChanged)
-							.catch((error: unknown) => toast.error(t.t("save_failed"), String(error)));
-					}}
-				/>
+				<div className="flex items-center gap-2">
+					<Switch
+						ariaLabel={t.t("item_enabled")}
+						checked={item.enabled}
+						onCheckedChange={() => void toggleEnabled()}
+					/>
+					<Button leadingIcon={<X />} size="xs" variant="ghost" onClick={onClose}>
+						{t.t("close")}
+					</Button>
+				</div>
 			</div>
 			<div className="grid gap-2 sm:grid-cols-2">
 				<Field label={t.t("item_name")}>
@@ -437,6 +394,194 @@ function ItemCard({
 					{t.t("item_save")}
 				</Button>
 			</div>
+		</div>
+	);
+}
+
+function PackAccordion({
+	items,
+	onChanged,
+	onLoadPreviews,
+	pack,
+	previews,
+}: {
+	items: readonly ItemRow[];
+	onChanged: () => Promise<void>;
+	onLoadPreviews: (items: readonly ItemRow[]) => Promise<void>;
+	pack: PackRow;
+	previews: Record<string, string>;
+}) {
+	const t = usePluginI18n();
+	const rpc = usePluginRpc();
+	const toast = usePluginToast();
+	const [expanded, setExpanded] = useState(false);
+	const [editing, setEditing] = useState(false);
+	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [name, setName] = useState(pack.name);
+	const [tags, setTags] = useState(join(pack.tags));
+	const [personas, setPersonas] = useState(join(pack.personaIds));
+	const [saving, setSaving] = useState(false);
+	const telegramName = telegramSetName(pack);
+	const selected = items.find((item) => item.id === selectedId) ?? null;
+	const toggle = () => {
+		const next = !expanded;
+		setExpanded(next);
+		setSelectedId(null);
+	};
+	useEffect(() => {
+		if (expanded) void onLoadPreviews(items);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [expanded, items.length]);
+	const save = async () => {
+		setSaving(true);
+		try {
+			await rpc.call(rpcName("packs.save"), {
+				enabled: pack.enabled,
+				id: pack.id,
+				name,
+				personaIds: list(personas),
+				source: pack.source,
+				tags: list(tags),
+			});
+			toast.success(t.t("save_success"));
+			setEditing(false);
+			await onChanged();
+		} catch (error) {
+			toast.error(t.t("save_failed"), String(error));
+		} finally {
+			setSaving(false);
+		}
+	};
+	return (
+		<div className="rounded-xl border border-border bg-background/40">
+			<div className="flex items-start gap-2 p-3">
+				<button
+					aria-expanded={expanded}
+					className="flex min-w-0 flex-1 items-center gap-2 text-left"
+					type="button"
+					onClick={toggle}
+				>
+					<ChevronRight
+						className={cn(
+							"size-4 shrink-0 text-muted-foreground transition-transform",
+							expanded && "rotate-90",
+						)}
+					/>
+					<span className="min-w-0">
+						<span className="block truncate text-sm font-medium">{pack.name}</span>
+						<span className="block text-[11px] text-muted-foreground">
+							{t.t(`source_${pack.source}`)} ·{" "}
+							{t.t("pack_items", { count: String(pack.itemCount) })}
+							{telegramName === undefined
+								? ""
+								: ` · ${t.t("telegram_pack_meta", { name: telegramName })}`}
+						</span>
+					</span>
+				</button>
+				<div className="flex shrink-0 items-center gap-1">
+					<Button
+						aria-expanded={editing}
+						leadingIcon={<Pencil />}
+						size="xs"
+						variant="ghost"
+						onClick={() => setEditing(!editing)}
+					>
+						{editing ? t.t("pack_edit_done") : t.t("edit")}
+					</Button>
+					<Switch
+						ariaLabel={t.t("pack_enabled")}
+						checked={pack.enabled}
+						onCheckedChange={() => {
+							void rpc
+								.call(rpcName("packs.toggle"), { enabled: !pack.enabled, packId: pack.id })
+								.then(onChanged)
+								.catch((error: unknown) => toast.error(t.t("save_failed"), String(error)));
+						}}
+					/>
+				</div>
+			</div>
+			{editing ? (
+				<div className="space-y-2 border-t border-border p-3">
+					<div className="grid gap-2 sm:grid-cols-3">
+						<Field label={t.t("pack_name")}>
+							<Input value={name} onChange={setName} />
+						</Field>
+						<Field label={t.t("pack_tags")}>
+							<Input value={tags} onChange={setTags} />
+						</Field>
+						<Field label={t.t("pack_personas")}>
+							<Input value={personas} onChange={setPersonas} />
+						</Field>
+					</div>
+					<div className="flex justify-end">
+						<Button loading={saving} leadingIcon={<Save />} size="xs" onClick={() => void save()}>
+							{t.t("save_pack")}
+						</Button>
+					</div>
+				</div>
+			) : null}
+			{expanded ? (
+				<div className="space-y-3 border-t border-border p-3">
+					{items.length === 0 ? (
+						<div className="text-xs text-muted-foreground">{t.t("pack_items_empty")}</div>
+					) : (
+						<div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
+							{items.map((item) => {
+								const preview = previews[item.id];
+								const missing = item.mediaId.length === 0 || item.revokedAt !== null;
+								const isSelected = selectedId === item.id;
+								return (
+									<button
+										key={item.id}
+										aria-label={item.name}
+										aria-pressed={isSelected}
+										className={cn(
+											"group relative aspect-square overflow-hidden rounded-lg border border-border bg-background/60 p-1 transition hover:border-primary/50",
+											isSelected && "ring-2 ring-primary",
+											!item.enabled && "opacity-50",
+										)}
+										type="button"
+										onClick={() => setSelectedId(isSelected ? null : item.id)}
+									>
+										{preview === undefined ? (
+											<span className="flex size-full items-center justify-center text-[10px] text-muted-foreground">
+												{t.t("item_preview")}
+											</span>
+										) : (
+											<img
+												alt={item.name}
+												className="size-full object-contain"
+												src={`data:${item.mimeType};base64,${preview}`}
+											/>
+										)}
+										{missing ? (
+											<span className="absolute inset-x-0 bottom-0 bg-warning/20 px-1 text-center text-[9px] text-warning">
+												{t.t("status_missing")}
+											</span>
+										) : null}
+										{!item.enabled ? (
+											<span className="absolute left-1 top-1 rounded bg-background/80 px-1 text-[9px] text-muted-foreground">
+												{t.t("item_disabled_short")}
+											</span>
+										) : null}
+									</button>
+								);
+							})}
+						</div>
+					)}
+					{selected === null ? (
+						<div className="text-[11px] text-muted-foreground">{t.t("sticker_edit_hint")}</div>
+					) : (
+						<StickerInspector
+							key={selected.id}
+							item={selected}
+							preview={previews[selected.id]}
+							onChanged={onChanged}
+							onClose={() => setSelectedId(null)}
+						/>
+					)}
+				</div>
+			) : null}
 		</div>
 	);
 }
@@ -476,12 +621,18 @@ function CandidateRow({
 				</div>
 				<div className="mt-1 flex flex-wrap gap-1">
 					{candidate.keywords.map((keyword) => (
-						<span key={keyword} className="rounded-full border border-border px-1.5 py-0.5 text-[10px]">
+						<span
+							key={keyword}
+							className="rounded-full border border-border px-1.5 py-0.5 text-[10px]"
+						>
 							{keyword}
 						</span>
 					))}
 					{candidate.emotions.map((emotion) => (
-						<span key={emotion} className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+						<span
+							key={emotion}
+							className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary"
+						>
 							{emotion}
 						</span>
 					))}
@@ -542,6 +693,13 @@ function StickerPanel() {
 	const [telegramAnimatedFormat, setTelegramAnimatedFormat] =
 		useState<TelegramAnimatedFormat>("gif");
 	const [telegramVideoFormat, setTelegramVideoFormat] = useState<TelegramVideoFormat>("gif");
+	const [backgroundSemantic, setBackgroundSemantic] = useState(false);
+	const configImportConcurrency =
+		typeof config.value.importConcurrency === "number" ? config.value.importConcurrency : 4;
+	const configSemanticConcurrency =
+		typeof config.value.semanticConcurrency === "number" ? config.value.semanticConcurrency : 4;
+	const [importConcurrency, setImportConcurrency] = useState(String(configImportConcurrency));
+	const [semanticConcurrency, setSemanticConcurrency] = useState(String(configSemanticConcurrency));
 	const [botToken, setBotToken] = useState("");
 	const [savingToken, setSavingToken] = useState(false);
 	const configMode = typeof config.value.semanticMode === "string" ? config.value.semanticMode : "";
@@ -570,7 +728,8 @@ function StickerPanel() {
 	const [backupBeforeDelete, setBackupBeforeDelete] = useState(true);
 	const [deleting, setDeleting] = useState(false);
 	const [loading, setLoading] = useState(false);
-	const [jobProgress, setJobProgress] = useState<JobProgressRow | null>(null);
+	const [jobs, setJobs] = useState<readonly JobProgressRow[]>([]);
+	const previewLoadingRef = useRef(new Set<string>());
 	const inFlightRef = useRef(false);
 	inFlightRef.current = importingTelegram || reclassifying || importingLegacy !== null;
 	const wasBackgroundRunningRef = useRef(false);
@@ -605,18 +764,18 @@ function StickerPanel() {
 				.catch(() => ({ configuredCustom: false, models: [] as readonly SemanticModelRow[] }));
 			const progressResult = await rpc
 				.call<ProgressResponse>(rpcName("progress"))
-				.catch(() => ({ active: null }));
+				.catch(() => ({ active: null, jobs: [] }));
 			setPacks(packResult.packs);
 			setItems(itemResult.items);
 			setCandidates(candidateResult.items);
 			setStats(statsResult);
 			setAvailableModels(modelsResult.models ?? []);
 			setConfiguredCustom(modelsResult.configuredCustom === true);
-			if (progressResult.active !== null) {
-				setJobProgress(progressResult.active);
-				if (progressResult.active.status === "running" && !inFlightRef.current) {
-					wasBackgroundRunningRef.current = true;
-				}
+			const progressJobs =
+				progressResult.jobs ?? (progressResult.active === null ? [] : [progressResult.active]);
+			setJobs(progressJobs);
+			if (progressJobs.some((job) => job.status === "running") && !inFlightRef.current) {
+				wasBackgroundRunningRef.current = true;
 			}
 			if (deletePackId.length === 0 && packResult.packs.length > 0) {
 				setDeletePackId(packResult.packs[0]?.id ?? "");
@@ -624,15 +783,13 @@ function StickerPanel() {
 			if (reclassifyPackId.length === 0 && packResult.packs.length > 0) {
 				setReclassifyPackId(packResult.packs[0]?.id ?? "");
 			}
-			const loaded: Record<string, string> = {};
-			for (const item of itemResult.items.slice(0, 24)) {
-				if (item.mediaId.length === 0) continue;
-				try {
-					const preview = await rpc.call<PreviewRow>(rpcName("preview"), { itemId: item.id });
-					loaded[item.id] = preview.dataBase64;
-				} catch {}
-			}
-			setPreviews(loaded);
+			setPreviews((current) => {
+				const ids = new Set(itemResult.items.map((item) => item.id));
+				return Object.fromEntries(Object.entries(current).filter(([id]) => ids.has(id))) as Record<
+					string,
+					string
+				>;
+			});
 		} catch (error) {
 			toast.error(t.t("load_failed"), String(error));
 		} finally {
@@ -645,11 +802,41 @@ function StickerPanel() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
+	/** Loads a pack's thumbnails on demand with a small bounded pool. */
+	const loadPreviews = async (packItems: readonly ItemRow[]): Promise<void> => {
+		const pending = packItems.filter(
+			(item) =>
+				item.mediaId.length > 0 &&
+				previews[item.id] === undefined &&
+				!previewLoadingRef.current.has(item.id),
+		);
+		if (pending.length === 0) return;
+		const limit = pLimit(4);
+		const loaded: Record<string, string> = {};
+		await Promise.all(
+			pending.map(async (item) => {
+				previewLoadingRef.current.add(item.id);
+				try {
+					const preview = await limit(() =>
+						rpc.call<PreviewRow>(rpcName("preview"), { itemId: item.id }),
+					);
+					loaded[item.id] = preview.dataBase64;
+				} catch {
+				} finally {
+					previewLoadingRef.current.delete(item.id);
+				}
+			}),
+		);
+		if (Object.keys(loaded).length > 0) {
+			setPreviews((current) => ({ ...current, ...loaded }));
+		}
+	};
+
 	const isJobRunning =
 		importingTelegram ||
 		reclassifying ||
 		importingLegacy !== null ||
-		jobProgress?.status === "running";
+		jobs.some((job) => job.status === "running");
 
 	useEffect(() => {
 		if (!isJobRunning) return;
@@ -661,8 +848,9 @@ function StickerPanel() {
 			try {
 				const result = await rpc.call<ProgressResponse>(rpcName("progress"));
 				if (cancelled || result.active === null) return;
-				setJobProgress(result.active);
-				if (result.active.status === "running") {
+				const progressJobs = result.jobs ?? [result.active];
+				setJobs(progressJobs);
+				if (progressJobs.some((job) => job.status === "running")) {
 					if (!inFlightRef.current) {
 						wasBackgroundRunningRef.current = true;
 					}
@@ -690,19 +878,22 @@ function StickerPanel() {
 
 	const startOptimisticJob = (kind: JobKind, stage: JobStage): void => {
 		const now = new Date().toISOString();
-		setJobProgress({
-			classified: 0,
-			current: 0,
-			dryRun,
-			id: `pending-${kind}`,
-			kind,
-			skipped: 0,
-			stage,
-			startedAt: now,
-			status: "running",
-			total: null,
-			updatedAt: now,
-		});
+		setJobs((current) => [
+			...current.filter((job) => job.id !== `pending-${kind}`),
+			{
+				classified: 0,
+				current: 0,
+				dryRun,
+				id: `pending-${kind}`,
+				kind,
+				skipped: 0,
+				stage,
+				startedAt: now,
+				status: "running",
+				total: null,
+				updatedAt: now,
+			},
+		]);
 	};
 
 	const tokenConfigured = config.secretsSet.includes("telegramBotToken");
@@ -767,24 +958,24 @@ function StickerPanel() {
 	};
 
 	const syncJobProgress = async (kind: JobKind, errorMessage?: string): Promise<void> => {
-		const latest = await rpc
-			.call<ProgressResponse>(rpcName("progress"))
-			.catch(() => ({ active: null }));
-		if (latest.active !== null) {
-			setJobProgress(latest.active);
-			return;
-		}
-		setJobProgress((current) =>
-			current !== null && current.kind === kind && current.status === "running"
-				? {
-						...current,
-						...(errorMessage === undefined ? {} : { error: errorMessage }),
-						stage: errorMessage === undefined ? "done" : "error",
-						status: errorMessage === undefined ? "completed" : "failed",
-						updatedAt: new Date().toISOString(),
-					}
-				: current,
-		);
+		const latest = await rpc.call<ProgressResponse>(rpcName("progress")).catch(() => null);
+		const serverJobs =
+			latest === null ? [] : (latest.jobs ?? (latest.active === null ? [] : [latest.active]));
+		setJobs((current): readonly JobProgressRow[] => {
+			const base = latest === null ? current : serverJobs;
+			if (errorMessage === undefined) return base;
+			return base.map((job) =>
+				job.kind === kind && job.status === "running"
+					? {
+							...job,
+							error: errorMessage,
+							stage: "error" as const,
+							status: "failed" as const,
+							updatedAt: new Date().toISOString(),
+						}
+					: job,
+			);
+		});
 	};
 
 	const importTelegram = async () => {
@@ -795,11 +986,13 @@ function StickerPanel() {
 		try {
 			const report = await rpc.call<TelegramImportRow>(rpcName("telegram.import"), {
 				animatedFormat: telegramAnimatedFormat,
+				deferSemantic: backgroundSemantic,
 				dryRun,
 				includeAnimated: telegramAnimated,
 				includeVideo: telegramAnimated,
 				semanticMode,
 				...classifierSelection(),
+				...workerArgs(),
 				url: telegramUrl,
 				videoFormat: telegramVideoFormat,
 			});
@@ -834,6 +1027,7 @@ function StickerPanel() {
 				mode: semanticMode,
 				...classifierSelection(),
 				packId: reclassifyPackId,
+				semanticConcurrency: clampWorkerCount(semanticConcurrency, 4),
 			});
 			setReclassifySummary(result);
 			toast.success(
@@ -867,6 +1061,7 @@ function StickerPanel() {
 				dryRun,
 				semanticMode,
 				...classifierSelection(),
+				...workerArgs(),
 			});
 			toast.success(
 				t.t("import_success"),
@@ -900,6 +1095,7 @@ function StickerPanel() {
 				dryRun,
 				semanticMode,
 				...classifierSelection(),
+				...workerArgs(),
 			});
 			toast.success(
 				t.t("import_success"),
@@ -934,6 +1130,7 @@ function StickerPanel() {
 				dryRun,
 				semanticMode,
 				...classifierSelection(),
+				...workerArgs(),
 			});
 			toast.success(
 				t.t("import_success"),
@@ -1019,23 +1216,26 @@ function StickerPanel() {
 		</>
 	);
 
-	const telegramProgress = jobProgress?.kind === "telegram.import" ? jobProgress : null;
+	const latestJob = (kinds: readonly JobKind[]): JobProgressRow | null => {
+		// `jobs` arrives newest first from the tracker, so the first match is the latest run.
+		const matching = jobs.filter((job) => kinds.includes(job.kind));
+		return matching.find((job) => job.status === "running") ?? matching[0] ?? null;
+	};
+	const telegramProgress = latestJob(["telegram.import"]);
 	const telegramBusy = importingTelegram || telegramProgress?.status === "running";
 	const telegramFailureMessage =
 		telegramError ??
 		(telegramProgress?.status === "failed"
 			? (telegramProgress.error ?? t.t("telegram_import_failed"))
 			: null);
-	const reclassifyProgress = jobProgress?.kind === "semantic.reclassify" ? jobProgress : null;
+	const reclassifyProgress = latestJob(["semantic.reclassify"]);
 	const reclassifyBusy = reclassifying || reclassifyProgress?.status === "running";
-	const legacyProgress =
-		jobProgress !== null &&
-		(jobProgress.kind === "packs.importDir" ||
-			jobProgress.kind === "packs.importBundle" ||
-			jobProgress.kind === "packs.importDsh")
-			? jobProgress
-			: null;
+	const legacyProgress = latestJob(["packs.importDir", "packs.importBundle", "packs.importDsh"]);
 	const legacyBusy = importingLegacy !== null || legacyProgress?.status === "running";
+	const workerArgs = (): Record<string, number> => ({
+		importConcurrency: clampWorkerCount(importConcurrency, 4),
+		semanticConcurrency: clampWorkerCount(semanticConcurrency, 4),
+	});
 
 	return (
 		<PluginPage
@@ -1187,9 +1387,35 @@ function StickerPanel() {
 								{modelSelectOptions}
 							</select>
 						</Field>
+						<Field label={t.t("import_concurrency")}>
+							<Input
+								max={16}
+								min={1}
+								type="number"
+								value={importConcurrency}
+								onChange={setImportConcurrency}
+							/>
+						</Field>
+						<Field label={t.t("semantic_concurrency")}>
+							<Input
+								max={16}
+								min={1}
+								type="number"
+								value={semanticConcurrency}
+								onChange={setSemanticConcurrency}
+							/>
+						</Field>
+						<label className="flex items-center gap-2 text-xs">
+							<Switch
+								ariaLabel={t.t("telegram_background_semantic")}
+								checked={backgroundSemantic}
+								onCheckedChange={setBackgroundSemantic}
+							/>
+							{t.t("telegram_background_semantic")}
+						</label>
 					</div>
 					<Button
-						disabled={telegramBusy || isJobRunning || telegramUrl.trim().length === 0}
+						disabled={telegramBusy || telegramUrl.trim().length === 0}
 						leadingIcon={<Send />}
 						loading={telegramBusy}
 						size="sm"
@@ -1271,7 +1497,7 @@ function StickerPanel() {
 							</select>
 						</Field>
 						<Button
-							disabled={reclassifyBusy || isJobRunning || reclassifyPackId.length === 0}
+							disabled={reclassifyBusy || reclassifyPackId.length === 0}
 							leadingIcon={<Sparkles />}
 							loading={reclassifyBusy}
 							size="sm"
@@ -1300,29 +1526,19 @@ function StickerPanel() {
 				</div>
 			</PluginSection>
 
-			<PluginSection title={t.t("packs")}>
+			<PluginSection description={t.t("packs_hint")} title={t.t("packs")}>
 				{packs.length === 0 ? (
 					<EmptyState description={t.t("packs_empty")} title={t.t("packs")} />
 				) : (
 					<div className="space-y-2">
 						{packs.map((pack) => (
-							<PackCard key={pack.id} pack={pack} onChanged={refresh} />
-						))}
-					</div>
-				)}
-			</PluginSection>
-
-			<PluginSection title={t.t("items")}>
-				{items.length === 0 ? (
-					<EmptyState title={t.t("items_empty")} />
-				) : (
-					<div className="grid gap-2 xl:grid-cols-2">
-						{items.map((item) => (
-							<ItemCard
-								key={item.id}
-								item={item}
+							<PackAccordion
+								key={pack.id}
+								items={items.filter((item) => item.packId === pack.id)}
+								pack={pack}
+								previews={previews}
 								onChanged={refresh}
-								preview={previews[item.id]}
+								onLoadPreviews={loadPreviews}
 							/>
 						))}
 					</div>
@@ -1356,7 +1572,7 @@ function StickerPanel() {
 					</Field>
 					<div className="flex flex-wrap gap-2">
 						<Button
-							disabled={legacyBusy || isJobRunning || directory.trim().length === 0}
+							disabled={legacyBusy || directory.trim().length === 0}
 							leadingIcon={<Upload />}
 							loading={importingLegacy === "dir"}
 							size="sm"
@@ -1365,7 +1581,7 @@ function StickerPanel() {
 							{importingLegacy === "dir" ? t.t("import_running") : t.t("import_run")}
 						</Button>
 						<Button
-							disabled={legacyBusy || isJobRunning || directory.trim().length === 0}
+							disabled={legacyBusy || directory.trim().length === 0}
 							loading={importingLegacy === "dsh"}
 							size="sm"
 							variant="secondary"
@@ -1383,7 +1599,7 @@ function StickerPanel() {
 					</Field>
 					<div className="flex flex-wrap gap-2">
 						<Button
-							disabled={legacyBusy || isJobRunning || bundle.trim().length === 0}
+							disabled={legacyBusy || bundle.trim().length === 0}
 							loading={importingLegacy === "bundle"}
 							size="sm"
 							onClick={() => void importBundle()}

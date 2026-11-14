@@ -137,5 +137,15 @@
 	"progress_stage_done": "Completed",
 	"progress_stage_error": "Failed",
 	"progress_item_status": "{stage} · {item}",
-	"progress_counts": "{classified} classified · {skipped} skipped"
+	"progress_counts": "{classified} classified · {skipped} skipped",
+	"import_concurrency": "Import workers",
+	"semantic_concurrency": "Semantic workers",
+	"telegram_background_semantic": "Classify in a separate background job",
+	"packs_hint": "Expand a pack to browse its stickers. Click a sticker to edit it.",
+	"edit": "Edit",
+	"pack_edit_done": "Done",
+	"pack_items_empty": "This pack has no stickers yet.",
+	"sticker_edit_hint": "Select a sticker to edit its details.",
+	"item_disabled_short": "Off",
+	"close": "Close"
 }
