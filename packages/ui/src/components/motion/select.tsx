@@ -38,7 +38,7 @@ const UNFOLD_SPRING = {
 } as const;
 // Exits are faster than entrances: the panel folds back on a short ease.
 const UNFOLD_EXIT = { duration: 0.2, ease: EASE_OUT } as const;
-const RADIUS = 12;
+const RADIUS = 10;
 // How far the open panel sits from the trigger once it has pulled away.
 const GAP = 8;
 // The surface starts as a thin lip flush against the trigger's edge.
@@ -294,7 +294,7 @@ export function SelectTrigger({ className, children }: SelectTriggerProps) {
 				borderBottomRightRadius: ctx.reduce || isTop ? RADIUS : nearRadius,
 			}}
 			className={cn(
-				"relative z-10 flex w-full items-center justify-between gap-2 whitespace-nowrap border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors",
+				"relative z-10 flex h-8 w-full items-center justify-between gap-2 whitespace-nowrap border border-border bg-background px-2.5 text-[12.5px] text-foreground outline-none transition-colors",
 				"hover:border-(--color-border-strong) focus-visible:ring-2 focus-visible:ring-foreground/20",
 				"disabled:pointer-events-none disabled:opacity-50",
 				className,
@@ -302,7 +302,7 @@ export function SelectTrigger({ className, children }: SelectTriggerProps) {
 		>
 			{children}
 			<motion.span aria-hidden style={{ rotate }} className="text-muted-foreground">
-				<ChevronDown className="h-4 w-4" />
+				<ChevronDown className="h-3.5 w-3.5" />
 			</motion.span>
 		</motion.button>
 	);
@@ -490,7 +490,7 @@ export function SelectItem({ value, disabled = false, className, children }: Sel
 				data-listbox-id={value}
 				onClick={() => ctx.select(value)}
 				className={cn(
-					"flex w-full items-center justify-between gap-2 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-left text-sm outline-none transition-colors",
+					"flex w-full items-center justify-between gap-2 whitespace-nowrap rounded-md px-2 py-1.5 text-left text-[12.5px] outline-none transition-colors",
 					selected
 						? "bg-muted text-foreground"
 						: "text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:bg-muted",

@@ -6,39 +6,39 @@ test.describe("conversation policy and approval state", () => {
 		page,
 	}) => {
 		await openAuthenticatedPage(page);
-		await createLocalChat(page, `E2E policy ${Date.now()}`);
+		const title = `E2E policy ${Date.now()}`;
+		await createLocalChat(page, title);
 
-		await page.getByRole("button", { name: "Rules" }).click();
-		await expect(page.getByRole("heading", { name: "Conversation rules" })).toBeVisible();
-		await expect(page.getByLabel("Private access")).toHaveValue("open");
-		await expect(page.getByText("No policy revisions yet.")).toBeVisible();
-
-		await page.getByLabel("Private access").selectOption("allowlist");
-		await page.getByLabel("Allowlist IDs").fill("e2e-approved-peer");
-		await page.getByRole("button", { name: "Save policy" }).click();
+		// The conversation policy lives in the session inspector's Triggers tab.
+		const inspector = page.getByRole("complementary", { name: "Session inspector" });
+		await inspector.getByRole("tab", { name: "Triggers" }).click();
+		await expect(inspector.getByLabel("Private access")).toHaveValue("open");
+		await inspector.getByLabel("Private access").selectOption("allowlist");
+		await inspector.getByLabel("Allowlist IDs").fill("e2e-approved-peer");
+		await inspector.getByRole("button", { name: "Save policy" }).click();
 		await expect(page.getByText("Policy saved")).toBeVisible();
 
-		// The history list is the WebUI's audit view for policy revisions.
-		await expect(page.getByRole("heading", { name: "Policy history" })).toBeVisible();
-		const historyRows = page
+		// The persona tab carries the WebUI's audit view for policy revisions.
+		await inspector.getByRole("tab", { name: "Persona" }).click();
+		await expect(inspector.getByRole("heading", { name: "Policy history" })).toBeVisible();
+		const historyRows = inspector
 			.getByRole("list")
 			.getByRole("listitem")
 			.filter({ hasText: /Version \d+/u });
 		await expect(historyRows).toHaveCount(1);
 		await expect(historyRows.filter({ hasText: "Active" })).toHaveCount(1);
 
-		await page
-			.getByRole("dialog")
-			.getByRole("button", { name: "Close", exact: true })
-			.last()
-			.click();
-		await page.getByRole("button", { name: "Rules" }).click();
-		await expect(page.getByLabel("Private access")).toHaveValue("allowlist");
-		await expect(page.getByLabel("Allowlist IDs")).toHaveValue("e2e-approved-peer");
+		await page.reload();
+		await expect(page.getByRole("heading", { name: title })).toBeVisible();
+		const reloadedInspector = page.getByRole("complementary", { name: "Session inspector" });
+		await reloadedInspector.getByRole("tab", { name: "Triggers" }).click();
+		await expect(reloadedInspector.getByLabel("Private access")).toHaveValue("allowlist");
+		await expect(reloadedInspector.getByLabel("Allowlist IDs")).toHaveValue("e2e-approved-peer");
 		// A second save must append a revision and keep exactly one active row.
-		await page.getByLabel("Allowlist IDs").fill("e2e-approved-peer-2");
-		await page.getByRole("button", { name: "Save policy" }).click();
+		await reloadedInspector.getByLabel("Allowlist IDs").fill("e2e-approved-peer-2");
+		await reloadedInspector.getByRole("button", { name: "Save policy" }).click();
 		await expect(page.getByText("Policy saved")).toBeVisible();
+		await reloadedInspector.getByRole("tab", { name: "Persona" }).click();
 		await expect(historyRows).toHaveCount(2);
 		await expect(historyRows.filter({ hasText: "Version 2" })).toHaveCount(1);
 		await expect(historyRows.filter({ hasText: "Active" })).toHaveCount(1);

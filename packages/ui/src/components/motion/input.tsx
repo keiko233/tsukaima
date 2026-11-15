@@ -98,7 +98,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
 			{label ? (
 				<label
 					htmlFor={id}
-					className={cn("px-1 text-sm font-medium text-foreground", classNames?.label)}
+					className={cn("px-1 text-[11.5px] font-medium text-foreground", classNames?.label)}
 				>
 					{label}
 				</label>
@@ -108,7 +108,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
 				ref={fieldRef}
 				data-state={hasError ? "error" : success ? "success" : focused ? "focused" : "idle"}
 				className={cn(
-					"relative h-11 overflow-hidden rounded-full border transition-colors duration-200",
+					"relative h-9 overflow-hidden rounded-lg border transition-colors duration-200",
 					"border-border",
 					focused && !hasError && "border-foreground/40 ring-2 ring-ring/40",
 					hasError && "border-destructive ring-2 ring-destructive/25",
@@ -119,7 +119,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
 				{leftIcon ? (
 					<span
 						className={cn(
-							"pointer-events-none absolute left-3 top-1/2 flex -translate-y-1/2 items-center text-muted-foreground [&_svg]:h-4 [&_svg]:w-4",
+							"pointer-events-none absolute left-2.5 top-1/2 flex -translate-y-1/2 items-center text-muted-foreground [&_svg]:h-3.5 [&_svg]:w-3.5",
 							classNames?.leftIcon,
 						)}
 					>
@@ -146,10 +146,10 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
 						onBlur?.(event);
 					}}
 					className={cn(
-						"peer h-full w-full bg-transparent text-base leading-6 text-foreground caret-foreground outline-none",
+						"peer h-full w-full bg-transparent text-[13px] leading-5 text-foreground caret-foreground outline-none",
 						"placeholder:text-muted-foreground/60",
-						leftIcon ? "pl-10" : "pl-3.5",
-						rightSlot || success ? "pr-10" : "pr-3.5",
+						leftIcon ? "pl-8" : "pl-3",
+						rightSlot || success ? "pr-8" : "pr-3",
 						disabled && "cursor-not-allowed",
 						classNames?.input,
 					)}
@@ -178,7 +178,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
 				) : rightSlot ? (
 					<span
 						className={cn(
-							"absolute right-0 top-0 flex h-full items-center text-muted-foreground [&_button]:grid [&_button]:size-11 [&_button]:place-items-center [&_svg]:h-4 [&_svg]:w-4",
+							"absolute right-0 top-0 flex h-full items-center text-muted-foreground [&_button]:grid [&_button]:size-9 [&_button]:place-items-center [&_svg]:h-3.5 [&_svg]:w-3.5",
 							classNames?.rightIcon,
 						)}
 					>

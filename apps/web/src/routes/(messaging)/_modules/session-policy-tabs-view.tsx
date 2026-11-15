@@ -83,11 +83,11 @@ function PolicyTabShell({
 	saving?: boolean;
 }) {
 	if (isPending) {
-		return <div className="px-4 py-8 text-center text-xs text-muted-foreground">{m.policy_loading()}</div>;
+		return <div className="px-3 py-6 text-center text-[11px] text-muted-foreground">{m.policy_loading()}</div>;
 	}
 	if (isError) {
 		return (
-			<div className="px-4 py-6">
+			<div className="px-3 py-4">
 				<InlineError
 					message={errorMessage ?? m.error_generic()}
 					onRetry={onRetry ?? (() => {})}
@@ -98,9 +98,9 @@ function PolicyTabShell({
 	}
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			<div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto px-4 pt-3 pb-4">{children}</div>
+			<div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pt-2.5 pb-3">{children}</div>
 			{onSave ? (
-				<div className="shrink-0 border-t border-border/70 bg-background/80 px-4 py-2.5">
+				<div className="shrink-0 border-t border-border/70 bg-background/80 px-3 py-2">
 					<div className="flex items-center justify-between gap-2">
 						<span className="text-[11px] text-muted-foreground">
 							{dirty ? m.policy_unsaved() : ""}

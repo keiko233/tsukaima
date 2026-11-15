@@ -19,12 +19,12 @@ const VARIANT_CLASS: Record<CardVariant, string> = {
 // Each part pads itself on the inline axis, so a part can be left out without
 // the others losing their edges. The root owns the block padding and the gap.
 const ROOT_SIZE_CLASS: Record<CardSize, string> = {
-	default: "gap-6 py-6",
-	compact: "gap-4 py-4",
+	default: "gap-4 py-4",
+	compact: "gap-3 py-3",
 };
 const INSET_CLASS: Record<CardSize, string> = {
-	default: "px-6",
-	compact: "px-4",
+	default: "px-5",
+	compact: "px-3.5",
 };
 
 /**
@@ -157,7 +157,7 @@ export function CardTitle({ as: Tag = "div", className, ...props }: CardTitlePro
 		<Tag
 			{...props}
 			data-slot="card-title"
-			className={cn("text-[15px] leading-snug font-semibold text-foreground", className)}
+			className={cn("text-[13.5px] leading-snug font-semibold text-foreground", className)}
 		/>
 	);
 }
@@ -169,7 +169,7 @@ export function CardDescription({ className, ...props }: CardDescriptionProps) {
 		<p
 			{...props}
 			data-slot="card-description"
-			className={cn("text-sm leading-relaxed text-muted-foreground", className)}
+			className={cn("text-[11.5px] leading-relaxed text-muted-foreground", className)}
 		/>
 	);
 }
@@ -200,7 +200,7 @@ export function CardContent({ className, ...props }: CardContentProps) {
 		<div
 			{...props}
 			data-slot="card-content"
-			className={cn("text-sm", INSET_CLASS[size], className)}
+			className={cn("text-[12px]", INSET_CLASS[size], className)}
 		/>
 	);
 }

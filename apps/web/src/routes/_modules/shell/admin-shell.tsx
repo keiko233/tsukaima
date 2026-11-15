@@ -35,10 +35,10 @@ export function useShellNavigation(): ShellNavigation {
 	return useContext(ShellNavigationContext);
 }
 
-const SIDEBAR_WIDTH_KEY = "elaina.webui.sidebar-width";
-const MIN_SIDEBAR_WIDTH = 280;
-const MAX_SIDEBAR_WIDTH = 420;
-const DEFAULT_SIDEBAR_WIDTH = 340;
+const SIDEBAR_WIDTH_KEY = "elaina.webui.sidebar-width.v2";
+const MIN_SIDEBAR_WIDTH = 232;
+const MAX_SIDEBAR_WIDTH = 360;
+const DEFAULT_SIDEBAR_WIDTH = 264;
 
 function storedSidebarWidth(): number {
 	const stored = localStorage.getItem(SIDEBAR_WIDTH_KEY);
@@ -127,7 +127,7 @@ export function AdminShell({ children }: { readonly children?: ReactNode }) {
 						aria-label="Elaina"
 						style={{ width: mobile ? "100%" : sidebarWidth }}
 						className={cn(
-							"relative flex min-h-0 shrink-0 flex-col bg-background",
+							"relative flex min-h-0 shrink-0 flex-col bg-sidebar",
 							!sidebarVisible && "hidden",
 							!mobile && "border-r border-border",
 						)}
@@ -164,8 +164,8 @@ export function AdminShell({ children }: { readonly children?: ReactNode }) {
 								<div
 									className={cn(
 										fullBleedRoute
-											? "flex h-full min-h-0 w-full flex-col px-4 py-5 sm:px-6 sm:py-4"
-											: "mx-auto w-full max-w-5xl px-4 py-5 sm:px-6 sm:py-7",
+											? "flex h-full min-h-0 w-full flex-col px-3 py-3 sm:px-4"
+											: "mx-auto w-full max-w-4xl px-4 py-4 sm:px-6 sm:py-5",
 									)}
 								>
 									{children ?? <Outlet />}

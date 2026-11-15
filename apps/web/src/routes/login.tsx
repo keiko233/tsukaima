@@ -60,19 +60,21 @@ function LoginPage() {
 
 	return (
 		<div className="grid h-dvh place-items-center bg-background px-4">
-			<div className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-sm">
-				<div className="mb-6 flex items-center gap-3">
-					<span className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground">
-						<Sparkles className="size-5" />
+			<div className="w-full max-w-[320px] rounded-xl border border-border bg-card p-5 shadow-sm">
+				<div className="mb-5 flex items-center gap-2.5">
+					<span className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground">
+						<Sparkles className="size-4" />
 					</span>
 					<div className="min-w-0">
-						<div className="text-base font-semibold tracking-tight">Elaina</div>
-						<div className="text-xs text-muted-foreground">{m.auth_sign_in_subtitle()}</div>
+						<div className="text-[13px] font-semibold tracking-tight">Elaina</div>
+						<div className="text-[10.5px] text-muted-foreground">
+							{m.auth_sign_in_subtitle()}
+						</div>
 					</div>
 				</div>
 				{configured ? (
 					<form
-						className="flex flex-col gap-4"
+						className="flex flex-col gap-3"
 						onSubmit={(event) => {
 							event.preventDefault();
 							login.mutate({ password, username: username.trim() });

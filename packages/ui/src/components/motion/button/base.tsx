@@ -60,13 +60,13 @@ const VARIANT_CLASS: Record<ButtonVariant, string> = {
 };
 
 const SIZE_CLASS: Record<ButtonSize, string> = {
-	xs: "h-7 px-2.5 text-[11px] gap-1 rounded-full",
-	sm: "h-8 px-3 text-xs gap-1.5 rounded-full",
-	md: "h-10 px-5 text-sm gap-2 rounded-full",
-	lg: "h-12 px-6 text-base gap-2 rounded-full",
-	icon: "h-8 w-8 rounded-lg",
-	iconSm: "h-7 w-7 rounded-md",
-	iconLg: "h-10 w-10 rounded-lg",
+	xs: "h-6 px-2 text-[11px] gap-1 rounded-md",
+	sm: "h-7 px-2.5 text-[12px] gap-1.5 rounded-md",
+	md: "h-8 px-3.5 text-[13px] gap-1.5 rounded-lg",
+	lg: "h-10 px-5 text-sm gap-2 rounded-lg",
+	icon: "h-8 w-8 rounded-md",
+	iconSm: "h-6 w-6 rounded-md",
+	iconLg: "h-9 w-9 rounded-lg",
 };
 
 const ICON_SIZE_CLASS: Record<ButtonSize, string> = {

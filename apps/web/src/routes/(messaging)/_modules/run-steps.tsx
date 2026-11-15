@@ -60,7 +60,7 @@ export function RunSteps({ entryId, sessionId }: { entryId: string; sessionId: s
 				)}
 			</button>
 			{open && rows.length > 0 ? (
-				<ul className="mt-1.5 flex w-full max-w-[min(42rem,88%)] flex-col items-start gap-1.5">
+				<ul className="mt-1.5 flex w-full max-w-[46rem] flex-col items-start gap-1.5">
 					{rows.map((row) => (
 						<li key={row.id} className="flex w-full min-w-0 flex-col items-start gap-0.5">
 							{row.node ?? (

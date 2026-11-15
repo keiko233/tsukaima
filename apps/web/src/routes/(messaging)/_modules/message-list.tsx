@@ -128,7 +128,7 @@ function InlineMedia({ part }: { part: MediaPart }) {
 			alt={alt}
 			loading="lazy"
 			onError={() => setFailed(true)}
-			className="h-auto w-auto max-h-80 max-w-full rounded-lg border border-border object-contain"
+			className="h-auto w-auto max-h-64 max-w-full rounded-lg border border-border object-contain"
 			{...(part.width !== undefined && part.height !== undefined
 				? { height: part.height, width: part.width }
 				: {})}
@@ -180,10 +180,21 @@ function MessageBody({ message }: { message: MessageSummary }) {
 
 const LOAD_OLDER_THRESHOLD = 320;
 
+function sameSender(left: MessageSummary, right: MessageSummary): boolean {
+	return (
+		left.senderKind === right.senderKind &&
+		left.senderExternalId === right.senderExternalId &&
+		left.senderDisplayName === right.senderDisplayName
+	);
+}
+
 function MessageRow({
+	grouped,
 	message,
 	sessionId,
 }: {
+	/** Follows an earlier message from the same sender, so the identity chrome is skipped. */
+	grouped: boolean;
 	message: MessageSummary;
 	/** Session the message belongs to, needed to expand a turn's steps. */
 	sessionId: string;
@@ -198,32 +209,49 @@ function MessageRow({
 			// The operator's own turns sit on the right, the assistant on the left; `from` keeps
 			// its semantic meaning for the aria label and bubble variant.
 			align={self ? "end" : "start"}
-			className="gap-2.5"
+			className="gap-2"
 		>
 			<MessageAvatar
-				className={cn(assistant && "border border-primary/20 bg-primary/10 text-primary")}
+				placeholder={grouped}
+				className={cn(
+					"size-6 text-[10px] [&_svg]:size-3",
+					assistant && "border border-primary/20 bg-primary/10 text-primary",
+				)}
 			>
 				{assistant ? "E" : senderName(message).slice(0, 1).toUpperCase()}
 			</MessageAvatar>
-			<MessageContent>
-				<MessageHeader>
-					<span className="font-medium text-foreground">{senderName(message)}</span>
-					<span aria-hidden="true">·</span>
-					<time dateTime={message.occurredAt} title={formatDateTime(message.occurredAt)}>
-						{formatTimestamp(message.occurredAt)}
-					</time>
-				</MessageHeader>
+			<MessageContent className="gap-1">
+				{grouped ? null : (
+					<MessageHeader className="gap-1 px-0.5">
+						<span className={cn("font-medium text-foreground/85", !self && "text-[11px]")}>
+							{senderName(message)}
+						</span>
+						<span aria-hidden="true" className="text-muted-foreground/40">
+							·
+						</span>
+						<time dateTime={message.occurredAt} title={formatDateTime(message.occurredAt)}>
+							{formatTimestamp(message.occurredAt)}
+						</time>
+					</MessageHeader>
+				)}
 				{/* Steps come first: they explain the answer rather than trailing it. */}
 				{assistant && message.durableEntryId !== null ? (
 					<RunSteps entryId={message.durableEntryId} sessionId={sessionId} />
 				) : null}
-				<MessageBubble variant={assistant ? "outline" : "soft"} className="max-w-full">
-					<MessageBubbleContent className="max-w-[min(42rem,88%)]">
+				<MessageBubble
+					variant={assistant ? "ghost" : "soft"}
+					className={cn("max-w-full", self && "items-end")}
+				>
+					<MessageBubbleContent
+						className={cn(
+							assistant ? "max-w-[46rem]" : "max-w-[min(32rem,80%)] rounded-lg px-2.5 py-1.5",
+						)}
+					>
 						<MessageBody message={message} />
 					</MessageBubbleContent>
 				</MessageBubble>
 				{self ? (
-					<MessageFooter>
+					<MessageFooter className="min-h-4 px-0.5 text-[10px]">
 						<span className={deliveryClass(message.deliveryStatus)}>
 							{deliveryLabel(message.deliveryStatus)}
 						</span>
@@ -274,15 +302,15 @@ export function MessageList({
 		// when content is appended or a streaming turn grows.
 		anchorTo: "end",
 		count,
-		estimateSize: (index) => (index === messages.length ? 160 : 96),
+		estimateSize: (index) => (index === messages.length ? 140 : 76),
 		followOnAppend: "auto",
-		gap: 16,
+		gap: 10,
 		getItemKey: (index) =>
 			messages[index]?.id ?? `live-run:${liveRun?.startedAtMs ?? "none"}`,
 		getScrollElement: () => viewportRef.current,
 		overscan: 8,
-		paddingEnd: 20,
-		paddingStart: 20,
+		paddingEnd: 14,
+		paddingStart: 12,
 	});
 
 	const requestOlder = () => {
@@ -314,16 +342,16 @@ export function MessageList({
 				smooth
 				className="h-full min-h-0"
 				viewportClassName="h-full"
-				contentClassName="mx-auto w-full max-w-3xl px-3 sm:px-6"
+				contentClassName="mx-auto w-full max-w-4xl px-3 sm:px-5"
 				viewportRef={viewportRef}
 				viewportProps={{ onScroll: requestOlder }}
 			>
 				{empty ? (
-					<div className="mx-auto flex max-w-sm flex-col items-center px-6 py-20 text-center">
-						<div className="grid size-11 place-items-center rounded-2xl bg-muted text-muted-foreground">
-							<StickyNote className="size-5" />
+					<div className="mx-auto flex max-w-sm flex-col items-center px-6 py-16 text-center">
+						<div className="grid size-9 place-items-center rounded-xl bg-muted text-muted-foreground">
+							<StickyNote className="size-4" />
 						</div>
-						<p className="mt-3 text-sm font-medium">{m.messages_empty()}</p>
+						<p className="mt-2.5 text-[12.5px] font-medium">{m.messages_empty()}</p>
 					</div>
 				) : (
 					<div
@@ -343,7 +371,14 @@ export function MessageList({
 									{message === undefined ? (
 										liveRun === undefined ? null : <LiveRunMessage now={now} run={liveRun} />
 									) : (
-										<MessageRow message={message} sessionId={sessionId} />
+										<MessageRow
+											grouped={
+												messages[virtualItem.index - 1] !== undefined &&
+												sameSender(messages[virtualItem.index - 1]!, message)
+											}
+											message={message}
+											sessionId={sessionId}
+										/>
 									)}
 								</div>
 							);
@@ -356,7 +391,7 @@ export function MessageList({
 					role="status"
 					className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center"
 				>
-					<span className="rounded-full border border-border bg-card/90 px-3 py-1 text-[11px] text-muted-foreground shadow-sm backdrop-blur">
+					<span className="rounded-full border border-border bg-card/90 px-2.5 py-0.5 text-[10px] text-muted-foreground shadow-sm backdrop-blur">
 						{m.loading()}
 					</span>
 				</div>

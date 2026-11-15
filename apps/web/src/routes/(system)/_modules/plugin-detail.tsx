@@ -422,8 +422,8 @@ export function PluginDetail({ plugin }: { plugin: PluginRow }) {
 	};
 
 	return (
-		<div className="space-y-5">
-			<header className="space-y-3">
+		<div className="space-y-4">
+			<header className="space-y-2">
 				<Button
 					className="-ml-2 md:hidden"
 					leadingIcon={<ArrowLeft />}
@@ -436,7 +436,7 @@ export function PluginDetail({ plugin }: { plugin: PluginRow }) {
 				<div className="flex flex-wrap items-start justify-between gap-3">
 					<div className="min-w-0">
 						<div className="flex flex-wrap items-center gap-2">
-							<h1 className="truncate text-xl font-semibold tracking-tight">{displayName}</h1>
+							<h1 className="truncate text-[16px] font-semibold tracking-tight">{displayName}</h1>
 							<StatusBadge
 								disabled={plugin.enabled !== 1}
 								label={statusLevelLabel(plugin)}
@@ -445,7 +445,7 @@ export function PluginDetail({ plugin }: { plugin: PluginRow }) {
 							/>
 							<span className="text-xs text-muted-foreground">v{plugin.version}</span>
 						</div>
-						<p className="mt-1 text-sm text-muted-foreground">
+						<p className="mt-0.5 text-[12px] text-muted-foreground">
 							{description ?? `${plugin.kind} · ${plugin.runMode}`}
 						</p>
 					</div>

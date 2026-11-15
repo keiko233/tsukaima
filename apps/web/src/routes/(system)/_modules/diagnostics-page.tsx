@@ -96,17 +96,17 @@ export function DiagnosticsPage() {
 
 	return (
 		<SystemPage fill description={m.diagnostics_page_description()} title={m.nav_diagnostics()}>
-			<div className="flex min-h-0 flex-1 flex-col gap-4">
+			<div className="flex min-h-0 flex-1 flex-col gap-3">
 				<Card size="compact" className="shrink-0">
 					<CardContent>
-						<dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 xl:grid-cols-6">
+						<dl className="grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-3 xl:grid-cols-6">
 							<div className="min-w-0">
-								<dt className="text-xs text-muted-foreground">{m.diagnostics_state_label()}</dt>
-								<dd className="mt-1 truncate font-medium">{diagnostics.state.stage}</dd>
+								<dt className="text-[10.5px] text-muted-foreground">{m.diagnostics_state_label()}</dt>
+								<dd className="mt-0.5 truncate text-[12px] font-medium">{diagnostics.state.stage}</dd>
 							</div>
 							<div className="min-w-0">
 								<dt className="text-xs text-muted-foreground">{m.diagnostics_channels_label()}</dt>
-								<dd className="mt-1 font-medium">
+								<dd className="mt-0.5 text-[12px] font-medium">
 									{diagnostics.channels
 										.map(
 											(channel) =>
@@ -117,11 +117,11 @@ export function DiagnosticsPage() {
 							</div>
 							<div className="min-w-0">
 								<dt className="text-xs text-muted-foreground">{m.diagnostics_processed_label()}</dt>
-								<dd className="mt-1 font-mono tabular-nums">{diagnostics.processedMessages}</dd>
+								<dd className="mt-0.5 text-[12px] font-mono tabular-nums">{diagnostics.processedMessages}</dd>
 							</div>
 							<div className="min-w-0">
 								<dt className="text-xs text-muted-foreground">{m.diagnostics_log_level_label()}</dt>
-								<dd className="mt-1 font-mono">{diagnostics.logLevel}</dd>
+								<dd className="mt-0.5 text-[12px] font-mono">{diagnostics.logLevel}</dd>
 							</div>
 							{diagnostics.cache === undefined ? null : (
 								<div className="min-w-0">
@@ -211,7 +211,7 @@ export function DiagnosticsPage() {
 								leftIcon={<Search />}
 							/>
 							<div className="space-y-1.5">
-								<label className="px-1 text-xs font-medium text-muted-foreground">
+								<label className="px-1 text-[10.5px] font-medium text-muted-foreground">
 									{m.settings_log_level_label()}
 								</label>
 								<Select

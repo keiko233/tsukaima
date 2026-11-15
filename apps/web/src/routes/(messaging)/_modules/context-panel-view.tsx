@@ -78,8 +78,8 @@ function BreakdownRow({
 	tokens,
 }: BreakdownRowProps) {
 	return (
-		<div className="grid grid-cols-[auto_1fr_auto_3rem] items-center gap-2.5 py-0.5 text-[12px] leading-5">
-			<span className={cn("size-2.5 shrink-0 rounded-[3px]", colorClass)} aria-hidden="true" />
+		<div className="grid grid-cols-[auto_1fr_auto_2.6rem] items-center gap-2 py-px text-[11.5px] leading-[18px]">
+			<span className={cn("size-2 shrink-0 rounded-[2px]", colorClass)} aria-hidden="true" />
 			<span
 				title={title}
 				className={cn(
@@ -112,10 +112,10 @@ function AccordionGroup({ children, count, label, open, onToggle }: AccordionGro
 				type="button"
 				aria-expanded={open}
 				onClick={onToggle}
-				className="flex w-full items-center gap-2 rounded-md px-1 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+				className="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-[11.5px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
 			>
 				<ChevronRight
-					className={cn("size-3.5 shrink-0 transition-transform duration-150", open && "rotate-90")}
+					className={cn("size-3 shrink-0 transition-transform duration-150", open && "rotate-90")}
 				/>
 				<span className="min-w-0 flex-1 truncate text-foreground/90">{label}</span>
 				<span className="tabular-nums text-muted-foreground">{count}</span>
@@ -218,28 +218,30 @@ export function ContextPanelContent({
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			{embedded ? null : (
-				<div className="flex items-center justify-between gap-2 px-4 pt-3.5 pb-2">
-					<h2 className="text-[13px] font-medium text-muted-foreground">{m.context_title()}</h2>
+				<div className="flex h-9 items-center justify-between gap-2 border-b border-border/60 px-3">
+					<h2 className="text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+						{m.context_title()}
+					</h2>
 					<div className="flex items-center gap-0.5">
 						{refreshButton}
 						{onClose ? (
 							<Button
 								type="button"
 								variant="ghost"
-								size="icon"
+								size="iconSm"
 								onClick={onClose}
 								aria-label={m.context_close()}
 								title={m.context_close()}
-								className="size-7 rounded-md text-muted-foreground hover:text-foreground"
+								className="size-6 rounded-md text-muted-foreground hover:text-foreground"
 							>
-								<X className="size-3.5" />
+								<X className="size-3" />
 							</Button>
 						) : null}
 					</div>
 				</div>
 			)}
 
-			<div className={cn("min-h-0 flex-1 overflow-y-auto px-4 pb-4", embedded && "pt-3")}>
+			<div className={cn("min-h-0 flex-1 overflow-y-auto px-3 pb-3", embedded && "pt-2.5")}>
 				{isPending ? (
 					<div className="py-8 text-center text-xs text-muted-foreground">{m.loading()}</div>
 				) : isError ? (
@@ -255,13 +257,13 @@ export function ContextPanelContent({
 				) : (
 					<div>
 						<div className="flex items-center justify-between gap-2">
-							<span className="text-[15px] font-medium tabular-nums text-foreground">
+							<span className="text-[13px] font-medium tabular-nums text-foreground">
 								{m.context_used_headline({
 									percent: formatHeadlinePercent(stats.usedPercent, stats.contextWindow),
 								})}
 							</span>
 							<div className="flex items-center gap-1">
-								<span className="text-[12px] tabular-nums text-muted-foreground">
+								<span className="text-[11px] tabular-nums text-muted-foreground">
 									{formatCompactTokens(stats.usedTokens)} /{" "}
 									{stats.contextWindow > 0 ? formatCompactTokens(stats.contextWindow) : "—"}
 								</span>
@@ -270,7 +272,7 @@ export function ContextPanelContent({
 						</div>
 
 						<div
-							className="mt-2 flex h-1.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800/90"
+							className="mt-1.5 flex h-1 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800/90"
 							role="progressbar"
 							aria-valuenow={Math.round(stats.usedPercent)}
 							aria-valuemin={0}
@@ -288,7 +290,7 @@ export function ContextPanelContent({
 							})}
 						</div>
 
-						<div className="mt-3 space-y-1">
+						<div className="mt-2.5 space-y-0.5">
 							<BreakdownRow
 								colorClass="bg-[#2f81f7]"
 								label={m.context_category_messages()}
@@ -351,7 +353,7 @@ export function ContextPanelContent({
 							) : null}
 						</div>
 
-						<div className="mt-3.5 space-y-1">
+						<div className="mt-2.5 space-y-0.5">
 							{stats.autocompact.enabled || stats.autocompact.bufferTokens > 0 ? (
 								<BreakdownRow
 									colorClass="bg-zinc-400/70 dark:bg-zinc-500"
@@ -379,7 +381,7 @@ export function ContextPanelContent({
 							) : null}
 						</div>
 
-						<div className="mt-3.5 space-y-0.5 border-t border-border/60 pt-2">
+						<div className="mt-2.5 space-y-0.5 border-t border-border/60 pt-1.5">
 							<AccordionGroup
 								count={stats.memories.items.length}
 								label={m.context_group_memories()}
@@ -476,7 +478,7 @@ export function ContextPanelContent({
 							</AccordionGroup>
 						</div>
 
-						<div className="mt-4 space-y-1 border-t border-border/60 pt-3 text-[11px] text-muted-foreground">
+						<div className="mt-3 space-y-1 border-t border-border/60 pt-2 text-[10.5px] text-muted-foreground">
 							<div
 								className="truncate font-mono text-[10.5px]"
 								title={`${stats.model.providerId}/${stats.model.modelId}`}

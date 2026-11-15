@@ -16,7 +16,7 @@ describe("Button", () => {
 			</Button>,
 		);
 		expect(html).toContain("bg-destructive");
-		expect(html).toContain("h-12");
+		expect(html).toContain("h-10");
 		expect(html).toContain("w-full");
 		expect(html).toContain("Delete");
 		expect(html.match(/shrink-0/g)).toHaveLength(2);
@@ -40,6 +40,6 @@ describe("Button", () => {
 			</IconButton>,
 		);
 		expect(html).toContain('aria-label="Refresh"');
-		expect(html).toContain("h-7");
+		expect(html).toContain("h-6");
 	});
 });

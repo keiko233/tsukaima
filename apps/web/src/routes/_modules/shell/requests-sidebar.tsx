@@ -114,39 +114,39 @@ export function RequestsSidebar({ search }: { search: string }) {
 	if (selected !== null) {
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
-				<div className="flex items-center gap-2 border-b border-border px-3 py-2">
+				<div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
 					<Button
 						variant="ghost"
 						size="sm"
 						onClick={() => setSelectedId(null)}
-						className="h-8 gap-1 rounded-full px-2.5 text-xs"
+						className="h-6 gap-0.5 rounded-md px-1.5 text-[11px]"
 					>
 						<ChevronLeft className="size-3.5" />
 						{m.back()}
 					</Button>
-					<span className="truncate text-xs font-medium text-muted-foreground">
+					<span className="truncate text-[11px] font-medium text-muted-foreground">
 						{m.request_detail()}
 					</span>
 				</div>
 				<div className="min-h-0 flex-1 overflow-y-auto">
-					<div className="flex items-center gap-3 px-4 py-4">
-						<Avatar name={selected.requesterDisplayName ?? selected.requesterExternalId} />
+					<div className="flex items-center gap-2.5 px-3 py-3">
+						<Avatar className="size-8 text-[11px]" name={selected.requesterDisplayName ?? selected.requesterExternalId} />
 						<div className="min-w-0 flex-1">
-							<h2 className="truncate text-sm font-semibold">
+							<h2 className="truncate text-[13px] font-semibold">
 								{selected.requesterDisplayName ?? selected.requesterExternalId}
 							</h2>
 							<p className="text-[11px] text-muted-foreground">{requestKindLabel(selected.kind)}</p>
 						</div>
 						<span
 							className={cn(
-								"shrink-0 rounded-full px-2 py-1 text-[10px] font-medium",
+								"shrink-0 rounded px-1.5 py-0.5 text-[9.5px] font-medium",
 								statusClass(selected.status),
 							)}
 						>
 							{requestStatusLabel(selected.status)}
 						</span>
 					</div>
-					<div className="space-y-2 border-y border-border px-4 py-3 text-xs">
+					<div className="space-y-1.5 border-y border-border px-3 py-2.5 text-[11px]">
 						<div className="flex justify-between gap-3">
 							<span className="text-muted-foreground">{m.request_requester()}</span>
 							<span className="break-all text-right">{selected.requesterExternalId}</span>
@@ -164,19 +164,19 @@ export function RequestsSidebar({ search }: { search: string }) {
 						{selected.comment ? (
 							<div>
 								<div className="mb-1 text-muted-foreground">{m.request_comment()}</div>
-								<p className="rounded-xl bg-muted px-3 py-2 leading-5 text-foreground">
+								<p className="rounded-md bg-muted px-2 py-1.5 leading-4 text-foreground">
 									{selected.comment}
 								</p>
 							</div>
 						) : null}
 						{selected.errorMessage ? (
-							<p className="rounded-xl bg-destructive/5 px-3 py-2 leading-5 text-destructive">
+							<p className="rounded-md bg-destructive/5 px-2 py-1.5 leading-4 text-destructive">
 								{selected.errorMessage}
 							</p>
 						) : null}
 					</div>
 					{selected.status === "pending" ? (
-						<div className="px-4 py-4">
+						<div className="px-3 py-3">
 							{connected ? (
 								<div className="flex gap-2">
 									<Button
@@ -200,13 +200,13 @@ export function RequestsSidebar({ search }: { search: string }) {
 									</Button>
 								</div>
 							) : (
-								<p className="rounded-xl border border-border px-3 py-2 text-xs leading-5 text-muted-foreground">
+								<p className="rounded-md border border-border px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
 									{m.request_channel_offline()}
 								</p>
 							)}
 						</div>
 					) : (
-						<p className="px-4 py-4 text-xs text-muted-foreground">{m.request_already_handled()}</p>
+						<p className="px-3 py-3 text-[11px] text-muted-foreground">{m.request_already_handled()}</p>
 					)}
 				</div>
 
@@ -218,7 +218,7 @@ export function RequestsSidebar({ search }: { search: string }) {
 					title={m.request_confirm_title()}
 					description={m.request_confirm_description()}
 				>
-					<div className="mb-3 space-y-1 rounded-xl bg-muted px-3 py-2 text-xs">
+					<div className="mb-3 space-y-1 rounded-md bg-muted px-2.5 py-1.5 text-[11px]">
 						<div className="flex justify-between gap-3">
 							<span className="text-muted-foreground">{m.request_requester()}</span>
 							<span>{selected.requesterDisplayName ?? selected.requesterExternalId}</span>
@@ -262,12 +262,12 @@ export function RequestsSidebar({ search }: { search: string }) {
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			<div className="flex gap-1 px-3 pb-2 pt-1">
+			<div className="flex gap-0.5 px-2.5 pb-1.5 pt-0.5">
 				<Button
 					size="sm"
 					variant={view === "pending" ? "secondary" : "ghost"}
 					onClick={() => setView("pending")}
-					className="h-7 rounded-full px-3 text-xs"
+					className="h-6 rounded-md px-2 text-[11px]"
 				>
 					{m.pending_requests()}
 				</Button>
@@ -283,7 +283,7 @@ export function RequestsSidebar({ search }: { search: string }) {
 			<div
 				role="list"
 				aria-label={m.tab_requests()}
-				className="min-h-0 flex-1 overflow-y-auto px-2 pb-4"
+				className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3"
 			>
 				{requests.isPending ? (
 					<div className="px-2 py-4 text-xs text-muted-foreground">{m.loading()}</div>
@@ -309,14 +309,14 @@ export function RequestsSidebar({ search }: { search: string }) {
 								onClick={() => {
 									setSelectedId(request.id);
 								}}
-								className="flex min-h-14 w-full items-start gap-2.5 rounded-xl px-2 py-2 text-left outline-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+								className="flex min-h-11 w-full items-start gap-2 rounded-md px-1.5 py-1.5 text-left outline-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
 							>
-								<span className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground">
-									<Icon className="size-4" />
+								<span className="grid size-7 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground">
+									<Icon className="size-3.5" />
 								</span>
 								<span className="min-w-0 flex-1">
 									<span className="flex items-center gap-2">
-										<span className="truncate text-sm font-medium">
+										<span className="truncate text-[12.5px] font-medium">
 											{request.requesterDisplayName ?? request.requesterExternalId}
 										</span>
 										<span
@@ -328,7 +328,7 @@ export function RequestsSidebar({ search }: { search: string }) {
 											{requestStatusLabel(request.status)}
 										</span>
 									</span>
-									<span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+									<span className="block truncate text-[10.5px] text-muted-foreground">
 										{requestKindLabel(request.kind)}
 										{request.groupExternalId ? ` · ${request.groupExternalId}` : ""}
 									</span>

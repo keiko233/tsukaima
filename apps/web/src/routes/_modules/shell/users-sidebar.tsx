@@ -12,8 +12,8 @@ import { InlineError, SidebarEmpty, Avatar } from "./primitives";
 
 function DetailSection({ children, title }: { children: React.ReactNode; title: string }) {
 	return (
-		<section className="border-b border-border px-4 py-4 last:border-b-0">
-			<h3 className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+		<section className="border-b border-border px-3 py-3 last:border-b-0">
+			<h3 className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
 				{title}
 			</h3>
 			{children}
@@ -63,17 +63,17 @@ export function UsersSidebar({ onNavigate, search }: { onNavigate: () => void; s
 		const user = detail.data;
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
-				<div className="flex items-center gap-2 border-b border-border px-3 py-2">
+				<div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
 					<Button
 						variant="ghost"
 						size="sm"
 						onClick={() => setSelectedId(null)}
-						className="h-8 gap-1 rounded-full px-2.5 text-xs"
+						className="h-6 gap-0.5 rounded-md px-1.5 text-[11px]"
 					>
 						<ChevronLeft className="size-3.5" />
 						{m.back()}
 					</Button>
-					<span className="truncate text-xs font-medium text-muted-foreground">
+					<span className="truncate text-[11px] font-medium text-muted-foreground">
 						{m.user_detail()}
 					</span>
 				</div>
@@ -90,11 +90,11 @@ export function UsersSidebar({ onNavigate, search }: { onNavigate: () => void; s
 						<InlineError message={m.error_generic()} retryLabel={m.retry()} />
 					) : (
 						<>
-							<div className="flex items-center gap-3 px-4 py-4">
-								<Avatar className="size-11" name={user.displayName} />
+							<div className="flex items-center gap-2.5 px-3 py-3">
+								<Avatar className="size-9" name={user.displayName} />
 								<div className="min-w-0">
-									<h2 className="truncate text-sm font-semibold">{user.displayName}</h2>
-									<p className="truncate text-xs text-muted-foreground">
+									<h2 className="truncate text-[13px] font-semibold">{user.displayName}</h2>
+									<p className="truncate text-[11px] text-muted-foreground">
 										{user.preferredName ?? user.identities[0]?.externalId ?? user.id}
 									</p>
 								</div>
@@ -106,7 +106,7 @@ export function UsersSidebar({ onNavigate, search }: { onNavigate: () => void; s
 									user.identities.map((identity) => (
 										<div
 											key={identity.id}
-											className="rounded-xl border border-border px-3 py-2 text-xs"
+											className="rounded-md border border-border px-2 py-1.5 text-[11px]"
 										>
 											<div className="font-medium text-foreground">
 												{identity.displayName ?? identity.externalId}
@@ -158,7 +158,7 @@ export function UsersSidebar({ onNavigate, search }: { onNavigate: () => void; s
 													onClick={() => {
 														if (session !== undefined) void openSession(session.id);
 													}}
-													className="flex w-full items-center gap-2 rounded-xl border border-border px-3 py-2 text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+													className="flex w-full items-center gap-2 rounded-md border border-border px-2 py-1.5 text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 												>
 													<MessageCircle className="size-4 text-muted-foreground" />
 													<span className="min-w-0 flex-1">
@@ -202,7 +202,7 @@ export function UsersSidebar({ onNavigate, search }: { onNavigate: () => void; s
 		<div
 			role="list"
 			aria-label={m.tab_users()}
-			className="min-h-0 flex-1 overflow-y-auto px-2 pb-4"
+			className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3"
 		>
 			{users.isPending ? (
 				<div className="px-2 py-4 text-xs text-muted-foreground">{m.loading()}</div>
@@ -225,21 +225,21 @@ export function UsersSidebar({ onNavigate, search }: { onNavigate: () => void; s
 						type="button"
 						onClick={() => setSelectedId(user.id)}
 						className={cn(
-							"flex min-h-12 w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left outline-none transition-colors",
+							"flex min-h-10 w-full items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none transition-colors",
 							"hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring",
 						)}
 					>
-						<Avatar name={user.displayName} />
+						<Avatar className="size-7 text-[10px] [&_svg]:size-3" name={user.displayName} />
 						<span className="min-w-0 flex-1">
 							<span className="flex items-center gap-1.5">
-								<span className="truncate text-sm font-medium">{user.displayName}</span>
+								<span className="truncate text-[12.5px] font-medium">{user.displayName}</span>
 								{user.kind === "bot" ? (
 									<span className="rounded-full bg-violet/10 px-1.5 py-0.5 text-[9px] text-violet">
 										BOT
 									</span>
 								) : null}
 							</span>
-							<span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+							<span className="block truncate text-[10.5px] text-muted-foreground">
 								{user.identities[0]?.externalId ?? user.id}
 							</span>
 						</span>

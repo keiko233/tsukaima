@@ -61,38 +61,38 @@ export function AppSidebar({ onNavigate }: { onNavigate: () => void }) {
 				}}
 				className="flex min-h-0 flex-1 flex-col"
 			>
-				<div className="shrink-0 px-2 pt-1">
+				<div className="shrink-0 px-2.5">
 					<TabsList className="w-full justify-between gap-0">
 						<TabsTrigger
 							value="chats"
-							indicatorClassName="h-0.5"
-							className="flex-1 justify-center px-1 text-[13px]"
+							indicatorClassName="h-px"
+							className="min-h-0 flex-1 justify-center px-1 pt-1 pb-1.5 text-[12px]"
 						>
 							{m.tab_chats()}
 						</TabsTrigger>
 						<TabsTrigger
 							value="users"
-							indicatorClassName="h-0.5"
-							className="flex-1 justify-center px-1 text-[13px]"
+							indicatorClassName="h-px"
+							className="min-h-0 flex-1 justify-center px-1 pt-1 pb-1.5 text-[12px]"
 						>
 							{m.tab_users()}
 						</TabsTrigger>
 						<TabsTrigger
 							value="groups"
-							indicatorClassName="h-0.5"
-							className="flex-1 justify-center px-1 text-[13px]"
+							indicatorClassName="h-px"
+							className="min-h-0 flex-1 justify-center px-1 pt-1 pb-1.5 text-[12px]"
 						>
 							{m.tab_groups()}
 						</TabsTrigger>
 						<TabsTrigger
 							value="requests"
-							indicatorClassName="h-0.5"
-							className="flex-1 justify-center px-1 text-[13px]"
+							indicatorClassName="h-px"
+							className="min-h-0 flex-1 justify-center px-1 pt-1 pb-1.5 text-[12px]"
 						>
 							<span className="inline-flex items-center gap-1">
 								{m.tab_requests()}
 								{pendingCount > 0 ? (
-									<span className="grid min-w-4 place-items-center rounded-full bg-primary px-1 py-0.5 text-[9px] leading-none text-primary-foreground">
+									<span className="grid min-w-3.5 place-items-center rounded-full bg-primary px-1 text-[9px] leading-3.5 text-primary-foreground">
 										{pendingCount > 99 ? "99+" : pendingCount}
 									</span>
 								) : null}
@@ -101,25 +101,30 @@ export function AppSidebar({ onNavigate }: { onNavigate: () => void }) {
 					</TabsList>
 				</div>
 
-				<div className="shrink-0 space-y-2 px-3 py-2.5">
+				<div className="shrink-0 space-y-1.5 px-2.5 py-2">
 					<Input
 						aria-label={placeholders[tab]}
 						placeholder={placeholders[tab]}
 						value={search[tab]}
 						onChange={(value) => setSearch((current) => ({ ...current, [tab]: value }))}
 						leftIcon={<Search />}
-						classNames={{ field: "h-9 bg-card/60", root: "gap-0" }}
+						classNames={{
+							field: "h-8 rounded-md bg-background/70",
+							input: "text-xs",
+							leftIcon: "[&_svg]:size-3.5",
+							root: "gap-0",
+						}}
 					/>
 					{tab === "chats" ? (
-						<div className="flex items-center gap-1">
+						<div className="flex items-center gap-0.5">
 							{(["active", "archived", "all"] as const).map((value) => (
 								<Button
 									key={value}
 									variant={chatFilter === value ? "secondary" : "ghost"}
-									size="sm"
+								size="xs"
 									onClick={() => setChatFilter(value)}
 									className={cn(
-										"h-6 rounded-full px-2 text-[10px]",
+										"h-5 rounded-md px-1.5 text-[10px]",
 										chatFilter === value && "border-border-strong",
 									)}
 								>
@@ -147,13 +152,13 @@ export function AppSidebar({ onNavigate }: { onNavigate: () => void }) {
 					<RequestsSidebar search={search.requests} />
 				</TabsContent>
 			</Tabs>
-			<div className="shrink-0 border-t border-border p-2">
+			<div className="shrink-0 border-t border-border p-1.5">
 				<Button
 					variant="ghost"
 					size="sm"
 					fullWidth
 					leadingIcon={<Brain />}
-					className="h-auto justify-start rounded-lg px-2.5 py-2 text-xs"
+					className="h-8 justify-start rounded-md px-2 text-xs"
 					onClick={() => void navigate({ to: "/memories" })}
 				>
 					{m.nav_memories()}
