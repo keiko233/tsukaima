@@ -6,6 +6,7 @@ import type { PluginRow } from "@elaina/contracts";
 import { useEffect } from "react";
 import { orpc } from "./api";
 import { applyRunDelta, setLiveRun } from "./live-run-store";
+import { invalidateMessageLists, refreshMessageInCache } from "./message-cache";
 import { runtimeUrl } from "./runtime-url";
 
 const EVENT_STREAM_URL = runtimeUrl("/events/stream");
@@ -23,22 +24,14 @@ const EVENT_TYPES = [
 	"run.delta",
 ] as const;
 
-function refreshConversation(queryClient: QueryClient, sessionId?: string): void {
-	const pending = [
+function refreshConversation(queryClient: QueryClient): void {
+	void Promise.all([
 		queryClient.invalidateQueries({ queryKey: orpc.admin.chats.key() }),
 		queryClient.invalidateQueries({ queryKey: orpc.admin.sessions.key() }),
 		queryClient.invalidateQueries({ queryKey: orpc.admin.diagnostics.status.queryKey() }),
 		queryClient.invalidateQueries({ queryKey: orpc.admin.groups.key() }),
 		queryClient.invalidateQueries({ queryKey: orpc.admin.users.key() }),
-	];
-	if (sessionId !== undefined) {
-		pending.push(
-			queryClient.invalidateQueries({
-				queryKey: orpc.admin.sessions.messages.key({ input: { sessionId } }),
-			}),
-		);
-	}
-	void Promise.all(pending);
+	]);
 }
 
 function refreshDiagnostics(queryClient: QueryClient): void {
@@ -56,6 +49,7 @@ function refreshSnapshot(queryClient: QueryClient): void {
 		queryClient.invalidateQueries({ queryKey: orpc.admin.requests.key() }),
 		queryClient.invalidateQueries({ queryKey: orpc.admin.users.key() }),
 		queryClient.invalidateQueries({ queryKey: orpc.admin.groups.key() }),
+		invalidateMessageLists(queryClient),
 	]);
 }
 
@@ -73,15 +67,25 @@ function applyLiveEvent(queryClient: QueryClient, event: LiveEvent): void {
 			]);
 			return;
 		case "message.received":
-			refreshConversation(queryClient, event.sessionId);
+			refreshConversation(queryClient);
+			// Channel events carry the platform message id, so the server resolves either that or
+			// a local row id from this one lookup.
+			void refreshMessageInCache(queryClient, event.sessionId, { messageId: event.messageId });
 			return;
 		case "activity.opened":
 		case "activity.closed":
 			refreshDiagnostics(queryClient);
 			return;
 		case "before.reply":
+			// The row is already persisted, but its delivery status is still moving. Wait for
+			// `after.reply` instead of refetching the transcript twice for one answer.
+			refreshConversation(queryClient);
+			return;
 		case "after.reply":
-			refreshConversation(queryClient, event.sessionId);
+			refreshConversation(queryClient);
+			void refreshMessageInCache(queryClient, event.sessionId, {
+				durableEntryId: event.entryId,
+			});
 			return;
 		case "plugin.status": {
 			const rows = queryClient.getQueryData<PluginRow[]>(orpc.admin.plugins.list.queryKey());
@@ -100,7 +104,7 @@ function applyLiveEvent(queryClient: QueryClient, event: LiveEvent): void {
 			// own store so a 100ms partial does not invalidate the transcript and diagnostics.
 			setLiveRun(event.sessionId, event.run);
 			if (event.run === null || event.run.settled) {
-				refreshConversation(queryClient, event.sessionId);
+				refreshConversation(queryClient);
 			}
 			return;
 		}
@@ -108,7 +112,7 @@ function applyLiveEvent(queryClient: QueryClient, event: LiveEvent): void {
 			// Only the fields that moved arrive here. The store merges them and orders them by
 			// revision, so a delta that races a reconnect snapshot never rewinds the view.
 			applyRunDelta(event.sessionId, event.patch, event.revision);
-			if (event.patch.settled === true) refreshConversation(queryClient, event.sessionId);
+			if (event.patch.settled === true) refreshConversation(queryClient);
 			return;
 		}
 	}

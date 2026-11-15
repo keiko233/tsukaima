@@ -458,6 +458,7 @@ describe("admin auth", () => {
 			"sessions/contextStats": { sessionId: "session-1" },
 			"sessions/create": { chatObjectId: "chat-1", title: "Sample" },
 			"sessions/get": { sessionId: "session-1" },
+			"sessions/message": { messageId: "message-1", sessionId: "session-1" },
 			"sessions/messages": { sessionId: "session-1" },
 			"sessions/resetContext": { sessionId: "session-1" },
 			"sessions/runSteps": { entryId: "entry-1", sessionId: "session-1" },

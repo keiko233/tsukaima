@@ -3,14 +3,16 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MessageEnvelope } from "@elaina/contracts";
-import { conversations } from "@elaina/db";
+import { conversations, messages as messagesTable } from "@elaina/db";
 import { eq } from "drizzle-orm";
 import { createApp } from "../src/app.ts";
 import {
 	createLocalChat,
 	createSession,
 	getSessionContextStats,
+	getSessionMessage,
 	listChats,
+	listMessagePage,
 	listMessages,
 	listRequests,
 	sendMessage,
@@ -47,6 +49,9 @@ async function createLifecycle() {
 	await lifecycle.start();
 	return lifecycle;
 }
+
+const pagedMessageAt = (offsetMs: number) =>
+	new Date(Date.parse("2026-01-01T00:00:00.000Z") + offsetMs).toISOString();
 
 async function waitFor<T>(read: () => Promise<T | undefined>, timeoutMs = 3_000): Promise<T> {
 	const startedAt = Date.now();
@@ -128,6 +133,137 @@ describe("WebUI chat and session service", () => {
 			expect(messages[0]?.contentText).toBe("hello elaina");
 			expect(messages.at(-1)?.contentText).toBe("ok");
 			expect(messages.at(-1)?.senderKind).toBe("assistant");
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("pages a transcript by a stable (occurredAt, id) cursor", async () => {
+		const lifecycle = await createLifecycle();
+		try {
+			const chat = await createLocalChat(lifecycle, {
+				sessionTitle: "Paged",
+				title: "Paged chat",
+			});
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("Domain database is not ready");
+			await database.insert(messagesTable).values([
+				{
+					conversationId: chat.sessionId,
+					direction: "inbound",
+					id: "m-1",
+					kind: "webui",
+					occurredAt: pagedMessageAt(0),
+				},
+				{
+					conversationId: chat.sessionId,
+					direction: "inbound",
+					id: "m-2",
+					kind: "webui",
+					occurredAt: pagedMessageAt(1),
+				},
+				{
+					conversationId: chat.sessionId,
+					direction: "inbound",
+					id: "m-3",
+					kind: "webui",
+					occurredAt: pagedMessageAt(1),
+					durableEntryId: "entry-3",
+					platformMessageId: "platform-3",
+				},
+				{
+					conversationId: chat.sessionId,
+					direction: "inbound",
+					id: "m-4",
+					kind: "webui",
+					occurredAt: pagedMessageAt(2),
+				},
+				{
+					conversationId: chat.sessionId,
+					direction: "inbound",
+					id: "m-5",
+					kind: "webui",
+					occurredAt: pagedMessageAt(3),
+				},
+			]);
+
+			await expect(
+				listMessagePage(lifecycle, { cursor: "not-a-cursor", sessionId: chat.sessionId }),
+			).rejects.toThrow("Invalid message cursor");
+			const first = await listMessagePage(lifecycle, { limit: 3, sessionId: chat.sessionId });
+			expect(first.messages.map((message) => message.id)).toEqual(["m-3", "m-4", "m-5"]);
+			if (first.nextCursor === null) throw new Error("Expected an older page");
+			// `m-2` shares `m-3`'s timestamp. A cursor made only of occurredAt would skip it.
+			const second = await listMessagePage(lifecycle, {
+				cursor: first.nextCursor,
+				limit: 3,
+				sessionId: chat.sessionId,
+			});
+			expect(second.messages.map((message) => message.id)).toEqual(["m-1", "m-2"]);
+			expect(second.nextCursor).toBeNull();
+
+			// Every row still comes back in chronological order through the legacy full read.
+			expect((await listMessages(lifecycle, chat.sessionId)).map((message) => message.id)).toEqual([
+				"m-1",
+				"m-2",
+				"m-3",
+				"m-4",
+				"m-5",
+			]);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("resolves a live event row by platform id, row id, or durable entry id", async () => {
+		const lifecycle = await createLifecycle();
+		try {
+			const chat = await createLocalChat(lifecycle, {
+				sessionTitle: "Lookup",
+				title: "Lookup chat",
+			});
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("Domain database is not ready");
+			await database.insert(messagesTable).values({
+				conversationId: chat.sessionId,
+				direction: "outbound",
+				durableEntryId: "entry-lookup",
+				id: "row-lookup",
+				kind: "webui",
+				occurredAt: "2026-01-01T00:00:00.000Z",
+				platformMessageId: "platform-lookup",
+			});
+
+			expect(
+				(
+					await getSessionMessage(lifecycle, {
+						messageId: "platform-lookup",
+						sessionId: chat.sessionId,
+					})
+				)?.id,
+			).toBe("row-lookup");
+			expect(
+				(
+					await getSessionMessage(lifecycle, {
+						messageId: "row-lookup",
+						sessionId: chat.sessionId,
+					})
+				)?.id,
+			).toBe("row-lookup");
+			expect(
+				(
+					await getSessionMessage(lifecycle, {
+						durableEntryId: "entry-lookup",
+						sessionId: chat.sessionId,
+					})
+				)?.id,
+			).toBe("row-lookup");
+			expect(
+				await getSessionMessage(lifecycle, {
+					messageId: "platform-lookup",
+					sessionId: "another-session",
+				}),
+			).toBeNull();
 		} finally {
 			await lifecycle.stop();
 		}
