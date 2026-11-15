@@ -235,6 +235,64 @@ describe("sticker-meme host integration", () => {
 			await lifecycle.stop();
 		}
 	});
+	test("deletes a sticker item and then its pack through the plugin RPC bridge", async () => {
+		const onebot = createOneBotTransportSpy();
+		const lifecycle = await createLifecycle(onebot);
+		try {
+			await lifecycle.pluginHost.invokeRpc("sticker-meme.packs.importBundle", {
+				dryRun: false,
+				files: [
+					{
+						dataBase64: Buffer.from("delete-me-bytes").toString("base64"),
+						path: "stickers/delete.png",
+					},
+				],
+				manifest: {
+					id: "pack-delete",
+					items: [
+						{
+							file: "stickers/delete.png",
+							id: "item-delete",
+							mimeType: "image/png",
+							name: "Delete me",
+						},
+					],
+					name: "Delete pack",
+				},
+			});
+
+			await expect(
+				lifecycle.pluginHost.invokeRpc("sticker-meme.packs.delete", { packId: "pack-delete" }),
+			).rejects.toThrow("confirmation");
+
+			const deletedItem = await lifecycle.pluginHost.invokeRpc("sticker-meme.items.delete", {
+				id: "item-delete",
+			});
+			expect(deletedItem).toEqual({ deleted: true });
+			const afterItem = (await lifecycle.pluginHost.invokeRpc("sticker-meme.items.list", {})) as {
+				items: readonly unknown[];
+			};
+			expect(afterItem.items).toHaveLength(0);
+
+			const deletedPack = await lifecycle.pluginHost.invokeRpc("sticker-meme.packs.delete", {
+				confirm: true,
+				packId: "pack-delete",
+			});
+			expect(deletedPack).toEqual({ deleted: true });
+			const afterPack = (await lifecycle.pluginHost.invokeRpc("sticker-meme.packs.list", {})) as {
+				packs: readonly unknown[];
+			};
+			expect(afterPack.packs).toHaveLength(0);
+
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("database missing");
+			const audits = await database.select().from(auditLog);
+			expect(audits.some((row) => row.action === "sticker.item.deleted")).toBe(true);
+			expect(audits.some((row) => row.action === "sticker.pack.deleted")).toBe(true);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
 	test("imports a Telegram sticker set through the plugin RPC bridge", async () => {
 		const onebot = createOneBotTransportSpy();
 		const lifecycle = await createLifecycle(onebot);

@@ -163,11 +163,12 @@ Model-visible text never includes absolute local paths or raw URLs.
 ## Admin UI
 
 - pack list, enable/disable, persona assignment
-- item grid with preview, tags, emotions, usage, score
+- item grid with preview, tags, emotions, usage, score, and per-item delete
 - bulk import/export
 - candidate review approve/reject/delete
 - usage/anonymized diagnostics
-- destructive delete requires backup/confirmation
+- destructive pack delete sits on the pack row and needs one confirmation click; bundle export
+  stays a separate action
 
 ## Tests
 
