@@ -55,7 +55,7 @@ export type QuietHoursPolicy = z.infer<typeof quietHoursSchema>;
 
 export const conversationPacingPolicySchema = z
 	.object({
-		burstSettleMs: z.number().int().min(1).default(6_000),
+		burstSettleMs: z.number().int().min(1).default(8_000),
 		burstMaxWaitMs: z.number().int().min(1).default(15_000),
 		burstMaxMessages: z.number().int().min(1).default(20),
 		burstLongMessageThreshold: z.number().int().min(1).default(400),
@@ -73,6 +73,27 @@ export const conversationPacingPolicySchema = z
 	.strict();
 
 export type ConversationPacingPolicy = z.infer<typeof conversationPacingPolicySchema>;
+
+/**
+ * How a conversation decides what to do with messages that arrive while a model run is
+ * already working. The sidechat is a fast classifier; the host owns the actual interrupt and
+ * batching behavior so a policy can never abort or queue work on its own.
+ */
+export const sidechatPolicySchema = z
+	.object({
+		enabled: z.boolean().default(true),
+		/** Model id inside the active provider. Falls back to the runtime sidechat setting. */
+		model: z.string().min(1).optional(),
+		timeoutMs: z.number().int().min(100).default(1_500),
+		minConfidence: z.number().min(0).max(1).default(0.6),
+		minRunAgeMs: z.number().int().min(0).default(0),
+		maxInterruptsPerMinute: z.number().int().min(0).default(3),
+		/** Stop accumulating and submit a follow-up if a run stays busy for this long. */
+		maxHoldMs: z.number().int().min(1).default(120_000),
+	})
+	.strict();
+
+export type SidechatPolicy = z.infer<typeof sidechatPolicySchema>;
 
 export const conversationPolicySchema = z
 	.object({
@@ -110,7 +131,7 @@ export const conversationPolicySchema = z
 			burstLongMessageThreshold: 400,
 			burstMaxMessages: 20,
 			burstMaxWaitMs: 15_000,
-			burstSettleMs: 6_000,
+			burstSettleMs: 8_000,
 			maxImmediateOutputMessages: 6,
 			maxRepliesPerMinute: 20,
 			replyCooldownMs: 0,
@@ -119,6 +140,14 @@ export const conversationPolicySchema = z
 			sendIntervalMs: 400,
 			stripMarkdown: true,
 			typingEnabled: false,
+		}),
+		sidechat: sidechatPolicySchema.default({
+			enabled: true,
+			maxHoldMs: 120_000,
+			maxInterruptsPerMinute: 3,
+			minConfidence: 0.6,
+			minRunAgeMs: 0,
+			timeoutMs: 1_500,
 		}),
 	})
 	.strict();
@@ -152,7 +181,7 @@ export const defaultConversationPolicy: ConversationPolicy = {
 		peerBotIds: [],
 	},
 	pacing: {
-		burstSettleMs: 6_000,
+		burstSettleMs: 8_000,
 		burstMaxWaitMs: 15_000,
 		burstMaxMessages: 20,
 		burstLongMessageThreshold: 400,
@@ -164,6 +193,14 @@ export const defaultConversationPolicy: ConversationPolicy = {
 		maxImmediateOutputMessages: 6,
 		stripMarkdown: true,
 		maxRepliesPerMinute: 20,
+	},
+	sidechat: {
+		enabled: true,
+		maxHoldMs: 120_000,
+		maxInterruptsPerMinute: 3,
+		minConfidence: 0.6,
+		minRunAgeMs: 0,
+		timeoutMs: 1_500,
 	},
 };
 
@@ -201,6 +238,18 @@ const pacingPolicyPatchSchema = z
 	})
 	.strict();
 
+const sidechatPolicyPatchSchema = z
+	.object({
+		enabled: z.boolean().optional(),
+		model: z.string().min(1).nullish(),
+		timeoutMs: z.number().int().min(100).optional(),
+		minConfidence: z.number().min(0).max(1).optional(),
+		minRunAgeMs: z.number().int().min(0).optional(),
+		maxInterruptsPerMinute: z.number().int().min(0).optional(),
+		maxHoldMs: z.number().int().min(1).optional(),
+	})
+	.strict();
+
 /** Explicit, strict patch: unknown keys are rejected rather than silently dropped. */
 export const conversationPolicyPatchSchema = z
 	.object({
@@ -220,6 +269,7 @@ export const conversationPolicyPatchSchema = z
 		memoryMaxWritesPerActivity: z.number().int().min(1).max(50).optional(),
 		trigger: triggerPolicyPatchSchema.optional(),
 		pacing: pacingPolicyPatchSchema.optional(),
+		sidechat: sidechatPolicyPatchSchema.optional(),
 	})
 	.strict();
 

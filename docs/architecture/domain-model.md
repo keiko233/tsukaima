@@ -41,9 +41,11 @@ Messages are not immediately submitted as separate turns. The channel router gro
 
 Rules:
 
-- Window closes after configurable inactivity, default 6 seconds (range 3–10 seconds by conversation).
+- Window closes after configurable inactivity, default 8 seconds.
 - Images followed by text, correction, and a sticker are one activity.
-- If the agent is already processing, a late message can be submitted as a steer instead of waiting.
+- If the agent is already processing, pending messages stay in the window. A sidechat classifier
+  chooses interrupt, steer, or wait; wait is the safe fallback and merges the burst into the next
+  follow-up.
 - Every raw message is persisted independently; aggregation metadata is stored separately.
 - Long-running stateful interactions (approval, form, wait-for-user) may bypass normal aggregation and use durable signals.
 

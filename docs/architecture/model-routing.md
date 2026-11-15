@@ -62,6 +62,11 @@ Examples:
 
 Selection is recorded per generation. Plugin A can request `plugin:a`; feature B can request `plugin:b`; neither needs to know the provider implementation.
 
+The busy-conversation sidechat classifier is not a capability policy: it uses
+`conversation.sidechat.model` when set, otherwise the runtime `sidechatModelId`, otherwise the
+active provider's default model. An unavailable configured model falls back to the active model,
+and a failed or timed-out classification always means `wait`.
+
 ## Usage and limits
 
 - Store token/cost usage per conversation, capability, plugin, and model.

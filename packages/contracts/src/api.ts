@@ -523,6 +523,7 @@ export type DiagnosticsData = z.infer<typeof diagnosticsDataSchema>;
 export const settingsViewSchema = z.object({
 	logLevel: logLevelSchema,
 	modelProviderId: z.string().optional(),
+	sidechatModelId: z.string().optional(),
 	plugins: z.array(
 		z.object({
 			config: z.record(z.string(), z.unknown()),
@@ -537,6 +538,8 @@ export const runtimeSettingsSchema = z.object({
 	logLevel: logLevelSchema,
 	/** Plugin id that owns the active model provider. */
 	modelProviderId: z.string().min(1).optional(),
+	/** Default model id for the busy-conversation sidechat classifier. */
+	sidechatModelId: z.string().min(1).optional(),
 });
 export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>;
 
@@ -544,10 +547,17 @@ export const runtimeSettingsPatchSchema = z
 	.object({
 		logLevel: logLevelSchema.optional(),
 		modelProviderId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
+		sidechatModelId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
 	})
-	.refine((input) => input.logLevel !== undefined || input.modelProviderId !== undefined, {
-		message: "At least one setting must be provided",
-	});
+	.refine(
+		(input) =>
+			input.logLevel !== undefined ||
+			input.modelProviderId !== undefined ||
+			input.sidechatModelId !== undefined,
+		{
+			message: "At least one setting must be provided",
+		},
+	);
 export type RuntimeSettingsPatch = z.infer<typeof runtimeSettingsPatchSchema>;
 
 // ─── Input schemas ───────────────────────────────────────────────────────────

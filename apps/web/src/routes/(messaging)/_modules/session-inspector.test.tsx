@@ -133,6 +133,13 @@ mock.module("@/paraglide/messages", () => ({
 		policy_save_persona: () => "Save persona aliases",
 		policy_section_pacing: () => "Aggregation and pacing",
 		policy_section_persona: () => "Persona binding",
+		policy_section_sidechat: () => "Busy-run interrupts",
+		policy_sidechat_confidence: () => "Minimum confidence",
+		policy_sidechat_enabled: () => "Let a sidechat interrupt a running reply",
+		policy_sidechat_hint: () => "While a reply is still generating, a fast model decides.",
+		policy_sidechat_interrupts: () => "Max interrupts per minute",
+		policy_sidechat_model: () => "Sidechat model (optional)",
+		policy_sidechat_timeout: () => "Decision timeout (ms)",
 		policy_section_trigger: () => "Trigger and access rules",
 		policy_self_aliases: () => "Self aliases",
 		policy_self_aliases_hint: () => "Names that count as addressing Tsukaima without an @ mention.",
@@ -334,6 +341,8 @@ describe("SessionInspectorSidebar views", () => {
 		expect(html).toContain("Max burst messages");
 		expect(html).toContain("Quiet hours");
 		expect(html).toContain("Allowed tools");
+		expect(html).toContain("Busy-run interrupts");
+		expect(html).toContain("Max interrupts per minute");
 		expect(html).not.toContain("Unsaved changes");
 	});
 

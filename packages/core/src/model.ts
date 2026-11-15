@@ -122,6 +122,8 @@ export function createSlowStreamingModel(
 	options: {
 		delayMs?: number;
 		modelId?: string;
+		/** Chunks for one provider call, for tests that need different answers per run. */
+		chunksForCall?: (callIndex: number) => readonly string[];
 		/** Observe the context the host sends, so a test can assert on image blocks. */
 		onContext?: (context: unknown) => void;
 		/** Declare image input, so a test can exercise the vision path. Defaults to text-only. */
@@ -131,8 +133,15 @@ export function createSlowStreamingModel(
 	const delayMs = options.delayMs ?? 40;
 	const providerId = "slow-test";
 	const modelId = options.modelId ?? "slow-test-model";
+	let callIndex = 0;
 
-	const stream = (model: { api: string; id: string; provider: string }, context?: unknown) => {
+	const stream = (
+		model: { api: string; id: string; provider: string },
+		context?: unknown,
+		streamOptions?: { signal?: AbortSignal },
+	) => {
+		const callChunks = options.chunksForCall?.(callIndex) ?? chunks;
+		callIndex += 1;
 		options.onContext?.(context);
 		const output = createAssistantMessageEventStream();
 		void (async () => {
@@ -146,8 +155,17 @@ export function createSlowStreamingModel(
 				type: "text_start",
 			});
 			let accumulated = "";
-			for (const chunk of chunks) {
+			for (const chunk of callChunks) {
 				await Bun.sleep(delayMs);
+				if (streamOptions?.signal?.aborted) {
+					const aborted = {
+						...testAssistantMessage(model, accumulated),
+						stopReason: "aborted" as const,
+					};
+					output.push({ error: aborted, reason: "aborted", type: "error" });
+					output.end(aborted);
+					return;
+				}
 				accumulated += chunk;
 				output.push({
 					contentIndex: 0,
