@@ -14,7 +14,7 @@ import {
 	RotateCcw,
 	MessageSquare,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import { Input } from "@tsukaima/ui/components/motion/input";
 import {
@@ -45,7 +45,7 @@ function MenuAction({
 		<button
 			type="button"
 			onClick={onSelect}
-			className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+			className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[11.5px] text-foreground outline-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
 		>
 			<span
 				aria-hidden="true"
@@ -76,9 +76,9 @@ function RowActions({
 				<button
 					type="button"
 					aria-label={label}
-					className="grid size-7 shrink-0 place-items-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+					className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
 				>
-					<MoreHorizontal className="size-4" />
+					<MoreHorizontal className="size-3.5" />
 				</button>
 			</MorphPopoverTrigger>
 			<MorphPopoverContent
@@ -128,8 +128,9 @@ export function ChatTree({
 	const navigate = useNavigate();
 	const pathname = useRouterState({ select: (state) => state.location.pathname });
 	const activeSessionId = pathname.startsWith("/chat/") ? pathname.slice("/chat/".length) : null;
+	// Groups start collapsed; the active chat is expanded on demand below, so a long chat list
+	// stays one row per conversation instead of two.
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
-	const seenChats = useRef(new Set<string>());
 	const [newChatOpen, setNewChatOpen] = useState(false);
 	const [newChatTitle, setNewChatTitle] = useState("");
 	const [newChatSessionTitle, setNewChatSessionTitle] = useState("");
@@ -139,19 +140,6 @@ export function ChatTree({
 	const [renameTitle, setRenameTitle] = useState("");
 
 	const chats = useQuery(orpc.admin.chats.list.queryOptions({ input: { status: "all" } }));
-
-	useEffect(() => {
-		if (!chats.data) return;
-		setExpanded((current) => {
-			const next = new Set(current);
-			for (const chat of chats.data) {
-				if (seenChats.current.has(chat.id)) continue;
-				seenChats.current.add(chat.id);
-				next.add(chat.id);
-			}
-			return next;
-		});
-	}, [chats.data]);
 
 	const invalidate = async () => {
 		await Promise.all([
@@ -312,24 +300,24 @@ export function ChatTree({
 	}
 	return (
 		<>
-			<div className="flex items-center justify-between px-3 pb-2 pt-1">
-				<span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+			<div className="flex items-center justify-between px-2.5 pb-1 pt-0.5">
+				<span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
 					{m.tab_chats()}
 				</span>
 				<Button
 					variant="ghost"
-					size="sm"
+					size="xs"
 					onClick={() => setNewChatOpen(true)}
-					className="h-7 gap-1 rounded-full px-2.5 text-xs"
+					className="h-6 gap-0.5 rounded-md px-1.5 text-[11px]"
 				>
-					<Plus className="size-3.5" />
+					<Plus className="size-3" />
 					{m.new_chat()}
 				</Button>
 			</div>
 			<div
 				role="tree"
 				aria-label={m.tab_chats()}
-				className="min-h-0 flex-1 overflow-y-auto px-2 pb-4"
+				className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3"
 			>
 				{visibleChats.length === 0 ? (
 					<SidebarEmpty
@@ -354,26 +342,27 @@ export function ChatTree({
 							.filter((message) => message !== null)
 							.toSorted((left, right) => right.occurredAt.localeCompare(left.occurredAt))[0];
 						return (
-							<div key={chat.id} role="treeitem" aria-expanded={expandedNow} className="mb-1">
+							<div key={chat.id} role="treeitem" aria-expanded={expandedNow} className="mb-0.5">
 								<div
 									className={cn(
-										"group flex min-h-11 items-center rounded-xl pr-1 text-muted-foreground transition-colors",
-										"hover:bg-muted/70 hover:text-foreground",
+										"group flex min-h-9 items-center rounded-md pr-0.5 text-muted-foreground transition-colors",
+										"hover:bg-foreground/[0.045] hover:text-foreground",
 									)}
 								>
 									<button
 										type="button"
 										onClick={() => toggleExpanded(chat.id)}
-										className="flex min-w-0 flex-1 items-center gap-2 rounded-l-xl py-1.5 pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+										className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 pl-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
 									>
 										<ChevronRight
 											aria-hidden="true"
 											className={cn(
-												"size-3.5 shrink-0 transition-transform duration-200",
+												"size-3 shrink-0 text-muted-foreground/60 transition-transform duration-200",
 												expandedNow && "rotate-90",
 											)}
 										/>
 										<Avatar
+											className="size-6 [&_svg]:size-3 text-[10px]"
 											kind={
 												chat.kind === "group" ? "group" : chat.kind === "webui" ? "webui" : "human"
 											}
@@ -381,21 +370,25 @@ export function ChatTree({
 										/>
 										<span className="min-w-0 flex-1">
 											<span className="flex items-center gap-1.5">
-												<span className="truncate text-sm font-medium text-foreground">
+												<span className="truncate text-[12.5px] font-medium text-foreground">
 													{chat.title}
 												</span>
-												<span className="shrink-0 text-[10px] text-muted-foreground">
+												<span className="shrink-0 text-[9.5px] tabular-nums text-muted-foreground">
 													{chat.sessions.length}
 												</span>
 											</span>
-											<span className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px]">
-												<span className="shrink-0 whitespace-nowrap">
+											<span className="flex min-w-0 items-center gap-1 text-[10.5px] leading-4">
+												<span className="shrink-0 whitespace-nowrap text-muted-foreground/80">
 													<ChatKindHint chat={chat} />
 												</span>
 												{latest?.contentText ? (
 													<>
-														<span aria-hidden="true">·</span>
-														<span className="truncate">{previewText(latest.contentText, "")}</span>
+														<span aria-hidden="true" className="text-muted-foreground/50">
+															·
+														</span>
+														<span className="truncate text-muted-foreground/80">
+															{previewText(latest.contentText, "")}
+														</span>
 													</>
 												) : null}
 											</span>
@@ -409,7 +402,7 @@ export function ChatTree({
 											setNewSessionChat(chat);
 											setNewSessionTitle("");
 										}}
-										className="grid size-7 shrink-0 place-items-center rounded-lg text-muted-foreground opacity-60 outline-none transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring"
+										className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 outline-none transition-[color,background-color,opacity] hover:bg-foreground/5 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100 max-sm:opacity-100"
 									>
 										<Plus className="size-3.5" />
 									</button>
@@ -417,7 +410,7 @@ export function ChatTree({
 								{expandedNow ? (
 									<div
 										role="group"
-										className="relative ml-[1.35rem] border-l border-border pl-2 pt-0.5"
+										className="relative ml-[0.9rem] border-l border-border/70 pl-1 pt-0"
 									>
 										{chat.sessions.map((session) => {
 											const active = activeSessionId === session.id;
@@ -426,22 +419,22 @@ export function ChatTree({
 												<div
 													key={session.id}
 													className={cn(
-														"group/session flex min-h-10 items-center rounded-xl pr-1 transition-colors",
+														"group/session flex min-h-8 items-center rounded-md pr-0.5 transition-colors",
 														active
-															? "bg-muted text-foreground"
-															: "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+															? "bg-foreground/[0.06] text-foreground"
+															: "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground",
 													)}
 												>
 													<button
 														type="button"
 														onClick={() => void openSession(session.id)}
 														aria-current={active ? "page" : undefined}
-														className="flex min-w-0 flex-1 items-center gap-2 rounded-l-xl py-1.5 pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+														className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 pl-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
 													>
 														<span
 															aria-hidden="true"
 															className={cn(
-																"size-1.5 shrink-0 rounded-full",
+																"size-1 shrink-0 rounded-full",
 																session.isReceiving
 																	? "bg-primary"
 																	: session.status === "archived"
@@ -450,33 +443,35 @@ export function ChatTree({
 															)}
 														/>
 														<span className="min-w-0 flex-1">
-															<span className="flex min-w-0 items-center gap-1.5">
-																<span className="truncate text-[13px] font-medium">
+															<span className="flex min-w-0 items-center gap-1">
+																<span className="truncate text-[12px] font-medium">
 																	{session.title}
 																</span>
 																{session.isReceiving &&
 																(chat.kind === "private" || chat.kind === "group") ? (
-																	<span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary">
+																	<span className="shrink-0 rounded bg-primary/10 px-1 text-[8.5px] leading-3.5 font-medium text-primary">
 																		{m.receiving()}
 																	</span>
 																) : null}
 																{session.status === "archived" ? (
-																	<span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[9px]">
+																	<span className="shrink-0 rounded bg-muted px-1 text-[8.5px] leading-3.5">
 																		{m.archived()}
 																	</span>
 																) : null}
 															</span>
-															<span className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground">
+															<span className="mt-px flex min-w-0 items-center gap-1 text-[10px] leading-3.5 text-muted-foreground/70">
 																<span className="truncate">
 																	{previewText(message?.contentText, m.messages_empty())}
 																</span>
-																<span className="ml-auto shrink-0">
+																<span className="ml-auto shrink-0 tabular-nums">
 																	{formatTimestamp(message?.occurredAt ?? session.updatedAt)}
 																</span>
 															</span>
 														</span>
 													</button>
-													{openSessionMenu(chat, session)}
+													<span className="opacity-0 transition-opacity group-hover/session:opacity-100 focus-within:opacity-100 max-sm:opacity-100">
+														{openSessionMenu(chat, session)}
+													</span>
 												</div>
 											);
 										})}

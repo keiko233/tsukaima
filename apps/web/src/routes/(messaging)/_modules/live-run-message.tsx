@@ -172,8 +172,8 @@ export function LiveRunMessage({ run, now }: LiveRunMessageProps) {
 	const expanded = working || !collapsed;
 
 	return (
-		<Message from="assistant" align="start" className="gap-2.5">
-			<MessageAvatar className="border border-primary/20 bg-primary/10 text-primary">
+		<Message from="assistant" align="start" className="gap-2">
+			<MessageAvatar className="size-6 text-[10px] border border-primary/20 bg-primary/10 text-primary">
 				E
 			</MessageAvatar>
 			<MessageContent>
@@ -206,7 +206,7 @@ export function LiveRunMessage({ run, now }: LiveRunMessageProps) {
 					)}
 				</MessageHeader>
 				{expanded && hasActivity ? (
-					<ul className="flex w-full max-w-[min(42rem,88%)] flex-col items-start gap-1.5">
+					<ul className="flex w-full max-w-[46rem] flex-col items-start gap-1.5">
 						{visibleSteps.map((step, index) => (
 							<li
 								key={`step-${index}-${step.kind}`}
@@ -262,8 +262,8 @@ export function LiveRunMessage({ run, now }: LiveRunMessageProps) {
 					<p className="text-left text-[11px] text-destructive">{run.failure}</p>
 				)}
 				{partial.length > 0 ? (
-					<MessageBubble variant="outline" className="max-w-full">
-						<MessageBubbleContent className="max-w-[min(42rem,88%)]">
+					<MessageBubble variant="ghost" className="max-w-full">
+						<MessageBubbleContent className="max-w-[46rem]">
 							<p className="whitespace-pre-wrap break-words">
 								{partial}
 								{working ? (

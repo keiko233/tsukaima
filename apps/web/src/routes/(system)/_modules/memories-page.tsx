@@ -44,9 +44,9 @@ const KINDS = [
 const STATUSES: readonly MemoryStatus[] = ["active", "pending", "rejected", "expired", "revoked"];
 
 const fieldClass =
-	"h-9 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+	"h-8 w-full rounded-md border border-border bg-background px-2 text-[12px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
 const textareaClass =
-	"min-h-20 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+	"min-h-16 w-full rounded-md border border-border bg-background px-2 py-1.5 text-[12px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 function StatusFilter({
 	value,
@@ -200,7 +200,7 @@ export function MemoriesPage() {
 					<CardTitle as="h2">{m.memories_list_title()}</CardTitle>
 					<CardDescription>{m.memories_list_description()}</CardDescription>
 				</CardHeader>
-				<CardContent className="space-y-4">
+				<CardContent className="space-y-3">
 					<div className="grid gap-2 lg:grid-cols-4">
 						<Input
 							aria-label={m.memories_search_placeholder()}
@@ -253,7 +253,7 @@ export function MemoriesPage() {
 								placeholder={m.memories_compact_conversation()}
 								value={compactConversationId}
 								onChange={setCompactConversationId}
-								classNames={{ field: "h-9 bg-card/60 min-w-52", root: "max-w-sm gap-0" }}
+								classNames={{ field: "h-8 min-w-52", root: "max-w-sm gap-0" }}
 							/>
 							<Button
 								variant="outline"

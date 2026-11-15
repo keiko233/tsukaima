@@ -117,7 +117,7 @@ export function PromptInput({
 		const measurement = measurementRef.current;
 		if (!textarea || !measurement || textarea.value !== currentValue) return;
 
-		const lineHeight = 24;
+		const lineHeight = 22;
 		const nextHeight = Math.min(
 			Math.max(measurement.scrollHeight, minRows * lineHeight),
 			maxRows * lineHeight,
@@ -176,7 +176,7 @@ export function PromptInput({
 		<form
 			onSubmit={submit}
 			className={cn(
-				"relative w-full rounded-2xl border border-border/80 bg-background p-2 transition-colors focus-within:border-foreground/25",
+				"relative w-full rounded-xl border border-border bg-card/70 p-1.5 transition-colors focus-within:border-foreground/25",
 				disabled && "opacity-60",
 				className,
 			)}
@@ -184,7 +184,7 @@ export function PromptInput({
 			<div
 				ref={measurementRef}
 				aria-hidden="true"
-				className="pointer-events-none invisible absolute inset-x-2 top-0 whitespace-pre-wrap px-2 text-sm leading-6 [overflow-wrap:break-word]"
+				className="pointer-events-none invisible absolute inset-x-2 top-0 whitespace-pre-wrap px-2 text-[13.5px] leading-[22px] [overflow-wrap:break-word]"
 			>
 				{`${currentValue}\u200b`}
 			</div>
@@ -198,10 +198,10 @@ export function PromptInput({
 				{...textareaProps}
 				onChange={(event) => setValue(event.target.value)}
 				onKeyDown={handleKeyDown}
-				className="scrollbar-hide block w-full resize-none overflow-y-auto bg-transparent px-2 pt-1.5 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground/55"
+				className="scrollbar-hide block w-full resize-none overflow-y-auto bg-transparent px-2 pt-1 text-[13.5px] leading-[22px] text-foreground outline-none placeholder:text-muted-foreground/55"
 			/>
 
-			<div className="mt-1 flex min-h-8 items-center gap-1">
+			<div className="mt-0.5 flex min-h-7 items-center gap-1">
 				{actions.length ? (
 					<MorphPopover open={actionsOpen} onOpenChange={setActionsOpen}>
 						<MorphPopoverTrigger>
@@ -211,7 +211,7 @@ export function PromptInput({
 								size="icon"
 								disabled={disabled || loading}
 								aria-label={t("addToPrompt")}
-								className="size-8 rounded-full"
+								className="size-7 rounded-md"
 							>
 								<motion.span
 									aria-hidden="true"
@@ -267,7 +267,7 @@ export function PromptInput({
 						disabled={disabled || loading}
 						className="min-w-0"
 					>
-						<SelectTrigger className="h-8 w-auto max-w-52 rounded-xl border-0 bg-transparent px-2 py-0 text-xs hover:bg-muted focus-visible:ring-2">
+						<SelectTrigger className="h-7 w-auto max-w-52 rounded-md border-0 bg-transparent px-1.5 py-0 text-[11px] hover:bg-muted focus-visible:ring-2">
 							<span className="flex min-w-0 items-center gap-1.5">
 								{currentModel?.icon ? (
 									<span className="grid size-4 shrink-0 place-items-center text-muted-foreground [&_svg]:size-3.5">
@@ -307,7 +307,7 @@ export function PromptInput({
 					disabled={loading ? !onStop : !canSubmit}
 					aria-label={loading ? t("stop") : t("send")}
 					onClick={loading ? onStop : undefined}
-					className="ml-auto size-8 rounded-full"
+					className="ml-auto size-7 rounded-md"
 				>
 					<AnimatePresence initial={false} mode="popLayout">
 						<motion.span

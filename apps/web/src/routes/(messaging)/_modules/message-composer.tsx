@@ -66,14 +66,14 @@ export function MessageComposer({
 			disabled={disabled || sending}
 		>
 			<SelectTrigger
-				className="h-8 w-auto max-w-48 rounded-xl border-0 bg-transparent px-2 py-0 text-xs hover:bg-muted focus-visible:ring-2"
+				className="h-7 w-auto max-w-48 rounded-md border-0 bg-transparent px-1.5 py-0 text-[11px] hover:bg-muted focus-visible:ring-2"
 				aria-label={m.session_target()}
 			>
 				<span className="flex min-w-0 items-center gap-1.5">
 					{target === "channel" ? (
-						<Send className="size-3.5 text-muted-foreground" />
+						<Send className="size-3 text-muted-foreground" />
 					) : (
-						<MessageCircle className="size-3.5 text-muted-foreground" />
+						<MessageCircle className="size-3 text-muted-foreground" />
 					)}
 					<span className="truncate text-muted-foreground">
 						{target === "channel" ? m.send_to_channel() : m.send_to_tsukaima()}
@@ -102,8 +102,8 @@ export function MessageComposer({
 	) : null;
 
 	return (
-		<div className="shrink-0 border-t border-border bg-background px-3 pb-3 pt-2 sm:px-5">
-			<div className="mx-auto w-full max-w-3xl">
+		<div className="shrink-0 bg-background px-3 pb-2.5 pt-1 sm:px-5">
+			<div className="mx-auto w-full max-w-4xl">
 				<PromptInput
 					value={text}
 					onValueChange={updateText}
@@ -114,9 +114,9 @@ export function MessageComposer({
 					minRows={1}
 					maxRows={8}
 					leadingAction={targetSelect}
-					className={cn("bg-background", sending && "opacity-80")}
+					className={cn(sending && "opacity-80")}
 				/>
-				<p className="mt-1.5 px-2 text-[10px] leading-4 text-muted-foreground">
+				<p className="mt-1 px-1.5 text-[10px] leading-4 text-muted-foreground/80">
 					{target === "channel" ? m.composer_hint_channel() : m.composer_hint_tsukaima()}
 				</p>
 			</div>

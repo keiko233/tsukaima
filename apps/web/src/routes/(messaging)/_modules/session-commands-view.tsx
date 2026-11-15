@@ -92,10 +92,10 @@ export function SessionCommandsView({
 	const archiveBlockedByReceiving = !archived && isExternal && isReceiving;
 
 	return (
-		<div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pt-3 pb-4">
+		<div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-3 pt-2.5 pb-3">
 			<div className="flex items-start justify-between gap-2">
 				<div className="min-w-0">
-					<h3 className="text-xs font-semibold text-foreground">{m.command_section_title()}</h3>
+					<h3 className="text-[11.5px] font-semibold text-foreground">{m.command_section_title()}</h3>
 					<p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
 						{m.command_section_hint()}
 					</p>
@@ -118,8 +118,8 @@ export function SessionCommandsView({
 				</span>
 			</div>
 
-			<section className="space-y-2 rounded-lg border border-border/70 bg-background/50 p-3">
-				<div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+			<section className="space-y-2 rounded-lg border border-border/70 bg-background/50 p-2.5">
+				<div className="flex items-center gap-1.5 text-[11.5px] font-medium text-foreground">
 					<Minimize2 className="size-3.5 text-muted-foreground" />
 					<span>{m.command_compact_title()}</span>
 				</div>
@@ -148,8 +148,8 @@ export function SessionCommandsView({
 				) : null}
 			</section>
 
-			<section className="space-y-2 rounded-lg border border-border/70 bg-background/50 p-3">
-				<div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+			<section className="space-y-2 rounded-lg border border-border/70 bg-background/50 p-2.5">
+				<div className="flex items-center gap-1.5 text-[11.5px] font-medium text-foreground">
 					<Brain className="size-3.5 text-muted-foreground" />
 					<span>{m.command_memory_compact_title()}</span>
 				</div>
@@ -171,8 +171,8 @@ export function SessionCommandsView({
 				) : null}
 			</section>
 
-			<section className="space-y-2 rounded-lg border border-border/70 bg-background/50 p-3">
-				<div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+			<section className="space-y-2 rounded-lg border border-border/70 bg-background/50 p-2.5">
+				<div className="flex items-center gap-1.5 text-[11.5px] font-medium text-foreground">
 					<Square className="size-3.5 text-muted-foreground" />
 					<span>{m.command_abort_title()}</span>
 				</div>
@@ -192,8 +192,8 @@ export function SessionCommandsView({
 				{abortResult ? <ResultBanner message={abortResult} /> : null}
 			</section>
 
-			<section className="space-y-2 rounded-lg border border-border/70 bg-background/50 p-3">
-				<div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+			<section className="space-y-2 rounded-lg border border-border/70 bg-background/50 p-2.5">
+				<div className="flex items-center gap-1.5 text-[11.5px] font-medium text-foreground">
 					<RotateCcw className="size-3.5 text-muted-foreground" />
 					<span>{m.command_reset_title()}</span>
 				</div>
@@ -255,7 +255,7 @@ export function SessionCommandsView({
 			</section>
 
 			<section className="space-y-2.5 rounded-lg border border-border/70 bg-background/50 p-3">
-				<div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+				<div className="flex items-center gap-1.5 text-[11.5px] font-medium text-foreground">
 					<Pencil className="size-3.5 text-muted-foreground" />
 					<span>{m.command_session_title()}</span>
 				</div>

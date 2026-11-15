@@ -6,12 +6,13 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-	--background: oklch(99% 0 0);
-	--foreground: oklch(15% 0 0);
-	--card: oklch(97% 0 0);
-	--muted-foreground: oklch(50% 0 0);
-	--border: oklch(15% 0 0 / 0.09);
-	--border-strong: oklch(15% 0 0 / 0.16);
+	--background: oklch(98.6% 0.002 90);
+	--foreground: oklch(17% 0 0);
+	--card: oklch(96.4% 0.003 90);
+	--sidebar: oklch(97.2% 0.003 90);
+	--muted-foreground: oklch(48% 0 0);
+	--border: oklch(15% 0 0 / 0.08);
+	--border-strong: oklch(15% 0 0 / 0.15);
 	--accent-fg: oklch(15% 0 0);
 	--neon: oklch(80% 0.22 145);
 	--violet: oklch(68% 0.22 295);
@@ -39,18 +40,19 @@
 }
 
 .dark {
-	--background: #151515;
-	--foreground: oklch(96% 0 0);
-	--card: #1c1c1c;
-	--muted-foreground: oklch(64% 0 0);
+	--background: #1a1a19;
+	--foreground: oklch(95% 0 0);
+	--card: #222221;
+	--sidebar: #141413;
+	--muted-foreground: oklch(62% 0 0);
 	--border: rgb(255 255 255 / 0.07);
-	--border-strong: rgb(255 255 255 / 0.14);
+	--border-strong: rgb(255 255 255 / 0.15);
 	--accent: oklch(80% 0.18 195);
 	--accent-fg: #151515;
-	--glass-bg: rgb(28 28 28 / 0.55);
+	--glass-bg: rgb(26 26 25 / 0.62);
 	--glass-border: rgb(255 255 255 / 0.08);
-	--glass-strong-bg: rgb(28 28 28 / 0.6);
-	--glass-thin-bg: rgb(21 21 21 / 0.45);
+	--glass-strong-bg: rgb(28 28 27 / 0.7);
+	--glass-thin-bg: rgb(20 20 19 / 0.5);
 	color-scheme: dark;
 }
 
@@ -66,6 +68,7 @@
 	--color-success: var(--success);
 	--color-warning: var(--warning);
 	--color-background: var(--background);
+	--color-sidebar: var(--sidebar);
 	--color-foreground: var(--foreground);
 	--color-card: var(--card);
 	--color-card-foreground: var(--card-foreground);
@@ -127,8 +130,14 @@
 	body {
 		background: var(--background);
 		color: var(--foreground);
+		font-family:
+			"Inter", "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+			"Microsoft YaHei", system-ui, sans-serif;
+		font-size: 13.5px;
+		line-height: 1.5;
 		font-synthesis: none;
 		text-rendering: optimizeLegibility;
+		-webkit-font-smoothing: antialiased;
 	}
 
 	button:not(:disabled) {
@@ -137,6 +146,33 @@
 
 	::selection {
 		background: color-mix(in oklab, var(--primary) 24%, transparent);
+	}
+
+	/* Desktop-app scrollbars: thin, translucent, and out of the content's way. */
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: var(--border-strong) transparent;
+	}
+
+	::-webkit-scrollbar {
+		width: 10px;
+		height: 10px;
+	}
+
+	::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	::-webkit-scrollbar-thumb {
+		border: 3px solid transparent;
+		border-radius: 999px;
+		background: var(--border-strong);
+		background-clip: content-box;
+	}
+
+	::-webkit-scrollbar-thumb:hover {
+		background: var(--muted-foreground);
+		background-clip: content-box;
 	}
 }
 

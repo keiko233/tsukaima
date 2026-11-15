@@ -36,30 +36,30 @@ export function PluginSidebar({ selectedId }: { selectedId?: string }) {
 
 	return (
 		<nav aria-label={m.nav_plugins()} className="flex min-h-0 flex-1 flex-col">
-			<div className="shrink-0 px-3 pb-2 pt-3">
-				<h1 className="text-base font-semibold tracking-tight">{m.nav_plugins()}</h1>
-				<p className="mt-0.5 text-xs text-muted-foreground">{m.plugins_sidebar_description()}</p>
+			<div className="shrink-0 px-2.5 pb-1.5 pt-2">
+				<h1 className="text-[13px] font-semibold tracking-tight">{m.nav_plugins()}</h1>
+				<p className="mt-0.5 text-[10.5px] text-muted-foreground">{m.plugins_sidebar_description()}</p>
 				<Input
 					aria-label={m.plugins_search_placeholder()}
 					placeholder={m.plugins_search_placeholder()}
 					value={search}
 					onChange={setSearch}
 					leftIcon={<Search />}
-					classNames={{ field: "mt-3 h-9 bg-card/60", root: "gap-0" }}
+					classNames={{ field: "mt-2 h-8 rounded-md", input: "text-xs", root: "gap-0" }}
 				/>
 			</div>
-			<div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+			<div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
 				{pluginsQuery.isPending ? (
 					<div className="space-y-2 px-1 py-2">
-						<Skeleton className="h-14 w-full" />
+						<Skeleton className="h-11 w-full" />
 						<Skeleton className="h-14 w-full" />
 					</div>
 				) : pluginsQuery.isError ? (
-					<p className="px-2 py-6 text-center text-xs text-destructive">
+					<p className="px-2 py-4 text-center text-[11px] text-destructive">
 						{pluginsQuery.error.message}
 					</p>
 				) : filtered.length === 0 ? (
-					<p className="px-2 py-6 text-center text-xs text-muted-foreground">
+					<p className="px-2 py-4 text-center text-[11px] text-muted-foreground">
 						{search.length === 0 ? m.plugins_empty() : m.plugins_no_matches()}
 					</p>
 				) : (
@@ -78,7 +78,7 @@ export function PluginSidebar({ selectedId }: { selectedId?: string }) {
 											});
 										}}
 										className={cn(
-											"flex w-full items-start gap-2.5 rounded-lg border border-transparent px-2.5 py-2 text-left outline-none transition-colors",
+											"flex w-full items-start gap-2 rounded-md border border-transparent px-1.5 py-1.5 text-left outline-none transition-colors",
 											"hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring",
 											selected && "border-border bg-muted/70",
 										)}
@@ -92,12 +92,12 @@ export function PluginSidebar({ selectedId }: { selectedId?: string }) {
 										</span>
 										<span className="min-w-0 flex-1">
 											<span className="flex items-baseline justify-between gap-2">
-												<span className="truncate text-sm font-medium">{plugin.name}</span>
+												<span className="truncate text-[12.5px] font-medium">{plugin.name}</span>
 												<span className="shrink-0 text-[10px] text-muted-foreground">
 													{plugin.version}
 												</span>
 											</span>
-											<span className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+											<span className="flex items-center gap-1.5 text-[10.5px] text-muted-foreground">
 												<span className="truncate">{statusLabel(plugin)}</span>
 											</span>
 										</span>
@@ -125,7 +125,7 @@ export function PluginLayout({ children }: { children: ReactNode }) {
 		<div className="flex min-h-0 flex-1 overflow-hidden">
 			<aside
 				className={cn(
-					"min-h-0 shrink-0 flex-col border-border bg-background md:flex md:w-72 md:border-r lg:w-80",
+					"min-h-0 shrink-0 flex-col border-border bg-sidebar md:flex md:w-60 md:border-r lg:w-64",
 					showList ? "flex w-full" : "hidden",
 				)}
 			>
@@ -137,7 +137,9 @@ export function PluginLayout({ children }: { children: ReactNode }) {
 					showDetail ? "block" : "hidden md:block",
 				)}
 			>
-				<div className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-6 sm:py-6">{children}</div>
+				<div className="mx-auto flex min-h-full w-full max-w-4xl flex-col px-4 py-4 sm:px-5">
+					{children}
+				</div>
 			</div>
 		</div>
 	);
@@ -145,11 +147,13 @@ export function PluginLayout({ children }: { children: ReactNode }) {
 
 export function PluginListPlaceholder({ children }: { children?: ReactNode }) {
 	return (
-		<div className="grid min-h-64 place-items-center rounded-xl border border-dashed border-border text-center">
-			<div className="space-y-2 p-6">
-				<Puzzle className="mx-auto size-6 text-muted-foreground" />
-				<p className="text-sm font-medium">{m.nav_plugins()}</p>
-				<p className="text-xs text-muted-foreground">{m.plugins_sidebar_description()}</p>
+		<div className="grid flex-1 place-items-center px-6 py-16 text-center">
+			<div className="max-w-xs space-y-1.5">
+				<Puzzle className="mx-auto size-6 text-muted-foreground/70" />
+				<p className="text-[12.5px] font-medium">{m.nav_plugins()}</p>
+				<p className="text-[11px] leading-4 text-muted-foreground">
+					{m.plugins_sidebar_description()}
+				</p>
 				{children}
 			</div>
 		</div>

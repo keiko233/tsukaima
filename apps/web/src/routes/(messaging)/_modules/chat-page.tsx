@@ -153,7 +153,7 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 
 	if (session.isPending) {
 		return (
-			<div className="grid h-full place-items-center text-sm text-muted-foreground">
+			<div className="grid h-full place-items-center text-[12px] text-muted-foreground">
 				{m.loading()}
 			</div>
 		);
@@ -171,7 +171,7 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 	}
 	if (detail === null || detail === undefined) {
 		return (
-			<div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
+			<div className="grid h-full place-items-center px-6 text-center text-[12px] text-muted-foreground">
 				{m.session_not_found()}
 			</div>
 		);
@@ -179,20 +179,20 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 
 	return (
 		<div className="flex h-full min-h-0 flex-col">
-			<header className="flex min-h-16 shrink-0 items-center gap-3 border-b border-border px-3 sm:px-5">
+			<header className="flex h-12 min-h-12 shrink-0 items-center gap-2 border-b border-border px-2.5 sm:px-3.5">
 				{mobile ? (
 					<Button
 						variant="ghost"
 						size="icon"
 						onClick={showSidebar}
 						aria-label={m.topbar_back_to_sidebar()}
-						className="size-9 rounded-lg"
+						className="size-7 rounded-md"
 					>
 						<ChevronLeft className="size-4" />
 					</Button>
 				) : null}
 				<Avatar
-					className="size-9"
+					className="size-7 [&_svg]:size-3.5 text-[11px]"
 					kind={
 						detail.chat.kind === "group"
 							? "group"
@@ -202,58 +202,66 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 					}
 					name={detail.title}
 				/>
-				<div className="min-w-0 flex-1">
-					<div className="flex min-w-0 items-center gap-2">
-						<h1 className="truncate text-sm font-semibold">{detail.title}</h1>
-						{detail.isReceiving &&
-						(detail.chat.kind === "private" || detail.chat.kind === "group") ? (
-							<span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-								{m.receiving()}
+				<div className="flex min-w-0 flex-1 items-center gap-1.5 text-[11px] text-muted-foreground">
+					<h1 className="min-w-0 shrink truncate text-[13px] font-semibold text-foreground">
+						{detail.title}
+					</h1>
+					{detail.isReceiving &&
+					(detail.chat.kind === "private" || detail.chat.kind === "group") ? (
+						<span className="shrink-0 rounded bg-primary/10 px-1.5 text-[9.5px] leading-4 font-medium text-primary">
+							{m.receiving()}
+						</span>
+					) : null}
+					{archived ? (
+						<span className="shrink-0 rounded bg-muted px-1.5 text-[9.5px] leading-4 text-muted-foreground">
+							{m.archived()}
+						</span>
+					) : null}
+					<span aria-hidden="true" className="hidden text-muted-foreground/45 sm:inline">
+						·
+					</span>
+					<span className="hidden min-w-0 truncate sm:inline">{detail.chat.title}</span>
+					<span aria-hidden="true" className="hidden text-muted-foreground/45 md:inline">
+						·
+					</span>
+					<span className="hidden shrink-0 md:inline">{chatKindLabel(detail.chat.kind)}</span>
+					{detail.channelId ? (
+						<>
+							<span
+								aria-hidden="true"
+								className="hidden text-muted-foreground/45 xl:inline"
+							>
+								·
 							</span>
-						) : null}
-						{archived ? (
-							<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-								{m.archived()}
+							<span className="hidden min-w-0 truncate xl:inline">{detail.channelId}</span>
+						</>
+					) : null}
+					{externalEligible ? (
+						<span
+							className={cn(
+								"ml-1 inline-flex shrink-0 items-center gap-1 text-[10.5px]",
+								channelConnected ? "text-(--color-success)" : "text-destructive",
+							)}
+						>
+							<Circle className="size-1.5 fill-current" />
+							<span className="hidden sm:inline">
+								{channelConnected ? m.connect_connected() : m.connect_disconnected()}
 							</span>
-						) : null}
-					</div>
-					<div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-						<span className="truncate">{detail.chat.title}</span>
-						<span aria-hidden="true">·</span>
-						<span>{chatKindLabel(detail.chat.kind)}</span>
-						{detail.channelId ? (
-							<>
-								<span aria-hidden="true">·</span>
-								<span className="truncate">{detail.channelId}</span>
-							</>
-						) : null}
-						{externalEligible ? (
-							<>
-								<span aria-hidden="true">·</span>
-								<span
-									className={cn(
-										"inline-flex items-center gap-1",
-										channelConnected ? "text-(--color-success)" : "text-destructive",
-									)}
-								>
-									<Circle className="size-1.5 fill-current" />
-									{channelConnected ? m.connect_connected() : m.connect_disconnected()}
-								</span>
-							</>
-						) : null}
-					</div>
+						</span>
+					) : null}
 				</div>
-				<div className="flex shrink-0 items-center gap-2">
+				<div className="flex shrink-0 items-center gap-1">
 					<Button
 						type="button"
-						variant={contextOpen ? "secondary" : "outline"}
-						size="sm"
-						className="shrink-0"
+						variant={contextOpen ? "secondary" : "ghost"}
+						size="xs"
+						className="h-7 shrink-0 gap-1 rounded-md px-1.5"
 						aria-pressed={contextOpen}
+						aria-label={m.inspector_action()}
+						title={m.inspector_action()}
 						onClick={toggleContextPanel}
 					>
-						<PanelRight className="size-4" />
-						<span className="hidden sm:inline">{m.inspector_action()}</span>
+						<PanelRight className="size-3.5" />
 						{liveRun !== undefined ? (
 							<span
 								aria-hidden="true"
@@ -267,7 +275,7 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 			<div className="flex min-h-0 flex-1">
 				<div className="flex min-w-0 flex-1 flex-col">
 					{archived ? (
-						<div className="border-b border-border bg-muted/40 px-5 py-2 text-xs text-muted-foreground">
+						<div className="border-b border-border bg-muted/40 px-3.5 py-1.5 text-[11px] text-muted-foreground">
 							{m.session_archived_notice()}
 						</div>
 					) : null}
@@ -315,7 +323,7 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 				{wideContextPane && desktopContextOpen ? (
 					<aside
 						aria-label={m.inspector_title()}
-						className="w-[320px] shrink-0 border-l border-border bg-card/35 xl:w-[350px] dark:bg-[#181818]"
+						className="w-[280px] shrink-0 border-l border-border bg-sidebar/60 xl:w-[300px]"
 					>
 						<SessionInspectorSidebar
 							activeTab={inspectorTab}
@@ -338,7 +346,7 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 					/>
 					<aside
 						aria-label={m.inspector_title()}
-						className="relative z-10 h-full w-[340px] max-w-[90vw] border-l border-border bg-background shadow-xl dark:bg-[#181818]"
+						className="relative z-10 h-full w-[320px] max-w-[90vw] border-l border-border bg-background shadow-xl"
 					>
 						<SessionInspectorSidebar
 							activeTab={inspectorTab}
@@ -358,14 +366,16 @@ export function ChatEmptyState() {
 	const { mobile, showSidebar } = useShellNavigation();
 	return (
 		<div className="grid h-full place-items-center px-6">
-			<div className="flex max-w-sm flex-col items-center text-center">
-				<span className="grid size-14 place-items-center rounded-2xl bg-primary/10 text-primary">
-					<MessageCircle className="size-6" />
+			<div className="flex max-w-xs flex-col items-center text-center">
+				<span className="grid size-10 place-items-center rounded-xl bg-muted text-muted-foreground">
+					<MessageCircle className="size-5" />
 				</span>
-				<h1 className="mt-4 text-lg font-semibold tracking-tight">{m.welcome_title()}</h1>
-				<p className="mt-1.5 text-sm leading-6 text-muted-foreground">{m.welcome_description()}</p>
+				<h1 className="mt-3 text-[14px] font-semibold tracking-tight">{m.welcome_title()}</h1>
+				<p className="mt-1 text-[11.5px] leading-5 text-muted-foreground">
+					{m.welcome_description()}
+				</p>
 				{mobile ? (
-					<Button variant="outline" size="sm" className="mt-5" onClick={showSidebar}>
+					<Button variant="outline" size="sm" className="mt-4" onClick={showSidebar}>
 						{m.topbar_back_to_sidebar()}
 					</Button>
 				) : null}

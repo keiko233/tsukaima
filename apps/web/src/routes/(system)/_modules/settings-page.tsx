@@ -46,14 +46,14 @@ export function SettingsPage() {
 
 	return (
 		<SystemPage description={m.settings_page_description()} title={m.nav_settings()}>
-			<div className="space-y-4">
+			<div className="space-y-3">
 				<Card size="compact">
 					<CardHeader>
 						<CardTitle as="h2">{m.settings_interface_title()}</CardTitle>
 					</CardHeader>
 					<CardContent className="space-y-2">
 						<div className="space-y-1.5">
-							<div className="px-1 text-sm font-medium text-foreground">
+							<div className="px-1 text-[11.5px] font-medium text-foreground">
 								{m.settings_language_label()}
 							</div>
 							<Select value={locale} onValueChange={changeLocale}>
@@ -70,15 +70,15 @@ export function SettingsPage() {
 								</SelectContent>
 							</Select>
 						</div>
-						<p className="text-xs text-muted-foreground">{m.settings_language_hint()}</p>
+						<p className="text-[11px] text-muted-foreground">{m.settings_language_hint()}</p>
 					</CardContent>
 				</Card>
 				<Card size="compact">
 					<CardHeader>
 						<CardTitle as="h2">{m.settings_title()}</CardTitle>
 					</CardHeader>
-					<CardContent className="space-y-4">
-						<div className="px-1 text-sm font-medium text-foreground">
+					<CardContent className="space-y-3">
+						<div className="px-1 text-[11.5px] font-medium text-foreground">
 							{m.settings_log_level_label()}
 						</div>
 						<Select

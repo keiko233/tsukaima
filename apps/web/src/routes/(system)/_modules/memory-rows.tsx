@@ -10,7 +10,7 @@ export function MemoryRows({
 	readonly memories: readonly MemoryRow[];
 }) {
 	if (memories.length === 0) {
-		return <p className="px-1 py-6 text-sm text-muted-foreground">{emptyLabel}</p>;
+		return <p className="px-1 py-4 text-[11px] text-muted-foreground">{emptyLabel}</p>;
 	}
 	return (
 		<ul className="space-y-2">

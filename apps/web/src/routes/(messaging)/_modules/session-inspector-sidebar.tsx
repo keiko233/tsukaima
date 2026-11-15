@@ -304,19 +304,21 @@ export function SessionInspectorSidebar({
 
 	return (
 		<div className="flex h-full min-h-0 flex-col">
-			<div className="flex items-center justify-between gap-2 px-4 pt-3 pb-1">
-				<h2 className="text-[13px] font-medium text-muted-foreground">{m.inspector_title()}</h2>
+			<div className="flex h-9 items-center justify-between gap-2 border-b border-border/60 px-3">
+				<h2 className="text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+					{m.inspector_title()}
+				</h2>
 				{onClose ? (
 					<Button
 						type="button"
 						variant="ghost"
-						size="icon"
+						size="iconSm"
 						onClick={onClose}
 						aria-label={m.inspector_close()}
 						title={m.inspector_close()}
-						className="size-7 rounded-md text-muted-foreground hover:text-foreground"
+						className="size-6 rounded-md text-muted-foreground hover:text-foreground"
 					>
-						<X className="size-3.5" />
+						<X className="size-3" />
 					</Button>
 				) : null}
 			</div>
@@ -331,19 +333,19 @@ export function SessionInspectorSidebar({
 				}}
 				className="flex min-h-0 flex-1 flex-col"
 			>
-				<div className="shrink-0 border-b border-border/70 px-2">
+				<div className="shrink-0 border-b border-border/70 px-1.5">
 					<TabsList className="w-full justify-between gap-0">
 						<TabsTrigger
 							value="context"
-							indicatorClassName="h-0.5"
-							className="flex-1 justify-center px-1 text-[12px]"
+							indicatorClassName="h-px"
+							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
 						>
 							{m.inspector_tab_context()}
 						</TabsTrigger>
 						<TabsTrigger
 							value="commands"
-							indicatorClassName="h-0.5"
-							className="flex-1 justify-center px-1 text-[12px]"
+							indicatorClassName="h-px"
+							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
 						>
 							<span className="inline-flex items-center gap-1">
 								{m.inspector_tab_commands()}
@@ -357,22 +359,22 @@ export function SessionInspectorSidebar({
 						</TabsTrigger>
 						<TabsTrigger
 							value="trigger"
-							indicatorClassName="h-0.5"
-							className="flex-1 justify-center px-1 text-[12px]"
+							indicatorClassName="h-px"
+							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
 						>
 							{m.inspector_tab_trigger()}
 						</TabsTrigger>
 						<TabsTrigger
 							value="pacing"
-							indicatorClassName="h-0.5"
-							className="flex-1 justify-center px-1 text-[12px]"
+							indicatorClassName="h-px"
+							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
 						>
 							{m.inspector_tab_pacing()}
 						</TabsTrigger>
 						<TabsTrigger
 							value="persona"
-							indicatorClassName="h-0.5"
-							className="flex-1 justify-center px-1 text-[12px]"
+							indicatorClassName="h-px"
+							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
 						>
 							{m.inspector_tab_persona()}
 						</TabsTrigger>

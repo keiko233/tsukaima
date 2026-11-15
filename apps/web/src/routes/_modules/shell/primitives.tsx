@@ -60,13 +60,13 @@ export function SidebarEmpty({
 	title: string;
 }) {
 	return (
-		<div className="mx-2 my-4 rounded-2xl border border-dashed border-border px-4 py-7 text-center">
-			<div className="mx-auto grid size-10 place-items-center rounded-full bg-muted text-muted-foreground">
-				<Icon className="size-4" />
+		<div className="mx-1.5 my-3 rounded-lg border border-dashed border-border px-3 py-5 text-center">
+			<div className="mx-auto grid size-8 place-items-center rounded-full bg-muted text-muted-foreground">
+				<Icon className="size-3.5" />
 			</div>
-			<p className="mt-3 text-sm font-medium text-foreground">{title}</p>
-			<p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>
-			{action ? <div className="mt-4 flex justify-center">{action}</div> : null}
+			<p className="mt-2.5 text-[12.5px] font-medium text-foreground">{title}</p>
+			<p className="mt-1 text-[11px] leading-4 text-muted-foreground">{description}</p>
+			{action ? <div className="mt-3 flex justify-center">{action}</div> : null}
 		</div>
 	);
 }
@@ -83,7 +83,7 @@ export function InlineError({
 	return (
 		<div
 			role="alert"
-			className="mx-2 my-3 rounded-xl border border-destructive/25 bg-destructive/5 p-3"
+			className="mx-1.5 my-2.5 rounded-md border border-destructive/25 bg-destructive/5 p-2.5"
 		>
 			<p className="text-xs leading-5 text-destructive">{message}</p>
 			{onRetry ? (
