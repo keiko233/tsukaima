@@ -151,7 +151,9 @@ thresholds are configurable.
    structured sticker directive, not loose markdown.
 2. The directive resolves to a validated send token.
 3. The token is replaced by a media `MessagePart`.
-4. Chunking keeps text/media ordering.
+4. Output batching keeps text/media ordering: every newline-separated text unit and every
+   sticker becomes its own chat message, so a reply can send text, a sticker, and more text in
+   between instead of packing everything into one message.
 5. OneBot sends the sticker as a QQ native animated sticker (`image` segment with
    `sub_type=1` + `summary`), falling back to a plain image when `nativeSticker` is disabled.
 6. Failure downgrades to text plus diagnostic, never injects binary data into text.

@@ -188,7 +188,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				`- Access: private ${policy.trigger.privateAccess}, group ${policy.trigger.groupAccess}`,
 				`- Group mentions: ${policy.trigger.groupMentionMode}`,
 				`- Reply pacing: settle ${policy.pacing.burstSettleMs} ms, wait at most ${policy.pacing.burstMaxWaitMs} ms, cooldown ${policy.pacing.replyCooldownMs} ms`,
-				`- Output: up to ${policy.pacing.maxImmediateOutputMessages} immediate messages, ${policy.pacing.sendIntervalMs} ms apart, markdown ${policy.pacing.stripMarkdown ? "stripped" : "kept"}`,
+				`- Output: up to ${policy.pacing.maxImmediateOutputMessages} immediate messages, ${policy.pacing.sendIntervalMs} ms apart, markdown ${policy.pacing.stripMarkdown ? "stripped" : "kept"}; each newline sends a separate message`,
 			);
 			if (policy.trigger.keywords.length > 0) {
 				lines.push(`- Wake keywords: ${policy.trigger.keywords.join(", ")}`);

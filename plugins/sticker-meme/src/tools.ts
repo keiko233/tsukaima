@@ -101,7 +101,7 @@ export function registerStickerTools(
 	});
 	context.tools.register({
 		description:
-			"Choose one approved sticker and issue a single-use, short-lived, conversation-bound send token. Use the returned directive verbatim in the final reply.",
+			"Choose one approved sticker and issue a single-use, short-lived, conversation-bound send token. Use the returned directive verbatim in the final reply, on its own line at the point where the sticker should be sent. Every newline in the final reply becomes a separate chat message; keep one thought or one sticker per line so text and stickers arrive naturally one after another.",
 		async execute(input, invocation) {
 			const startedAt = Date.now();
 			const conversationId = invocation.conversationId;
