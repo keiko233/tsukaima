@@ -241,26 +241,22 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		const record = recordValue(input);
 		const packId = normalizeText(record.packId ?? record.id);
 		if (packId.length === 0) throw new Error("packId is required");
-		if (record.confirm !== true || record.backup !== true) {
-			throw new Error("Pack deletion requires explicit confirmation and a backup flag");
+		if (record.confirm !== true) {
+			throw new Error("Pack deletion requires explicit confirmation");
 		}
-		const backup = await importService.exportPacks(packId);
+		const pack = await repository.getPack(packId);
+		if (pack === undefined) throw new Error("Pack not found");
+		const itemCount = (await repository.listItems(packId)).length;
 		await repository.deletePack(packId);
 		await context.audit?.record({
 			action: "sticker.pack.deleted",
 			actorKind: "user",
-			payload: { itemCount: backup.manifest.packs[0]?.items.length ?? 0, packId },
+			payload: { itemCount, packId },
 			result: "ok",
 			targetId: packId,
 			targetKind: "sticker-pack",
 		});
-		return {
-			backup: {
-				files: bundleFilesResponse(backup.files),
-				manifest: backup.manifest,
-			},
-			deleted: true,
-		};
+		return { deleted: true };
 	});
 
 	rpc.register("packs.importDir", async (input) => {
@@ -653,6 +649,24 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 			targetKind: "sticker-item",
 		});
 		return item;
+	});
+
+	rpc.register("items.delete", async (input) => {
+		const record = recordValue(input);
+		const id = normalizeText(record.id ?? record.itemId);
+		if (id.length === 0) throw new Error("id is required");
+		const item = await repository.getItem(id);
+		if (item === undefined) throw new Error("Item not found");
+		await repository.deleteItem(id);
+		await context.audit?.record({
+			action: "sticker.item.deleted",
+			actorKind: "user",
+			payload: { itemId: id, packId: item.packId },
+			result: "ok",
+			targetId: id,
+			targetKind: "sticker-item",
+		});
+		return { deleted: true };
 	});
 
 	rpc.register("candidates.list", async (input) => {

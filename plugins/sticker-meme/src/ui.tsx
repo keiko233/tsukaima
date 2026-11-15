@@ -295,6 +295,8 @@ function StickerInspector({
 	const [emotions, setEmotions] = useState(join(item.emotions));
 	const [score, setScore] = useState(String(item.score));
 	const [saving, setSaving] = useState(false);
+	const [deleting, setDeleting] = useState(false);
+	const [deleteArmed, setDeleteArmed] = useState(false);
 	const missing = item.mediaId.length === 0 || item.revokedAt !== null;
 	const save = async () => {
 		setSaving(true);
@@ -321,6 +323,23 @@ function StickerInspector({
 			await onChanged();
 		} catch (error) {
 			toast.error(t.t("save_failed"), String(error));
+		}
+	};
+	const deleteItem = async () => {
+		if (!deleteArmed) {
+			setDeleteArmed(true);
+			return;
+		}
+		setDeleting(true);
+		try {
+			await rpc.call(rpcName("items.delete"), { id: item.id });
+			toast.success(t.t("item_delete_success"));
+			onClose();
+			await onChanged();
+		} catch (error) {
+			toast.error(t.t("item_delete_failed"), String(error));
+		} finally {
+			setDeleting(false);
 		}
 	};
 	return (
@@ -389,7 +408,16 @@ function StickerInspector({
 					<Input type="number" value={score} onChange={setScore} />
 				</Field>
 			</div>
-			<div className="flex justify-end">
+			<div className="flex flex-wrap items-center justify-between gap-2">
+				<Button
+					leadingIcon={<Trash2 />}
+					loading={deleting}
+					size="xs"
+					variant="danger"
+					onClick={() => void deleteItem()}
+				>
+					{deleteArmed ? t.t("item_delete_confirm") : t.t("item_delete")}
+				</Button>
 				<Button loading={saving} size="xs" variant="secondary" onClick={() => void save()}>
 					{t.t("item_save")}
 				</Button>
@@ -421,12 +449,15 @@ function PackAccordion({
 	const [tags, setTags] = useState(join(pack.tags));
 	const [personas, setPersonas] = useState(join(pack.personaIds));
 	const [saving, setSaving] = useState(false);
+	const [deleting, setDeleting] = useState(false);
+	const [confirmDelete, setConfirmDelete] = useState(false);
 	const telegramName = telegramSetName(pack);
 	const selected = items.find((item) => item.id === selectedId) ?? null;
 	const toggle = () => {
 		const next = !expanded;
 		setExpanded(next);
 		setSelectedId(null);
+		setConfirmDelete(false);
 	};
 	useEffect(() => {
 		if (expanded) void onLoadPreviews(items);
@@ -450,6 +481,24 @@ function PackAccordion({
 			toast.error(t.t("save_failed"), String(error));
 		} finally {
 			setSaving(false);
+		}
+	};
+	/** First click arms the delete, the second click removes the whole pack. */
+	const deletePack = async () => {
+		if (!confirmDelete) {
+			setConfirmDelete(true);
+			return;
+		}
+		setDeleting(true);
+		try {
+			await rpc.call(rpcName("packs.delete"), { confirm: true, packId: pack.id });
+			toast.success(t.t("delete_success"));
+			await onChanged();
+		} catch (error) {
+			toast.error(t.t("delete_failed"), String(error));
+			setConfirmDelete(false);
+		} finally {
+			setDeleting(false);
 		}
 	};
 	return (
@@ -480,11 +529,25 @@ function PackAccordion({
 				</button>
 				<div className="flex shrink-0 items-center gap-1">
 					<Button
+						aria-label={confirmDelete ? t.t("pack_delete_confirm") : t.t("delete_pack")}
+						disabled={deleting}
+						leadingIcon={confirmDelete ? undefined : <Trash2 />}
+						loading={deleting}
+						size="xs"
+						variant={confirmDelete ? "danger" : "ghost"}
+						onClick={() => void deletePack()}
+					>
+						{confirmDelete ? t.t("pack_delete_confirm") : null}
+					</Button>
+					<Button
 						aria-expanded={editing}
 						leadingIcon={<Pencil />}
 						size="xs"
 						variant="ghost"
-						onClick={() => setEditing(!editing)}
+						onClick={() => {
+							setConfirmDelete(false);
+							setEditing(!editing);
+						}}
 					>
 						{editing ? t.t("pack_edit_done") : t.t("edit")}
 					</Button>
@@ -723,10 +786,6 @@ function StickerPanel() {
 	const [reclassifySummary, setReclassifySummary] = useState<ReclassifyRow | null>(null);
 	const [importingLegacy, setImportingLegacy] = useState<"dir" | "dsh" | "bundle" | null>(null);
 	const [exporting, setExporting] = useState(false);
-	const [deletePackId, setDeletePackId] = useState("");
-	const [deleteArmed, setDeleteArmed] = useState(false);
-	const [backupBeforeDelete, setBackupBeforeDelete] = useState(true);
-	const [deleting, setDeleting] = useState(false);
 	const [loading, setLoading] = useState(false);
 	const [jobs, setJobs] = useState<readonly JobProgressRow[]>([]);
 	const previewLoadingRef = useRef(new Set<string>());
@@ -777,12 +836,11 @@ function StickerPanel() {
 			if (progressJobs.some((job) => job.status === "running") && !inFlightRef.current) {
 				wasBackgroundRunningRef.current = true;
 			}
-			if (deletePackId.length === 0 && packResult.packs.length > 0) {
-				setDeletePackId(packResult.packs[0]?.id ?? "");
-			}
-			if (reclassifyPackId.length === 0 && packResult.packs.length > 0) {
-				setReclassifyPackId(packResult.packs[0]?.id ?? "");
-			}
+			setReclassifyPackId((current) =>
+				packResult.packs.some((pack) => pack.id === current)
+					? current
+					: (packResult.packs[0]?.id ?? ""),
+			);
 			setPreviews((current) => {
 				const ids = new Set(itemResult.items.map((item) => item.id));
 				return Object.fromEntries(Object.entries(current).filter(([id]) => ids.has(id))) as Record<
@@ -1160,24 +1218,6 @@ function StickerPanel() {
 			toast.error(t.t("save_failed"), String(error));
 		} finally {
 			setExporting(false);
-		}
-	};
-
-	const deletePack = async () => {
-		setDeleting(true);
-		try {
-			await rpc.call(rpcName("packs.delete"), {
-				backup: backupBeforeDelete,
-				confirm: deleteArmed,
-				packId: deletePackId,
-			});
-			toast.success(t.t("delete_success"));
-			setDeleteArmed(false);
-			await refresh();
-		} catch (error) {
-			toast.error(t.t("delete_failed"), String(error));
-		} finally {
-			setDeleting(false);
 		}
 	};
 
@@ -1632,55 +1672,6 @@ function StickerPanel() {
 							/>
 						</Field>
 					)}
-				</div>
-			</PluginSection>
-
-			<PluginSection title={t.t("delete_pack")}>
-				<Alert tone="warning">{t.t("delete_confirm")}</Alert>
-				<div className="mt-3 grid gap-3 sm:grid-cols-2">
-					<Field label={t.t("packs")}>
-						<select
-							className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
-							value={deletePackId}
-							onChange={(event) => setDeletePackId(event.target.value)}
-						>
-							{packs.map((pack) => (
-								<option key={pack.id} value={pack.id}>
-									{pack.name}
-								</option>
-							))}
-						</select>
-					</Field>
-					<div className="flex flex-wrap items-center gap-4 pt-5">
-						<label className="flex items-center gap-2 text-xs">
-							<Switch
-								ariaLabel={t.t("delete_backup")}
-								checked={backupBeforeDelete}
-								onCheckedChange={setBackupBeforeDelete}
-							/>
-							{t.t("delete_backup")}
-						</label>
-						<label className="flex items-center gap-2 text-xs">
-							<Switch
-								ariaLabel={t.t("delete_arm")}
-								checked={deleteArmed}
-								onCheckedChange={setDeleteArmed}
-							/>
-							{t.t("delete_arm")}
-						</label>
-					</div>
-				</div>
-				<div className="mt-3 flex justify-end">
-					<Button
-						disabled={deleting || !deleteArmed || !backupBeforeDelete || deletePackId.length === 0}
-						leadingIcon={<Trash2 />}
-						loading={deleting}
-						size="sm"
-						variant="danger"
-						onClick={() => void deletePack()}
-					>
-						{deleting ? t.t("deleting") : t.t("delete_pack")}
-					</Button>
 				</div>
 			</PluginSection>
 
