@@ -334,6 +334,11 @@ export class PluginHost {
 		return this.#modelProviders.get(providerId);
 	}
 
+	/** Secret-free model catalog reported by started providers. */
+	async listModels(query?: PluginModelQuery): Promise<readonly PluginModelInfo[]> {
+		return collectPluginModels(this.#modelProviders.values(), query);
+	}
+
 	/** Invoke a WebUI-visible plugin RPC method. Methods are namespaced by plugin id. */
 	async invokeRpc(method: string, input: unknown, pluginId?: string): Promise<unknown> {
 		if (pluginId !== undefined && !method.startsWith(`${pluginId}.`)) {
