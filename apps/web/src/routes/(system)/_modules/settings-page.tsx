@@ -15,6 +15,7 @@ import { applyLocale } from "@/lib/locale";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { getLocale, locales, toLocale, type Locale } from "@/paraglide/runtime";
+import { modelOptionLabel } from "../../_modules/policy/conversation-policy-fields";
 import { SystemPage } from "./page-header";
 import { PolicyDefaultsCard } from "./policy-defaults-card";
 
@@ -52,7 +53,6 @@ export function SettingsPage() {
 	const configuredModelMissing =
 		configuredSidechatModel !== undefined &&
 		!models.some((model) => model.id === configuredSidechatModel);
-	const sidechatProvider = models[0]?.providerId ?? settings?.modelProviderId;
 	const changeLocale = (value: string) => {
 		const next = toLocale(value);
 		if (next === undefined || next === locale) return;
@@ -135,8 +135,8 @@ export function SettingsPage() {
 										{m.settings_sidechat_model_active()}
 									</SelectItem>
 									{models.map((model) => (
-										<SelectItem key={`${model.providerId}:${model.id}`} value={model.id}>
-											{model.name === undefined ? model.id : `${model.name} · ${model.id}`}
+										<SelectItem key={model.id} value={model.id}>
+											{modelOptionLabel(model)}
 										</SelectItem>
 									))}
 									{configuredSidechatModel !== undefined && configuredModelMissing ? (
@@ -149,11 +149,6 @@ export function SettingsPage() {
 							<p className="text-[11px] text-muted-foreground">
 								{m.settings_sidechat_model_hint()}
 							</p>
-							{sidechatProvider === undefined ? null : (
-								<p className="text-[11px] text-muted-foreground">
-									{m.settings_sidechat_model_provider({ provider: sidechatProvider })}
-								</p>
-							)}
 							{models.length === 0 ? (
 								<p className="text-[11px] text-muted-foreground">
 									{m.settings_sidechat_model_empty()}

@@ -4,8 +4,16 @@ import {
 	type ConversationCompactionPreset,
 	type ConversationPolicy,
 	conversationCompactionPresets,
+	type ModelCatalogEntry,
 } from "@tsukaima/contracts";
 import { Button } from "@tsukaima/ui/components/motion/button";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@tsukaima/ui/components/motion/select";
 import { m } from "@/paraglide/messages";
 
 export const fieldClass =
@@ -54,6 +62,19 @@ export function Toggle({
 }
 
 type DraftChange = (updater: (current: ConversationPolicy) => ConversationPolicy) => void;
+
+/** Sentinel option that clears `sidechat.model` so settings decide the model. */
+export const POLICY_DEFAULT_MODEL = "__policy_default__";
+
+/**
+ * Label for a model in a select. The stored value is the bare id, so the provider is shown to
+ * make cross-provider entries distinguishable.
+ */
+export function modelOptionLabel(model: ModelCatalogEntry): string {
+	const name =
+		model.name === undefined || model.name === model.id ? model.id : `${model.name} · ${model.id}`;
+	return `${name} · ${model.providerId}`;
+}
 
 interface PolicyFieldsProps {
 	draft: ConversationPolicy;
@@ -251,10 +272,19 @@ export function PolicyPacingFields({ draft, onChange }: PolicyFieldsProps) {
 	);
 }
 
-export function PolicySidechatFields({ draft, onChange }: PolicyFieldsProps) {
+export function PolicySidechatFields({
+	draft,
+	models = [],
+	onChange,
+}: PolicyFieldsProps & { models?: readonly ModelCatalogEntry[] }) {
 	const updateSidechat = (patch: Partial<ConversationPolicy["sidechat"]>) => {
 		onChange((current) => ({ ...current, sidechat: { ...current.sidechat, ...patch } }));
 	};
+	const selected = draft.sidechat.model ?? POLICY_DEFAULT_MODEL;
+	const missing =
+		draft.sidechat.model !== undefined &&
+		draft.sidechat.model.length > 0 &&
+		!models.some((model) => model.id === draft.sidechat.model);
 
 	return (
 		<>
@@ -264,16 +294,32 @@ export function PolicySidechatFields({ draft, onChange }: PolicyFieldsProps) {
 				onChange={(value) => updateSidechat({ enabled: value })}
 			/>
 			<p className="text-[11px] leading-4 text-muted-foreground">{m.policy_sidechat_hint()}</p>
-			<Field label={m.policy_sidechat_model()}>
-				<input
-					type="text"
-					className={fieldClass}
-					value={draft.sidechat.model ?? ""}
-					onChange={(event) => {
-						const value = event.target.value.trim();
-						updateSidechat(value.length === 0 ? { model: undefined } : { model: value });
-					}}
-				/>
+			<Field label={m.policy_sidechat_model()} hint={m.policy_sidechat_model_hint()}>
+				<Select
+					value={selected}
+					onValueChange={(value) =>
+						updateSidechat({ model: value === POLICY_DEFAULT_MODEL ? undefined : value })
+					}
+				>
+					<SelectTrigger className="w-full">
+						<SelectValue placeholder={m.policy_sidechat_model_default()} />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value={POLICY_DEFAULT_MODEL}>
+							{m.policy_sidechat_model_default()}
+						</SelectItem>
+						{models.map((model) => (
+							<SelectItem key={model.id} value={model.id}>
+								{modelOptionLabel(model)}
+							</SelectItem>
+						))}
+						{missing ? (
+							<SelectItem value={draft.sidechat.model ?? ""}>
+								{`${draft.sidechat.model} · ${m.policy_sidechat_model_unavailable()}`}
+							</SelectItem>
+						) : null}
+					</SelectContent>
+				</Select>
 			</Field>
 			<div className="grid grid-cols-3 gap-2.5">
 				<Field label={m.policy_sidechat_timeout()}>

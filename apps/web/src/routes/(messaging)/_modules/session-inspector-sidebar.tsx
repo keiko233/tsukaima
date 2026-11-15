@@ -105,6 +105,11 @@ export function SessionInspectorSidebar({
 		...orpc.admin.personas.bindings.queryOptions(),
 		enabled: personaTabActive,
 	});
+	// Shared with the settings page through the query cache; the catalog is admin-scoped.
+	const settings = useQuery({
+		...orpc.admin.settings.get.queryOptions(),
+		enabled: policyTabActive,
+	});
 
 	useEffect(() => {
 		if (policy.data !== undefined && draft === undefined) {
@@ -405,9 +410,7 @@ export function SessionInspectorSidebar({
 								sessionId,
 							});
 						}}
-						onCompactMemories={() =>
-							compactMemoriesMutation.mutate({ conversationId: sessionId })
-						}
+						onCompactMemories={() => compactMemoriesMutation.mutate({ conversationId: sessionId })}
 						onRename={(title) => updateSessionMutation.mutate({ sessionId, title })}
 						onResetContext={(handoff) => {
 							const trimmed = handoff?.trim();
@@ -426,9 +429,7 @@ export function SessionInspectorSidebar({
 						resetResult={resetResult}
 						resetting={resetContextMutation.isPending}
 						sessionTitle={session.title}
-						updatingSession={
-							updateSessionMutation.isPending || setReceivingMutation.isPending
-						}
+						updatingSession={updateSessionMutation.isPending || setReceivingMutation.isPending}
 					/>
 				</TabsContent>
 
@@ -459,6 +460,7 @@ export function SessionInspectorSidebar({
 						onRetry={() => void policy.refetch()}
 						onSave={handleSavePolicy}
 						saving={savePolicy.isPending}
+						sidechatModels={settings.data?.models}
 					/>
 				</TabsContent>
 

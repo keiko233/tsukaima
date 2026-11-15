@@ -148,6 +148,11 @@ function ModelCard({
 					label={t.t("capability_audio")}
 					onClick={() => onChange({ ...model, supportsAudio: !model.supportsAudio })}
 				/>
+				<CapabilityButton
+					active={model.supportsSidechat}
+					label={t.t("capability_sidechat")}
+					onClick={() => onChange({ ...model, supportsSidechat: !model.supportsSidechat })}
+				/>
 				{model.supportsReasoning ? (
 					<div className="ml-auto flex items-center gap-2">
 						<span className="text-[11px] text-muted-foreground">{t.t("reasoning_effort")}</span>

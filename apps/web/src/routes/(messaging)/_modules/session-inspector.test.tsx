@@ -154,6 +154,10 @@ mock.module("@/paraglide/messages", () => ({
 		policy_sidechat_hint: () => "While a reply is still generating, a fast model decides.",
 		policy_sidechat_interrupts: () => "Max interrupts per minute",
 		policy_sidechat_model: () => "Sidechat model (optional)",
+		policy_sidechat_model_default: () => "Use the settings default",
+		policy_sidechat_model_hint: () =>
+			"Only models that a plugin advertises for sidechat are listed.",
+		policy_sidechat_model_unavailable: () => "not in the current catalog",
 		policy_sidechat_timeout: () => "Decision timeout (ms)",
 		policy_section_trigger: () => "Trigger and access rules",
 		policy_self_aliases: () => "Self aliases",
@@ -353,6 +357,7 @@ describe("SessionInspectorSidebar views", () => {
 		expect(html).toContain("Allowed tools");
 		expect(html).toContain("Busy-run interrupts");
 		expect(html).toContain("Max interrupts per minute");
+		expect(html).toContain("Use the settings default");
 		expect(html).toContain("Context compaction");
 		expect(html).toContain("Reserve tokens");
 		expect(html).toContain("Trigger at (tokens)");

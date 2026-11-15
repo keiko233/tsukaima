@@ -526,13 +526,15 @@ export const modelCatalogEntrySchema = z.object({
 	id: z.string(),
 	maxOutputTokens: z.number().int().nonnegative().optional(),
 	name: z.string().optional(),
+	/** Plugin that registered the provider, when the host knows it. */
+	pluginId: z.string().optional(),
 	providerId: z.string(),
 });
 export type ModelCatalogEntry = z.infer<typeof modelCatalogEntrySchema>;
 
 export const settingsViewSchema = z.object({
 	logLevel: logLevelSchema,
-	/** Chat-capable models reported by the active provider, when it exposes a catalog. */
+	/** Models that plugins advertise for the busy-run sidechat classifier. */
 	models: z.array(modelCatalogEntrySchema).optional(),
 	modelProviderId: z.string().optional(),
 	sidechatModelId: z.string().optional(),

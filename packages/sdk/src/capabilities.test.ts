@@ -5,6 +5,7 @@ import {
 	hasChannelCapability,
 } from "./host.ts";
 import { LocalModelRegistry } from "./bridges.ts";
+import { hasModelCapability, MODEL_CAPABILITIES } from "./model-capabilities.ts";
 
 describe("channel capabilities", () => {
 	test("maps legacy capabilities to the granular machine-readable set", () => {
@@ -190,5 +191,17 @@ describe("model capability ports", () => {
 				providerId: "port-provider",
 			}),
 		).rejects.toThrow("not enabled");
+	});
+});
+
+describe("model capabilities", () => {
+	test("provides the shared vocabulary plugins and the host agree on", () => {
+		expect(MODEL_CAPABILITIES.sidechat).toBe("chat.sidechat");
+		expect(
+			hasModelCapability({ capabilities: [MODEL_CAPABILITIES.sidechat] }, "chat.sidechat"),
+		).toBe(true);
+		expect(hasModelCapability({ capabilities: ["basic-chat"] }, MODEL_CAPABILITIES.sidechat)).toBe(
+			false,
+		);
 	});
 });

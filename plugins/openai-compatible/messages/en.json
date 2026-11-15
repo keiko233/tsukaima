@@ -55,5 +55,6 @@
 	"save_success": "Model catalog saved",
 	"save_failed": "Could not save the model catalog",
 	"status_needs_attention": "The provider needs attention",
-	"plugin_identity": "{id} · v{version}"
+	"plugin_identity": "{id} · v{version}",
+	"capability_sidechat": "Sidechat"
 }
