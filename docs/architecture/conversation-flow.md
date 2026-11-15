@@ -169,14 +169,21 @@ Close when:
 - explicit close signal arrives from plugin
 - maximum wait is reached
 
-Default timeout is 6 seconds. Allowed range is 3–10 seconds.
+Default timeout is 8 seconds. The value is policy-configurable and may be shorter or longer.
 
 ### Special cases
 
 1. **Agent already processing**
-   - Keep activity window open for late messages for a shorter grace period.
-   - Submit late messages as `steer` if agent is still running.
-   - Otherwise submit as `follow-up`.
+   - Keep the activity window collecting instead of submitting each burst as its own follow-up.
+   - When the window settles, a fast sidechat classifier decides:
+     - `interrupt`: abort only the working generation task, keep queued inputs, then submit the
+       pending window as one new turn. The aborted partial is excluded from model context.
+     - `steer`: place the pending window at the next tool boundary when a tool round is active.
+     - `wait`: keep collecting until the run is idle, then submit one merged follow-up.
+   - Missing, slow, or low-confidence classification degrades to `wait`. Interrupts are bounded
+     by a minimum run age, a per-minute ceiling, and a maximum hold time. An interrupt cancels
+     generation and further tool calls; side effects of tool calls that already completed are not
+     rolled back.
 2. **Correction arrives after reply**
    - Create a new activity referencing the previous activity as context.
    - Do not rewrite prior history.

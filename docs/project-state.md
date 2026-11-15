@@ -100,8 +100,13 @@ This file is the cross-session handoff record. Update it whenever implementation
   window. Direct/soft turns receive a compact trigger contract and the model may return
   `ELAINA_LURK`; that marker is suppressed before outbound history/channel dispatch and recorded
   as an audited no-send (`message.lurk`).
-- Burst settle, max-wait, max-count, long-message immediate submission, cooldown/rate-limit
-  aggregation, and steer-then-follow-up all run under a shared per-conversation execution lock.
+- Burst settle, max-wait, max-count, cooldown/rate-limit aggregation, and steer-then-follow-up
+  all run under a shared per-conversation execution lock. While a run is working, a fast
+  sidechat classifier reads the running request, the partial answer, and the pending window;
+  `interrupt` aborts only the generation task (queued inputs stay), `steer` places the window at
+  the next tool boundary, and `wait` keeps collecting until the run is idle. A missing, slow, or
+  low-confidence classifier degrades to `wait`. Interrupts are bounded by run age, a per-minute
+  ceiling, and a maximum hold time.
   Outbound delivery strips Markdown, groups ordered text and media into separate message batches
   (newlines and stickers/media each go out individually, preserving source order), applies the
   immediate-message cap, optional typing/delay, send intervals, and per-conversation cancellation
@@ -276,9 +281,11 @@ The full built-in plugin inventory and migration order are tracked in
 - WebUI/work transcripts import assistant visible text plus tool calls/results verbatim. This
   preserves agent history but makes large work conversations (the live rehearsal has 42k+ webui
   messages); tool outputs can repeat file contents and diagnostic logs.
-- One inbound message is answered when its activity window settles (roughly
-  `pacing.burstSettleMs`, 6 s by default), unless a long message or max-wait forces an earlier
-  submission. Tune the policy or add an immediate first-message path.
+- One inbound burst is answered when its activity window settles (`pacing.burstSettleMs`, 8 s by
+  default), unless a long message or max-wait forces an earlier submission. While a run is
+  working, pending messages stay in the window and a configurable fast sidechat model decides
+  whether to interrupt, steer, or wait. Without a configured sidechat model the classifier uses
+  the active model; a slow or unavailable classifier always falls back to waiting.
 - Reply delivery is at-most-once: a crash between claiming the outbound row and a successful send
   leaves a permanent `pending` row with no reconciliation job yet.
 - Answers with no text blocks (tool-only) produce no reply. Output is newline- and

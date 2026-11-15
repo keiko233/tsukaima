@@ -41,6 +41,17 @@ type ConversationPacingPolicy = {
   sendIntervalMs: number;
   maxImmediateOutputMessages: number;
 };
+
+type SidechatPolicy = {
+  enabled: boolean;
+  /** Model id inside the active provider; runtime settings supply the global fallback. */
+  model?: string;
+  timeoutMs: number;
+  minConfidence: number;
+  minRunAgeMs: number;
+  maxInterruptsPerMinute: number;
+  maxHoldMs: number;
+};
 ```
 
 Persist as a versioned document with defaults, validation, and no silent partial update:
@@ -77,9 +88,13 @@ output dispatch, must be absent from outbound history, and must produce an audit
 
 ## Aggregation and queues
 
-- Preserve burst settle/max-wait/max-count semantics.
-- Long messages may terminate aggregation immediately.
-- If the agent is active, steer until its grace window closes, then submit follow-up.
+- Preserve burst settle/max-wait/max-count semantics. The default settle window is 8 s.
+- Long messages may terminate aggregation immediately, but while a run is working the window
+  stays collecting so the sidechat decision can merge the burst.
+- While the agent is working, a fast sidechat classifier chooses `interrupt`, `steer`, or
+  `wait`. `interrupt` aborts only the generation task and resubmits the pending window;
+  `steer` is valid only during a tool round; `wait` holds the window until idle. A missing,
+  slow, or low-confidence classifier degrades to `wait`, and interrupt counts are bounded.
 - During cooldown, aggregate rather than discard; do not queue another model run.
 - Per-chat execution must be serialized with a shared conversation execution lock honored by
   inbound turns, steering/follow-ups, outbound pacing, and proactive/scheduled background turns,
@@ -132,6 +147,7 @@ All mutations are authenticated and audited.
 4. Lurk marker suppression and audit.
 5. Output split/delay/cancel.
 6. Persona binding resolution and prompt section.
+7. Sidechat interrupt, steer, wait-hold, low-confidence fallback, and interrupt ceilings.
 
 ## Acceptance
 

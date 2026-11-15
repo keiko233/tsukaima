@@ -309,6 +309,9 @@ export function PolicyPacingTabView({
 	const updatePacing = (patch: Partial<ConversationPolicy["pacing"]>) => {
 		onChange((current) => ({ ...current, pacing: { ...current.pacing, ...patch } }));
 	};
+	const updateSidechat = (patch: Partial<ConversationPolicy["sidechat"]>) => {
+		onChange((current) => ({ ...current, sidechat: { ...current.sidechat, ...patch } }));
+	};
 
 	return (
 		<PolicyTabShell
@@ -498,6 +501,72 @@ export function PolicyPacingTabView({
 							}}
 						/>
 					</Field>
+
+					<div className="space-y-2 border-t border-border/60 pt-2.5">
+						<h3 className="text-xs font-semibold text-foreground">
+							{m.policy_section_sidechat()}
+						</h3>
+						<Toggle
+							checked={draft.sidechat.enabled}
+							label={m.policy_sidechat_enabled()}
+							onChange={(value) => updateSidechat({ enabled: value })}
+						/>
+						<p className="text-[11px] leading-4 text-muted-foreground">
+							{m.policy_sidechat_hint()}
+						</p>
+						<Field label={m.policy_sidechat_model()}>
+							<input
+								type="text"
+								className={fieldClass}
+								value={draft.sidechat.model ?? ""}
+								onChange={(event) => {
+									const value = event.target.value.trim();
+									updateSidechat(
+										value.length === 0 ? { model: undefined } : { model: value },
+									);
+								}}
+							/>
+						</Field>
+						<div className="grid grid-cols-3 gap-2.5">
+							<Field label={m.policy_sidechat_timeout()}>
+								<input
+									type="number"
+									min={100}
+									className={fieldClass}
+									value={draft.sidechat.timeoutMs}
+									onChange={(event) =>
+										updateSidechat({ timeoutMs: Number(event.target.value) })
+									}
+								/>
+							</Field>
+							<Field label={m.policy_sidechat_confidence()}>
+								<input
+									type="number"
+									min={0}
+									max={1}
+									step={0.05}
+									className={fieldClass}
+									value={draft.sidechat.minConfidence}
+									onChange={(event) =>
+										updateSidechat({ minConfidence: Number(event.target.value) })
+									}
+								/>
+							</Field>
+							<Field label={m.policy_sidechat_interrupts()}>
+								<input
+									type="number"
+									min={0}
+									className={fieldClass}
+									value={draft.sidechat.maxInterruptsPerMinute}
+									onChange={(event) =>
+										updateSidechat({
+											maxInterruptsPerMinute: Number(event.target.value),
+										})
+									}
+								/>
+							</Field>
+						</div>
+					</div>
 				</>
 			)}
 		</PolicyTabShell>

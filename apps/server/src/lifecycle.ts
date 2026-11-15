@@ -77,6 +77,7 @@ import { PluginStatusStore } from "./services/plugin-status.ts";
 import { PluginStorageStore } from "./services/plugin-storage.ts";
 import { PluginTaskService } from "./services/plugin-task-service.ts";
 import { ReplyDispatcher } from "./services/reply-dispatcher.ts";
+import { SidechatService } from "./services/sidechat.ts";
 import { LiveRunCache } from "./services/live-run-cache.ts";
 import { RequestService } from "./services/request-service.ts";
 
@@ -168,6 +169,7 @@ export class ElainaLifecycle {
 	readonly modelUsageLedger = new ModelUsageLedger();
 	modelRouter: ModelPolicyRouter | undefined;
 	private memoryModel: ModelPort | undefined;
+	private sidechatService: SidechatService | undefined;
 	processedMessageCount = 0;
 	providerRestartRequired = false;
 	routingPolicies: readonly ModelPolicy[] = [];
@@ -556,7 +558,21 @@ export class ElainaLifecycle {
 		const model = await this.createModelPort(settings);
 		this.memoryModel = model;
 		this.activeProviderId = model.providerId;
+		this.sidechatService = new SidechatService({
+			defaultModelId: async () =>
+				this.domainDatabase === undefined
+					? undefined
+					: (await readRuntimeSettings(this.domainDatabase)).sidechatModelId,
+			logger: this.logger,
+			model: () => this.memoryModel,
+		});
+		if (settings.sidechatModelId === undefined) {
+			this.runtimeLog.info("sidechat model is not configured; using the active model", {
+				modelId: model.modelId,
+			});
+		}
 		this.conversationHost = new PiDurableConversationHost({
+			busyArbiter: async (input) => this.sidechatService?.decide(input),
 			contextProvider: this.contextProvider,
 			executionLock: this.executionLock,
 			logger: this.logger.child("elaina::core::host"),

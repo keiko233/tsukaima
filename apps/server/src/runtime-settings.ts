@@ -13,6 +13,7 @@ export type { RuntimeSettings, RuntimeSettingsPatch };
 export interface PublicRuntimeSettings {
 	readonly logLevel: RuntimeSettings["logLevel"];
 	readonly modelProviderId?: string;
+	readonly sidechatModelId?: string;
 }
 
 const SETTINGS_KEY = "runtime-settings";
@@ -20,12 +21,14 @@ const SETTINGS_KEY = "runtime-settings";
 type SettingsValue = {
 	logLevel: RuntimeSettings["logLevel"];
 	modelProviderId?: string;
+	sidechatModelId?: string;
 };
 
 function normalize(input: RuntimeSettings): SettingsValue {
 	return {
 		logLevel: input.logLevel,
 		...(input.modelProviderId === undefined ? {} : { modelProviderId: input.modelProviderId }),
+		...(input.sidechatModelId === undefined ? {} : { sidechatModelId: input.sidechatModelId }),
 	};
 }
 
@@ -69,6 +72,9 @@ export function publicRuntimeSettings(settings: RuntimeSettings): PublicRuntimeS
 		...(settings.modelProviderId === undefined
 			? {}
 			: { modelProviderId: settings.modelProviderId }),
+		...(settings.sidechatModelId === undefined
+			? {}
+			: { sidechatModelId: settings.sidechatModelId }),
 	};
 }
 
@@ -83,5 +89,10 @@ export async function patchRuntimeSettings(
 			? undefined
 			: (patch.modelProviderId ?? current.modelProviderId);
 	if (modelProviderId !== undefined) next.modelProviderId = modelProviderId;
+	const sidechatModelId =
+		patch.sidechatModelId === null || patch.sidechatModelId === ""
+			? undefined
+			: (patch.sidechatModelId ?? current.sidechatModelId);
+	if (sidechatModelId !== undefined) next.sidechatModelId = sidechatModelId;
 	return writeRuntimeSettings(database, next);
 }

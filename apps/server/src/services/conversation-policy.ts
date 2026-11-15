@@ -108,9 +108,12 @@ export function mergeConversationPolicy(
 ): ConversationPolicy {
 	const pacingPatch = patch.pacing;
 	const triggerPatch = patch.trigger;
+	const sidechatPatch = patch.sidechat;
 	const pacing = mergeSection<ConversationPacingPolicy>(base.pacing, pacingPatch);
 	if (pacingPatch?.allowedTools === null) delete pacing.allowedTools;
 	const trigger = mergeSection<ConversationTriggerPolicy>(base.trigger, triggerPatch);
+	const sidechat = mergeSection<ConversationPolicy["sidechat"]>(base.sidechat, sidechatPatch);
+	if (sidechatPatch?.model === null) delete sidechat.model;
 	const memoryExtractModel =
 		patch.memoryExtractModel === null
 			? undefined
@@ -146,6 +149,7 @@ export function mergeConversationPolicy(
 		...(patch.version === undefined ? {} : { version: patch.version }),
 		...(patch.capabilities === undefined ? {} : { capabilities: patch.capabilities }),
 		pacing,
+		sidechat,
 		trigger,
 	});
 }

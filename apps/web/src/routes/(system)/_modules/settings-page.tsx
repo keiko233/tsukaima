@@ -1,8 +1,9 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@elaina/ui/components/motion/card";
+import { Input } from "@elaina/ui/components/motion/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@elaina/ui/components/motion/select";
 import { logLevels as LOG_LEVELS, orpc, type LogLevel } from "@/lib/api";
 import { applyLocale } from "@/lib/locale";
@@ -31,6 +32,10 @@ export function SettingsPage() {
 		}),
 	);
 	const [locale, setLocaleState] = useState<Locale>(() => getLocale());
+	const [sidechatModel, setSidechatModel] = useState("");
+	useEffect(() => {
+		setSidechatModel(settingsQuery.data?.sidechatModelId ?? "");
+	}, [settingsQuery.data?.sidechatModelId]);
 
 	if (settingsQuery.isError) {
 		return <Card className="p-4">{settingsQuery.error.message}</Card>;
@@ -96,6 +101,24 @@ export function SettingsPage() {
 								))}
 							</SelectContent>
 						</Select>
+						<div className="space-y-1.5">
+							<div className="px-1 text-[11.5px] font-medium text-foreground">
+								{m.settings_sidechat_model_label()}
+							</div>
+							<Input
+								value={sidechatModel}
+								placeholder={m.settings_sidechat_model_placeholder()}
+								onChange={setSidechatModel}
+								onBlur={() => {
+									const next = sidechatModel.trim();
+									if (next === (settings?.sidechatModelId ?? "")) return;
+									updateSettings.mutate({ sidechatModelId: next.length === 0 ? null : next });
+								}}
+							/>
+							<p className="text-[11px] text-muted-foreground">
+								{m.settings_sidechat_model_hint()}
+							</p>
+						</div>
 					</CardContent>
 				</Card>
 			</div>

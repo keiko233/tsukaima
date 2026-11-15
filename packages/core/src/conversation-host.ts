@@ -59,6 +59,7 @@ import {
 import { createFallbackCoreLogger, previewText, type CoreLogger } from "./logger.ts";
 import { createFakeModel, type ModelPort } from "./model.ts";
 import { busyDisposition } from "./output-pacing.ts";
+import type { BusyArbiter, BusyArbitrationResult } from "./busy-arbiter.ts";
 import { shouldCloseActivityWindow } from "./index.ts";
 
 type StoredEnvelope = JsonObject & {
@@ -282,6 +283,11 @@ export interface DurableConversationHostOptions {
 	 */
 	readonly logger?: CoreLogger;
 	readonly model?: ModelPort;
+	/**
+	 * Fast classifier used when new messages arrive while a run is still working. Without it,
+	 * busy handling stays transport-level (`steer`/`follow-up`) and never aborts a run.
+	 */
+	readonly busyArbiter?: BusyArbiter;
 	/** Convenience for tests: deterministic fake-model replies, ignored when `model` is set. */
 	readonly responses?: readonly string[];
 	/** Observe activity-window opens and closes. Errors never affect message processing. */
@@ -428,6 +434,38 @@ function assistantEntryText(entry: EntryRecord): string | undefined {
 	}
 	const text = texts.join("\n").trim();
 	return text.length === 0 ? undefined : text;
+}
+
+/** Text of the user message an input entry placed, when the entry carries one. */
+function userEntryText(entry: EntryRecord): string | undefined {
+	if (entry.model === undefined) return undefined;
+	for (const message of entry.model) {
+		if (message.role !== "user") continue;
+		const text = stripTriggerContext(contentText(message.content)).trim();
+		if (text.length > 0) return text;
+	}
+	return undefined;
+}
+
+/** Drop the routing contract the host prepends to an input; it is not conversation content. */
+function stripTriggerContext(text: string): string {
+	return text.replace(/^Conversation trigger:[\s\S]*?\n\n/u, "");
+}
+
+/** Bound a library call that has no timeout of its own. */
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<T>((resolve) => {
+				timer = setTimeout(() => resolve(fallback), Math.max(1, timeoutMs));
+				timer.unref?.();
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
 }
 
 /** A settled run: nothing to show, and the client clears its activity view. */
@@ -597,6 +635,21 @@ export class PiDurableConversationHost {
 	private readonly activeRuns = new Map<string, Map<string, { startedAtMs: number }>>();
 	private readonly activityTimers = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
 	private readonly activityFlushes = new Set<string>();
+	/**
+	 * Pending windows held because a run is working. One entry per conversation; new messages
+	 * extend the same hold instead of creating parallel waiters.
+	 */
+	private readonly busyHolds = new Map<
+		string,
+		{
+			envelopeCount: number;
+			since: number;
+			timer?: ReturnType<typeof setTimeout>;
+			updatedAt: number;
+		}
+	>();
+	/** Recent interrupt timestamps for the per-minute ceiling. */
+	private readonly interruptTimes = new Map<string, number[]>();
 	private readonly contextExtension: Extension | undefined;
 	private readonly extensions = new Map<string, Extension>();
 	private readonly dynamicExtensions = new Set<string>();
@@ -722,10 +775,24 @@ export class PiDurableConversationHost {
 			pacing,
 			latestMessageAtMs,
 		);
-		const shouldSubmit =
-			input.forceSubmit === true ||
-			(input.collectOnly !== true &&
-				(nextEnvelopes.length >= pacing.burstMaxMessages || longMessage || windowClosed));
+		const burstWantsSubmit =
+			input.collectOnly !== true &&
+			(nextEnvelopes.length >= pacing.burstMaxMessages || longMessage || windowClosed);
+		const arbitrationEnabled = policy.sidechat.enabled && this.options.busyArbiter !== undefined;
+		let shouldSubmit = input.forceSubmit === true || burstWantsSubmit;
+		let deferredWhileWorking = false;
+		if (
+			shouldSubmit &&
+			input.forceSubmit !== true &&
+			arbitrationEnabled &&
+			// The in-process map avoids a live-document read on the hot path; after a restart it is
+			// empty, so fall back to the durable run state before letting a long message through.
+			(this.activeRunSince(input.conversationId) !== undefined ||
+				(await this.runIsWorking(harness, conversationId)))
+		) {
+			shouldSubmit = false;
+			deferredWhileWorking = true;
+		}
 		const activeSinceMs = this.activeRunSince(input.conversationId);
 		const disposition = busyDisposition(activeSinceMs, input.submittedAtMs, this.steerGraceMs);
 		const whenBusy =
@@ -746,6 +813,7 @@ export class PiDurableConversationHost {
 			classification: input.classification,
 			collectOnly: input.collectOnly === true,
 			conversationId: input.conversationId,
+			deferredWhileWorking,
 			envelopeCount: nextEnvelopes.length,
 			messageId: input.envelope.id,
 			shouldSubmit,
@@ -1114,11 +1182,77 @@ export class PiDurableConversationHost {
 				return;
 			}
 			const envelopes = window.envelopes;
-			const disposition = busyDisposition(
-				this.activeRunSince(conversationId),
-				Date.now(),
-				this.steerGraceMs,
-			);
+			const now = Date.now();
+			const arbitrationEnabled = policy.sidechat.enabled && this.options.busyArbiter !== undefined;
+			const live = arbitrationEnabled
+				? await harness.snapshot(LiveDoc, numericId, BACKGROUND_CONTEXT)
+				: undefined;
+			const working = live?.run !== undefined && live.run.inputs.length > 0;
+			let whenBusy: "steer" | "follow-up" =
+				busyDisposition(this.activeRunSince(conversationId), now, this.steerGraceMs) === "steer" &&
+				policy.steerWhenBusy === "steer"
+					? "steer"
+					: "follow-up";
+			let interrupted = false;
+
+			if (working && arbitrationEnabled && live !== undefined) {
+				const hold = this.busyHolds.get(conversationId);
+				const holdExpired = hold !== undefined && now - hold.since >= policy.sidechat.maxHoldMs;
+				if (holdExpired) {
+					this.logger.info("Busy hold expired; submitting a follow-up", {
+						activityId,
+						conversationId,
+						envelopeCount: envelopes.length,
+						heldMs: hold === undefined ? 0 : now - hold.since,
+					});
+					this.clearBusyHold(conversationId);
+					whenBusy = "follow-up";
+				} else {
+					const runAgeMs = now - (this.activeRunSince(conversationId) ?? now);
+					const result =
+						runAgeMs < policy.sidechat.minRunAgeMs
+							? undefined
+							: await this.arbitrateBusy(conversation, conversationId, envelopes, live, policy);
+					const decision = result?.decision ?? "wait";
+					if (decision === "interrupt") {
+						if (this.canInterrupt(conversationId, policy.sidechat.maxInterruptsPerMinute, now)) {
+							const outcome = await this.abortWorkingRun(
+								harness,
+								conversation,
+								conversationId,
+								live,
+							);
+							if (outcome === "failed") {
+								this.holdBusyWindow(conversation, conversationId, envelopes.length, now, policy);
+								return;
+							}
+							if (outcome === "aborted") {
+								interrupted = true;
+								this.recordInterrupt(conversationId, now);
+							}
+							this.clearBusyHold(conversationId);
+							whenBusy = "follow-up";
+						} else {
+							this.logger.debug("Busy interrupt limit reached; keeping the window", {
+								conversationId,
+								envelopeCount: envelopes.length,
+								maxInterruptsPerMinute: policy.sidechat.maxInterruptsPerMinute,
+							});
+							this.holdBusyWindow(conversation, conversationId, envelopes.length, now, policy);
+							return;
+						}
+					} else if (decision === "steer") {
+						whenBusy = "steer";
+						this.clearBusyHold(conversationId);
+					} else {
+						this.holdBusyWindow(conversation, conversationId, envelopes.length, now, policy);
+						return;
+					}
+				}
+			} else if (!working) {
+				this.clearBusyHold(conversationId);
+			}
+
 			const submissionId = await conversation.commit(async (tx) => {
 				const document = await tx.doc(activityWindowDoc, numericId, activityId, {
 					conversationId: numericId,
@@ -1140,12 +1274,7 @@ export class PiDurableConversationHost {
 					entry,
 					requestId: activitySubmissionRequestId(activityId, envelopes[0]?.id ?? "window"),
 					type: "input",
-					whenBusy:
-						disposition === "steer" && policy.steerWhenBusy === "steer"
-							? "steer"
-							: policy.followUpWhenBusy === "reject"
-								? "followUp"
-								: "followUp",
+					whenBusy: whenBusy === "steer" ? "steer" : "followUp",
 				});
 			}, BACKGROUND_CONTEXT);
 			this.emitActivityEvent({
@@ -1160,11 +1289,276 @@ export class PiDurableConversationHost {
 				conversationId,
 				durationMs: Math.round(performance.now() - startedAt),
 				envelopeCount: envelopes.length,
+				interrupted,
 				submitted: true,
+				whenBusy,
 			});
 			this.trackSubmission(conversationId, String(submissionId));
 			this.observeAnswer(harness, conversationId, submission, String(submissionId));
 		}
+	}
+
+	/** True while a run still owes an answer (afterRun bookkeeping does not count). */
+	private async runIsWorking(
+		harness: DurableHarness,
+		conversationId: ConversationId,
+	): Promise<boolean> {
+		const live = await harness.snapshot(LiveDoc, conversationId, BACKGROUND_CONTEXT);
+		return live?.run !== undefined && live.run.inputs.length > 0;
+	}
+
+	/**
+	 * Ask the sidechat router what to do with a settled window while the run is working. A
+	 * missing, slow, or throwing router always degrades to `wait`: accumulating is recoverable,
+	 * interrupting the wrong answer is not.
+	 */
+	private async arbitrateBusy(
+		conversation: Conversation,
+		conversationId: string,
+		envelopes: readonly StoredEnvelope[],
+		live: LiveState,
+		policy: ConversationPolicy,
+	): Promise<BusyArbitrationResult | undefined> {
+		const arbiter = this.options.busyArbiter;
+		if (arbiter === undefined) return undefined;
+		const startedAt = performance.now();
+		const context = await this.arbitrationContext(conversation);
+		const partialAnswer = partialTextOf(live.generation?.message);
+		const input = {
+			conversationId,
+			pendingText: this.envelopesForArbitration(envelopes),
+			runningRequest: context.runningRequest,
+			...(context.previousAnswer === undefined ? {} : { previousAnswer: context.previousAnswer }),
+			...(partialAnswer === undefined ? {} : { partialAnswer }),
+			policy,
+			toolsActive: (live.tools?.length ?? 0) > 0,
+			turns: live.run?.turns ?? 0,
+			runAgeMs: Date.now() - (this.activeRunSince(conversationId) ?? Date.now()),
+		};
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const timeout = new Promise<undefined>((resolve) => {
+				timer = setTimeout(
+					() => resolve(undefined),
+					Math.max(100, policy.sidechat.timeoutMs) + 250,
+				);
+				timer.unref?.();
+			});
+			const result = await Promise.race([Promise.resolve(arbiter(input)), timeout]);
+			this.logger.debug("Busy arbitration completed", {
+				confidence: result?.confidence,
+				conversationId,
+				decision: result?.decision ?? "wait",
+				durationMs: Math.round(performance.now() - startedAt),
+				envelopeCount: envelopes.length,
+				toolsActive: input.toolsActive,
+				turns: input.turns,
+			});
+			return result;
+		} catch (error) {
+			this.logger.warn("Busy arbitration failed", { conversationId, error });
+			return undefined;
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+		}
+	}
+
+	/** Recent request and previous answer for the sidechat router, bounded to two entries each. */
+	private async arbitrationContext(
+		conversation: Conversation,
+	): Promise<{ runningRequest: string; previousAnswer?: string }> {
+		try {
+			const page = await conversation.entries(
+				{ order: "descending" },
+				12,
+				undefined,
+				BACKGROUND_CONTEXT,
+			);
+			let previousAnswer: string | undefined;
+			let seenUser = false;
+			const requests: string[] = [];
+			for (const entry of page.items) {
+				const userText = userEntryText(entry);
+				if (!seenUser) {
+					if (userText === undefined) continue;
+					requests.unshift(userText);
+					seenUser = true;
+					continue;
+				}
+				// A steer placed during the run is part of the same request. Older user entries are
+				// separated by the previous settled assistant answer.
+				if (userText !== undefined) {
+					if (requests.length < 3) requests.unshift(userText);
+					continue;
+				}
+				if (entry.kind !== "pi.assistant") continue;
+				const text = assistantEntryText(entry);
+				if (text === undefined) continue;
+				previousAnswer = text;
+				break;
+			}
+			return {
+				runningRequest: requests.join("\n---\n"),
+				...(previousAnswer === undefined ? {} : { previousAnswer }),
+			};
+		} catch (error) {
+			this.logger.trace("Busy arbitration context unavailable", { error });
+			return { runningRequest: "" };
+		}
+	}
+
+	/** Plain labeled text of a pending window; trigger contracts are routing noise here. */
+	private envelopesForArbitration(envelopes: readonly StoredEnvelope[]): string {
+		return envelopes
+			.map((envelope) => {
+				const parts = Array.isArray(envelope.parts) ? envelope.parts : [];
+				const content = parts
+					.map((part) => {
+						const parsed = messagePartSchema.safeParse(part);
+						return parsed.success ? messagePartText(parsed.data) : "";
+					})
+					.filter((value) => value.length > 0)
+					.join(" ");
+				const sender =
+					typeof envelope.sender === "object" &&
+					envelope.sender !== null &&
+					"displayName" in envelope.sender &&
+					typeof envelope.sender.displayName === "string"
+						? envelope.sender.displayName
+						: "Unknown";
+				return `${sender}: ${content}`;
+			})
+			.join("\n");
+	}
+
+	private canInterrupt(conversationId: string, limit: number, nowMs: number): boolean {
+		if (limit <= 0) return false;
+		const recent = (this.interruptTimes.get(conversationId) ?? []).filter(
+			(timestamp) => nowMs - timestamp < 60_000,
+		);
+		this.interruptTimes.set(conversationId, recent);
+		return recent.length < limit;
+	}
+
+	private recordInterrupt(conversationId: string, nowMs: number): void {
+		const recent = (this.interruptTimes.get(conversationId) ?? []).filter(
+			(timestamp) => nowMs - timestamp < 60_000,
+		);
+		recent.push(nowMs);
+		this.interruptTimes.set(conversationId, recent);
+	}
+
+	/**
+	 * Abort only the working generation task, then wait for its abort handler. The conversation's
+	 * queued inputs stay in the inbox, unlike `Conversation.abort()`; the pending activity window
+	 * is the only input that gets submitted afterwards.
+	 */
+	private async abortWorkingRun(
+		harness: DurableHarness,
+		conversation: Conversation,
+		conversationId: string,
+		live: LiveState,
+	): Promise<"aborted" | "ended" | "failed"> {
+		const taskId = live.run?.taskId;
+		if (taskId === undefined) return "failed";
+		const startedAt = performance.now();
+		try {
+			const marked = await withTimeout(
+				harness.abortTask(taskId, BACKGROUND_CONTEXT),
+				5_000,
+				"timeout" as const,
+			);
+			if (marked === "timeout") {
+				this.logger.warn("Busy run abort timed out", { conversationId });
+				return "failed";
+			}
+			if (marked === "terminal") {
+				this.logger.debug("Busy run ended before the interrupt landed", { conversationId });
+				return "ended";
+			}
+			const idle = await withTimeout(
+				conversation.waitForIdle(BACKGROUND_CONTEXT).then(() => true),
+				5_000,
+				false,
+			);
+			if (!idle) {
+				this.logger.warn("Busy run abort did not become idle", { conversationId });
+				return "failed";
+			}
+			this.logger.debug("Busy run interrupted", {
+				conversationId,
+				durationMs: Math.round(performance.now() - startedAt),
+				taskId: String(taskId),
+			});
+			return "aborted";
+		} catch (error) {
+			this.logger.warn("Busy run interrupt failed", { conversationId, error });
+			return "failed";
+		}
+	}
+
+	/**
+	 * Keep the collecting window open until the working run is idle. A new message re-arms the
+	 * normal settle timer, so an urgent follow-up can be classified again before the run ends.
+	 */
+	private holdBusyWindow(
+		conversation: Conversation,
+		conversationId: string,
+		envelopeCount: number,
+		nowMs: number,
+		policy: ConversationPolicy,
+	): void {
+		const existing = this.busyHolds.get(conversationId);
+		if (existing !== undefined) {
+			existing.envelopeCount = envelopeCount;
+			existing.updatedAt = nowMs;
+			this.logger.debug("Activity window hold extended", {
+				conversationId,
+				envelopeCount,
+				heldMs: nowMs - existing.since,
+			});
+			return;
+		}
+		const hold: {
+			envelopeCount: number;
+			since: number;
+			timer?: ReturnType<typeof setTimeout>;
+			updatedAt: number;
+		} = { envelopeCount, since: nowMs, updatedAt: nowMs };
+		this.busyHolds.set(conversationId, hold);
+		const timer = setTimeout(() => {
+			if (this.closed) return;
+			if (this.busyHolds.get(conversationId) !== hold) return;
+			this.scheduleActivityFlush(conversationId, 0);
+		}, policy.sidechat.maxHoldMs);
+		timer.unref?.();
+		hold.timer = timer;
+		this.logger.debug("Activity window held while a run is working", {
+			conversationId,
+			envelopeCount,
+			maxHoldMs: policy.sidechat.maxHoldMs,
+		});
+		void conversation
+			.waitForIdle(BACKGROUND_CONTEXT)
+			.then(() => {
+				if (this.closed) return;
+				if (this.busyHolds.get(conversationId) !== hold) return;
+				this.busyHolds.delete(conversationId);
+				this.scheduleActivityFlush(conversationId, 0);
+			})
+			.catch((error: unknown) => {
+				if (this.closed) return;
+				if (this.busyHolds.get(conversationId) !== hold) return;
+				this.busyHolds.delete(conversationId);
+				this.logger.warn("Busy hold wait failed", { conversationId, error });
+				this.scheduleActivityFlush(conversationId, policy.pacing.burstSettleMs);
+			});
+	}
+
+	private clearBusyHold(conversationId: string): void {
+		const hold = this.busyHolds.get(conversationId);
+		if (hold?.timer !== undefined) clearTimeout(hold.timer);
+		this.busyHolds.delete(conversationId);
 	}
 
 	async submitBackgroundTurn(input: BackgroundTurnInput): Promise<BackgroundTurnResult> {
@@ -1997,6 +2391,10 @@ export class PiDurableConversationHost {
 		this.closed = true;
 		for (const scheduled of this.activityTimers.values()) clearTimeout(scheduled.timer);
 		this.activityTimers.clear();
+		for (const hold of this.busyHolds.values()) {
+			if (hold.timer !== undefined) clearTimeout(hold.timer);
+		}
+		this.busyHolds.clear();
 		// Close the Session before the watchers. Ending the Session line makes any document load
 		// still queued on it fail inside the library instead of reaching storage after the caller
 		// closes the handle, which would surface as a spurious "SqliteStorage is closed" error.

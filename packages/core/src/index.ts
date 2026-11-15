@@ -18,11 +18,11 @@ export function shouldCloseActivityWindow(
 	candidateAtMs: number,
 	policy: ActivityWindowLikePolicy = {
 		maxMessages: 20,
-		windowMs: 6_000,
+		windowMs: 8_000,
 	},
 	latestMessageAtMs: number = firstMessageAtMs,
 ): boolean {
-	const settleMs = policy.burstSettleMs ?? policy.windowMs ?? 6_000;
+	const settleMs = policy.burstSettleMs ?? policy.windowMs ?? 8_000;
 	const maxWaitMs = policy.burstMaxWaitMs ?? settleMs;
 	const settledForMs = candidateAtMs - latestMessageAtMs;
 	const elapsedMs = candidateAtMs - firstMessageAtMs;
@@ -55,6 +55,12 @@ export {
 	type InspectConversationContextOptions,
 	type LiveRunSnapshot,
 } from "./conversation-host.ts";
+export {
+	type BusyArbiter,
+	type BusyArbitrationDecision,
+	type BusyArbitrationInput,
+	type BusyArbitrationResult,
+} from "./busy-arbiter.ts";
 export {
 	CONTEXT_EXTENSION_NAME,
 	MEMORY_SECTION_KEY,
