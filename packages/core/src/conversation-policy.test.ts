@@ -17,6 +17,7 @@ import {
 	busyDisposition,
 	classifyConversationTrigger,
 	extractLurkMarker,
+	prepareOutboundParts,
 	prepareOutboundText,
 	shouldCloseActivityWindow,
 	splitOnNewlines,
@@ -248,6 +249,49 @@ describe("activity window and pacing helpers", () => {
 			stripMarkdown: false,
 		});
 		expect(prepared.units).toEqual(["one", "two", "three\nfour"]);
+		expect(prepared.overflowCount).toBe(2);
+	});
+
+	test("groups text lines and media into ordered delivery batches", () => {
+		const sticker = { channelRef: "sticker-1", type: "sticker" as const };
+		const prepared = prepareOutboundParts(
+			[
+				{ text: "first line\nsecond line", type: "text" },
+				sticker,
+				{ text: "third line", type: "text" },
+			],
+			{ ...policy.pacing, maxImmediateOutputMessages: 6, stripMarkdown: false },
+		);
+		expect(prepared.units).toEqual([
+			[{ text: "first line", type: "text" }],
+			[{ text: "second line", type: "text" }],
+			[sticker],
+			[{ text: "third line", type: "text" }],
+		]);
+		expect(prepared.parts).toEqual([
+			{ text: "first line\nsecond line", type: "text" },
+			sticker,
+			{ text: "third line", type: "text" },
+		]);
+		expect(prepared.text).toBe("first line\nsecond line\nthird line");
+	});
+
+	test("folds batch overflow into the final message without losing media", () => {
+		const sticker = { channelRef: "sticker-1", type: "sticker" as const };
+		const prepared = prepareOutboundParts(
+			[
+				{ text: "one", type: "text" },
+				{ text: "two", type: "text" },
+				{ text: "three", type: "text" },
+				sticker,
+			],
+			{ ...policy.pacing, maxImmediateOutputMessages: 3, stripMarkdown: false },
+		);
+		expect(prepared.units).toEqual([
+			[{ text: "one", type: "text" }],
+			[{ text: "two", type: "text" }],
+			[{ text: "three", type: "text" }, sticker],
+		]);
 		expect(prepared.overflowCount).toBe(2);
 	});
 

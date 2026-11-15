@@ -1,4 +1,4 @@
-import type { ConversationPacingPolicy } from "@elaina/contracts";
+import type { ConversationPacingPolicy, MessagePart } from "@elaina/contracts";
 
 /** Split fenced code blocks without breaking them, then treat each non-empty line as a unit. */
 export function splitOnNewlines(text: string): string[] {
@@ -86,6 +86,42 @@ export interface PreparedOutput {
 	readonly text: string;
 }
 
+export interface PreparedPartsOutput {
+	/** Ordered delivery batches. Text lines and media each become their own chat message. */
+	readonly units: MessagePart[][];
+	/** Batches folded into the final immediate message because the cap was reached. */
+	readonly overflowCount: number;
+	/** Normalized logical content in source order, suitable for outbound history. */
+	readonly parts: MessagePart[];
+	readonly text: string;
+}
+
+/** Fold several delivery units into one message, joining adjacent text with a newline. */
+const foldUnits = (units: readonly (readonly MessagePart[])[]): MessagePart[] => {
+	const folded: MessagePart[] = [];
+	for (const unit of units) {
+		for (const part of unit) {
+			const last = folded.at(-1);
+			if (part.type === "text" && last?.type === "text") {
+				folded[folded.length - 1] = { text: `${last.text}\n${part.text}`, type: "text" };
+			} else {
+				folded.push(part);
+			}
+		}
+	}
+	return folded;
+};
+
+/** Split normalized text into delivery units without applying the immediate-message cap. */
+const normalizeTextUnits = (
+	text: string,
+	pacing: ConversationPacingPolicy,
+): { readonly text: string; readonly units: string[] } => {
+	const stripped = pacing.stripMarkdown ? stripMarkdownFormatting(text) : text;
+	const normalized = stripped.trim();
+	return { text: normalized, units: splitOnNewlines(normalized) };
+};
+
 /**
  * Normalize model text for humanlike delivery: optional Markdown stripping, newline units,
  * then a hard cap on immediate output. Extra units are joined into the last message instead of
@@ -95,19 +131,58 @@ export function prepareOutboundText(
 	text: string,
 	pacing: ConversationPacingPolicy,
 ): PreparedOutput {
-	const stripped = pacing.stripMarkdown ? stripMarkdownFormatting(text) : text;
-	const normalized = stripped.trim();
-	const allUnits = splitOnNewlines(normalized);
-	if (allUnits.length === 0) return { overflowCount: 0, text: "", units: [] };
+	const normalized = normalizeTextUnits(text, pacing);
+	if (normalized.units.length === 0) return { overflowCount: 0, text: "", units: [] };
 	const cap = Math.max(1, pacing.maxImmediateOutputMessages);
-	if (allUnits.length <= cap) return { overflowCount: 0, text: normalized, units: allUnits };
-	const head = allUnits.slice(0, cap - 1);
-	const overflow = allUnits.slice(cap - 1);
+	if (normalized.units.length <= cap) {
+		return { overflowCount: 0, text: normalized.text, units: normalized.units };
+	}
+	const head = normalized.units.slice(0, cap - 1);
+	const overflow = normalized.units.slice(cap - 1);
 	return {
 		overflowCount: overflow.length,
-		text: normalized,
+		text: normalized.text,
 		units: [...head, overflow.join("\n")],
 	};
+}
+
+/**
+ * Group an ordered part list into humanlike delivery batches: every newline-separated text unit
+ * and every media part is sent as its own chat message. Media no longer forces one combined
+ * message, so a reply can send text, a sticker, and more text in between without losing order.
+ * The immediate-message cap still folds overflow into the final batch instead of dropping it.
+ */
+export function prepareOutboundParts(
+	parts: readonly MessagePart[],
+	pacing: ConversationPacingPolicy,
+): PreparedPartsOutput {
+	const normalizedParts: MessagePart[] = [];
+	const batches: MessagePart[][] = [];
+	let overflowCount = 0;
+	for (const part of parts) {
+		if (part.type !== "text") {
+			normalizedParts.push(part);
+			batches.push([part]);
+			continue;
+		}
+		const prepared = normalizeTextUnits(part.text, pacing);
+		if (prepared.text.length === 0) continue;
+		normalizedParts.push({ text: prepared.text, type: "text" });
+		for (const unit of prepared.units) batches.push([{ text: unit, type: "text" }]);
+	}
+	const text = normalizedParts
+		.filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
+		.map((part) => part.text)
+		.join("\n")
+		.trim();
+	const cap = Math.max(1, pacing.maxImmediateOutputMessages);
+	let units = batches;
+	if (batches.length > cap) {
+		const overflow = batches.slice(cap - 1);
+		units = [...batches.slice(0, cap - 1), foldUnits(overflow)];
+		overflowCount += overflow.length;
+	}
+	return { overflowCount, parts: normalizedParts, text, units };
 }
 
 /** Optional bounded pre-reply delay; the random source is injectable for deterministic tests. */

@@ -102,7 +102,8 @@ This file is the cross-session handoff record. Update it whenever implementation
   as an audited no-send (`message.lurk`).
 - Burst settle, max-wait, max-count, long-message immediate submission, cooldown/rate-limit
   aggregation, and steer-then-follow-up all run under a shared per-conversation execution lock.
-  Outbound delivery strips Markdown, splits newline units (preserving fenced code), applies the
+  Outbound delivery strips Markdown, groups ordered text and media into separate message batches
+  (newlines and stickers/media each go out individually, preserving source order), applies the
   immediate-message cap, optional typing/delay, send intervals, and per-conversation cancellation
   on new inbound turns.
 - Personas are versioned rows with explicit `aliases_json` (shared with trigger aliases) and
@@ -280,8 +281,9 @@ The full built-in plugin inventory and migration order are tracked in
   submission. Tune the policy or add an immediate first-message path.
 - Reply delivery is at-most-once: a crash between claiming the outbound row and a successful send
   leaves a permanent `pending` row with no reconciliation job yet.
-- Answers with no text blocks (tool-only) produce no reply. Output is now newline-chunked and
-  platform-length split per unit, but there is still no media-aware unit grouping.
+- Answers with no text blocks (tool-only) produce no reply. Output is newline- and
+  media-aware: each text unit and each sticker/image is delivered as its own message batch in
+  source order, with platform-length splitting inside a batch.
 - Better Auth sign-in throttling is per client IP. Direct connections use Bun's socket peer
   address; reverse proxies must be listed in `ELAINA_TRUSTED_PROXIES` before their forwarded chain
   is trusted. There is no password-rotation UI or multi-admin model yet. Migration `0005` drops the legacy

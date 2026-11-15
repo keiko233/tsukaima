@@ -101,8 +101,10 @@ export {
 export {
 	boundedReplyDelayMs,
 	busyDisposition,
+	prepareOutboundParts,
 	prepareOutboundText,
 	splitOnNewlines,
 	stripMarkdownFormatting,
 	type PreparedOutput,
+	type PreparedPartsOutput,
 } from "./output-pacing.ts";

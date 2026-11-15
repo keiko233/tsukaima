@@ -115,6 +115,26 @@ const secondPlugin: ElainaPlugin = {
 	},
 };
 
+const batchedPlugin: ElainaPlugin = {
+	manifest: pluginManifestSchema.parse({
+		apiVersion: "1",
+		kind: "first-party",
+		name: "batched-transform",
+		permissions: ["reply.transform"],
+		version: "0.1.0",
+	}),
+	setup(context) {
+		context.events.on("reply.transform", () => ({
+			parts: [
+				{ text: "first line\nsecond line", type: "text" as const },
+				{ channelRef: "sticker-1", type: "sticker" as const },
+				{ text: "third line", type: "text" as const },
+			],
+			text: "first line\nsecond line\nthird line",
+		}));
+	},
+};
+
 describe("reply.transform hook", () => {
 	test("runs trusted handlers in order, gates permissions, and preserves media parts", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "elaina-reply-transform-"));
@@ -165,11 +185,106 @@ describe("reply.transform hook", () => {
 				{ channelRef: "sticker-1", type: "sticker" },
 			]);
 			expect(unauthorizedCalled).toBe(false);
-			expect(adapter.sent).toHaveLength(1);
-			expect(adapter.sent.flat()).toEqual([
-				{ text: "hello first second", type: "text" },
-				{ channelRef: "sticker-1", type: "sticker" },
+			expect(adapter.sent).toEqual([
+				[{ text: "hello first second", type: "text" }],
+				[{ channelRef: "sticker-1", type: "sticker" }],
 			]);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("applies a text-only transform to the delivered text", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "elaina-reply-text-transform-"));
+		directories.push(directory);
+		adapter.sent.length = 0;
+		const { lifecycle } = createApp(
+			{ ELAINA_DATA_DIR: directory, ELAINA_PORT: "7420" },
+			{ plugins: [channelPlugin, firstPlugin] },
+		);
+		await lifecycle.start();
+		try {
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("domain database missing");
+			await database.insert(chatObjects).values({
+				channelId: "fake",
+				id: "chat-text",
+				kind: "private",
+				platformConversationId: "peer-text",
+				title: "Fake chat",
+			});
+			await database.insert(conversations).values({
+				channelId: "fake",
+				chatObjectId: "chat-text",
+				durableConversationId: "durable-text",
+				id: "session-text",
+				isReceiving: 1,
+				kind: "private",
+				platformConversationId: "peer-text",
+				title: "Fake session",
+			});
+
+			await lifecycle.replyDispatcher.handleAnswer({
+				activityId: randomUUID(),
+				conversationId: "durable-text",
+				entryId: "entry-text",
+				text: "hello",
+			});
+
+			expect(adapter.sent).toEqual([[{ text: "hello first", type: "text" }]]);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("sends interleaved text and media as separate ordered messages", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "elaina-reply-batches-"));
+		directories.push(directory);
+		adapter.sent.length = 0;
+		const { lifecycle } = createApp(
+			{ ELAINA_DATA_DIR: directory, ELAINA_PORT: "7420" },
+			{ plugins: [channelPlugin, batchedPlugin] },
+		);
+		await lifecycle.start();
+		try {
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("domain database missing");
+			await database.insert(chatObjects).values({
+				channelId: "fake",
+				id: "chat-batch",
+				kind: "private",
+				platformConversationId: "peer-batch",
+				title: "Fake chat",
+			});
+			await database.insert(conversations).values({
+				channelId: "fake",
+				chatObjectId: "chat-batch",
+				durableConversationId: "durable-batch",
+				id: "session-batch",
+				isReceiving: 1,
+				kind: "private",
+				platformConversationId: "peer-batch",
+				title: "Fake session",
+			});
+
+			await lifecycle.replyDispatcher.handleAnswer({
+				activityId: randomUUID(),
+				conversationId: "durable-batch",
+				entryId: "entry-batch",
+				text: "hello",
+			});
+
+			expect(adapter.sent).toEqual([
+				[{ text: "first line", type: "text" }],
+				[{ text: "second line", type: "text" }],
+				[{ channelRef: "sticker-1", type: "sticker" }],
+				[{ text: "third line", type: "text" }],
+			]);
+			const [outbound] = await database
+				.select()
+				.from(messages)
+				.where(eq(messages.direction, "outbound"));
+			expect(outbound?.contentText).toBe("first line\nsecond line\nthird line");
 		} finally {
 			await lifecycle.stop();
 		}

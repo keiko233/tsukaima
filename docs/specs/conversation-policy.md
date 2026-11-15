@@ -89,7 +89,8 @@ output dispatch, must be absent from outbound history, and must produce an audit
 
 Implement pacing as post-model output orchestration:
 
-1. normalize plain text into message units; newline means separate QQ messages
+1. normalize ordered parts into message batches; each newline-separated text unit and each
+   media part becomes a separate message, preserving the model's text/media order
 2. strip Markdown/list formatting according to policy
 3. optional bounded delay or typing indicator
 4. send messages with interval and max immediate output

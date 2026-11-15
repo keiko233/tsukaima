@@ -11,7 +11,7 @@ import {
 	type ConversationAnswer,
 	type ConversationExecutionLock,
 	extractLurkMarker,
-	prepareOutboundText,
+	prepareOutboundParts,
 	withConversationLock,
 } from "@elaina/core";
 import { chatObjects, conversations, messages, type ElainaDatabase } from "@elaina/db";
@@ -258,52 +258,19 @@ export class ReplyDispatcher {
 			sessionId: session.sessionId,
 			text: lurk.text,
 		});
-		const hasMedia = transformed.parts.some((part) => part.type !== "text");
-		const prepared = prepareOutboundText(transformed.text, policy.pacing);
-		let text: string;
-		let parts: MessagePart[];
-		let plan: DeliveryPlanItem[];
-		if (hasMedia) {
-			// Media-bearing transforms keep their exact text/media order in one outbound message,
-			// matching the single row the WebUI renders. Newline pacing only applies to text-only
-			// replies; splitting here would turn one rendered bubble into several QQ messages.
-			const normalizedParts: MessagePart[] = [];
-			for (const part of transformed.parts) {
-				if (part.type !== "text") {
-					normalizedParts.push(part);
-					continue;
-				}
-				const partOutput = prepareOutboundText(part.text, policy.pacing);
-				if (partOutput.text.length > 0) {
-					normalizedParts.push({ text: partOutput.text, type: "text" });
-				}
-			}
-			if (normalizedParts.length === 0) {
-				this.#logger.debug("assistant answer skipped as empty after transform", {
-					entryId: answer.entryId,
-					sessionId: session.sessionId,
-				});
-				return { deliveryStatus: "skipped", reason: "empty_output" };
-			}
-			parts = normalizedParts;
-			plan = [{ parts: normalizedParts }];
-			text = normalizedParts
-				.filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
-				.map((part) => part.text)
-				.join("\n")
-				.trim();
-		} else {
-			if (prepared.units.length === 0) {
-				this.#logger.debug("assistant answer skipped as empty output", {
-					entryId: answer.entryId,
-					sessionId: session.sessionId,
-				});
-				return { deliveryStatus: "skipped", reason: "empty_output" };
-			}
-			text = prepared.text;
-			parts = text.length > 0 ? [{ text, type: "text" }] : [];
-			plan = prepared.units.map((unit) => ({ parts: [{ text: unit, type: "text" as const }] }));
+		const prepared = prepareOutboundParts(transformed.parts, policy.pacing);
+		if (prepared.units.length === 0) {
+			this.#logger.debug("assistant answer skipped as empty output", {
+				entryId: answer.entryId,
+				sessionId: session.sessionId,
+			});
+			return { deliveryStatus: "skipped", reason: "empty_output" };
 		}
+		const text = prepared.text;
+		const parts = prepared.parts;
+		// Text lines and media parts each stay in their own batch, so a reply can send a message,
+		// a sticker, and the next message in the exact order the model placed them.
+		const plan: DeliveryPlanItem[] = prepared.units.map((unitParts) => ({ parts: unitParts }));
 		if (prepared.overflowCount > 0) {
 			await this.#audit({
 				action: "message.output-overflow",
@@ -451,6 +418,15 @@ export class ReplyDispatcher {
 		if (candidate.text !== undefined && typeof candidate.text !== "string") {
 			this.#logger.warn("reply transform returned an invalid text value");
 			return current;
+		}
+		// A text-only transform replaces the textual content, so keep `parts` consistent with the
+		// text later hooks and delivery receive. Media-bearing results stay part-authoritative.
+		if (
+			typeof candidate.text === "string" &&
+			candidate.parts === undefined &&
+			parts.every((part) => part.type === "text")
+		) {
+			parts = candidate.text.length > 0 ? [{ text: candidate.text, type: "text" }] : [];
 		}
 		if (typeof candidate.text === "string" && !parts.some((part) => part.type === "text")) {
 			if (candidate.text.length > 0) parts = [{ text: candidate.text, type: "text" }, ...parts];
@@ -643,7 +619,7 @@ export class ReplyDispatcher {
 			platformConversationId: string | null;
 			policy: ConversationPolicy;
 			sessionId: string;
-			units: readonly string[];
+			units: readonly MessagePart[][];
 		},
 	): Promise<"failed" | "sent" | "uncertain"> {
 		const { channelId, platformConversationId } = target;
