@@ -1,10 +1,11 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Circle, MessageCircle, PanelRight } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import { orpc, type DeliveryStatus } from "@/lib/api";
+import { messageListOptions, upsertMessagesInCache } from "@/lib/message-cache";
 import { errorMessage, useToast } from "@/lib/toast";
 import { useLiveRun } from "@/lib/live-run-store";
 import { cn } from "@tsukaima/ui/lib/utils";
@@ -100,7 +101,14 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 	};
 
 	const session = useQuery(orpc.admin.sessions.get.queryOptions({ input: { sessionId } }));
-	const messages = useQuery(orpc.admin.sessions.messages.queryOptions({ input: { sessionId } }));
+	const messages = useInfiniteQuery(messageListOptions(sessionId));
+	const transcript = useMemo(
+		() =>
+			messages.data === undefined
+				? []
+				: messages.data.pages.toReversed().flatMap((page) => page.messages),
+		[messages.data],
+	);
 	const diagnostics = useQuery(orpc.admin.diagnostics.status.queryOptions());
 	const send = useMutation(
 		orpc.admin.sessions.send.mutationOptions({
@@ -120,10 +128,8 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 				} else {
 					toast.info(notice);
 				}
+				upsertMessagesInCache(queryClient, sessionId, [message]);
 				await Promise.all([
-					queryClient.invalidateQueries({
-						queryKey: orpc.admin.sessions.messages.key({ input: { sessionId } }),
-					}),
 					queryClient.invalidateQueries({
 						queryKey: orpc.admin.sessions.contextStats.key({ input: { sessionId } }),
 					}),
@@ -281,9 +287,13 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 							</div>
 						) : (
 							<MessageList
+								key={sessionId}
+								hasOlder={messages.hasNextPage}
 								liveRun={liveRun}
-								messages={messages.data ?? []}
+								loadingOlder={messages.isFetchingNextPage}
+								messages={transcript}
 								now={now}
+								onLoadOlder={() => void messages.fetchNextPage()}
 								sessionId={sessionId}
 							/>
 						)}

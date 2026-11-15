@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
 	File as FileIcon,
 	FileAudio,
@@ -177,11 +178,70 @@ function MessageBody({ message }: { message: MessageSummary }) {
 	);
 }
 
+const LOAD_OLDER_THRESHOLD = 320;
+
+function MessageRow({
+	message,
+	sessionId,
+}: {
+	message: MessageSummary;
+	/** Session the message belongs to, needed to expand a turn's steps. */
+	sessionId: string;
+}) {
+	const assistant = message.senderKind === "assistant";
+	// Only the WebUI operator sits on the right: it drives the bot directly, so its turns read
+	// as "mine". Everyone else — the assistant and the people in the chat — stays on the left.
+	const self = message.senderKind === "system";
+	return (
+		<Message
+			from={self ? "user" : "assistant"}
+			// The operator's own turns sit on the right, the assistant on the left; `from` keeps
+			// its semantic meaning for the aria label and bubble variant.
+			align={self ? "end" : "start"}
+			className="gap-2.5"
+		>
+			<MessageAvatar
+				className={cn(assistant && "border border-primary/20 bg-primary/10 text-primary")}
+			>
+				{assistant ? "E" : senderName(message).slice(0, 1).toUpperCase()}
+			</MessageAvatar>
+			<MessageContent>
+				<MessageHeader>
+					<span className="font-medium text-foreground">{senderName(message)}</span>
+					<span aria-hidden="true">·</span>
+					<time dateTime={message.occurredAt} title={formatDateTime(message.occurredAt)}>
+						{formatTimestamp(message.occurredAt)}
+					</time>
+				</MessageHeader>
+				{/* Steps come first: they explain the answer rather than trailing it. */}
+				{assistant && message.durableEntryId !== null ? (
+					<RunSteps entryId={message.durableEntryId} sessionId={sessionId} />
+				) : null}
+				<MessageBubble variant={assistant ? "outline" : "soft"} className="max-w-full">
+					<MessageBubbleContent className="max-w-[min(42rem,88%)]">
+						<MessageBody message={message} />
+					</MessageBubbleContent>
+				</MessageBubble>
+				{self ? (
+					<MessageFooter>
+						<span className={deliveryClass(message.deliveryStatus)}>
+							{deliveryLabel(message.deliveryStatus)}
+						</span>
+					</MessageFooter>
+				) : null}
+			</MessageContent>
+		</Message>
+	);
+}
+
 export function MessageList({
 	messages,
 	liveRun,
 	now,
 	sessionId,
+	hasOlder,
+	loadingOlder,
+	onLoadOlder,
 }: {
 	messages: readonly MessageSummary[];
 	/** Session the messages belong to, needed to expand a turn's steps. */
@@ -190,77 +250,117 @@ export function MessageList({
 	liveRun?: LiveRunState | undefined;
 	/** Wall clock used for the live run's elapsed label. */
 	now: number;
+	/** Whether a cursor page older than the first row still exists. */
+	hasOlder: boolean;
+	/** The older page request is in flight. */
+	loadingOlder: boolean;
+	/** Request the page before the current oldest message. */
+	onLoadOlder: () => void;
 }) {
+	const viewportRef = useRef<HTMLElement>(null);
+	const loadOlderRef = useRef(onLoadOlder);
+	const loadingOlderRef = useRef(loadingOlder);
+	useEffect(() => {
+		loadOlderRef.current = onLoadOlder;
+	}, [onLoadOlder]);
+	useEffect(() => {
+		loadingOlderRef.current = loadingOlder;
+	}, [loadingOlder]);
+
+	const count = messages.length + (liveRun === undefined ? 0 : 1);
+	const virtualizer = useVirtualizer({
+		// The transcript is chat-shaped: newest content lives at the bottom. `anchorTo` keeps the
+		// row under the reader pinned when an older page is prepended, and follows the live edge
+		// when content is appended or a streaming turn grows.
+		anchorTo: "end",
+		count,
+		estimateSize: (index) => (index === messages.length ? 160 : 96),
+		followOnAppend: "auto",
+		gap: 16,
+		getItemKey: (index) =>
+			messages[index]?.id ?? `live-run:${liveRun?.startedAtMs ?? "none"}`,
+		getScrollElement: () => viewportRef.current,
+		overscan: 8,
+		paddingEnd: 20,
+		paddingStart: 20,
+	});
+
+	const requestOlder = () => {
+		const viewport = viewportRef.current;
+		if (viewport === null || viewport.scrollTop > LOAD_OLDER_THRESHOLD) return;
+		if (!hasOlder || loadingOlderRef.current) return;
+		loadingOlderRef.current = true;
+		loadOlderRef.current();
+	};
+
+	// A short transcript can leave the viewport with no scroll range, so `onScroll` alone would
+	// never request the next page. Keep filling until the list is scrollable or history ends.
+	useEffect(() => {
+		if (!hasOlder || loadingOlder) return;
+		const viewport = viewportRef.current;
+		if (viewport === null) return;
+		if (viewport.scrollHeight <= viewport.clientHeight + LOAD_OLDER_THRESHOLD) {
+			loadingOlderRef.current = true;
+			loadOlderRef.current();
+		}
+	}, [hasOlder, loadingOlder, messages.length]);
+
 	const empty = messages.length === 0 && liveRun === undefined;
 	return (
-		<MessageScroller
-			label={m.tab_chats()}
-			followOutput
-			smooth
-			className="h-full min-h-0"
-			viewportClassName="h-full"
-			contentClassName="mx-auto flex w-full max-w-3xl flex-col gap-4 px-3 py-5 sm:px-6"
-		>
-			{empty ? (
-				<div className="mx-auto flex max-w-sm flex-col items-center px-6 py-20 text-center">
-					<div className="grid size-11 place-items-center rounded-2xl bg-muted text-muted-foreground">
-						<StickyNote className="size-5" />
+		<div className="relative h-full min-h-0">
+			<MessageScroller
+				label={m.tab_chats()}
+				followOutput
+				smooth
+				className="h-full min-h-0"
+				viewportClassName="h-full"
+				contentClassName="mx-auto w-full max-w-3xl px-3 sm:px-6"
+				viewportRef={viewportRef}
+				viewportProps={{ onScroll: requestOlder }}
+			>
+				{empty ? (
+					<div className="mx-auto flex max-w-sm flex-col items-center px-6 py-20 text-center">
+						<div className="grid size-11 place-items-center rounded-2xl bg-muted text-muted-foreground">
+							<StickyNote className="size-5" />
+						</div>
+						<p className="mt-3 text-sm font-medium">{m.messages_empty()}</p>
 					</div>
-					<p className="mt-3 text-sm font-medium">{m.messages_empty()}</p>
+				) : (
+					<div
+						className="relative w-full"
+						style={{ height: `${virtualizer.getTotalSize()}px` }}
+					>
+						{virtualizer.getVirtualItems().map((virtualItem) => {
+							const message = messages[virtualItem.index];
+							return (
+								<div
+									key={virtualItem.key}
+									data-index={virtualItem.index}
+									ref={virtualizer.measureElement}
+									className="absolute top-0 left-0 w-full"
+									style={{ transform: `translateY(${virtualItem.start}px)` }}
+								>
+									{message === undefined ? (
+										liveRun === undefined ? null : <LiveRunMessage now={now} run={liveRun} />
+									) : (
+										<MessageRow message={message} sessionId={sessionId} />
+									)}
+								</div>
+							);
+						})}
+					</div>
+				)}
+			</MessageScroller>
+			{loadingOlder ? (
+				<div
+					role="status"
+					className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center"
+				>
+					<span className="rounded-full border border-border bg-card/90 px-3 py-1 text-[11px] text-muted-foreground shadow-sm backdrop-blur">
+						{m.loading()}
+					</span>
 				</div>
-			) : (
-				<>
-					{messages.map((message) => {
-					const assistant = message.senderKind === "assistant";
-					// Only the WebUI operator sits on the right: it drives the bot directly, so its
-					// turns read as "mine". Everyone else — the assistant and the people in the
-					// chat — stays on the left.
-					const self = message.senderKind === "system";
-					return (
-						<Message
-							key={message.id}
-							from={self ? "user" : "assistant"}
-							// The operator's own turns sit on the right, the assistant on the left;
-							// `from` keeps its semantic meaning for the aria label and bubble variant.
-							align={self ? "end" : "start"}
-							className="gap-2.5"
-						>
-							<MessageAvatar
-								className={cn(assistant && "border border-primary/20 bg-primary/10 text-primary")}
-							>
-								{assistant ? "E" : senderName(message).slice(0, 1).toUpperCase()}
-							</MessageAvatar>
-							<MessageContent>
-								<MessageHeader>
-									<span className="font-medium text-foreground">{senderName(message)}</span>
-									<span aria-hidden="true">·</span>
-									<time dateTime={message.occurredAt} title={formatDateTime(message.occurredAt)}>
-										{formatTimestamp(message.occurredAt)}
-									</time>
-								</MessageHeader>
-								{/* Steps come first: they explain the answer rather than trailing it. */}
-								{assistant && message.durableEntryId !== null ? (
-									<RunSteps entryId={message.durableEntryId} sessionId={sessionId} />
-								) : null}
-								<MessageBubble variant={assistant ? "outline" : "soft"} className="max-w-full">
-									<MessageBubbleContent className="max-w-[min(42rem,88%)]">
-										<MessageBody message={message} />
-									</MessageBubbleContent>
-								</MessageBubble>
-								{self ? (
-									<MessageFooter>
-										<span className={deliveryClass(message.deliveryStatus)}>
-											{deliveryLabel(message.deliveryStatus)}
-										</span>
-									</MessageFooter>
-								) : null}
-							</MessageContent>
-						</Message>
-					);
-					})}
-					{liveRun === undefined ? null : <LiveRunMessage now={now} run={liveRun} />}
-				</>
-			)}
-		</MessageScroller>
+			) : null}
+		</div>
 	);
 }

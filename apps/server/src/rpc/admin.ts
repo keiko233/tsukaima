@@ -1,3 +1,4 @@
+import { ORPCError } from "@orpc/server";
 import { conversations, modelPolicies, type memories } from "@tsukaima/db";
 import { adminBase, type TsukaimaApiContext } from "./base.ts";
 import {
@@ -9,10 +10,12 @@ import {
 	getRequest,
 	getSession,
 	getSessionContextStats,
+	getSessionMessage,
 	getUser,
 	listChats,
 	listGroups,
-	listMessages,
+	listMessagePage,
+	MessageCursorError,
 	listRequests,
 	listRunSteps,
 	listUsers,
@@ -462,9 +465,22 @@ export const adminRouter = {
 		get: adminBase.admin.sessions.get.handler(async ({ context, input }) =>
 			getSession(context.lifecycle, input.sessionId),
 		),
-		messages: adminBase.admin.sessions.messages.handler(async ({ context, input }) =>
-			listMessages(context.lifecycle, input.sessionId),
+		message: adminBase.admin.sessions.message.handler(async ({ context, input }) =>
+			getSessionMessage(context.lifecycle, input),
 		),
+		messages: adminBase.admin.sessions.messages.handler(async ({ context, input }) => {
+			try {
+				return await listMessagePage(context.lifecycle, input);
+			} catch (error) {
+				if (error instanceof MessageCursorError) {
+					throw new ORPCError("INVALID_INPUT", {
+						message: error.message,
+						status: 400,
+					});
+				}
+				throw error;
+			}
+		}),
 		resetContext: adminBase.admin.sessions.resetContext.handler(async ({ context, input }) => {
 			await resetSessionContext(context.lifecycle, {
 				...(input.handoff === undefined ? {} : { handoff: input.handoff }),

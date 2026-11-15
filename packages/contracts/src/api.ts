@@ -54,6 +54,18 @@ export const messageSummarySchema = z.object({
 });
 export type MessageSummary = z.infer<typeof messageSummarySchema>;
 
+/**
+ * One page of a session transcript, ordered oldest → newest inside the page.
+ *
+ * `nextCursor` points at the oldest message in the page and is `null` once the beginning of
+ * the conversation has been reached. Clients only ever echo the opaque value back.
+ */
+export const messagePageSchema = z.object({
+	messages: z.array(messageSummarySchema),
+	nextCursor: z.string().nullable(),
+});
+export type MessagePage = z.infer<typeof messagePageSchema>;
+
 export const sessionSummarySchema = z.object({
 	createdAt: z.string(),
 	id: z.string(),
@@ -541,6 +553,27 @@ export type RuntimeSettingsPatch = z.infer<typeof runtimeSettingsPatchSchema>;
 // ─── Input schemas ───────────────────────────────────────────────────────────
 
 const sessionIdInputSchema = z.object({ sessionId: z.string().min(1) });
+
+/**
+ * Reverse cursor page of a session transcript. Without `cursor` the newest page is returned;
+ * with `cursor` the page immediately older than that cursor is returned.
+ */
+export const sessionsMessagesInputSchema = z.object({
+	cursor: z.string().min(1).optional(),
+	limit: z.number().int().positive().max(200).optional(),
+	sessionId: z.string().min(1),
+});
+
+/** Look up the single transcript row a live event refers to. */
+export const sessionsMessageInputSchema = z
+	.object({
+		durableEntryId: z.string().min(1).optional(),
+		messageId: z.string().min(1).optional(),
+		sessionId: z.string().min(1),
+	})
+	.refine((input) => (input.messageId === undefined) !== (input.durableEntryId === undefined), {
+		message: "Provide exactly one of messageId or durableEntryId",
+	});
 
 /** Which assistant turn to expand. `entryId` is `messages.durableEntryId`. */
 export const runStepsInputSchema = z.object({
@@ -1292,7 +1325,8 @@ export const appContract = oc.router({
 				.output(createSessionOutputSchema)
 				.meta({ audit: true }),
 			get: oc.input(sessionIdInputSchema).output(sessionDetailSchema.nullable()),
-			messages: oc.input(sessionIdInputSchema).output(z.array(messageSummarySchema)),
+			message: oc.input(sessionsMessageInputSchema).output(messageSummarySchema.nullable()),
+			messages: oc.input(sessionsMessagesInputSchema).output(messagePageSchema),
 			resetContext: oc
 				.input(sessionsResetContextInputSchema)
 				.output(okSchema)

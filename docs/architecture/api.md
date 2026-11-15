@@ -264,6 +264,12 @@ messages.activity.get.query({ activityId: string });
 messages.activity.list.query({ conversationId: string; cursor?: string; limit?: number });
 ```
 
+`messages.list` is a reverse cursor page: it returns `{ messages, nextCursor }`, newest page
+first when no cursor is supplied, with each page ordered oldest → newest. The cursor is an opaque
+`(occurredAt, id)` pair so rows written in the same millisecond are neither skipped nor repeated.
+The WebUI renders the transcript with `@tanstack/react-virtual` and requests the next older page
+when the viewport approaches the top.
+
 For live updates the WebUI subscribes to the server-sent event stream described under
 [Realtime events](#realtime-events). Assistant streaming is carried by `run.state` and
 `run.delta`: text, reasoning, draft tool calls, and the accumulated model/tool call chain are

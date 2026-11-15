@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, or } from "drizzle-orm";
 import {
 	messagePartSchema,
+	type MessagePage,
 	type MessagePart,
 	type MessageSummary as ContractMessageSummary,
 	type RunStep,
@@ -126,6 +127,46 @@ function requireDatabase(lifecycle: TsukaimaLifecycle) {
 	const database = lifecycle.domainDatabase;
 	if (database === undefined) throw new Error("Database is not ready");
 	return database;
+}
+
+const DEFAULT_MESSAGE_PAGE_SIZE = 50;
+const MAX_MESSAGE_PAGE_SIZE = 200;
+
+interface MessageCursor {
+	id: string;
+	occurredAt: string;
+}
+
+/** Raised for a cursor the service did not mint; the RPC layer maps it to INVALID_INPUT. */
+export class MessageCursorError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "MessageCursorError";
+	}
+}
+
+function encodeMessageCursor(row: MessageCursor): string {
+	return Buffer.from(JSON.stringify(row), "utf8").toString("base64url");
+}
+
+function decodeMessageCursor(cursor: string): MessageCursor {
+	try {
+		const parsed: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+		if (typeof parsed === "object" && parsed !== null) {
+			const record = parsed as Record<string, unknown>;
+			if (
+				typeof record.id === "string" &&
+				record.id.length > 0 &&
+				typeof record.occurredAt === "string" &&
+				record.occurredAt.length > 0
+			) {
+				return { id: record.id, occurredAt: record.occurredAt };
+			}
+		}
+	} catch {
+		// Fall through to the stable error below.
+	}
+	throw new MessageCursorError("Invalid message cursor");
 }
 
 export async function listChats(
@@ -533,8 +574,86 @@ export async function listMessages(
 		.select()
 		.from(messages)
 		.where(eq(messages.conversationId, sessionId))
-		.orderBy(asc(messages.occurredAt));
+		.orderBy(asc(messages.occurredAt), asc(messages.id));
 	return rows.map(toMessageSummary);
+}
+
+/**
+ * One reverse-cursor page of a session transcript.
+ *
+ * Pages are fetched newest-first so the newest page never has to scan the whole conversation,
+ * then reversed before returning so the client always receives chronological rows. The cursor
+ * is the `(occurredAt, id)` of the oldest row in the page: `occurredAt` alone is not unique and
+ * would skip or repeat every message that shares a millisecond with the page boundary.
+ */
+export async function listMessagePage(
+	lifecycle: TsukaimaLifecycle,
+	input: { cursor?: string | undefined; limit?: number | undefined; sessionId: string },
+): Promise<MessagePage> {
+	const database = requireDatabase(lifecycle);
+	const [session] = await database
+		.select()
+		.from(conversations)
+		.where(eq(conversations.id, input.sessionId))
+		.limit(1);
+	if (session === undefined) throw new Error("Session not found");
+
+	const limit = Math.min(
+		Math.max(input.limit ?? DEFAULT_MESSAGE_PAGE_SIZE, 1),
+		MAX_MESSAGE_PAGE_SIZE,
+	);
+	const cursor = input.cursor === undefined ? null : decodeMessageCursor(input.cursor);
+	const filters =
+		cursor === null
+			? eq(messages.conversationId, input.sessionId)
+			: and(
+					eq(messages.conversationId, input.sessionId),
+					or(
+						lt(messages.occurredAt, cursor.occurredAt),
+						and(eq(messages.occurredAt, cursor.occurredAt), lt(messages.id, cursor.id)),
+					),
+				);
+
+	// Fetch one extra row to learn whether an older page exists without a second count query.
+	const rows = await database
+		.select()
+		.from(messages)
+		.where(filters)
+		.orderBy(desc(messages.occurredAt), desc(messages.id))
+		.limit(limit + 1);
+	const pageRows = rows.slice(0, limit);
+	const oldest = pageRows.at(-1);
+	return {
+		messages: pageRows.toReversed().map(toMessageSummary),
+		nextCursor:
+			rows.length > limit && oldest !== undefined
+				? encodeMessageCursor({ id: oldest.id, occurredAt: oldest.occurredAt })
+				: null,
+	};
+}
+
+/** The transcript row a live event points at, or `null` when it has been removed. */
+export async function getSessionMessage(
+	lifecycle: TsukaimaLifecycle,
+	input: { durableEntryId?: string | undefined; messageId?: string | undefined; sessionId: string },
+): Promise<MessageSummary | null> {
+	const database = requireDatabase(lifecycle);
+	// Inbound channel events carry the platform message id, not the domain row id. Local WebUI
+	// sends use the row id as their envelope id, so both lookup keys have to be considered.
+	const lookup =
+		input.messageId === undefined
+			? input.durableEntryId === undefined
+				? undefined
+				: eq(messages.durableEntryId, input.durableEntryId)
+			: or(eq(messages.id, input.messageId), eq(messages.platformMessageId, input.messageId));
+	if (lookup === undefined) throw new Error("Message lookup is missing");
+	const [row] = await database
+		.select()
+		.from(messages)
+		.where(and(eq(messages.conversationId, input.sessionId), lookup))
+		.orderBy(desc(messages.occurredAt), desc(messages.id))
+		.limit(1);
+	return row === undefined ? null : toMessageSummary(row);
 }
 
 /**
