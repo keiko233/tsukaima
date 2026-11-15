@@ -28,7 +28,12 @@ import {
 import { BACKGROUND_CONTEXT, openDurableStorage, type SqliteStorage } from "@elaina/durable";
 import { KeyvCache } from "@elaina/cache";
 import { eq } from "drizzle-orm";
-import { createPluginToolsExtension, type AuditEntry, type ElainaPlugin } from "@elaina/sdk";
+import {
+	createPluginToolsExtension,
+	MODEL_CAPABILITIES,
+	type AuditEntry,
+	type ElainaPlugin,
+} from "@elaina/sdk";
 import {
 	MigrationRegistry,
 	PluginDatabaseStore,
@@ -385,6 +390,12 @@ export class ElainaLifecycle {
 					`plugin:${pluginId}`,
 				);
 			},
+			onHostModelMessage: (message, capability) => {
+				this.modelUsageLedger.record(
+					message as Parameters<typeof this.modelUsageLedger.record>[0],
+					capability,
+				);
+			},
 			plugins: this.plugins,
 			requests: this.requestService,
 			settings: this.pluginSettings,
@@ -392,6 +403,23 @@ export class ElainaLifecycle {
 			storage: this.pluginStorage,
 			tasks: this.pluginTasks,
 		});
+	}
+
+	/**
+	 * Provider id whose port currently serves conversations. `fake` means no plugin provider is
+	 * usable, so settings surfaces should not offer a catalog.
+	 */
+	get activeModelProviderId(): string | undefined {
+		return this.activeProviderId;
+	}
+
+	/** Conversation model as a sidechat target; the deterministic fake model is not one. */
+	private activeModelTarget():
+		| { readonly modelId: string; readonly providerId: string }
+		| undefined {
+		const model = this.memoryModel;
+		if (model === undefined || model.providerId === "fake") return undefined;
+		return { modelId: model.modelId, providerId: model.providerId };
 	}
 
 	get state(): LifecycleState {
@@ -564,7 +592,27 @@ export class ElainaLifecycle {
 					? undefined
 					: (await readRuntimeSettings(this.domainDatabase)).sidechatModelId,
 			logger: this.logger,
-			model: () => this.memoryModel,
+			models: {
+				active: () => this.activeModelTarget(),
+				eligible: async () =>
+					(await this.pluginHost.listModels({ capability: MODEL_CAPABILITIES.sidechat })).map(
+						(candidate) => ({ modelId: candidate.id, providerId: candidate.providerId }),
+					),
+				complete: async (target, prompt, options) => {
+					const result = await this.pluginHost.completeModel(
+						{
+							maxTokens: options.maxTokens,
+							messages: [{ content: prompt, role: "user" }],
+							modelId: target.modelId,
+							providerId: target.providerId,
+							signal: options.signal,
+							temperature: options.temperature,
+						},
+						MODEL_CAPABILITIES.sidechat,
+					);
+					return result.text;
+				},
+			},
 		});
 		if (settings.sidechatModelId === undefined) {
 			this.runtimeLog.info("sidechat model is not configured; using the active model", {

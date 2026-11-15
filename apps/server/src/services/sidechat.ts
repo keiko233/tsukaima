@@ -1,4 +1,4 @@
-import type { BusyArbitrationInput, BusyArbitrationResult, ModelPort } from "@elaina/core";
+import type { BusyArbitrationInput, BusyArbitrationResult } from "@elaina/core";
 import type { Logger } from "../logging.ts";
 
 const MAX_PENDING_CHARS = 3_000;
@@ -43,11 +43,52 @@ function parseDecision(
 	};
 }
 
+export interface SidechatModelTarget {
+	readonly modelId: string;
+	readonly providerId: string;
+}
+
+/**
+ * Model access supplied by the plugin registry. `eligible` is whatever providers advertise with
+ * the sidechat capability, so each plugin decides which of its models may classify busy runs.
+ */
+export interface SidechatModels {
+	/** Model currently serving conversations; the fallback when nothing is configured. */
+	readonly active: () => SidechatModelTarget | undefined;
+	readonly eligible: () => Promise<readonly SidechatModelTarget[]>;
+	readonly complete: (
+		target: SidechatModelTarget,
+		prompt: string,
+		options: {
+			readonly maxTokens: number;
+			readonly signal: AbortSignal;
+			readonly temperature: number;
+		},
+	) => Promise<string>;
+}
+
 export interface SidechatServiceOptions {
 	/** Global default model id, read from runtime settings on demand. */
 	readonly defaultModelId: () => Promise<string | undefined>;
 	readonly logger: Logger;
-	readonly model: () => ModelPort | undefined;
+	readonly models: SidechatModels;
+}
+
+/**
+ * Picks the provider/model for a requested model id. Model ids are only unique per provider, so
+ * the active provider wins a tie and the remaining catalog order breaks the rest.
+ */
+export function resolveSidechatTarget(
+	eligible: readonly SidechatModelTarget[],
+	modelId: string,
+	active: SidechatModelTarget | undefined,
+): SidechatModelTarget | undefined {
+	const matches = eligible.filter((model) => model.modelId === modelId);
+	return (
+		matches.find((model) => model.providerId === active?.providerId) ??
+		matches[0] ??
+		(active?.modelId === modelId ? active : undefined)
+	);
 }
 
 /**
@@ -58,18 +99,18 @@ export interface SidechatServiceOptions {
 export class SidechatService {
 	readonly #defaultModelId: SidechatServiceOptions["defaultModelId"];
 	readonly #logger: Logger;
-	readonly #model: SidechatServiceOptions["model"];
+	readonly #models: SidechatModels;
 
 	constructor(options: SidechatServiceOptions) {
 		this.#defaultModelId = options.defaultModelId;
 		this.#logger = options.logger.child("elaina::server::sidechat");
-		this.#model = options.model;
+		this.#models = options.models;
 	}
 
 	async decide(input: BusyArbitrationInput): Promise<BusyArbitrationResult | undefined> {
 		if (!input.policy.sidechat.enabled) return undefined;
-		const port = this.#model();
-		if (port === undefined) return undefined;
+		const active = this.#models.active();
+		const eligible = await this.#models.eligible().catch(() => []);
 		const configured = input.policy.sidechat.model?.trim();
 		const fallback =
 			configured !== undefined && configured.length > 0
@@ -80,20 +121,20 @@ export class SidechatService {
 				? configured
 				: fallback !== undefined && fallback.trim().length > 0
 					? fallback.trim()
-					: port.modelId;
-		let selected = port.models.getModel(port.providerId, requested);
-		if (selected === undefined && requested !== port.modelId) {
+					: undefined;
+		// With nothing configured, a plugin-declared model is better than no classifier at all.
+		let target =
+			requested === undefined
+				? (active ?? eligible[0])
+				: resolveSidechatTarget(eligible, requested, active);
+		if (requested !== undefined && target === undefined) {
 			this.#logger.warn("sidechat model is not available; using the active model", {
 				modelId: requested,
-				providerId: port.providerId,
 			});
-			selected = port.models.getModel(port.providerId, port.modelId);
+			target = active;
 		}
-		if (selected === undefined) {
-			this.#logger.warn("sidechat has no usable model", {
-				modelId: requested,
-				providerId: port.providerId,
-			});
+		if (target === undefined) {
+			this.#logger.warn("sidechat has no usable model", { modelId: requested });
 			return undefined;
 		}
 		const startedAt = performance.now();
@@ -104,39 +145,25 @@ export class SidechatService {
 		);
 		timer.unref?.();
 		try {
-			const response = await port.models.completeSimple(
-				selected,
-				{
-					messages: [
-						{
-							content: buildSidechatPrompt(input),
-							role: "user",
-							timestamp: Date.now(),
-						},
-					],
-				},
-				{
-					cacheRetention: "none",
-					maxTokens: 160,
-					signal: controller.signal,
-					temperature: 0,
-				},
-			);
-			const text = response.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+			const text = await this.#models.complete(target, buildSidechatPrompt(input), {
+				maxTokens: 160,
+				signal: controller.signal,
+				temperature: 0,
+			});
 			const parsed = parseDecision(text);
 			if (parsed === undefined) {
 				this.#logger.debug("sidechat returned no usable decision", {
 					durationMs: Math.round(performance.now() - startedAt),
-					modelId: selected.id,
+					modelId: target.modelId,
 					outputChars: text.length,
-					providerId: port.providerId,
+					providerId: target.providerId,
 				});
 				return undefined;
 			}
 			if (parsed.decision !== "wait" && parsed.confidence === undefined) {
 				this.#logger.debug("sidechat decision without confidence downgraded", {
 					decision: parsed.decision,
-					modelId: selected.id,
+					modelId: target.modelId,
 				});
 				return { decision: "wait", reason: "missing confidence" };
 			}
@@ -148,7 +175,7 @@ export class SidechatService {
 					confidence: parsed.confidence,
 					decision: parsed.decision,
 					minConfidence: input.policy.sidechat.minConfidence,
-					modelId: selected.id,
+					modelId: target.modelId,
 				});
 				return {
 					decision: "wait",
@@ -158,7 +185,7 @@ export class SidechatService {
 			}
 			if (parsed.decision === "steer" && !input.toolsActive) {
 				this.#logger.debug("sidechat steer downgraded: no active tool round", {
-					modelId: selected.id,
+					modelId: target.modelId,
 				});
 				return {
 					decision: "wait",
@@ -170,8 +197,8 @@ export class SidechatService {
 				confidence: parsed.confidence,
 				decision: parsed.decision,
 				durationMs: Math.round(performance.now() - startedAt),
-				modelId: selected.id,
-				providerId: port.providerId,
+				modelId: target.modelId,
+				providerId: target.providerId,
 				toolRounds: input.turns,
 				toolsActive: input.toolsActive,
 			});
@@ -180,13 +207,13 @@ export class SidechatService {
 			if (controller.signal.aborted) {
 				this.#logger.debug("sidechat timed out", {
 					durationMs: Math.round(performance.now() - startedAt),
-					modelId: selected.id,
+					modelId: target.modelId,
 					timeoutMs: input.policy.sidechat.timeoutMs,
 				});
 			} else {
 				this.#logger.warn("sidechat completion failed", {
 					error: error instanceof Error ? error.message : String(error),
-					modelId: selected.id,
+					modelId: target.modelId,
 				});
 			}
 			return undefined;

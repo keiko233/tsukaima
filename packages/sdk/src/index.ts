@@ -127,6 +127,11 @@ export {
 	hasChannelCapability,
 } from "./host.ts";
 export {
+	hasModelCapability,
+	MODEL_CAPABILITIES,
+	type KnownModelCapability,
+} from "./model-capabilities.ts";
+export {
 	completePluginModel,
 	createConsolePluginLogger,
 	createPluginContext,

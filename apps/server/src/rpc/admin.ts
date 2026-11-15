@@ -1,4 +1,5 @@
 import { ORPCError } from "@orpc/server";
+import { MODEL_CAPABILITIES } from "@elaina/sdk";
 import { conversations, modelPolicies, type memories } from "@elaina/db";
 import { adminBase, type ElainaApiContext } from "./base.ts";
 import {
@@ -73,32 +74,33 @@ function toContractPolicies(policies: readonly LifecycleModelPolicy[]) {
 }
 
 /**
- * Settings plus the chat-capable model catalog of the active provider. The catalog is omitted
- * when the provider reports none, which keeps the settings contract small for the fake model
- * and for providers that do not expose descriptors.
+ * Settings plus the models plugins advertise for the sidechat classifier. The catalog is omitted
+ * when no provider declares one, which keeps the contract small and lets the WebUI explain that
+ * the active model will be used instead.
+ *
+ * The stored setting is a bare model id, so duplicate ids collapse to one entry and the active
+ * provider wins the tie — the same preference the classifier applies at run time.
  */
 async function settingsView(context: ElainaApiContext) {
 	const settings = await readRuntimeSettings(context.lifecycle.domainDatabase);
-	const providerId =
-		settings.modelProviderId ?? context.lifecycle.pluginHost.modelProviders()[0]?.id;
-	const models =
-		providerId === undefined
-			? []
-			: (
-					await context.lifecycle.pluginHost.listModels({
-						capability: "basic-chat",
-						providerId,
-					})
-				).map((model) => ({
-					capabilities: [...model.capabilities],
-					...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
-					id: model.id,
-					...(model.maxOutputTokens === undefined
-						? {}
-						: { maxOutputTokens: model.maxOutputTokens }),
-					...(model.name === undefined ? {} : { name: model.name }),
-					providerId: model.providerId,
-				}));
+	const activeProviderId = context.lifecycle.activeModelProviderId;
+	const catalog = await context.lifecycle.pluginHost.listModels({
+		capability: MODEL_CAPABILITIES.sidechat,
+	});
+	const byId = new Map<string, (typeof catalog)[number]>();
+	for (const model of catalog) {
+		const existing = byId.get(model.id);
+		if (existing === undefined || model.providerId === activeProviderId) byId.set(model.id, model);
+	}
+	const models = [...byId.values()].map((model) => ({
+		capabilities: [...model.capabilities],
+		...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+		id: model.id,
+		...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
+		...(model.name === undefined ? {} : { name: model.name }),
+		...(model.pluginId === undefined ? {} : { pluginId: model.pluginId }),
+		providerId: model.providerId,
+	}));
 	return {
 		...publicRuntimeSettings(settings),
 		...(models.length === 0 ? {} : { models }),

@@ -195,19 +195,27 @@ describe("admin RPC", () => {
 			models: [
 				{ enabled: true, id: "text-chat" },
 				{ enabled: true, id: "vision-reasoner", supportsImage: true },
+				{ enabled: true, id: "slow-chat", supportsSidechat: false },
 				{ enabled: false, id: "disabled-chat" },
 			],
 		});
 		const catalogSettings = (await request("admin/settings/get")) as {
-			models?: Array<{ capabilities: string[]; id: string; providerId: string }>;
+			models?: Array<{
+				capabilities: string[];
+				id: string;
+				pluginId?: string;
+				providerId: string;
+			}>;
 		};
+		// The plugin decides which models may classify; the host only filters on its capability.
 		expect(catalogSettings.models?.map((model) => model.id)).toEqual([
 			"text-chat",
 			"vision-reasoner",
 		]);
 		expect(
-			catalogSettings.models?.every((model) => model.capabilities.includes("basic-chat")),
+			catalogSettings.models?.every((model) => model.capabilities.includes("chat.sidechat")),
 		).toBe(true);
+		expect(catalogSettings.models?.[0]?.pluginId).toBe("openai-compatible");
 		const withSidechatModel = (await request("admin/settings/update", {
 			sidechatModelId: "text-chat",
 		})) as {

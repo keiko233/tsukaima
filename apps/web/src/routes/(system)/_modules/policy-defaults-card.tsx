@@ -33,6 +33,8 @@ export function PolicyDefaultsCard() {
 	const [draft, setDraft] = useState<ConversationPolicy | undefined>();
 	const [overrideOpen, setOverrideOpen] = useState(false);
 	const policyQuery = useQuery(orpc.admin.policies.get.queryOptions());
+	// Same cache entry as the settings page query, so opening both costs one request.
+	const settingsQuery = useQuery(orpc.admin.settings.get.queryOptions());
 	const overrideAll = useMutation(
 		orpc.admin.policies.overrideAll.mutationOptions({
 			onError: (error) =>
@@ -152,7 +154,11 @@ export function PolicyDefaultsCard() {
 
 						<section className="space-y-2.5 border-t border-border/60 pt-3">
 							<SectionHeader onReset={resetSidechat} title={m.policy_section_sidechat()} />
-							<PolicySidechatFields draft={draft} onChange={change} />
+							<PolicySidechatFields
+								draft={draft}
+								models={settingsQuery.data?.models}
+								onChange={change}
+							/>
 						</section>
 
 						<section className="space-y-2.5 border-t border-border/60 pt-3">

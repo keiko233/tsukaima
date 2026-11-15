@@ -588,10 +588,23 @@ describe("openai-compatible plugin", () => {
 				"structured-output",
 			]),
 		);
+		expect(modelCapabilities(first)).toContain("chat.sidechat");
 		expect(modelInputModalities(first)).toEqual(["text", "image"]);
 		expect(toPluginModelDescriptor(first).reasoning).toEqual({
 			default: "medium",
 			levels: ["minimal", "low", "medium", "high", "xhigh", "max"],
 		});
+	});
+
+	test("lets the model opt out of the sidechat capability", () => {
+		const config = resolveOpenAiCompatibleConfig({
+			apiKey: "test-key",
+			baseUrl: "https://models.example/v1",
+			models: [{ enabled: true, id: "slow", supportsSidechat: false }],
+		});
+		const model = config?.models[0];
+		if (model === undefined) throw new Error("model missing");
+		expect(model.supportsSidechat).toBe(false);
+		expect(modelCapabilities(model)).not.toContain("chat.sidechat");
 	});
 });

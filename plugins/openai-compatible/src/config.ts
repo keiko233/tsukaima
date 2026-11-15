@@ -1,7 +1,8 @@
-import type {
-	PluginModelDescriptor,
-	PluginModelInputModality,
-	PluginModelReasoningLevel,
+import {
+	MODEL_CAPABILITIES,
+	type PluginModelDescriptor,
+	type PluginModelInputModality,
+	type PluginModelReasoningLevel,
 } from "@elaina/sdk";
 import { z } from "zod";
 
@@ -38,6 +39,8 @@ export const openAiCompatibleModelSchema = z.object({
 	defaultReasoningLevel: openAiCompatibleReasoningLevelSchema.default("medium"),
 	supportsImage: z.boolean().default(false),
 	supportsAudio: z.boolean().default(false),
+	/** Whether the busy-run classifier may use this model; untick slow or costly models. */
+	supportsSidechat: z.boolean().default(true),
 	capabilities: z.array(z.string().trim().min(1)).default([]),
 	contextWindow: z.number().int().positive().default(128_000),
 	maxOutputTokens: z.number().int().positive().default(4_096),
@@ -122,17 +125,18 @@ function customCapabilities(model: OpenAiCompatibleModel): readonly string[] {
 }
 
 export function modelCapabilities(model: OpenAiCompatibleModel): readonly string[] {
-	const capabilities = new Set(["basic-chat"]);
-	if (model.supportsTools) capabilities.add("tool-use");
+	const capabilities = new Set<string>([MODEL_CAPABILITIES.basicChat]);
+	if (model.supportsTools) capabilities.add(MODEL_CAPABILITIES.toolUse);
 	if (model.supportsReasoning) {
-		capabilities.add("reasoning");
-		capabilities.add("thinking");
+		capabilities.add(MODEL_CAPABILITIES.reasoning);
+		capabilities.add(MODEL_CAPABILITIES.thinking);
 	}
 	if (model.supportsImage) {
-		capabilities.add("vision");
-		capabilities.add("image-input");
+		capabilities.add(MODEL_CAPABILITIES.vision);
+		capabilities.add(MODEL_CAPABILITIES.imageInput);
 	}
-	if (model.supportsAudio) capabilities.add("audio-input");
+	if (model.supportsAudio) capabilities.add(MODEL_CAPABILITIES.audioInput);
+	if (model.supportsSidechat) capabilities.add(MODEL_CAPABILITIES.sidechat);
 	for (const capability of customCapabilities(model)) capabilities.add(capability);
 	return [...capabilities];
 }

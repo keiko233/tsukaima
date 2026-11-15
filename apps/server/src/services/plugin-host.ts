@@ -12,6 +12,7 @@ import {
 	type PluginLogger,
 	type PluginManifest,
 	type PluginModelCompleteRequest,
+	type PluginModelCompleteResult,
 	type PluginModelInfo,
 	type PluginModelProvider,
 	type PluginModelQuery,
@@ -63,6 +64,8 @@ export interface PluginHostOptions {
 	readonly hooks: HookBus;
 	readonly logger: Logger;
 	readonly onModelMessage?: (message: unknown, pluginId: string) => void;
+	/** Usage from host services (sidechat, memory) attributed to a model capability. */
+	readonly onHostModelMessage?: (message: unknown, capability: string) => void;
 	readonly plugins: readonly ElainaPlugin[];
 	readonly requests: RequestService;
 	readonly settings: PluginSettingsStore;
@@ -334,9 +337,26 @@ export class PluginHost {
 		return this.#modelProviders.get(providerId);
 	}
 
-	/** Secret-free model catalog reported by started providers. */
+	/** Secret-free model catalog reported by started providers, stamped with plugin owners. */
 	async listModels(query?: PluginModelQuery): Promise<readonly PluginModelInfo[]> {
-		return collectPluginModels(this.#modelProviders.values(), query);
+		const catalog = await collectPluginModels(this.#modelProviders.values(), query);
+		return catalog.map((model) => {
+			const ownerId = this.#modelProviderOwners.get(model.providerId);
+			return ownerId === undefined ? model : { ...model, pluginId: ownerId };
+		});
+	}
+
+	/**
+	 * Runs a completion on behalf of a host service rather than a plugin. Usage is attributed to
+	 * the requested capability so ledger entries do not look like plugin traffic.
+	 */
+	async completeModel(
+		request: PluginModelCompleteRequest,
+		capability: string,
+	): Promise<PluginModelCompleteResult> {
+		return await completePluginModel(this.#modelProviders, request, {
+			onMessage: (message) => this.#options.onHostModelMessage?.(message, capability),
+		});
 	}
 
 	/** Invoke a WebUI-visible plugin RPC method. Methods are namespaced by plugin id. */
@@ -886,13 +906,7 @@ export class PluginHost {
 		const models = {
 			getProvider: (id: string) => this.#modelProviders.get(id),
 			listProviders: () => [...this.#modelProviders.values()],
-			listModels: async (query?: PluginModelQuery): Promise<readonly PluginModelInfo[]> => {
-				const catalog = await collectPluginModels(this.#modelProviders.values(), query);
-				return catalog.map((model) => {
-					const ownerId = this.#modelProviderOwners.get(model.providerId);
-					return ownerId === undefined ? model : { ...model, pluginId: ownerId };
-				});
-			},
+			listModels: (query?: PluginModelQuery) => this.listModels(query),
 			findModel: async (modelId: string, providerId?: string) => {
 				const catalog = await collectPluginModels(
 					this.#modelProviders.values(),

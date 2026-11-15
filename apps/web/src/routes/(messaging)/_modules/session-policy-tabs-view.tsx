@@ -1,6 +1,11 @@
 "use client";
 
-import type { ConversationPolicy, PersonaSummary, PolicyRevision } from "@elaina/contracts";
+import type {
+	ConversationPolicy,
+	ModelCatalogEntry,
+	PersonaSummary,
+	PolicyRevision,
+} from "@elaina/contracts";
 import { Button } from "@elaina/ui/components/motion/button";
 import { m } from "@/paraglide/messages";
 import {
@@ -103,6 +108,8 @@ export interface PolicyDraftTabProps {
 	onRetry: () => void;
 	onSave: () => void;
 	saving?: boolean;
+	/** Models plugins advertise for sidechat; the policy editor offers them as overrides. */
+	sidechatModels?: readonly ModelCatalogEntry[];
 }
 
 export function PolicyTriggerTabView({
@@ -276,6 +283,7 @@ export function PolicyPacingTabView({
 	onRetry,
 	onSave,
 	saving = false,
+	sidechatModels,
 }: PolicyDraftTabProps) {
 	return (
 		<PolicyTabShell
@@ -295,7 +303,7 @@ export function PolicyPacingTabView({
 
 					<div className="space-y-2 border-t border-border/60 pt-2.5">
 						<h3 className="text-xs font-semibold text-foreground">{m.policy_section_sidechat()}</h3>
-						<PolicySidechatFields draft={draft} onChange={onChange} />
+						<PolicySidechatFields draft={draft} models={sidechatModels} onChange={onChange} />
 					</div>
 
 					<div className="space-y-2 border-t border-border/60 pt-2.5">

@@ -55,5 +55,6 @@
 	"save_success": "模型目录已保存",
 	"save_failed": "保存模型目录失败",
 	"status_needs_attention": "Provider 需要处理",
-	"plugin_identity": "{id} · v{version}"
+	"plugin_identity": "{id} · v{version}",
+	"capability_sidechat": "侧聊"
 }

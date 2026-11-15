@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { type BusyArbitrationInput, createFakeModel } from "@elaina/core";
+import type { BusyArbitrationInput } from "@elaina/core";
 import { conversationPolicySchema, defaultConversationPolicy } from "@elaina/contracts";
 import { Logger } from "../src/logging.ts";
-import { buildSidechatPrompt, SidechatService } from "../src/services/sidechat.ts";
+import {
+	buildSidechatPrompt,
+	SidechatService,
+	type SidechatModelTarget,
+} from "../src/services/sidechat.ts";
 
 const logger = Logger.create({ level: "error", sink: () => undefined });
 
@@ -19,6 +23,11 @@ const policy = (patch: { minConfidence?: number } = {}) =>
 		},
 	});
 
+const withSidechatModel = (model: string) => ({
+	...policy(),
+	sidechat: { ...policy().sidechat, model },
+});
+
 const input = (overrides: Partial<BusyArbitrationInput> = {}): BusyArbitrationInput => ({
 	conversationId: "42",
 	pendingText: "Aya: 然后呢",
@@ -30,11 +39,29 @@ const input = (overrides: Partial<BusyArbitrationInput> = {}): BusyArbitrationIn
 	...overrides,
 });
 
-const service = (response: string) =>
+const activeModel: SidechatModelTarget = { modelId: "active-model", providerId: "primary" };
+
+interface RuntimeOptions {
+	readonly active?: SidechatModelTarget | undefined;
+	readonly defaultModelId?: string;
+	readonly eligible?: readonly SidechatModelTarget[];
+	readonly used?: SidechatModelTarget[];
+}
+
+const runtime = (response: string, options: RuntimeOptions = {}) => ({
+	active: () => ("active" in options ? options.active : activeModel),
+	complete: async (target: SidechatModelTarget) => {
+		options.used?.push(target);
+		return response;
+	},
+	eligible: async () => options.eligible ?? [],
+});
+
+const service = (response: string, options: RuntimeOptions = {}) =>
 	new SidechatService({
-		defaultModelId: async () => undefined,
+		defaultModelId: async () => options.defaultModelId,
 		logger,
-		model: () => createFakeModel({ responses: [response] }),
+		models: runtime(response, options),
 	});
 
 describe("sidechat service", () => {
@@ -68,6 +95,56 @@ describe("sidechat service", () => {
 	test("returns undefined for an unusable answer", async () => {
 		const result = await service("I think you should interrupt.").decide(input());
 		expect(result).toBeUndefined();
+	});
+
+	test("uses the plugin-declared model from conversation policy", async () => {
+		const used: SidechatModelTarget[] = [];
+		const result = await service('{"decision":"interrupt","confidence":0.9}', {
+			eligible: [{ modelId: "fast-classifier", providerId: "openai-compatible" }],
+			used,
+		}).decide(input({ policy: withSidechatModel("fast-classifier") }));
+		expect(result?.decision).toBe("interrupt");
+		expect(used).toEqual([{ modelId: "fast-classifier", providerId: "openai-compatible" }]);
+	});
+
+	test("prefers the active provider for a shared model id", async () => {
+		const used: SidechatModelTarget[] = [];
+		await service('{"decision":"wait","confidence":0.9}', {
+			eligible: [
+				{ modelId: "shared", providerId: "secondary" },
+				{ modelId: "shared", providerId: "primary" },
+			],
+			used,
+		}).decide(input({ policy: withSidechatModel("shared") }));
+		expect(used).toEqual([{ modelId: "shared", providerId: "primary" }]);
+	});
+
+	test("falls back to the active model when the plugin no longer declares the model", async () => {
+		const used: SidechatModelTarget[] = [];
+		await service('{"decision":"wait","confidence":0.9}', { used }).decide(
+			input({ policy: withSidechatModel("retired-model") }),
+		);
+		expect(used).toEqual([activeModel]);
+	});
+
+	test("uses the runtime default before the active model", async () => {
+		const used: SidechatModelTarget[] = [];
+		await service('{"decision":"wait","confidence":0.9}', {
+			defaultModelId: "settings-model",
+			eligible: [{ modelId: "settings-model", providerId: "openai-compatible" }],
+			used,
+		}).decide(input());
+		expect(used).toEqual([{ modelId: "settings-model", providerId: "openai-compatible" }]);
+	});
+
+	test("uses a plugin-declared model when no active model exists", async () => {
+		const used: SidechatModelTarget[] = [];
+		await service('{"decision":"wait","confidence":0.9}', {
+			active: undefined,
+			eligible: [{ modelId: "fallback-model", providerId: "openai-compatible" }],
+			used,
+		}).decide(input());
+		expect(used).toEqual([{ modelId: "fallback-model", providerId: "openai-compatible" }]);
 	});
 
 	test("builds a bounded prompt with the request and pending batch", () => {
