@@ -1034,6 +1034,19 @@ export const policyHistoryInputSchema = z
 	})
 	.strict();
 
+/** Save the patch as the global default and replace every conversation policy with it. */
+export const policyOverrideAllInputSchema = z
+	.object({
+		policy: conversationPolicyPatchSchema,
+	})
+	.strict();
+
+export const policyOverrideAllOutputSchema = z.object({
+	updated: z.number().int().nonnegative(),
+	view: conversationPolicyViewSchema,
+});
+export type PolicyOverrideAllOutput = z.infer<typeof policyOverrideAllOutputSchema>;
+
 export const personaSummarySchema = z.object({
 	createdAt: z.string(),
 	id: z.string(),
@@ -1288,6 +1301,10 @@ export const appContract = oc.router({
 		policies: {
 			get: oc.input(policyGetInputSchema).output(conversationPolicyViewSchema),
 			history: oc.input(policyHistoryInputSchema).output(z.array(policyRevisionSchema)),
+			overrideAll: oc
+				.input(policyOverrideAllInputSchema)
+				.output(policyOverrideAllOutputSchema)
+				.meta({ audit: true }),
 			update: oc
 				.input(policyUpdateInputSchema)
 				.output(conversationPolicyViewSchema)

@@ -4,13 +4,20 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@elaina/ui/components/motion/card";
 import { Input } from "@elaina/ui/components/motion/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@elaina/ui/components/motion/select";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@elaina/ui/components/motion/select";
 import { logLevels as LOG_LEVELS, orpc, type LogLevel } from "@/lib/api";
 import { applyLocale } from "@/lib/locale";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { getLocale, locales, toLocale, type Locale } from "@/paraglide/runtime";
 import { SystemPage } from "./page-header";
+import { PolicyDefaultsCard } from "./policy-defaults-card";
 
 const LOCALE_LABELS: Record<Locale, string> = {
 	en: "English",
@@ -78,6 +85,7 @@ export function SettingsPage() {
 						<p className="text-[11px] text-muted-foreground">{m.settings_language_hint()}</p>
 					</CardContent>
 				</Card>
+				<PolicyDefaultsCard />
 				<Card size="compact">
 					<CardHeader>
 						<CardTitle as="h2">{m.settings_title()}</CardTitle>

@@ -103,6 +103,11 @@ describe("conversation policy service", () => {
 
 			await policyService.update({
 				policy: {
+					compaction: {
+						keepRecentTokens: 9_000,
+						reserveTokens: 4_096,
+						triggerTokens: 100_000,
+					},
 					trigger: { groupAccess: "allowlist", keywords: ["wake"] },
 				},
 				scope: "global",
@@ -116,6 +121,10 @@ describe("conversation policy service", () => {
 			expect(conversationUpdate.policy.trigger.keywords).toEqual(["wake"]);
 			expect(conversationUpdate.policy.pacing.burstSettleMs).toBe(123);
 			expect(conversationUpdate.policy.pacing.replyCooldownMs).toBe(456);
+			expect(conversationUpdate.policy.compaction.reserveTokens).toBe(4_096);
+			expect(conversationUpdate.policy.compaction.keepRecentTokens).toBe(9_000);
+			expect(conversationUpdate.policy.compaction.backgroundTokens).toBe(32_768);
+			expect(conversationUpdate.policy.compaction.triggerTokens).toBe(100_000);
 
 			const second = await policyService.update({
 				conversationId: "session-1",
@@ -135,6 +144,86 @@ describe("conversation policy service", () => {
 			expect(history.find((revision) => revision.isActive)?.policy.version).toBe(2);
 			const rows = await database.select().from(policies);
 			expect(rows.filter((row) => row.scope === "conversation")).toHaveLength(2);
+		} finally {
+			database.$client.close();
+		}
+	});
+
+	test("overrideAll replaces every conversation policy with the saved global snapshot", async () => {
+		const database = await openFixture();
+		try {
+			await seedSession(database);
+			const now = new Date().toISOString();
+			await database.insert(conversations).values({
+				chatObjectId: "chat-1",
+				createdAt: now,
+				durableConversationId: "42",
+				id: "session-2",
+				isReceiving: 0,
+				kind: "group",
+				title: "Second",
+				updatedAt: now,
+			});
+			const policyService = service(database);
+			await policyService.update({
+				conversationId: "session-1",
+				policy: {
+					compaction: { reserveTokens: 2_048 },
+					memoryExtractModel: "custom-extract-model",
+					pacing: {
+						allowedTools: ["search"],
+						burstSettleMs: 123,
+						quietHours: { enabled: true, endHour: 2, startHour: 1 },
+					},
+					sidechat: { model: "custom-sidechat-model" },
+				},
+				scope: "conversation",
+			});
+			await policyService.update({
+				conversationId: "session-2",
+				policy: { pacing: { burstSettleMs: 456 } },
+				scope: "conversation",
+			});
+
+			const result = await policyService.overrideAll({
+				policy: {
+					compaction: { reserveTokens: 4_096, triggerTokens: 90_000 },
+					pacing: { burstSettleMs: 999 },
+				},
+			});
+			expect(result.updated).toBe(2);
+			expect(result.view.source.scope).toBe("global");
+			expect(result.view.policy.pacing.burstSettleMs).toBe(999);
+
+			const first = await policyService.view({ conversationId: "session-1" });
+			expect(first.source.scope).toBe("conversation");
+			expect(first.policy.pacing.burstSettleMs).toBe(999);
+			expect(first.policy.pacing.allowedTools).toBeUndefined();
+			expect(first.policy.pacing.quietHours).toBeUndefined();
+			expect(first.policy.sidechat.model).toBeUndefined();
+			expect(first.policy.memoryExtractModel).toBeUndefined();
+			expect(first.policy.compaction.reserveTokens).toBe(4_096);
+			expect(first.policy.compaction.triggerTokens).toBe(90_000);
+
+			const second = await policyService.view({ conversationId: "session-2" });
+			expect(second.policy.pacing.burstSettleMs).toBe(999);
+			expect(second.policy.compaction.reserveTokens).toBe(4_096);
+			expect(second.policy.compaction.triggerTokens).toBe(90_000);
+
+			const firstHistory = await policyService.history({
+				conversationId: "session-1",
+				scope: "conversation",
+			});
+			expect(firstHistory).toHaveLength(2);
+			expect(firstHistory.filter((revision) => revision.isActive)).toHaveLength(1);
+			expect(firstHistory.find((revision) => revision.isActive)?.policy.pacing.burstSettleMs).toBe(
+				999,
+			);
+			const secondHistory = await policyService.history({
+				conversationId: "session-2",
+				scope: "conversation",
+			});
+			expect(secondHistory).toHaveLength(2);
 		} finally {
 			database.$client.close();
 		}

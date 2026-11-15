@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Extension } from "@earendil-works/pi-durable";
+import { conversationPolicySchema, defaultConversationPolicy } from "@elaina/contracts";
 import { BACKGROUND_CONTEXT, openDurableStorage } from "@elaina/durable";
 import { PiDurableConversationHost } from "./conversation-host.ts";
 
@@ -25,6 +26,75 @@ describe("inspectConversationContext", () => {
 			const host = new PiDurableConversationHost({ storage });
 			expect(await host.inspectConversationContext("not-a-number")).toBeUndefined();
 			expect(await host.inspectConversationContext("999999")).toBeUndefined();
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("applies conversation compaction policy to the active agent", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "elaina-inspect-compaction-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const host = new PiDurableConversationHost({ storage });
+			const conversationId = await host.createConversation();
+			await host.updatePolicy(
+				conversationId,
+				conversationPolicySchema.parse({
+					...defaultConversationPolicy,
+					compaction: {
+						backgroundTokens: 12_000,
+						enabled: true,
+						keepRecentTokens: 9_000,
+						reserveTokens: 4_096,
+						triggerTokens: 0,
+					},
+				}),
+			);
+
+			const stats = await host.inspectConversationContext(conversationId);
+			expect(stats?.autocompact).toEqual({
+				backgroundTokens: 12_000,
+				bufferTokens: 4_096,
+				enabled: true,
+				keepRecentTokens: 9_000,
+			});
+
+			await host.updatePolicy(
+				conversationId,
+				conversationPolicySchema.parse({
+					...defaultConversationPolicy,
+					compaction: {
+						backgroundTokens: 12_000,
+						enabled: true,
+						keepRecentTokens: 9_000,
+						reserveTokens: 4_096,
+						triggerTokens: 100_000,
+					},
+				}),
+			);
+			const triggered = await host.inspectConversationContext(conversationId);
+			// The fake model has a 128k window, so a 100k trigger leaves a 28k reserve.
+			expect(triggered?.autocompact.bufferTokens).toBe(28_000);
+
+			await host.updatePolicy(
+				conversationId,
+				conversationPolicySchema.parse({
+					...defaultConversationPolicy,
+					compaction: {
+						backgroundTokens: 12_000,
+						enabled: true,
+						keepRecentTokens: 9_000,
+						reserveTokens: 4_096,
+						triggerTokens: 200_000,
+					},
+				}),
+			);
+			const clamped = await host.inspectConversationContext(conversationId);
+			// A trigger above the window still leaves a usable summary budget.
+			expect(clamped?.autocompact.bufferTokens).toBe(2_048);
+
 			await host.close();
 			await storage.close(BACKGROUND_CONTEXT);
 		} finally {

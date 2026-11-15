@@ -1,12 +1,17 @@
 "use client";
 
-import type {
-	ConversationPolicy,
-	PersonaSummary,
-	PolicyRevision,
-} from "@elaina/contracts";
+import type { ConversationPolicy, PersonaSummary, PolicyRevision } from "@elaina/contracts";
 import { Button } from "@elaina/ui/components/motion/button";
 import { m } from "@/paraglide/messages";
+import {
+	Field,
+	PolicyCompactionFields,
+	PolicyPacingFields,
+	PolicySidechatFields,
+	Toggle,
+	fieldClass,
+	textareaClass,
+} from "../../_modules/policy/conversation-policy-fields";
 import { InlineError } from "../../_modules/shell/primitives";
 
 export const listValue = (values: readonly string[]): string => values.join(", ");
@@ -15,51 +20,6 @@ export const splitValue = (value: string): string[] =>
 		.split(/[,\n]/u)
 		.map((entry) => entry.trim())
 		.filter((entry) => entry.length > 0);
-
-const fieldClass =
-	"h-8 w-full rounded-md border border-border bg-background px-2.5 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
-const textareaClass =
-	"min-h-16 w-full resize-y rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
-
-function Field({
-	children,
-	hint,
-	label,
-}: {
-	children: React.ReactNode;
-	hint?: string;
-	label: string;
-}) {
-	return (
-		<label className="flex flex-col gap-1 text-[11px] font-medium text-foreground">
-			<span>{label}</span>
-			{children}
-			{hint ? <span className="font-normal leading-4 text-muted-foreground">{hint}</span> : null}
-		</label>
-	);
-}
-
-function Toggle({
-	checked,
-	label,
-	onChange,
-}: {
-	checked: boolean;
-	label: string;
-	onChange: (value: boolean) => void;
-}) {
-	return (
-		<label className="flex items-center gap-2 text-xs text-foreground">
-			<input
-				type="checkbox"
-				checked={checked}
-				onChange={(event) => onChange(event.target.checked)}
-				className="size-3.5 rounded border-border accent-primary"
-			/>
-			<span>{label}</span>
-		</label>
-	);
-}
 
 function PolicyTabShell({
 	children,
@@ -83,7 +43,11 @@ function PolicyTabShell({
 	saving?: boolean;
 }) {
 	if (isPending) {
-		return <div className="px-3 py-6 text-center text-[11px] text-muted-foreground">{m.policy_loading()}</div>;
+		return (
+			<div className="px-3 py-6 text-center text-[11px] text-muted-foreground">
+				{m.policy_loading()}
+			</div>
+		);
 	}
 	if (isError) {
 		return (
@@ -107,7 +71,13 @@ function PolicyTabShell({
 						</span>
 						<div className="flex items-center gap-1.5">
 							{dirty && onDiscard ? (
-								<Button type="button" variant="ghost" size="sm" disabled={saving} onClick={onDiscard}>
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									disabled={saving}
+									onClick={onDiscard}
+								>
 									{m.policy_reset_draft()}
 								</Button>
 							) : null}
@@ -176,7 +146,8 @@ export function PolicyTriggerTabView({
 								value={draft.trigger.privateAccess}
 								onChange={(event) =>
 									updateTrigger({
-										privateAccess: event.target.value as ConversationPolicy["trigger"]["privateAccess"],
+										privateAccess: event.target
+											.value as ConversationPolicy["trigger"]["privateAccess"],
 									})
 								}
 							>
@@ -306,13 +277,6 @@ export function PolicyPacingTabView({
 	onSave,
 	saving = false,
 }: PolicyDraftTabProps) {
-	const updatePacing = (patch: Partial<ConversationPolicy["pacing"]>) => {
-		onChange((current) => ({ ...current, pacing: { ...current.pacing, ...patch } }));
-	};
-	const updateSidechat = (patch: Partial<ConversationPolicy["sidechat"]>) => {
-		onChange((current) => ({ ...current, sidechat: { ...current.sidechat, ...patch } }));
-	};
-
 	return (
 		<PolicyTabShell
 			dirty={dirty}
@@ -327,245 +291,18 @@ export function PolicyPacingTabView({
 			{draft === undefined ? null : (
 				<>
 					<h3 className="text-xs font-semibold text-foreground">{m.policy_section_pacing()}</h3>
-
-					<div className="grid grid-cols-2 gap-2.5">
-						<Field label={m.policy_burst_settle()}>
-							<input
-								type="number"
-								min={1}
-								className={fieldClass}
-								value={draft.pacing.burstSettleMs}
-								onChange={(event) => updatePacing({ burstSettleMs: Number(event.target.value) })}
-							/>
-						</Field>
-						<Field label={m.policy_burst_max_wait()}>
-							<input
-								type="number"
-								min={1}
-								className={fieldClass}
-								value={draft.pacing.burstMaxWaitMs}
-								onChange={(event) => updatePacing({ burstMaxWaitMs: Number(event.target.value) })}
-							/>
-						</Field>
-						<Field label={m.policy_burst_max_messages()}>
-							<input
-								type="number"
-								min={1}
-								className={fieldClass}
-								value={draft.pacing.burstMaxMessages}
-								onChange={(event) => updatePacing({ burstMaxMessages: Number(event.target.value) })}
-							/>
-						</Field>
-						<Field label={m.policy_long_message()}>
-							<input
-								type="number"
-								min={1}
-								className={fieldClass}
-								value={draft.pacing.burstLongMessageThreshold}
-								onChange={(event) =>
-									updatePacing({ burstLongMessageThreshold: Number(event.target.value) })
-								}
-							/>
-						</Field>
-						<Field label={m.policy_cooldown()}>
-							<input
-								type="number"
-								min={0}
-								className={fieldClass}
-								value={draft.pacing.replyCooldownMs}
-								onChange={(event) => updatePacing({ replyCooldownMs: Number(event.target.value) })}
-							/>
-						</Field>
-						<Field label={m.policy_rate_limit()}>
-							<input
-								type="number"
-								min={0}
-								className={fieldClass}
-								value={draft.pacing.maxRepliesPerMinute}
-								onChange={(event) =>
-									updatePacing({ maxRepliesPerMinute: Number(event.target.value) })
-								}
-							/>
-						</Field>
-						<Field label={m.policy_reply_delay_max()}>
-							<input
-								type="number"
-								min={0}
-								className={fieldClass}
-								value={draft.pacing.replyDelayMaxMs}
-								onChange={(event) => updatePacing({ replyDelayMaxMs: Number(event.target.value) })}
-							/>
-						</Field>
-						<Field label={m.policy_send_interval()}>
-							<input
-								type="number"
-								min={0}
-								className={fieldClass}
-								value={draft.pacing.sendIntervalMs}
-								onChange={(event) => updatePacing({ sendIntervalMs: Number(event.target.value) })}
-							/>
-						</Field>
-					</div>
-
-					<Field label={m.policy_max_immediate()}>
-						<input
-							type="number"
-							min={1}
-							className={fieldClass}
-							value={draft.pacing.maxImmediateOutputMessages}
-							onChange={(event) =>
-								updatePacing({ maxImmediateOutputMessages: Number(event.target.value) })
-							}
-						/>
-					</Field>
+					<PolicyPacingFields draft={draft} onChange={onChange} />
 
 					<div className="space-y-2 border-t border-border/60 pt-2.5">
-						<Toggle
-							checked={draft.pacing.typingEnabled}
-							label={m.policy_typing()}
-							onChange={(value) => updatePacing({ typingEnabled: value })}
-						/>
-						<Toggle
-							checked={draft.pacing.replyDelayEnabled}
-							label={m.policy_reply_delay()}
-							onChange={(value) => updatePacing({ replyDelayEnabled: value })}
-						/>
-						<Toggle
-							checked={draft.pacing.stripMarkdown}
-							label={m.policy_strip_markdown()}
-							onChange={(value) => updatePacing({ stripMarkdown: value })}
-						/>
+						<h3 className="text-xs font-semibold text-foreground">{m.policy_section_sidechat()}</h3>
+						<PolicySidechatFields draft={draft} onChange={onChange} />
 					</div>
-
-					<div className="space-y-2 border-t border-border/60 pt-2.5">
-						<Toggle
-							checked={draft.pacing.quietHours?.enabled === true}
-							label={m.policy_quiet_hours()}
-							onChange={(value) =>
-								updatePacing({
-									quietHours: {
-										enabled: value,
-										endHour: draft.pacing.quietHours?.endHour ?? 7,
-										startHour: draft.pacing.quietHours?.startHour ?? 22,
-									},
-								})
-							}
-						/>
-						<div className="grid grid-cols-2 gap-2.5">
-							<Field label={m.policy_quiet_start()}>
-								<input
-									type="number"
-									min={0}
-									max={23}
-									className={fieldClass}
-									value={draft.pacing.quietHours?.startHour ?? 22}
-									onChange={(event) =>
-										updatePacing({
-											quietHours: {
-												enabled: draft.pacing.quietHours?.enabled ?? false,
-												endHour: draft.pacing.quietHours?.endHour ?? 7,
-												startHour: Number(event.target.value),
-											},
-										})
-									}
-								/>
-							</Field>
-							<Field label={m.policy_quiet_end()}>
-								<input
-									type="number"
-									min={0}
-									max={23}
-									className={fieldClass}
-									value={draft.pacing.quietHours?.endHour ?? 7}
-									onChange={(event) =>
-										updatePacing({
-											quietHours: {
-												enabled: draft.pacing.quietHours?.enabled ?? false,
-												endHour: Number(event.target.value),
-												startHour: draft.pacing.quietHours?.startHour ?? 22,
-											},
-										})
-									}
-								/>
-							</Field>
-						</div>
-					</div>
-
-					<Field label={m.policy_allowed_tools()} hint={m.policy_allowed_tools_hint()}>
-						<textarea
-							className={textareaClass}
-							value={listValue(draft.pacing.allowedTools ?? [])}
-							onChange={(event) => {
-								const values = splitValue(event.target.value);
-								updatePacing({ allowedTools: values.length === 0 ? undefined : values });
-							}}
-						/>
-					</Field>
 
 					<div className="space-y-2 border-t border-border/60 pt-2.5">
 						<h3 className="text-xs font-semibold text-foreground">
-							{m.policy_section_sidechat()}
+							{m.policy_section_compaction()}
 						</h3>
-						<Toggle
-							checked={draft.sidechat.enabled}
-							label={m.policy_sidechat_enabled()}
-							onChange={(value) => updateSidechat({ enabled: value })}
-						/>
-						<p className="text-[11px] leading-4 text-muted-foreground">
-							{m.policy_sidechat_hint()}
-						</p>
-						<Field label={m.policy_sidechat_model()}>
-							<input
-								type="text"
-								className={fieldClass}
-								value={draft.sidechat.model ?? ""}
-								onChange={(event) => {
-									const value = event.target.value.trim();
-									updateSidechat(
-										value.length === 0 ? { model: undefined } : { model: value },
-									);
-								}}
-							/>
-						</Field>
-						<div className="grid grid-cols-3 gap-2.5">
-							<Field label={m.policy_sidechat_timeout()}>
-								<input
-									type="number"
-									min={100}
-									className={fieldClass}
-									value={draft.sidechat.timeoutMs}
-									onChange={(event) =>
-										updateSidechat({ timeoutMs: Number(event.target.value) })
-									}
-								/>
-							</Field>
-							<Field label={m.policy_sidechat_confidence()}>
-								<input
-									type="number"
-									min={0}
-									max={1}
-									step={0.05}
-									className={fieldClass}
-									value={draft.sidechat.minConfidence}
-									onChange={(event) =>
-										updateSidechat({ minConfidence: Number(event.target.value) })
-									}
-								/>
-							</Field>
-							<Field label={m.policy_sidechat_interrupts()}>
-								<input
-									type="number"
-									min={0}
-									className={fieldClass}
-									value={draft.sidechat.maxInterruptsPerMinute}
-									onChange={(event) =>
-										updateSidechat({
-											maxInterruptsPerMinute: Number(event.target.value),
-										})
-									}
-								/>
-							</Field>
-						</div>
+						<PolicyCompactionFields draft={draft} onChange={onChange} />
 					</div>
 				</>
 			)}

@@ -327,7 +327,10 @@ export async function getSessionContextStats(
 		.limit(1);
 	if (session === undefined) return null;
 
-	const policy = await lifecycle.conversationPolicy.effectivePolicy(sessionId);
+	const policy = await lifecycle.conversationPolicy.ensureHostPolicy(
+		sessionId,
+		session.durableConversationId,
+	);
 	const codingTools = lifecycle.pluginHost.modelToolNames("self-iteration");
 	const omittedTools = policy.capabilities.includes("coding") ? [] : codingTools;
 	const [inspection, contextDetails] = await Promise.all([
@@ -362,6 +365,10 @@ export async function compactSessionContext(
 		.where(eq(conversations.id, input.sessionId))
 		.limit(1);
 	if (session === undefined) throw new Error("Session not found");
+	await lifecycle.conversationPolicy.ensureHostPolicy(
+		input.sessionId,
+		session.durableConversationId,
+	);
 	const result = await host.compactConversation(session.durableConversationId, input.instructions);
 	await lifecycle.writeAudit({
 		action: "session.compact",
@@ -819,6 +826,10 @@ export async function sendMessage(
 
 	const host = lifecycle.conversationHost;
 	if (host === undefined) throw new Error("Conversation host is not ready");
+	await lifecycle.conversationPolicy.ensureHostPolicy(
+		session.session.id,
+		session.session.durableConversationId,
+	);
 	await database.insert(messages).values({
 		chatObjectId: session.chat.id,
 		contentText: text,

@@ -5,6 +5,7 @@ import type { SessionContextStats } from "@elaina/contracts";
 mock.module("@/paraglide/messages", () => ({
 	m: {
 		context_autocompact_buffer: () => "Autocompact buffer",
+		context_autocompact_threshold: ({ tokens }: { tokens: string }) => `Compacts at ${tokens}`,
 		context_category_memories: () => "Memories",
 		context_category_messages: () => "Messages",
 		context_category_other_system: () => "Other system",
@@ -45,12 +46,8 @@ mock.module("@/paraglide/messages", () => ({
 	},
 }));
 
-const {
-	ContextPanelContent,
-	formatCategoryPercent,
-	formatCompactTokens,
-	formatHeadlinePercent,
-} = await import("./context-panel-view");
+const { ContextPanelContent, formatCategoryPercent, formatCompactTokens, formatHeadlinePercent } =
+	await import("./context-panel-view");
 
 const sampleStats: SessionContextStats = {
 	autocompact: {
@@ -142,6 +139,7 @@ describe("ContextPanel", () => {
 		expect(html).toContain("Policy");
 		expect(html).toContain("Autocompact buffer");
 		expect(html).toContain("33k");
+		expect(html).toContain("Compacts at 967k");
 		expect(html).toContain("Free space");
 		expect(html).toContain("System tools (deferred)");
 		expect(html).toContain("25.6k");
