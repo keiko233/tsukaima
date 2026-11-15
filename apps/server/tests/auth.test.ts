@@ -446,6 +446,7 @@ describe("admin auth", () => {
 			},
 			"policies/get": { conversationId: "session-1" },
 			"policies/history": { conversationId: "session-1", scope: "conversation" },
+			"policies/overrideAll": { policy: {} },
 			"policies/update": { policy: {}, scope: "global" },
 			"plugins/rpc": { input: {}, method: "test.ping" },
 			"plugins/setEnabled": { enabled: false, pluginId: "onebot-napcat" },

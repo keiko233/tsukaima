@@ -50,6 +50,7 @@ mock.module("@/paraglide/messages", () => ({
 		command_status_active: () => "Running",
 		command_status_idle: () => "Idle",
 		context_autocompact_buffer: () => "Autocompact buffer",
+		context_autocompact_threshold: ({ tokens }: { tokens: string }) => `Compacts at ${tokens}`,
 		context_category_memories: () => "Memories",
 		context_category_messages: () => "Messages",
 		context_category_other_system: () => "Other system",
@@ -103,6 +104,19 @@ mock.module("@/paraglide/messages", () => ({
 		policy_burst_max_wait: () => "Max wait (ms)",
 		policy_burst_settle: () => "Settle window (ms)",
 		policy_cooldown: () => "Reply cooldown (ms)",
+		policy_compaction_background: () => "Background lead (tokens)",
+		policy_compaction_enabled: () => "Auto-compact when the context fills",
+		policy_compaction_hint: () =>
+			"Compaction starts when used context reaches the model window minus the reserve.",
+		policy_compaction_keep_recent: () => "Keep recent tokens",
+		policy_compaction_preset: () => "Preset strategy",
+		policy_compaction_preset_aggressive: () => "Aggressive",
+		policy_compaction_preset_balanced: () => "Balanced",
+		policy_compaction_preset_conservative: () => "Conservative",
+		policy_compaction_preset_hint: () => "Presets only replace the three thresholds above.",
+		policy_compaction_reserve: () => "Reserve tokens",
+		policy_compaction_trigger: () => "Trigger at (tokens)",
+		policy_compaction_trigger_hint: () => "0 = auto: context window minus reserve.",
 		policy_description: () =>
 			"Control when this conversation responds, how it aggregates bursts, and how replies are paced. Changes create a new audited policy revision.",
 		policy_group_access: () => "Group access",
@@ -131,6 +145,7 @@ mock.module("@/paraglide/messages", () => ({
 		policy_revision_active: () => "Active",
 		policy_save: () => "Save policy",
 		policy_save_persona: () => "Save persona aliases",
+		policy_section_compaction: () => "Context compaction",
 		policy_section_pacing: () => "Aggregation and pacing",
 		policy_section_persona: () => "Persona binding",
 		policy_section_sidechat: () => "Busy-run interrupts",
@@ -157,13 +172,8 @@ mock.module("@/paraglide/messages", () => ({
 
 const { ContextPanelContent } = await import("./context-panel-view");
 const { SessionCommandsView } = await import("./session-commands-view");
-const {
-	PolicyPacingTabView,
-	PolicyPersonaTabView,
-	PolicyTriggerTabView,
-	listValue,
-	splitValue,
-} = await import("./session-policy-tabs-view");
+const { PolicyPacingTabView, PolicyPersonaTabView, PolicyTriggerTabView, listValue, splitValue } =
+	await import("./session-policy-tabs-view");
 
 const noop = () => {};
 
@@ -343,6 +353,13 @@ describe("SessionInspectorSidebar views", () => {
 		expect(html).toContain("Allowed tools");
 		expect(html).toContain("Busy-run interrupts");
 		expect(html).toContain("Max interrupts per minute");
+		expect(html).toContain("Context compaction");
+		expect(html).toContain("Reserve tokens");
+		expect(html).toContain("Trigger at (tokens)");
+		expect(html).toContain("Keep recent tokens");
+		expect(html).toContain("Conservative");
+		expect(html).toContain("Balanced");
+		expect(html).toContain("Aggressive");
 		expect(html).not.toContain("Unsaved changes");
 	});
 

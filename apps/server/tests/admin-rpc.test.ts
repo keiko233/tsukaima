@@ -260,6 +260,38 @@ describe("admin conversation policy and persona RPC", () => {
 			expect(history).toHaveLength(1);
 			expect(history[0]?.isActive).toBe(true);
 
+			const overridden = (await request("admin/policies/overrideAll", {
+				policy: {
+					compaction: { reserveTokens: 5_000, triggerTokens: 90_000 },
+					pacing: { burstSettleMs: 654 },
+				},
+			})) as {
+				updated: number;
+				view: {
+					policy: {
+						compaction: { reserveTokens: number; triggerTokens: number };
+						pacing: { burstSettleMs: number };
+					};
+					source: { scope: string };
+				};
+			};
+			expect(overridden.updated).toBe(1);
+			expect(overridden.view.source.scope).toBe("global");
+			expect(overridden.view.policy.pacing.burstSettleMs).toBe(654);
+			expect(overridden.view.policy.compaction.reserveTokens).toBe(5_000);
+			expect(overridden.view.policy.compaction.triggerTokens).toBe(90_000);
+			const afterOverride = (await request("admin/policies/get", {
+				conversationId: chat.sessionId,
+			})) as {
+				policy: {
+					compaction: { reserveTokens: number; triggerTokens: number };
+					pacing: { burstSettleMs: number };
+				};
+			};
+			expect(afterOverride.policy.pacing.burstSettleMs).toBe(654);
+			expect(afterOverride.policy.compaction.reserveTokens).toBe(5_000);
+			expect(afterOverride.policy.compaction.triggerTokens).toBe(90_000);
+
 			const persona = (await request("admin/personas/upsert", {
 				name: "Admin persona",
 				prompt: "You are the admin-created persona.",
@@ -296,12 +328,22 @@ describe("admin conversation policy and persona RPC", () => {
 			const database = lifecycle.domainDatabase;
 			if (database === undefined) throw new Error("database missing");
 			const audits = await database.select().from(auditLog);
-			for (const action of ["policy.update", "persona.upsert", "persona.bind"]) {
+			for (const action of [
+				"policy.update",
+				"policy.override-all",
+				"persona.upsert",
+				"persona.bind",
+			]) {
 				expect(audits.some((row) => row.action === action && row.result === "ok")).toBe(true);
 			}
 			expect(
 				audits.some(
 					(row) => row.action === "admin.rpc" && row.payloadJson?.includes("policies/update"),
+				),
+			).toBe(true);
+			expect(
+				audits.some(
+					(row) => row.action === "admin.rpc" && row.payloadJson?.includes("policies/overrideAll"),
 				),
 			).toBe(true);
 

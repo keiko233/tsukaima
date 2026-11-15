@@ -3,6 +3,7 @@ import {
 	adminEventSchema,
 	activityAggregationPolicySchema,
 	conversationPolicyFromActivityAggregation,
+	conversationCompactionPresets,
 	conversationPolicyPatchSchema,
 	conversationPolicySchema,
 	defaultActivityAggregationPolicy,
@@ -34,16 +35,35 @@ describe("contracts", () => {
 		expect(defaultConversationPolicy.trigger.privateAccess).toBe("open");
 		expect(defaultConversationPolicy.pacing.burstMaxMessages).toBe(20);
 		expect(defaultConversationPolicy.pacing.stripMarkdown).toBe(true);
+		expect(defaultConversationPolicy.compaction.reserveTokens).toBe(16_384);
+		expect(defaultConversationPolicy.compaction.keepRecentTokens).toBe(20_000);
+		expect(defaultConversationPolicy.compaction.backgroundTokens).toBe(32_768);
+		expect(defaultConversationPolicy.compaction.triggerTokens).toBe(0);
 		expect(() => conversationPolicySchema.parse({ steerWhenBusy: "later" })).toThrow();
 		expect(() =>
 			conversationPolicySchema.parse({ trigger: { privateAccess: "friends" } }),
 		).toThrow();
+		expect(() => conversationPolicySchema.parse({ compaction: { reserveTokens: -1 } })).toThrow();
+	});
+
+	test("compaction presets move from late to early and keep the balanced defaults", () => {
+		const { aggressive, balanced, conservative } = conversationCompactionPresets;
+		expect(conservative.reserveTokens).toBeLessThan(balanced.reserveTokens);
+		expect(balanced.reserveTokens).toBeLessThan(aggressive.reserveTokens);
+		expect(conservative.keepRecentTokens).toBeGreaterThan(balanced.keepRecentTokens);
+		expect(balanced.keepRecentTokens).toBeGreaterThan(aggressive.keepRecentTokens);
+		expect(defaultConversationPolicy.compaction).toMatchObject(balanced);
+		expect(conservative.triggerTokens).toBe(0);
+		expect(aggressive.triggerTokens).toBe(0);
 	});
 
 	test("rejects unknown keys in full and patch documents instead of dropping them", () => {
 		expect(() => conversationPolicySchema.parse({ unexpected: true })).toThrow();
 		expect(() => conversationPolicyPatchSchema.parse({ pacing: { unknownSetting: 1 } })).toThrow();
 		expect(() => conversationPolicySchema.parse({ trigger: { unknownTrigger: true } })).toThrow();
+		expect(() =>
+			conversationPolicyPatchSchema.parse({ compaction: { unknownSetting: 1 } }),
+		).toThrow();
 	});
 
 	test("validates admin events", () => {

@@ -95,6 +95,61 @@ export const sidechatPolicySchema = z
 
 export type SidechatPolicy = z.infer<typeof sidechatPolicySchema>;
 
+/**
+ * Automatic context compaction thresholds for one conversation. Compaction starts at
+ * `triggerTokens` when it is positive, otherwise above `contextWindow - reserveTokens`. It
+ * keeps roughly `keepRecentTokens` of recent history verbatim, and a background pass starts
+ * `backgroundTokens` before the blocking threshold. `0` disables the background pass.
+ */
+export const conversationCompactionPolicySchema = z
+	.object({
+		enabled: z.boolean().default(true),
+		/**
+		 * Absolute context size that triggers compaction. `0` means auto: use
+		 * `contextWindow - reserveTokens` for the active model instead.
+		 */
+		triggerTokens: z.number().int().min(0).default(0),
+		reserveTokens: z.number().int().min(0).default(16_384),
+		keepRecentTokens: z.number().int().min(0).default(20_000),
+		backgroundTokens: z.number().int().min(0).default(32_768),
+	})
+	.strict();
+
+export type ConversationCompactionPolicy = z.infer<typeof conversationCompactionPolicySchema>;
+
+/**
+ * Named compaction shapes offered by the WebUI. They only set the compaction section, so an
+ * operator can start from a strategy and still tune individual thresholds.
+ */
+export const conversationCompactionPresets = {
+	/** Compact late and keep a large recent window verbatim. */
+	conservative: {
+		backgroundTokens: 8_192,
+		enabled: true,
+		keepRecentTokens: 32_768,
+		reserveTokens: 8_192,
+		triggerTokens: 0,
+	},
+	/** pi-durable's defaults: a middle ground for large-window models. */
+	balanced: {
+		backgroundTokens: 32_768,
+		enabled: true,
+		keepRecentTokens: 20_000,
+		reserveTokens: 16_384,
+		triggerTokens: 0,
+	},
+	/** Compact earlier and keep a smaller recent window verbatim. */
+	aggressive: {
+		backgroundTokens: 32_768,
+		enabled: true,
+		keepRecentTokens: 12_000,
+		reserveTokens: 32_768,
+		triggerTokens: 0,
+	},
+} as const satisfies Record<string, ConversationCompactionPolicy>;
+
+export type ConversationCompactionPreset = keyof typeof conversationCompactionPresets;
+
 export const conversationPolicySchema = z
 	.object({
 		version: z.number().int().min(1).default(1),
@@ -149,6 +204,13 @@ export const conversationPolicySchema = z
 			minRunAgeMs: 0,
 			timeoutMs: 1_500,
 		}),
+		compaction: conversationCompactionPolicySchema.default({
+			backgroundTokens: 32_768,
+			enabled: true,
+			keepRecentTokens: 20_000,
+			reserveTokens: 16_384,
+			triggerTokens: 0,
+		}),
 	})
 	.strict();
 
@@ -202,6 +264,13 @@ export const defaultConversationPolicy: ConversationPolicy = {
 		minRunAgeMs: 0,
 		timeoutMs: 1_500,
 	},
+	compaction: {
+		backgroundTokens: 32_768,
+		enabled: true,
+		keepRecentTokens: 20_000,
+		reserveTokens: 16_384,
+		triggerTokens: 0,
+	},
 };
 
 const triggerPolicyPatchSchema = z
@@ -250,6 +319,16 @@ const sidechatPolicyPatchSchema = z
 	})
 	.strict();
 
+const compactionPolicyPatchSchema = z
+	.object({
+		enabled: z.boolean().optional(),
+		triggerTokens: z.number().int().min(0).optional(),
+		reserveTokens: z.number().int().min(0).optional(),
+		keepRecentTokens: z.number().int().min(0).optional(),
+		backgroundTokens: z.number().int().min(0).optional(),
+	})
+	.strict();
+
 /** Explicit, strict patch: unknown keys are rejected rather than silently dropped. */
 export const conversationPolicyPatchSchema = z
 	.object({
@@ -270,6 +349,7 @@ export const conversationPolicyPatchSchema = z
 		trigger: triggerPolicyPatchSchema.optional(),
 		pacing: pacingPolicyPatchSchema.optional(),
 		sidechat: sidechatPolicyPatchSchema.optional(),
+		compaction: compactionPolicyPatchSchema.optional(),
 	})
 	.strict();
 

@@ -114,6 +114,10 @@ export function mergeConversationPolicy(
 	const trigger = mergeSection<ConversationTriggerPolicy>(base.trigger, triggerPatch);
 	const sidechat = mergeSection<ConversationPolicy["sidechat"]>(base.sidechat, sidechatPatch);
 	if (sidechatPatch?.model === null) delete sidechat.model;
+	const compaction = mergeSection<ConversationPolicy["compaction"]>(
+		base.compaction,
+		patch.compaction,
+	);
 	const memoryExtractModel =
 		patch.memoryExtractModel === null
 			? undefined
@@ -148,6 +152,7 @@ export function mergeConversationPolicy(
 			: { memoryMaxWritesPerActivity: patch.memoryMaxWritesPerActivity }),
 		...(patch.version === undefined ? {} : { version: patch.version }),
 		...(patch.capabilities === undefined ? {} : { capabilities: patch.capabilities }),
+		compaction,
 		pacing,
 		sidechat,
 		trigger,
@@ -336,23 +341,7 @@ export class ConversationPolicyService {
 				: await this.effectivePolicy(input.conversationId);
 		const merged = mergeConversationPolicy(base, input.policy);
 		const database = this.#db();
-		const version =
-			(Math.max(
-				0,
-				...(
-					await database
-						.select({ policyJson: policies.policyJson })
-						.from(policies)
-						.where(
-							input.scope === "global"
-								? eq(policies.scope, "global")
-								: and(
-										eq(policies.scope, "conversation"),
-										eq(policies.conversationId, input.conversationId ?? ""),
-									),
-						)
-				).map((row) => parsePolicy(row.policyJson).version),
-			) ?? 0) + 1;
+		const version = await this.#nextPolicyVersion(input);
 		const next = conversationPolicySchema.parse({ ...merged, version });
 		const now = nowIso();
 		const id = randomUUID();
@@ -395,6 +384,79 @@ export class ConversationPolicyService {
 		return this.view(
 			input.conversationId === undefined ? {} : { conversationId: input.conversationId },
 		);
+	}
+
+	/**
+	 * Save the patch as the new global default, then replace every conversation policy with
+	 * that exact snapshot. Unlike a normal global update, this deliberately removes existing
+	 * per-conversation overrides so one action can align every session.
+	 */
+	async overrideAll(input: {
+		policy: ConversationPolicyPatch;
+	}): Promise<{ updated: number; view: ConversationPolicyView }> {
+		const view = await this.update({ policy: input.policy, scope: "global" });
+		const rows = await this.#db().select({ id: conversations.id }).from(conversations);
+		for (const row of rows) {
+			await this.#replaceConversationPolicy(row.id, view.policy);
+		}
+		this.#logger.info("conversation policy overridden for all conversations", {
+			conversations: rows.length,
+			version: view.policy.version,
+		});
+		return { updated: rows.length, view };
+	}
+
+	async #nextPolicyVersion(input: {
+		conversationId?: string;
+		scope: "global" | "conversation";
+	}): Promise<number> {
+		const rows = await this.#db()
+			.select({ policyJson: policies.policyJson })
+			.from(policies)
+			.where(
+				input.scope === "global"
+					? eq(policies.scope, "global")
+					: and(
+							eq(policies.scope, "conversation"),
+							eq(policies.conversationId, input.conversationId ?? ""),
+						),
+			);
+		return (Math.max(0, ...rows.map((row) => parsePolicy(row.policyJson).version)) ?? 0) + 1;
+	}
+
+	async #replaceConversationPolicy(
+		conversationId: string,
+		policy: ConversationPolicy,
+	): Promise<void> {
+		const database = this.#db();
+		const version = await this.#nextPolicyVersion({ conversationId, scope: "conversation" });
+		const next = conversationPolicySchema.parse({ ...policy, version });
+		const now = nowIso();
+		const id = randomUUID();
+		await database.transaction((tx) => {
+			tx.update(policies)
+				.set({ isActive: 0, updatedAt: now })
+				.where(
+					and(
+						eq(policies.scope, "conversation"),
+						eq(policies.conversationId, conversationId),
+						eq(policies.isActive, 1),
+					),
+				)
+				.run();
+			tx.insert(policies)
+				.values({
+					conversationId,
+					createdAt: now,
+					id,
+					isActive: 1,
+					policyJson: JSON.stringify(next),
+					scope: "conversation",
+					updatedAt: now,
+				})
+				.run();
+		});
+		await this.syncHostPolicy(conversationId, next);
 	}
 
 	async history(input: {

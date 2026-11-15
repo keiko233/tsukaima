@@ -82,6 +82,11 @@ type StoredEnvelope = JsonObject & {
  * every committed partial without reading faster than the writer.
  */
 const LIVE_RUN_POLL_MS = 100;
+/**
+ * Summary generation uses the compaction reserve as its output budget, so an explicit trigger
+ * threshold still has to leave a usable reserve even when it sits at (or above) the window.
+ */
+const MIN_COMPACTION_RESERVE_TOKENS = 2_048;
 
 /**
  * How long a poller waits for its run to appear before deciding the run already settled. The
@@ -2112,6 +2117,26 @@ export class PiDurableConversationHost {
 					const document = await tx.doc(conversationPolicyDoc, numericId, "policy", seed);
 					document.policyJson = JSON.stringify(parsed);
 				}, BACKGROUND_CONTEXT);
+				// Compaction thresholds live in the conversation's agent document, not in the
+				// policy document the host reads for ping/pacing. Keep them aligned here so a
+				// default saved in Settings also covers sessions that never open their inspector.
+				const agent = await conversation.agent(BACKGROUND_CONTEXT);
+				const hostModelRef = {
+					modelId: this.model.modelId,
+					provider: this.model.providerId,
+				};
+				const agentModel =
+					agent.model === undefined
+						? undefined
+						: this.model.models.getModel(agent.model.provider, agent.model.modelId);
+				const contextWindow =
+					agentModel?.contextWindow ??
+					this.model.models.getModel(hostModelRef.provider, hostModelRef.modelId)?.contextWindow ??
+					0;
+				await conversation.configure(
+					{ compaction: this.compactionSettings(parsed.compaction, contextWindow) },
+					BACKGROUND_CONTEXT,
+				);
 			},
 			this.executionLock,
 		);
@@ -2231,6 +2256,32 @@ export class PiDurableConversationHost {
 	}
 
 	/**
+	 * Map the user-facing compaction policy onto pi-durable's reserve-based thresholds. A
+	 * positive `triggerTokens` is an absolute threshold, so the reserve is derived from the
+	 * active model window while still leaving enough output budget for the summary.
+	 */
+	private compactionSettings(
+		policy: ConversationPolicy["compaction"],
+		contextWindow: number,
+	): {
+		backgroundTokens: number;
+		enabled: boolean;
+		keepRecentTokens: number;
+		reserveTokens: number;
+	} {
+		const triggerReserve =
+			policy.triggerTokens > 0 && contextWindow > 0
+				? Math.max(MIN_COMPACTION_RESERVE_TOKENS, contextWindow - policy.triggerTokens)
+				: undefined;
+		return {
+			backgroundTokens: policy.backgroundTokens,
+			enabled: policy.enabled,
+			keepRecentTokens: policy.keepRecentTokens,
+			reserveTokens: triggerReserve ?? policy.reserveTokens,
+		};
+	}
+
+	/**
 	 * Keep existing durable conversations aligned with the active model provider. Conversations
 	 * created while the server was unconfigured (using `fake-deterministic`) or before a
 	 * provider/model change would otherwise fail `GenerationTask` with `failNoModel` or keep
@@ -2250,8 +2301,18 @@ export class PiDurableConversationHost {
 				current.provider !== this.model.providerId ||
 				resolved === undefined
 			) {
+				const nextModel = {
+					modelId: this.model.modelId,
+					provider: this.model.providerId,
+				};
+				const policy = await this.readPolicy(Number(durableId) as ConversationId);
+				const contextWindow =
+					this.model.models.getModel(nextModel.provider, nextModel.modelId)?.contextWindow ?? 0;
 				await conversation.configure(
-					{ model: { modelId: this.model.modelId, provider: this.model.providerId } },
+					{
+						compaction: this.compactionSettings(policy.compaction, contextWindow),
+						model: nextModel,
+					},
 					BACKGROUND_CONTEXT,
 				);
 			}

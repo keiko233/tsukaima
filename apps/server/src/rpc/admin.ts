@@ -423,6 +423,24 @@ export const adminRouter = {
 				scope: input.scope,
 			}),
 		),
+		overrideAll: adminBase.admin.policies.overrideAll.handler(async ({ context, input }) => {
+			const result = await context.lifecycle.conversationPolicy.overrideAll({
+				policy: input.policy,
+			});
+			await context.lifecycle.writeAudit({
+				action: "policy.override-all",
+				payload: {
+					updated: result.updated,
+					version: result.view.policy.version,
+				},
+				result: "ok",
+				...(result.view.source.revisionId === null
+					? {}
+					: { targetId: result.view.source.revisionId }),
+				targetKind: "policy",
+			});
+			return result;
+		}),
 		update: adminBase.admin.policies.update.handler(async ({ context, input }) => {
 			const view = await context.lifecycle.conversationPolicy.update({
 				...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),

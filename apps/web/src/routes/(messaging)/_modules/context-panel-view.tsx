@@ -365,6 +365,15 @@ export function ContextPanelContent({
 									)}
 								/>
 							) : null}
+							{stats.autocompact.enabled && stats.contextWindow > 0 ? (
+								<p className="pl-4 pr-1 text-[10.5px] leading-4 text-muted-foreground">
+									{m.context_autocompact_threshold({
+										tokens: formatCompactTokens(
+											Math.max(0, stats.contextWindow - stats.autocompact.bufferTokens),
+										),
+									})}
+								</p>
+							) : null}
 							<BreakdownRow
 								colorClass="bg-zinc-300 dark:bg-zinc-700"
 								label={m.context_free_space()}
