@@ -142,7 +142,8 @@ test("normalizes private messages and rejects invalid events", () => {
 		id: "100",
 		mentions: [{ id: "10001" }],
 		parts: [
-			{ text: "hello ", type: "text" },
+			// The mention stays inline: the transcript and the model must see who was addressed.
+			{ text: "@10001hello ", type: "text" },
 			// A file name and a URL are not content hashes: they belong in `channelRef` and
 			// `sourceUrl`, so downstream code cannot mistake an un-fetched remote image for bytes
 			// it already has locally.

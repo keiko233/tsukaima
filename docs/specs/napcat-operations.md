@@ -33,6 +33,7 @@ Elaina must normalize, or explicitly mark and store, these OneBot/NapCat cases:
 | --- | --- |
 | `notice` | Dedicated `ChannelNotice` / `onNotice` envelope (do not overload `MessageEnvelope` where `parts.min(1)` fails): poke, revoke, emoji reaction, typing, ban, mute, group file/upload, title, member change. |
 | Poke at bot | Persist as system/notice event and optionally wake under Phase 2 conversation policy; preserve sender attribution. |
+| At mention | Keep the mention inline as text (`@name`, falling back to the QQ id when NapCat omits it) so the transcript, the WebUI, and the model see who was addressed; the ids stay in `mentions` for trigger classification. |
 | Voice | Store original media and transcript; PTT-to-text uses a host/plugin STT capability with timeout/rate limit and fallback text. |
 | Video | Store metadata and extracted representative frames. |
 | File | Resolve URL/base64/local path, preserve name, MIME, size, hash, and source. |

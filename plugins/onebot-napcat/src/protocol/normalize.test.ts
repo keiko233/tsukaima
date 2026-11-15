@@ -189,6 +189,43 @@ describe("OneBot inbound segment fidelity", () => {
 			config,
 		);
 		expect(envelope?.mentions).toEqual([{ all: true }]);
+		expect(envelope?.parts).toEqual([{ text: "@all everyone", type: "text" }]);
+	});
+
+	test("keeps at mentions inline so the addressed name is not eaten", () => {
+		const envelope = normalizeOneBotEvent(
+			message([
+				{ data: { name: "蓝肥鱼", qq: "10002" }, type: "at" },
+				{ data: { text: " 发点表情包" }, type: "text" },
+			]),
+			config,
+		);
+		expect(envelope?.mentions).toEqual([{ id: "10002" }]);
+		// One text part: QQ already puts the separating space in the text segment.
+		expect(envelope?.parts).toEqual([{ text: "@蓝肥鱼 发点表情包", type: "text" }]);
+	});
+
+	test("falls back to the QQ id when NapCat omits the at name", () => {
+		const envelope = normalizeOneBotEvent(
+			message([
+				{ data: { qq: 10_002 }, type: "at" },
+				{ data: { text: " ping" }, type: "text" },
+			]),
+			config,
+		);
+		expect(envelope?.parts).toEqual([{ text: "@10002 ping", type: "text" }]);
+	});
+
+	test("drops an at segment that carries neither a name nor an id", () => {
+		expect(
+			normalizeOneBotEvent(
+				message([
+					{ data: { qq: "   " }, type: "at" },
+					{ data: { text: "hi" }, type: "text" },
+				]),
+				config,
+			)?.parts,
+		).toEqual([{ text: "hi", type: "text" }]);
 	});
 
 	test("expands forward bundles with bounds and falls back on timeout", async () => {
