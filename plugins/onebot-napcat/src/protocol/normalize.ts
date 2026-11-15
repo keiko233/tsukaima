@@ -133,6 +133,21 @@ const textPart = (segment: OneBotSegment): MessagePart | undefined => {
 };
 
 /**
+ * Keep `at` mentions inline as text. Dropping the segment silently ate the address: a message
+ * like "@TestUser 发点表情包" reached the WebUI transcript and the model as " 发点表情包", so
+ * neither could tell who was being talked to. The ids still ride in `mentions` for trigger
+ * classification; the label is the platform-supplied name, falling back to the QQ id when
+ * NapCat omits it.
+ */
+const atPart = (segment: OneBotSegment): MessagePart | undefined => {
+	const name = asString(segment.data?.name)?.trim();
+	const qq = asString(segment.data?.qq)?.trim();
+	const label = name !== undefined && name.length > 0 ? name : qq;
+	if (label === undefined || label.length === 0) return undefined;
+	return { text: `@${label}`, type: "text" };
+};
+
+/**
  * NapCat reports QQ animated/collected stickers as `image` segments. `sub_type=1` is the
  * documented marker; some deployments only expose `emoji_id`/`emoji_package_id`, and others
  * only write a sticker summary. Treating these as images hid them from sticker-only policy and
@@ -464,8 +479,9 @@ const syncPart = (
 				maxChars: MAX_FORWARD_CHARS,
 				maxNodes: MAX_FORWARD_NODES,
 			});
-		case "reply":
 		case "at":
+			return atPart(segment);
+		case "reply":
 			return undefined;
 		default:
 			logger.debug("OneBot segment preserved as channel-native", { segmentType: segment.type });
@@ -637,6 +653,19 @@ export function parseForwardNodes(raw: unknown): OneBotForwardNode[] {
 	return messages.map((entry) => forwardNode(entry));
 }
 
+/**
+ * Adjacent text stays one part. A mention normalizes to text, and QQ's own text segment keeps
+ * the leading space, so splitting them again would double the space in joined previews.
+ */
+const appendPart = (parts: MessagePart[], part: MessagePart): void => {
+	const previous = parts.at(-1);
+	if (part.type === "text" && previous?.type === "text") {
+		parts[parts.length - 1] = { text: previous.text + part.text, type: "text" };
+		return;
+	}
+	parts.push(part);
+};
+
 const normalizedParts = (
 	segments: readonly OneBotSegment[],
 	logger?: PluginLogger,
@@ -644,7 +673,7 @@ const normalizedParts = (
 	const parts: MessagePart[] = [];
 	for (const segment of segments) {
 		const part = syncPart(segment, createSafeLogger(logger));
-		if (part !== undefined) parts.push(part);
+		if (part !== undefined) appendPart(parts, part);
 	}
 	return parts;
 };
@@ -819,7 +848,7 @@ export const normalizeOneBotEventAsync = async (
 				options,
 			);
 		}
-		parts.push(part);
+		appendPart(parts, part);
 	}
 	const envelope = buildEnvelope(event, config, parts);
 	if (envelope === undefined) {
