@@ -1,9 +1,8 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
-import { Input } from "@tsukaima/ui/components/motion/input";
 import {
 	Select,
 	SelectContent,
@@ -24,6 +23,8 @@ const LOCALE_LABELS: Record<Locale, string> = {
 	"zh-cn": "简体中文",
 };
 
+const ACTIVE_SIDECHAT_MODEL = "__active__";
+
 export function SettingsPage() {
 	const toast = useToast();
 	const queryClient = useQueryClient();
@@ -39,16 +40,19 @@ export function SettingsPage() {
 		}),
 	);
 	const [locale, setLocaleState] = useState<Locale>(() => getLocale());
-	const [sidechatModel, setSidechatModel] = useState("");
-	useEffect(() => {
-		setSidechatModel(settingsQuery.data?.sidechatModelId ?? "");
-	}, [settingsQuery.data?.sidechatModelId]);
 
 	if (settingsQuery.isError) {
 		return <Card className="p-4">{settingsQuery.error.message}</Card>;
 	}
 
 	const settings = settingsQuery.data;
+	const models = settings?.models ?? [];
+	const configuredSidechatModel = settings?.sidechatModelId;
+	const sidechatModelValue = configuredSidechatModel ?? ACTIVE_SIDECHAT_MODEL;
+	const configuredModelMissing =
+		configuredSidechatModel !== undefined &&
+		!models.some((model) => model.id === configuredSidechatModel);
+	const sidechatProvider = models[0]?.providerId ?? settings?.modelProviderId;
 	const changeLocale = (value: string) => {
 		const next = toLocale(value);
 		if (next === undefined || next === locale) return;
@@ -113,19 +117,48 @@ export function SettingsPage() {
 							<div className="px-1 text-[11.5px] font-medium text-foreground">
 								{m.settings_sidechat_model_label()}
 							</div>
-							<Input
-								value={sidechatModel}
-								placeholder={m.settings_sidechat_model_placeholder()}
-								onChange={setSidechatModel}
-								onBlur={() => {
-									const next = sidechatModel.trim();
-									if (next === (settings?.sidechatModelId ?? "")) return;
-									updateSettings.mutate({ sidechatModelId: next.length === 0 ? null : next });
+							<Select
+								value={sidechatModelValue}
+								disabled={updateSettings.isPending}
+								onValueChange={(value) => {
+									const next = value === ACTIVE_SIDECHAT_MODEL ? null : value;
+									if ((next ?? undefined) === configuredSidechatModel) return;
+									updateSettings.mutate({ sidechatModelId: next });
 								}}
-							/>
+							>
+								<SelectTrigger className="w-full">
+									<span className="sr-only">{m.settings_sidechat_model_label()}: </span>
+									<SelectValue placeholder={m.settings_sidechat_model_placeholder()} />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value={ACTIVE_SIDECHAT_MODEL}>
+										{m.settings_sidechat_model_active()}
+									</SelectItem>
+									{models.map((model) => (
+										<SelectItem key={`${model.providerId}:${model.id}`} value={model.id}>
+											{model.name === undefined ? model.id : `${model.name} · ${model.id}`}
+										</SelectItem>
+									))}
+									{configuredSidechatModel !== undefined && configuredModelMissing ? (
+										<SelectItem value={configuredSidechatModel}>
+											{configuredSidechatModel} · {m.settings_sidechat_model_unavailable()}
+										</SelectItem>
+									) : null}
+								</SelectContent>
+							</Select>
 							<p className="text-[11px] text-muted-foreground">
 								{m.settings_sidechat_model_hint()}
 							</p>
+							{sidechatProvider === undefined ? null : (
+								<p className="text-[11px] text-muted-foreground">
+									{m.settings_sidechat_model_provider({ provider: sidechatProvider })}
+								</p>
+							)}
+							{models.length === 0 ? (
+								<p className="text-[11px] text-muted-foreground">
+									{m.settings_sidechat_model_empty()}
+								</p>
+							) : null}
 						</div>
 					</CardContent>
 				</Card>

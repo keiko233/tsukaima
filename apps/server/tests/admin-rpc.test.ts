@@ -188,6 +188,38 @@ describe("admin RPC", () => {
 		expect((updated as { primary: { modelId: string } }[])[0]?.primary.modelId).toBe(
 			"fake-deterministic",
 		);
+
+		await lifecycle.updatePluginConfig("openai-compatible", {
+			apiKey: "test-key",
+			baseUrl: "https://models.example/v1",
+			models: [
+				{ enabled: true, id: "text-chat" },
+				{ enabled: true, id: "vision-reasoner", supportsImage: true },
+				{ enabled: false, id: "disabled-chat" },
+			],
+		});
+		const catalogSettings = (await request("admin/settings/get")) as {
+			models?: Array<{ capabilities: string[]; id: string; providerId: string }>;
+		};
+		expect(catalogSettings.models?.map((model) => model.id)).toEqual([
+			"text-chat",
+			"vision-reasoner",
+		]);
+		expect(
+			catalogSettings.models?.every((model) => model.capabilities.includes("basic-chat")),
+		).toBe(true);
+		const withSidechatModel = (await request("admin/settings/update", {
+			sidechatModelId: "text-chat",
+		})) as {
+			models?: Array<{ id: string }>;
+			sidechatModelId?: string;
+		};
+		expect(withSidechatModel.sidechatModelId).toBe("text-chat");
+		expect(withSidechatModel.models?.map((model) => model.id)).toEqual([
+			"text-chat",
+			"vision-reasoner",
+		]);
+
 		const cleared = (await request("admin/diagnostics/clearLogs")) as { cleared: number };
 		expect(cleared.cleared).toBeGreaterThan(0);
 		const clearedLogs = (await request("admin/diagnostics/logs")) as {

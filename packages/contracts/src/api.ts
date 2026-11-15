@@ -520,8 +520,20 @@ export type DiagnosticsData = z.infer<typeof diagnosticsDataSchema>;
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
+export const modelCatalogEntrySchema = z.object({
+	capabilities: z.array(z.string()),
+	contextWindow: z.number().int().nonnegative().optional(),
+	id: z.string(),
+	maxOutputTokens: z.number().int().nonnegative().optional(),
+	name: z.string().optional(),
+	providerId: z.string(),
+});
+export type ModelCatalogEntry = z.infer<typeof modelCatalogEntrySchema>;
+
 export const settingsViewSchema = z.object({
 	logLevel: logLevelSchema,
+	/** Chat-capable models reported by the active provider, when it exposes a catalog. */
+	models: z.array(modelCatalogEntrySchema).optional(),
 	modelProviderId: z.string().optional(),
 	sidechatModelId: z.string().optional(),
 	plugins: z.array(

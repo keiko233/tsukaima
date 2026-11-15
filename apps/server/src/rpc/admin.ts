@@ -72,6 +72,40 @@ function toContractPolicies(policies: readonly LifecycleModelPolicy[]) {
 	}));
 }
 
+/**
+ * Settings plus the chat-capable model catalog of the active provider. The catalog is omitted
+ * when the provider reports none, which keeps the settings contract small for the fake model
+ * and for providers that do not expose descriptors.
+ */
+async function settingsView(context: TsukaimaApiContext) {
+	const settings = await readRuntimeSettings(context.lifecycle.domainDatabase);
+	const providerId =
+		settings.modelProviderId ?? context.lifecycle.pluginHost.modelProviders()[0]?.id;
+	const models =
+		providerId === undefined
+			? []
+			: (
+					await context.lifecycle.pluginHost.listModels({
+						capability: "basic-chat",
+						providerId,
+					})
+				).map((model) => ({
+					capabilities: [...model.capabilities],
+					...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+					id: model.id,
+					...(model.maxOutputTokens === undefined
+						? {}
+						: { maxOutputTokens: model.maxOutputTokens }),
+					...(model.name === undefined ? {} : { name: model.name }),
+					providerId: model.providerId,
+				}));
+	return {
+		...publicRuntimeSettings(settings),
+		...(models.length === 0 ? {} : { models }),
+		plugins: await context.lifecycle.pluginHost.configViews(),
+	};
+}
+
 export const adminRouter = {
 	chats: {
 		createLocal: adminBase.admin.chats.createLocal.handler(async ({ context, input }) =>
@@ -546,22 +580,13 @@ export const adminRouter = {
 		}),
 	},
 	settings: {
-		get: adminBase.admin.settings.get.handler(async ({ context }) => {
-			const settings = await readRuntimeSettings(context.lifecycle.domainDatabase);
-			return {
-				...publicRuntimeSettings(settings),
-				plugins: await context.lifecycle.pluginHost.configViews(),
-			};
-		}),
+		get: adminBase.admin.settings.get.handler(async ({ context }) => settingsView(context)),
 		update: adminBase.admin.settings.update.handler(async ({ context, input }) => {
 			const database = context.lifecycle.domainDatabase;
 			if (database === undefined) throw new Error("Database not ready");
 			const settings = await patchRuntimeSettings(database, input);
 			await context.lifecycle.applyRuntimeSettings(settings);
-			return {
-				...publicRuntimeSettings(settings),
-				plugins: await context.lifecycle.pluginHost.configViews(),
-			};
+			return settingsView(context);
 		}),
 	},
 	users: {
