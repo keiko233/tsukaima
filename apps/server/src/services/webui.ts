@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, lt, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import {
 	messagePartSchema,
 	type MessagePage,
@@ -194,17 +194,37 @@ export async function listChats(
 					.where(inArray(conversations.chatObjectId, ids))
 					.orderBy(desc(conversations.updatedAt));
 	const sessionIds = sessionRows.map((row) => row.id);
-	const messageRows =
-		sessionIds.length === 0
-			? []
-			: await database
-					.select()
-					.from(messages)
-					.where(inArray(messages.conversationId, sessionIds))
-					.orderBy(desc(messages.occurredAt));
+	// Only the newest message of each session reaches the wire. Rank in SQLite and fetch those
+	// rows by primary key: selecting every message for every session pulled tens of megabytes of
+	// text into JS just to throw all but one row per session away, which made this query the
+	// slowest page-load RPC and could fail under memory pressure.
+	const latestIds: { id: string }[] = [];
+	if (sessionIds.length > 0) {
+		const ranked = database
+			.select({
+				id: messages.id,
+				rank: sql<number>`row_number() over (partition by ${messages.conversationId} order by ${messages.occurredAt} desc, ${messages.id} desc)`.as(
+					"message_rank",
+				),
+			})
+			.from(messages)
+			.where(inArray(messages.conversationId, sessionIds))
+			.as("ranked_messages");
+		const rows = await database.select({ id: ranked.id }).from(ranked).where(eq(ranked.rank, 1));
+		for (const row of rows) latestIds.push(row);
+	}
 	const latestBySession = new Map<string, MessageSummary>();
-	for (const row of messageRows) {
-		if (!latestBySession.has(row.conversationId)) {
+	if (latestIds.length > 0) {
+		const messageRows = await database
+			.select()
+			.from(messages)
+			.where(
+				inArray(
+					messages.id,
+					latestIds.map((row) => row.id),
+				),
+			);
+		for (const row of messageRows) {
 			latestBySession.set(row.conversationId, toMessageSummary(row));
 		}
 	}

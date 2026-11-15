@@ -77,9 +77,21 @@ export const adminRouter = {
 		createLocal: adminBase.admin.chats.createLocal.handler(async ({ context, input }) =>
 			createLocalChat(context.lifecycle, input),
 		),
-		list: adminBase.admin.chats.list.handler(async ({ context, input }) =>
-			listChats(context.lifecycle, input?.status === undefined ? {} : { status: input.status }),
-		),
+		list: adminBase.admin.chats.list.handler(async ({ context, input }) => {
+			try {
+				return await listChats(
+					context.lifecycle,
+					input?.status === undefined ? {} : { status: input.status },
+				);
+			} catch (error) {
+				// oRPC turns procedure errors into a bare 500 response, so without this log a failing
+				// chats list leaves no trace of the underlying cause in the server log.
+				context.lifecycle.logger.error("chats list failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+				throw error;
+			}
+		}),
 	},
 	conversations: {
 		list: adminBase.admin.conversations.list.handler(async ({ context }) => {
