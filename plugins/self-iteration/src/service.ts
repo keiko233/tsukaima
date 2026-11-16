@@ -583,6 +583,109 @@ export class SelfIterationService {
 		}
 	}
 
+	/**
+	 * Stage an upstream merge inside the task worktree without committing it. The proposal
+	 * diff is computed against HEAD, so committing here would hide every merged change from
+	 * review. Conflicts are reported so the agent can resolve them with `edit`; finalize
+	 * commits the staged merge state.
+	 */
+	async upstream(
+		input: ToolTaskInput & {
+			readonly action?: "abort" | "merge";
+			readonly ref?: string;
+		},
+	): Promise<Record<string, unknown>> {
+		const startedAt = performance.now();
+		const task = await this.resolveTask(input, "patch", "self-iteration.upstream");
+		await this.#requireMode(task, "patch", "self-iteration.upstream");
+		const current = await this.#taskWithWorktree(task);
+		const policy = await this.policy();
+		const action = input.action === "abort" ? "abort" : "merge";
+		const worktreePath = current.worktreePath!;
+		const runner = this.#runner(worktreePath, policy);
+		this.#logger.trace("upstream action requested", {
+			action,
+			ref: preview(input.ref ?? ""),
+			taskId: task.id,
+		});
+		try {
+			if (action === "abort") {
+				const result = await runner.exec("git", ["merge", "--abort"]);
+				await this.#recordTimeline(
+					task,
+					"self-iteration.upstream:abort",
+					result.exitCode === 0 ? "success" : "failure",
+				);
+				return {
+					action,
+					exitCode: result.exitCode,
+					stderr: result.stderr,
+					stdout: result.stdout,
+					taskId: task.id,
+				};
+			}
+			const ref = input.ref?.trim();
+			if (ref === undefined || ref.length === 0) throw new Error("ref is required");
+			const resolved = await runner.exec("git", ["rev-parse", "--verify", `${ref}^{commit}`]);
+			if (resolved.exitCode !== 0) {
+				throw new Error(`unknown_ref:${ref}`);
+			}
+			const result = await runner.exec("git", ["merge", "--no-ff", "--no-commit", ref]);
+			const conflicts = await runner.exec("git", ["diff", "--name-only", "--diff-filter=U"]);
+			const conflicted = conflicts.stdout
+				.split("\n")
+				.map((line) => line.trim())
+				.filter((line) => line.length > 0);
+			const alreadyMerged = result.stdout.includes("Already up to date");
+			await this.#recordTimeline(
+				task,
+				"self-iteration.upstream:merge",
+				conflicted.length > 0 ? "denied" : "success",
+				conflicted.length > 0 ? conflicted.join(",") : ref,
+			);
+			await this.#auditRecord({
+				action: "self-iteration.upstream",
+				actorId: input.sourceConversationId ?? "agent",
+				actorKind: "agent",
+				payload: {
+					action,
+					conflicted: conflicted.length,
+					exitCode: result.exitCode,
+					ref,
+				},
+				result: conflicted.length > 0 ? "failed" : "ok",
+				targetId: task.id,
+				targetKind: "coding-task",
+			});
+			this.#logger.debug("upstream merge staged", {
+				action,
+				alreadyMerged,
+				conflicted: conflicted.length,
+				durationMs: elapsedMs(startedAt),
+				exitCode: result.exitCode,
+				taskId: task.id,
+			});
+			return {
+				action,
+				alreadyMerged,
+				conflicted,
+				exitCode: result.exitCode,
+				stderr: result.stderr,
+				stdout: result.stdout,
+				taskId: task.id,
+			};
+		} catch (error) {
+			this.#logger.error("upstream action failed", {
+				action,
+				durationMs: elapsedMs(startedAt),
+				error: errorMessage(error),
+				taskId: task.id,
+			});
+			await this.#auditDenied(task.id, "self-iteration.upstream", errorMessage(error));
+			throw error;
+		}
+	}
+
 	async test(
 		input: ToolTaskInput & {
 			readonly args?: readonly string[];

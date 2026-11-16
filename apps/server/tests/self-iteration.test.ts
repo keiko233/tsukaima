@@ -136,6 +136,7 @@ describe("self-iteration runtime", () => {
 				"self-iteration.propose",
 				"self-iteration.status",
 				"self-iteration.test",
+				"self-iteration.upstream",
 				"self-iteration.worktree",
 			]);
 			expect(

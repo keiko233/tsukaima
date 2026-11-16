@@ -180,7 +180,7 @@ const TASK_FIELDS = {
 	taskId: { type: "string" },
 } as const;
 
-/** Registers the eight `self-iteration.*` model tools. Maintenance verbs are intentionally absent. */
+/** Registers the `self-iteration.*` model tools. Maintenance verbs are intentionally absent. */
 export function registerSelfIterationTools(
 	context: PluginContext,
 	service: SelfIterationService,
@@ -286,6 +286,31 @@ export function registerSelfIterationTools(
 					const edit = structuredEdit(input);
 					return await service.edit({ ...taskInput(input, invocation), edit });
 				}),
+		),
+	);
+
+	context.tools.register(
+		tool(
+			"upstream",
+			"Stage a git merge from a ref inside the task worktree without committing, or abort an in-progress merge. Report conflicted files, resolve them with edit, then validate before proposing.",
+			{
+				properties: {
+					...TASK_FIELDS,
+					action: { enum: ["abort", "merge"], type: "string" },
+					ref: { description: "Commit, branch, or remote-tracking ref to merge.", type: "string" },
+				},
+				type: "object",
+			},
+			["coding.execute"],
+			120_000,
+			async (input, invocation) =>
+				invoke(context, log, "self-iteration.upstream", input, invocation, async () =>
+					service.upstream({
+						...taskInput(input, invocation),
+						action: input.action === "abort" ? "abort" : "merge",
+						...(stringValue(input, "ref") === undefined ? {} : { ref: stringValue(input, "ref")! }),
+					}),
+				),
 		),
 	);
 

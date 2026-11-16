@@ -158,6 +158,10 @@ describe("admin RPC", () => {
 		});
 		expect(lifecycle.logLevel).toBe("debug");
 		expect(lifecycle.providerRestartRequired).toBe(false);
+		const upgradeStatus = await request("admin/upgrade/status");
+		expect(upgradeStatus).toBeNull();
+		const upgradeHistory = await request("admin/upgrade/history");
+		expect(upgradeHistory).toEqual([]);
 
 		await lifecycle.updatePluginConfig("onebot-napcat", {
 			accessToken: "test-token",

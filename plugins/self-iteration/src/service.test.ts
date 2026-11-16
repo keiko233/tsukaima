@@ -407,7 +407,7 @@ describe("SelfIterationService", () => {
 		expect(preview.endsWith("…")).toBe(true);
 	});
 
-	test("registers the plugin and exposes exactly the eight model tools", async () => {
+	test("registers the plugin and exposes the bounded model tools", async () => {
 		const { repo, store, worktrees } = await fixture();
 		const tools: string[] = [];
 		const rpc: string[] = [];
@@ -438,6 +438,7 @@ describe("SelfIterationService", () => {
 			"self-iteration.propose",
 			"self-iteration.status",
 			"self-iteration.test",
+			"self-iteration.upstream",
 			"self-iteration.worktree",
 		]);
 		expect(tools.some((name) => /maintenance|deploy|rollback|backup|reload/u.test(name))).toBe(
