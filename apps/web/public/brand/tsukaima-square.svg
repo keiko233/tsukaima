@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Tsukaima square logo</title>
+  <desc id="desc">A minimal ivory lowercase ts monogram with a small slate-blue dot on a charcoal rounded square.</desc>
+  <rect width="1024" height="1024" rx="212" fill="#292C30"/>
+  <g transform="translate(184 323) scale(5)" fill="none" stroke="#F4F1EB" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M23 4 V57 C23 70 28 77 42 77"/>
+    <path d="M6 27 H44"/>
+    <path d="M109 30 C96 21 72 22 67 36 C61 51 83 53 97 56 C113 60 113 72 99 78 C88 83 72 78 63 71"/>
+  </g>
+  <circle cx="836" cy="707" r="26" fill="#90A1AE"/>
+</svg>

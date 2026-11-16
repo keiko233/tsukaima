@@ -11,7 +11,6 @@ import {
 	MoreHorizontal,
 	Puzzle,
 	Settings,
-	Sparkles,
 	SquareTerminal,
 	Sun,
 	Terminal,
@@ -179,9 +178,15 @@ export function AppRail() {
 					to="/"
 					aria-label="Tsukaima"
 					title="Tsukaima"
-					className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					className="grid size-8 shrink-0 place-items-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
 				>
-					<Sparkles className="size-4" />
+					<img
+						src="/brand/tsukaima-square.svg"
+						alt=""
+						className="size-8 rounded-lg"
+						width={32}
+						height={32}
+					/>
 				</Link>
 
 				<div className="mt-3 flex flex-col items-center gap-1">

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="460" viewBox="0 0 1680 460" role="img" aria-labelledby="title desc">
+  <title id="title">Tsukaima horizontal wordmark</title>
+  <desc id="desc">The Tsukaima typographic logo on warm ivory, with a charcoal monogram tile and a custom soft geometric wordmark.</desc>
+  <rect width="1680" height="460" rx="54" fill="#F6F4F0"/>
+  <rect x="60" y="62" width="336" height="336" rx="70" fill="#292C30"/>
+  <g transform="translate(92 145) scale(2.35)" fill="none" stroke="#F4F1EB" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M23 4 V57 C23 70 28 77 42 77"/>
+    <path d="M6 27 H44"/>
+    <path d="M109 30 C96 21 72 22 67 36 C61 51 83 53 97 56 C113 60 113 72 99 78 C88 83 72 78 63 71"/>
+  </g>
+  <circle cx="372" cy="323" r="12" fill="#90A1AE"/>
+  <!-- Custom rounded monoline lettering; every stroke remains editable vector artwork. -->
+  <g transform="translate(481 152) scale(2.1)" fill="none" stroke="#292C30" stroke-width="9.8" stroke-linecap="round" stroke-linejoin="round">
+    <!-- t -->
+    <path d="M22 4 V58 C22 71 28 77 42 77 M5 27 H43"/>
+    <!-- s -->
+    <path d="M110 30 C97 22 73 22 68 36 C63 50 83 52 99 56 C113 59 114 72 100 78 C87 83 73 77 64 71"/>
+    <!-- u -->
+    <path d="M131 28 V57 C131 83 176 83 176 57 V28"/>
+    <!-- k -->
+    <path d="M200 6 V77 M243 28 L201 52 L247 77"/>
+    <!-- a -->
+    <path d="M307 28 V77 M305 38 C298 25 279 23 268 35 C255 50 261 71 274 77 C287 82 300 76 307 65"/>
+    <!-- i -->
+    <path d="M340 28 V77"/>
+    <!-- m -->
+    <path d="M368 28 V77 M369 43 C372 26 400 23 402 44 V77 M402 43 C406 26 439 22 440 45 V77"/>
+    <!-- a -->
+    <path d="M506 28 V77 M504 38 C497 25 478 23 467 35 C454 50 460 71 473 77 C486 82 499 76 506 65"/>
+  </g>
+  <circle cx="1195" cy="171" r="12" fill="#90A1AE"/>
+</svg>

@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Sparkles } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import { Input } from "@tsukaima/ui/components/motion/input";
@@ -61,16 +60,15 @@ function LoginPage() {
 	return (
 		<div className="grid h-dvh place-items-center bg-background px-4">
 			<div className="w-full max-w-[320px] rounded-xl border border-border bg-card p-5 shadow-sm">
-				<div className="mb-5 flex items-center gap-2.5">
-					<span className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground">
-						<Sparkles className="size-4" />
-					</span>
-					<div className="min-w-0">
-						<div className="text-[13px] font-semibold tracking-tight">Tsukaima</div>
-						<div className="text-[10.5px] text-muted-foreground">
-							{m.auth_sign_in_subtitle()}
-						</div>
-					</div>
+				<div className="mb-5">
+					<img
+						src="/brand/tsukaima-wide.svg"
+						alt="Tsukaima"
+						className="mb-3 h-auto w-[280px] max-w-full rounded-lg"
+						width={1680}
+						height={460}
+					/>
+					<div className="text-[10.5px] text-muted-foreground">{m.auth_sign_in_subtitle()}</div>
 				</div>
 				{configured ? (
 					<form

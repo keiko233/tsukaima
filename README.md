@@ -1,3 +1,7 @@
+<p align="center">
+	<img src="apps/web/public/brand/tsukaima-wide.svg" alt="Tsukaima" width="420" />
+</p>
+
 # tsukaima
 
 `tsukaima` is a bot-native agent runtime built around Pi components and Bun. It includes an
