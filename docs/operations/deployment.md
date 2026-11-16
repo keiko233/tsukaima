@@ -99,7 +99,7 @@ The bootstrap creates:
 | `/opt/tsukaima/backups` | pre-deploy data archives, three retained |
 | `/opt/tsukaima/deployments` | JSON deployment records |
 | `/opt/tsukaima/compose.yaml` | symlink to the committed `repo/compose.yaml` (repo and compose stay siblings, but the file is versioned) |
-| `/opt/tsukaima/.env` | image tag, version, deployer, public URL |
+| `/opt/tsukaima/.env` | image tag, version, deployer, public URL, trusted browser origins |
 
 It also adds an idempotent `app.example.test` block to `/opt/caddy/Caddyfile` and reloads Caddy when
 that file exists. The container joins the external `tsukaima` network and binds only
