@@ -18,6 +18,7 @@ import { getLocale, locales, toLocale, type Locale } from "@/paraglide/runtime";
 import { modelOptionLabel } from "../../_modules/policy/conversation-policy-fields";
 import { SystemPage } from "./page-header";
 import { PolicyDefaultsCard } from "./policy-defaults-card";
+import { RuntimeMaintenanceCard } from "./runtime-maintenance-card";
 
 const LOCALE_LABELS: Record<Locale, string> = {
 	en: "English",
@@ -89,6 +90,7 @@ export function SettingsPage() {
 						<p className="text-[11px] text-muted-foreground">{m.settings_language_hint()}</p>
 					</CardContent>
 				</Card>
+				<RuntimeMaintenanceCard />
 				<PolicyDefaultsCard />
 				<Card size="compact">
 					<CardHeader>

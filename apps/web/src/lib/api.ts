@@ -25,6 +25,7 @@ export type {
 	MemoryRow,
 	MemoryScope,
 	MemoryStatus,
+	MessageDeliveryMode,
 	MessageSummary,
 	PluginRow,
 	PluginStatusSnapshot,
@@ -32,8 +33,11 @@ export type {
 	SessionDetail,
 	SessionSummary,
 	SettingsView,
+	RestartStatus,
 	UserDetail,
 	UserSummary,
+	WorkspaceDetail,
+	WorkspaceSummary,
 } from "@tsukaima/contracts";
 
 const RPC_URL = runtimeUrl("/rpc");

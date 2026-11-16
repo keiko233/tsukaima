@@ -12,6 +12,7 @@ import {
 	Puzzle,
 	Settings,
 	Sparkles,
+	SquareTerminal,
 	Sun,
 	Terminal,
 	Users,
@@ -39,10 +40,14 @@ type RailDestination =
 	| "/plugins"
 	| "/requests"
 	| "/settings"
-	| "/users";
+	| "/users"
+	| "/workspace";
 
 function destinationActive(destination: RailDestination, pathname: string): boolean {
 	if (destination === "/") return pathname === "/" || pathname.startsWith("/chat/");
+	if (destination === "/workspace") {
+		return pathname === "/workspace" || pathname.startsWith("/workspace/");
+	}
 	return pathname === destination || pathname.startsWith(`${destination}/`);
 }
 
@@ -185,6 +190,12 @@ export function AppRail() {
 						icon={MessageSquare}
 						label={m.tab_chats()}
 						to="/"
+					/>
+					<RailLink
+						active={destinationActive("/workspace", pathname)}
+						icon={SquareTerminal}
+						label={m.tab_workspace()}
+						to="/workspace"
 					/>
 					<RailLink
 						active={destinationActive("/users", pathname)}

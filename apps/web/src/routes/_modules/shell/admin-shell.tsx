@@ -19,9 +19,10 @@ import { ChatSidebar } from "./chat-sidebar";
 import { GroupsSidebar } from "./groups-sidebar";
 import { RequestsSidebar } from "./requests-sidebar";
 import { UsersSidebar } from "./users-sidebar";
+import { WorkspaceSidebar } from "./workspace-sidebar";
 
 type MobilePane = "content" | "sidebar";
-type ShellSection = "chats" | "groups" | "requests" | "users" | null;
+type ShellSection = "chats" | "groups" | "requests" | "users" | "workspace" | null;
 
 interface ShellNavigation {
 	mobile: boolean;
@@ -54,6 +55,7 @@ function storedSidebarWidth(): number {
 
 function sectionFor(pathname: string): ShellSection {
 	if (pathname === "/" || pathname.startsWith("/chat/")) return "chats";
+	if (pathname === "/workspace" || pathname.startsWith("/workspace/")) return "workspace";
 	if (pathname === "/users" || pathname.startsWith("/users/")) return "users";
 	if (pathname === "/groups" || pathname.startsWith("/groups/")) return "groups";
 	if (pathname === "/requests" || pathname.startsWith("/requests/")) return "requests";
@@ -77,7 +79,11 @@ function selectedIdFor(
 
 function isMobileContentPath(pathname: string): boolean {
 	return (
-		pathname !== "/" && pathname !== "/users" && pathname !== "/groups" && pathname !== "/requests"
+		pathname !== "/" &&
+		pathname !== "/workspace" &&
+		pathname !== "/users" &&
+		pathname !== "/groups" &&
+		pathname !== "/requests"
 	);
 }
 
@@ -85,6 +91,7 @@ function isFullBleedRoute(pathname: string): boolean {
 	return (
 		pathname === "/" ||
 		pathname.startsWith("/chat/") ||
+		pathname.startsWith("/workspace") ||
 		pathname.startsWith("/users") ||
 		pathname.startsWith("/groups") ||
 		pathname.startsWith("/requests") ||
@@ -168,6 +175,7 @@ export function AdminShell({ children }: { readonly children?: ReactNode }) {
 							)}
 						>
 							{section === "chats" ? <ChatSidebar onNavigate={showContent} /> : null}
+							{section === "workspace" ? <WorkspaceSidebar onNavigate={showContent} /> : null}
 							{section === "users" ? (
 								<UsersSidebar onNavigate={showContent} selectedId={selectedId} />
 							) : null}

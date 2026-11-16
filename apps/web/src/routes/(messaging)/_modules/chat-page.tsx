@@ -49,13 +49,22 @@ function deliveryNotice(status: DeliveryStatus): string {
 	}
 }
 
-function chatKindLabel(kind: "private" | "group" | "webui" | "task" | "plugin"): string {
+function chatKindLabel(
+	kind: "private" | "group" | "webui" | "workspace" | "task" | "plugin",
+): string {
 	if (kind === "group") return m.external_group_chat();
 	if (kind === "private") return m.external_private_chat();
+	if (kind === "workspace") return m.workspace_kind();
 	return m.local_chat();
 }
 
-export function ChatPage({ sessionId }: { sessionId: string }) {
+export function ChatPage({
+	sessionId,
+	surface = "chat",
+}: {
+	sessionId: string;
+	surface?: "chat" | "workspace";
+}) {
 	const toast = useToast();
 	const queryClient = useQueryClient();
 	const { mobile, showSidebar } = useShellNavigation();
@@ -101,6 +110,11 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 	};
 
 	const session = useQuery(orpc.admin.sessions.get.queryOptions({ input: { sessionId } }));
+	const workspace = useQuery({
+		...orpc.admin.workspace.get.queryOptions({ input: { sessionId } }),
+		enabled: surface === "workspace",
+		refetchInterval: surface === "workspace" ? 5_000 : false,
+	});
 	const messages = useInfiniteQuery(messageListOptions(sessionId));
 	const transcript = useMemo(
 		() =>
@@ -140,6 +154,7 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 	);
 
 	const detail = session.data;
+	const workspaceDetail = workspace.data;
 	const externalEligible =
 		detail !== null &&
 		detail !== undefined &&
@@ -198,7 +213,9 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 							? "group"
 							: detail.chat.kind === "webui"
 								? "webui"
-								: "human"
+								: detail.chat.kind === "workspace"
+									? "webui"
+									: "human"
 					}
 					name={detail.title}
 				/>
@@ -217,6 +234,11 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 							{m.archived()}
 						</span>
 					) : null}
+					{surface === "workspace" ? (
+						<span className="shrink-0 rounded bg-violet/10 px-1.5 text-[9.5px] leading-4 font-medium text-violet">
+							{m.workspace_kind()}
+						</span>
+					) : null}
 					<span aria-hidden="true" className="hidden text-muted-foreground/45 sm:inline">
 						·
 					</span>
@@ -227,10 +249,7 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 					<span className="hidden shrink-0 md:inline">{chatKindLabel(detail.chat.kind)}</span>
 					{detail.channelId ? (
 						<>
-							<span
-								aria-hidden="true"
-								className="hidden text-muted-foreground/45 xl:inline"
-							>
+							<span aria-hidden="true" className="hidden text-muted-foreground/45 xl:inline">
 								·
 							</span>
 							<span className="hidden min-w-0 truncate xl:inline">{detail.channelId}</span>
@@ -277,6 +296,31 @@ export function ChatPage({ sessionId }: { sessionId: string }) {
 					{archived ? (
 						<div className="border-b border-border bg-muted/40 px-3.5 py-1.5 text-[11px] text-muted-foreground">
 							{m.session_archived_notice()}
+						</div>
+					) : null}
+					{surface === "workspace" && workspaceDetail !== undefined && workspaceDetail !== null ? (
+						<div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-muted/25 px-3.5 py-1.5 text-[10.5px] text-muted-foreground">
+							<span>
+								{m.workspace_task()}:{" "}
+								<span className="font-medium text-foreground">
+									{workspaceDetail.workspace.taskStatus}
+								</span>
+							</span>
+							<span>
+								{m.workspace_mode()}: {workspaceDetail.workspace.mode}
+							</span>
+							<span className="min-w-0 truncate">
+								{m.workspace_repo()}:{" "}
+								<span className="font-mono text-foreground">
+									{workspaceDetail.workspace.repositoryRoot}
+								</span>
+							</span>
+							<span>
+								{m.workspace_proposals()}: {workspaceDetail.proposals.length}
+							</span>
+							<span className="font-mono text-muted-foreground/70">
+								{workspaceDetail.workspace.taskId}
+							</span>
 						</div>
 					) : null}
 
