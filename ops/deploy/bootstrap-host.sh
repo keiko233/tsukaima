@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Prepare a Docker host for a main-based deployment. Run as root on the target host, for example:
+# Prepare a Docker host for a deployment. Run as root on the target host, for example:
 #
-#   ssh <ssh-target> 'DEPLOYER=example-user REPO_URL=git@github.com:example-org/tsukaima.git bash -s' \
+#   ssh <ssh-target> \
+#     'REPO_URL=<repo-url> PUBLIC_URL=<public-origin> DEPLOY_BRANCH=<branch> bash -s' \
 #     < ops/deploy/bootstrap-host.sh
 #
 # Safe to re-run. The first run may stop after printing the host deploy key; authorize it on the
@@ -13,12 +14,15 @@ DEPLOYER="${DEPLOYER//[^A-Za-z0-9_.-]/-}"
 ROOT="${ROOT:-/opt/tsukaima}"
 REPO_URL="${REPO_URL:-${FORK_URL:-}}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
-MAINLINE_REPO="${MAINLINE_REPO:-example-org/tsukaima}"
+PUBLIC_URL="${PUBLIC_URL:-${TSUKAIMA_PUBLIC_URL:-}}"
+PUBLIC_ORIGIN="${PUBLIC_URL%/}"
+DOCKER_NETWORK="${DOCKER_NETWORK:-${TSUKAIMA_DOCKER_NETWORK:-tsukaima}}"
+TRUSTED_ORIGINS="${TRUSTED_ORIGINS:-$PUBLIC_ORIGIN}"
 GIT_NAME="${GIT_NAME:-Tsukaima Deploy ($DEPLOYER)}"
 GIT_EMAIL="${GIT_EMAIL:-${DEPLOYER}@tsukaima.invalid}"
 SSH_KEY="${SSH_KEY:-/root/.ssh/tsukaima_deploy_ed25519}"
 ENABLE_CADDY="${ENABLE_CADDY:-1}"
-CADDYFILE="${CADDYFILE:-/opt/caddy/Caddyfile}"
+CADDYFILE="${CADDYFILE:-}"
 CADDY_CONTAINER="${CADDY_CONTAINER:-}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-$DEPLOYER}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-${DEPLOYER}@tsukaima.invalid}"
@@ -29,19 +33,9 @@ if [[ -z "$REPO_URL" ]]; then
 	echo "REPO_URL is required (the deployment repository clone URL)." >&2
 	exit 2
 fi
-
-repository_slug() {
-	local url="$1"
-	url="${url%.git}"
-	url="${url#git@github.com:}"
-	url="${url#https://github.com/}"
-	url="${url#ssh://git@github.com/}"
-	printf '%s\n' "$url"
-}
-
-if [[ "$(repository_slug "$REPO_URL")" != "$MAINLINE_REPO" && "$DEPLOY_BRANCH" == "main" ]]; then
-	echo "Refusing to bootstrap main from a fork. Use a dedicated deployment branch (for example," >&2
-	echo "DEPLOY_BRANCH=deploy/<name>) and rebase it onto mainline/main before deploying." >&2
+if [[ ! "$PUBLIC_ORIGIN" =~ ^https?://[^/]+$ ]]; then
+	echo "PUBLIC_URL is required as an HTTP(S) origin without a path, for example" >&2
+	echo "PUBLIC_URL=https://chat.example.com." >&2
 	exit 2
 fi
 if [[ "$(id -u)" != "0" ]]; then
@@ -62,7 +56,7 @@ if ! docker compose version >/dev/null 2>&1; then
 	echo "docker compose v2 is required on the host." >&2
 	exit 2
 fi
-docker network inspect tsukaima >/dev/null 2>&1 || docker network create tsukaima
+docker network inspect "$DOCKER_NETWORK" >/dev/null 2>&1 || docker network create "$DOCKER_NETWORK"
 
 mkdir -p "$ROOT/repo" "$ROOT/data" "$ROOT/secrets" "$ROOT/backups" "$ROOT/deployments" "$ROOT/.deploy"
 chmod 700 "$ROOT/secrets" "$ROOT/.deploy"
@@ -74,37 +68,60 @@ if [[ ! -f "$SSH_KEY" ]]; then
 fi
 chmod 600 "$SSH_KEY"
 chmod 644 "$SSH_KEY.pub"
-if ! ssh-keygen -F github.com >/dev/null 2>&1; then
-	ssh-keyscan -t ed25519 github.com >>/root/.ssh/known_hosts 2>/dev/null
-fi
+repository_ssh_host() {
+	local url="$1"
+	case "$url" in
+	ssh://*)
+		url="${url#ssh://}"
+		url="${url#*@}"
+		printf '%s\n' "${url%%/*}" | cut -d: -f1
+		;;
+	http://* | https://*)
+		return 1
+		;;
+	*@*:*)
+		url="${url#*@}"
+		printf '%s\n' "${url%%:*}"
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
 
-if ! grep -q "tsukaima deploy key" /root/.ssh/config 2>/dev/null; then
-	cat >>/root/.ssh/config <<EOF
+repository_host="$(repository_ssh_host "$REPO_URL" || true)"
+if [[ -n "$repository_host" ]]; then
+	if ! ssh-keygen -F "$repository_host" >/dev/null 2>&1; then
+		ssh-keyscan -t ed25519 "$repository_host" >>/root/.ssh/known_hosts 2>/dev/null
+	fi
+	if ! grep -q "Host $repository_host" /root/.ssh/config 2>/dev/null; then
+		cat >>/root/.ssh/config <<EOF
 # tsukaima deploy key (managed by ops/deploy/bootstrap-host.sh)
-Host github.com
+Host $repository_host
 	IdentityFile $SSH_KEY
 	IdentitiesOnly yes
 EOF
-	chmod 600 /root/.ssh/config
+		chmod 600 /root/.ssh/config
+	fi
 fi
 
-github_authenticated() {
-	{ ssh -i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -T git@github.com 2>&1 || true; } |
-		grep -q "Hi .*successfully authenticated"
+repository_authenticated() {
+	GIT_SSH_COMMAND="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes" \
+		git ls-remote "$REPO_URL" >/dev/null 2>&1
 }
 
 if [[ ! -d "$ROOT/repo/.git" ]]; then
 	case "$REPO_URL" in
-	git@* | ssh://*)
+	*@*:* | ssh://*)
 		echo "Host deploy key (add with write access to $REPO_URL):"
 		cat "$SSH_KEY.pub"
-		if ! github_authenticated; then
+		if ! repository_authenticated; then
 			echo "The key is not authorized yet. Add it to the repository, then re-run this script." >&2
 			exit 3
 		fi
 		;;
 	esac
-	git clone "$REPO_URL" "$ROOT/repo"
+	git -c "core.sshCommand=ssh -i $SSH_KEY -o IdentitiesOnly=yes" clone "$REPO_URL" "$ROOT/repo"
 fi
 
 cd "$ROOT/repo"
@@ -125,13 +142,20 @@ if git remote get-url origin >/dev/null 2>&1; then
 else
 	git remote add origin "$REPO_URL"
 fi
-git fetch origin --prune --tags
+git fetch origin --prune
 git checkout "$DEPLOY_BRANCH" 2>/dev/null || git checkout -b "$DEPLOY_BRANCH" "origin/$DEPLOY_BRANCH"
 git branch --set-upstream-to="origin/$DEPLOY_BRANCH" "$DEPLOY_BRANCH" 2>/dev/null || true
 git pull --ff-only
 
+source_version="$(tr -d '[:space:]' <VERSION)"
 ln -sfn repo/compose.yaml "$ROOT/compose.yaml"
-cp ops/deploy/Caddyfile.fragment "$ROOT/Caddyfile.fragment"
+cat >"$ROOT/Caddyfile.fragment" <<EOF
+# BEGIN tsukaima (managed by ops/deploy/deploy.sh)
+$PUBLIC_ORIGIN {
+	reverse_proxy tsukaima:7420
+}
+# END tsukaima
+EOF
 chown -R 1000:1000 "$ROOT/data"
 
 if [[ ! -f "$ROOT/secrets/runtime.env" ]]; then
@@ -154,19 +178,20 @@ fi
 if [[ ! -f "$ROOT/.env" ]]; then
 	cat >"$ROOT/.env" <<EOF
 TSUKAIMA_ROOT=$ROOT
-TSUKAIMA_IMAGE=tsukaima:0.1.0
-TSUKAIMA_VERSION=0.1.0
+TSUKAIMA_IMAGE=tsukaima:$source_version
+TSUKAIMA_VERSION=$source_version
 TSUKAIMA_COMMIT=
 TSUKAIMA_DEPLOYER=$DEPLOYER
-TSUKAIMA_PUBLIC_URL=${PUBLIC_URL:-http://app.example.test}
+TSUKAIMA_PUBLIC_URL=$PUBLIC_ORIGIN
 TSUKAIMA_BIND_ADDR=${BIND_ADDR:-127.0.0.1}
-TSUKAIMA_TRUSTED_ORIGINS=${PUBLIC_URL:-http://app.example.test},http://app.example.test
-TSUKAIMA_TRUSTED_PROXIES=172.16.0.0/12
+TSUKAIMA_TRUSTED_ORIGINS=$TRUSTED_ORIGINS
+TSUKAIMA_DOCKER_NETWORK=$DOCKER_NETWORK
+TSUKAIMA_TRUSTED_PROXIES=${TRUSTED_PROXIES:-172.16.0.0/12}
 EOF
 	chmod 600 "$ROOT/.env"
 fi
 
-if [[ "$ENABLE_CADDY" == "1" && -f "$CADDYFILE" ]]; then
+if [[ "$ENABLE_CADDY" == "1" && -n "$CADDYFILE" && -f "$CADDYFILE" ]]; then
 	if ! grep -q "BEGIN tsukaima (managed by ops/deploy/deploy.sh)" "$CADDYFILE"; then
 		backup="$CADDYFILE.bak-$(date -u +%Y%m%dT%H%M%SZ)"
 		cp -a "$CADDYFILE" "$backup"
@@ -176,6 +201,7 @@ if [[ "$ENABLE_CADDY" == "1" && -f "$CADDYFILE" ]]; then
 			CADDY_CONTAINER="$(docker ps --format '{{.Names}}' | grep -E '(^|-)caddy(-|$)' | head -n1 || true)"
 		fi
 		if [[ -n "$CADDY_CONTAINER" ]]; then
+			docker network connect "$DOCKER_NETWORK" "$CADDY_CONTAINER" >/dev/null 2>&1 || true
 			if ! docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile; then
 				cp -a "$backup" "$CADDYFILE"
 				echo "Caddy reload failed; restored $backup" >&2
@@ -206,8 +232,9 @@ Host bootstrap complete.
   data:      $ROOT/data (uid/gid 1000)
   secrets:   $ROOT/secrets/runtime.env
   admin pw:  $ROOT/secrets/initial-admin-password.txt
-  URL:       http://app.example.test (after deploy)
+  URL:       $PUBLIC_ORIGIN (after deploy)
+  network:   $DOCKER_NETWORK
 
-Deploy:
-  ssh root@\$(hostname -I | awk '{print \$1}') 'cd $ROOT/repo && DEPLOYER=$DEPLOYER DEPLOY_BRANCH=$DEPLOY_BRANCH ROOT=$ROOT bash ops/deploy/deploy.sh'
+Deploy from your workstation:
+  HOST=<ssh-target> ROOT=$ROOT DEPLOY_BRANCH=$DEPLOY_BRANCH bun run ops:deploy
 EOF

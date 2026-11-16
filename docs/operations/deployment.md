@@ -1,220 +1,216 @@
 # Docker deployment
 
-This repository is the mainline. Deployment policy depends on who owns the checkout:
-
-- **Maintainers of `example-org/tsukaima`** deploy `main` directly.
-- **Everyone else must fork** the repository, either locally or on GitHub, and deploy from a
-  dedicated deployment branch that is rebased onto mainline `main`. Never deploy `main` from a
-  fork.
-
-The deployment scripts enforce this distinction. They compare the `origin` repository slug with
-`MAINLINE_REPO` (default `example-org/tsukaima`) and refuse `main` when `origin` is not the
-mainline repository.
+Deployment is environment-driven. Any clone or fork can deploy any branch it can push; the
+repository does not contain a production host, SSH user, IP address, internal hostname, deployment
+path, Docker network name, or public URL.
 
 Related documents:
 
 - [Production runbook](runbook.md)
+- [Privacy and synthetic data](privacy.md)
 - [Self-iteration architecture](../architecture/self-iteration.md)
 - [Quality gates](quality.md)
 
 ## 1. Topology
 
 ```text
-maintainer checkout (main) ──push──▶ origin/main ──▶ host /opt/tsukaima/repo (main)
-
-third-party fork (deploy/<name>) ──push──▶ fork/deploy/<name>
-        ▲                                           │
-        └──── rebase onto mainline/main ◀───────────┘
-                                                    ▼
-                                      host /opt/tsukaima/repo (deploy/<name>)
+workstation checkout ──push──▶ origin/<deployment-branch>
+        │                                  │
+        └──────── ssh ────────▶ deployment host <deployment-root>/repo
+                                           │
+                                           ▼
+                              Docker image + persistent data volume
 ```
 
-Both modes use the same host build and rollback path. Only the git branch policy differs.
+The deployment host needs Docker with Compose v2, Git, `sqlite3`, and an SSH key accepted by its
+`sshd`. The standard scripts also use `curl` and standard GNU userland tools. The host does not
+need Bun installed; builds and the runtime use the image.
 
-## 2. Version authority
+Choose these values yourself and keep them out of Git:
 
-`VERSION` and every workspace `package.json` version are owned by the mainline repository.
+| Value | Example placeholder | Purpose |
+| --- | --- | --- |
+| SSH target | `<ssh-target>` | Any reachable `user@host` or SSH config alias |
+| Repository URL | `<repo-url>` | Clone URL the host can read |
+| Deployment branch | `<branch>` | Branch you push and want the host to run |
+| Deployment root | `/opt/tsukaima` (default) | Persistent host directory; override with `ROOT` |
+| Public origin | `<public-origin>` | Exact browser origin, such as `https://chat.example.com` |
+| Docker network | `tsukaima` (default) | Existing or newly created external Compose network |
 
-- `bun run check:version` verifies that all workspace manifests agree with `VERSION`.
-- A release is a mainline commit tagged `vX.Y.Z` where `VERSION` is `X.Y.Z`.
-- A commit that is not exactly at a release is built as `tsukaima:<version>-<short-sha>`.
-- Third-party forks should not edit `VERSION` or workspace versions. Rebase onto mainline to pick
-  up release changes, then deploy the resulting commit with its short-commit suffix.
+Use reserved example domains such as `example.com` and `example.test` in public documentation.
+Never put a real deployment coordinate in a test, fixture, screenshot, or commit.
+
+## 2. Version policy
+
+`VERSION` and every workspace `package.json` version move together. Every deployment must increase
+`VERSION` according to [Semantic Versioning 2.0.0](https://semver.org/). The deployer compares the
+new strict SemVer value with the last successfully deployed source version and refuses an equal or
+lower value. Build metadata alone is not a bump because SemVer ignores it for precedence.
+
+Examples:
+
+| Change | Next version |
+| --- | --- |
+| Bug fix or deployment-only change | `PATCH` bump, for example `0.2.0` → `0.2.1` |
+| Compatible feature | `MINOR` bump, for example `0.2.1` → `0.3.0` |
+| Incompatible change | `MAJOR` bump |
+| Prerelease | Valid strict SemVer, for example `0.3.0-rc.1` |
+
+Bump before committing the deployable revision:
+
+```sh
+bun run version:bump 0.2.1
+bun run check:version
+git diff -- VERSION apps packages plugins tools
+```
+
+`VERSION` must not include a leading `v`. The image is tagged with the strict version; Docker tags
+cannot contain SemVer build metadata's `+`, so an image tag replaces `+` with `_`. The commit is
+recorded in image labels and the deployment JSON. No Git tag or registry release workflow is
+required.
+
+The first deployment has no previous source version and may use the current value. Every
+subsequent deployment must be higher. Rollback restores a previous image; it is recovery, not a
+new deployment, and does not need a version bump. The next forward deployment still must exceed
+the highest successfully deployed source version.
 
 ## 3. Host bootstrap
 
-The target host needs Docker with Compose v2, Git, `sqlite3`, and the `tsukaima` Docker network.
-The default target is `<ssh-target>`, root directory `/opt/tsukaima`.
-
-### Maintainers
+The bootstrap reads `REPO_URL` and `PUBLIC_URL` from the environment and refuses to create a
+deployment without a public origin. `DEPLOY_BRANCH` defaults to `main`.
 
 ```sh
 ssh <ssh-target> \
-  'DEPLOYER=example-user REPO_URL=git@github.com:example-org/tsukaima.git DEPLOY_BRANCH=main bash -s' \
+  'REPO_URL=<repo-url> PUBLIC_URL=<public-origin> DEPLOY_BRANCH=<branch> bash -s' \
   < ops/deploy/bootstrap-host.sh
 ```
 
-### Third-party forks
+The first run may print an SSH deploy key and stop. Add that public key to the repository with read
+access, then run the same command again. HTTPS clone URLs skip the deploy-key prompt.
 
-First publish the deployment branch to a repository the host can read:
+The bootstrap creates or configures:
 
-```sh
-# GitHub fork: origin is your fork.
-git remote add mainline https://github.com/example-org/tsukaima.git
-git fetch mainline main
-git switch -c deploy/<name> mainline/main
-git push -u origin deploy/<name>
-
-# Local-only fork: create a separate writable bare repository or clone and point origin at it.
-# The deployment host must be able to clone that URL.
-```
-
-Then bootstrap the host against the fork's deployment branch:
-
-```sh
-ssh <ssh-target> \
-  'DEPLOYER=<name> REPO_URL=git@github.com:<you>/tsukaima.git DEPLOY_BRANCH=deploy/<name> bash -s' \
-  < ops/deploy/bootstrap-host.sh
-```
-
-If the host deploy key is not authorized yet, add it to the fork with write access and re-run the
-same bootstrap command.
-
-The bootstrap creates:
-
-| Path | Purpose |
+| Path or setting | Purpose |
 | --- | --- |
-| `/opt/tsukaima/repo` | repository checkout on the configured deployment branch |
-| `/opt/tsukaima/data` | mounted at `/data` in the container, owned by uid 1000 |
-| `/opt/tsukaima/secrets/runtime.env` | auth secret and admin bootstrap, mode 0600 |
-| `/opt/tsukaima/secrets/initial-admin-password.txt` | generated first password, mode 0600 |
-| `/opt/tsukaima/backups` | pre-deploy data archives, three retained |
-| `/opt/tsukaima/deployments` | JSON deployment records |
-| `/opt/tsukaima/compose.yaml` | symlink to the committed `repo/compose.yaml` |
-| `/opt/tsukaima/.env` | image tag, version, deployer, public URL, trusted browser origins |
+| `<deployment-root>/repo` | Repository checkout on the configured branch |
+| `<deployment-root>/data` | Container data mount, owned by uid/gid 1000 |
+| `<deployment-root>/secrets/runtime.env` | Auth secret and initial administrator, mode 0600 |
+| `<deployment-root>/secrets/initial-admin-password.txt` | Generated first password, mode 0600 |
+| `<deployment-root>/backups` | Pre-deploy data archives, three retained |
+| `<deployment-root>/deployments` | Deployment records |
+| `<deployment-root>/compose.yaml` | Symlink to the committed `compose.yaml` |
+| `<deployment-root>/.env` | Non-secret Compose and deployment settings |
 
-It also adds an idempotent `app.example.test` block to `/opt/caddy/Caddyfile` and reloads Caddy when
-that file exists. The container joins the external `tsukaima` network and binds only
-`127.0.0.1:7420`; Caddy is the LAN entrypoint. Set `TSUKAIMA_BIND_ADDR=192.0.2.10` in
-`/opt/tsukaima/.env` for direct LAN access.
+The external Docker network defaults to `tsukaima`; override it with
+`DOCKER_NETWORK=<existing-network>`. The app container joins that network and binds
+`TSUKAIMA_BIND_ADDR` (default `127.0.0.1`). Put a reverse proxy in front of it, or set
+`TSUKAIMA_BIND_ADDR=0.0.0.0` only when direct exposure is intended.
+
+Existing installations that previously relied on a hard-coded external network should add
+`TSUKAIMA_DOCKER_NETWORK=<existing-network>` to their deployment `.env`, or attach the reverse
+proxy to the new `tsukaima` network before the first upgraded deployment.
+
+### Optional Caddy integration
+
+Caddy automation is opt-in via `CADDYFILE`. The bootstrap generates the site block from
+`PUBLIC_URL`:
+
+```sh
+ssh <ssh-target> \
+  'REPO_URL=<repo-url> PUBLIC_URL=<public-origin> DEPLOY_BRANCH=<branch> \
+   CADDYFILE=/etc/caddy/Caddyfile CADDY_CONTAINER=<caddy-container> bash -s' \
+  < ops/deploy/bootstrap-host.sh
+```
+
+The script backs up the Caddyfile, appends a managed block, connects the Caddy container to the
+deployment network when needed, and reloads Caddy. If Caddy runs outside Docker, configure the
+reverse proxy manually. Do not commit host-specific Caddy files.
 
 ## 4. Move development data
 
-Stop the source app if it is running, then snapshot and copy the databases and blobs. The script
-uses `sqlite3 .backup` so WAL contents are included and does not copy `*.pre-rename.bak` files.
+Stop any local process writing the source databases first. The script snapshots SQLite with
+`.backup`, copies blobs, stops only the remote app container, and transfers the staging directory.
 
 ```sh
 bash ops/deploy/copy-dev-data.sh \
   --source apps/server/data \
   --host <ssh-target> \
-  --root /opt/tsukaima
+  --root <deployment-root>
 ```
 
-The remote app is stopped first. The deploy script starts the new image and the app runs embedded
-migrations on boot. Keep the archive under `/opt/tsukaima/backups` until sign-in and channel tests
-pass.
+`--host` or `HOST` is required. The source data may contain chat content and credentials from your
+local environment; never commit it, upload it to a public artifact store, or use it as a test
+fixture.
 
 ## 5. Deploy
 
-### Maintainers: deploy `main`
+Push a committed, clean branch and deploy that exact revision:
 
 ```sh
-git switch main
-# edit, test, commit
-bun run ops:deploy
+HOST=<ssh-target> ROOT=<deployment-root> DEPLOY_BRANCH=<branch> bun run ops:deploy
 ```
 
-Because `origin` is `example-org/tsukaima`, the script selects `main`, pushes it, and the host
-fast-forwards to `origin/main`.
+Before pushing, the script verifies:
 
-### Third-party forks: deploy a rebased branch
+1. `HOST` and the current branch are set.
+2. The worktree is clean.
+3. `VERSION` is strict SemVer and higher than `<deployment-root>/.deploy/current-source-version`
+   on the host, when present.
 
-The deployment branch must be rebased onto mainline before every deploy:
+The host-side deployer repeats the version check, fetches the branch, fast-forwards to
+`origin/<branch>`, and then:
+
+1. Builds `tsukaima:<version>-<sha>` from that revision.
+2. Reuses the dependency image prepared for the current lockfile and workspace manifests.
+3. Stops the previous container only after the new image build succeeds.
+4. Archives `data` before starting the new image.
+5. Polls `/readyz`; on failure it prints logs and restores the previous image.
+6. Records the source version, image, commit, branch, deployer, and previous image under
+   `<deployment-root>/deployments`.
+
+The branch is whatever the operator chooses. There is no repository-owner, fork, or mainline
+special case in the deploy scripts.
+
+Dependency preparation can run ahead of time:
 
 ```sh
-git fetch mainline main
-git switch deploy/<name>
-git rebase mainline/main
-# resolve conflicts, test, then:
-DEPLOY_BRANCH=deploy/<name> bun run ops:deploy
+cd <deployment-root>/repo
+bash ops/deploy/prepare-deps.sh
 ```
-
-If the checkout has no `mainline` remote yet:
-
-```sh
-git remote add mainline https://github.com/example-org/tsukaima.git
-```
-
-For a local-only fork, replace `origin` with the writable repository the host will clone. Keep the
-mainline remote available for rebasing. Do not deploy `main` from the fork; the scripts reject it.
-
-### What `ops:deploy` does
-
-1. Refuses a dirty worktree.
-2. Selects `main` only for the mainline repository; otherwise it uses `deploy/<deployer>` (or the
-   explicit `DEPLOY_BRANCH`).
-3. Pushes that branch to `origin`.
-4. The host fetches `origin`, checks out the branch, and fast-forwards to `origin/<branch>`. If
-   that revision changed `ops/deploy/deploy.sh`, the script re-executes itself so the rest of the
-   run uses the revision it just checked out.
-5. Reuses the prepared dependency image for the current `bun.lock` and workspace manifests,
-   building it only when those changed. An ordinary image build therefore never runs `bun install`.
-6. Builds `tsukaima:<version>-<sha>`. `node_modules` and the source tree are separate layers, so a
-   code-only release re-exports a few megabytes instead of the whole tree.
-7. Stops the old container only after the build succeeds, archives `data` (except logs), and starts
-   the new image. The archive uses `pigz` when available; the media blob store is incompressible
-   and single-threaded gzip dominated the stopped window.
-8. Polls `/readyz`; on failure it prints container logs and restores the previous image.
-9. Records the deployment under `/opt/tsukaima/deployments`, keeps the previous image, and retains
-   three data archives for rollback. Dangling images and build cache unused for two weeks are
-   reclaimed before the next build; recent cache (what keeps redeploys fast) and unrelated host
-   images are never touched.
-
-Dependency preparation can also run ahead of time, which is what keeps a deploy short:
-
-```sh
-# on the host; bootstrap-host.sh already does this on a fresh install
-cd /opt/tsukaima/repo && bash ops/deploy/prepare-deps.sh
-```
-
-The script prints the image tag (`tsukaima-deps:<key>`). Re-run it after changing `bun.lock`, any
-workspace `package.json`, or the dependency stage of the `Dockerfile`; `deploy.sh` does the same
-automatically and reports `dependencies ready in Ns`.
 
 ## 6. Verification and rollback
 
 ```sh
 curl -fsS http://127.0.0.1:7420/healthz
 curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7420/readyz
-curl -fsS http://app.example.test/healthz
+curl -fsS <public-origin>/healthz
 ```
 
-Sign in at `http://app.example.test` with the bootstrap administrator. The current `192.0.2.10`
-deployment also binds `http://host.example.test:7420` because local DNS may not yet map `app.example.test`. The
-password is in `/opt/tsukaima/secrets/initial-admin-password.txt`; change it in the UI after the
-first login.
+Sign in with the bootstrap administrator and change the generated password in the UI. The password
+file is `<deployment-root>/secrets/initial-admin-password.txt`.
 
-Rollback is an image swap, not a git rewrite:
+Rollback is an image swap:
 
 ```sh
-cat /opt/tsukaima/.deploy/current-image
-ls -1t /opt/tsukaima/backups/data-*.tgz | head
-# Edit TSUKAIMA_IMAGE in /opt/tsukaima/.env to the previous tag, then:
-docker compose -f /opt/tsukaima/compose.yaml --project-directory /opt/tsukaima up -d
+cat <deployment-root>/.deploy/current-image
+ls -1t <deployment-root>/backups/data-*.tgz | head
+# Edit TSUKAIMA_IMAGE in <deployment-root>/.env to the previous tag, then:
+docker compose \
+  -f <deployment-root>/compose.yaml \
+  --project-directory <deployment-root> up -d
 ```
 
 If a schema migration must be undone, stop the container, restore the matching data archive, and
-start the previous image. Do not restore data under a newer schema.
+start the previous image. Never restore data under a newer schema.
 
 ## 7. Self-iteration boundary
 
 The container runs the self-iteration plugin in proposal/worktree mode. The image includes the
 repository `.git` at `/app`, and worktrees live under `/data/worktrees`; each new worktree gets a
-`node_modules` symlink back to the image install so tests and builds can run without a second
-install. It has `git`, `bun`, and `ripgrep`, but no Docker socket and no host checkout, so a
-proposal cannot replace the running image.
+`node_modules` symlink back to the image install. It has `git`, `bun`, and `ripgrep`, but no Docker
+socket and no host checkout, so a proposal cannot replace the running image.
 
-Promote a proposed change by applying it to the allowed deployment branch, committing it, and
-running `bun run ops:deploy`; the host build stays the only path that replaces the running image.
-The running container's `.git` is replaced with each image, so durable work belongs in the proposal
-record or a commit, not in a container worktree.
+Promote a proposal by applying it to the deployment branch, bumping `VERSION`, committing, and
+running `bun run ops:deploy`. The host build remains the only path that replaces the running image.
+The container's `.git` is replaced with each image, so durable work belongs in the proposal record
+or a commit, not in a container worktree.

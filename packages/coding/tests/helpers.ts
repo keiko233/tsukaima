@@ -7,7 +7,7 @@ const GIT_CONFIG_ARGS = [
 	"-c",
 	"user.name=tsukaima-test",
 	"-c",
-	"user.email=test@tsukaima.local",
+	"user.email=test@tsukaima.invalid",
 ] as const;
 
 export function gitSync(cwd: string, args: readonly string[]): string {

@@ -30,9 +30,9 @@ const withSidechatModel = (model: string) => ({
 
 const input = (overrides: Partial<BusyArbitrationInput> = {}): BusyArbitrationInput => ({
 	conversationId: "42",
-	pendingText: "Aya: 然后呢",
+	pendingText: "ExampleUser: what changed?",
 	policy: policy(),
-	runningRequest: "Aya: 不对\nAya: 你应该说",
+	runningRequest: "ExampleUser: no\nExampleUser: say this",
 	runAgeMs: 5_000,
 	toolsActive: false,
 	turns: 0,
@@ -149,10 +149,13 @@ describe("sidechat service", () => {
 
 	test("builds a bounded prompt with the request and pending batch", () => {
 		const prompt = buildSidechatPrompt(
-			input({ pendingText: "Aya: 然后呢", runningRequest: "Aya: 你应该说" }),
+			input({
+				pendingText: "ExampleUser: what changed?",
+				runningRequest: "ExampleUser: say this",
+			}),
 		);
-		expect(prompt).toContain("Aya: 你应该说");
-		expect(prompt).toContain("Aya: 然后呢");
+		expect(prompt).toContain("ExampleUser: say this");
+		expect(prompt).toContain("ExampleUser: what changed?");
 		expect(prompt).toContain('"decision":"interrupt|steer|wait"');
 	});
 });

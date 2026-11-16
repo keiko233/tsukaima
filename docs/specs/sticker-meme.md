@@ -127,7 +127,7 @@ Selection uses exact keyword, normalized text, semantic labels, emotion, persona
 score, enabled state, and pack preference. Pack filters accept a pack id, display name, or tag,
 so a pack imported during a live conversation is discoverable immediately. Query terms separated
 by spaces or commas are alternatives, and taxonomy aliases are expanded in both directions, so
-`ExamplePerson 丰川` or `疑惑` reach items whose stored labels are English. No deprecated packs or revoked
+`示例别名` or `疑惑` reach items whose stored labels are English. No deprecated packs or revoked
 items are selectable.
 
 Send tokens are single-use, short TTL, conversation-bound, and audited.

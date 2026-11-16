@@ -18,10 +18,12 @@ import {
 	identities,
 	messages,
 	requests,
+	type TsukaimaDatabase,
 	userAliases,
 	users,
 } from "@tsukaima/db";
 import type { TsukaimaLifecycle } from "../lifecycle.ts";
+import { collectMentionIds, loadMentionLabels, replaceMentionIds } from "./mention-labels.ts";
 import { collectRunSteps } from "./run-steps.ts";
 import { WORKSPACE_TOOL_NAMES } from "./workspace-tools.ts";
 
@@ -95,19 +97,63 @@ function parseParts(value: string | null): MessagePart[] {
 	}
 }
 
-function toMessageSummary(row: MessageRow): MessageSummary {
+/** Ids mentioned anywhere in these rows, read straight from the stored text. */
+function messageMentionIds(rows: readonly MessageRow[]): string[] {
+	const ids = new Set<string>();
+	for (const row of rows) {
+		if (row.contentText !== null) collectMentionIds(row.contentText, ids);
+		// The resolved part text is the same string, so scanning the JSON avoids parsing it twice.
+		if (row.partsJson !== null) collectMentionIds(row.partsJson, ids);
+	}
+	return [...ids];
+}
+
+/**
+ * Channel accounts that scope a page's mention labels. Multiple accounts on one page share a
+ * single lookup; the same numeric id under two accounts is not expected in practice.
+ */
+function messageAccountIds(
+	rows: readonly MessageRow[],
+	sessions: readonly { channelId?: string | null | undefined; id: string }[],
+): string[] {
+	const channelBySession = new Map(sessions.map((session) => [session.id, session.channelId]));
+	const accounts = new Set<string>();
+	for (const row of rows) {
+		const channelId = channelBySession.get(row.conversationId);
+		if (channelId !== null && channelId !== undefined) accounts.add(channelId);
+	}
+	return [...accounts];
+}
+
+async function mentionLabelsFor(
+	database: TsukaimaDatabase,
+	rows: readonly MessageRow[],
+	accountIds: readonly string[],
+): Promise<Map<string, string>> {
+	return loadMentionLabels(database, accountIds, messageMentionIds(rows));
+}
+
+function toMessageSummary(
+	row: MessageRow,
+	labels: ReadonlyMap<string, string> = new Map(),
+): MessageSummary {
+	// Rows are stored with the platform id in mention text (`@<qq>`); the transcript shows the
+	// display name instead. Nothing here is persisted, so a renamed contact shows up on the next
+	// read and the stored envelope keeps the id the channel actually sent.
 	const isWebui =
 		row.kind === "webui" || row.direction === "outbound" || row.senderExternalId === "webui-admin";
 	const isBot = row.kind === "assistant";
 	return {
-		contentText: row.contentText ?? "",
+		contentText: replaceMentionIds(row.contentText ?? "", labels),
 		direction: row.direction,
 		deliveryStatus: row.deliveryStatus,
 		durableEntryId: row.durableEntryId,
 		id: row.id,
 		kind: row.kind,
 		occurredAt: row.occurredAt,
-		parts: parseParts(row.partsJson),
+		parts: parseParts(row.partsJson).map((part) =>
+			part.type === "text" ? { ...part, text: replaceMentionIds(part.text, labels) } : part,
+		),
 		platformMessageId: row.platformMessageId,
 		replyToMessageId: row.replyToMessageId,
 		senderDisplayName: row.senderDisplayName ?? (isWebui ? "WebUI" : "Unknown"),
@@ -229,8 +275,13 @@ export async function listChats(
 					latestIds.map((row) => row.id),
 				),
 			);
+		const labels = await mentionLabelsFor(
+			database,
+			messageRows,
+			messageAccountIds(messageRows, sessionRows),
+		);
 		for (const row of messageRows) {
-			latestBySession.set(row.conversationId, toMessageSummary(row));
+			latestBySession.set(row.conversationId, toMessageSummary(row, labels));
 		}
 	}
 	return objectRows.map((object) => ({
@@ -616,7 +667,8 @@ export async function listMessages(
 		.from(messages)
 		.where(eq(messages.conversationId, sessionId))
 		.orderBy(asc(messages.occurredAt), asc(messages.id));
-	return rows.map(toMessageSummary);
+	const labels = await mentionLabelsFor(database, rows, messageAccountIds(rows, [session]));
+	return rows.map((row) => toMessageSummary(row, labels));
 }
 
 /**
@@ -664,8 +716,9 @@ export async function listMessagePage(
 		.limit(limit + 1);
 	const pageRows = rows.slice(0, limit);
 	const oldest = pageRows.at(-1);
+	const labels = await mentionLabelsFor(database, pageRows, messageAccountIds(pageRows, [session]));
 	return {
-		messages: pageRows.toReversed().map(toMessageSummary),
+		messages: pageRows.toReversed().map((row) => toMessageSummary(row, labels)),
 		nextCursor:
 			rows.length > limit && oldest !== undefined
 				? encodeMessageCursor({ id: oldest.id, occurredAt: oldest.occurredAt })
@@ -694,7 +747,18 @@ export async function getSessionMessage(
 		.where(and(eq(messages.conversationId, input.sessionId), lookup))
 		.orderBy(desc(messages.occurredAt), desc(messages.id))
 		.limit(1);
-	return row === undefined ? null : toMessageSummary(row);
+	if (row === undefined) return null;
+	const [session] = await database
+		.select({ channelId: conversations.channelId })
+		.from(conversations)
+		.where(eq(conversations.id, input.sessionId))
+		.limit(1);
+	const labels = await mentionLabelsFor(
+		database,
+		[row],
+		messageAccountIds([row], [{ channelId: session?.channelId ?? null, id: input.sessionId }]),
+	);
+	return toMessageSummary(row, labels);
 }
 
 /**
@@ -840,7 +904,8 @@ export async function sendMessage(
 		}
 		const [saved] = await database.select().from(messages).where(eq(messages.id, id)).limit(1);
 		if (saved === undefined) throw new Error("Failed to persist outbound message");
-		return toMessageSummary(saved);
+		const labels = await loadMentionLabels(database, [channelId], collectMentionIds(text));
+		return toMessageSummary(saved, labels);
 	}
 
 	const sent = await lifecycle.sessionMessaging.sendAgentMessage({
@@ -855,7 +920,12 @@ export async function sendMessage(
 		.where(eq(messages.id, sent.messageId))
 		.limit(1);
 	if (saved === undefined) throw new Error("Failed to persist message");
-	return toMessageSummary(saved);
+	const labels = await loadMentionLabels(
+		database,
+		session.session.channelId === null ? [] : [session.session.channelId],
+		collectMentionIds(text),
+	);
+	return toMessageSummary(saved, labels);
 }
 
 export async function listUsers(lifecycle: TsukaimaLifecycle): Promise<

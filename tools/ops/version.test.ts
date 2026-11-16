@@ -1,16 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	bumpVersions,
+	compareSemver,
 	checkManifestVersions,
-	checkRelease,
-	checkVersionAuthority,
-	deploymentVersion,
+	assertVersionIncrease,
 	parseSemver,
-	sanitizeDockerTag,
 	workspaceManifestPaths,
 } from "./version.ts";
 
@@ -21,12 +18,6 @@ afterEach(async () => {
 		directories.splice(0).map((directory) => fs.rm(directory, { force: true, recursive: true })),
 	);
 });
-
-function git(root: string, ...args: string[]): string {
-	const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
-	if (result.status !== 0) throw new Error(result.stderr);
-	return result.stdout.trim();
-}
 
 async function repository(version = "0.1.0"): Promise<string> {
 	const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-version-"));
@@ -39,15 +30,10 @@ async function repository(version = "0.1.0"): Promise<string> {
 			JSON.stringify({ name: directory, version }, null, "\t"),
 		);
 	}
-	git(root, "init", "-b", "main");
-	git(root, "config", "user.name", "Test");
-	git(root, "config", "user.email", "test@example.invalid");
-	git(root, "add", ".");
-	git(root, "commit", "-m", "initial");
 	return root;
 }
 
-describe("version authority", () => {
+describe("version policy", () => {
 	test("accepts semantic versions and rejects loose labels", () => {
 		expect(parseSemver("0.1.0")).not.toBeNull();
 		expect(parseSemver("1.2.3-rc.1+build.4")).not.toBeNull();
@@ -64,22 +50,11 @@ describe("version authority", () => {
 		expect(result.mismatches).toEqual([{ file: "apps/server/package.json", version: "0.2.0" }]);
 	});
 
-	test("rejects fork-authored version changes but accepts upstream merges", async () => {
-		const root = await repository();
-		git(root, "checkout", "-b", "deploy/example-user");
-		await fs.writeFile(join(root, "apps/server/feature.ts"), "export const feature = true;\n");
-		git(root, "add", ".");
-		git(root, "commit", "-m", "feat(server): local feature");
-		expect(() => checkVersionAuthority(root, "main")).not.toThrow();
-
-		await fs.writeFile(join(root, "VERSION"), "0.2.0\n");
-		git(root, "add", "VERSION");
-		git(root, "commit", "-m", "chore(release): bump");
-		expect(() => checkVersionAuthority(root, "main")).toThrow("must not change VERSION");
-	});
-
 	test("bumps VERSION and every workspace manifest together", async () => {
 		const root = await repository();
+		expect(() => bumpVersions(root, "0.1.0")).toThrow("must be greater");
+		expect(() => bumpVersions(root, "0.0.9")).toThrow("must be greater");
+		expect(() => bumpVersions(root, "0.2")).toThrow("not a semantic version");
 		const changed = bumpVersions(root, "0.2.0");
 		expect(changed).toContain("VERSION");
 		expect(changed).toHaveLength(5);
@@ -87,38 +62,18 @@ describe("version authority", () => {
 		expect(await fs.readFile(join(root, "VERSION"), "utf8")).toBe("0.2.0\n");
 	});
 
-	test("labels tagged releases and fork builds differently", async () => {
-		const root = await repository();
-		git(root, "tag", "-a", "v0.1.0", "-m", "release 0.1.0");
-		expect(deploymentVersion(root)).toBe("0.1.0");
-
-		await fs.writeFile(join(root, "apps/server/feature.ts"), "export const feature = true;\n");
-		git(root, "add", ".");
-		git(root, "commit", "-m", "feat(server): local feature");
-		expect(deploymentVersion(root, { deployer: "example-user", fork: true })).toMatch(
-			/^0\.1\.0-fork\.example-user\.[0-9a-f]{12}$/u,
-		);
-		expect(deploymentVersion(root)).toMatch(/^0\.1\.0-dev\.1\.g[0-9a-f]{12}$/u);
-	});
-
-	test("rejects tags that do not match VERSION, HEAD, or mainline", async () => {
-		const root = await repository();
-		git(root, "tag", "-a", "v0.1.0", "-m", "release 0.1.0");
-		expect(() => checkRelease({ branch: "main", root, tag: "v0.1.0" })).not.toThrow();
-		expect(() => checkRelease({ branch: "main", root, tag: "v0.2.0" })).toThrow(
-			"does not match VERSION",
-		);
-
-		await fs.writeFile(join(root, "README.md"), "changed\n");
-		git(root, "add", ".");
-		git(root, "commit", "-m", "docs: change");
-		expect(() => checkRelease({ branch: "main", root, tag: "v0.1.0" })).toThrow(
-			"does not point at HEAD",
-		);
-	});
-
-	test("sanitizes Docker tags and keeps them within the registry limit", () => {
-		expect(sanitizeDockerTag("0.1.0-fork.example-user/../abc")).toBe("0.1.0-fork.example-user-..-abc");
-		expect(sanitizeDockerTag("x".repeat(300))).toHaveLength(128);
+	test("compares strict SemVer values and requires every deployment to increase", () => {
+		expect(compareSemver("1.2.3", "1.2.3")).toBe(0);
+		expect(compareSemver("1.3.0", "1.2.9")).toBe(1);
+		expect(compareSemver("1.2.3-rc.1", "1.2.3")).toBe(-1);
+		expect(compareSemver("1.2.3-rc.10", "1.2.3-rc.2")).toBe(1);
+		expect(compareSemver("1.2.3-1", "1.2.3-alpha")).toBe(-1);
+		expect(compareSemver("1.2.3+build.2", "1.2.3+build.1")).toBe(0);
+		expect(() => assertVersionIncrease("1.2.4", "1.2.3")).not.toThrow();
+		expect(() => assertVersionIncrease("1.3.0-rc.1", "1.2.9")).not.toThrow();
+		expect(() => assertVersionIncrease("1.2.3", undefined)).not.toThrow();
+		expect(() => assertVersionIncrease("1.2.3", "1.2.3")).toThrow("must increase");
+		expect(() => assertVersionIncrease("1.2.3", "1.2.4")).toThrow("must increase");
+		expect(() => assertVersionIncrease("01.2.3", undefined)).toThrow("not strict SemVer");
 	});
 });

@@ -41,8 +41,8 @@ are config inputs only and never appear in serialized baseline output.
 
 | Item | Baseline |
 | --- | --- |
-| Image | `registry.example.test/dsh:0.0.0-synthetic` |
-| CLI | `0.0.0-synthetic` |
+| Image | Recorded by the operator's private audit; fixture uses `registry.example.test/dsh:0.0.0-synthetic` |
+| CLI | Recorded by the operator's private audit; fixture uses `0.0.0-synthetic` |
 
 ## 2. Profile and bundle packages
 
@@ -128,9 +128,10 @@ Space names are sanitized to patterns so real QQ or workspace identifiers do not
 
 ## 7. Meme packs
 
-Observed pack IDs: `synthetic-pack-01`, `synthetic-pack-02`, `synthetic-pack-03`, `synthetic-pack-04`,
-`synthetic-pack-05`. The live layout is `/workspace/.dsh/meme-packs/<pack>/`; the fixture also keeps
-the older `/workspace/meme-packs/<pack>/` layout so both paths are covered.
+The committed fixture uses generic pack IDs `synthetic-pack-01` through `synthetic-pack-05`.
+Production pack IDs, titles, and media are not repository data. The live layout is
+`/workspace/.dsh/meme-packs/<pack>/`; the fixture also keeps the older
+`/workspace/meme-packs/<pack>/` layout so both paths are covered.
 
 Each pack has `manifest.json` fields `id`, `name`, `version`, `description`, `maintainer`,
 `license`, `tags`, `source`, and an SQLite `index.db` table
@@ -155,8 +156,9 @@ The fixture contains all three status classes and both schedule sources.
 
 ## 9. Session inventory and v4 JSONL schema
 
-The live audit sampled 732 files under
-`sessions/<workspace>/<session>/session.v4.jsonl.zstd`. The fixture contains two synthetic sessions,
+The live audit samples a bounded subset of files under
+`sessions/<workspace>/<session>/session.v4.jsonl.zstd`; exact counts stay in the private audit.
+The fixture contains two synthetic sessions,
 one uncompressed JSONL file and one zstd-compressed file. Remote audits emit
 `audit/sessions.json` with total/compressed file counts, workspace count, and the union of record
 keys and event types from a bounded read-only sample; the extractor also scans session files when

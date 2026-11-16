@@ -1,4 +1,4 @@
-{"type":"session","version":4,"id":"session-synthetic-001","createdAt":"2026-01-01T00:00:00.000Z","cwd":"/synthetic/workspace","parentSession":null,"isSeeded":false,"origin":"synthetic","delegationDepth":0,"agentPreset":"tsukaima"}
+{"type":"session","version":4,"id":"session-synthetic-001","createdAt":"2026-01-01T00:00:00.000Z","cwd":"/synthetic/workspace","parentSession":null,"isSeeded":false,"origin":"synthetic","delegationDepth":0,"agentPreset":"synthetic-persona"}
 {"type":"subagent/descriptor","seq":1,"time":1767225600001,"data":{"id":"subagent-synthetic","kind":"synthetic"}}
 {"type":"sandbox/mode","seq":2,"time":1767225600002,"data":{"mode":"synthetic"}}
 {"type":"approval/policy","seq":3,"time":1767225600003,"data":{"policy":"synthetic"}}

@@ -1,6 +1,8 @@
 # tsukaima
 
-`tsukaima` is a bot-native agent runtime built around Pi components and Bun. It replaces the current DeepSeek Harness (DSH) QQ deployment without importing AstrBot data.
+`tsukaima` is a bot-native agent runtime built around Pi components and Bun. It includes an
+offline migration path for existing DeepSeek Harness (DSH) deployments without importing AstrBot
+data.
 
 ## Goals
 
@@ -17,7 +19,7 @@
 - No AstrBot migration.
 - No general-purpose multi-tenant bot hosting.
 - No Docker socket access from the agent process.
-- No public Internet exposure; the initial deployment remains LAN-only.
+- No assumed public or private network topology; exposure is an operator deployment decision.
 
 ## Status
 
@@ -33,9 +35,13 @@ verify, rollback) also exists.
 
 ```sh
 bun install
+test -f apps/server/.env || cp .env.example apps/server/.env
 bun run check
 bun run dev
 ```
+
+The copied file is local development configuration and is ignored by Git. Do not commit it or
+reuse its values in tests, fixtures, or documentation.
 
 ## Key decisions
 
@@ -48,7 +54,9 @@ bun run dev
 - Coding core: `pi-coding-agent` capabilities wrapped behind a policy-controlled Self-Iteration Runtime.
 - OneBot mode: Tsukaima actively connects to NapCat's WebSocket server.
 - Migration source: current DSH only.
-- Deployment: maintainers deploy `main`; forks deploy a rebased `deploy/<name>` branch; see [docs/operations/deployment.md](docs/operations/deployment.md).
+- Deployment: environment-driven and available to any clone or fork. Every deployment must bump
+  `VERSION` using strict SemVer; see [docs/operations/deployment.md](docs/operations/deployment.md)
+  and [privacy rules](docs/operations/privacy.md).
 - WebUI authorization: single administrator.
 - WebUI authentication: Better Auth 1.7 over SQLite with native `/api/auth/*` routes.
 

@@ -26,4 +26,4 @@ Use:
 - Elysia handles hosting and raw HTTP/WS concerns; oRPC handles procedure typing and validation.
 - beUI requires Tailwind CSS and Motion.
 - Domain and durable data remain separate SQLite files with separate ownership and migrations.
-- Local hooks stay fast; full checks run in CI.
+- Local hooks stay fast; the test workflow runs full checks on pull requests and `main`.

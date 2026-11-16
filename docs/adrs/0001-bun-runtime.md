@@ -17,4 +17,4 @@ Use Bun as the primary runtime and toolchain.
 - Use `bun:sqlite` through a dedicated adapter for `pi-durable`.
 - Validate PostgreSQL client compatibility before locking dependency versions.
 - Keep pure/domain code runtime-neutral so it can run under Node if a blocker appears.
-- Pin a specific Bun version in CI and Dockerfiles.
+- Pin a specific Bun version in the test workflow and Dockerfiles.

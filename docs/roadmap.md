@@ -8,7 +8,7 @@
 
 ## Phase 1 — Core skeleton
 
-- [x] 1. Scaffold Bun monorepo and CI.
+- [x] 1. Scaffold Bun monorepo and verification checks.
 - [x] 2. Implement startup lifecycle with database migration and readiness gates.
 - [x] 3. Implement `BunSqliteStorage` adapter and storage conformance tests.
 - [x] 4. Create `pi-durable` host service with fake model.

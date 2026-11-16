@@ -1924,9 +1924,7 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 		(path) =>
 			/\.jsonl(?:\.zstd)?$/i.test(path) &&
 			/(?:^|\/)sessions\//i.test(path) &&
-			!/(?:^|\/)(?:audit|personas?|memory|settings|stickers?|backups|synthetic-snapshot|node_modules)\//i.test(
-				path,
-			),
+			!/(?:^|\/)(?:audit|personas?|memory|settings|stickers?|backups|node_modules)\//i.test(path),
 	);
 	for (const path of sessionPaths) {
 		const entry = entriesByPath.get(path);

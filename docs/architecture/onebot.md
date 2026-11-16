@@ -6,7 +6,7 @@ Tsukaima's first channel is NapCat's OneBot v11 WebSocket server. Tsukaima is th
 
 | Mode | Role | First release |
 | --- | --- | --- |
-| Forward WebSocket | Tsukaima connects to `ws://napcat.test:3001` | Yes |
+| Forward WebSocket | Tsukaima connects to `ws://<napcat-host>:3001` | Yes |
 | Reverse WebSocket | NapCat connects to Tsukaima | Later |
 | HTTP server | NapCat accepts API calls | Optional |
 | HTTP client | Tsukaima calls NapCat HTTP | Optional |

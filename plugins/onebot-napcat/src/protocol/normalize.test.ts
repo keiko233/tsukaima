@@ -104,7 +104,7 @@ describe("OneBot inbound segment fidelity", () => {
 				},
 				{
 					data: {
-						data: JSON.stringify({ prompt: "hello https://secret.test 123456789", title: "T" }),
+						data: JSON.stringify({ prompt: "hello https://secret.test 10004", title: "T" }),
 					},
 					type: "json",
 				},
@@ -164,10 +164,10 @@ describe("OneBot inbound segment fidelity", () => {
 		// accounts. An empty display name fails the envelope contract, which used to drop the
 		// whole message before ingestion.
 		const cases: Array<[NonNullable<OneBotEvent["sender"]>, string]> = [
-			[{ card: "", nickname: "TestNickname", user_id: 10_001 }, "TestNickname"],
-			[{ card: "   ", nickname: "TestNickname", user_id: 10_001 }, "TestNickname"],
-			[{ nickname: "TestNickname", user_id: 10_001 }, "TestNickname"],
-			[{ card: "Test User", nickname: "TestNickname", user_id: 10_001 }, "Test User"],
+			[{ card: "", nickname: "Test Nickname", user_id: 10_001 }, "Test Nickname"],
+			[{ card: "   ", nickname: "Test Nickname", user_id: 10_001 }, "Test Nickname"],
+			[{ nickname: "Test Nickname", user_id: 10_001 }, "Test Nickname"],
+			[{ card: "Test User", nickname: "Test Nickname", user_id: 10_001 }, "Test User"],
 			[{ card: "", user_id: 10_001 }, "10001"],
 		];
 		for (const [sender, expected] of cases) {
@@ -195,14 +195,14 @@ describe("OneBot inbound segment fidelity", () => {
 	test("keeps at mentions inline so the addressed name is not eaten", () => {
 		const envelope = normalizeOneBotEvent(
 			message([
-				{ data: { name: "TestUser", qq: "10002" }, type: "at" },
-				{ data: { text: " 发点表情包" }, type: "text" },
+				{ data: { name: "Example User", qq: "10002" }, type: "at" },
+				{ data: { text: " send a sticker" }, type: "text" },
 			]),
 			config,
 		);
 		expect(envelope?.mentions).toEqual([{ id: "10002" }]);
 		// One text part: QQ already puts the separating space in the text segment.
-		expect(envelope?.parts).toEqual([{ text: "@TestUser 发点表情包", type: "text" }]);
+		expect(envelope?.parts).toEqual([{ text: "@Example User send a sticker", type: "text" }]);
 	});
 
 	test("falls back to the QQ id when NapCat omits the at name", () => {

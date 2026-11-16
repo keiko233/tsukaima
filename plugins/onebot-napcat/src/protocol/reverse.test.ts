@@ -126,14 +126,14 @@ describe("OneBot reverse mode", () => {
 		const transport = new FakeTransport();
 		servers[0]?.options.onConnection(transport, {
 			origin: "https://napcat.test",
-			remoteAddress: "10.0.0.5",
+			remoteAddress: "192.0.2.5",
 		});
 		transport.emit("open");
 		expect(channel.diagnostics).toMatchObject({
 			connected: true,
 			mode: "reverse",
 			origin: "https://napcat.test",
-			remoteAddress: "10.0.0.5",
+			remoteAddress: "192.0.2.5",
 			state: "open",
 		});
 
@@ -181,12 +181,12 @@ describe("OneBot reverse mode", () => {
 		servers[0]?.options.onRejected?.({
 			origin: "https://evil.test",
 			reason: "unauthorized",
-			remoteAddress: "10.0.0.9",
+			remoteAddress: "192.0.2.9",
 		});
 		expect(channel.diagnostics).toMatchObject({
 			lastErrorClass: "connect",
 			origin: "https://evil.test",
-			remoteAddress: "10.0.0.9",
+			remoteAddress: "192.0.2.9",
 		});
 		channel.stop();
 	});

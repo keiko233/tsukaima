@@ -25,7 +25,7 @@ describe("inspectConversationContext", () => {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const host = new PiDurableConversationHost({ storage });
 			expect(await host.inspectConversationContext("not-a-number")).toBeUndefined();
-			expect(await host.inspectConversationContext("999999")).toBeUndefined();
+			expect(await host.inspectConversationContext("10003")).toBeUndefined();
 			await host.close();
 			await storage.close(BACKGROUND_CONTEXT);
 		} finally {

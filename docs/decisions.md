@@ -7,7 +7,7 @@
 | Runtime | Bun |
 | Migration scope | Current DSH only; AstrBot is not migrated |
 | Downtime | Allowed |
-| Deployment | Option C: agent produces artifacts/proposals; administrator applies. Local development first, GHCR later. |
+| Deployment | Agent produces artifacts/proposals; administrator applies them to a deployment branch and builds the image on the host. |
 | WebUI authorization | Single administrator |
 | OneBot mode | Tsukaima actively connects to NapCat WebSocket (forward WS) |
 | Project name | `tsukaima` |

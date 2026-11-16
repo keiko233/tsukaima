@@ -211,13 +211,13 @@ describe("fake NapCat integration", () => {
 			transports[0]?.emitOpen();
 			transports[0]?.emitMessage({
 				message: [{ data: { text: "test" }, type: "text" }],
-				message_id: 617_018_306,
+				message_id: 700_001,
 				message_type: "private",
 				post_type: "message",
 				self_id: 99,
-				sender: { card: "", nickname: "TestNickname", user_id: 940_582_963 },
+				sender: { card: "", nickname: "Test Nickname", user_id: 10_002 },
 				time: Math.floor(Date.now() / 1_000),
-				user_id: 940_582_963,
+				user_id: 10_002,
 			});
 			const database = lifecycle.domainDatabase;
 			if (database === undefined) throw new Error("Domain database not ready");
@@ -226,11 +226,11 @@ describe("fake NapCat integration", () => {
 				return rows.find((row) => row.platformMessageId === "700001");
 			});
 			expect(inbound.contentText).toBe("test");
-			expect(inbound.senderDisplayName).toBe("TestNickname");
+			expect(inbound.senderDisplayName).toBe("Test Nickname");
 			expect(inbound.triggerClassification).toBe("direct");
 			// The chat object is what the WebUI chat list renders; without it the message is invisible.
 			const chats = await database.select().from(chatObjects);
-			expect(chats.map((chat) => chat.platformConversationId)).toContain("10003");
+			expect(chats.map((chat) => chat.platformConversationId)).toContain("10002");
 			expect(lifecycle.lastProcessingError).toBeUndefined();
 		} finally {
 			await lifecycle.stop();
@@ -277,13 +277,13 @@ describe("fake NapCat integration", () => {
 						type: "image",
 					},
 				],
-				message_id: 617_018_307,
+				message_id: 700_002,
 				message_type: "private",
 				post_type: "message",
 				self_id: 99,
-				sender: { card: "", nickname: "TestNickname", user_id: 940_582_963 },
+				sender: { card: "", nickname: "Test Nickname", user_id: 10_002 },
 				time: Math.floor(Date.now() / 1_000),
-				user_id: 940_582_963,
+				user_id: 10_002,
 			});
 			const database = lifecycle.domainDatabase;
 			if (database === undefined) throw new Error("Domain database not ready");
@@ -378,13 +378,13 @@ describe("fake NapCat integration", () => {
 						type: "image",
 					},
 				],
-				message_id: 617_018_308,
+				message_id: 700_003,
 				message_type: "private",
 				post_type: "message",
 				self_id: 99,
-				sender: { card: "", nickname: "TestNickname", user_id: 940_582_963 },
+				sender: { card: "", nickname: "Test Nickname", user_id: 10_002 },
 				time: Math.floor(Date.now() / 1_000),
-				user_id: 940_582_963,
+				user_id: 10_002,
 			});
 
 			const userContent = await waitFor(async () => {
@@ -439,7 +439,7 @@ describe("fake NapCat integration", () => {
 			transports[0]?.emitOpen();
 			const sent = await lifecycle.pluginHost.invokeRpc("onebot-napcat.send", {
 				parts: [{ text: "Synthetic outbound message", type: "text" }],
-				target: { channelId: "onebot", kind: "private", platformConversationId: "10002" },
+				target: { channelId: "onebot", kind: "private", platformConversationId: "10003" },
 			});
 			expect(sent).toEqual({ ok: true, result: { platformMessageId: "7001" } });
 
@@ -447,7 +447,7 @@ describe("fake NapCat integration", () => {
 			if (database === undefined) throw new Error("Domain database not ready");
 			// The target had never messaged the bot, so the chat object and session are created here.
 			const chats = await database.select().from(chatObjects);
-			const chat = chats.find((row) => row.platformConversationId === "10002");
+			const chat = chats.find((row) => row.platformConversationId === "10003");
 			expect(chat?.kind).toBe("private");
 			if (chat === undefined) throw new Error("outbound chat object missing");
 
@@ -462,8 +462,8 @@ describe("fake NapCat integration", () => {
 			expect(outbound.platformMessageId).toBe("7001");
 
 			const poked = (await lifecycle.pluginHost.invokeRpc("onebot-napcat.poke", {
-				target: { channelId: "onebot", kind: "private", platformConversationId: "10002" },
-				userId: "10002",
+				target: { channelId: "onebot", kind: "private", platformConversationId: "10003" },
+				userId: "10003",
 			})) as { ok: boolean };
 			expect(poked.ok).toBe(true);
 			const notices = await waitFor(async () => {

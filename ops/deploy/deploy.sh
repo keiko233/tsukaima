@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Build and release one revision from a pushed deployment branch. Run on the host:
+# Build and deploy one revision from a pushed deployment branch. Run on the host:
 #
 #   cd /opt/tsukaima/repo
-#   DEPLOY_BRANCH=main ROOT=/opt/tsukaima bash ops/deploy/deploy.sh
+#   DEPLOY_BRANCH=<branch> ROOT=/opt/tsukaima bash ops/deploy/deploy.sh
 #
-# Maintainers deploy main from the mainline repository. Forks must deploy a non-main branch.
-# The build is versioned from VERSION; every non-release commit gets a short-commit suffix.
-# Previous image and data backup are kept for rollback.
+# The build is versioned directly from VERSION; the commit is recorded in labels and records.
+# Every deployment must increase VERSION according to strict SemVer relative to the version
+# recorded by the previous successful deployment. Previous image and data backup are kept for
+# rollback.
 #
 # Dependencies live in a prepared image keyed by bun.lock and the workspace manifests, so an image
 # build never runs `bun install`. The first deploy after a lockfile change prepares that image
@@ -17,12 +18,15 @@
 # actually want the newest oven/bun.
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=ops/deploy/semver.sh
+source "$script_dir/semver.sh"
 cd "$(git rev-parse --show-toplevel)"
+
 REPO="$(pwd)"
 DEPLOYER="${DEPLOYER:-${TSUKAIMA_DEPLOYER:-$(git config user.name || echo deploy)}}"
 DEPLOYER="${DEPLOYER//[^A-Za-z0-9_.-]/-}"
 ROOT="${ROOT:-/opt/tsukaima}"
-MAINLINE_REPO="${MAINLINE_REPO:-example-org/tsukaima}"
 COMPOSE_FILE="$ROOT/compose.yaml"
 DATA_DIR="$ROOT/data"
 ENV_FILE="$ROOT/.env"
@@ -38,39 +42,27 @@ fail() {
 	exit 1
 }
 
-repository_slug() {
-	local url="$1"
-	url="${url%.git}"
-	url="${url#git@github.com:}"
-	url="${url#https://github.com/}"
-	url="${url#ssh://git@github.com/}"
-	printf '%s\n' "$url"
-}
-
-origin_slug="$(repository_slug "$(git remote get-url origin)")"
-is_mainline=0
-[[ "$origin_slug" == "$MAINLINE_REPO" ]] && is_mainline=1
 if [[ -n "${DEPLOY_BRANCH:-}" ]]; then
 	deploy_branch="$DEPLOY_BRANCH"
-elif [[ "$is_mainline" == "1" ]]; then
-	deploy_branch="main"
 else
-	deploy_branch="deploy/$DEPLOYER"
+	deploy_branch="$(git branch --show-current)"
 fi
-if [[ "$is_mainline" != "1" && "$deploy_branch" == "main" ]]; then
-	fail "refusing to deploy main from a fork; check out a dedicated deployment branch instead"
-fi
+[[ -n "$deploy_branch" ]] || fail "DEPLOY_BRANCH is required; detached HEADs are not deployable"
 
 [[ "$(id -u)" == "0" ]] || fail "run as root on the deployment host"
 [[ -f "$ROOT/secrets/runtime.env" ]] || fail "missing $ROOT/secrets/runtime.env (run bootstrap-host.sh)"
 [[ -f "$COMPOSE_FILE" ]] || fail "missing $COMPOSE_FILE (run bootstrap-host.sh)"
 docker compose version >/dev/null 2>&1 || fail "docker compose v2 is required"
+docker_network="$(sed -n 's/^TSUKAIMA_DOCKER_NETWORK=//p' "$ENV_FILE" 2>/dev/null | tail -n1)"
+docker_network="${docker_network:-tsukaima}"
+docker network inspect "$docker_network" >/dev/null 2>&1 ||
+	docker network create "$docker_network" >/dev/null
 
 if [[ -n "$(git status --porcelain)" ]]; then
 	fail "worktree is dirty; commit or stash before deploying"
 fi
 
-git fetch origin --prune --tags
+git fetch origin --prune
 current_branch="$(git branch --show-current)"
 if [[ "$current_branch" != "$deploy_branch" ]]; then
 	git checkout "$deploy_branch"
@@ -94,12 +86,33 @@ if [[ "${TSUKAIMA_DEPLOY_REEXEC:-0}" != "1" ]] &&
 fi
 
 local_version="$(tr -d '[:space:]' <VERSION)"
-commit="$(git rev-parse HEAD)"
-if git describe --tags --exact-match --match "v$local_version" HEAD >/dev/null 2>&1; then
-	image_version="$local_version"
-else
-	image_version="$local_version-$(git rev-parse --short=12 HEAD)"
+semver_valid "$local_version" ||
+	fail "VERSION is not strict SemVer (expected MAJOR.MINOR.PATCH with optional prerelease/build)"
+
+previous_version=""
+if [[ -f "$ROOT/.deploy/current-version" ]]; then
+	previous_version="$(cat "$ROOT/.deploy/current-version")"
 fi
+previous_source_version=""
+if [[ -f "$ROOT/.deploy/current-source-version" ]]; then
+	previous_source_version="$(cat "$ROOT/.deploy/current-source-version")"
+elif [[ -n "$previous_version" ]]; then
+	# Older deployments only recorded the image version. Remove the generated commit suffix
+	# so a version bump is checked against its source version.
+	previous_source_version="$(printf '%s\n' "$previous_version" | sed -E 's/-[0-9a-f]{12}$//')"
+fi
+if [[ -n "$previous_source_version" ]]; then
+	semver_valid "$previous_source_version" ||
+		fail "deployed VERSION $previous_source_version is not strict SemVer"
+	comparison="$(semver_compare "$local_version" "$previous_source_version")"
+	[[ "$comparison" == "1" ]] ||
+		fail "VERSION must increase for every deployment (deployed: $previous_source_version, local: $local_version)"
+fi
+
+commit="$(git rev-parse HEAD)"
+# Docker tags cannot contain SemVer build metadata's "+"; replace it with "_" in the image
+# tag only. The source VERSION stays unchanged.
+image_version="${local_version//+/_}"
 image="tsukaima:$image_version"
 source_url="$(git remote get-url origin 2>/dev/null || echo unknown)"
 
@@ -126,12 +139,8 @@ fi
 health_url="http://$health_host:7420"
 
 previous_image=""
-previous_version=""
 if [[ -f "$ROOT/.deploy/current-image" ]]; then
 	previous_image="$(cat "$ROOT/.deploy/current-image")"
-fi
-if [[ -f "$ROOT/.deploy/current-version" ]]; then
-	previous_version="$(cat "$ROOT/.deploy/current-version")"
 fi
 
 deps_started=$SECONDS
@@ -228,6 +237,7 @@ echo "Deploy finished in $((SECONDS - deploy_started))s"
 
 printf '%s\n' "$image" >"$ROOT/.deploy/current-image"
 printf '%s\n' "$image_version" >"$ROOT/.deploy/current-version"
+printf '%s\n' "$local_version" >"$ROOT/.deploy/current-source-version"
 printf '%s\n' "$commit" >"$ROOT/.deploy/current-commit"
 chmod 600 "$ROOT/.deploy"/*
 
@@ -236,6 +246,7 @@ cat >"$ROOT/deployments/$TIMESTAMP.json" <<EOF
 	"deployedAt": "$TIMESTAMP",
 	"deployer": "$DEPLOYER",
 	"branch": "$deploy_branch",
+	"sourceVersion": "$local_version",
 	"version": "$image_version",
 	"image": "$image",
 	"commit": "$commit",

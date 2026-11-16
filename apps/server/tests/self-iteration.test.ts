@@ -69,9 +69,13 @@ async function fixture() {
 	await fs.writeFile(join(repo, "README.md"), "# Server fixture\n");
 	await fs.writeFile(join(repo, "package.json"), '{"name":"fixture"}\n');
 	const git = (args: readonly string[]) =>
-		execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@tsukaima.local", ...args], {
-			cwd: repo,
-		});
+		execFileSync(
+			"git",
+			["-c", "user.name=test", "-c", "user.email=test@tsukaima.invalid", ...args],
+			{
+				cwd: repo,
+			},
+		);
 	git(["init", "-b", "main"]);
 	git(["add", "."]);
 	git(["commit", "-m", "initial"]);

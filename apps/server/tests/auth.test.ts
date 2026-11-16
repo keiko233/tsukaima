@@ -367,12 +367,12 @@ describe("admin auth", () => {
 
 		// A spoofed forwarded header cannot move the bucket while no proxy is trusted.
 		for (let index = 0; index < 5; index += 1) {
-			expect((await attempt("10.0.0.5", `198.51.100.${index + 1}`)).status).toBe(401);
+			expect((await attempt("192.0.2.5", `198.51.100.${index + 1}`)).status).toBe(401);
 		}
-		expect((await attempt("10.0.0.5", "198.51.100.99")).status).toBe(429);
+		expect((await attempt("192.0.2.5", "198.51.100.99")).status).toBe(429);
 
 		// Another direct client has its own bucket.
-		expect((await attempt("192.0.2.10")).status).toBe(401);
+		expect((await attempt("192.0.2.6")).status).toBe(401);
 
 		await lifecycle.stop();
 	});

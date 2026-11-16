@@ -5,7 +5,7 @@ This file is the cross-session handoff record. Update it whenever implementation
 ## Current status
 
 - Project name: `tsukaima`.
-- Repository initialized at `<repo-root>` on branch `main`.
+- Repository initialized on branch `main`.
 - First commit: `5dc80bc Add Tsukaima Chatbot architecture and DSH migration plan`.
 - Current phase: implementation-spec Phases 0–9 and the Release Readiness checklist are complete.
   The closed reply loop, oRPC contract layer, ingest boundary, persona/memory injection, admin
@@ -158,7 +158,7 @@ This file is the cross-session handoff record. Update it whenever implementation
 | UI                        | beUI design system through its shadcn-compatible registry                               |
 | Migration source          | Current DSH only; AstrBot is not migrated                                               |
 | Downtime during cutover   | Allowed                                                                                 |
-| Self-iteration deployment | Local development first; agent creates deployment proposals/artifacts; later GHCR image |
+| Self-iteration deployment | Host-built images from approved deployment branches; agent creates proposals |
 | WebUI authorization       | One administrator                                                                       |
 | Authentication            | Better Auth with SQLite-backed users and sessions                                       |
 | OneBot mode               | Tsukaima actively connects to NapCat WebSocket server                                     |
@@ -223,7 +223,10 @@ These are implementation-level decisions, not blockers for starting scaffolding:
 - Phase 7: `proactive-scheduler` durable tasks, gates, decisions, tools, and panel are implemented.
 - Phase 8: `self-iteration` runtime, coding tasks/proposals/approvals, supervised reload, deployments, rollback, tools, and panel are implemented.
 - Phase 9: offline DSH v4 snapshot, parsers, normalize/dry-run/import/verify/rollback pipeline, migration CLI, and backup/restore rollback are implemented. A real read-only snapshot → dry-run → import → verify rehearsal passed against an isolated lab database; the live DSH cutover has not been executed.
-- Release Readiness: `messages.activity_id` and duplicated RPC schemas are removed, the Playwright WebUI E2E suite exists, CI secret scanning and scheduled SQLite + blob backup/restore drills exist, and the production runbook is written.
+- Deployment Readiness: `messages.activity_id` and duplicated RPC schemas are removed, the
+  Playwright WebUI E2E suite exists, the GitHub Actions test workflow enforces checks and tests,
+  secret scanning and scheduled SQLite + blob backup/restore drills exist, and the production
+  runbook is written.
 
 Verified baseline (this working tree):
 
@@ -235,19 +238,17 @@ bun run test:e2e
 ```
 
 Observed results: secret scan passes over the tracked tree; WebUI i18n checks, i18n lint, and the
-production build exit `0`; `bun run check` passes lint, formatting, all TypeScript projects, and
-521 tests across 96 files; `bun run test:e2e` passes 5 Chromium specs against the isolated stack.
+production build exit `0`; `bun run check` passes version consistency, lint, formatting, all
+TypeScript projects, and the full test suite; `bun run test:e2e` passes against the isolated
+stack.
 
 Live DSH rehearsal (this working tree):
 
-- Read-only capture produced 13,222 files / 989 MB with 0 capture errors; 355 structured files were
-  redacted and 91 secret-classified files were replaced by placeholders.
-- Dry-run and import against an isolated lab database mapped 648 conversations (3 group, 5 private,
-  640 webui), 51,398 messages, 1,254 source memories, 287 attachments, 2 personas, 138 settings,
-  6 sticker packs / 339 stickers, 26 users, and the request/scheduler rows. QQ chat history now
-  includes the NapCat history dump, every `recent.jsonl` window (including backups and pending
-  rebuilds), `cross-recent.jsonl`, archived history rows, and successful control-session send
-  tool calls; assistant reports from non-chat sessions are not treated as chat.
+- A read-only capture was rehearsed against an isolated lab database. Exact file sizes, counts,
+  identifiers, and chat content stay in private operations records and are not copied here.
+- The rehearsal covered the NapCat history dump, every `recent.jsonl` window (including backups and
+  pending rebuilds), `cross-recent.jsonl`, archived history rows, and successful control-session
+  send tool calls; assistant reports from non-chat sessions are not treated as chat.
 - Every verify check passed (checksums, counts, references, secrets, plugin config, rendering, fake
   model smoke turn). Re-import returned the original completed run id with identical counts.
 - The rehearsal exposed and fixed captured-snapshot wrapper ingestion, concatenated-volume tar
@@ -265,7 +266,7 @@ The implementation phases are done. Remaining work is operational:
 2. **NapCat cutover**: connect the production bot account, validate channel diagnostics, and tune
    conversation policies per group.
 3. **Scheduled operations**: enable `TSUKAIMA_BACKUP_DRILL_INTERVAL_MS` in production and alert on
-   failed drill reports; keep `bun run check:secrets` in CI.
+   failed drill reports; run `bun run check:secrets` before every deploy.
 4. **Ongoing review**: use the self-iteration approval/deployment flow for every runtime change.
 
 The full built-in plugin inventory and migration order are tracked in
@@ -279,8 +280,8 @@ The full built-in plugin inventory and migration order are tracked in
   down) can still be missing. Prompt-derived inbound timestamps have minute precision and infer the
   UTC date from the prompt event; OneBot/recent rows keep exact timestamps.
 - WebUI/work transcripts import assistant visible text plus tool calls/results verbatim. This
-  preserves agent history but makes large work conversations (the live rehearsal has 42k+ webui
-  messages); tool outputs can repeat file contents and diagnostic logs.
+  preserves agent history but can make work conversations very large; tool outputs can repeat
+  file contents and diagnostic logs.
 - One inbound burst is answered when its activity window settles (`pacing.burstSettleMs`, 8 s by
   default), unless a long message or max-wait forces an earlier submission. While a run is
   working, pending messages stay in the window and a configurable fast sidechat model decides

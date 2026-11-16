@@ -7,13 +7,14 @@ Tsukaima can modify its own plugins, prompts, documentation, and application cod
 - Every coding change happens in a disposable git worktree.
 - Every deployment proposal has a diff, test result, review note, and rollback path.
 - The chat-facing agent calls tools; it does not run the deployer itself.
-- Secrets, production data, NapCat login state, and unrelated tsukaima paths are protected.
-- Development is local-first; later production distribution is a GHCR image.
+- Secrets, production data, NapCat login state, and unrelated deployment paths are protected.
+- Development is local-first; production distribution is a host-built image from the approved
+  deployment branch.
 
 ## Workflow
 
 1. Create `IterationTask` in durable storage with goal, source conversation, and constraints.
-2. Create a git worktree under `/opt/tsukaima/worktrees/<task-id>`.
+2. Create a git worktree under `<data-dir>/worktrees/<task-id>`.
 3. Run the coding runner with read/write/edit/search/bash tools scoped to that worktree.
 4. Require tests relevant to the change.
 5. Generate a patch summary and risk assessment.
@@ -48,7 +49,7 @@ It does not expose:
 - host filesystem outside approved roots
 - secret files
 - production databases
-- other tsukaima project directories
+- other project directories on the deployment host
 
 ## Deployment path
 
@@ -61,10 +62,10 @@ The agent can produce a deployment bundle:
 - backup/rollback notes
 - exact commands for the administrator
 
-Later phase: GHCR.
+Deployment phase:
 
-- CI builds a versioned image.
-- Deployment is an explicit image pull plus controlled service update.
+- The deployment host builds an image tagged with the strict `VERSION`.
+- Deployment is an explicit host build plus controlled service update.
 - Rollback uses the previous image tag.
 - The bot may propose this operation, but the host-side deployer remains a narrow, audited service.
 

@@ -81,6 +81,11 @@ const ASSIGNMENT_PATTERN =
 const ENV_ASSIGNMENT_PATTERN =
 	/^\s*(?:[A-Z0-9_]*(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE[_-]?KEY)[A-Z0-9_]*)\s*=\s*([^\s#]{8,})\s*$/u;
 
+const KNOWN_SECRET_ENV_PATTERN =
+	/^\s*(?:TSUKAIMA_(?:ADMIN_PASSWORD|AUTH_SECRET|ONEBOT_ACCESS_TOKEN|OPENAI_API_KEY|SEMANTIC_API_KEY|TELEGRAM_BOT_TOKEN)|BETTER_AUTH_SECRET)\s*=\s*([^\s#]+)\s*$/u;
+
+const DEPLOYMENT_SSH_TARGET_PATTERN = /\b(?:root|admin|deploy|ubuntu)@(?:\d{1,3}\.){3}\d{1,3}\b/u;
+
 const ALLOW_MARKER = /secret-scan:allow\b/u;
 
 const PLACEHOLDER_VALUES = new Set([
@@ -104,7 +109,13 @@ function isPlaceholder(value: string): boolean {
 	const normalized = value.trim().toLowerCase();
 	if (normalized.length === 0) return true;
 	if (PLACEHOLDER_VALUES.has(normalized)) return true;
-	if (/^(?:\$\{[^}]+\}|<[^>]+>|process\.env\.|env\.|your[-_])/u.test(normalized)) return true;
+	if (
+		/^(?:\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*|<[^>]+>|process\.env\.|env\.|your[-_])/u.test(
+			normalized,
+		)
+	) {
+		return true;
+	}
 	if (/^(?:\*+|x+|-+)$/u.test(normalized)) return true;
 	return /example|placeholder|changeme|change-me|redacted|dummy|fake|sample/iu.test(normalized);
 }
@@ -151,6 +162,7 @@ function scanLine(path: string, line: number, text: string): SecretFinding[] {
 	for (const token of TOKEN_PATTERNS) {
 		if (token.pattern.test(text)) add(token.rule);
 	}
+	if (DEPLOYMENT_SSH_TARGET_PATTERN.test(text)) add("deployment-ssh-target");
 	for (const match of text.matchAll(CONNECTION_STRING_PATTERN)) {
 		const password = match[1] ?? "";
 		if (!isPlaceholder(password)) add("connection-string-with-password");
@@ -161,6 +173,8 @@ function scanLine(path: string, line: number, text: string): SecretFinding[] {
 	}
 	const env = ENV_ASSIGNMENT_PATTERN.exec(text);
 	if (env !== null && looksLikeSecret(env[1] ?? "")) add("env-credential-assignment");
+	const knownEnv = KNOWN_SECRET_ENV_PATTERN.exec(text);
+	if (knownEnv !== null && !isPlaceholder(knownEnv[1] ?? "")) add("known-secret-env-assignment");
 	return findings;
 }
 

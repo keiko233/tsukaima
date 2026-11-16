@@ -159,25 +159,31 @@ Supports:
 6. Reject proposal.
 7. Verify worktree cleanup.
 
-## CI policy
+## Verification policy
 
-CI runs:
+The GitHub Actions `test` workflow runs on pull requests and pushes to `main` and is mandatory.
+The same commands can be run locally before pushing:
 
 ```sh
 bun install --frozen-lockfile
+bun run check:version
 bun run lint
 bun run format:check
 bun run typecheck
 bun run test
+bun run check:secrets
 ```
 
-End-to-end tests may run in a separate job.
+Run Playwright separately with `bun run test:e2e`.
 
 ## Test data rules
 
-1. No real QQ messages.
-2. No real credentials.
-3. No real DSH user data in committed fixtures.
-4. Use synthetic IDs and synthetic content.
-5. Do not commit generated SQLite files.
-6. Temporary databases live in test temp directories.
+1. No real chat messages, transcripts, nicknames, QQ numbers, group numbers, or account IDs.
+2. No real deployment hosts, SSH users, IP addresses, internal hostnames, container names, or
+   operator-specific paths.
+3. No real credentials or populated environment files.
+4. No real DSH user data in committed fixtures; use schema shapes and synthetic rows only.
+5. Use reserved example domains and documentation IP ranges where a network value is required.
+6. Keep localized content only when the test covers language handling, and write synthetic phrases.
+7. Do not commit generated SQLite files; temporary databases live in test temp directories.
+8. Follow the full [privacy and synthetic data rules](../operations/privacy.md).

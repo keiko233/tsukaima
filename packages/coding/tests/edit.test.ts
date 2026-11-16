@@ -19,7 +19,7 @@ let outsidePath: string;
 const gitSync = (cwd: string, args: readonly string[]): void => {
 	execFileSync(
 		"git",
-		["-c", "user.name=tsukaima-test", "-c", "user.email=test@tsukaima.local", ...args],
+		["-c", "user.name=tsukaima-test", "-c", "user.email=test@tsukaima.invalid", ...args],
 		{ cwd },
 	);
 };

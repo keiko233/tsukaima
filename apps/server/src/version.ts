@@ -4,7 +4,7 @@ import { join } from "node:path";
 const FALLBACK_VERSION = "0.1.0";
 
 /**
- * Release builds inject `TSUKAIMA_VERSION` from the mainline tag. Source checkouts fall back to
+ * Deployment images inject `TSUKAIMA_VERSION` from `VERSION`. Source checkouts fall back to
  * the root VERSION file so `/healthz` never reports a version that disagrees with the release.
  */
 export function runtimeVersion(env: Record<string, string | undefined> = process.env): string {

@@ -57,6 +57,9 @@ Never edit an already-applied migration or its snapshot. Add a new migration ins
 - Use `apply_patch` for edits.
 - Add comments only where the reasoning or invariant is non-obvious.
 - Do not add copyright or license headers.
+- Never commit deployment hosts, SSH users, IP addresses, internal hostnames, deployment paths,
+  account/group IDs, chat content, or private sticker-library references. Use placeholders from
+  `docs/operations/privacy.md`.
 - Keep optional fields compatible with `exactOptionalPropertyTypes`.
 - When a wire field changes, update `packages/contracts` and every consumer together.
 - WebUI copy lives in both `apps/web/messages/en.json` and `apps/web/messages/zh-cn.json`.
@@ -81,6 +84,8 @@ Never edit an already-applied migration or its snapshot. Add a new migration ins
 - Tests run against SQLite/Bun test APIs and temporary directories. Never require a real QQ,
   NapCat, model provider, Docker daemon, or network endpoint.
 - Deterministic fake models are the default in server tests.
+- Every test identity and message is synthetic. Never paste production chat text, nicknames, QQ or
+  group numbers, or host details into tests or fixtures, even as a "small realistic example".
 - Cover restart recovery, idempotency, queue/interrupt behavior, and policy denial paths when
   changing runtime orchestration.
 - Clean up temporary directories and open resources in `finally` blocks.
@@ -91,5 +96,7 @@ Never edit an already-applied migration or its snapshot. Add a new migration ins
 - `ops/deploy/*` targets a real host and may stop containers, build images, or overwrite
   deployment state. Do not run deployment or production maintenance commands without explicit
   user approval.
+- Every deployment must increase `VERSION` using strict SemVer and deploy a committed, clean
+  branch. See `docs/operations/deployment.md`.
 - Do not commit generated runtime data (`data/`), secrets, local `.env*` files, or worktrees.
 - Run `bun run check:secrets` before committing anything that touched configuration or logs.

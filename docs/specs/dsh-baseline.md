@@ -7,17 +7,16 @@ work from being driven by assumptions about a generic DeepSeek Harness install.
 
 ## Current baseline
 
-- Host/project target: configured via CLI flags or environment variables (current audit target:
-  `<ssh-target>`, Docker host `docker`, `/opt/dsh-project`), image
-  `registry.example.test/dsh:0.0.0-synthetic`, CLI `0.0.0-synthetic`.
-- Harness container: `dsh-project-harness-1`.
-- Gateway: `gateway.example.test`; NapCat is reachable from the harness at `ws://napcat.test:3001`.
-- Persistent volumes: `dsh-home` and `dsh-workspace`.
-- Installed bundles: `dsh-base`, `dsh-web-app`, `dshmarket`, `dsh-free-search`, `dsh-mnemon`,
-  `dsh-meme`, `@deepseek-ai/dsh-experimental-agent-team-profile`,
-  `@hytime/dsh-thinking-effort`, local `dsh-napcat@0.4.4`, and `dsh-purge`.
-- The DSH session store is `home/.dsh/sessions/<workspace>/<session>/session.v4.jsonl.zstd`.
-- Keep deployment host addresses/paths out of runtime defaults and generated repo fixtures.
+- Host, project directory, and container are supplied at runtime through CLI flags or
+  `DSH_AUDIT_*` environment variables. They must never be committed as defaults.
+- Image and CLI versions are captured by the read-only audit. The committed fixture uses
+  `registry.example.test/dsh:0.0.0-synthetic` and `0.0.0-synthetic`.
+- The harness container name, gateway hostname, NapCat URL, and persistent volume names are
+  deployment-specific. They may appear in a private audit but not in repository fixtures.
+- DSH's session store shape is
+  `home/.dsh/sessions/<workspace>/<session>/session.v4.jsonl.zstd`.
+- Keep deployment host addresses, SSH users, absolute home paths, container names, volume IDs,
+  and internal hostnames out of runtime defaults, tests, and generated repository fixtures.
 
 ## Required baseline artifact
 

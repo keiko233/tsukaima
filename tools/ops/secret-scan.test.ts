@@ -56,9 +56,23 @@ describe("secret scanner", () => {
 		expect(rules).toContain("connection-string-with-password");
 	});
 
+	test("detects deployment SSH targets and known secret env values regardless of entropy", () => {
+		const target = fixture("root@", "203.0.113.10");
+		const weakEnv = fixture("TSUKAIMA_ADMIN_PASSWORD=", "12345687");
+		const rules = scanContent("ops/deploy/example.sh", `${target}\n${weakEnv}\n`).map(
+			(finding) => finding.rule,
+		);
+		expect(rules).toContain("deployment-ssh-target");
+		expect(rules).toContain("known-secret-env-assignment");
+		expect(scanContent("deploy/runtime.env.example", "TSUKAIMA_ADMIN_PASSWORD=\n")).toEqual([]);
+	});
+
 	test("ignores placeholders and accepts explicit inline allow markers", () => {
 		const placeholder = 'password: "change-me-please"';
 		expect(scanContent("docs/example.md", placeholder)).toEqual([]);
+		expect(
+			scanContent("ops/deploy/bootstrap-host.sh", "TSUKAIMA_ADMIN_PASSWORD=$ADMIN_PASSWORD\n"),
+		).toEqual([]);
 		const allowed = `apiKey = "${fixture("Ab9", "xY7", "Q2m", "N4p", "R8t", "V6w")}" // secret-scan:allow test fixture`;
 		expect(scanContent("tools/fixture.ts", allowed)).toEqual([]);
 	});

@@ -10,7 +10,7 @@ Self-modification is a core requirement, but the current phase is local developm
 
 ## Decision
 
-Implement self-iteration as a governed coding workflow using `pi-coding-agent`-style tools inside scoped git worktrees. Deployment is a proposal workflow controlled by the administrator during development. Later GHCR-based deployment remains explicit and audited.
+Implement self-iteration as a governed coding workflow using `pi-coding-agent`-style tools inside scoped git worktrees. Deployment is a proposal workflow controlled by the administrator. The approved branch is built into an image on the deployment host, and every deployment remains explicit and audited.
 
 ## Consequences
 

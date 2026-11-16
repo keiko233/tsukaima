@@ -556,15 +556,15 @@ describe("sticker selection and send tokens", () => {
 	test("finds a freshly imported pack by name, tag, and localized emotion", async () => {
 		const setup = await setupSelection();
 		await setup.repository.savePack({
-			id: "pack-sakiko",
+			id: "pack-example",
 			name: "Example Sticker Pack",
 			tags: ["telegram", "regular"],
 		});
 		const item = await seedItem(setup.repository, setup.media, {
 			emotions: ["happy"],
-			id: "sakiko-hug",
+			id: "example-hug",
 			keywords: ["hug"],
-			packId: "pack-sakiko",
+			packId: "pack-example",
 		});
 		const byName = await setup.selection.search({ query: "Example Sticker Pack" });
 		expect(byName.map((candidate) => candidate.itemId)).toContain(item.id);
@@ -573,7 +573,7 @@ describe("sticker selection and send tokens", () => {
 		);
 		// Models send several aliases at once; every term is an alternative, not a phrase.
 		const byAliases = await setup.selection.search({
-			query: "ExamplePerson ExamplePerson example-alias example-alias alice",
+			query: "example pack example-sticker",
 		});
 		expect(byAliases.map((candidate) => candidate.itemId)).toContain(item.id);
 		const bySynonyms = await setup.selection.search({ query: "抱抱 拥抱 hug" });
@@ -957,7 +957,7 @@ describe("telegram sticker import", () => {
 								width: 512,
 							},
 						],
-						title: "Serena",
+						title: "Example Sticker Pack",
 					},
 				});
 			}
@@ -984,7 +984,7 @@ describe("telegram sticker import", () => {
 		expect(set).toMatchObject({
 			name: "example_sticker_set",
 			stickerType: "regular",
-			title: "Serena",
+			title: "Example Sticker Pack",
 		});
 		expect(set.stickers[0]).toMatchObject({ emoji: "😭", fileId: "file-1" });
 		const file = await client.downloadFile("file-1");
@@ -1481,7 +1481,7 @@ describe("sticker semantic classification", () => {
 			bytes: bytes("image-bytes"),
 			emoji: "😭",
 			mimeType: "image/webp",
-			title: "Serena",
+			title: "Example Sticker Pack",
 		});
 		expect(profile.source).toBe("merged");
 		expect(profile.labels).toEqual(expect.arrayContaining(["sad", "cry"]));

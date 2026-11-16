@@ -1,13 +1,14 @@
 # Production runbook
 
 This runbook is the operator-facing companion to the architecture documents. It covers the
-release-readiness items: deployment prerequisites, secret configuration, NapCat connectivity,
+deployment-readiness items: prerequisites, secret configuration, NapCat connectivity,
 health checks, the offline DSH migration workflow, scheduled backup/restore drills, and supervised
 self-iteration reload recovery.
 
 Related documents:
 
 - [Docker deployment](deployment.md)
+- [Privacy and synthetic data](privacy.md)
 - [Startup lifecycle](../architecture/startup-lifecycle.md)
 - [DSH migration](../migration/dsh.md) and [Migration Kit](../migration/migration-kit.md)
 - [Quality gates](quality.md)
@@ -15,10 +16,11 @@ Related documents:
 
 ## 1. Deployment prerequisites
 
-Production deployment is image-based. Maintainers deploy `main`; forks must deploy a dedicated
-branch rebased onto mainline `main`. Follow [deployment.md](deployment.md) for the branch policy,
-version authority, host bootstrap, data-copy, and rollback workflow. The build command below is the
-direct source-checkout equivalent of the container entrypoint.
+Production deployment is image-based and environment-driven. Any clone or fork can deploy a
+committed branch after increasing `VERSION` with strict SemVer. Follow
+[deployment.md](deployment.md) for the host bootstrap, version policy, data-copy, and rollback
+workflow. The build command below is the direct source-checkout equivalent of the container
+entrypoint.
 
 | Requirement | Notes |
 | --- | --- |
@@ -27,7 +29,7 @@ direct source-checkout equivalent of the container entrypoint.
 | Writable data directory | `TSUKAIMA_DATA_DIR` holds both databases, `blobs/`, plugin worktrees, and drill output. |
 | Reverse proxy (recommended) | Terminate TLS, forward `/api`, `/rpc`, `/events`, and the WebUI. List it in `TSUKAIMA_TRUSTED_PROXIES`. |
 | NapCat instance | OneBot v11 WebSocket server; see [NapCat setup](#3-napcat-websocket-setup). |
-| Chromium (CI only) | `bunx playwright install chromium` for `bun run test:e2e`. |
+| Chromium (E2E only) | `bunx playwright install chromium` for `bun run test:e2e`. |
 
 Build and start:
 
@@ -229,11 +231,12 @@ Recovery after a failed or interrupted reload:
 Never let a model invoke maintenance verbs directly; only the WebUI approval path may deploy or roll
 back.
 
-## 8. Release verification checklist
+## 8. Deployment verification checklist
 
 Run before every cutover:
 
 ```sh
+bun run check:version
 bun run check:secrets
 bun --filter '@tsukaima/web' check:i18n
 bun --filter '@tsukaima/web' lint:i18n

@@ -7,7 +7,7 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 SOURCE="apps/server/data"
-HOST="${HOST:-<ssh-target>}"
+HOST="${HOST:-${TSUKAIMA_DEPLOY_HOST:-}}"
 ROOT="${ROOT:-/opt/tsukaima}"
 
 while [[ $# -gt 0 ]]; do
@@ -37,6 +37,10 @@ done
 
 [[ -d "$SOURCE" ]] || {
 	echo "Source data directory does not exist: $SOURCE" >&2
+	exit 2
+}
+[[ -n "$HOST" ]] || {
+	echo "--host or HOST is required (for example --host <user>@<host>)" >&2
 	exit 2
 }
 command -v sqlite3 >/dev/null || {

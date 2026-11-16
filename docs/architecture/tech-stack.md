@@ -187,7 +187,7 @@ fix(onebot): deduplicate reconnect events
 docs(migration): expand DSH cutover steps
 ```
 
-Pre-commit must not run the full test suite by default if it makes iteration slow. It should format and lint staged files. CI runs the full `check` pipeline.
+Pre-commit must not run the full test suite by default if it makes iteration slow. It should format and lint staged files. The mandatory test workflow runs the full `check` pipeline on pull requests and pushes to `main`.
 
 ## Dependency policy
 

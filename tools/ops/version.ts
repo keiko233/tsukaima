@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -23,7 +22,64 @@ export function parseSemver(value: string): RegExpMatchArray | null {
 	return SEMVER.exec(value.trim());
 }
 
-/** Existing package manifests that must carry the mainline VERSION verbatim. */
+function comparePrerelease(left: string | undefined, right: string | undefined): number {
+	if (left === undefined && right === undefined) return 0;
+	if (left === undefined) return 1;
+	if (right === undefined) return -1;
+	const leftParts = left.split(".");
+	const rightParts = right.split(".");
+	for (let index = 0; index < Math.min(leftParts.length, rightParts.length); index += 1) {
+		const leftPart = leftParts[index] ?? "";
+		const rightPart = rightParts[index] ?? "";
+		const leftNumeric = /^\d+$/u.test(leftPart);
+		const rightNumeric = /^\d+$/u.test(rightPart);
+		if (leftNumeric && rightNumeric) {
+			const difference = Number(leftPart) - Number(rightPart);
+			if (difference !== 0) return difference < 0 ? -1 : 1;
+			continue;
+		}
+		if (leftNumeric) return -1;
+		if (rightNumeric) return 1;
+		if (leftPart !== rightPart) return leftPart < rightPart ? -1 : 1;
+	}
+	if (leftParts.length === rightParts.length) return 0;
+	return leftParts.length < rightParts.length ? -1 : 1;
+}
+
+/** Compare two strict SemVer values. Build metadata is ignored for precedence. */
+export function compareSemver(left: string, right: string): number {
+	const leftMatch = parseSemver(left);
+	const rightMatch = parseSemver(right);
+	if (leftMatch === null) throw new Error(`not a semantic version: ${left}`);
+	if (rightMatch === null) throw new Error(`not a semantic version: ${right}`);
+	for (const index of [1, 2, 3] as const) {
+		const difference = Number(leftMatch[index]) - Number(rightMatch[index]);
+		if (difference !== 0) return difference < 0 ? -1 : 1;
+	}
+	return comparePrerelease(leftMatch[4], rightMatch[4]);
+}
+
+/**
+ * Every deployment must increase VERSION in strict SemVer order. The first deployment has no
+ * previous version and is accepted as-is.
+ */
+export function assertVersionIncrease(current: string, previous?: string): void {
+	if (parseSemver(current) === null) {
+		throw new Error(`VERSION is not strict SemVer: ${current}`);
+	}
+	const normalizedPrevious = previous?.trim();
+	if (normalizedPrevious === undefined || normalizedPrevious === "") return;
+	if (parseSemver(normalizedPrevious) === null) {
+		throw new Error(`previous deployed VERSION is not strict SemVer: ${normalizedPrevious}`);
+	}
+	if (compareSemver(current, normalizedPrevious) <= 0) {
+		throw new Error(
+			`VERSION must increase for every deployment (deployed: ${normalizedPrevious}, local: ${current})`,
+		);
+	}
+}
+
+/** Existing package manifests that must carry the workspace VERSION verbatim. */
 export function workspaceManifestPaths(root: string): readonly string[] {
 	const paths: string[] = [];
 	for (const directory of WORKSPACE_DIRECTORIES) {
@@ -55,15 +111,18 @@ export function forkFileName(file: string): string {
 }
 
 /**
- * Mainline-only version bump. It updates VERSION and every workspace package manifest together so
- * a release tag can never disagree with the packages it ships.
+ * Strict deployment bump. It updates VERSION and every workspace package manifest together so a
+ * built image can never disagree with the packages it ships.
  */
 export function bumpVersions(root: string, next: string): readonly string[] {
 	if (parseSemver(next) === null) throw new Error(`not a semantic version: ${next}`);
 	const changed: string[] = [];
 	const versionPath = join(root, "VERSION");
 	const current = readFileSync(versionPath, "utf8").trim();
-	if (current === next) return changed;
+	if (parseSemver(current) === null) throw new Error(`VERSION is not strict SemVer: ${current}`);
+	if (compareSemver(next, current) <= 0) {
+		throw new Error(`next version ${next} must be greater than current VERSION ${current}`);
+	}
 	writeFileSync(versionPath, `${next}\n`);
 	changed.push("VERSION");
 	for (const path of workspaceManifestPaths(root)) {
@@ -76,179 +135,18 @@ export function bumpVersions(root: string, next: string): readonly string[] {
 	return changed;
 }
 
-function git(root: string, args: readonly string[]): string {
-	const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
-	if (result.status !== 0) {
-		throw new Error(`git ${args.join(" ")} failed: ${result.stderr.trim()}`);
-	}
-	return result.stdout.trim();
-}
-
-function tryGit(root: string, args: readonly string[]): string | undefined {
-	const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
-	return result.status === 0 ? result.stdout.trim() : undefined;
-}
-
-function refExists(root: string, ref: string): boolean {
-	return tryGit(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]) !== undefined;
-}
-
-function versionFiles(root: string): readonly string[] {
-	return [
-		"VERSION",
-		...workspaceManifestPaths(root).map((path) => forkFileName(path.slice(root.length + 1))),
-	];
-}
-
-function requireCleanVersionFiles(root: string): void {
-	const files = versionFiles(root);
-	const dirty = tryGit(root, ["status", "--porcelain", "--", ...files]);
-	if (dirty !== undefined && dirty.length > 0) {
-		throw new Error(
-			`version files have uncommitted changes:\n${dirty}\nCommit or revert them before validating a release.`,
-		);
-	}
-}
-
-/**
- * A fork may merge upstream version bumps, but it may not author one. Only non-merge commits on
- * the fork side of `upstreamRef..HEAD` that touch a version file are rejected.
- */
-export function checkVersionAuthority(root: string, upstreamRef: string): void {
-	if (!refExists(root, upstreamRef)) {
-		throw new Error(`upstream ref ${upstreamRef} is not available; run git fetch --all --tags`);
-	}
-	requireCleanVersionFiles(root);
-	const files = versionFiles(root);
-	const authored = tryGit(root, [
-		"log",
-		"--no-merges",
-		"--format=%h %s",
-		`${upstreamRef}..HEAD`,
-		"--",
-		...files,
-	]);
-	if (authored !== undefined && authored.length > 0) {
-		throw new Error(
-			[
-				`Fork-authored commits must not change VERSION or workspace package versions:`,
-				authored,
-				"",
-				"Version releases are produced only on the mainline. Merge upstream/main instead, then",
-				"retry. If this fork is the mainline, pass --mainline to check explicitly.",
-			].join("\n"),
-		);
-	}
-}
-
-function latestVersionTag(root: string): string | undefined {
-	return tryGit(root, ["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0"]);
-}
-
-export function shortSha(root: string): string {
-	return git(root, ["rev-parse", "--short=12", "HEAD"]);
-}
-
-export function exactVersionTag(root: string, version: string): string | undefined {
-	const tag = tryGit(root, [
-		"describe",
-		"--tags",
-		"--exact-match",
-		"--match",
-		`v${version}`,
-		"HEAD",
-	]);
-	return tag === `v${version}` ? tag : undefined;
-}
-
-export function sanitizeDockerTag(value: string): string {
-	return value
-		.replaceAll(/[^A-Za-z0-9_.-]/gu, "-")
-		.replaceAll(/-+/gu, "-")
-		.slice(0, 128);
-}
-
-export function deploymentVersion(
-	root: string,
-	options: {
-		readonly deployer?: string;
-		readonly fork?: boolean;
-	} = {},
-): string {
-	const version = readFileSync(join(root, "VERSION"), "utf8").trim();
-	const tag = exactVersionTag(root, version);
-	if (tag !== undefined) return version;
-	const sha = shortSha(root);
-	if (options.fork === true || options.deployer !== undefined) {
-		const deployer = sanitizeDockerTag(options.deployer ?? "local");
-		return sanitizeDockerTag(`${version}-fork.${deployer}.${sha}`);
-	}
-	const latest = latestVersionTag(root);
-	const count =
-		latest === undefined
-			? tryGit(root, ["rev-list", "--count", "HEAD"])
-			: tryGit(root, ["rev-list", "--count", `${latest}..HEAD`]);
-	return sanitizeDockerTag(`${version}-dev.${count ?? "0"}.g${sha}`);
-}
-
-export interface ReleaseCheckOptions {
-	readonly allowDetached?: boolean;
-	readonly branch: string;
-	readonly root: string;
-	readonly tag: string;
-}
-
-export function checkRelease(options: ReleaseCheckOptions): void {
-	const version = readFileSync(join(options.root, "VERSION"), "utf8").trim();
-	if (parseSemver(version) === null) {
-		throw new Error(`VERSION is not semantic: ${version}`);
-	}
-	const expectedTag = `v${version}`;
-	if (options.tag !== expectedTag) {
-		throw new Error(`release tag ${options.tag} does not match VERSION (${expectedTag})`);
-	}
-	const branch = tryGit(options.root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-	const detachedRelease = options.allowDetached === true && branch === "HEAD";
-	if (!detachedRelease && branch !== options.branch) {
-		throw new Error(
-			`release must be tagged from ${options.branch}, not ${branch ?? "detached HEAD"}`,
-		);
-	}
-	const tagCommit = tryGit(options.root, ["rev-list", "-n", "1", options.tag]);
-	if (tagCommit === undefined) throw new Error(`tag ${options.tag} does not exist locally`);
-	const head = git(options.root, ["rev-parse", "HEAD"]);
-	if (tagCommit !== head) throw new Error(`tag ${options.tag} does not point at HEAD`);
-	const main = refExists(options.root, "origin/main") ? "origin/main" : "main";
-	if (!refExists(options.root, main)) throw new Error(`mainline ref ${main} is missing`);
-	const onMainline =
-		spawnSync("git", ["merge-base", "--is-ancestor", "HEAD", main], {
-			cwd: options.root,
-		}).status === 0;
-	if (!onMainline) {
-		throw new Error(`${options.tag} is not on ${main}; releases ship from mainline only`);
-	}
-	const latest = latestVersionTag(options.root);
-	if (latest !== options.tag) {
-		throw new Error(
-			`release tag ${options.tag} is not the newest version tag (${latest ?? "none"})`,
-		);
-	}
-	checkManifestVersions(options.root, version);
-}
-
 function usage(): string {
 	return `Usage: bun tools/ops/version.ts <command> [options]
 
 Commands:
-  show [--deployer <name>] [--fork]   Print the version used for an image/build.
-  bump <X.Y.Z>                        Mainline-only VERSION + workspace version bump.
-  check [--upstream <ref>]            Validate VERSION, workspace manifests, and fork authority.
-  release-check --tag <vX.Y.Z>        Validate a mainline release tag (also checks origin/main).
-                     [--allow-detached]  CI checks out a tag in detached HEAD.
+  show                                Print the current VERSION.
+  bump <X.Y.Z>                        Update VERSION and every workspace manifest together.
+  check                               Validate VERSION and workspace manifest consistency.
+  require-bump [--previous <version>] Fail unless VERSION is a strict SemVer increase.
   workspace-paths                     Print manifest paths validated by check.
 
-Policy: VERSION and workspace package versions are owned by mainline. A fork may merge upstream
-version commits but must not author version-file changes.`;
+Policy: every deployment increases VERSION using strict SemVer. Images are built from that
+version; there is no tag-triggered release pipeline.`;
 }
 
 function option(argv: readonly string[], name: string): string | undefined {
@@ -262,23 +160,11 @@ if (import.meta.main) {
 	const command = argv[0] ?? "show";
 	try {
 		if (command === "show") {
-			const deployer = option(argv, "--deployer");
-			console.log(
-				deploymentVersion(root, {
-					...(deployer === undefined ? {} : { deployer }),
-					fork: argv.includes("--fork"),
-				}),
-			);
+			console.log(readFileSync(join(root, "VERSION"), "utf8").trim());
 		} else if (command === "bump") {
 			const next = argv[1];
 			if (next === undefined)
 				throw new Error("bump requires a semantic version, for example 0.1.1");
-			const branch = tryGit(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-			if (branch !== "main") throw new Error(`version bumps happen on main, not ${branch}`);
-			const dirty = tryGit(root, ["status", "--porcelain"]);
-			if (dirty !== undefined && dirty.length > 0) {
-				throw new Error("commit or stash changes before bumping versions");
-			}
 			const changed = bumpVersions(root, next);
 			console.log(changed.length === 0 ? `already at ${next}` : `bumped:\n${changed.join("\n")}`);
 		} else if (command === "check") {
@@ -290,27 +176,15 @@ if (import.meta.main) {
 					[
 						`workspace manifests disagree with VERSION ${version}:`,
 						...result.mismatches.map((entry) => `  ${entry.file}: ${entry.version}`),
-						"Mainline owns version bumps; do not edit these files on a fork.",
+						"Run `bun run version:bump <X.Y.Z>` to update VERSION and every manifest together.",
 					].join("\n"),
 				);
 			}
-			const upstream = option(argv, "--upstream");
-			if (upstream !== undefined && !argv.includes("--mainline")) {
-				checkVersionAuthority(root, upstream);
-			}
-			console.log(
-				`version ${version} is consistent${upstream === undefined ? "" : ` with ${upstream}`}`,
-			);
-		} else if (command === "release-check") {
-			const tag = option(argv, "--tag");
-			if (tag === undefined) throw new Error("release-check requires --tag vX.Y.Z");
-			checkRelease({
-				allowDetached: argv.includes("--allow-detached"),
-				branch: option(argv, "--branch") ?? "main",
-				root,
-				tag,
-			});
-			console.log(`release ${tag} is valid`);
+			console.log(`version ${version} is consistent`);
+		} else if (command === "require-bump") {
+			const version = readFileSync(join(root, "VERSION"), "utf8").trim();
+			assertVersionIncrease(version, option(argv, "--previous"));
+			console.log(`version ${version} is a valid deployment bump`);
 		} else if (command === "workspace-paths") {
 			for (const path of workspaceManifestPaths(root))
 				console.log(forkFileName(path.slice(root.length + 1)));

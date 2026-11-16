@@ -134,8 +134,8 @@ const textPart = (segment: OneBotSegment): MessagePart | undefined => {
 
 /**
  * Keep `at` mentions inline as text. Dropping the segment silently ate the address: a message
- * like "@TestUser 发点表情包" reached the WebUI transcript and the model as " 发点表情包", so
- * neither could tell who was being talked to. The ids still ride in `mentions` for trigger
+ * like "@Example User send a sticker" reached the WebUI transcript and the model without the
+ * display name, so neither could tell who was being talked to. The ids still ride in `mentions` for trigger
  * classification; the label is the platform-supplied name, falling back to the QQ id when
  * NapCat omits it.
  */

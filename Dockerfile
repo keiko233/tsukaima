@@ -92,8 +92,7 @@ EXPOSE 7420
 VOLUME ["/data"]
 
 LABEL org.opencontainers.image.title="tsukaima" \
-	org.opencontainers.image.description="Bot-native agent runtime and WebUI" \
-	org.opencontainers.image.source="https://github.com/example-org/tsukaima"
+	org.opencontainers.image.description="Bot-native agent runtime and WebUI"
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 	CMD ["bun", "-e", "const r=await fetch('http://127.0.0.1:7420/readyz');process.exit(r.status===204?0:1)"]

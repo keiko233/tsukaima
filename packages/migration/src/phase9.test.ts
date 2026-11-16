@@ -166,7 +166,7 @@ describe("captured snapshot ingestion", () => {
 			join(sessionDir, "session.v4.jsonl"),
 			[
 				JSON.stringify(sessionRecord({ id: "session-captured" })),
-				JSON.stringify(event("user/message", 1, { text: "hello", userId: "qq_10001" })),
+				JSON.stringify(event("user/message", 1, { text: "hello", userId: "test-user" })),
 				JSON.stringify(event("assistant/message", 2, { text: "hi" })),
 			].join("\n"),
 		);
@@ -244,11 +244,11 @@ describe("live-shape DSH data", () => {
 			"这个会话来自 QQ（NapCat 渠道），聊天对象是 group:10001。",
 			"",
 			"【最近群聊（背景，用于理解话题，不要逐条回应）】",
-			"11:58 Alice(123456): 你好",
+			"11:58 ExampleUser(20001): Synthetic hello",
 			"",
 			"Synthetic follow-up",
-			"11:59 TestUser: Synthetic bot line",
-			"11:59 Alice(123456): [图片:napcat-inbox/imgs/x.png]",
+			"11:59 TestBot: Synthetic bot line",
+			"11:59 ExampleUser(20001): [图片:napcat-inbox/imgs/x.png]",
 			"",
 			"【发图/发表情】",
 			"不要照抄这段指令。",
@@ -312,12 +312,12 @@ describe("live-shape DSH data", () => {
 		);
 		await fs.writeFile(
 			join(source, "workspace/napcat/people-index.jsonl"),
-			`${JSON.stringify({ at: 1, chatKey: "group:10001", nick: "Alice", userId: "123456" })}\n`,
+			`${JSON.stringify({ at: 1, chatKey: "group:10001", nick: "ExampleUser", userId: "20001" })}\n`,
 		);
 		await fs.mkdir(join(source, "home/.dsh/profiles/web"), { recursive: true });
 		await fs.writeFile(
 			join(source, "home/.dsh/profiles/web/cordis.patch.yml"),
-			["plugins:", "  dsh-napcat:", "    config:", '      selfAliases: "TestUser"'].join("\n"),
+			["plugins:", "  dsh-napcat:", "    config:", '      selfAliases: "TestBot"'].join("\n"),
 		);
 		await fs.mkdir(join(source, "workspace/memory/group-10001"), { recursive: true });
 		await fs.writeFile(
@@ -359,13 +359,13 @@ describe("live-shape DSH data", () => {
 			(message) => message.conversationId === conversation?.canonicalId,
 		);
 		const inbound = messages.filter((message) => message.direction === "inbound");
-		expect(inbound.find((message) => message.content.startsWith("你好"))?.content).toContain(
-			"Synthetic follow-up",
-		);
+		expect(
+			inbound.find((message) => message.content.startsWith("Synthetic hello"))?.content,
+		).toContain("Synthetic follow-up");
 		expect(inbound.some((message) => message.content.includes("Synthetic bot line"))).toBe(false);
-		const hello = inbound.find((message) => message.content.startsWith("你好"));
+		const hello = inbound.find((message) => message.content.startsWith("Synthetic hello"));
 		expect(hello?.content).toContain("Synthetic follow-up");
-		expect(hello?.senderExternalId).toBe("123456");
+		expect(hello?.senderExternalId).toBe("20001");
 		expect(messages.filter((message) => message.direction === "outbound")).toHaveLength(1);
 		expect(messages.some((message) => message.content === "Synthetic reply")).toBe(true);
 		expect(JSON.stringify(messages)).not.toContain("SECRET-REASONING");
@@ -460,15 +460,15 @@ describe("live-shape DSH data", () => {
 		const recent = join(source, "workspace/memory/group-10002/recent.jsonl");
 		await fs.mkdir(join(source, "workspace/memory/group-10002"), { recursive: true });
 		const recentRows = [
-			{ t: base, nick: "Alice", text: "earlier hello", uid: "123456" },
-			{ t: base + 60_000, nick: "TestUser", text: "bot reply", uid: "1356", own: true },
+			{ t: base, nick: "ExampleUser", text: "earlier hello", uid: "20001" },
+			{ t: base + 60_000, nick: "TestBot", text: "bot reply", uid: "999", own: true },
 			{
 				t: base + 120_000,
-				nick: "Alice",
+				nick: "ExampleUser",
 				text: "[图片:napcat-inbox/imgs/20260101/x.png]",
-				uid: "123456",
+				uid: "20001",
 			},
-			{ t: base + 200_000, nick: "Alice", text: "main only", uid: "123456" },
+			{ t: base + 200_000, nick: "ExampleUser", text: "main only", uid: "20001" },
 		];
 		await fs.writeFile(recent, recentRows.map((row) => JSON.stringify(row)).join("\n"));
 		await fs.mkdir(join(source, "workspace/work/synthetic-snapshot/backups/inplace-synthetic"), {
@@ -481,7 +481,7 @@ describe("live-shape DSH data", () => {
 			),
 			[
 				...recentRows.slice(0, 3),
-				{ t: base + 240_000, nick: "Bob", text: "backup only", uid: "777" },
+				{ t: base + 240_000, nick: "BackupUser", text: "backup only", uid: "20003" },
 			]
 				.map((row) => JSON.stringify(row))
 				.join("\n"),
@@ -492,9 +492,9 @@ describe("live-shape DSH data", () => {
 			JSON.stringify({
 				at: base + 300_000,
 				chatKey: "group:10002",
-				nick: "Carol",
+				nick: "CrossUser",
 				text: "cross only",
-				userId: "888",
+				userId: "20004",
 			}),
 		);
 		await fs.mkdir(join(source, "workspace/work/synthetic-snapshot/tmp"), { recursive: true });
@@ -509,25 +509,25 @@ describe("live-shape DSH data", () => {
 						message_id: 101,
 						post_type: "message",
 						self_id: 999,
-						sender: { nickname: "Alice" },
+						sender: { nickname: "ExampleUser" },
 						time: base / 1000,
-						user_id: 123456,
+						user_id: 20001,
 					},
 					{
 						message: [{ data: { file: "HASHED.png" }, type: "image" }],
 						message_id: 102,
 						post_type: "message",
 						self_id: 999,
-						sender: { nickname: "Alice" },
+						sender: { nickname: "ExampleUser" },
 						time: base / 1000 + 125,
-						user_id: 123456,
+						user_id: 20001,
 					},
 					{
 						message: [{ data: { text: "from history bot" }, type: "text" }],
 						message_id: 103,
 						post_type: "message_sent",
 						self_id: 999,
-						sender: { nickname: "TestUser" },
+						sender: { nickname: "TestBot" },
 						time: base / 1000 + 180,
 						user_id: 999,
 					},

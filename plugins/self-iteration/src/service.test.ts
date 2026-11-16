@@ -34,7 +34,7 @@ class MemoryStorage implements PluginStorage {
 }
 
 async function git(cwd: string, args: readonly string[]): Promise<void> {
-	execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@tsukaima.local", ...args], {
+	execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@tsukaima.invalid", ...args], {
 		cwd,
 	});
 }

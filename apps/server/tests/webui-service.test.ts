@@ -269,6 +269,64 @@ describe("WebUI chat and session service", () => {
 		}
 	});
 
+	test("shows mention display names in transcripts without rewriting stored rows", async () => {
+		const lifecycle = await createLifecycle();
+		try {
+			await lifecycle.processEnvelope({
+				...envelope("mention-source", "hi"),
+				sender: { displayName: "ExampleUser", id: "10001", platformId: "10001" },
+			});
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("Domain database is not ready");
+			const chats = await listChats(lifecycle);
+			const sessionId = chats[0]?.sessions[0]?.id;
+			if (sessionId === undefined) throw new Error("Session was not created");
+			const mentionText = "@10001 ping, @10003 too";
+			await database.insert(messagesTable).values({
+				contentText: mentionText,
+				conversationId: sessionId,
+				direction: "inbound",
+				id: "mention-row",
+				kind: "onebot-test",
+				// Later than the live traffic above, so it is also the chat's preview row.
+				occurredAt: "2026-12-01T00:00:00.000Z",
+				partsJson: JSON.stringify([{ text: mentionText, type: "text" }]),
+				senderDisplayName: "Observer",
+				senderExternalId: "user-2",
+			});
+
+			const page = await listMessagePage(lifecycle, { sessionId });
+			const mention = page.messages.find((message) => message.id === "mention-row");
+			// Known ids become names; an id with no known identity has to stay readable as sent.
+			expect(mention?.contentText).toBe("@ExampleUser ping, @10003 too");
+			expect(mention?.parts).toEqual([{ text: "@ExampleUser ping, @10003 too", type: "text" }]);
+			expect((await listMessages(lifecycle, sessionId)).at(-1)?.contentText).toBe(
+				"@ExampleUser ping, @10003 too",
+			);
+			expect((await listChats(lifecycle))[0]?.sessions[0]?.latestMessage?.contentText).toBe(
+				"@ExampleUser ping, @10003 too",
+			);
+			expect(
+				(
+					await getSessionMessage(lifecycle, {
+						messageId: "mention-row",
+						sessionId,
+					})
+				)?.contentText,
+			).toBe("@ExampleUser ping, @10003 too");
+
+			const [stored] = await database
+				.select({ contentText: messagesTable.contentText, partsJson: messagesTable.partsJson })
+				.from(messagesTable)
+				.where(eq(messagesTable.id, "mention-row"))
+				.limit(1);
+			expect(stored?.contentText).toBe(mentionText);
+			expect(stored?.partsJson).toContain("@10001");
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
 	test("deduplicates request events and never retries when the channel is unavailable", async () => {
 		const lifecycle = await createLifecycle();
 		try {

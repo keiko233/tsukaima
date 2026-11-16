@@ -317,7 +317,7 @@ describe("sticker-meme host integration", () => {
 									width: 512,
 								},
 							],
-							title: "Serena",
+							title: "Example Sticker Pack",
 						},
 					});
 				}
@@ -366,7 +366,7 @@ describe("sticker-meme host integration", () => {
 				classified: 1,
 				items: 1,
 				setName: "example_sticker_set",
-				title: "Serena",
+				title: "Example Sticker Pack",
 			});
 
 			const importProgress = (await lifecycle.pluginHost.invokeRpc(
@@ -388,7 +388,7 @@ describe("sticker-meme host integration", () => {
 				classified: 1,
 				current: 1,
 				kind: "telegram.import",
-				packTitle: "Serena",
+				packTitle: "Example Sticker Pack",
 				skipped: 0,
 				stage: "done",
 				status: "completed",
@@ -450,7 +450,7 @@ describe("sticker-meme host integration", () => {
 									width: 512,
 								},
 							],
-							title: "Serena",
+							title: "Example Sticker Pack",
 						},
 					});
 				}
@@ -691,7 +691,7 @@ describe("sticker-meme host integration", () => {
 									width: 512,
 								},
 							],
-							title: "Serena",
+							title: "Example Sticker Pack",
 						},
 					});
 				}

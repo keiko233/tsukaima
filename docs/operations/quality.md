@@ -2,20 +2,23 @@
 
 All code changes pass:
 
-1. `bun run lint`
-2. `bun run format:check`
-3. `bun run typecheck`
-4. `bun run test`
-5. `bun run check:secrets`
-6. `bun run test:e2e`
+1. `bun run check:version`
+2. `bun run lint`
+3. `bun run format:check`
+4. `bun run typecheck`
+5. `bun run test`
+6. `bun run check:secrets`
+7. `bun run test:e2e`
+8. Review against the [privacy and synthetic data rules](privacy.md)
 
 Git requirements:
 
 - Conventional Commits enforced by `commitlint`.
 - `lint-staged` formats and lints staged files before commit.
 - Husky manages local hooks.
-- CI runs secret scanning, the WebUI i18n/build checks, the complete `bun run check` pipeline, and
-  a separate Playwright Chromium E2E job.
+- The GitHub Actions `test` workflow runs on pull requests and pushes to `main`. It is the
+  mandatory gate for secret scanning, WebUI i18n/build checks, the complete `bun run check`
+  pipeline, and Playwright. There is no tag-triggered release or publishing workflow.
 - `bun test` only collects `*.test.ts`/`*_test_*`/`*.spec.ts` files outside `e2e/`; `bunfig.toml`
   ignores `e2e/**`, and Playwright owns `e2e/*.spec.ts`.
 - Generated files should be formatted, but should not be manually edited.

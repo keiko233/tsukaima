@@ -20,19 +20,20 @@ DSH_AUDIT_HOST="<ssh-target>" DSH_AUDIT_PROJECT="<project-dir>" DSH_AUDIT_CONTAI
 Host, project, and container values come from flags or `DSH_AUDIT_*` environment variables; they are
 not runtime defaults or fixture data.
 
-## Current DSH deployment facts
+## DSH deployment inputs
 
-- Project: `/opt/dsh-project` on `192.0.2.10`.
-- DSH version in use: `0.0.0-synthetic` image, CLI reports `0.0.0-synthetic`.
-- Persistent volumes:
-  - `dsh-project_dsh-home`
-  - `dsh-project_dsh-workspace`
-  - `dsh-project_dsh-lan-caddy-data`
-  - `dsh-project_dsh-lan-caddy-config`
-- `dsh-home` holds profiles, plugin manifests, sessions, agent presets, and market state.
-- `dsh-workspace` holds workspaces, meme packs, NapCat plugin local source, and plugin settings.
-- NapCat uses forward WebSocket on `ws://napcat.test:3001`; token exists only on the host.
-- Known installed profile bundles include DSH base/web, plugin market, free search, Mnemon, meme, agent team profile, thinking effort, NapCat, and purge.
+This repository does not contain a live DSH host, SSH target, project path, container name,
+volume name, production URL, or chat database. Operators provide those values at runtime:
+
+- `DSH_AUDIT_HOST` or `--host` selects the SSH target.
+- `DSH_AUDIT_PROJECT` or `--project` selects the project directory.
+- `DSH_AUDIT_CONTAINER` or `--container` selects the harness container.
+- Image and CLI versions are recorded by the baseline command in a local, uncommitted audit.
+
+The persistent home/workspace layout, installed profiles, and NapCat endpoint are deployment
+details. Record their field names and schema shapes in the audit, but never copy host
+coordinates, volume identifiers, tokens, QQ identifiers, or chat content into this repository.
+The committed fixture uses synthetic names and values only.
 
 ## Migration sources
 
@@ -164,9 +165,8 @@ The migration report lists settings with no direct equivalent for manual decisio
 
 ## Rehearsal status
 
-The kit has been run against a real read-only capture of the current deployment (13,222 files,
-989 MB, 0 capture errors). The isolated lab import mapped 648 conversations, 51,398 messages,
-1,254 source memories, 287 attachments, 2 personas, 138 settings, and 6 sticker packs; every
+The kit has been rehearsed against a real read-only capture in an isolated lab. Exact sizes,
+conversation counts, identifiers, and content stay in the operator's private records; every
 `verify` check passed and a second import was idempotent. The live cutover has not run yet.
 
 Live-shape handling now includes:
