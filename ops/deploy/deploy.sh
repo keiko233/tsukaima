@@ -70,6 +70,19 @@ echo "  commit:   $commit"
 echo "  branch:   $DEPLOY_BRANCH"
 echo "  fork:     $DEPLOYER"
 
+if [[ -f "$ENV_FILE" ]]; then
+	# Deployment-local, non-secret compose settings (bind address, public URL, image tag).
+	set -a
+	# shellcheck disable=SC1090
+	. "$ENV_FILE"
+	set +a
+fi
+health_host="${TSUKAIMA_BIND_ADDR:-127.0.0.1}"
+if [[ "$health_host" == "0.0.0.0" || "$health_host" == "::" ]]; then
+	health_host="127.0.0.1"
+fi
+health_url="http://$health_host:7420"
+
 previous_image=""
 previous_version=""
 if [[ -f "$ROOT/.deploy/current-image" ]]; then
@@ -121,7 +134,7 @@ docker compose -f "$COMPOSE_FILE" --project-directory "$ROOT" up -d --remove-orp
 
 ready=0
 for _ in $(seq 1 90); do
-	if curl -fsS -o /dev/null "http://127.0.0.1:7420/readyz"; then
+	if curl -fsS -o /dev/null "$health_url/readyz"; then
 		ready=1
 		break
 	fi
@@ -162,6 +175,6 @@ chmod 600 "$ROOT/deployments/$TIMESTAMP.json"
 ls -1t "$ROOT/backups"/data-*.tgz 2>/dev/null | tail -n +6 | xargs -r rm -f
 ls -1t "$ROOT/deployments"/*.json 2>/dev/null | tail -n +21 | xargs -r rm -f
 
-health="$(curl -fsS "http://127.0.0.1:7420/healthz" || true)"
+health="$(curl -fsS "$health_url/healthz" || true)"
 echo "$health"
 echo "Deployed $image at $TIMESTAMP"

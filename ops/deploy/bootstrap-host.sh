@@ -115,7 +115,7 @@ git checkout "$DEPLOY_BRANCH" 2>/dev/null || git checkout -b "$DEPLOY_BRANCH" "o
 git branch --set-upstream-to="origin/$DEPLOY_BRANCH" "$DEPLOY_BRANCH" 2>/dev/null || true
 git pull --ff-only
 
-cp ops/deploy/compose.yaml "$ROOT/compose.yaml"
+ln -sfn repo/compose.yaml "$ROOT/compose.yaml"
 cp ops/deploy/Caddyfile.fragment "$ROOT/Caddyfile.fragment"
 chown -R 1000:1000 "$ROOT/data"
 
@@ -138,6 +138,7 @@ fi
 
 if [[ ! -f "$ROOT/.env" ]]; then
 	cat >"$ROOT/.env" <<EOF
+TSUKAIMA_ROOT=$ROOT
 TSUKAIMA_IMAGE=tsukaima:0.1.0
 TSUKAIMA_VERSION=0.1.0
 TSUKAIMA_COMMIT=
