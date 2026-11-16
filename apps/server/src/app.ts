@@ -83,6 +83,7 @@ export function createApp(
 		trustedProxies: config.trustedProxies,
 	});
 	auth.start();
+	lifecycle.setBeforeReady(() => auth.ensureInitialized());
 	lifecycle.onStop(() => auth.stop());
 	const handler = createRpcHandler();
 	const requireAuthForEvents = options?.requireAuthForEvents ?? true;
