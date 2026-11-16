@@ -19,7 +19,11 @@
 		"check": "bun run lint && bun run format:check && bun run typecheck && bun run test",
 		"check:secrets": "bun tools/ops/secret-scan.ts",
 		"ops:backup-drill": "bun tools/ops/backup-drill.ts",
-		"test:e2e": "playwright test"
+		"test:e2e": "playwright test",
+		"check:version": "bun tools/ops/version.ts check",
+		"ops:version": "bun tools/ops/version.ts show",
+		"ops:sync": "bash ops/deploy/sync-upstream.sh",
+		"ops:deploy": "bash ops/deploy/deploy-local.sh"
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.65.0",

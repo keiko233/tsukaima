@@ -9,6 +9,7 @@ import type { TsukaimaApiContext } from "./rpc/base.ts";
 import { loadConfig, type TsukaimaConfig } from "./config.ts";
 import { TsukaimaLifecycle, type LifecycleOptions } from "./lifecycle.ts";
 import { AuthService } from "./services/auth.ts";
+import { StaticWebServer } from "./static-web.ts";
 import {
 	createLiveEventStream,
 	createLogEventStream,
@@ -65,6 +66,7 @@ export function createApp(
 	const config = loadConfig(env);
 	const lifecycle = new TsukaimaLifecycle(config, { ...options, env });
 	const httpLog = lifecycle.logger.child("tsukaima::server::http");
+	const staticWeb = new StaticWebServer({ distDir: config.webDistDir });
 	const auth = new AuthService({
 		audit: (entry) => lifecycle.writeAudit(entry),
 		baseUrl: config.publicUrl,
@@ -225,7 +227,16 @@ export function createApp(
 				}
 			},
 			{ parse: "none" },
-		);
+		)
+		.get("/*", async ({ request, status }) => {
+			const pathname = new URL(request.url).pathname;
+			const response = await staticWeb.response(pathname);
+			if (response === undefined) {
+				httpLog.debug("static asset not found", { path: pathname });
+				return status(404, "Not found");
+			}
+			return response;
+		});
 
 	return { app, auth, config, lifecycle };
 }

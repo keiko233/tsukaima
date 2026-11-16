@@ -1,0 +1,5 @@
+# BEGIN tsukaima (managed by ops/deploy/deploy.sh)
+http://app.example.test {
+	reverse_proxy tsukaima:7420
+}
+# END tsukaima

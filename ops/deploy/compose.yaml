@@ -1,0 +1,33 @@
+services:
+  tsukaima:
+    image: ${TSUKAIMA_IMAGE:?set TSUKAIMA_IMAGE in /opt/tsukaima/.env}
+    container_name: tsukaima
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file:
+      - ./secrets/runtime.env
+    environment:
+      NODE_ENV: production
+      TSUKAIMA_HOST: 0.0.0.0
+      TSUKAIMA_PORT: "7420"
+      TSUKAIMA_DATA_DIR: /data
+      TSUKAIMA_WEB_DIST: /app/apps/web/dist
+      TSUKAIMA_VERSION: ${TSUKAIMA_VERSION:?set TSUKAIMA_VERSION in /opt/tsukaima/.env}
+      TSUKAIMA_PUBLIC_URL: ${TSUKAIMA_PUBLIC_URL:-http://app.example.test}
+      TSUKAIMA_TRUSTED_PROXIES: ${TSUKAIMA_TRUSTED_PROXIES:-172.16.0.0/12}
+    ports:
+      - "${TSUKAIMA_BIND_ADDR:-127.0.0.1}:7420:7420"
+    volumes:
+      - ./data:/data
+    networks:
+      - tsukaima
+    labels:
+      io.tsukaima.managed: "ops/deploy"
+      io.tsukaima.version: ${TSUKAIMA_VERSION}
+      io.tsukaima.image: ${TSUKAIMA_IMAGE}
+      io.tsukaima.commit: ${TSUKAIMA_COMMIT:-unknown}
+      io.tsukaima.deployer: ${TSUKAIMA_DEPLOYER:-unknown}
+
+networks:
+  tsukaima:
+    external: true
