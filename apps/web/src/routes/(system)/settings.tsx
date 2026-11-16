@@ -1,4 +1,10 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { SettingsPage } from "./_modules/settings-page";
+import { Outlet, createFileRoute } from "@tanstack/react-router";
+import { SettingsLayout } from "./_modules/settings-layout";
 
-export const Route = createFileRoute("/(system)/settings")({ component: SettingsPage });
+export const Route = createFileRoute("/(system)/settings")({
+	component: () => (
+		<SettingsLayout>
+			<Outlet />
+		</SettingsLayout>
+	),
+});

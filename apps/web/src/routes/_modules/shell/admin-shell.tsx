@@ -95,7 +95,8 @@ function isFullBleedRoute(pathname: string): boolean {
 		pathname.startsWith("/users") ||
 		pathname.startsWith("/groups") ||
 		pathname.startsWith("/requests") ||
-		pathname.startsWith("/plugins")
+		pathname.startsWith("/plugins") ||
+		pathname.startsWith("/settings")
 	);
 }
 

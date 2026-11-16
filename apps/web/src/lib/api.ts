@@ -34,6 +34,8 @@ export type {
 	SessionSummary,
 	SettingsView,
 	RestartStatus,
+	UpgradeCheck,
+	UpgradeRecord,
 	UserDetail,
 	UserSummary,
 	WorkspaceDetail,
