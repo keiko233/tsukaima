@@ -8,6 +8,7 @@ import type {
 	ConversationPolicyView,
 	PersonaSummary,
 	SessionDetail,
+	WorkspaceDetail,
 } from "@tsukaima/contracts";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@tsukaima/ui/components/motion/tabs";
@@ -15,6 +16,7 @@ import { orpc } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { ContextPanel } from "./context-panel";
+import { WorkspaceInspectorTabs } from "./workspace-inspector";
 import { SessionCommandsView, type CommandFeedback } from "./session-commands-view";
 import {
 	PolicyPacingTabView,
@@ -24,7 +26,15 @@ import {
 	splitValue,
 } from "./session-policy-tabs-view";
 
-export type InspectorTab = "context" | "commands" | "trigger" | "pacing" | "persona";
+export type InspectorTab =
+	| "context"
+	| "commands"
+	| "trigger"
+	| "pacing"
+	| "persona"
+	| "todos"
+	| "sessions"
+	| "data";
 
 const INSPECTOR_TAB_KEY = "tsukaima.webui.inspector-tab";
 
@@ -34,14 +44,23 @@ function isInspectorTab(value: string | null): value is InspectorTab {
 		value === "commands" ||
 		value === "trigger" ||
 		value === "pacing" ||
-		value === "persona"
+		value === "persona" ||
+		value === "todos" ||
+		value === "sessions" ||
+		value === "data"
 	);
 }
 
-export function storedInspectorTab(): InspectorTab {
+export function storedInspectorTab(surface: "chat" | "workspace" = "chat"): InspectorTab {
 	try {
-		const raw = localStorage.getItem(INSPECTOR_TAB_KEY);
-		return isInspectorTab(raw) ? raw : "context";
+		const raw = localStorage.getItem(`${INSPECTOR_TAB_KEY}.${surface}`);
+		if (isInspectorTab(raw)) {
+			if (surface === "workspace") {
+				return raw === "todos" || raw === "sessions" || raw === "data" ? raw : "context";
+			}
+			return raw === "todos" || raw === "sessions" || raw === "data" ? "context" : raw;
+		}
+		return "context";
 	} catch {
 		return "context";
 	}
@@ -53,12 +72,16 @@ export function SessionInspectorSidebar({
 	onClose,
 	onTabChange,
 	session,
+	surface = "chat",
+	workspace,
 }: {
 	activeTab: InspectorTab;
 	isRunning: boolean;
 	onClose?: () => void;
 	onTabChange: (tab: InspectorTab) => void;
 	session: SessionDetail;
+	surface?: "chat" | "workspace";
+	workspace?: WorkspaceDetail | null;
 }) {
 	const sessionId = session.id;
 	const toast = useToast();
@@ -306,6 +329,19 @@ export function SessionInspectorSidebar({
 	};
 
 	const selectedPersona = personas.data?.find((entry) => entry.id === personaId);
+
+	if (surface === "workspace") {
+		return (
+			<WorkspaceInspectorTabs
+				activeTab={activeTab}
+				isRunning={isRunning}
+				onClose={onClose}
+				onTabChange={onTabChange}
+				session={session}
+				workspace={workspace}
+			/>
+		);
+	}
 
 	return (
 		<div className="flex h-full min-h-0 flex-col">

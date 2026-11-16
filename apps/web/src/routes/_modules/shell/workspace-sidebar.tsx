@@ -11,11 +11,7 @@ import { orpc, type WorkspaceSummary } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { formatTimestamp, previewText } from "../lib/format";
-import { Modal, ModalActions } from "../ui/modal";
 import { InlineError, SidebarEmpty } from "./primitives";
-
-const WORKSPACE_MODES = ["analysis", "patch", "proposal"] as const;
-type WorkspaceMode = (typeof WORKSPACE_MODES)[number];
 
 function statusClass(status: WorkspaceSummary["taskStatus"]): string {
 	switch (status) {
@@ -54,17 +50,12 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate: () => void }) {
 		? pathname.slice("/workspace/".length).split("/")[0]
 		: null;
 	const [search, setSearch] = useState("");
-	const [createOpen, setCreateOpen] = useState(false);
-	const [goal, setGoal] = useState("");
-	const [mode, setMode] = useState<WorkspaceMode>("patch");
 	const workspaces = useQuery(orpc.admin.workspace.list.queryOptions({ input: {} }));
 	const createWorkspace = useMutation(
 		orpc.admin.workspace.create.mutationOptions({
 			onError: (error) =>
 				toast.error(m.toast_workspace_create_failed(), { description: errorMessage(error) }),
 			onSuccess: async ({ sessionId }) => {
-				setCreateOpen(false);
-				setGoal("");
 				toast.success(m.toast_workspace_created());
 				await queryClient.invalidateQueries({ queryKey: orpc.admin.workspace.key() });
 				onNavigate();
@@ -78,8 +69,9 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate: () => void }) {
 			(workspace) =>
 				query.length === 0 ||
 				workspace.title.toLowerCase().includes(query) ||
-				workspace.goal.toLowerCase().includes(query) ||
-				workspace.taskId.toLowerCase().includes(query),
+				(workspace.goal?.toLowerCase().includes(query) ?? false) ||
+				(workspace.taskId?.toLowerCase().includes(query) ?? false) ||
+				workspace.tags.some((tag) => tag.toLowerCase().includes(query)),
 		) ?? [];
 
 	return (
@@ -107,7 +99,8 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate: () => void }) {
 					className="h-6 gap-0.5 rounded-md px-1.5 text-[11px]"
 					size="xs"
 					variant="ghost"
-					onClick={() => setCreateOpen(true)}
+					disabled={createWorkspace.isPending}
+					onClick={() => createWorkspace.mutate({})}
 				>
 					<Plus className="size-3" />
 					{m.workspace_new()}
@@ -125,7 +118,12 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate: () => void }) {
 				) : visible.length === 0 ? (
 					<SidebarEmpty
 						action={
-							<Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={createWorkspace.isPending}
+								onClick={() => createWorkspace.mutate({})}
+							>
 								<Plus className="size-3.5" />
 								{m.workspace_new()}
 							</Button>
@@ -167,11 +165,15 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate: () => void }) {
 											statusClass(workspace.taskStatus),
 										)}
 									>
-										{workspace.taskStatus}
+										{workspace.taskStatus ?? m.workspace_status_draft()}
 									</span>
 								</span>
 								<span className="flex min-w-0 items-center gap-1.5 pl-5 text-[10px] leading-3.5 text-muted-foreground/75">
-									<span className="shrink-0">{modeLabel(workspace.mode)}</span>
+									<span className="shrink-0">
+										{workspace.tags.length > 0
+											? workspace.tags.slice(0, 2).join(" · ")
+											: modeLabel(workspace.mode)}
+									</span>
 									<span aria-hidden="true">·</span>
 									<span className="min-w-0 flex-1 truncate">
 										{previewText(
@@ -188,62 +190,6 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate: () => void }) {
 					})
 				)}
 			</div>
-			<Modal
-				description={m.workspace_new_description()}
-				onOpenChange={setCreateOpen}
-				open={createOpen}
-				title={m.workspace_new_title()}
-			>
-				<div className="space-y-3">
-					<label className="block space-y-1.5">
-						<span className="px-1 text-[11.5px] font-medium text-foreground">
-							{m.workspace_goal_label()}
-						</span>
-						<textarea
-							autoFocus
-							value={goal}
-							onChange={(event) => setGoal(event.target.value)}
-							placeholder={m.workspace_goal_placeholder()}
-							rows={4}
-							className="w-full resize-none rounded-md border border-border bg-background px-2.5 py-2 text-[12px] leading-5 text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-ring"
-						/>
-					</label>
-					<div className="space-y-1.5">
-						<div className="px-1 text-[11.5px] font-medium text-foreground">
-							{m.workspace_mode()}
-						</div>
-						<div className="flex gap-1">
-							{WORKSPACE_MODES.map((value) => (
-								<Button
-									key={value}
-									size="xs"
-									variant={mode === value ? "secondary" : "ghost"}
-									onClick={() => setMode(value)}
-								>
-									{modeLabel(value)}
-								</Button>
-							))}
-						</div>
-					</div>
-				</div>
-				<ModalActions>
-					<Button variant="ghost" size="sm" onClick={() => setCreateOpen(false)}>
-						{m.cancel()}
-					</Button>
-					<Button
-						disabled={createWorkspace.isPending || goal.trim().length === 0}
-						size="sm"
-						onClick={() =>
-							createWorkspace.mutate({
-								goal: goal.trim(),
-								mode,
-							})
-						}
-					>
-						{m.create()}
-					</Button>
-				</ModalActions>
-			</Modal>
 		</div>
 	);
 }

@@ -71,7 +71,14 @@ export function ChatPage({
 	const wideContextPane = useMediaQuery("(min-width: 1024px)");
 	const [desktopContextOpen, setDesktopContextOpen] = useState<boolean>(() => storedContextOpen());
 	const [drawerContextOpen, setDrawerContextOpen] = useState(false);
-	const [inspectorTab, setInspectorTab] = useState<InspectorTab>(() => storedInspectorTab());
+	const [inspectorTab, setInspectorTab] = useState<InspectorTab>(() => storedInspectorTab(surface));
+	const setSurfaceInspectorTab = (tab: InspectorTab) => {
+		if (surface === "workspace") {
+			setInspectorTab(tab === "todos" || tab === "sessions" || tab === "data" ? tab : "context");
+			return;
+		}
+		setInspectorTab(tab === "todos" || tab === "sessions" || tab === "data" ? "context" : tab);
+	};
 	const liveRun = useLiveRun(sessionId);
 	// The live run's elapsed label is a wall clock, not the render time of a message. Tick it only
 	// while a run is active so an idle transcript never re-renders.
@@ -91,11 +98,11 @@ export function ChatPage({
 	}, [desktopContextOpen]);
 	useEffect(() => {
 		try {
-			localStorage.setItem(INSPECTOR_TAB_KEY, inspectorTab);
+			localStorage.setItem(`${INSPECTOR_TAB_KEY}.${surface}`, inspectorTab);
 		} catch {
 			// Ignore storage errors in restricted environments.
 		}
-	}, [inspectorTab]);
+	}, [inspectorTab, surface]);
 	useEffect(() => {
 		setDrawerContextOpen(false);
 	}, [sessionId, wideContextPane]);
@@ -148,6 +155,13 @@ export function ChatPage({
 						queryKey: orpc.admin.sessions.contextStats.key({ input: { sessionId } }),
 					}),
 					queryClient.invalidateQueries({ queryKey: orpc.admin.chats.key() }),
+					...(surface === "workspace"
+						? [
+								queryClient.invalidateQueries({
+									queryKey: orpc.admin.workspace.key(),
+								}),
+							]
+						: []),
 				]);
 			},
 		}),
@@ -303,7 +317,7 @@ export function ChatPage({
 							<span>
 								{m.workspace_task()}:{" "}
 								<span className="font-medium text-foreground">
-									{workspaceDetail.workspace.taskStatus}
+									{workspaceDetail.workspace.taskStatus ?? m.workspace_status_draft()}
 								</span>
 							</span>
 							<span>
@@ -318,9 +332,20 @@ export function ChatPage({
 							<span>
 								{m.workspace_proposals()}: {workspaceDetail.proposals.length}
 							</span>
-							<span className="font-mono text-muted-foreground/70">
-								{workspaceDetail.workspace.taskId}
-							</span>
+							{workspaceDetail.workspace.taskId !== null ? (
+								<span className="font-mono text-muted-foreground/70">
+									{workspaceDetail.workspace.taskId}
+								</span>
+							) : null}
+							{workspaceDetail.workspace.tags.length > 0 ? (
+								<span className="flex items-center gap-1">
+									{workspaceDetail.workspace.tags.map((tag) => (
+										<span key={tag} className="rounded bg-muted px-1.5 py-0.5 text-[9.5px]">
+											{tag}
+										</span>
+									))}
+								</span>
+							) : null}
 						</div>
 					) : null}
 
@@ -360,6 +385,7 @@ export function ChatPage({
 							onSend={(input) => send.mutateAsync({ ...input, sessionId })}
 							sending={send.isPending}
 							sessionId={detail.id}
+							workspace={surface === "workspace"}
 						/>
 					)}
 				</div>
@@ -373,8 +399,10 @@ export function ChatPage({
 							activeTab={inspectorTab}
 							isRunning={liveRun !== undefined}
 							onClose={() => setDesktopContextOpen(false)}
-							onTabChange={setInspectorTab}
+							onTabChange={setSurfaceInspectorTab}
 							session={detail}
+							surface={surface}
+							workspace={workspaceDetail}
 						/>
 					</aside>
 				) : null}
@@ -396,8 +424,10 @@ export function ChatPage({
 							activeTab={inspectorTab}
 							isRunning={liveRun !== undefined}
 							onClose={() => setDrawerContextOpen(false)}
-							onTabChange={setInspectorTab}
+							onTabChange={setSurfaceInspectorTab}
 							session={detail}
+							surface={surface}
+							workspace={workspaceDetail}
 						/>
 					</aside>
 				</div>
