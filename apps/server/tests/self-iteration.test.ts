@@ -152,7 +152,7 @@ describe("self-iteration runtime", () => {
 		}
 	});
 
-	test("normal QQ conversations never see coding tools; explicit coding policy enables them", async () => {
+	test("normal QQ conversations never see coding tools, even with an explicit capability", async () => {
 		const { lifecycle, requests } = await fixture();
 		await lifecycle.start();
 		try {
@@ -184,9 +184,9 @@ describe("self-iteration runtime", () => {
 			await lifecycle.conversationRouter.ingest(envelope("coding-1"));
 			await waitFor(() => (requests.length >= 2 ? true : undefined));
 			const codingTools = requests[1]?.tools?.map((tool) => tool.function?.name ?? "") ?? [];
-			expect(codingTools).toContain(providerSafeToolName("self-iteration.analyze"));
-			expect(codingTools).toContain(providerSafeToolName("self-iteration.edit"));
-			expect(codingTools).toContain(providerSafeToolName("self-iteration.propose"));
+			expect(codingTools).not.toContain(providerSafeToolName("self-iteration.analyze"));
+			expect(codingTools).not.toContain(providerSafeToolName("self-iteration.edit"));
+			expect(codingTools.some((name) => name.includes("self_iteration"))).toBe(false);
 		} finally {
 			await lifecycle.stop();
 		}

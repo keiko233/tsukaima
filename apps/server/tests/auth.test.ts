@@ -459,6 +459,9 @@ describe("admin auth", () => {
 			"requests/get": { requestId: "request-1" },
 			"requests/list": {},
 			"requests/respond": { action: "approve", requestId: "request-1" },
+			"runtime/cancelRestart": {},
+			"runtime/restartStatus": {},
+			"runtime/scheduleRestart": { delaySeconds: 60, mode: "restart" },
 			"sessions/abort": { sessionId: "session-1" },
 			"sessions/compact": { sessionId: "session-1" },
 			"sessions/contextStats": { sessionId: "session-1" },
@@ -475,6 +478,9 @@ describe("admin auth", () => {
 			"settings/update": { logLevel: "info" },
 			"users/get": { userId: "user-1" },
 			"users/list": {},
+			"workspace/create": { goal: "Sample workspace" },
+			"workspace/get": { sessionId: "session-1" },
+			"workspace/list": {},
 		};
 
 		// Coverage check in both directions: every real procedure has a sample and vice versa.

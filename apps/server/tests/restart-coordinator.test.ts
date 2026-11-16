@@ -58,11 +58,22 @@ async function setup() {
 }
 
 describe("restart coordinator", () => {
+	async function waitForStatus(
+		coordinator: RestartCoordinator,
+		expected: "completed" | "cancelled" | "failed",
+	): Promise<void> {
+		const deadline = Date.now() + 2_000;
+		while (Date.now() < deadline) {
+			if ((await coordinator.status())?.status === expected) return;
+			await Bun.sleep(20);
+		}
+		throw new Error(`Timed out waiting for restart status ${expected}`);
+	}
+
 	test("injects the countdown into every session and executes the handler", async () => {
 		const { coordinator, database, hooks, sessionId } = await setup();
-		let intent: RestartIntent | undefined;
-		coordinator.setHandler((value) => {
-			intent = value;
+		const handled = new Promise<RestartIntent>((resolve) => {
+			coordinator.setHandler(resolve);
 		});
 		const scheduled = await coordinator.schedule({
 			delayMs: 40,
@@ -72,11 +83,10 @@ describe("restart coordinator", () => {
 		});
 		expect(scheduled.status).toBe("scheduled");
 		expect(await hooks.renderContext(sessionId)).toContain("restart and update");
-		for (let attempt = 0; attempt < 20 && intent === undefined; attempt += 1) {
-			await Bun.sleep(20);
-		}
+		const intent = await Promise.race([handled, Bun.sleep(500).then(() => undefined)]);
 		expect(intent?.mode).toBe("update");
 		expect(intent?.reason).toBe("test update");
+		await waitForStatus(coordinator, "completed");
 		expect((await coordinator.status())?.status).toBe("completed");
 		coordinator.close();
 		hooks.close();

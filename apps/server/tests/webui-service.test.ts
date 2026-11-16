@@ -304,7 +304,7 @@ describe("WebUI chat and session service", () => {
 		}
 	});
 
-	test("computes session context stats with messages, memories, and capability-gated coding tools", async () => {
+	test("computes session context stats without exposing coding tools to chat", async () => {
 		const lifecycle = await createLifecycle();
 		try {
 			const chat = await createLocalChat(lifecycle, {
@@ -350,11 +350,9 @@ describe("WebUI chat and session service", () => {
 			expect(withCoding).not.toBeNull();
 			if (withCoding === null) throw new Error("Expected context stats with coding");
 			if (codingTools.length > 0) {
-				expect(withCoding.tools.some((tool) => codingTools.includes(tool.name))).toBe(true);
-				expect(withCoding.categories.toolsTokens).toBeGreaterThanOrEqual(
-					withoutCoding.categories.toolsTokens,
-				);
+				expect(withCoding.tools.some((tool) => codingTools.includes(tool.name))).toBe(false);
 			}
+			expect(withCoding.tools.some((tool) => tool.name === "workspace_spawn")).toBe(true);
 		} finally {
 			await lifecycle.stop();
 		}
