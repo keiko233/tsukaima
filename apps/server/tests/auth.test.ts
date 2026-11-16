@@ -97,6 +97,11 @@ describe("admin auth", () => {
 		const { app, lifecycle } = createApp(adminEnv(directory));
 		await lifecycle.start();
 
+		const anonymousSession = await app.handle(new Request("http://localhost/api/auth/get-session"));
+		expect(anonymousSession.status).toBe(200);
+		expect(anonymousSession.headers.get("content-type")).toContain("application/json");
+		expect(await anonymousSession.json()).toBeNull();
+
 		const before = await rpc(app, "auth/status", {});
 		expect(before.body).toEqual({ authenticated: false, configured: true });
 

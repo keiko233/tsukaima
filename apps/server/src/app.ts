@@ -175,6 +175,18 @@ export function createApp(
 			},
 			{ parse: "none" },
 		)
+		// Elysia prefers the method-specific static wildcard below for GET; register GET
+		// explicitly so Better Auth's session read is not swallowed by the WebUI fallback.
+		.get(
+			"/api/auth/*",
+			async ({ request, server }: { request: Request; server: unknown }) => {
+				const address = (
+					server as { requestIP?: (request: Request) => { address: string } | null } | null
+				)?.requestIP?.(request);
+				return auth.handle(request, address?.address);
+			},
+			{ parse: "none" },
+		)
 		.all(
 			"/rpc/*",
 			async ({ request }: { request: Request }) => {
