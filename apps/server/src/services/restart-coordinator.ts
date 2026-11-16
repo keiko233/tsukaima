@@ -270,11 +270,11 @@ export class RestartCoordinator {
 				restartId: id,
 			});
 			await this.#handler(intent);
+			await this.#hooks.cancelByDedupeKey(`runtime-restart:${id}`, "restart executed");
 			await database
 				.update(runtimeRestarts)
 				.set({ completedAtMs: this.#now(), status: "completed", updatedAtMs: this.#now() })
 				.where(eq(runtimeRestarts.id, id));
-			await this.#hooks.cancelByDedupeKey(`runtime-restart:${id}`, "restart executed");
 		} catch (error) {
 			await this.#markFailed(id, error instanceof Error ? error.message : String(error));
 		}

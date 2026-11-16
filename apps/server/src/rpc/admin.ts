@@ -602,11 +602,12 @@ export const adminRouter = {
 		get: adminBase.admin.workspace.get.handler(async ({ context, input }) =>
 			context.lifecycle.workspace.get(input.sessionId),
 		),
-		list: adminBase.admin.workspace.list.handler(async ({ context, input }) =>
-			context.lifecycle.workspace.list({
-				...(input?.includeArchived === undefined ? {} : { includeArchived: input.includeArchived }),
-			}),
-		),
+		list: adminBase.admin.workspace.list.handler(async ({ context, input }) => {
+			const includeArchived = input?.includeArchived;
+			return context.lifecycle.workspace.list(
+				includeArchived === undefined ? {} : { includeArchived },
+			);
+		}),
 	},
 	runtime: {
 		cancelRestart: adminBase.admin.runtime.cancelRestart.handler(async ({ context }) => {
