@@ -188,6 +188,7 @@ export class TsukaimaLifecycle {
 	 */
 	private readonly inboundFailureLoggedAt = new Map<string, number>();
 	private activeProviderId: string | undefined;
+	private beforeReadyCallback: (() => Promise<void>) | undefined;
 
 	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
 		this.config = config;
@@ -735,7 +736,17 @@ export class TsukaimaLifecycle {
 		}
 		this.replyDispatcher.startPendingReconciliation();
 		this.backupDrills.start();
+		if (this.beforeReadyCallback !== undefined) {
+			// `/readyz` must not turn green before the single administrator exists; otherwise a
+			// supervisor can race the first sign-in after a cold start.
+			await this.beforeReadyCallback();
+		}
 		this.transition("ready", "ready");
+	}
+
+	/** Gate readiness on a service that depends on the database but must precede traffic. */
+	setBeforeReady(callback: () => Promise<void>): void {
+		this.beforeReadyCallback = callback;
 	}
 
 	/** Run one isolated SQLite + blob backup/restore drill and return its secret-free report. */
