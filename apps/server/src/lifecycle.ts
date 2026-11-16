@@ -94,6 +94,7 @@ import {
 import { OutboundService } from "./services/outbound.ts";
 import { RequestService } from "./services/request-service.ts";
 import { SessionMessagingService } from "./services/session-messaging.ts";
+import { UpgradeService } from "./services/upgrade-service.ts";
 import {
 	CODING_AGENT_TOOL_NAMES,
 	createCodingAgentToolsExtension,
@@ -177,6 +178,7 @@ export class TsukaimaLifecycle {
 	readonly requestService: RequestService;
 	readonly restartCoordinator: RestartCoordinator;
 	readonly sessionMessaging: SessionMessagingService;
+	readonly upgrades: UpgradeService;
 	readonly workspace: WorkspaceService;
 	readonly workspaceTodos: WorkspaceTodoService;
 	private currentState: LifecycleState["state"] = "starting";
@@ -461,6 +463,18 @@ export class TsukaimaLifecycle {
 			repositoryRoot: process.cwd(),
 			todos: this.workspaceTodos,
 		});
+		this.upgrades = new UpgradeService({
+			audit: (entry) => this.writeAudit(entry),
+			database: () => this.domainDatabase,
+			defaultRemote: config.upgradeRemote,
+			logger: this.runtimeLog,
+			repositoryRoot: process.cwd(),
+			restart: {
+				cancel: (reason) => this.cancelRestart(reason),
+				schedule: (input) => this.scheduleRestart(input),
+			},
+			workspace: this.workspace,
+		});
 		this.workspaceToolsExtension = createWorkspaceToolsExtension({
 			audit: (entry) => this.writeAudit(entry),
 			logger: this.runtimeLog,
@@ -726,6 +740,7 @@ export class TsukaimaLifecycle {
 		this.domainDatabase = await openDomainDatabase(join(this.config.dataDir, "domain.sqlite"));
 		migrateDomainDatabase(this.domainDatabase);
 		await this.restartCoordinator.recover();
+		await this.upgrades.recover();
 		this.transition("plugin-migrations");
 		const domainSource = wrapPluginSqlConnection(
 			this.domainDatabase.$client as unknown as Parameters<typeof wrapPluginSqlConnection>[0],

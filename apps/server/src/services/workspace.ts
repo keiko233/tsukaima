@@ -115,6 +115,7 @@ function workspacePrompt(input: {
 		`- Pass taskId="${input.taskId}" to every self-iteration tool.`,
 		"- Inspect with self-iteration.analyze before editing.",
 		"- Create a bounded worktree with self-iteration.worktree before any write.",
+		"- Merge upstream refs only with self-iteration.upstream; never run git merge in a shell.",
 		"- Use only self-iteration.edit and self-iteration.test for repository changes and validation.",
 		"- Use todo_write to keep a multi-step plan visible, and update it as steps complete.",
 		"- Use session_context only for conversations the user explicitly referenced.",

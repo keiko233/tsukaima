@@ -644,6 +644,30 @@ export const adminRouter = {
 			}),
 		),
 	},
+	upgrade: {
+		check: adminBase.admin.upgrade.check.handler(async ({ context, input }) =>
+			context.lifecycle.upgrades.check(input?.remote === undefined ? {} : { remote: input.remote }),
+		),
+		finalize: adminBase.admin.upgrade.finalize.handler(async ({ context, input }) =>
+			context.lifecycle.upgrades.finalize({
+				...(input?.upgradeId === undefined ? {} : { upgradeId: input.upgradeId }),
+				requestedBy: "webui-admin",
+			}),
+		),
+		history: adminBase.admin.upgrade.history.handler(async ({ context }) => [
+			...(await context.lifecycle.upgrades.history()),
+		]),
+		start: adminBase.admin.upgrade.start.handler(async ({ context, input }) =>
+			context.lifecycle.upgrades.start({
+				...(input?.autoFinalize === undefined ? {} : { autoFinalize: input.autoFinalize }),
+				...(input?.remote === undefined ? {} : { remote: input.remote }),
+				requestedBy: "webui-admin",
+			}),
+		),
+		status: adminBase.admin.upgrade.status.handler(async ({ context }) =>
+			context.lifecycle.upgrades.status(),
+		),
+	},
 	settings: {
 		get: adminBase.admin.settings.get.handler(async ({ context }) => settingsView(context)),
 		update: adminBase.admin.settings.update.handler(async ({ context, input }) => {

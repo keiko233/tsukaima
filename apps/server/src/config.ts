@@ -22,6 +22,11 @@ const configurationSchema = z.object({
 	port: z.number().int().min(1).max(65_535),
 	publicUrl: z.string().url(),
 	secureCookies: z.boolean(),
+	/**
+	 * Git remote treated as upstream by the WebUI upgrade center. `origin` is the conventional
+	 * default; forks can point this at their own canonical remote.
+	 */
+	upgradeRemote: z.string().min(1),
 	webDistDir: z.string().min(1),
 	webOrigin: z.string().url().optional(),
 	/** Additional origins accepted by Better Auth's origin check, comma-separated in env. */
@@ -111,6 +116,7 @@ export function loadConfig(env: Record<string, string | undefined>): TsukaimaCon
 		port,
 		publicUrl,
 		secureCookies: env.TSUKAIMA_AUTH_SECURE_COOKIES === "true" || publicUrl.startsWith("https://"),
+		upgradeRemote: env.TSUKAIMA_UPGRADE_REMOTE?.trim() || "origin",
 		webDistDir,
 		webOrigin,
 		trustedOrigins: [
