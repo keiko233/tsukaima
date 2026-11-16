@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     env_file:
-      - ./secrets/runtime.env
+      - ${TSUKAIMA_ROOT:-/opt/tsukaima}/secrets/runtime.env
     environment:
       NODE_ENV: production
       TSUKAIMA_HOST: 0.0.0.0
@@ -18,7 +18,7 @@ services:
     ports:
       - "${TSUKAIMA_BIND_ADDR:-127.0.0.1}:7420:7420"
     volumes:
-      - ./data:/data
+      - ${TSUKAIMA_ROOT:-/opt/tsukaima}/data:/data
     networks:
       - homelab
     labels:
