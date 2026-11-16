@@ -114,7 +114,12 @@ if [[ -f "$DATA_DIR/domain.sqlite" ]]; then
 	docker compose -f "$COMPOSE_FILE" --project-directory "$ROOT" stop tsukaima >/dev/null 2>&1 || true
 	mkdir -p "$ROOT/backups"
 	echo "Backing up data (excluding logs)..."
-	tar -C "$ROOT" -czf "$ROOT/backups/data-$TIMESTAMP.tgz" --exclude='data/logs' data
+	if ! tar -C "$ROOT" -czf "$ROOT/backups/data-$TIMESTAMP.tgz" --exclude='data/logs' data; then
+		echo "Data backup failed; restarting the current image." >&2
+		rm -f "$ROOT/backups/data-$TIMESTAMP.tgz"
+		docker compose -f "$COMPOSE_FILE" --project-directory "$ROOT" up -d --remove-orphans >/dev/null 2>&1 || true
+		fail "could not archive $DATA_DIR; deployment aborted"
+	fi
 fi
 
 cp -a "$ENV_FILE" "$ENV_FILE.before-$TIMESTAMP"

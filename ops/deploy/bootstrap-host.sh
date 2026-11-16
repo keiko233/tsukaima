@@ -78,12 +78,16 @@ github_authenticated() {
 }
 
 if [[ ! -d "$ROOT/repo/.git" ]]; then
-	echo "Host deploy key (add with write access to $FORK_URL):"
-	cat "$SSH_KEY.pub"
-	if ! github_authenticated; then
-		echo "The key is not authorized yet. Add it to the fork, then re-run this script." >&2
-		exit 3
-	fi
+	case "$FORK_URL" in
+	git@* | ssh://*)
+		echo "Host deploy key (add with write access to $FORK_URL):"
+		cat "$SSH_KEY.pub"
+		if ! github_authenticated; then
+			echo "The key is not authorized yet. Add it to the fork, then re-run this script." >&2
+			exit 3
+		fi
+		;;
+	esac
 	git clone "$FORK_URL" "$ROOT/repo"
 fi
 
