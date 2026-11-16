@@ -73,7 +73,7 @@ function RailItem({
 			className={cn(
 				"relative grid size-9 place-items-center rounded-lg text-muted-foreground outline-none transition-colors",
 				"hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
-				active && "bg-primary/12 text-primary hover:bg-primary/15 hover:text-primary",
+				active && "bg-accent/30 text-foreground hover:bg-accent/40 hover:text-foreground",
 			)}
 		>
 			<Icon className="size-[18px]" />
@@ -109,7 +109,7 @@ function RailLink({
 			className={cn(
 				"relative grid size-9 place-items-center rounded-lg text-muted-foreground outline-none transition-colors",
 				"hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
-				active && "bg-primary/12 text-primary hover:bg-primary/15 hover:text-primary",
+				active && "bg-accent/30 text-foreground hover:bg-accent/40 hover:text-foreground",
 			)}
 		>
 			<Icon className="size-[18px]" />

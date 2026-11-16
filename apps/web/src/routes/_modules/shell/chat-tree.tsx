@@ -421,8 +421,8 @@ export function ChatTree({
 													className={cn(
 														"group/session flex min-h-8 items-center rounded-md pr-0.5 transition-colors",
 														active
-															? "bg-foreground/[0.06] text-foreground"
-															: "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground",
+															? "bg-accent/25 text-foreground"
+															: "text-muted-foreground hover:bg-accent/15 hover:text-foreground",
 													)}
 												>
 													<button

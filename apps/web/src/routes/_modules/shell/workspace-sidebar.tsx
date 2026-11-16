@@ -150,8 +150,8 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate: () => void }) {
 								className={cn(
 									"mb-0.5 flex w-full min-w-0 flex-col gap-1 rounded-md px-2 py-1.5 text-left outline-none transition-colors",
 									active
-										? "bg-foreground/[0.06] text-foreground"
-										: "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground",
+										? "bg-accent/25 text-foreground"
+										: "text-muted-foreground hover:bg-accent/15 hover:text-foreground",
 								)}
 							>
 								<span className="flex min-w-0 items-center gap-1.5">
