@@ -336,6 +336,11 @@ glob is what actually bundles code into the admin app today.
 
 Implementation notes:
 
+- A browser panel must import only browser-safe SDK subpaths (`@tsukaima/sdk/ui`,
+  `@tsukaima/sdk/i18n`, `@tsukaima/sdk/model-capabilities`). The `@tsukaima/sdk` barrel also
+  exports host bridges that use `node:crypto`; Vite externalizes that builtin, and the panel
+  then fails on load. `apps/web/src/plugins/plugin-browser-imports.test.ts` walks the value
+  import graph of every panel entry and rejects the barrel or a `node:` builtin.
 - `resolve.dedupe: ["react", "react-dom"]` is required so workspace packages share the host
   React instance.
 - Tailwind must scan the kit and plugin UI sources. Add to `apps/web/src/app.css`:

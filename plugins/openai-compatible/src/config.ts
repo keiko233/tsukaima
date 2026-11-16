@@ -1,8 +1,8 @@
-import {
-	MODEL_CAPABILITIES,
-	type PluginModelDescriptor,
-	type PluginModelInputModality,
-	type PluginModelReasoningLevel,
+import { MODEL_CAPABILITIES } from "@tsukaima/sdk/model-capabilities";
+import type {
+	PluginModelDescriptor,
+	PluginModelInputModality,
+	PluginModelReasoningLevel,
 } from "@tsukaima/sdk";
 import { z } from "zod";
 

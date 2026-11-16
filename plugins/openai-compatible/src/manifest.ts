@@ -33,6 +33,7 @@ export const openAiCompatibleManifest: PluginManifest = pluginManifestSchema.par
 						supportsAudio: { type: "boolean" },
 						supportsImage: { type: "boolean" },
 						supportsReasoning: { type: "boolean" },
+						supportsSidechat: { type: "boolean" },
 						supportsTools: { type: "boolean" },
 					},
 					type: "object",

@@ -52,6 +52,9 @@
 						"supportsAudio": {
 							"type": "boolean"
 						},
+						"supportsSidechat": {
+							"type": "boolean"
+						},
 						"capabilities": {
 							"type": "array",
 							"items": {

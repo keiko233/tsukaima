@@ -68,8 +68,8 @@ function renderPanel(
 				config: {
 					save: async () => {},
 					saving: false,
-					secretsSet: [],
-					value: {},
+					secretsSet: pluginValue.secretsSet,
+					value: pluginValue.config,
 				},
 				i18n,
 				notify: { error: () => {}, info: () => {}, success: () => {} },
@@ -116,15 +116,28 @@ describe("built-in plugin panels", () => {
 		expect(zh).not.toContain(">wsUrl<");
 	});
 
-	test("renders the openai-compatible provider panel", () => {
+	test("renders the openai-compatible provider panel with a model catalog", () => {
 		const html = renderPanel(openAiUi, openAiI18n.bind("en"), {
 			...plugin,
+			config: {
+				baseUrl: "https://models.example/v1",
+				models: [
+					{ enabled: true, id: "fast-chat", name: "Fast Chat", supportsTools: true },
+					{ enabled: false, id: "slow-chat" },
+				],
+			},
 			id: "openai-compatible",
 			name: "openai-compatible",
 			secretKeys: ["apiKey"],
 		});
 		expect(html).toContain("Models");
 		expect(html).toContain("Discover models");
+		expect(html).toContain("fast-chat");
+		expect(html).toContain("Fast Chat");
+		expect(html).toContain("slow-chat");
+		expect(html).toContain("Tool use");
+		expect(html).toContain("Default");
+		expect(html).not.toContain("Edit this value in the plugin configuration JSON.");
 		expect(html.indexOf("onebot-napcat")).toBe(-1);
 	});
 
