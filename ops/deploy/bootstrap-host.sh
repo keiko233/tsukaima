@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Prepare a Docker host for a fork deployment. Run as root on the target host, for example:
+# Prepare a Docker host for a main-based deployment. Run as root on the target host, for example:
 #
-#   ssh <ssh-target> 'DEPLOYER=example-user FORK_URL=git@github.com:MajoStudio/tsukaima.git bash -s' \
+#   ssh <ssh-target> 'DEPLOYER=example-user REPO_URL=git@github.com:example-org/tsukaima.git bash -s' \
 #     < ops/deploy/bootstrap-host.sh
 #
 # Safe to re-run. The first run may stop after printing the host deploy key; authorize it on the
-# fork, then re-run to clone the repository and finish the setup.
+# repository, then re-run to clone it and finish the setup.
 set -euo pipefail
 
 DEPLOYER="${DEPLOYER:-$(git config user.name || echo deploy)}"
 DEPLOYER="${DEPLOYER//[^A-Za-z0-9_.-]/-}"
 ROOT="${ROOT:-/opt/tsukaima}"
-FORK_URL="${FORK_URL:-}"
-UPSTREAM_URL="${UPSTREAM_URL:-https://github.com/example-org/tsukaima.git}"
-DEPLOY_BRANCH="${DEPLOY_BRANCH:-deploy/$DEPLOYER}"
+REPO_URL="${REPO_URL:-${FORK_URL:-}}"
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+MAINLINE_REPO="${MAINLINE_REPO:-example-org/tsukaima}"
 GIT_NAME="${GIT_NAME:-Tsukaima Deploy ($DEPLOYER)}"
 GIT_EMAIL="${GIT_EMAIL:-${DEPLOYER}@tsukaima.invalid}"
 SSH_KEY="${SSH_KEY:-/root/.ssh/tsukaima_deploy_ed25519}"
@@ -24,8 +24,23 @@ ADMIN_USERNAME="${ADMIN_USERNAME:-$DEPLOYER}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-${DEPLOYER}@tsukaima.invalid}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 
-if [[ -z "$FORK_URL" ]]; then
-	echo "FORK_URL is required (the fork remote, not the mainline)." >&2
+if [[ -z "$REPO_URL" ]]; then
+	echo "REPO_URL is required (the deployment repository clone URL)." >&2
+	exit 2
+fi
+
+repository_slug() {
+	local url="$1"
+	url="${url%.git}"
+	url="${url#git@github.com:}"
+	url="${url#https://github.com/}"
+	url="${url#ssh://git@github.com/}"
+	printf '%s\n' "$url"
+}
+
+if [[ "$(repository_slug "$REPO_URL")" != "$MAINLINE_REPO" && "$DEPLOY_BRANCH" == "main" ]]; then
+	echo "Refusing to bootstrap main from a fork. Use a dedicated deployment branch (for example," >&2
+	echo "DEPLOY_BRANCH=deploy/<name>) and rebase it onto mainline/main before deploying." >&2
 	exit 2
 fi
 if [[ "$(id -u)" != "0" ]]; then
@@ -78,17 +93,17 @@ github_authenticated() {
 }
 
 if [[ ! -d "$ROOT/repo/.git" ]]; then
-	case "$FORK_URL" in
+	case "$REPO_URL" in
 	git@* | ssh://*)
-		echo "Host deploy key (add with write access to $FORK_URL):"
+		echo "Host deploy key (add with write access to $REPO_URL):"
 		cat "$SSH_KEY.pub"
 		if ! github_authenticated; then
-			echo "The key is not authorized yet. Add it to the fork, then re-run this script." >&2
+			echo "The key is not authorized yet. Add it to the repository, then re-run this script." >&2
 			exit 3
 		fi
 		;;
 	esac
-	git clone "$FORK_URL" "$ROOT/repo"
+	git clone "$REPO_URL" "$ROOT/repo"
 fi
 
 cd "$ROOT/repo"
@@ -105,16 +120,11 @@ git config --local pull.ff only
 git config --global --add safe.directory "$ROOT/repo" 2>/dev/null || true
 
 if git remote get-url origin >/dev/null 2>&1; then
-	git remote set-url origin "$FORK_URL"
+	git remote set-url origin "$REPO_URL"
 else
-	git remote add origin "$FORK_URL"
+	git remote add origin "$REPO_URL"
 fi
-if git remote get-url upstream >/dev/null 2>&1; then
-	git remote set-url upstream "$UPSTREAM_URL"
-else
-	git remote add upstream "$UPSTREAM_URL"
-fi
-git fetch --all --prune --tags
+git fetch origin --prune --tags
 git checkout "$DEPLOY_BRANCH" 2>/dev/null || git checkout -b "$DEPLOY_BRANCH" "origin/$DEPLOY_BRANCH"
 git branch --set-upstream-to="origin/$DEPLOY_BRANCH" "$DEPLOY_BRANCH" 2>/dev/null || true
 git pull --ff-only

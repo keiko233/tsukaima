@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build and release one git revision on a prepared host. Run on the host:
+# Build and release one revision from a pushed deployment branch. Run on the host:
 #
 #   cd /opt/tsukaima/repo
-#   DEPLOYER=example-user DEPLOY_BRANCH=deploy/example-user ROOT=/opt/tsukaima bash ops/deploy/deploy.sh
+#   DEPLOY_BRANCH=main ROOT=/opt/tsukaima bash ops/deploy/deploy.sh
 #
-# The build is versioned from VERSION. A fork commit gets a `-fork.<deployer>.<sha>` suffix; only
-# mainline tags produce a bare release version. Previous image and data backup are kept for
-# rollback.
+# Maintainers deploy main from the mainline repository. Forks must deploy a non-main branch.
+# The build is versioned from VERSION; every non-release commit gets a short-commit suffix.
+# Previous image and data backup are kept for rollback.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -14,7 +14,7 @@ REPO="$(pwd)"
 DEPLOYER="${DEPLOYER:-${TSUKAIMA_DEPLOYER:-$(git config user.name || echo deploy)}}"
 DEPLOYER="${DEPLOYER//[^A-Za-z0-9_.-]/-}"
 ROOT="${ROOT:-/opt/tsukaima}"
-DEPLOY_BRANCH="${DEPLOY_BRANCH:-deploy/$DEPLOYER}"
+MAINLINE_REPO="${MAINLINE_REPO:-example-org/tsukaima}"
 COMPOSE_FILE="$ROOT/compose.yaml"
 DATA_DIR="$ROOT/data"
 ENV_FILE="$ROOT/.env"
@@ -26,6 +26,29 @@ fail() {
 	exit 1
 }
 
+repository_slug() {
+	local url="$1"
+	url="${url%.git}"
+	url="${url#git@github.com:}"
+	url="${url#https://github.com/}"
+	url="${url#ssh://git@github.com/}"
+	printf '%s\n' "$url"
+}
+
+origin_slug="$(repository_slug "$(git remote get-url origin)")"
+is_mainline=0
+[[ "$origin_slug" == "$MAINLINE_REPO" ]] && is_mainline=1
+if [[ -n "${DEPLOY_BRANCH:-}" ]]; then
+	deploy_branch="$DEPLOY_BRANCH"
+elif [[ "$is_mainline" == "1" ]]; then
+	deploy_branch="main"
+else
+	deploy_branch="deploy/$DEPLOYER"
+fi
+if [[ "$is_mainline" != "1" && "$deploy_branch" == "main" ]]; then
+	fail "refusing to deploy main from a fork; check out a dedicated deployment branch instead"
+fi
+
 [[ "$(id -u)" == "0" ]] || fail "run as root on the deployment host"
 [[ -f "$ROOT/secrets/runtime.env" ]] || fail "missing $ROOT/secrets/runtime.env (run bootstrap-host.sh)"
 [[ -f "$COMPOSE_FILE" ]] || fail "missing $COMPOSE_FILE (run bootstrap-host.sh)"
@@ -35,35 +58,22 @@ if [[ -n "$(git status --porcelain)" ]]; then
 	fail "worktree is dirty; commit or stash before deploying"
 fi
 
-git fetch --all --prune --tags
+git fetch origin --prune --tags
 current_branch="$(git branch --show-current)"
-if [[ "$current_branch" != "$DEPLOY_BRANCH" ]]; then
-	git checkout "$DEPLOY_BRANCH"
+if [[ "$current_branch" != "$deploy_branch" ]]; then
+	git checkout "$deploy_branch"
 fi
-git merge --ff-only "origin/$DEPLOY_BRANCH" || fail "local $DEPLOY_BRANCH differs from origin; push or reset it first"
-
-[[ -n "$(git rev-parse --verify upstream/main 2>/dev/null)" ]] || fail "upstream/main is missing"
-git merge-base --is-ancestor upstream/main HEAD ||
-	fail "deploy branch does not contain upstream/main; run bun run ops:sync and push"
+git merge --ff-only "origin/$deploy_branch" || fail "local $deploy_branch differs from origin; push or reset it first"
 
 local_version="$(tr -d '[:space:]' <VERSION)"
-upstream_version="$(git show upstream/main:VERSION 2>/dev/null | tr -d '[:space:]' || true)"
-[[ "$local_version" == "$upstream_version" ]] ||
-	fail "VERSION $local_version is behind mainline ($upstream_version); merge upstream/main before deploying"
-
-mapfile -t version_files < <(git ls-files 'VERSION' '*/package.json')
-authored="$(git log --no-merges --format='%h %s' upstream/main..HEAD -- "${version_files[@]}")"
-[[ -z "$authored" ]] ||
-	fail "fork commits must not modify VERSION or package versions:\n$authored"
-
 commit="$(git rev-parse HEAD)"
 if git describe --tags --exact-match --match "v$local_version" HEAD >/dev/null 2>&1; then
 	image_version="$local_version"
 else
-	image_version="$local_version-fork.$DEPLOYER.$(git rev-parse --short=12 HEAD)"
+	image_version="$local_version-$(git rev-parse --short=12 HEAD)"
 fi
 image="tsukaima:$image_version"
-source_url="$(git remote get-url upstream 2>/dev/null || echo https://github.com/example-org/tsukaima.git)"
+source_url="$(git remote get-url origin 2>/dev/null || echo unknown)"
 
 # Keep enough room for the build, data archive, and previous image. Build cache and stale
 # Tsukaima images/backups are reclaimable; unrelated host images are never touched.
@@ -75,8 +85,8 @@ fi
 
 echo "Deploying $image"
 echo "  commit:   $commit"
-echo "  branch:   $DEPLOY_BRANCH"
-echo "  fork:     $DEPLOYER"
+echo "  branch:   $deploy_branch"
+echo "  source:   $source_url"
 
 health_host="$(sed -n 's/^TSUKAIMA_BIND_ADDR=//p' "$ENV_FILE" 2>/dev/null | tail -n1)"
 health_host="${health_host:-127.0.0.1}"
@@ -101,7 +111,6 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
 		--label "org.opencontainers.image.version=$image_version" \
 		--label "org.opencontainers.image.revision=$commit" \
 		--label "org.opencontainers.image.source=$source_url" \
-		--label "io.tsukaima.fork=$DEPLOYER" \
 		-t "$image" "$REPO"
 else
 	docker image inspect "$image" >/dev/null 2>&1 || fail "SKIP_BUILD=1 but image $image does not exist"
@@ -170,7 +179,7 @@ cat >"$ROOT/deployments/$TIMESTAMP.json" <<EOF
 {
 	"deployedAt": "$TIMESTAMP",
 	"deployer": "$DEPLOYER",
-	"branch": "$DEPLOY_BRANCH",
+	"branch": "$deploy_branch",
 	"version": "$image_version",
 	"image": "$image",
 	"commit": "$commit",

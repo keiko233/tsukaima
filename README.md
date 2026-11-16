@@ -48,7 +48,7 @@ bun run dev
 - Coding core: `pi-coding-agent` capabilities wrapped behind a policy-controlled Self-Iteration Runtime.
 - OneBot mode: Tsukaima actively connects to NapCat's WebSocket server.
 - Migration source: current DSH only.
-- Deployment: fork-first Docker deployment with mainline-owned release tags; see [docs/operations/deployment.md](docs/operations/deployment.md).
+- Deployment: maintainers deploy `main`; forks deploy a rebased `deploy/<name>` branch; see [docs/operations/deployment.md](docs/operations/deployment.md).
 - WebUI authorization: single administrator.
 - WebUI authentication: Better Auth 1.7 over SQLite with native `/api/auth/*` routes.
 

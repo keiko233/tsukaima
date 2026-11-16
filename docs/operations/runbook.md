@@ -7,7 +7,7 @@ self-iteration reload recovery.
 
 Related documents:
 
-- [Fork-based Docker deployment](deployment.md)
+- [Docker deployment](deployment.md)
 - [Startup lifecycle](../architecture/startup-lifecycle.md)
 - [DSH migration](../migration/dsh.md) and [Migration Kit](../migration/migration-kit.md)
 - [Quality gates](quality.md)
@@ -15,9 +15,10 @@ Related documents:
 
 ## 1. Deployment prerequisites
 
-Production deployment is fork-first and image-based. Follow [deployment.md](deployment.md) for the
-fork, version-authority, host bootstrap, data-copy, and rollback workflow. The build command below
-is the direct source-checkout equivalent of the container entrypoint.
+Production deployment is image-based. Maintainers deploy `main`; forks must deploy a dedicated
+branch rebased onto mainline `main`. Follow [deployment.md](deployment.md) for the branch policy,
+version authority, host bootstrap, data-copy, and rollback workflow. The build command below is the
+direct source-checkout equivalent of the container entrypoint.
 
 | Requirement | Notes |
 | --- | --- |

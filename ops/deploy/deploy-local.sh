@@ -1,28 +1,49 @@
 #!/usr/bin/env bash
-# Local entrypoint: sync the deploy branch with mainline, push it, then build and release remotely.
+# Push the allowed deployment branch and deploy that exact revision on the prepared host.
 #
 #   bun run ops:deploy
 #   HOST=<ssh-target> DEPLOYER=example-user bun run ops:deploy
 #
-# The host must have been bootstrapped once with ops/deploy/bootstrap-host.sh.
+# Maintainers of the mainline repository deploy main. Forks must deploy a non-main branch
+# (deploy/<deployer> by default) that has been rebased onto mainline/main.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 HOST="${HOST:-<ssh-target>}"
 ROOT="${ROOT:-/opt/tsukaima}"
-if [[ -z "${DEPLOYER:-}" ]]; then
-	if [[ -n "${TSUKAIMA_DEPLOYER:-}" ]]; then
-		DEPLOYER="$TSUKAIMA_DEPLOYER"
-	elif [[ "$(git branch --show-current)" == deploy/* ]]; then
-		DEPLOYER="$(git branch --show-current)"
-		DEPLOYER="${DEPLOYER#deploy/}"
-	else
-		DEPLOYER="$(git config user.name || whoami)"
-	fi
-fi
+DEPLOYER="${DEPLOYER:-${TSUKAIMA_DEPLOYER:-$(git config user.name || whoami)}}"
 DEPLOYER="${DEPLOYER//[^A-Za-z0-9_.-]/-}"
-DEPLOY_BRANCH="${DEPLOY_BRANCH:-deploy/$DEPLOYER}"
-SYNC="${SYNC:-1}"
+MAINLINE_REPO="${MAINLINE_REPO:-example-org/tsukaima}"
+
+repository_slug() {
+	local url="$1"
+	url="${url%.git}"
+	url="${url#git@github.com:}"
+	url="${url#https://github.com/}"
+	url="${url#ssh://git@github.com/}"
+	printf '%s\n' "$url"
+}
+
+origin_url="$(git remote get-url origin)"
+origin_slug="$(repository_slug "$origin_url")"
+is_mainline=0
+[[ "$origin_slug" == "$MAINLINE_REPO" ]] && is_mainline=1
+
+if [[ -n "${DEPLOY_BRANCH:-}" ]]; then
+	deploy_branch="$DEPLOY_BRANCH"
+elif [[ "$is_mainline" == "1" ]]; then
+	deploy_branch="main"
+else
+	deploy_branch="deploy/$DEPLOYER"
+fi
+
+if [[ "$is_mainline" != "1" && "$deploy_branch" == "main" ]]; then
+	echo "Refusing to deploy main from a fork. Fork the repository locally or on GitHub and deploy a" >&2
+	echo "dedicated branch instead, for example:" >&2
+	echo "  git switch -c deploy/$DEPLOYER" >&2
+	echo "  DEPLOY_BRANCH=deploy/$DEPLOYER bun run ops:deploy" >&2
+	exit 2
+fi
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
 	sed -n '2,9p' "$0"
@@ -33,22 +54,19 @@ if [[ -n "$(git status --porcelain)" ]]; then
 	exit 2
 fi
 
-if [[ "$SYNC" == "1" ]]; then
-	bash ops/deploy/sync-upstream.sh --push
-else
-	current="$(git branch --show-current)"
-	if [[ "$current" != "$DEPLOY_BRANCH" ]]; then
-		echo "Current branch $current is not $DEPLOY_BRANCH (set SYNC=1 or check out the branch)." >&2
-		exit 2
-	fi
-	git push origin "$DEPLOY_BRANCH"
+current="$(git branch --show-current)"
+if [[ "$current" != "$deploy_branch" ]]; then
+	echo "Current branch $current is not $deploy_branch. Check out $deploy_branch before deploying." >&2
+	exit 2
 fi
+
+git push origin "$deploy_branch"
 
 ssh -o BatchMode=yes "$HOST" "
 	set -euo pipefail
 	cd '$ROOT/repo'
-	git fetch --all --prune --tags
-	git checkout '$DEPLOY_BRANCH'
-	git merge --ff-only 'origin/$DEPLOY_BRANCH'
-	DEPLOYER='$DEPLOYER' DEPLOY_BRANCH='$DEPLOY_BRANCH' ROOT='$ROOT' bash ops/deploy/deploy.sh
+	git fetch origin --prune --tags
+	git checkout '$deploy_branch'
+	git merge --ff-only 'origin/$deploy_branch'
+	DEPLOYER='$DEPLOYER' DEPLOY_BRANCH='$deploy_branch' MAINLINE_REPO='$MAINLINE_REPO' ROOT='$ROOT' bash ops/deploy/deploy.sh
 "
