@@ -70,14 +70,8 @@ echo "  commit:   $commit"
 echo "  branch:   $DEPLOY_BRANCH"
 echo "  fork:     $DEPLOYER"
 
-if [[ -f "$ENV_FILE" ]]; then
-	# Deployment-local, non-secret compose settings (bind address, public URL, image tag).
-	set -a
-	# shellcheck disable=SC1090
-	. "$ENV_FILE"
-	set +a
-fi
-health_host="${TSUKAIMA_BIND_ADDR:-127.0.0.1}"
+health_host="$(sed -n 's/^TSUKAIMA_BIND_ADDR=//p' "$ENV_FILE" 2>/dev/null | tail -n1)"
+health_host="${health_host:-127.0.0.1}"
 if [[ "$health_host" == "0.0.0.0" || "$health_host" == "::" ]]; then
 	health_host="127.0.0.1"
 fi
@@ -141,8 +135,9 @@ for _ in $(seq 1 90); do
 	sleep 2
 done
 
-if [[ "$ready" != "1" ]]; then
-	echo "New revision did not become ready; collecting logs and rolling back." >&2
+actual_image="$(docker inspect --format '{{.Config.Image}}' tsukaima 2>/dev/null || true)"
+if [[ "$ready" != "1" || "$actual_image" != "$image" ]]; then
+	echo "New revision did not become ready or the running image does not match; collecting logs and rolling back." >&2
 	docker compose -f "$COMPOSE_FILE" --project-directory "$ROOT" logs --tail=120 tsukaima >&2 || true
 	if [[ -n "$previous_image" ]]; then
 		echo "Rolling back to $previous_image" >&2
