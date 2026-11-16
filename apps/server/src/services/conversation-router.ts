@@ -62,6 +62,14 @@ export interface ConversationRouterOptions {
 	readonly onInboundTrigger?: (durableConversationId: string) => void;
 	readonly pacing?: ConversationPacingTracker;
 	readonly policy?: ConversationPolicyService;
+	/**
+	 * Durable prompt-hook text inserted before the next turn. A hook failure is logged and
+	 * skipped: injection must never block message ingestion.
+	 */
+	readonly promptContext?: (
+		sessionId: string,
+		durableConversationId: string,
+	) => Promise<string | undefined>;
 }
 
 export const messageText = messagePartsText;
@@ -112,6 +120,7 @@ export class ConversationRouter {
 	readonly #onInboundTrigger: ConversationRouterOptions["onInboundTrigger"];
 	readonly #pacing: ConversationPacingTracker | undefined;
 	readonly #policy: ConversationPolicyService | undefined;
+	readonly #promptContext: ConversationRouterOptions["promptContext"];
 	readonly #ingesting = new Set<string>();
 	readonly #ignoredAuditAt = new Map<string, number>();
 	readonly #ingestMedia: ((part: MessagePart) => Promise<MessagePart>) | undefined;
@@ -133,6 +142,7 @@ export class ConversationRouter {
 		this.#onInboundTrigger = options.onInboundTrigger;
 		this.#pacing = options.pacing;
 		this.#policy = options.policy;
+		this.#promptContext = options.promptContext;
 	}
 
 	triggerStats(): {
@@ -278,19 +288,23 @@ export class ConversationRouter {
 					cooldownMs,
 					durableConversationId: target.durableConversationId,
 				});
+				const injected = await this.#injectedPrompt(target.sessionId, target.durableConversationId);
 				await host.append({
 					classification: trigger.classification,
 					collectOnly: cooldownMs > 0,
 					conversationId: target.durableConversationId,
 					envelope: hydratedMessage,
 					submittedAtMs: Date.now(),
-					triggerContext: buildTriggerContext({
-						classification: trigger.classification,
-						result: trigger,
-						...(hydratedMessage.sender.isBot === undefined
-							? {}
-							: { senderIsBot: hydratedMessage.sender.isBot }),
-					}),
+					triggerContext: [
+						buildTriggerContext({
+							classification: trigger.classification,
+							result: trigger,
+							...(hydratedMessage.sender.isBot === undefined
+								? {}
+								: { senderIsBot: hydratedMessage.sender.isBot }),
+						}),
+						...(injected === undefined ? [] : [injected]),
+					].join("\n\n"),
 				});
 				if (cooldownMs > 0) {
 					host.scheduleActivityFlushAfter(target.durableConversationId, cooldownMs);
@@ -318,6 +332,22 @@ export class ConversationRouter {
 			};
 		} finally {
 			this.#ingesting.delete(ingestionKey);
+		}
+	}
+
+	async #injectedPrompt(
+		sessionId: string,
+		durableConversationId: string,
+	): Promise<string | undefined> {
+		try {
+			return await this.#promptContext?.(sessionId, durableConversationId);
+		} catch (error) {
+			this.#logger.warn("prompt hook injection failed", {
+				durableConversationId,
+				error: error instanceof Error ? error.message : String(error),
+				sessionId,
+			});
+			return undefined;
 		}
 	}
 

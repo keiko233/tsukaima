@@ -8,17 +8,15 @@ import {
 	PiDurableConversationHost,
 	createFakeModel,
 	type ActivityWindowEvent,
+	type DurableExtension,
 	type LiveRunSnapshot,
 	type ModelPort,
 	type ModelPolicy,
 } from "@tsukaima/core";
-import {
-	DomainCodingStore,
-	NoopReloadController,
-	SELF_ITERATION_HOST_BINDING,
-} from "@tsukaima/coding";
+import { DomainCodingStore, SELF_ITERATION_HOST_BINDING } from "@tsukaima/coding";
 import {
 	auditLog,
+	chatObjects,
 	conversations,
 	media,
 	type TsukaimaDatabase,
@@ -47,6 +45,8 @@ import type {
 	ChannelRequest,
 	MessageEnvelope,
 	MessagePart,
+	RestartMode,
+	RestartStatus,
 } from "@tsukaima/contracts";
 import { loadConfig, type TsukaimaConfig } from "./config.ts";
 import {
@@ -84,7 +84,16 @@ import { PluginTaskService } from "./services/plugin-task-service.ts";
 import { ReplyDispatcher } from "./services/reply-dispatcher.ts";
 import { SidechatService } from "./services/sidechat.ts";
 import { LiveRunCache } from "./services/live-run-cache.ts";
+import { PromptHookService } from "./services/prompt-hooks.ts";
+import {
+	RestartCoordinator,
+	RestartReloadController,
+	type RestartIntent,
+} from "./services/restart-coordinator.ts";
 import { RequestService } from "./services/request-service.ts";
+import { SessionMessagingService } from "./services/session-messaging.ts";
+import { WORKSPACE_TOOL_NAMES, createWorkspaceToolsExtension } from "./services/workspace-tools.ts";
+import { WorkspaceService } from "./services/workspace.ts";
 
 /**
  * Minimum spacing between logged failures for one channel stage and conversation. Detached
@@ -153,8 +162,12 @@ export class TsukaimaLifecycle {
 	readonly memory: MemoryService;
 	private readonly plugins: readonly TsukaimaPlugin[];
 	readonly media: MediaService;
+	readonly promptHooks: PromptHookService;
 	readonly replyDispatcher: ReplyDispatcher;
 	readonly requestService: RequestService;
+	readonly restartCoordinator: RestartCoordinator;
+	readonly sessionMessaging: SessionMessagingService;
+	readonly workspace: WorkspaceService;
 	private currentState: LifecycleState["state"] = "starting";
 	private currentStage = "initialize";
 	private failureReason: string | undefined;
@@ -189,6 +202,7 @@ export class TsukaimaLifecycle {
 	private readonly inboundFailureLoggedAt = new Map<string, number>();
 	private activeProviderId: string | undefined;
 	private beforeReadyCallback: (() => Promise<void>) | undefined;
+	private workspaceToolsExtension: DurableExtension | undefined;
 
 	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
 		this.config = config;
@@ -232,6 +246,16 @@ export class TsukaimaLifecycle {
 		});
 		this.executionLock = new ConversationExecutionLock();
 		this.hooks = new HookBus(this.logger);
+		this.promptHooks = new PromptHookService({
+			database: () => this.domainDatabase,
+			logger: this.runtimeLog,
+		});
+		this.restartCoordinator = new RestartCoordinator({
+			audit: (entry) => this.writeAudit(entry),
+			database: () => this.domainDatabase,
+			hooks: this.promptHooks,
+			logger: this.runtimeLog,
+		});
 		this.channels = new ChannelRegistry({
 			onEnvelope: (channelId, envelope) => {
 				void this.handleChannelEnvelope(channelId, envelope).catch((error: unknown) =>
@@ -261,13 +285,8 @@ export class TsukaimaLifecycle {
 			logger: this.runtimeLog,
 		});
 		this.conversationRouter = new ConversationRouter({
-			applyModelToolPolicy: async (durableConversationId, policy) => {
-				const codingTools = this.pluginHost.modelToolNames("self-iteration");
-				if (codingTools.length === 0) return;
-				await this.conversationHost?.updateModelTools(durableConversationId, {
-					remove: policy.capabilities.includes("coding") ? [] : codingTools,
-				});
-			},
+			applyModelToolPolicy: async (durableConversationId, policy) =>
+				this.applySessionToolPolicy(durableConversationId, policy),
 			audit: (entry) => this.writeAudit(entry),
 			database: () => this.domainDatabase,
 			host: () => this.conversationHost,
@@ -277,6 +296,7 @@ export class TsukaimaLifecycle {
 				this.replyDispatcher.cancelPendingOutput(conversationId),
 			pacing: this.conversationPacing,
 			policy: this.conversationPolicy,
+			promptContext: async (sessionId) => this.promptHooks.renderContext(sessionId),
 		});
 		this.contextProvider = new DrizzleContextProvider({
 			database: () => this.domainDatabase,
@@ -350,6 +370,62 @@ export class TsukaimaLifecycle {
 				? {}
 				: { splitMaxChars: options.reply.splitMaxChars }),
 		});
+		this.sessionMessaging = new SessionMessagingService({
+			applyToolPolicy: async (sessionId, durableConversationId) => {
+				const policy = await this.conversationPolicy.effectivePolicy(sessionId);
+				await this.applySessionToolPolicy(durableConversationId, policy);
+			},
+			audit: (entry) => this.writeAudit(entry),
+			cancelPendingOutput: (durableConversationId) =>
+				this.replyDispatcher.cancelPendingOutput(durableConversationId),
+			database: () => this.domainDatabase,
+			hooks: this.promptHooks,
+			host: () => this.conversationHost,
+			logger: this.runtimeLog,
+			notifyMessageReceived: ({ chatObjectId, messageId: inboundMessageId, sessionId }) => {
+				this.hooks.emitDetached("message.received", {
+					channelId: "webui",
+					chatObjectId,
+					envelope: { id: inboundMessageId },
+					sessionId,
+				});
+			},
+			policy: {
+				ensureHostPolicy: (sessionId, durableConversationId) =>
+					this.conversationPolicy.ensureHostPolicy(sessionId, durableConversationId),
+			},
+		});
+		this.workspace = new WorkspaceService({
+			applyToolPolicy: async (sessionId, durableConversationId) => {
+				const policy = await this.conversationPolicy.effectivePolicy(sessionId);
+				await this.applySessionToolPolicy(durableConversationId, policy);
+			},
+			audit: (entry) => this.writeAudit(entry),
+			database: () => this.domainDatabase,
+			host: () => this.conversationHost,
+			invokePluginRpc: (method, input) => this.pluginHost.invokeRpc(method, input),
+			logger: this.runtimeLog,
+			messaging: this.sessionMessaging,
+			policy: this.conversationPolicy,
+			repositoryRoot: process.cwd(),
+		});
+		this.workspaceToolsExtension = createWorkspaceToolsExtension({
+			audit: (entry) => this.writeAudit(entry),
+			logger: this.runtimeLog,
+			messaging: this.sessionMessaging,
+			promptHooks: this.promptHooks,
+			resolveSessionId: async (durableConversationId) => {
+				const database = this.domainDatabase;
+				if (database === undefined) return undefined;
+				const [row] = await database
+					.select({ id: conversations.id })
+					.from(conversations)
+					.where(eq(conversations.durableConversationId, durableConversationId))
+					.limit(1);
+				return row?.id;
+			},
+			workspace: this.workspace,
+		});
 		this.pluginConversations = new PluginConversationService({
 			audit: (entry) => this.writeAudit(entry),
 			channels: this.channels,
@@ -365,7 +441,7 @@ export class TsukaimaLifecycle {
 		if (!pluginBindings.has(SELF_ITERATION_HOST_BINDING)) {
 			pluginBindings.set(SELF_ITERATION_HOST_BINDING, {
 				healthCheck: async () => ({ checkedAtMs: Date.now(), ok: this.ready }),
-				reload: new NoopReloadController(),
+				reload: new RestartReloadController(this.restartCoordinator),
 				repositoryRoot: process.cwd(),
 				store: new DomainCodingStore(() => this.domainDatabase),
 				worktreeRoot: join(config.dataDir, "worktrees"),
@@ -434,6 +510,74 @@ export class TsukaimaLifecycle {
 
 	get ready(): boolean {
 		return this.currentState === "ready" || this.currentState === "degraded";
+	}
+
+	setRestartHandler(handler: (intent: RestartIntent) => Promise<void> | void): void {
+		this.restartCoordinator.setHandler(handler);
+	}
+
+	async scheduleRestart(
+		input: {
+			readonly delaySeconds?: number;
+			readonly mode?: RestartMode;
+			readonly reason?: string;
+			readonly requestedBy?: string;
+		} = {},
+	): Promise<RestartStatus> {
+		return this.restartCoordinator.schedule({
+			...(input.delaySeconds === undefined
+				? {}
+				: { delayMs: Math.max(1, input.delaySeconds) * 1_000 }),
+			...(input.mode === undefined ? {} : { mode: input.mode }),
+			...(input.reason === undefined ? {} : { reason: input.reason }),
+			...(input.requestedBy === undefined ? {} : { requestedBy: input.requestedBy }),
+		});
+	}
+
+	async cancelRestart(reason?: string): Promise<boolean> {
+		return this.restartCoordinator.cancel(reason);
+	}
+
+	async restartStatus(): Promise<RestartStatus | null> {
+		return this.restartCoordinator.status();
+	}
+
+	/**
+	 * Keep each conversation's model-tool surface aligned with its execution role. Chat can
+	 * control workspaces and hooks but never receives coding tools; workspace requires an
+	 * explicit `coding` capability and receives the repo tools only then.
+	 */
+	private async applySessionToolPolicy(
+		durableConversationId: string,
+		policy: { readonly capabilities: readonly string[] },
+	): Promise<void> {
+		const database = this.domainDatabase;
+		const host = this.conversationHost;
+		if (database === undefined || host === undefined) return;
+		const [row] = await database
+			.select({ chatKind: chatObjects.kind, sessionKind: conversations.kind })
+			.from(conversations)
+			.leftJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
+			.where(eq(conversations.durableConversationId, durableConversationId))
+			.limit(1);
+		const kind = row?.chatKind ?? row?.sessionKind;
+		const codingTools = this.pluginHost.modelToolNames("self-iteration");
+		const sessionTools = [...WORKSPACE_TOOL_NAMES];
+		const removed = new Set<string>();
+		if (kind !== "workspace") {
+			for (const name of codingTools) removed.add(name);
+		} else if (!policy.capabilities.includes("coding")) {
+			for (const name of codingTools) removed.add(name);
+		}
+		if (kind === "webui") {
+			// A chat may spawn/control workspaces but never edit code in its own turn.
+			for (const name of codingTools) removed.add(name);
+		} else if (kind === "workspace") {
+			removed.add("workspace_spawn");
+		} else {
+			for (const name of sessionTools) removed.add(name);
+		}
+		await host.updateModelTools(durableConversationId, { remove: [...removed] });
 	}
 
 	private transition(stage: string, state: LifecycleState["state"] = "starting"): void {
@@ -524,6 +668,7 @@ export class TsukaimaLifecycle {
 		this.transition("domain-database");
 		this.domainDatabase = await openDomainDatabase(join(this.config.dataDir, "domain.sqlite"));
 		migrateDomainDatabase(this.domainDatabase);
+		await this.restartCoordinator.recover();
 		this.transition("plugin-migrations");
 		const domainSource = wrapPluginSqlConnection(
 			this.domainDatabase.$client as unknown as Parameters<typeof wrapPluginSqlConnection>[0],
@@ -712,19 +857,23 @@ export class TsukaimaLifecycle {
 							},
 						},
 					);
-		if (conversationHost !== undefined && pluginTools !== undefined) {
+		const dynamicExtensions = [
+			...(pluginTools === undefined ? [] : [pluginTools]),
+			...(this.workspaceToolsExtension === undefined ? [] : [this.workspaceToolsExtension]),
+		];
+		if (conversationHost !== undefined && dynamicExtensions.length > 0) {
 			// Install before plugins connect so inbound messages always resolve the extension;
 			// the tool getter sees registrations as soon as each plugin's setup completes.
-			conversationHost.installExtensions([pluginTools]);
+			conversationHost.installExtensions(dynamicExtensions);
 		}
 		this.transition("plugins");
 		await this.pluginHost.start();
 		this.pluginTasks.start();
 		await this.memory.start();
-		if (conversationHost !== undefined && pluginTools !== undefined) {
+		if (conversationHost !== undefined && dynamicExtensions.length > 0) {
 			// Reinstall after startup to reset per-conversation checks for sessions that received
 			// a message while the extension still had no tools.
-			conversationHost.installExtensions([pluginTools]);
+			conversationHost.installExtensions(dynamicExtensions);
 		}
 
 		try {
@@ -742,6 +891,19 @@ export class TsukaimaLifecycle {
 			await this.beforeReadyCallback();
 		}
 		this.transition("ready", "ready");
+		try {
+			const dispatch = (hook: Parameters<SessionMessagingService["dispatchResumeHook"]>[0]) =>
+				this.sessionMessaging.dispatchResumeHook(hook);
+			const resumed = await this.promptHooks.dispatchStartupResumes(dispatch);
+			const armed = await this.promptHooks.resumeTimers(dispatch);
+			if (resumed > 0 || armed > 0) {
+				this.runtimeLog.info("restored reserved work", { armed, resumed });
+			}
+		} catch (error) {
+			this.runtimeLog.warn("failed to restore reserved work", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 
 	/** Gate readiness on a service that depends on the database but must precede traffic. */
@@ -1163,6 +1325,8 @@ export class TsukaimaLifecycle {
 	async stop(): Promise<void> {
 		this.transition("stopping", "maintenance");
 		this.backupDrills.stop();
+		this.restartCoordinator.close();
+		this.promptHooks.close();
 		for (const listener of this.stopListeners) {
 			try {
 				listener();

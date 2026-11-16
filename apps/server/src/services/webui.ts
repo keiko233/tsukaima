@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
 import {
 	messagePartSchema,
+	type MessageDeliveryMode,
 	type MessagePage,
 	type MessagePart,
 	type MessageSummary as ContractMessageSummary,
@@ -23,7 +24,7 @@ import {
 import type { TsukaimaLifecycle } from "../lifecycle.ts";
 import { collectRunSteps } from "./run-steps.ts";
 
-type ChatKind = "private" | "group" | "webui" | "task" | "plugin";
+type ChatKind = "private" | "group" | "webui" | "workspace" | "task" | "plugin";
 
 /** Store the adapter's own kind; the WebUI must not know which platforms exist. */
 const toMessageKind = (channelKind: string | undefined): string => channelKind ?? "plugin";
@@ -179,9 +180,12 @@ export async function listChats(
 		.select()
 		.from(chatObjects)
 		.where(
-			status === "all"
-				? undefined
-				: eq(chatObjects.status, status === "archived" ? "archived" : "active"),
+			and(
+				ne(chatObjects.kind, "workspace"),
+				status === "all"
+					? undefined
+					: eq(chatObjects.status, status === "archived" ? "archived" : "active"),
+			),
 		)
 		.orderBy(desc(chatObjects.pinned), desc(chatObjects.updatedAt));
 	const ids = objectRows.map((row) => row.id);
@@ -733,7 +737,12 @@ export async function listRunSteps(
 
 export async function sendMessage(
 	lifecycle: TsukaimaLifecycle,
-	input: { sessionId: string; target: "channel" | "tsukaima"; text: string },
+	input: {
+		mode?: MessageDeliveryMode;
+		sessionId: string;
+		target: "channel" | "tsukaima";
+		text: string;
+	},
 ): Promise<MessageSummary> {
 	const database = requireDatabase(lifecycle);
 	const [session] = await database
@@ -824,76 +833,17 @@ export async function sendMessage(
 		return toMessageSummary(saved);
 	}
 
-	const host = lifecycle.conversationHost;
-	if (host === undefined) throw new Error("Conversation host is not ready");
-	await lifecycle.conversationPolicy.ensureHostPolicy(
-		session.session.id,
-		session.session.durableConversationId,
-	);
-	await database.insert(messages).values({
-		chatObjectId: session.chat.id,
-		contentText: text,
-		conversationId: session.session.id,
-		direction: "inbound",
-		deliveryStatus: "pending",
-		id,
-		ingestedAt: now,
-		kind: "webui",
-		occurredAt: now,
-		partsJson: JSON.stringify([{ text, type: "text" }]),
-		senderDisplayName: "WebUI admin",
-		senderExternalId: "webui-admin",
-		updatedAt: now,
+	const sent = await lifecycle.sessionMessaging.sendAgentMessage({
+		...(input.mode === undefined ? {} : { deliveryMode: input.mode }),
+		sessionId: session.session.id,
+		source: "webui",
+		text,
 	});
-	try {
-		await host.append({
-			conversationId: session.session.durableConversationId,
-			envelope: {
-				channelId: "webui",
-				channelKind: "webui",
-				conversationKey: { kind: "webui" },
-				id: id,
-				mentions: [],
-				parts: [{ text, type: "text" }],
-				sender: {
-					displayName: "WebUI admin",
-					id: "webui-admin",
-					platformId: "webui-admin",
-				},
-				source: { messageId: id, receivedAtMs: Date.now(), timestampMs: Date.now() },
-			},
-			forceSubmit: true,
-			submittedAtMs: Date.now(),
-		});
-		await database
-			.update(messages)
-			.set({ deliveryStatus: "accepted", updatedAt: new Date().toISOString() })
-			.where(eq(messages.id, id));
-		// Announce the message like any other inbound one. Without this the WebUI that sent it
-		// never learns the message exists: the channel path emits this hook, and the send path
-		// bypasses the channel entirely.
-		lifecycle.hooks.emitDetached("message.received", {
-			channelId: "webui",
-			chatObjectId: session.chat.id,
-			envelope: { id },
-			sessionId: session.session.id,
-		});
-	} catch (error) {
-		await database
-			.update(messages)
-			.set({ deliveryStatus: "failed", updatedAt: new Date().toISOString() })
-			.where(eq(messages.id, id));
-		throw error;
-	}
-	await database
-		.update(conversations)
-		.set({ updatedAt: new Date().toISOString() })
-		.where(eq(conversations.id, session.session.id));
-	await database
-		.update(chatObjects)
-		.set({ updatedAt: new Date().toISOString() })
-		.where(eq(chatObjects.id, session.chat.id));
-	const [saved] = await database.select().from(messages).where(eq(messages.id, id)).limit(1);
+	const [saved] = await database
+		.select()
+		.from(messages)
+		.where(eq(messages.id, sent.messageId))
+		.limit(1);
 	if (saved === undefined) throw new Error("Failed to persist message");
 	return toMessageSummary(saved);
 }

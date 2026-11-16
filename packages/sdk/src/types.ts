@@ -397,7 +397,7 @@ export interface PluginConversationSummary {
 	readonly durableConversationId: string;
 	readonly chatObjectId: string | null;
 	readonly channelId: string | null;
-	readonly kind: "private" | "group" | "webui" | "task" | "plugin";
+	readonly kind: "private" | "group" | "webui" | "workspace" | "task" | "plugin";
 	readonly title: string;
 	readonly updatedAt: string;
 	readonly status: string;

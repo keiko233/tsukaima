@@ -559,7 +559,12 @@ export const adminRouter = {
 		),
 		send: adminBase.admin.sessions.send.handler(async ({ context, input }) => {
 			try {
-				return await sendMessage(context.lifecycle, input);
+				return await sendMessage(context.lifecycle, {
+					...(input.mode === undefined ? {} : { mode: input.mode }),
+					sessionId: input.sessionId,
+					target: input.target,
+					text: input.text,
+				});
 			} catch (error) {
 				context.lifecycle.logger
 					.child("tsukaima::server::rpc")
@@ -582,6 +587,46 @@ export const adminRouter = {
 			});
 			return { ok: true };
 		}),
+	},
+	workspace: {
+		create: adminBase.admin.workspace.create.handler(async ({ context, input }) => {
+			const result = await context.lifecycle.workspace.create({
+				...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
+				goal: input.goal,
+				...(input.mode === undefined ? {} : { mode: input.mode }),
+				...(input.parentSessionId === undefined ? {} : { parentSessionId: input.parentSessionId }),
+				requestedBy: "webui-admin",
+			});
+			return result;
+		}),
+		get: adminBase.admin.workspace.get.handler(async ({ context, input }) =>
+			context.lifecycle.workspace.get(input.sessionId),
+		),
+		list: adminBase.admin.workspace.list.handler(async ({ context, input }) =>
+			context.lifecycle.workspace.list({
+				...(input?.includeArchived === undefined ? {} : { includeArchived: input.includeArchived }),
+			}),
+		),
+	},
+	runtime: {
+		cancelRestart: adminBase.admin.runtime.cancelRestart.handler(async ({ context }) => {
+			const cancelled = await context.lifecycle.cancelRestart("cancelled from WebUI");
+			return {
+				cancelled,
+				restart: await context.lifecycle.restartStatus(),
+			};
+		}),
+		restartStatus: adminBase.admin.runtime.restartStatus.handler(async ({ context }) =>
+			context.lifecycle.restartStatus(),
+		),
+		scheduleRestart: adminBase.admin.runtime.scheduleRestart.handler(async ({ context, input }) =>
+			context.lifecycle.scheduleRestart({
+				...(input.delaySeconds === undefined ? {} : { delaySeconds: input.delaySeconds }),
+				...(input.mode === undefined ? {} : { mode: input.mode }),
+				...(input.reason === undefined ? {} : { reason: input.reason }),
+				requestedBy: "webui-admin",
+			}),
+		),
 	},
 	settings: {
 		get: adminBase.admin.settings.get.handler(async ({ context }) => settingsView(context)),

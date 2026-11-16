@@ -55,6 +55,10 @@ export {
 	type InspectConversationContextOptions,
 	type LiveRunSnapshot,
 } from "./conversation-host.ts";
+export type {
+	Extension as DurableExtension,
+	ToolRegistration as DurableToolRegistration,
+} from "@earendil-works/pi-durable";
 export {
 	type BusyArbiter,
 	type BusyArbitrationDecision,

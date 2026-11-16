@@ -1,4 +1,7 @@
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { createApp, listenOptions } from "./app.ts";
+import type { RestartIntent } from "./services/restart-coordinator.ts";
 
 const { app, auth, config, lifecycle } = createApp();
 await app.listen(listenOptions(config));
@@ -23,20 +26,43 @@ try {
 
 let shuttingDown = false;
 
-const shutdown = async () => {
+const shutdown = async (exitCode = 0, restartIntent?: RestartIntent) => {
 	if (shuttingDown) {
 		process.exit(1);
 	}
 	shuttingDown = true;
-	lifecycle.logger.info("shutdown requested");
+	lifecycle.logger.info("shutdown requested", {
+		exitCode,
+		restartMode: restartIntent?.mode,
+	});
 	try {
+		if (restartIntent !== undefined) {
+			await mkdir(config.dataDir, { recursive: true });
+			await Bun.write(
+				join(config.dataDir, "restart-intent.json"),
+				JSON.stringify(restartIntent, null, 2),
+			);
+		}
 		auth.stop();
 		await lifecycle.stop();
 		await app.stop(true);
 	} finally {
-		process.exit(0);
+		process.exit(exitCode);
 	}
 };
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+lifecycle.setRestartHandler(async (intent) => {
+	lifecycle.logger.info("maintenance window reached", {
+		executeAtMs: intent.executeAtMs,
+		mode: intent.mode,
+		reason: intent.reason,
+	});
+	await shutdown(75, intent);
+});
+
+process.on("SIGINT", () => {
+	void shutdown();
+});
+process.on("SIGTERM", () => {
+	void shutdown();
+});

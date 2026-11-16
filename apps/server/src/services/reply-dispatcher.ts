@@ -22,7 +22,7 @@ import type { ConversationPacingTracker } from "./conversation-pacing.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
 import type { HookBus } from "./hook-bus.ts";
 
-type ChatKind = "private" | "group" | "webui" | "task" | "plugin";
+type ChatKind = "private" | "group" | "webui" | "workspace" | "task" | "plugin";
 
 const DEFAULT_SPLIT_MAX_CHARS = 2_000;
 const DEFAULT_PENDING_GRACE_MS = 15_000;
