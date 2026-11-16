@@ -23,7 +23,8 @@
 		"check:version": "bun tools/ops/version.ts check",
 		"ops:version": "bun tools/ops/version.ts show",
 		"ops:sync": "bash ops/deploy/sync-upstream.sh",
-		"ops:deploy": "bash ops/deploy/deploy-local.sh"
+		"ops:deploy": "bash ops/deploy/deploy-local.sh",
+		"pretest": "git restore --source=HEAD -- packages/migration/fixtures 2>/dev/null || true"
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.65.0",
