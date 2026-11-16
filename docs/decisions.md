@@ -28,3 +28,13 @@
 | Shared UI kit | Extract the beUI component set into `packages/ui` (`@tsukaima/ui`); `@tsukaima/sdk/ui` composes it for plugin panels |
 | Plugin i18n | Hybrid: `bindParaglide` for compiled plugin inlang projects, `createDictionaryI18n` as a no-build fallback |
 | Plugin enable/disable | Persisted in the domain `meta` table, applied immediately through `admin.plugins.setEnabled` |
+
+## 2026-11-16
+
+| Question | Decision |
+| --- | --- |
+| Chat vs. repository execution | Separate `chat` and `workspace` session surfaces; chat can spawn/control workspaces but never receives coding tools |
+| Workspace repository scope | Coding task plus the running process repository root; mutations remain inside governed worktrees |
+| Session communication | One shared service for `queue` (next loop step), `interrupt`, and `follow-up` across chat and workspace |
+| Durable context injection | `prompt_hooks` supports one-shot context, recurring runtime notices, and post-restart reserved turns |
+| Restart/update | One-minute graceful maintenance window injected into every chat prompt; process exits 75 with a restart-intent file for the host supervisor |

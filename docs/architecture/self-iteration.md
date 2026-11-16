@@ -21,6 +21,16 @@ Tsukaima can modify its own plugins, prompts, documentation, and application cod
 7. Apply locally, restart/reload only the affected component, and verify health.
 8. Record result, commit, and rollback instructions in the durable task and PostgreSQL audit table.
 
+## Workspace agents
+
+Self-iteration work now runs in an explicit workspace session created from chat or the Workspace
+sidebar. A workspace conversation is linked to one `coding_tasks` row and receives the governed
+coding tools; the parent chat only receives `workspace_spawn`, status, send, and hook tools. See
+[Workspace and prompt hooks](workspace-and-hooks.md).
+
+The workspace uses the running process repository (`process.cwd()`) as its analysis root. Any
+mutation still happens in a disposable worktree with the existing path/command policy.
+
 ## Tool surface
 
 The coding runner exposes:
@@ -57,6 +67,10 @@ Later phase: GHCR.
 - Deployment is an explicit image pull plus controlled service update.
 - Rollback uses the previous image tag.
 - The bot may propose this operation, but the host-side deployer remains a narrow, audited service.
+
+Approved reloads become a durable one-minute restart/update intent. The process stops gracefully,
+writes `restart-intent.json`, and exits with code 75 so a supervisor can replace the image or
+container before starting again. Reserved chat/workspace tasks resume after readiness.
 
 ## Policy
 

@@ -484,6 +484,43 @@ coding.proposals.reject.mutation({ proposalId: string; reason: string });
 
 Deployment remains outside oRPC until a host-side deployer exists. oRPC only exposes proposal state.
 
+## Workspace and runtime maintenance
+
+```ts
+admin.workspace.list.query({ includeArchived?: boolean });
+admin.workspace.create.mutation({
+  goal: string;
+  mode?: "analysis" | "patch" | "proposal" | "maintenance";
+  baseRef?: string;
+  parentSessionId?: string;
+});
+admin.workspace.get.query({ sessionId: string });
+
+admin.sessions.send.mutation({
+  sessionId: string;
+  target: "tsukaima";
+  text: string;
+  mode?: "queue" | "interrupt" | "follow-up";
+});
+
+admin.runtime.scheduleRestart.mutation({
+  delaySeconds?: number;
+  mode?: "restart" | "update";
+  reason?: string;
+});
+admin.runtime.cancelRestart.mutation();
+admin.runtime.restartStatus.query();
+```
+
+`queue` inserts at the next loop/tool boundary, `interrupt` aborts the active generation, and
+`follow-up` waits for the current turn to settle. Workspace objects are excluded from
+`admin.chats.list`; they are returned only by the workspace procedures.
+
+Restart scheduling creates a global runtime prompt hook. Every new turn receives the countdown
+before its prompt. When the deadline arrives the process stops gracefully, writes
+`$TSUKAIMA_DATA_DIR/restart-intent.json`, and exits with code 75. A host supervisor performs the
+image/container update and restart; the runtime does not receive Docker or host-shell access.
+
 ## WebUI flows
 
 ### Conversation view

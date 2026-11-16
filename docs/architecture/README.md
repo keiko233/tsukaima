@@ -15,6 +15,7 @@ This document set is the durable design record for Tsukaima. Each file is meant 
 | [Database design](database.md) | Exact domain tables, durable boundaries, indexes, migrations, and query rules |
 | [API design](api.md) | oRPC namespaces, procedures, context, errors, realtime patterns, and WebUI flows |
 | [Conversation flow](conversation-flow.md) | End-to-end message pipeline, aggregation, policy, model turn, tool execution, and output |
+| [Workspace and prompt hooks](workspace-and-hooks.md) | Chat/workspace execution split, shared queueing, durable prompt hooks, and graceful updates |
 | [OneBot/NapCat integration](onebot.md) | Event normalization, action facade, reconnect, permissions, and operational edge cases |
 | [Plugins](plugins.md) | Manifest, permissions, worker runtime, lifecycle, and built-in plugin requirements |
 | [Plugin SDK](plugin-sdk.md) | Runtime API, context, RPC boundary, UI bridge, and testing expectations |
@@ -34,7 +35,8 @@ The system has five planes:
 
 1. **Channel plane**: adapters normalize IM events into `MessageEnvelope`s and send outbound actions.
 2. **Conversation plane**: `pi-durable` stores immutable entries, tasks, submissions, documents, usage, and compactions.
-3. **Agent plane**: model routing, prompt assembly, tools, plugins, hooks, and policy.
+3. **Agent plane**: chat and workspace agents, model routing, prompt assembly, tools, plugins,
+   durable prompt hooks, and policy.
    Ephemeral run state is published through the KV cache instead of being polled from durable.
 4. **Domain plane**: users, relationships, memory, personas, stickers, moderation, and IM-specific state.
 5. **Interface plane**: WebUI, admin APIs, migration tools, and deployment artifacts.
