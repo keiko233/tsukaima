@@ -180,6 +180,94 @@ export const restartStatusSchema = z.object({
 });
 export type RestartStatus = z.infer<typeof restartStatusSchema>;
 
+export const upgradeModeSchema = z.enum(["fast_forward", "workspace"]);
+export type UpgradeMode = z.infer<typeof upgradeModeSchema>;
+
+export const upgradeRecordStatusSchema = z.enum([
+	"running",
+	"ready",
+	"merging",
+	"restarting",
+	"completed",
+	"failed",
+	"cancelled",
+]);
+export type UpgradeRecordStatus = z.infer<typeof upgradeRecordStatusSchema>;
+
+export const upgradeCheckStatusSchema = z.enum([
+	"up_to_date",
+	"available",
+	"diverged",
+	"unavailable",
+]);
+export type UpgradeCheckStatus = z.infer<typeof upgradeCheckStatusSchema>;
+
+/**
+ * A read-only comparison between the running checkout and its configured upstream.
+ * `ahead` is the number of local commits the upstream does not contain; `behind` is the
+ * number of upstream commits missing locally. A clean checkout with no local commits can
+ * fast-forward directly; local commits require a governed workspace upgrade.
+ */
+export const upgradeCheckSchema = z.object({
+	ahead: z.number().int().nonnegative(),
+	behind: z.number().int().nonnegative(),
+	branch: z.string(),
+	canUpgrade: z.boolean(),
+	currentCommit: z.string(),
+	currentVersion: z.string(),
+	dirty: z.boolean(),
+	mode: z.union([upgradeModeSchema, z.literal("none")]),
+	reason: z.string().optional(),
+	remote: z.string(),
+	status: upgradeCheckStatusSchema,
+	upstreamCommit: z.string(),
+	upstreamRef: z.string(),
+	upstreamVersion: z.string(),
+});
+export type UpgradeCheck = z.infer<typeof upgradeCheckSchema>;
+
+export const upgradeRecordSchema = z.object({
+	ahead: z.number().int().nonnegative(),
+	autoFinalize: z.boolean(),
+	behind: z.number().int().nonnegative(),
+	branch: z.string(),
+	completedAt: z.string().nullable(),
+	createdAt: z.string(),
+	currentCommit: z.string(),
+	currentVersion: z.string(),
+	error: z.string().nullable(),
+	id: z.string(),
+	mode: upgradeModeSchema,
+	remote: z.string(),
+	restartId: z.string().nullable(),
+	status: upgradeRecordStatusSchema,
+	targetCommit: z.string(),
+	targetVersion: z.string(),
+	taskId: z.string().nullable(),
+	updatedAt: z.string(),
+	upstreamRef: z.string(),
+	workspaceSessionId: z.string().nullable(),
+	worktreePath: z.string().nullable(),
+});
+export type UpgradeRecord = z.infer<typeof upgradeRecordSchema>;
+
+export const upgradeStartOutputSchema = z.object({
+	upgrade: upgradeRecordSchema,
+	workspace: z
+		.object({
+			sessionId: z.string(),
+			taskId: z.string(),
+		})
+		.nullable(),
+});
+export type UpgradeStartOutput = z.infer<typeof upgradeStartOutputSchema>;
+
+export const upgradeFinalizeOutputSchema = z.object({
+	restart: restartStatusSchema,
+	upgrade: upgradeRecordSchema,
+});
+export type UpgradeFinalizeOutput = z.infer<typeof upgradeFinalizeOutputSchema>;
+
 export const sessionDetailSchema = z.object({
 	channelId: z.string().nullable(),
 	chat: z.object({
@@ -830,6 +918,22 @@ export const runtimeScheduleRestartInputSchema = z.object({
 	mode: restartModeSchema.optional(),
 	reason: z.string().trim().min(1).max(500).optional(),
 });
+
+export const upgradeStartInputSchema = z
+	.object({
+		/** Restart as soon as a fast-forward upgrade has been merged. */
+		autoFinalize: z.boolean().optional(),
+		/** Override the tracked upstream remote; defaults to `origin`. */
+		remote: z.string().trim().min(1).max(64).optional(),
+	})
+	.optional();
+
+export const upgradeFinalizeInputSchema = z
+	.object({
+		/** Defaults to the newest upgrade that is waiting for finalization. */
+		upgradeId: z.string().min(1).optional(),
+	})
+	.optional();
 
 export const sessionsUpdateInputSchema = z.object({
 	sessionId: z.string().min(1),
@@ -1570,6 +1674,19 @@ export const appContract = oc.router({
 				.input(runtimeScheduleRestartInputSchema)
 				.output(restartStatusSchema)
 				.meta({ audit: true }),
+		},
+		upgrade: {
+			check: oc.input(upgradeStartInputSchema).output(upgradeCheckSchema),
+			finalize: oc
+				.input(upgradeFinalizeInputSchema)
+				.output(upgradeFinalizeOutputSchema)
+				.meta({ audit: true }),
+			history: oc.output(z.array(upgradeRecordSchema)),
+			start: oc
+				.input(upgradeStartInputSchema)
+				.output(upgradeStartOutputSchema)
+				.meta({ audit: true }),
+			status: oc.output(upgradeRecordSchema.nullable()),
 		},
 		settings: {
 			get: oc.output(settingsViewSchema),

@@ -817,6 +817,44 @@ export const runtimeRestarts = sqliteTable(
 );
 
 /**
+ * One administrator-initiated upstream upgrade. Fast-forward upgrades merge the tracked
+ * upstream branch directly; upgrades with local commits run in a governed workspace and are
+ * merged back only after the workspace has produced a proposal.
+ */
+export const runtimeUpgrades = sqliteTable(
+	"runtime_upgrades",
+	{
+		ahead: integer("ahead").notNull().default(0),
+		autoFinalize: integer("auto_finalize", { mode: "boolean" }).notNull().default(true),
+		behind: integer("behind").notNull().default(0),
+		branch: text("branch").notNull(),
+		completedAtMs: integer("completed_at_ms"),
+		createdAtMs: integer("created_at_ms").notNull(),
+		currentCommit: text("current_commit").notNull(),
+		currentVersion: text("current_version").notNull(),
+		error: text("error"),
+		id: text("id").primaryKey(),
+		mode: text("mode", { enum: ["fast_forward", "workspace"] }).notNull(),
+		remote: text("remote").notNull(),
+		restartId: text("restart_id"),
+		status: text("status", {
+			enum: ["running", "ready", "merging", "restarting", "completed", "failed", "cancelled"],
+		}).notNull(),
+		targetCommit: text("target_commit").notNull(),
+		targetVersion: text("target_version").notNull(),
+		taskId: text("task_id"),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+		upstreamRef: text("upstream_ref").notNull(),
+		workspaceSessionId: text("workspace_session_id"),
+		worktreePath: text("worktree_path"),
+	},
+	(table) => [
+		index("runtime_upgrades_status_idx").on(table.status, table.createdAtMs),
+		index("runtime_upgrades_created_idx").on(table.createdAtMs),
+	],
+);
+
+/**
  * Legacy host-owned migration ledger from when plugin tables lived in `domain.sqlite`.
  * Plugin migrations now record themselves in each plugin's own database; rows here are
  * deleted as their tables are moved out. The table stays so existing deployments migrate
