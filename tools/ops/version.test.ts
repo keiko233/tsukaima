@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	bumpVersions,
 	checkManifestVersions,
 	checkRelease,
 	checkVersionAuthority,
@@ -75,6 +76,15 @@ describe("version authority", () => {
 		git(root, "add", "VERSION");
 		git(root, "commit", "-m", "chore(release): bump");
 		expect(() => checkVersionAuthority(root, "main")).toThrow("must not change VERSION");
+	});
+
+	test("bumps VERSION and every workspace manifest together", async () => {
+		const root = await repository();
+		const changed = bumpVersions(root, "0.2.0");
+		expect(changed).toContain("VERSION");
+		expect(changed).toHaveLength(5);
+		expect(checkManifestVersions(root, "0.2.0").mismatches).toEqual([]);
+		expect(await fs.readFile(join(root, "VERSION"), "utf8")).toBe("0.2.0\n");
 	});
 
 	test("labels tagged releases and fork builds differently", async () => {
