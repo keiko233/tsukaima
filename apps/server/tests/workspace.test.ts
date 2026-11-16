@@ -110,4 +110,51 @@ describe("workspace sessions", () => {
 		expect(detail?.workspace.goal).toContain("status card");
 		await lifecycle.stop();
 	});
+
+	test("chat gets workspace controls but workspace alone gets coding tools", async () => {
+		const lifecycle = await startApp();
+		const parent = await createLocalChat(lifecycle, {
+			sessionTitle: "Main",
+			title: "Admin chat",
+		});
+		await lifecycle.sessionMessaging.sendAgentMessage({
+			sessionId: parent.sessionId,
+			source: "webui",
+			text: "Say hello without changing code.",
+		});
+		const workspace = await lifecycle.workspace.create({
+			goal: "Inspect the chat tool policy.",
+			parentSessionId: parent.sessionId,
+			requestedBy: "test-admin",
+		});
+		const database = lifecycle.domainDatabase;
+		const host = lifecycle.conversationHost;
+		if (database === undefined || host === undefined) throw new Error("Lifecycle not ready");
+		const sessions = await database.select().from(conversations);
+		const parentDurable = sessions.find(
+			(session) => session.id === parent.sessionId,
+		)?.durableConversationId;
+		const workspaceDurable = sessions.find(
+			(session) => session.id === workspace.sessionId,
+		)?.durableConversationId;
+		if (parentDurable === undefined || workspaceDurable === undefined) {
+			throw new Error("Durable conversation missing");
+		}
+		const parentTools = (await host.inspectConversationContext(parentDurable))?.tools.map(
+			(tool) => tool.name,
+		);
+		const workspaceTools = (await host.inspectConversationContext(workspaceDurable))?.tools.map(
+			(tool) => tool.name,
+		);
+		expect(parentTools).toContain("workspace_spawn");
+		expect(parentTools).toContain("session_lookup");
+		expect(parentTools?.some((name) => name.startsWith("self-iteration_"))).toBe(false);
+		expect(workspaceTools).toContain("workspace_status");
+		expect(workspaceTools).not.toContain("workspace_spawn");
+		expect(workspaceTools?.some((name) => name.startsWith("self-iteration_"))).toBe(true);
+
+		const found = await lifecycle.sessionMessaging.searchSessions("Admin chat");
+		expect(found[0]?.id).toBe(parent.sessionId);
+		await lifecycle.stop();
+	});
 });
