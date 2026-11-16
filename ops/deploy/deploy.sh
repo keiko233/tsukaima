@@ -10,7 +10,8 @@
 #
 # Dependencies live in a prepared image keyed by bun.lock and the workspace manifests, so an image
 # build never runs `bun install`. The first deploy after a lockfile change prepares that image
-# (ops/deploy/prepare-deps.sh); do it ahead of time at bootstrap to keep deploys short.
+# (ops/deploy/prepare-deps.sh); do it ahead of time at bootstrap to keep deploys short. Set
+# FORCE_DEPS=1 to rebuild it even when the key is unchanged.
 # Redeploys reuse the Docker build cache; only stale cache and dangling images are reclaimed by
 # default. Set PULL_BASE=1 to force a base-image pull, which is slower and only worth it when you
 # actually want the newest oven/bun.
