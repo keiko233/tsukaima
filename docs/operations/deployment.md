@@ -154,14 +154,32 @@ mainline remote available for rebasing. Do not deploy `main` from the fork; the 
 2. Selects `main` only for the mainline repository; otherwise it uses `deploy/<deployer>` (or the
    explicit `DEPLOY_BRANCH`).
 3. Pushes that branch to `origin`.
-4. The host fetches `origin`, checks out the branch, and fast-forwards to `origin/<branch>`.
-5. Builds `tsukaima:<version>-<sha>`.
-6. Stops the old container only after the build succeeds, archives `data` (except logs), and starts
-   the new image.
-7. Polls `/readyz`; on failure it prints container logs and restores the previous image.
-8. Records the deployment under `/opt/tsukaima/deployments`, keeps the previous image, and retains
-   three data archives for rollback. Older Tsukaima images and build cache are pruned before the
-   next build; unrelated host images are never touched.
+4. The host fetches `origin`, checks out the branch, and fast-forwards to `origin/<branch>`. If
+   that revision changed `ops/deploy/deploy.sh`, the script re-executes itself so the rest of the
+   run uses the revision it just checked out.
+5. Reuses the prepared dependency image for the current `bun.lock` and workspace manifests,
+   building it only when those changed. An ordinary image build therefore never runs `bun install`.
+6. Builds `tsukaima:<version>-<sha>`. `node_modules` and the source tree are separate layers, so a
+   code-only release re-exports a few megabytes instead of the whole tree.
+7. Stops the old container only after the build succeeds, archives `data` (except logs), and starts
+   the new image. The archive uses `pigz` when available; the media blob store is incompressible
+   and single-threaded gzip dominated the stopped window.
+8. Polls `/readyz`; on failure it prints container logs and restores the previous image.
+9. Records the deployment under `/opt/tsukaima/deployments`, keeps the previous image, and retains
+   three data archives for rollback. Dangling images and build cache unused for two weeks are
+   reclaimed before the next build; recent cache (what keeps redeploys fast) and unrelated host
+   images are never touched.
+
+Dependency preparation can also run ahead of time, which is what keeps a deploy short:
+
+```sh
+# on the host; bootstrap-host.sh already does this on a fresh install
+cd /opt/tsukaima/repo && bash ops/deploy/prepare-deps.sh
+```
+
+The script prints the image tag (`tsukaima-deps:<key>`). Re-run it after changing `bun.lock`, any
+workspace `package.json`, or the dependency stage of the `Dockerfile`; `deploy.sh` does the same
+automatically and reports `dependencies ready in Ns`.
 
 ## 6. Verification and rollback
 

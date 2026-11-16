@@ -1,6 +1,12 @@
 # syntax=docker/dockerfile:1.7
 
-FROM oven/bun:latest AS build
+# Dependencies live in a prepared image (ops/deploy/prepare-deps.sh) tagged with the lockfile and
+# workspace-manifest hash. A deploy reuses that image, so an ordinary image build never runs
+# `bun install`; only a lockfile or manifest change prepares a new one.
+ARG DEPS_IMAGE=oven/bun:latest
+
+# Target `deps`: toolchain plus installed node_modules. Built on demand, not on every deploy.
+FROM oven/bun:latest AS deps
 WORKDIR /app
 ENV CI=1
 
@@ -20,10 +26,22 @@ RUN apt-get update \
 	&& rm -rf /var/lib/apt/lists/*
 
 # The repository is the build context. node_modules, data, and local env files are excluded by
-# .dockerignore so the image always comes from the checked-out git revision.
+# .dockerignore so the prepared image always comes from the checked-out git revision.
 COPY . .
 RUN --mount=type=cache,target=/root/.bun/install/cache \
 	bun install --frozen-lockfile
+
+# Target `build` and `runtime`: the deployable image. Everything up to the dependency image is
+# already prepared, so this only re-checks out source, builds the WebUI, and prunes dev packages.
+FROM ${DEPS_IMAGE} AS build
+WORKDIR /app
+ENV CI=1
+RUN test -d /app/node_modules || { \
+		echo "missing node_modules: build the dependency image first (ops/deploy/prepare-deps.sh)" >&2; \
+		exit 1; \
+	}
+
+COPY . .
 RUN bun run check:version
 RUN bun run --filter '@tsukaima/web' build
 # Runtime needs source + workspace links, not Vite/Playwright/TypeScript dev dependencies.

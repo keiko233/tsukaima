@@ -23,6 +23,7 @@ CADDY_CONTAINER="${CADDY_CONTAINER:-}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-$DEPLOYER}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-${DEPLOYER}@tsukaima.invalid}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+SKIP_PREPARE_DEPS="${SKIP_PREPARE_DEPS:-0}"
 
 if [[ -z "$REPO_URL" ]]; then
 	echo "REPO_URL is required (the deployment repository clone URL)." >&2
@@ -183,6 +184,17 @@ if [[ "$ENABLE_CADDY" == "1" && -f "$CADDYFILE" ]]; then
 		else
 			echo "Caddy container not found; fragment written but not reloaded." >&2
 		fi
+	fi
+fi
+
+# Installing dependencies is the slowest part of a first deploy. Prepare the dependency image now
+# so every later deploy (and every self-iteration reload) finds it ready.
+if [[ "$SKIP_PREPARE_DEPS" != "1" ]] && [[ -f "$ROOT/repo/ops/deploy/prepare-deps.sh" ]]; then
+	echo "Preparing the dependency image (bun install runs once per lockfile change)..."
+	if deps_image="$(REPO="$ROOT/repo" bash "$ROOT/repo/ops/deploy/prepare-deps.sh")"; then
+		echo "Dependency image ready: $deps_image"
+	else
+		echo "Dependency image preparation failed; the first deploy will retry it." >&2
 	fi
 fi
 

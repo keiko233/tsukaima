@@ -8,6 +8,9 @@
 # The build is versioned from VERSION; every non-release commit gets a short-commit suffix.
 # Previous image and data backup are kept for rollback.
 #
+# Dependencies live in a prepared image keyed by bun.lock and the workspace manifests, so an image
+# build never runs `bun install`. The first deploy after a lockfile change prepares that image
+# (ops/deploy/prepare-deps.sh); do it ahead of time at bootstrap to keep deploys short.
 # Redeploys reuse the Docker build cache; only stale cache and dangling images are reclaimed by
 # default. Set PULL_BASE=1 to force a base-image pull, which is slower and only worth it when you
 # actually want the newest oven/bun.
@@ -26,6 +29,8 @@ TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 PULL_BASE="${PULL_BASE:-0}"
 deploy_started=$SECONDS
+script_path="$0"
+script_digest="$(sha256sum "$script_path" | cut -d' ' -f1)"
 
 fail() {
 	echo "deploy: $*" >&2
@@ -71,6 +76,22 @@ if [[ "$current_branch" != "$deploy_branch" ]]; then
 fi
 git merge --ff-only "origin/$deploy_branch" || fail "local $deploy_branch differs from origin; push or reset it first"
 
+# This script usually deploys the revision that rewrites it. bash reads a script as it runs, so
+# continuing after the checkout moved would execute a mix of old and new lines. Re-run once on
+# the new file instead.
+if [[ "${TSUKAIMA_DEPLOY_REEXEC:-0}" != "1" ]] &&
+	[[ "$(git show "HEAD:ops/deploy/deploy.sh" | sha256sum | cut -d' ' -f1)" != "$script_digest" ]]; then
+	echo "deploy script changed in this revision; restarting it"
+	exec env \
+		TSUKAIMA_DEPLOY_REEXEC=1 \
+		DEPLOYER="$DEPLOYER" \
+		DEPLOY_BRANCH="$deploy_branch" \
+		ROOT="$ROOT" \
+		SKIP_BUILD="$SKIP_BUILD" \
+		PULL_BASE="$PULL_BASE" \
+		bash "$script_path" "$@"
+fi
+
 local_version="$(tr -d '[:space:]' <VERSION)"
 commit="$(git rev-parse HEAD)"
 if git describe --tags --exact-match --match "v$local_version" HEAD >/dev/null 2>&1; then
@@ -112,6 +133,12 @@ if [[ -f "$ROOT/.deploy/current-version" ]]; then
 	previous_version="$(cat "$ROOT/.deploy/current-version")"
 fi
 
+deps_started=$SECONDS
+echo "Preparing dependency image..."
+deps_image="$(REPO="$REPO" FORCE="${FORCE_DEPS:-0}" bash "$REPO/ops/deploy/prepare-deps.sh")" ||
+	fail "dependency image preparation failed"
+echo "  dependencies ready in $((SECONDS - deps_started))s ($deps_image)"
+
 build_started=$SECONDS
 pull_args=()
 [[ "$PULL_BASE" == "1" ]] && pull_args+=(--pull)
@@ -119,6 +146,7 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
 	echo "Building image (oven/bun:latest)..."
 	DOCKER_BUILDKIT=1 docker build \
 		"${pull_args[@]}" \
+		--build-arg "DEPS_IMAGE=$deps_image" \
 		--label "org.opencontainers.image.version=$image_version" \
 		--label "org.opencontainers.image.revision=$commit" \
 		--label "org.opencontainers.image.source=$source_url" \
