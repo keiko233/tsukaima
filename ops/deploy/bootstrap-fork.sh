@@ -62,7 +62,7 @@ git config --local init.defaultBranch main
 
 if [[ ! -f "$SSH_KEY" ]]; then
 	mkdir -p "$(dirname "$SSH_KEY")"
-	ssh-keygen -q -t ed25519 -N "" -C "tsukaima-${DEPLOYER}@$(hostname)" -f "$SSH_KEY"
+	ssh-keygen -q -t ed25519 -N "" -C "tsukaima-${DEPLOYER}@$(uname -n)" -f "$SSH_KEY"
 	echo "Generated SSH key: $SSH_KEY"
 fi
 chmod 600 "$SSH_KEY"
@@ -83,9 +83,18 @@ github_authenticated() {
 		grep -q "successfully authenticated"
 }
 
+fork_repo() {
+	local url="$FORK_URL"
+	url="${url#git@github.com:}"
+	url="${url#https://github.com/}"
+	url="${url#ssh://git@github.com/}"
+	printf '%s\n' "${url%.git}"
+}
+
 if ! github_authenticated; then
 	if command -v gh >/dev/null 2>&1 && [[ "${AUTO_ADD_KEY:-1}" == "1" ]]; then
-		gh ssh-key add "$SSH_KEY.pub" --title "tsukaima-${DEPLOYER}" >/dev/null 2>&1 || true
+		gh repo deploy-key add "$SSH_KEY.pub" \
+			--repo "$(fork_repo)" --title "tsukaima-${DEPLOYER}-local" --allow-write >/dev/null 2>&1 || true
 	fi
 	if ! github_authenticated; then
 		echo "The SSH key is not authorized for GitHub yet. Add this public key and re-run:" >&2
@@ -128,8 +137,9 @@ Fork checkout ready.
   ssh key:  $SSH_KEY.pub
 
 Authorize that public key for the fork before the first fetch/push:
-  gh ssh-key add "$SSH_KEY.pub" --title "tsukaima-${DEPLOYER}"
-or add it as a repository deploy key with write access.
+  gh repo deploy-key add "$SSH_KEY.pub" --repo "$(fork_repo)" --title "tsukaima-${DEPLOYER}-local" --allow-write
+or add it as a repository deploy key with write access. The script tries this automatically when
+gh is authenticated with repository admin access.
 
 Then update the fork:
   bun run ops:sync
