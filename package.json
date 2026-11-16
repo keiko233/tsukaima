@@ -1,5 +1,5 @@
 {
-	"name": "tsukaima-chatbot",
+	"name": "tsukaima",
 	"private": true,
 	"workspaces": [
 		"apps/*",

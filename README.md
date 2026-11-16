@@ -1,6 +1,6 @@
-# tsukaima-chatbot
+# tsukaima
 
-`tsukaima-chatbot` is a bot-native agent runtime built around Pi components and Bun. It replaces the current DeepSeek Harness (DSH) QQ deployment without importing AstrBot data.
+`tsukaima` is a bot-native agent runtime built around Pi components and Bun. It replaces the current DeepSeek Harness (DSH) QQ deployment without importing AstrBot data.
 
 ## Goals
 

@@ -561,11 +561,13 @@ export const adminRouter = {
 			try {
 				return await sendMessage(context.lifecycle, input);
 			} catch (error) {
-				context.lifecycle.logger.child("tsukaima::server::rpc").error("session message send failed", {
-					error: error instanceof Error ? error.message : String(error),
-					sessionId: input.sessionId,
-					target: input.target,
-				});
+				context.lifecycle.logger
+					.child("tsukaima::server::rpc")
+					.error("session message send failed", {
+						error: error instanceof Error ? error.message : String(error),
+						sessionId: input.sessionId,
+						target: input.target,
+					});
 				throw error;
 			}
 		}),

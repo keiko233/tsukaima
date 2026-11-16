@@ -4,7 +4,7 @@ This file is the cross-session handoff record. Update it whenever implementation
 
 ## Current status
 
-- Project name: `tsukaima-chatbot`.
+- Project name: `tsukaima`.
 - Repository initialized at `<repo-root>` on branch `main`.
 - First commit: `5dc80bc Add Tsukaima Chatbot architecture and DSH migration plan`.
 - Current phase: implementation-spec Phases 0–9 and the Release Readiness checklist are complete.
@@ -163,7 +163,7 @@ This file is the cross-session handoff record. Update it whenever implementation
 | Authentication            | Better Auth with SQLite-backed users and sessions                                       |
 | OneBot mode               | Tsukaima actively connects to NapCat WebSocket server                                     |
 | LLM-assisted migration    | Allowed, especially for conversation compression and memory extraction                  |
-| Project name              | `tsukaima-chatbot`                                                                        |
+| Project name              | `tsukaima`                                                                        |
 
 ## Design documents already written
 

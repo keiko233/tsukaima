@@ -10,7 +10,7 @@
 | Deployment | Option C: agent produces artifacts/proposals; administrator applies. Local development first, GHCR later. |
 | WebUI authorization | Single administrator |
 | OneBot mode | Tsukaima actively connects to NapCat WebSocket (forward WS) |
-| Project name | `tsukaima-chatbot` |
+| Project name | `tsukaima` |
 | Migration scripts | Private scripts/docs allowed; LLM-assisted compression is allowed through Magpie |
 
 ## 2026-11-13

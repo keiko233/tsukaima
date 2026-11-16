@@ -7,11 +7,11 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
+		"@inlang/paraglide-js": "^3.2.2",
 		"@tsukaima/contracts": "workspace:*",
 		"@tsukaima/core": "workspace:*",
 		"@tsukaima/sdk": "workspace:*",
 		"@tsukaima/ui": "workspace:*",
-		"@inlang/paraglide-js": "^3.2.2",
 		"lucide-react": "^1.72.0",
 		"zod": "4.6.7"
 	},

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "tsukaima-chatbot",
+      "name": "tsukaima",
       "devDependencies": {
         "@playwright/test": "^1.65.0",
         "@types/bun": "1.4.4",
@@ -17,6 +17,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@better-auth/drizzle-adapter": "1.7.22",
+        "@orpc/server": "1.16.2",
         "@tsukaima-plugin/onebot-napcat": "workspace:*",
         "@tsukaima-plugin/openai-compatible": "workspace:*",
         "@tsukaima-plugin/proactive-scheduler": "workspace:*",
@@ -32,7 +33,6 @@
         "@tsukaima/migration": "workspace:*",
         "@tsukaima/plugin-registry": "workspace:*",
         "@tsukaima/sdk": "workspace:*",
-        "@orpc/server": "1.16.2",
         "better-auth": "1.7.22",
         "drizzle-orm": "0.45.4",
         "elysia": "1.4.32",
@@ -43,9 +43,6 @@
       "name": "@tsukaima/web",
       "version": "0.1.0",
       "dependencies": {
-        "@tsukaima/contracts": "workspace:*",
-        "@tsukaima/sdk": "workspace:*",
-        "@tsukaima/ui": "workspace:*",
         "@inlang/paraglide-js": "^3.2.2",
         "@orpc/client": "1.16.2",
         "@orpc/contract": "1.16.2",
@@ -55,6 +52,9 @@
         "@tanstack/react-query": "^5.107.1",
         "@tanstack/react-router": "^1.170.46",
         "@tanstack/react-virtual": "^3.14.26",
+        "@tsukaima/contracts": "workspace:*",
+        "@tsukaima/sdk": "workspace:*",
+        "@tsukaima/ui": "workspace:*",
         "better-auth": "1.7.22",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
@@ -210,10 +210,10 @@
       "name": "@tsukaima-plugin/onebot-napcat",
       "version": "0.1.0",
       "dependencies": {
+        "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/sdk": "workspace:*",
         "@tsukaima/ui": "workspace:*",
-        "@inlang/paraglide-js": "^3.2.2",
         "lucide-react": "^1.72.0",
         "zod": "4.6.7",
       },
@@ -228,11 +228,11 @@
       "name": "@tsukaima-plugin/openai-compatible",
       "version": "0.1.0",
       "dependencies": {
+        "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/core": "workspace:*",
         "@tsukaima/sdk": "workspace:*",
         "@tsukaima/ui": "workspace:*",
-        "@inlang/paraglide-js": "^3.2.2",
         "lucide-react": "^1.72.0",
         "zod": "4.6.7",
       },
@@ -247,10 +247,10 @@
       "name": "@tsukaima-plugin/proactive-scheduler",
       "version": "0.1.0",
       "dependencies": {
+        "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/sdk": "workspace:*",
         "@tsukaima/ui": "workspace:*",
-        "@inlang/paraglide-js": "^3.2.2",
         "lucide-react": "^1.72.0",
         "zod": "4.6.7",
       },
@@ -265,9 +265,9 @@
       "name": "@tsukaima-plugin/search-fetch",
       "version": "0.1.0",
       "dependencies": {
+        "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/sdk": "workspace:*",
         "@tsukaima/ui": "workspace:*",
-        "@inlang/paraglide-js": "^3.2.2",
         "lucide-react": "^1.72.0",
         "zod": "4.6.7",
       },
@@ -282,11 +282,11 @@
       "name": "@tsukaima-plugin/self-iteration",
       "version": "0.1.0",
       "dependencies": {
+        "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/coding": "workspace:*",
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/sdk": "workspace:*",
         "@tsukaima/ui": "workspace:*",
-        "@inlang/paraglide-js": "^3.2.2",
         "lucide-react": "^1.72.0",
         "zod": "4.6.7",
       },
@@ -301,10 +301,10 @@
       "name": "@tsukaima-plugin/sticker-meme",
       "version": "0.1.0",
       "dependencies": {
+        "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/sdk": "workspace:*",
         "@tsukaima/ui": "workspace:*",
-        "@inlang/paraglide-js": "^3.2.2",
         "canvas": "^3.2.3",
         "emojilib": "^4.0.3",
         "gifenc": "^1.0.3",
@@ -489,48 +489,6 @@
     "@earendil-works/pi-schema": ["@earendil-works/pi-schema@1.5.2", "", {}, "sha512-hJoyCXWUhsSrXY5wJo2Q4kHXUsR51pNhkJHAMkWRwVMLDRtMDPkKNaa+JlVRVqTw1hjdSxcVVaFLSDbKlaTXEQ=="],
 
     "@earendil-works/pi-telemetry": ["@earendil-works/pi-telemetry@1.5.2", "", {}, "sha512-m+cumjIqNh1aMISi/9ttcG3ZOwIdriPbz/eMyWmRMJCGa/WcgY1RX4lrb7HvsHhSfI/JUeBESA4nOCr8C3y5ow=="],
-
-    "@tsukaima-plugin/onebot-napcat": ["@tsukaima-plugin/onebot-napcat@workspace:plugins/onebot-napcat"],
-
-    "@tsukaima-plugin/openai-compatible": ["@tsukaima-plugin/openai-compatible@workspace:plugins/openai-compatible"],
-
-    "@tsukaima-plugin/proactive-scheduler": ["@tsukaima-plugin/proactive-scheduler@workspace:plugins/proactive-scheduler"],
-
-    "@tsukaima-plugin/search-fetch": ["@tsukaima-plugin/search-fetch@workspace:plugins/search-fetch"],
-
-    "@tsukaima-plugin/self-iteration": ["@tsukaima-plugin/self-iteration@workspace:plugins/self-iteration"],
-
-    "@tsukaima-plugin/sticker-meme": ["@tsukaima-plugin/sticker-meme@workspace:plugins/sticker-meme"],
-
-    "@tsukaima/cache": ["@tsukaima/cache@workspace:packages/cache"],
-
-    "@tsukaima/chaos": ["@tsukaima/chaos@workspace:packages/chaos"],
-
-    "@tsukaima/coding": ["@tsukaima/coding@workspace:packages/coding"],
-
-    "@tsukaima/contracts": ["@tsukaima/contracts@workspace:packages/contracts"],
-
-    "@tsukaima/core": ["@tsukaima/core@workspace:packages/core"],
-
-    "@tsukaima/db": ["@tsukaima/db@workspace:packages/db"],
-
-    "@tsukaima/durable": ["@tsukaima/durable@workspace:packages/durable"],
-
-    "@tsukaima/migration": ["@tsukaima/migration@workspace:packages/migration"],
-
-    "@tsukaima/migration-cli": ["@tsukaima/migration-cli@workspace:tools/migration"],
-
-    "@tsukaima/ops": ["@tsukaima/ops@workspace:tools/ops"],
-
-    "@tsukaima/plugin-registry": ["@tsukaima/plugin-registry@workspace:packages/plugin-registry"],
-
-    "@tsukaima/sdk": ["@tsukaima/sdk@workspace:packages/sdk"],
-
-    "@tsukaima/server": ["@tsukaima/server@workspace:apps/server"],
-
-    "@tsukaima/ui": ["@tsukaima/ui@workspace:packages/ui"],
-
-    "@tsukaima/web": ["@tsukaima/web@workspace:apps/web"],
 
     "@emnapi/core": ["@emnapi/core@2.0.0-beta.2", "", { "dependencies": { "@emnapi/wasi-threads": "2.2.0", "tslib": "^2.4.0" } }, "sha512-MzCVoWtcg4Pm2B3je5mMvYMvj3MmBKw+fU7vbsJc9/iT8ip6/eYIHo/Dsm/mr+wsHB6SEyJDuxB09Yy6r/8+4A=="],
 
@@ -921,6 +879,48 @@
     "@tokenizer/inflate": ["@tokenizer/inflate@0.6.0", "", { "dependencies": { "debug": "^4.4.3", "strtok3": "^10.6.2", "token-types": "^6.1.2" } }, "sha512-+0RDxhBkyT9xMnGdJAwmats9yxRLR8ypJrQgrnLqOu4Gv/aHlnxYgdGVy2QTwvBl6IF/w2Hr+ZNirH+iMUbVZA=="],
 
     "@tokenizer/token": ["@tokenizer/token@0.3.0", "", {}, "sha512-OvjF+z51L3ov0OyAU0duzsYuvO01PH7x4t6DJx+guahgTnBHkhJdG7soQeTSFLWN3efnHyibZ4Z8l2EuWwJN3A=="],
+
+    "@tsukaima-plugin/onebot-napcat": ["@tsukaima-plugin/onebot-napcat@workspace:plugins/onebot-napcat"],
+
+    "@tsukaima-plugin/openai-compatible": ["@tsukaima-plugin/openai-compatible@workspace:plugins/openai-compatible"],
+
+    "@tsukaima-plugin/proactive-scheduler": ["@tsukaima-plugin/proactive-scheduler@workspace:plugins/proactive-scheduler"],
+
+    "@tsukaima-plugin/search-fetch": ["@tsukaima-plugin/search-fetch@workspace:plugins/search-fetch"],
+
+    "@tsukaima-plugin/self-iteration": ["@tsukaima-plugin/self-iteration@workspace:plugins/self-iteration"],
+
+    "@tsukaima-plugin/sticker-meme": ["@tsukaima-plugin/sticker-meme@workspace:plugins/sticker-meme"],
+
+    "@tsukaima/cache": ["@tsukaima/cache@workspace:packages/cache"],
+
+    "@tsukaima/chaos": ["@tsukaima/chaos@workspace:packages/chaos"],
+
+    "@tsukaima/coding": ["@tsukaima/coding@workspace:packages/coding"],
+
+    "@tsukaima/contracts": ["@tsukaima/contracts@workspace:packages/contracts"],
+
+    "@tsukaima/core": ["@tsukaima/core@workspace:packages/core"],
+
+    "@tsukaima/db": ["@tsukaima/db@workspace:packages/db"],
+
+    "@tsukaima/durable": ["@tsukaima/durable@workspace:packages/durable"],
+
+    "@tsukaima/migration": ["@tsukaima/migration@workspace:packages/migration"],
+
+    "@tsukaima/migration-cli": ["@tsukaima/migration-cli@workspace:tools/migration"],
+
+    "@tsukaima/ops": ["@tsukaima/ops@workspace:tools/ops"],
+
+    "@tsukaima/plugin-registry": ["@tsukaima/plugin-registry@workspace:packages/plugin-registry"],
+
+    "@tsukaima/sdk": ["@tsukaima/sdk@workspace:packages/sdk"],
+
+    "@tsukaima/server": ["@tsukaima/server@workspace:apps/server"],
+
+    "@tsukaima/ui": ["@tsukaima/ui@workspace:packages/ui"],
+
+    "@tsukaima/web": ["@tsukaima/web@workspace:apps/web"],
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.4", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-W3c4gRigFS0T/Ma4qIYF3GDAc5AQdHb1yL5znJT1Zv1YaD9Kitx656wBjvr19qbiosmZT8lWDM5BEMynUqX65A=="],
 

@@ -13,7 +13,7 @@ Tsukaima can modify its own plugins, prompts, documentation, and application cod
 ## Workflow
 
 1. Create `IterationTask` in durable storage with goal, source conversation, and constraints.
-2. Create a git worktree under `/opt/tsukaima-chatbot/worktrees/<task-id>`.
+2. Create a git worktree under `/opt/tsukaima/worktrees/<task-id>`.
 3. Run the coding runner with read/write/edit/search/bash tools scoped to that worktree.
 4. Require tests relevant to the change.
 5. Generate a patch summary and risk assessment.

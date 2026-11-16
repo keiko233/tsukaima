@@ -123,7 +123,8 @@ const configProperties = {
 	},
 	mode: {
 		default: "forward",
-		description: "Forward: Tsukaima dials NapCat. Reverse: NapCat dials Tsukaima. Defaults to forward.",
+		description:
+			"Forward: Tsukaima dials NapCat. Reverse: NapCat dials Tsukaima. Defaults to forward.",
 		descriptionKey: "config_mode_hint",
 		enum: ["forward", "reverse"],
 		enumLabels: {

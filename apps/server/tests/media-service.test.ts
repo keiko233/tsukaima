@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { media, migrateDomainDatabase, openDomainDatabase, type TsukaimaDatabase } from "@tsukaima/db";
+import {
+	media,
+	migrateDomainDatabase,
+	openDomainDatabase,
+	type TsukaimaDatabase,
+} from "@tsukaima/db";
 import { createLogger } from "../src/logging.ts";
 import { MediaService } from "../src/services/media-service.ts";
 import { createPluginMediaBridge } from "../src/services/plugin-media.ts";

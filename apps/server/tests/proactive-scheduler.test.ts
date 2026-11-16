@@ -78,10 +78,13 @@ const fakeChannelPlugin: TsukaimaPlugin = {
 };
 
 function createLifecycle(directory: string, responses: string[]): TsukaimaLifecycle {
-	return new TsukaimaLifecycle(loadConfig({ TSUKAIMA_DATA_DIR: directory, TSUKAIMA_PORT: "7420" }), {
-		model: createFakeModel({ responses }),
-		plugins: [...builtinPlugins, fakeChannelPlugin],
-	});
+	return new TsukaimaLifecycle(
+		loadConfig({ TSUKAIMA_DATA_DIR: directory, TSUKAIMA_PORT: "7420" }),
+		{
+			model: createFakeModel({ responses }),
+			plugins: [...builtinPlugins, fakeChannelPlugin],
+		},
+	);
 }
 
 async function createConversation(

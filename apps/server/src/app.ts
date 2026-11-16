@@ -89,7 +89,7 @@ export function createApp(
 		logger: lifecycle.logger,
 	};
 
-	const app = new Elysia({ name: "tsukaima-chatbot" })
+	const app = new Elysia({ name: "tsukaima" })
 		.get("/healthz", ({ status }) => {
 			const state = lifecycle.state;
 			const statusCode = state.state === "failed" || state.state === "maintenance" ? 503 : 200;

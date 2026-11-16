@@ -399,7 +399,10 @@ export class AuthService {
 		throw new Error("Domain database was not ready for Better Auth");
 	}
 
-	async #bootstrapAdministrator(auth: BetterAuthInstance, database: TsukaimaDatabase): Promise<void> {
+	async #bootstrapAdministrator(
+		auth: BetterAuthInstance,
+		database: TsukaimaDatabase,
+	): Promise<void> {
 		const [existing] = await database
 			.select({ id: authUser.id, username: authUser.username })
 			.from(authUser)

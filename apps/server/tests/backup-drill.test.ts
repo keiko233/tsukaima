@@ -46,8 +46,10 @@ describe("scheduled backup drills", () => {
 
 	test("parses the scheduled interval from the environment and rejects invalid values", () => {
 		expect(
-			loadConfig({ ...envFor("/tmp/tsukaima-drill-config"), TSUKAIMA_BACKUP_DRILL_INTERVAL_MS: "0" })
-				.backupDrillIntervalMs,
+			loadConfig({
+				...envFor("/tmp/tsukaima-drill-config"),
+				TSUKAIMA_BACKUP_DRILL_INTERVAL_MS: "0",
+			}).backupDrillIntervalMs,
 		).toBeUndefined();
 		expect(
 			loadConfig({

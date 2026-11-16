@@ -130,7 +130,10 @@ describe("keyless and optional providers", () => {
 		};
 		const provider = createKeylessProvider(transport);
 		await expect(
-			provider.search({ maxResults: 5, query: "tsukaima" }, { fetch: transport.fetch, now: () => 0 }),
+			provider.search(
+				{ maxResults: 5, query: "tsukaima" },
+				{ fetch: transport.fetch, now: () => 0 },
+			),
 		).rejects.toThrow();
 	});
 
