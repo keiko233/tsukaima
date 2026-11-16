@@ -6,53 +6,88 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-	--background: oklch(98.6% 0.002 90);
-	--foreground: oklch(17% 0 0);
-	--card: oklch(96.4% 0.003 90);
-	--sidebar: oklch(97.2% 0.003 90);
-	--muted-foreground: oklch(48% 0 0);
-	--border: oklch(15% 0 0 / 0.08);
-	--border-strong: oklch(15% 0 0 / 0.15);
-	--accent-fg: oklch(15% 0 0);
-	--neon: oklch(80% 0.22 145);
-	--violet: oklch(68% 0.22 295);
-	--danger: oklch(62% 0.22 25);
-	--success: oklch(64% 0.16 155);
-	--warning: oklch(72% 0.16 75);
-	--glass-bg: oklch(99% 0 0 / 0.55);
-	--glass-border: oklch(15% 0 0 / 0.08);
-	--glass-strong-bg: rgb(255 255 255 / 0.7);
-	--glass-thin-bg: rgb(255 255 255 / 0.45);
+	/* Paper and ink: warm cream surfaces under charcoal type. */
+	--background: #f6f4f0;
+	--foreground: #292c30;
+	--card: #fbfaf7;
+	--sidebar: #f1eee8;
+	--muted-foreground: #6b6760;
+	--border: rgb(41 44 48 / 0.1);
+	--border-strong: rgb(41 44 48 / 0.18);
+	--accent-fg: #292c30;
+	--neon: #47735a;
+	/* Mist gray-blue is the accent: fills stay #90a1ae, text uses the deeper tone. */
+	--violet: #5c6b80;
+	--danger: #b4453c;
+	--success: #47735a;
+	--warning: #8a6415;
+	--glass-bg: rgb(251 250 247 / 0.62);
+	--glass-border: rgb(41 44 48 / 0.1);
+	--glass-strong-bg: rgb(251 250 247 / 0.82);
+	--glass-thin-bg: rgb(246 244 240 / 0.5);
+	--glass-shadow: 0 24px 60px -28px rgb(41 44 48 / 0.28);
 	--card-foreground: var(--foreground);
 	--popover: var(--background);
 	--popover-foreground: var(--foreground);
-	--primary: #0285f7;
-	--primary-foreground: #ffffff;
+	--primary: #292c30;
+	--primary-foreground: #f6f4f0;
 	--secondary: var(--card);
 	--secondary-foreground: var(--foreground);
-	--muted: var(--card);
-	--accent: oklch(72% 0.18 195);
+	--muted: #efece6;
+	--accent: #90a1ae;
 	--accent-foreground: var(--accent-fg);
 	--destructive: var(--danger);
+	--destructive-foreground: #ffffff;
 	--input: var(--border);
-	--ring: var(--border-strong);
+	--ring: #5c7285;
+	--chart-messages: #5c7285;
+	--chart-tools: #a35c45;
+	--chart-persona: #4f7d63;
+	--chart-policy: #8a6415;
+	--chart-memories: #8a857c;
+	--chart-other: #7c7770;
+	--chart-buffer: #a39d93;
+	--chart-deferred: #b3ada3;
+	--chart-free: #e5e1d9;
+	--log-bg: #fbfaf7;
 	color-scheme: light;
 }
 
 .dark {
-	--background: #1a1a19;
-	--foreground: oklch(95% 0 0);
-	--card: #222221;
-	--sidebar: #141413;
-	--muted-foreground: oklch(62% 0 0);
-	--border: rgb(255 255 255 / 0.07);
-	--border-strong: rgb(255 255 255 / 0.15);
-	--accent: oklch(80% 0.18 195);
-	--accent-fg: #151515;
-	--glass-bg: rgb(26 26 25 / 0.62);
-	--glass-border: rgb(255 255 255 / 0.08);
-	--glass-strong-bg: rgb(28 28 27 / 0.7);
-	--glass-thin-bg: rgb(20 20 19 / 0.5);
+	--background: #1b1e22;
+	--foreground: #f2efe9;
+	--card: #23272b;
+	--sidebar: #16181b;
+	--muted-foreground: #a3abb2;
+	--border: rgb(242 239 233 / 0.08);
+	--border-strong: rgb(242 239 233 / 0.16);
+	--accent: #a7b5c0;
+	--accent-fg: #16181b;
+	--muted: #2b3036;
+	--danger: #e0796f;
+	--success: #7fb39a;
+	--warning: #d9ae62;
+	--violet: #a3b0c0;
+	--neon: #7fb39a;
+	--glass-bg: rgb(27 30 34 / 0.66);
+	--glass-border: rgb(242 239 233 / 0.09);
+	--glass-strong-bg: rgb(35 39 43 / 0.76);
+	--glass-thin-bg: rgb(22 24 27 / 0.55);
+	--glass-shadow: 0 24px 60px -24px rgb(0 0 0 / 0.55);
+	--primary: #90a1ae;
+	--primary-foreground: #16181b;
+	--destructive-foreground: #16181b;
+	--ring: #90a1ae;
+	--chart-messages: #90a1ae;
+	--chart-tools: #d29a72;
+	--chart-persona: #86b39b;
+	--chart-policy: #d4b36a;
+	--chart-memories: #a8a29a;
+	--chart-other: #8e8a83;
+	--chart-buffer: #6e7378;
+	--chart-deferred: #7d8288;
+	--chart-free: #343a41;
+	--log-bg: #17191c;
 	color-scheme: dark;
 }
 
@@ -83,8 +118,19 @@
 	--color-accent: var(--accent);
 	--color-accent-foreground: var(--accent-foreground);
 	--color-destructive: var(--destructive);
+	--color-destructive-foreground: var(--destructive-foreground);
 	--color-input: var(--input);
 	--color-ring: var(--ring);
+	--color-chart-messages: var(--chart-messages);
+	--color-chart-tools: var(--chart-tools);
+	--color-chart-persona: var(--chart-persona);
+	--color-chart-policy: var(--chart-policy);
+	--color-chart-memories: var(--chart-memories);
+	--color-chart-other: var(--chart-other);
+	--color-chart-buffer: var(--chart-buffer);
+	--color-chart-deferred: var(--chart-deferred);
+	--color-chart-free: var(--chart-free);
+	--color-log: var(--log-bg);
 }
 
 @theme {
@@ -145,7 +191,7 @@
 	}
 
 	::selection {
-		background: color-mix(in oklab, var(--primary) 24%, transparent);
+		background: color-mix(in oklab, var(--accent) 45%, transparent);
 	}
 
 	/* Desktop-app scrollbars: thin, translucent, and out of the content's way. */
@@ -199,7 +245,7 @@
 		border: 1px solid var(--glass-border);
 		box-shadow:
 			0 1px 0 0 rgb(255 255 255 / 0.06) inset,
-			0 24px 60px -24px rgb(0 0 0 / 0.45);
+			var(--glass-shadow);
 	}
 
 	.glass-strong {

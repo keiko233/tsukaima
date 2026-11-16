@@ -157,6 +157,39 @@ Use the project's existing theme tokens and beUI source where appropriate. Consu
 
 The top-level panels meet along straight separators; their boundaries have no rounded corners. Rounded controls and surfaces within them should look native to beUI. Avoid unnecessary wrapper cards and excessive visual chrome. Use light and dark themes with legible contrast. Prefer brief, purposeful motion, respect reduced-motion settings, and avoid animating large lists on every update.
 
+### Color palette
+
+The palette is warm paper under charcoal ink, with mist gray-blue as the single accent. Tokens
+live in `apps/web/src/app.css`; components must use the tokens rather than raw hex values.
+
+| Role | Token | Light | Dark |
+| --- | --- | --- | --- |
+| Primary (ink) | `--primary` | `#292c30` | `#90a1ae` |
+| On primary | `--primary-foreground` | `#f6f4f0` | `#16181b` |
+| Page background | `--background` | `#f6f4f0` | `#1b1e22` |
+| Card / raised surface | `--card` | `#fbfaf7` | `#23272b` |
+| Sidebar | `--sidebar` | `#f1eee8` | `#16181b` |
+| Muted surface | `--muted` | `#efece6` | `#2b3036` |
+| Text | `--foreground` | `#292c30` | `#f2efe9` |
+| Secondary text | `--muted-foreground` | `#6b6760` | `#a3abb2` |
+| Accent fill | `--accent` | `#90a1ae` | `#a7b5c0` |
+| Accent text / focus | `--ring` | `#5c7285` | `#90a1ae` |
+| Danger | `--danger` | `#b4453c` | `#e0796f` |
+| Success | `--success` | `#47735a` | `#7fb39a` |
+| Warning | `--warning` | `#8a6415` | `#d9ae62` |
+
+Notes:
+
+- Charcoal is the light-theme primary; in dark mode mist takes over as the primary so controls stay
+  visible against charcoal surfaces. Light-mode accent text uses the deeper mist tone because
+  `#90a1ae` alone is only 2.4:1 on cream.
+- Status colors are darkened in light mode and lightened in dark mode so each pair clears 4.5:1 on
+  its surface. Pair them with a label or icon, never color alone.
+- The context-window breakdown uses the `--chart-*` tokens (messages, tools, persona, policy,
+  memories, other, buffer, deferred, free) instead of ad-hoc palette classes.
+- The log terminal has its own `--log-bg` surface and pairs `github-light-high-contrast` with
+  `github-dark-high-contrast` for ANSI token colors.
+
 ## 11. Responsive behavior and accessibility
 
 - Desktop: global top bar above a persistent sidebar and flexible outlet.
