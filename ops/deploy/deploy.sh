@@ -7,6 +7,10 @@
 # Maintainers deploy main from the mainline repository. Forks must deploy a non-main branch.
 # The build is versioned from VERSION; every non-release commit gets a short-commit suffix.
 # Previous image and data backup are kept for rollback.
+#
+# Redeploys reuse the Docker build cache; only stale cache and dangling images are reclaimed by
+# default. Set PULL_BASE=1 to force a base-image pull, which is slower and only worth it when you
+# actually want the newest oven/bun.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -20,6 +24,8 @@ DATA_DIR="$ROOT/data"
 ENV_FILE="$ROOT/.env"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 SKIP_BUILD="${SKIP_BUILD:-0}"
+PULL_BASE="${PULL_BASE:-0}"
+deploy_started=$SECONDS
 
 fail() {
 	echo "deploy: $*" >&2
@@ -75,9 +81,11 @@ fi
 image="tsukaima:$image_version"
 source_url="$(git remote get-url origin 2>/dev/null || echo unknown)"
 
-# Keep enough room for the build, data archive, and previous image. Build cache and stale
-# Tsukaima images/backups are reclaimable; unrelated host images are never touched.
-docker builder prune -f >/dev/null 2>&1 || true
+# Keep enough room for the build, data archive, and previous image. The recent build cache is
+# what makes a redeploy fast, so only cache unused for two weeks and dangling images are
+# reclaimed; unrelated host images are never touched.
+docker image prune -f >/dev/null 2>&1 || true
+docker builder prune -f --filter until=336h >/dev/null 2>&1 || true
 available_kb="$(df -Pk "$ROOT" | awk 'NR==2 {print $4}')"
 if [[ -n "$available_kb" && "$available_kb" -lt 4194304 ]]; then
 	fail "less than 4 GiB free on $ROOT; prune Docker images/backups before deploying"
@@ -104,10 +112,13 @@ if [[ -f "$ROOT/.deploy/current-version" ]]; then
 	previous_version="$(cat "$ROOT/.deploy/current-version")"
 fi
 
+build_started=$SECONDS
+pull_args=()
+[[ "$PULL_BASE" == "1" ]] && pull_args+=(--pull)
 if [[ "$SKIP_BUILD" != "1" ]]; then
 	echo "Building image (oven/bun:latest)..."
 	DOCKER_BUILDKIT=1 docker build \
-		--pull \
+		"${pull_args[@]}" \
 		--label "org.opencontainers.image.version=$image_version" \
 		--label "org.opencontainers.image.revision=$commit" \
 		--label "org.opencontainers.image.source=$source_url" \
@@ -115,21 +126,32 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
 else
 	docker image inspect "$image" >/dev/null 2>&1 || fail "SKIP_BUILD=1 but image $image does not exist"
 fi
+echo "  image built in $((SECONDS - build_started))s"
 
 # Back up the previous data directory only after the new image exists, so a build failure never
-# takes the running service down.
+# takes the running service down. gzip is single-threaded and the data directory is mostly the
+# media blob store, so a multi-core compressor keeps the stopped window short.
+compress_args=(-z)
+if command -v pigz >/dev/null 2>&1; then
+	compress_args=(--use-compress-program=pigz)
+fi
+
+backup_started=$SECONDS
+downtime_started=0
 if [[ -f "$DATA_DIR/domain.sqlite" ]]; then
 	echo "Stopping the current container for a consistent data backup..."
 	docker compose -f "$COMPOSE_FILE" --project-directory "$ROOT" stop tsukaima >/dev/null 2>&1 || true
+	downtime_started=$SECONDS
 	mkdir -p "$ROOT/backups"
 	echo "Backing up data (excluding logs)..."
-	if ! tar -C "$ROOT" -czf "$ROOT/backups/data-$TIMESTAMP.tgz" --exclude='data/logs' data; then
+	if ! tar -C "$ROOT" "${compress_args[@]}" -cf "$ROOT/backups/data-$TIMESTAMP.tgz" --exclude='data/logs' data; then
 		echo "Data backup failed; restarting the current image." >&2
 		rm -f "$ROOT/backups/data-$TIMESTAMP.tgz"
 		docker compose -f "$COMPOSE_FILE" --project-directory "$ROOT" up -d --remove-orphans >/dev/null 2>&1 || true
 		fail "could not archive $DATA_DIR; deployment aborted"
 	fi
 fi
+echo "  data backed up in $((SECONDS - backup_started))s"
 
 cp -a "$ENV_FILE" "$ENV_FILE.before-$TIMESTAMP"
 set_env() {
@@ -169,6 +191,11 @@ if [[ "$ready" != "1" || "$actual_image" != "$image" ]]; then
 	fi
 	exit 1
 fi
+
+if [[ "$downtime_started" != "0" ]]; then
+	echo "  container stopped for $((SECONDS - downtime_started))s"
+fi
+echo "Deploy finished in $((SECONDS - deploy_started))s"
 
 printf '%s\n' "$image" >"$ROOT/.deploy/current-image"
 printf '%s\n' "$image_version" >"$ROOT/.deploy/current-version"

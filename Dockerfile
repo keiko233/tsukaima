@@ -29,6 +29,14 @@ RUN bun run --filter '@tsukaima/web' build
 # Runtime needs source + workspace links, not Vite/Playwright/TypeScript dev dependencies.
 RUN bun prune --production
 
+# The runtime stage copies the tree in two layers. `node_modules` changes only with the lockfile,
+# so a code-only release reuses that layer and exports a few megabytes of source instead of
+# re-exporting 700 MB every deploy. The copy loop stays correct when top-level entries are added.
+RUN mkdir -p /runtime \
+	&& for entry in /app/* /app/.[!.]*; do \
+		[ "$entry" = "/app/node_modules" ] || cp -a "$entry" /runtime/; \
+	done
+
 FROM oven/bun:latest AS runtime
 # Canvas ships bundled shared libraries when it uses a prebuilt binary; a source build links
 # these system libraries instead, so both paths work at runtime.
@@ -53,8 +61,12 @@ ENV NODE_ENV=production \
 	TSUKAIMA_DATA_DIR=/data \
 	TSUKAIMA_WEB_DIST=/app/apps/web/dist
 
-COPY --from=build /app /app
-RUN mkdir -p /data && chown -R bun:bun /app /data
+# Ownership is applied during the copy: a separate `chown -R /app` rewrote the whole tree into
+# another layer, which doubled the image and cost ~25 s per build. `bun` stays able to write
+# /app/.git so governed self-iteration worktrees keep working.
+COPY --from=build --chown=bun:bun /app/node_modules /app/node_modules
+COPY --from=build --chown=bun:bun /runtime /app
+RUN mkdir -p /data && chown bun:bun /data
 USER bun
 EXPOSE 7420
 VOLUME ["/data"]
