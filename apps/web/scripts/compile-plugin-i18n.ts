@@ -10,7 +10,15 @@ const entries = await readdir(pluginsDir, { withFileTypes: true });
 for (const entry of entries) {
 	if (!entry.isDirectory()) continue;
 	const dir = join(pluginsDir, entry.name);
-	if (!existsSync(join(dir, "tsukaima.plugin.json"))) continue;
+	if (!existsSync(join(dir, "tsukaima.plugin.json"))) {
+		if (existsSync(join(dir, "package.json"))) {
+			console.error(
+				`plugin ${entry.name} has package.json but no tsukaima.plugin.json; rename legacy manifests`,
+			);
+			process.exitCode = 1;
+		}
+		continue;
+	}
 	const project = join(dir, "project.inlang");
 	try {
 		await compile({
