@@ -41,6 +41,8 @@ export interface PluginConversationServiceOptions {
 	readonly policy: ConversationPolicyService;
 	readonly replyDispatcher: ReplyDispatcher;
 	readonly now?: () => number;
+	/** Durable prompt hook text rendered before a background agent turn. */
+	readonly promptContext?: (sessionId: string) => Promise<string | undefined>;
 }
 
 function summaryFrom(row: ConversationRow, chat: ChatRow | undefined): ResolvedConversation {
@@ -83,6 +85,7 @@ export class PluginConversationService {
 	readonly #policy: ConversationPolicyService;
 	readonly #replyDispatcher: ReplyDispatcher;
 	readonly #now: () => number;
+	readonly #promptContext: PluginConversationServiceOptions["promptContext"];
 
 	constructor(options: PluginConversationServiceOptions) {
 		this.#audit = options.audit;
@@ -94,6 +97,7 @@ export class PluginConversationService {
 		this.#policy = options.policy;
 		this.#replyDispatcher = options.replyDispatcher;
 		this.#now = options.now ?? Date.now;
+		this.#promptContext = options.promptContext;
 	}
 
 	forPlugin(
@@ -279,9 +283,13 @@ export class PluginConversationService {
 						skippedReason: channelProblem,
 					};
 				}
+				const hookContext = await this.#promptContext?.(conversation.id).catch(() => undefined);
+				const context = [input.context, hookContext]
+					.filter((entry): entry is string => entry !== undefined && entry.trim().length > 0)
+					.join("\n\n");
 				const turn = await host.submitBackgroundTurn({
 					conversationId: conversation.durableConversationId,
-					...(input.context === undefined ? {} : { context: input.context }),
+					...(context.length === 0 ? {} : { context }),
 					kind: input.kind,
 					prompt: input.prompt,
 				});

@@ -434,6 +434,7 @@ export class TsukaimaLifecycle {
 			lock: this.executionLock,
 			logger: this.runtimeLog,
 			policy: this.conversationPolicy,
+			promptContext: (sessionId) => this.promptHooks.renderContext(sessionId),
 			replyDispatcher: this.replyDispatcher,
 		});
 		const pluginBindings = new Map(options?.pluginBindings ?? []);
