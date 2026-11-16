@@ -22,6 +22,7 @@ const configurationSchema = z.object({
 	port: z.number().int().min(1).max(65_535),
 	publicUrl: z.string().url(),
 	secureCookies: z.boolean(),
+	webDistDir: z.string().min(1),
 	webOrigin: z.string().url().optional(),
 	/** Additional origins accepted by Better Auth's origin check, comma-separated in env. */
 	trustedOrigins: z.array(z.string().url()),
@@ -74,6 +75,7 @@ export function loadConfig(env: Record<string, string | undefined>): TsukaimaCon
 			: parsedDrillInterval;
 
 	const dataDir = env.TSUKAIMA_DATA_DIR ?? "./data";
+	const webDistDir = env.TSUKAIMA_WEB_DIST?.trim() || join(process.cwd(), "apps/web/dist");
 	const rawLogLevel = env.TSUKAIMA_LOG_LEVEL?.trim();
 	const logLevelFromEnv = rawLogLevel !== undefined && rawLogLevel.length > 0;
 	const logBufferCapacity =
@@ -109,6 +111,7 @@ export function loadConfig(env: Record<string, string | undefined>): TsukaimaCon
 		port,
 		publicUrl,
 		secureCookies: env.TSUKAIMA_AUTH_SECURE_COOKIES === "true" || publicUrl.startsWith("https://"),
+		webDistDir,
 		webOrigin,
 		trustedOrigins: [
 			...new Set([

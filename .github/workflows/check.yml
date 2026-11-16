@@ -12,9 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
+      - run: bun run check:version
+      - run: bun tools/ops/version.ts check --upstream origin/main
       - run: bun run check:secrets
       - run: bun run --filter '@tsukaima/web' check:i18n
       - run: bun run --filter '@tsukaima/web' lint:i18n
@@ -26,8 +26,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium
       - run: bun run test:e2e
