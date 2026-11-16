@@ -165,37 +165,37 @@ export function ContextPanelContent({
 			? []
 			: [
 					{
-						colorClass: "bg-[#2f81f7]",
+						colorClass: "bg-chart-messages",
 						key: "messages",
 						tokens: stats.categories.messagesTokens,
 					},
 					{
-						colorClass: "bg-[#f06424]",
+						colorClass: "bg-chart-tools",
 						key: "tools",
 						tokens: stats.categories.toolsTokens,
 					},
 					{
-						colorClass: "bg-[#00b87c]",
+						colorClass: "bg-chart-persona",
 						key: "persona",
 						tokens: stats.categories.personaTokens,
 					},
 					{
-						colorClass: "bg-[#e0a200]",
+						colorClass: "bg-chart-policy",
 						key: "policy",
 						tokens: stats.categories.policyTokens,
 					},
 					{
-						colorClass: "bg-zinc-400 dark:bg-zinc-400",
+						colorClass: "bg-chart-memories",
 						key: "memories",
 						tokens: stats.categories.memoriesTokens,
 					},
 					{
-						colorClass: "bg-zinc-500",
+						colorClass: "bg-chart-other",
 						key: "otherSystem",
 						tokens: stats.categories.otherSystemTokens,
 					},
 					{
-						colorClass: "bg-zinc-400/55 dark:bg-zinc-600/85",
+						colorClass: "bg-chart-buffer",
 						key: "buffer",
 						tokens: stats.autocompact.bufferTokens,
 					},
@@ -272,7 +272,7 @@ export function ContextPanelContent({
 						</div>
 
 						<div
-							className="mt-1.5 flex h-1 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800/90"
+							className="mt-1.5 flex h-1 w-full overflow-hidden rounded-full bg-chart-free"
 							role="progressbar"
 							aria-valuenow={Math.round(stats.usedPercent)}
 							aria-valuemin={0}
@@ -292,7 +292,7 @@ export function ContextPanelContent({
 
 						<div className="mt-2.5 space-y-0.5">
 							<BreakdownRow
-								colorClass="bg-[#2f81f7]"
+								colorClass="bg-chart-messages"
 								label={m.context_category_messages()}
 								tokens={stats.categories.messagesTokens}
 								percentText={formatCategoryPercent(
@@ -301,7 +301,7 @@ export function ContextPanelContent({
 								)}
 							/>
 							<BreakdownRow
-								colorClass="bg-[#f06424]"
+								colorClass="bg-chart-tools"
 								label={m.context_category_tools()}
 								tokens={stats.categories.toolsTokens}
 								percentText={formatCategoryPercent(
@@ -310,7 +310,7 @@ export function ContextPanelContent({
 								)}
 							/>
 							<BreakdownRow
-								colorClass="bg-[#00b87c]"
+								colorClass="bg-chart-persona"
 								label={m.context_category_persona()}
 								title={stats.personaName ?? undefined}
 								tokens={stats.categories.personaTokens}
@@ -320,7 +320,7 @@ export function ContextPanelContent({
 								)}
 							/>
 							<BreakdownRow
-								colorClass="bg-[#e0a200]"
+								colorClass="bg-chart-policy"
 								dotted
 								label={m.context_category_policy()}
 								tokens={stats.categories.policyTokens}
@@ -330,7 +330,7 @@ export function ContextPanelContent({
 								)}
 							/>
 							<BreakdownRow
-								colorClass="bg-zinc-400 dark:bg-zinc-400"
+								colorClass="bg-chart-memories"
 								dotted
 								label={m.context_category_memories()}
 								tokens={stats.categories.memoriesTokens}
@@ -341,7 +341,7 @@ export function ContextPanelContent({
 							/>
 							{stats.categories.otherSystemTokens > 0 ? (
 								<BreakdownRow
-									colorClass="bg-zinc-500"
+									colorClass="bg-chart-other"
 									dotted
 									label={m.context_category_other_system()}
 									tokens={stats.categories.otherSystemTokens}
@@ -356,7 +356,7 @@ export function ContextPanelContent({
 						<div className="mt-2.5 space-y-0.5">
 							{stats.autocompact.enabled || stats.autocompact.bufferTokens > 0 ? (
 								<BreakdownRow
-									colorClass="bg-zinc-400/70 dark:bg-zinc-500"
+									colorClass="bg-chart-buffer"
 									label={m.context_autocompact_buffer()}
 									tokens={stats.autocompact.bufferTokens}
 									percentText={formatCategoryPercent(
@@ -375,14 +375,14 @@ export function ContextPanelContent({
 								</p>
 							) : null}
 							<BreakdownRow
-								colorClass="bg-zinc-300 dark:bg-zinc-700"
+								colorClass="bg-chart-free"
 								label={m.context_free_space()}
 								tokens={stats.freeSpaceTokens}
 								percentText={formatCategoryPercent(stats.freeSpaceTokens, stats.contextWindow)}
 							/>
 							{stats.deferredToolsTokens > 0 ? (
 								<BreakdownRow
-									colorClass="bg-zinc-400/60 dark:bg-zinc-600"
+									colorClass="bg-chart-deferred"
 									label={m.context_category_tools_deferred()}
 									tokens={stats.deferredToolsTokens}
 									percentText="—"

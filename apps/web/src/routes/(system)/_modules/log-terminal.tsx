@@ -108,7 +108,7 @@ export function LogTerminal({ className, emptyLabel, entries, follow }: LogTermi
 			aria-live={follow ? "polite" : "off"}
 			className={cn(
 				"max-h-[min(60vh,44rem)] min-h-64 overflow-auto rounded-xl border border-border",
-				"bg-[#ffffff] text-foreground dark:bg-[#0a0c10]",
+				"bg-log text-foreground",
 				className,
 			)}
 		>

@@ -242,7 +242,7 @@ export function LogPanel({ open, onClose }: { open: boolean; onClose: () => void
 					</IconButton>
 				</div>
 			</header>
-			<div className="dark flex min-h-0 flex-1 flex-col bg-[#0a0c10]">
+			<div className="dark flex min-h-0 flex-1 flex-col bg-log">
 				<LogTerminal
 					className="min-h-0 max-h-none flex-1 rounded-none border-0"
 					emptyLabel={m.diagnostics_logs_empty()}
