@@ -22,7 +22,9 @@ mention need the same durable prompt injection.
 1. Add `workspace` as a first-class chat/session kind.
    - A workspace has one ordinary durable conversation and message transcript.
    - `workspace_sessions` links that conversation to a governed coding task, repository root,
-     base revision, parent chat session, and mode.
+     base revision, parent chat session, and mode. A draft may have no task or goal yet.
+   - The first user message starts the task and derives the title and tags; creation itself does
+     not require a prompt.
    - The workspace agent runs with the `coding` capability and the
      `self-iteration.*` repository tools.
    - Chat sessions never receive `self-iteration.*` coding tools.
@@ -33,6 +35,8 @@ mention need the same durable prompt injection.
    - A chat can spawn a workspace for a user-reported bug/feature or for an issue it discovers
      itself.
    - A workspace receives status/send/hook tools but cannot recursively spawn another workspace.
+   - Workspaces alone receive coding-agent tools for todos, referenced conversation context, and
+     read-only domain-database diagnostics.
    - Workspaces are listed by `admin.workspace.*` and are excluded from the chat list.
 
 3. Share message delivery semantics.

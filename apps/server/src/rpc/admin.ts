@@ -557,10 +557,14 @@ export const adminRouter = {
 		runSteps: adminBase.admin.sessions.runSteps.handler(async ({ context, input }) =>
 			listRunSteps(context.lifecycle, input),
 		),
+		search: adminBase.admin.sessions.search.handler(async ({ context, input }) =>
+			context.lifecycle.sessionMessaging.searchSessions(input?.query ?? "", input?.limit ?? 10),
+		),
 		send: adminBase.admin.sessions.send.handler(async ({ context, input }) => {
 			try {
 				return await sendMessage(context.lifecycle, {
 					...(input.mode === undefined ? {} : { mode: input.mode }),
+					...(input.references === undefined ? {} : { references: input.references }),
 					sessionId: input.sessionId,
 					target: input.target,
 					text: input.text,
@@ -592,9 +596,10 @@ export const adminRouter = {
 		create: adminBase.admin.workspace.create.handler(async ({ context, input }) => {
 			const result = await context.lifecycle.workspace.create({
 				...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
-				goal: input.goal,
+				...(input.goal === undefined ? {} : { goal: input.goal }),
 				...(input.mode === undefined ? {} : { mode: input.mode }),
 				...(input.parentSessionId === undefined ? {} : { parentSessionId: input.parentSessionId }),
+				...(input.tags === undefined ? {} : { tags: input.tags }),
 				requestedBy: "webui-admin",
 			});
 			return result;
@@ -608,6 +613,16 @@ export const adminRouter = {
 				includeArchived === undefined ? {} : { includeArchived },
 			);
 		}),
+		todos: adminBase.admin.workspace.todos.handler(async ({ context, input }) =>
+			context.lifecycle.workspace.listTodos(input.sessionId),
+		),
+		update: adminBase.admin.workspace.update.handler(async ({ context, input }) =>
+			context.lifecycle.workspace.update({
+				sessionId: input.sessionId,
+				...(input.tags === undefined ? {} : { tags: input.tags }),
+				...(input.title === undefined ? {} : { title: input.title }),
+			}),
+		),
 	},
 	runtime: {
 		cancelRestart: adminBase.admin.runtime.cancelRestart.handler(async ({ context }) => {

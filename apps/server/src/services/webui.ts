@@ -26,6 +26,7 @@ import type { TsukaimaLifecycle } from "../lifecycle.ts";
 import { collectMentionIds, loadMentionLabels, replaceMentionIds } from "./mention-labels.ts";
 import { collectRunSteps } from "./run-steps.ts";
 import { WORKSPACE_TOOL_NAMES } from "./workspace-tools.ts";
+import { CODING_AGENT_TOOL_NAMES } from "./coding-agent-tools.ts";
 
 type ChatKind = "private" | "group" | "webui" | "workspace" | "task" | "plugin";
 
@@ -396,6 +397,9 @@ export async function getSessionContextStats(
 	const kind = session.chatKind ?? session.sessionKind;
 	const omittedTools = [
 		...(kind === "workspace" && policy.capabilities.includes("coding") ? [] : codingTools),
+		...(kind === "workspace" && policy.capabilities.includes("coding")
+			? []
+			: [...CODING_AGENT_TOOL_NAMES]),
 		...(kind === "webui" || kind === "workspace" ? [] : WORKSPACE_TOOL_NAMES),
 	];
 	const [inspection, contextDetails] = await Promise.all([
@@ -813,6 +817,7 @@ export async function sendMessage(
 	lifecycle: TsukaimaLifecycle,
 	input: {
 		mode?: MessageDeliveryMode;
+		references?: readonly { messageId?: string | undefined; sessionId: string }[];
 		sessionId: string;
 		target: "channel" | "tsukaima";
 		text: string;
@@ -910,6 +915,7 @@ export async function sendMessage(
 
 	const sent = await lifecycle.sessionMessaging.sendAgentMessage({
 		...(input.mode === undefined ? {} : { deliveryMode: input.mode }),
+		...(input.references === undefined ? {} : { references: input.references }),
 		sessionId: session.session.id,
 		source: "webui",
 		text,

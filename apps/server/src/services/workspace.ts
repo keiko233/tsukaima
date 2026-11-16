@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import type {
 	MessageDeliveryMode,
 	WorkspaceDetail,
@@ -7,6 +7,7 @@ import type {
 	WorkspaceProposalSummary,
 	WorkspaceSummary,
 	WorkspaceTaskStatus,
+	WorkspaceTodo,
 } from "@tsukaima/contracts";
 import type { PiDurableConversationHost } from "@tsukaima/core";
 import {
@@ -22,8 +23,11 @@ import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
 import type { SessionMessagingService } from "./session-messaging.ts";
+import type { WorkspaceReferenceService } from "./workspace-references.ts";
+import type { WorkspaceTodoService } from "./workspace-todos.ts";
 
 const WORKSPACE_CAPABILITIES = ["coding"];
+const DEFAULT_WORKSPACE_TITLE = "New workspace";
 
 export interface WorkspaceServiceOptions {
 	readonly applyToolPolicy?: (sessionId: string, durableConversationId: string) => Promise<void>;
@@ -34,21 +38,32 @@ export interface WorkspaceServiceOptions {
 	readonly logger: Logger;
 	readonly messaging: SessionMessagingService;
 	readonly policy: ConversationPolicyService;
+	readonly references: WorkspaceReferenceService;
 	readonly repositoryRoot: string;
+	readonly todos: WorkspaceTodoService;
 }
 
 export interface CreateWorkspaceInput {
 	readonly baseRef?: string;
-	readonly goal: string;
+	readonly goal?: string;
 	readonly mode?: WorkspaceMode;
 	readonly parentSessionId?: string;
 	readonly requestedBy?: string;
+	readonly tags?: readonly string[];
 }
 
 export interface CreateWorkspaceResult {
 	readonly chatId: string;
 	readonly sessionId: string;
-	readonly taskId: string;
+	readonly taskId: string | null;
+}
+
+export interface StartWorkspaceTaskInput {
+	readonly goal: string;
+	readonly references?: readonly {
+		readonly messageId?: string | undefined;
+		readonly sessionId: string;
+	}[];
 }
 
 type WorkspaceRow = typeof workspaceSessions.$inferSelect;
@@ -58,6 +73,27 @@ type ConversationRow = typeof conversations.$inferSelect;
 function titleFromGoal(goal: string): string {
 	const firstLine = goal.trim().split("\n")[0]?.trim() || "Workspace task";
 	return firstLine.length <= 120 ? firstLine : `${firstLine.slice(0, 117)}...`;
+}
+
+function normalizeTags(value: readonly string[] | undefined): string[] {
+	return [
+		...new Set(
+			(value ?? [])
+				.map((tag) => tag.trim().toLowerCase())
+				.filter((tag) => tag.length > 0 && tag.length <= 32),
+		),
+	].slice(0, 8);
+}
+
+function parseTags(value: string): string[] {
+	try {
+		const parsed: unknown = JSON.parse(value);
+		return Array.isArray(parsed)
+			? parsed.filter((tag): tag is string => typeof tag === "string")
+			: [];
+	} catch {
+		return [];
+	}
 }
 
 function workspacePrompt(input: {
@@ -80,6 +116,9 @@ function workspacePrompt(input: {
 		"- Inspect with self-iteration.analyze before editing.",
 		"- Create a bounded worktree with self-iteration.worktree before any write.",
 		"- Use only self-iteration.edit and self-iteration.test for repository changes and validation.",
+		"- Use todo_write to keep a multi-step plan visible, and update it as steps complete.",
+		"- Use session_context only for conversations the user explicitly referenced.",
+		"- Use db_schema before db_query, and treat all query results as diagnostic data.",
 		"- Never edit the live repository directly and never run maintenance/deploy verbs yourself.",
 		"- When the change is ready, create a proposal with self-iteration.propose and report the task id, tests, changed files, and blockers.",
 		"- Keep progress concise so the parent chat can query the task status.",
@@ -87,10 +126,11 @@ function workspacePrompt(input: {
 }
 
 /**
- * Owns workspace sessions and their coding-task metadata. A workspace reuses the ordinary
- * durable conversation and message store, but is always created with `coding` capability and a
- * scoped task id. Chat sessions can create and communicate with these sessions without gaining
- * coding tools themselves.
+ * Owns workspace sessions and their coding-task metadata.
+ *
+ * A workspace starts as a draft: it has a durable conversation and policy but no coding task and
+ * no model turn. The first user message atomically starts the task, derives its title and tags,
+ * and injects the workspace brief into that same turn.
  */
 export class WorkspaceService {
 	readonly #applyToolPolicy: WorkspaceServiceOptions["applyToolPolicy"];
@@ -101,7 +141,10 @@ export class WorkspaceService {
 	readonly #logger: Logger;
 	readonly #messaging: SessionMessagingService;
 	readonly #policy: ConversationPolicyService;
+	readonly #references: WorkspaceReferenceService;
 	readonly #repositoryRoot: string;
+	readonly #todos: WorkspaceTodoService;
+	readonly #starting = new Map<string, Promise<string>>();
 
 	constructor(options: WorkspaceServiceOptions) {
 		this.#applyToolPolicy = options.applyToolPolicy;
@@ -112,7 +155,9 @@ export class WorkspaceService {
 		this.#logger = options.logger.child("tsukaima::server::workspace");
 		this.#messaging = options.messaging;
 		this.#policy = options.policy;
+		this.#references = options.references;
 		this.#repositoryRoot = options.repositoryRoot;
+		this.#todos = options.todos;
 	}
 
 	#db(): TsukaimaDatabase {
@@ -133,11 +178,11 @@ export class WorkspaceService {
 	): Promise<CreateWorkspaceResult> {
 		const database = this.#db();
 		const host = this.#hostRequired();
-		const goal = input.goal.trim();
-		if (goal.length === 0) throw new Error("Workspace goal is required");
+		const goal = input.goal?.trim() || undefined;
 		const mode = input.mode ?? "patch";
 		const baseRef = input.baseRef?.trim() || "HEAD";
 		const requestedBy = input.requestedBy ?? "webui-admin";
+		const tags = normalizeTags([mode, ...(input.tags ?? [])]);
 		let parentSessionId = input.parentSessionId;
 		if (parentSessionId !== undefined) {
 			const [parent] = await database
@@ -150,29 +195,12 @@ export class WorkspaceService {
 			parentSessionId = undefined;
 		}
 
-		const taskResult = await this.#invokePluginRpc("self-iteration.tasks.create", {
-			baseRef,
-			goal,
-			mode,
-			sourceConversationId: parentSessionId ?? "workspace:webui",
-		});
-		const taskId =
-			typeof taskResult === "object" &&
-			taskResult !== null &&
-			"id" in taskResult &&
-			typeof taskResult.id === "string"
-				? taskResult.id
-				: undefined;
-		if (taskId === undefined) {
-			throw new Error("Self-iteration task creation returned no task id");
-		}
-
 		const chatId = randomUUID();
 		const sessionId = randomUUID();
 		const durableConversationId = await host.createConversation();
 		const nowMs = Date.now();
 		const now = new Date(nowMs).toISOString();
-		const title = titleFromGoal(goal);
+		const title = goal === undefined ? DEFAULT_WORKSPACE_TITLE : titleFromGoal(goal);
 		await database.transaction((tx) => {
 			tx.insert(chatObjects)
 				.values({
@@ -200,12 +228,13 @@ export class WorkspaceService {
 					baseRef,
 					chatObjectId: chatId,
 					createdAtMs: nowMs,
-					goal,
+					goal: goal ?? null,
 					id: sessionId,
 					mode,
 					parentSessionId: parentSessionId ?? null,
 					repositoryRoot: this.#repositoryRoot,
-					taskId,
+					tagsJson: JSON.stringify(tags),
+					taskId: null,
 					updatedAtMs: nowMs,
 				})
 				.run();
@@ -222,11 +251,12 @@ export class WorkspaceService {
 			actorKind: "user",
 			payload: {
 				baseRef,
-				goal,
+				goal: goal ?? null,
 				mode,
 				parentSessionId: parentSessionId ?? null,
 				sessionId,
-				taskId,
+				tags,
+				taskId: null,
 			},
 			result: "ok",
 			targetId: sessionId,
@@ -237,30 +267,153 @@ export class WorkspaceService {
 			chatId,
 			mode,
 			sessionId,
-			taskId,
+			taskId: null,
 		});
-		if (options.start !== false) {
-			await this.#messaging.sendAgentMessage({
-				context: [
-					"[Workspace handoff] A parent chat created this workspace for repository work.",
-					"Treat the goal below as the complete task brief unless follow-up messages add constraints.",
-				].join("\n"),
-				sessionId,
-				source: "session-tool",
-				text: workspacePrompt({
-					baseRef,
-					goal,
-					repositoryRoot: this.#repositoryRoot,
-					taskId,
-				}),
-			});
+		if (goal !== undefined && options.start !== false) {
+			const taskId = await this.startTask(sessionId, { goal });
+			return { chatId, sessionId, taskId };
 		}
-		return { chatId, sessionId, taskId };
+		return { chatId, sessionId, taskId: null };
+	}
+
+	/**
+	 * Start the coding task for a draft workspace. Idempotent under concurrent first messages:
+	 * callers are serialized per session, then re-read the row before creating the task.
+	 */
+	async startTask(sessionId: string, input: StartWorkspaceTaskInput): Promise<string> {
+		const existing = this.#starting.get(sessionId);
+		if (existing !== undefined) return existing;
+		const starting = this.#startTaskInner(sessionId, input).finally(() => {
+			this.#starting.delete(sessionId);
+		});
+		this.#starting.set(sessionId, starting);
+		return starting;
+	}
+
+	async #startTaskInner(sessionId: string, input: StartWorkspaceTaskInput): Promise<string> {
+		const database = this.#db();
+		const goal = input.goal.trim();
+		if (goal.length === 0) throw new Error("Workspace goal is required");
+		const [workspace] = await database
+			.select()
+			.from(workspaceSessions)
+			.where(eq(workspaceSessions.id, sessionId))
+			.limit(1);
+		if (workspace === undefined) throw new Error("workspace_not_found");
+		if (workspace.taskId !== null) return workspace.taskId;
+		const taskResult = await this.#invokePluginRpc("self-iteration.tasks.create", {
+			baseRef: workspace.baseRef,
+			goal,
+			mode: workspace.mode,
+			sourceConversationId: workspace.parentSessionId ?? "workspace:webui",
+		});
+		const taskId =
+			typeof taskResult === "object" &&
+			taskResult !== null &&
+			"id" in taskResult &&
+			typeof taskResult.id === "string"
+				? taskResult.id
+				: undefined;
+		if (taskId === undefined) {
+			throw new Error("Self-iteration task creation returned no task id");
+		}
+		const title = titleFromGoal(goal);
+		const now = new Date().toISOString();
+		const tags = normalizeTags([workspace.mode, ...parseTags(workspace.tagsJson)]);
+		const updated = await database.transaction((tx) => {
+			const result = tx
+				.update(workspaceSessions)
+				.set({
+					goal,
+					tagsJson: JSON.stringify(tags),
+					taskId,
+					updatedAtMs: Date.now(),
+				})
+				.where(and(eq(workspaceSessions.id, sessionId), isNull(workspaceSessions.taskId)))
+				.returning({ id: workspaceSessions.id })
+				.all();
+			if (result.length === 0) return false;
+			tx.update(chatObjects)
+				.set({ title, updatedAt: now })
+				.where(eq(chatObjects.id, workspace.chatObjectId))
+				.run();
+			tx.update(conversations)
+				.set({ title, updatedAt: now })
+				.where(eq(conversations.id, sessionId))
+				.run();
+			return true;
+		});
+		if (!updated) {
+			const [current] = await database
+				.select({ taskId: workspaceSessions.taskId })
+				.from(workspaceSessions)
+				.where(eq(workspaceSessions.id, sessionId))
+				.limit(1);
+			if (current?.taskId === null || current?.taskId === undefined) {
+				throw new Error("Workspace task was not persisted");
+			}
+			return current.taskId;
+		}
+		await this.#audit?.({
+			action: "workspace.start",
+			actorKind: "user",
+			payload: {
+				goal,
+				references: input.references?.length ?? 0,
+				sessionId,
+				taskId,
+			},
+			result: "ok",
+			targetId: sessionId,
+			targetKind: "workspace",
+		});
+		this.#logger.info("workspace task started", { sessionId, taskId });
+		return taskId;
+	}
+
+	/**
+	 * Prompt context for the turn that starts a draft. It carries the task contract without
+	 * becoming a second user message in the transcript.
+	 */
+	async prepareTurn(
+		sessionId: string,
+		input: StartWorkspaceTaskInput,
+	): Promise<{ readonly context: string; readonly taskId: string }> {
+		const taskId = await this.startTask(sessionId, input);
+		// Reference rows are recorded once per turn, after the task exists, so a failed first
+		// message leaves the workspace as a draft that the user can retry.
+		if (input.references !== undefined && input.references.length > 0) {
+			await this.#references.record(sessionId, input.references);
+		}
+		const [workspace] = await this.#db()
+			.select()
+			.from(workspaceSessions)
+			.where(eq(workspaceSessions.id, sessionId))
+			.limit(1);
+		if (workspace === undefined) throw new Error("workspace_not_found");
+		const referenceContext = await this.#references.render(sessionId, input.references ?? []);
+		const context = [
+			workspacePrompt({
+				baseRef: workspace.baseRef,
+				goal: input.goal,
+				repositoryRoot: workspace.repositoryRoot,
+				taskId,
+			}),
+			referenceContext,
+		]
+			.filter((entry): entry is string => entry !== undefined)
+			.join("\n\n");
+		return { context, taskId };
 	}
 
 	async spawnFromSession(
 		sourceSessionId: string,
-		input: { readonly baseRef?: string; readonly goal: string; readonly mode?: WorkspaceMode },
+		input: {
+			readonly baseRef?: string;
+			readonly goal?: string;
+			readonly mode?: WorkspaceMode;
+			readonly tags?: readonly string[];
+		},
 	): Promise<CreateWorkspaceResult> {
 		const source = await this.#messaging.session(sourceSessionId);
 		if (source.chat.kind !== "webui" && source.chat.kind !== "workspace") {
@@ -268,10 +421,11 @@ export class WorkspaceService {
 		}
 		return this.create({
 			...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
-			goal: input.goal,
+			...(input.goal === undefined ? {} : { goal: input.goal }),
 			...(input.mode === undefined ? {} : { mode: input.mode }),
 			parentSessionId: sourceSessionId,
 			requestedBy: "chat-agent",
+			...(input.tags === undefined ? {} : { tags: input.tags }),
 		});
 	}
 
@@ -287,7 +441,7 @@ export class WorkspaceService {
 			.from(workspaceSessions)
 			.innerJoin(conversations, eq(conversations.id, workspaceSessions.id))
 			.innerJoin(chatObjects, eq(chatObjects.id, workspaceSessions.chatObjectId))
-			.innerJoin(codingTasks, eq(codingTasks.id, workspaceSessions.taskId))
+			.leftJoin(codingTasks, eq(codingTasks.id, workspaceSessions.taskId))
 			.where(
 				options.includeArchived === true
 					? undefined
@@ -327,7 +481,7 @@ export class WorkspaceService {
 			.from(workspaceSessions)
 			.innerJoin(conversations, eq(conversations.id, workspaceSessions.id))
 			.innerJoin(chatObjects, eq(chatObjects.id, workspaceSessions.chatObjectId))
-			.innerJoin(codingTasks, eq(codingTasks.id, workspaceSessions.taskId))
+			.leftJoin(codingTasks, eq(codingTasks.id, workspaceSessions.taskId))
 			.where(eq(workspaceSessions.id, sessionId))
 			.limit(1);
 		if (row === undefined) return null;
@@ -340,6 +494,7 @@ export class WorkspaceService {
 		const proposals = await this.#proposals(row.workspace.taskId);
 		return {
 			proposals,
+			references: await this.#references.list(sessionId),
 			session: {
 				channelId: row.chat.channelId,
 				chat: {
@@ -357,6 +512,7 @@ export class WorkspaceService {
 				title: row.session.title ?? row.chat.title,
 				updatedAt: row.session.updatedAt,
 			},
+			todos: await this.#todos.list(sessionId),
 			workspace: this.#summary({
 				chat: row.chat,
 				latest: latest ?? null,
@@ -391,8 +547,23 @@ export class WorkspaceService {
 						.from(workspaceSessions)
 						.where(eq(workspaceSessions.id, input.sessionId))
 						.limit(1);
-		const resolvedTaskId = task?.id ?? workspace?.taskId;
-		if (resolvedTaskId === undefined) throw new Error("workspace_not_found");
+		const resolvedTaskId = task?.id ?? workspace?.taskId ?? undefined;
+		if (resolvedTaskId === undefined) {
+			if (workspace === undefined) throw new Error("workspace_not_found");
+			return {
+				baseRef: workspace.baseRef,
+				goal: workspace.goal,
+				mode: workspace.mode,
+				parentSessionId: workspace.parentSessionId,
+				proposals: [],
+				repositoryRoot: workspace.repositoryRoot,
+				sessionId: workspace.id,
+				status: "draft",
+				tags: parseTags(workspace.tagsJson),
+				taskId: null,
+				timeline: [],
+			};
+		}
 		const [resolvedTask] =
 			task === undefined
 				? await database
@@ -428,10 +599,47 @@ export class WorkspaceService {
 			repositoryRoot: resolvedWorkspace.repositoryRoot,
 			sessionId: resolvedWorkspace.id,
 			status: resolvedTask.status,
+			tags: parseTags(resolvedWorkspace.tagsJson),
 			taskId: resolvedTask.id,
 			timeline: JSON.parse(resolvedTask.timelineJson) as unknown,
 			worktreePath: resolvedTask.worktreePath,
 		};
+	}
+
+	async update(input: {
+		readonly sessionId: string;
+		readonly tags?: readonly string[];
+		readonly title?: string;
+	}): Promise<WorkspaceSummary> {
+		const database = this.#db();
+		const [workspace] = await database
+			.select()
+			.from(workspaceSessions)
+			.where(eq(workspaceSessions.id, input.sessionId))
+			.limit(1);
+		if (workspace === undefined) throw new Error("workspace_not_found");
+		const now = new Date().toISOString();
+		const tags =
+			input.tags === undefined ? parseTags(workspace.tagsJson) : normalizeTags(input.tags);
+		await database.transaction((tx) => {
+			tx.update(workspaceSessions)
+				.set({ tagsJson: JSON.stringify(tags), updatedAtMs: Date.now() })
+				.where(eq(workspaceSessions.id, input.sessionId))
+				.run();
+			if (input.title !== undefined) {
+				tx.update(chatObjects)
+					.set({ title: input.title, updatedAt: now })
+					.where(eq(chatObjects.id, workspace.chatObjectId))
+					.run();
+				tx.update(conversations)
+					.set({ title: input.title, updatedAt: now })
+					.where(eq(conversations.id, input.sessionId))
+					.run();
+			}
+		});
+		const detail = await this.get(input.sessionId);
+		if (detail === null) throw new Error("workspace_not_found");
+		return detail.workspace;
 	}
 
 	async sendToWorkspace(input: {
@@ -459,7 +667,12 @@ export class WorkspaceService {
 		};
 	}
 
-	async #proposals(taskId: string): Promise<WorkspaceProposalSummary[]> {
+	async listTodos(sessionId: string): Promise<WorkspaceTodo[]> {
+		return this.#todos.list(sessionId);
+	}
+
+	async #proposals(taskId: string | null): Promise<WorkspaceProposalSummary[]> {
+		if (taskId === null) return [];
 		const rows = await this.#db()
 			.select()
 			.from(codingProposals)
@@ -478,7 +691,7 @@ export class WorkspaceService {
 		readonly chat: ChatRow;
 		readonly latest: typeof messages.$inferSelect | null;
 		readonly session: ConversationRow;
-		readonly taskStatus: WorkspaceTaskStatus;
+		readonly taskStatus: WorkspaceTaskStatus | null;
 		readonly workspace: WorkspaceRow;
 	}): WorkspaceSummary {
 		const latest = input.latest;
@@ -515,6 +728,7 @@ export class WorkspaceService {
 			mode: input.workspace.mode,
 			parentSessionId: input.workspace.parentSessionId,
 			repositoryRoot: input.workspace.repositoryRoot,
+			tags: parseTags(input.workspace.tagsJson),
 			taskId: input.workspace.taskId,
 			taskStatus: input.taskStatus,
 			title: input.chat.title,

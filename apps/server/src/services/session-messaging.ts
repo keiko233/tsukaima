@@ -17,6 +17,10 @@ export interface SessionMessagingOptions {
 	readonly host: () => PiDurableConversationHost | undefined;
 	readonly logger: Logger;
 	readonly hooks: PromptHookService;
+	readonly prepareTurn?: (
+		sessionId: string,
+		input: PrepareTurnInput,
+	) => Promise<string | undefined>;
 	readonly notifyMessageReceived?: (input: {
 		readonly chatObjectId: string;
 		readonly messageId: string;
@@ -31,6 +35,10 @@ export interface SendAgentMessageInput {
 	readonly context?: string;
 	readonly deliveryMode?: MessageDeliveryMode;
 	readonly direction?: "inbound" | "system";
+	readonly references?: readonly {
+		readonly messageId?: string | undefined;
+		readonly sessionId: string;
+	}[];
 	readonly senderExternalId?: string;
 	readonly senderName?: string;
 	readonly sessionId: string;
@@ -43,6 +51,14 @@ export interface SendAgentMessageResult {
 	readonly durableConversationId: string;
 	readonly messageId: string;
 	readonly mode: MessageDeliveryMode;
+}
+
+export interface PrepareTurnInput {
+	readonly references?: readonly {
+		readonly messageId?: string | undefined;
+		readonly sessionId: string;
+	}[];
+	readonly text: string;
 }
 
 interface SessionRow {
@@ -69,6 +85,7 @@ export class SessionMessagingService {
 	readonly #logger: Logger;
 	readonly #notifyMessageReceived: SessionMessagingOptions["notifyMessageReceived"];
 	readonly #policy: SessionMessagingOptions["policy"];
+	readonly #prepareTurn: SessionMessagingOptions["prepareTurn"];
 
 	constructor(options: SessionMessagingOptions) {
 		this.#applyToolPolicy = options.applyToolPolicy;
@@ -80,6 +97,7 @@ export class SessionMessagingService {
 		this.#logger = options.logger.child("tsukaima::server::session-messaging");
 		this.#notifyMessageReceived = options.notifyMessageReceived;
 		this.#policy = options.policy;
+		this.#prepareTurn = options.prepareTurn;
 	}
 
 	#db(): TsukaimaDatabase {
@@ -176,10 +194,14 @@ export class SessionMessagingService {
 			this.#cancelPendingOutput?.(session.durableConversationId);
 			await host.abortConversation(session.durableConversationId);
 		}
+		const preparedContext = await this.#prepareTurn?.(session.id, {
+			...(input.references === undefined ? {} : { references: input.references }),
+			text,
+		});
 		await this.#applyToolPolicy?.(session.id, session.durableConversationId);
 		await this.#policy.ensureHostPolicy(session.id, session.durableConversationId);
 		const hookContext = await this.#hooks.renderContext(session.id);
-		const triggerContext = [input.context, hookContext]
+		const triggerContext = [input.context, preparedContext, hookContext]
 			.filter((entry): entry is string => entry !== undefined && entry.trim().length > 0)
 			.join("\n\n");
 

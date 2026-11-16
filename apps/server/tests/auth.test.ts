@@ -471,6 +471,7 @@ describe("admin auth", () => {
 			"sessions/messages": { sessionId: "session-1" },
 			"sessions/resetContext": { sessionId: "session-1" },
 			"sessions/runSteps": { entryId: "entry-1", sessionId: "session-1" },
+			"sessions/search": { query: "Sample" },
 			"sessions/send": { sessionId: "session-1", target: "tsukaima", text: "hello" },
 			"sessions/setReceiving": { sessionId: "session-1" },
 			"sessions/update": { sessionId: "session-1" },
@@ -481,6 +482,8 @@ describe("admin auth", () => {
 			"workspace/create": { goal: "Sample workspace" },
 			"workspace/get": { sessionId: "session-1" },
 			"workspace/list": {},
+			"workspace/todos": { sessionId: "session-1" },
+			"workspace/update": { sessionId: "session-1", tags: ["patch"] },
 		};
 
 		// Coverage check in both directions: every real procedure has a sample and vice versa.

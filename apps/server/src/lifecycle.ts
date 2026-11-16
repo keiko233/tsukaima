@@ -19,6 +19,7 @@ import {
 	chatObjects,
 	conversations,
 	media,
+	workspaceSessions,
 	type TsukaimaDatabase,
 	migrateDomainDatabase,
 	openDomainDatabase,
@@ -93,6 +94,13 @@ import {
 import { OutboundService } from "./services/outbound.ts";
 import { RequestService } from "./services/request-service.ts";
 import { SessionMessagingService } from "./services/session-messaging.ts";
+import {
+	CODING_AGENT_TOOL_NAMES,
+	createCodingAgentToolsExtension,
+} from "./services/coding-agent-tools.ts";
+import { WorkspaceReferenceService } from "./services/workspace-references.ts";
+import { WorkspaceSqlService } from "./services/workspace-sql.ts";
+import { WorkspaceTodoService } from "./services/workspace-todos.ts";
 import { WORKSPACE_TOOL_NAMES, createWorkspaceToolsExtension } from "./services/workspace-tools.ts";
 import { WorkspaceService } from "./services/workspace.ts";
 
@@ -170,6 +178,7 @@ export class TsukaimaLifecycle {
 	readonly restartCoordinator: RestartCoordinator;
 	readonly sessionMessaging: SessionMessagingService;
 	readonly workspace: WorkspaceService;
+	readonly workspaceTodos: WorkspaceTodoService;
 	private currentState: LifecycleState["state"] = "starting";
 	private currentStage = "initialize";
 	private failureReason: string | undefined;
@@ -205,6 +214,7 @@ export class TsukaimaLifecycle {
 	private activeProviderId: string | undefined;
 	private beforeReadyCallback: (() => Promise<void>) | undefined;
 	private workspaceToolsExtension: DurableExtension | undefined;
+	private codingAgentToolsExtension: DurableExtension | undefined;
 
 	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
 		this.config = config;
@@ -380,6 +390,21 @@ export class TsukaimaLifecycle {
 				? {}
 				: { splitMaxChars: options.reply.splitMaxChars }),
 		});
+		this.workspaceTodos = new WorkspaceTodoService({ database: () => this.domainDatabase });
+		const workspaceReferences = new WorkspaceReferenceService({
+			database: () => this.domainDatabase,
+		});
+		const workspaceSql = new WorkspaceSqlService({ database: () => this.domainDatabase });
+		const resolveSessionId = async (durableConversationId: string): Promise<string | undefined> => {
+			const database = this.domainDatabase;
+			if (database === undefined) return undefined;
+			const [row] = await database
+				.select({ id: conversations.id })
+				.from(conversations)
+				.where(eq(conversations.durableConversationId, durableConversationId))
+				.limit(1);
+			return row?.id;
+		};
 		this.sessionMessaging = new SessionMessagingService({
 			applyToolPolicy: async (sessionId, durableConversationId) => {
 				const policy = await this.conversationPolicy.effectivePolicy(sessionId);
@@ -392,6 +417,21 @@ export class TsukaimaLifecycle {
 			hooks: this.promptHooks,
 			host: () => this.conversationHost,
 			logger: this.runtimeLog,
+			prepareTurn: async (sessionId, input) => {
+				const database = this.domainDatabase;
+				if (database === undefined) return undefined;
+				const [row] = await database
+					.select({ taskId: workspaceSessions.taskId })
+					.from(workspaceSessions)
+					.where(eq(workspaceSessions.id, sessionId))
+					.limit(1);
+				if (row === undefined) return undefined;
+				const { context } = await this.workspace.prepareTurn(sessionId, {
+					goal: input.text,
+					...(input.references === undefined ? {} : { references: input.references }),
+				});
+				return context;
+			},
 			notifyMessageReceived: ({ chatObjectId, messageId: inboundMessageId, sessionId }) => {
 				this.hooks.emitDetached("message.received", {
 					channelId: "webui",
@@ -417,24 +457,26 @@ export class TsukaimaLifecycle {
 			logger: this.runtimeLog,
 			messaging: this.sessionMessaging,
 			policy: this.conversationPolicy,
+			references: workspaceReferences,
 			repositoryRoot: process.cwd(),
+			todos: this.workspaceTodos,
 		});
 		this.workspaceToolsExtension = createWorkspaceToolsExtension({
 			audit: (entry) => this.writeAudit(entry),
 			logger: this.runtimeLog,
 			messaging: this.sessionMessaging,
 			promptHooks: this.promptHooks,
-			resolveSessionId: async (durableConversationId) => {
-				const database = this.domainDatabase;
-				if (database === undefined) return undefined;
-				const [row] = await database
-					.select({ id: conversations.id })
-					.from(conversations)
-					.where(eq(conversations.durableConversationId, durableConversationId))
-					.limit(1);
-				return row?.id;
-			},
+			resolveSessionId,
 			workspace: this.workspace,
+		});
+		this.codingAgentToolsExtension = createCodingAgentToolsExtension({
+			audit: (entry) => this.writeAudit(entry),
+			logger: this.runtimeLog,
+			messaging: this.sessionMessaging,
+			references: workspaceReferences,
+			resolveSessionId,
+			sql: workspaceSql,
+			todos: this.workspaceTodos,
 		});
 		this.pluginConversations = new PluginConversationService({
 			audit: (entry) => this.writeAudit(entry),
@@ -575,11 +617,14 @@ export class TsukaimaLifecycle {
 		const kind = row?.chatKind ?? row?.sessionKind;
 		const codingTools = this.pluginHost.modelToolNames("self-iteration");
 		const sessionTools = [...WORKSPACE_TOOL_NAMES];
+		const codingAgentTools = [...CODING_AGENT_TOOL_NAMES];
 		const removed = new Set<string>();
 		if (kind !== "workspace") {
 			for (const name of codingTools) removed.add(name);
+			for (const name of codingAgentTools) removed.add(name);
 		} else if (!policy.capabilities.includes("coding")) {
 			for (const name of codingTools) removed.add(name);
+			for (const name of codingAgentTools) removed.add(name);
 		}
 		if (kind === "webui") {
 			// A chat may spawn/control workspaces but never edit code in its own turn.
@@ -872,6 +917,7 @@ export class TsukaimaLifecycle {
 		const dynamicExtensions = [
 			...(pluginTools === undefined ? [] : [pluginTools]),
 			...(this.workspaceToolsExtension === undefined ? [] : [this.workspaceToolsExtension]),
+			...(this.codingAgentToolsExtension === undefined ? [] : [this.codingAgentToolsExtension]),
 		];
 		if (conversationHost !== undefined && dynamicExtensions.length > 0) {
 			// Install before plugins connect so inbound messages always resolve the extension;

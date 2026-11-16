@@ -3,7 +3,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { chatObjects, conversations, messages, workspaceSessions } from "@tsukaima/db";
+import {
+	chatObjects,
+	codingTasks,
+	conversations,
+	messages,
+	workspaceReferences,
+	workspaceSessions,
+	workspaceTodos,
+} from "@tsukaima/db";
 import { createApp } from "../src/app.ts";
 import { createLocalChat, listChats } from "../src/services/webui.ts";
 
@@ -95,6 +103,95 @@ describe("workspace sessions", () => {
 		await lifecycle.stop();
 	});
 
+	test("starts a draft workspace from its first message exactly once", async () => {
+		const lifecycle = await startApp();
+		const draft = await lifecycle.workspace.create({});
+		expect(draft.taskId).toBeNull();
+		const database = lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("Database not ready");
+		const [before] = await database
+			.select()
+			.from(workspaceSessions)
+			.where(eq(workspaceSessions.id, draft.sessionId))
+			.limit(1);
+		expect(before?.taskId).toBeNull();
+		expect(before?.goal).toBeNull();
+
+		await lifecycle.sessionMessaging.sendAgentMessage({
+			sessionId: draft.sessionId,
+			source: "webui",
+			text: "Add a draft workspace status badge.",
+		});
+		const [after] = await database
+			.select()
+			.from(workspaceSessions)
+			.where(eq(workspaceSessions.id, draft.sessionId))
+			.limit(1);
+		expect(after?.taskId).not.toBeNull();
+		expect(after?.goal).toContain("draft workspace status badge");
+		expect(after?.tagsJson).toContain("patch");
+		const taskId = after?.taskId;
+		if (taskId === null || taskId === undefined) throw new Error("Task was not created");
+		const [task] = await database
+			.select()
+			.from(codingTasks)
+			.where(eq(codingTasks.id, taskId))
+			.limit(1);
+		expect(task?.goal).toContain("draft workspace status badge");
+
+		await lifecycle.sessionMessaging.sendAgentMessage({
+			sessionId: draft.sessionId,
+			source: "webui",
+			text: "Keep the badge compact.",
+		});
+		const tasks = await database.select().from(codingTasks);
+		expect(tasks).toHaveLength(1);
+		expect((await lifecycle.workspace.list())[0]?.title).toContain("draft workspace status badge");
+		await lifecycle.stop();
+	});
+
+	test("stores workspace todos and referenced conversation context", async () => {
+		const lifecycle = await startApp();
+		const parent = await createLocalChat(lifecycle, {
+			sessionTitle: "Reference source",
+			title: "Admin chat",
+		});
+		const workspace = await lifecycle.workspace.create({});
+		const database = lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("Database not ready");
+		await lifecycle.sessionMessaging.sendAgentMessage({
+			sessionId: workspace.sessionId,
+			source: "webui",
+			text: "Use the referenced conversation to plan the change.",
+			references: [{ sessionId: parent.sessionId }],
+		});
+		const todos = await lifecycle.workspaceTodos.replace(workspace.sessionId, [
+			{ content: "Inspect the referenced transcript" },
+			{ content: "Add a regression test", status: "completed" },
+		]);
+		expect(todos.map((todo) => todo.status)).toEqual(["in_progress", "completed"]);
+		const storedTodos = await database
+			.select()
+			.from(workspaceTodos)
+			.where(eq(workspaceTodos.workspaceSessionId, workspace.sessionId));
+		expect(storedTodos).toHaveLength(2);
+		const references = await database
+			.select()
+			.from(workspaceReferences)
+			.where(eq(workspaceReferences.sourceSessionId, workspace.sessionId));
+		expect(references[0]?.targetSessionId).toBe(parent.sessionId);
+		const detail = await lifecycle.workspace.get(workspace.sessionId);
+		expect(detail?.todos).toHaveLength(2);
+		expect(detail?.references[0]?.sessionId).toBe(parent.sessionId);
+		await expect(
+			lifecycle.workspaceTodos.replace(workspace.sessionId, [
+				{ content: "a", status: "in_progress" },
+				{ content: "b", status: "in_progress" },
+			]),
+		).rejects.toThrow("At most one todo can be in progress");
+		await lifecycle.stop();
+	});
+
 	test("chat can spawn a workspace through the same service boundary", async () => {
 		const lifecycle = await startApp();
 		const parent = await createLocalChat(lifecycle, {
@@ -152,6 +249,10 @@ describe("workspace sessions", () => {
 		expect(workspaceTools).toContain("workspace_status");
 		expect(workspaceTools).not.toContain("workspace_spawn");
 		expect(workspaceTools?.some((name) => name.startsWith("self-iteration_"))).toBe(true);
+		expect(workspaceTools).toContain("todo_write");
+		expect(workspaceTools).toContain("db_query");
+		expect(parentTools).not.toContain("todo_write");
+		expect(parentTools).not.toContain("db_query");
 
 		const found = await lifecycle.sessionMessaging.searchSessions("Admin chat");
 		expect(found[0]?.id).toBe(parent.sessionId);

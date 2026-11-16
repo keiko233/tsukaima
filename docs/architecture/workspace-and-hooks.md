@@ -20,17 +20,19 @@ A workspace is a normal chat object and durable conversation with `kind = "works
 | --- | --- |
 | `id` | Workspace conversation/session id |
 | `chat_object_id` | Workspace chat object |
-| `task_id` | `coding_tasks.id` created through the self-iteration RPC |
+| `task_id` | `coding_tasks.id`, null until the first user message starts the task |
 | `parent_session_id` | Chat session that spawned it, when applicable |
 | `repository_root` | The running process repository, normally `process.cwd()` |
 | `base_ref` | Git revision supplied to the task |
 | `mode` | `analysis`, `patch`, `proposal`, or `maintenance` |
-| `goal` | Immutable task brief shown in the UI and workspace prompt |
+| `goal` | Task brief, null for a draft and set from the first user message |
+| `tags` | Structured labels; the task mode is always included |
 
-The workspace's durable conversation receives an initial handoff prompt containing the task id,
-repository root, base revision, workflow rules, and the requirement to pass `taskId` to every
-self-iteration tool. It never edits the live repository; writes remain inside the governed
-worktree.
+Creating a workspace is a two-phase operation. The New action immediately creates an empty draft
+with a durable conversation, `coding` capability, and no model turn. The first user message
+starts the coding task, derives the title from that message, records the mode and user tags, and
+injects the workspace handoff prompt into the same turn. Later messages reuse the task. It never
+edits the live repository; writes remain inside the governed worktree.
 
 ## Tool surfaces
 
@@ -56,6 +58,19 @@ Workspace-control tools:
 The chat model is instructed to spawn a workspace for a concrete bug, feature, optimization, or
 self-discovered improvement. It does not claim the code is changed until the workspace reports a
 proposal or completion.
+
+Workspace-only coding-agent tools:
+
+- `session_context({ sessionId, messageId? })` reads bounded context from a conversation the user
+  explicitly referenced in this turn.
+- `todo_write({ items })` replaces the workspace checklist; at most one item may be in progress.
+- `todo_list()` returns the current checklist.
+- `db_schema({ table? })` lists allowlisted tables and columns.
+- `db_query({ sql, params? })` runs one read-only `SELECT`/`WITH` query against an allowlisted
+  table set, capped at 200 rows and 64 KiB.
+
+The coding-agent extension is installed process-wide but filtered out for chat, IM, task, and
+plugin sessions in `applySessionToolPolicy`.
 
 ## Shared delivery
 
@@ -144,9 +159,12 @@ Admin procedures:
 
 ```ts
 admin.workspace.list({ includeArchived? })
-admin.workspace.create({ goal, mode?, baseRef?, parentSessionId? })
+admin.workspace.create({ goal?, mode?, baseRef?, parentSessionId?, tags? })
 admin.workspace.get({ sessionId })
-admin.sessions.send({ sessionId, target: "tsukaima", text, mode? })
+admin.workspace.update({ sessionId, title?, tags? })
+admin.workspace.todos({ sessionId })
+admin.sessions.search({ query?, limit? })
+admin.sessions.send({ sessionId, target: "tsukaima", text, mode?, references? })
 admin.runtime.scheduleRestart({ delaySeconds?, mode?, reason? })
 admin.runtime.cancelRestart()
 admin.runtime.restartStatus()
@@ -157,12 +175,16 @@ WebUI:
 - `/workspace` is a separate rail destination and sidebar.
 - Chat list excludes workspace objects.
 - Workspace transcript reuses the chat renderer and adds task/repository/proposal status.
+- Workspace inspector tabs are Context, Todos, Sessions, and Data; chat keeps its existing tabs.
 - The composer exposes queue, interrupt, and follow-up modes.
+- The workspace composer can `@` a conversation; references are one-turn context, not a
+  subscription.
 - Settings exposes one-minute restart/update scheduling and cancellation.
 
 ## Failure behavior
 
-- A workspace task-creation failure does not create a workspace session.
+- A draft is created even when the first task creation fails; the user can retry from the same
+  empty workspace.
 - A failed hook render never drops the underlying message.
 - A message interrupted by a workspace command remains visible as an outbound failed/aborted run
   through the normal live-run and transcript records.
