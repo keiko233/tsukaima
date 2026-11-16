@@ -274,15 +274,20 @@ describe("proactive-scheduler host integration", () => {
 		let firstConversation = "";
 		let secondConversation = "";
 		try {
-			firstConversation = (await createConversation(first, "first")).conversationId;
+			const firstCreated = await createConversation(first, "first");
+			firstConversation = firstCreated.conversationId;
 			secondConversation = (await createConversation(first, "second")).conversationId;
-			const created = (await first.pluginHost.invokeRpc("proactive-scheduler.tasks.create", {
-				conversationId: firstConversation,
-				delayMs: 3_600_000,
-				kind: "remind",
-				prompt: "persisted task",
-			})) as { id: string };
-			taskId = created.id;
+			const scheduledViaDurableId = await first.pluginHost.invokeTool(
+				"proactive-scheduler.schedule",
+				{ delayMs: 3_600_000, kind: "remind", prompt: "persisted task" },
+				{ conversationId: firstCreated.durableConversationId, isAdmin: false },
+			);
+			const parsedScheduled = JSON.parse(toolText(scheduledViaDurableId)) as {
+				conversationId: string;
+				taskId: string;
+			};
+			expect(parsedScheduled.conversationId).toBe(firstConversation);
+			taskId = parsedScheduled.taskId;
 			const cross = await first.pluginHost.invokeTool(
 				"proactive-scheduler.schedule",
 				{ conversationId: secondConversation, delayMs: 1_000, prompt: "cross" },

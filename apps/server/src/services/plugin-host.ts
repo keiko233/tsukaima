@@ -50,9 +50,15 @@ import { createPluginDatabase } from "./plugin-scoped-database.ts";
 import { createPluginCacheBridge } from "./plugin-cache.ts";
 import { createPluginMediaBridge } from "./plugin-media.ts";
 import type { MediaService } from "./media-service.ts";
-import { pluginInstallStates, type TsukaimaDatabase } from "@tsukaima/db";
+import {
+	chatObjects,
+	conversations as conversationsTable,
+	messages as messagesTable,
+	pluginInstallStates,
+	type TsukaimaDatabase,
+} from "@tsukaima/db";
 import type { KeyvCache } from "@tsukaima/cache";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, or } from "drizzle-orm";
 
 export interface PluginHostOptions {
 	readonly audit: (entry: AuditEntry) => Promise<void>;
@@ -419,13 +425,46 @@ export class PluginHost {
 	): Promise<PluginToolInvocationResult> {
 		for (const pluginId of this.#started) {
 			const pluginContext = this.#contexts.get(pluginId);
-			if (pluginContext?.tools.list().some((tool) => tool.name === name) !== true) continue;
+			const tool = pluginContext?.tools.list().find((candidate) => candidate.name === name);
+			if (pluginContext === undefined || tool === undefined) continue;
+			const policy = await this.toolPolicyContext(tool, context);
+			const mergedCapabilities =
+				policy.channelCapabilities !== undefined ||
+				policy.conversationCapabilities !== undefined ||
+				context.conversationCapabilities !== undefined
+					? [
+							...new Set([
+								...(context.conversationCapabilities ?? []),
+								...(policy.channelCapabilities ?? []),
+								...(policy.conversationCapabilities ?? []),
+							]),
+						]
+					: undefined;
+			const effectiveContext: ToolInvocationContext = {
+				...context,
+				...(context.userId !== undefined || policy.userId === undefined
+					? {}
+					: { userId: policy.userId }),
+				...(context.isAdmin !== undefined || policy.isAdmin === undefined
+					? {}
+					: { isAdmin: policy.isAdmin }),
+				...(context.role !== undefined || policy.role === undefined ? {} : { role: policy.role }),
+				...(context.taskKind !== undefined || policy.taskKind === undefined
+					? {}
+					: { taskKind: policy.taskKind }),
+				...(context.allowedTools !== undefined || policy.conversationAllowedTools === undefined
+					? {}
+					: { allowedTools: policy.conversationAllowedTools }),
+				...(mergedCapabilities === undefined
+					? {}
+					: { conversationCapabilities: mergedCapabilities }),
+			};
 			this.#logger.trace("routing plugin tool invocation", {
-				conversationId: context.conversationId,
+				conversationId: effectiveContext.conversationId,
 				pluginId,
 				tool: name,
 			});
-			return pluginContext.tools.invoke(name, input, context);
+			return pluginContext.tools.invoke(name, input, effectiveContext);
 		}
 		throw new Error(`Unknown plugin tool ${name}`);
 	}
@@ -439,14 +478,93 @@ export class PluginHost {
 		readonly conversationAllowedTools?: readonly string[];
 		readonly channelCapabilities?: readonly string[];
 		readonly conversationCapabilities?: readonly string[];
+		readonly userId?: string;
+		readonly isAdmin?: boolean;
+		readonly role?: string;
+		readonly taskKind?: string;
 	}> {
 		const owner = this.#toolOwner(tool.name);
 		const manifest = owner === undefined ? undefined : this.#plugins.get(owner)?.manifest;
 		const conversation = context.conversationId;
+		let resolvedChannelId =
+			conversation !== undefined && conversation.includes(":")
+				? (conversation.split(":")[0] ?? "")
+				: undefined;
+		let resolvedDomainConversationId: string | undefined;
+		let resolvedUserId = context.userId;
+		let resolvedIsAdmin = context.isAdmin;
+		let resolvedRole = context.role;
+		const database = this.#database?.();
+		if (conversation !== undefined && database !== undefined) {
+			try {
+				const [row] = await database
+					.select({ chat: chatObjects, conversation: conversationsTable })
+					.from(conversationsTable)
+					.leftJoin(chatObjects, eq(chatObjects.id, conversationsTable.chatObjectId))
+					.where(
+						or(
+							eq(conversationsTable.durableConversationId, conversation),
+							eq(conversationsTable.id, conversation),
+						),
+					)
+					.limit(1);
+				if (row !== undefined) {
+					resolvedDomainConversationId = row.conversation.id;
+					resolvedChannelId =
+						row.conversation.channelId ?? row.chat?.channelId ?? resolvedChannelId;
+					if (resolvedUserId === undefined) {
+						if (row.conversation.kind === "private") {
+							resolvedUserId =
+								row.conversation.platformConversationId ??
+								row.chat?.platformConversationId ??
+								undefined;
+						}
+						if (resolvedUserId === undefined) {
+							const [latestInbound] = await database
+								.select({ senderExternalId: messagesTable.senderExternalId })
+								.from(messagesTable)
+								.where(
+									and(
+										eq(messagesTable.conversationId, row.conversation.id),
+										eq(messagesTable.direction, "inbound"),
+									),
+								)
+								.orderBy(desc(messagesTable.occurredAt))
+								.limit(1);
+							if (
+								typeof latestInbound?.senderExternalId === "string" &&
+								latestInbound.senderExternalId.trim().length > 0
+							) {
+								resolvedUserId = latestInbound.senderExternalId.trim();
+							}
+						}
+					}
+				}
+			} catch {}
+		}
+		if (resolvedIsAdmin === undefined && resolvedUserId !== undefined) {
+			try {
+				const onebotSettings = await this.settings.read("onebot-napcat");
+				const adminUsers = Array.isArray(
+					(onebotSettings as { adminUsers?: unknown } | undefined)?.adminUsers,
+				)
+					? (onebotSettings as { adminUsers: unknown[] }).adminUsers.filter(
+							(entry): entry is string => typeof entry === "string",
+						)
+					: [];
+				if (adminUsers.includes(resolvedUserId)) {
+					resolvedIsAdmin = true;
+					resolvedRole = resolvedRole ?? "admin";
+				}
+			} catch {}
+		}
 		const channelCapabilities =
 			conversation === undefined
 				? undefined
-				: this.channels.capabilities(conversation.split(":")[0] ?? "");
+				: this.channels.capabilities(
+						resolvedChannelId ?? conversation.split(":")[0] ?? "",
+						resolvedDomainConversationId ?? conversation,
+					);
 		let conversationCapabilities: readonly string[] | undefined;
 		if (conversation !== undefined && this.#conversationCapabilities !== undefined) {
 			try {
@@ -455,6 +573,9 @@ export class PluginHost {
 				conversationCapabilities = [];
 			}
 		}
+		const resolvedTaskKind =
+			context.taskKind ??
+			(conversationCapabilities?.includes("coding") === true ? "coding" : undefined);
 		return {
 			grantedPermissions: manifest?.permissions ?? [],
 			...(context.allowedTools === undefined
@@ -462,6 +583,10 @@ export class PluginHost {
 				: { conversationAllowedTools: context.allowedTools }),
 			...(channelCapabilities === undefined ? {} : { channelCapabilities }),
 			...(conversationCapabilities === undefined ? {} : { conversationCapabilities }),
+			...(resolvedUserId === undefined ? {} : { userId: resolvedUserId }),
+			...(resolvedIsAdmin === undefined ? {} : { isAdmin: resolvedIsAdmin }),
+			...(resolvedRole === undefined ? {} : { role: resolvedRole }),
+			...(resolvedTaskKind === undefined ? {} : { taskKind: resolvedTaskKind }),
 		};
 	}
 

@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, or } from "drizzle-orm";
 import { consumeProactiveMarkers, type ConversationPolicy } from "@tsukaima/contracts";
 import {
 	withConversationLock,
@@ -111,7 +111,7 @@ export class PluginConversationService {
 				if (conversation === undefined) {
 					throw new Error(`Unknown conversation ${conversationId}`);
 				}
-				return await this.#policy.effectivePolicy(conversationId);
+				return await this.#policy.effectivePolicy(conversation.id);
 			},
 			list: async () => {
 				this.#assert(grantedPermissions, "conversation.read", pluginId);
@@ -161,7 +161,12 @@ export class PluginConversationService {
 			.select({ chat: chatObjects, conversation: conversations })
 			.from(conversations)
 			.leftJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
-			.where(eq(conversations.id, conversationId))
+			.where(
+				or(
+					eq(conversations.id, conversationId),
+					eq(conversations.durableConversationId, conversationId),
+				),
+			)
 			.limit(1);
 		return row === undefined ? undefined : summaryFrom(row.conversation, row.chat ?? undefined);
 	}
@@ -171,6 +176,8 @@ export class PluginConversationService {
 		limit = 10,
 	): Promise<readonly PluginConversationMessage[]> {
 		const database = this.#requireDatabase();
+		const resolved = await this.#get(conversationId);
+		const targetConversationId = resolved?.id ?? conversationId;
 		const bounded = Math.min(MAX_RECENT_MESSAGES, Math.max(1, Math.floor(limit)));
 		const rows = await database
 			.select({
@@ -184,7 +191,7 @@ export class PluginConversationService {
 				senderDisplayName: messages.senderDisplayName,
 			})
 			.from(messages)
-			.where(eq(messages.conversationId, conversationId))
+			.where(eq(messages.conversationId, targetConversationId))
 			.orderBy(desc(messages.occurredAt))
 			.limit(bounded);
 		return rows.toReversed().map((row) => ({

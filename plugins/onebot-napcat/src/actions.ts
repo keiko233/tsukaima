@@ -79,43 +79,261 @@ const DESCRIPTORS = {
 export type OneBotActionMethod = keyof typeof DESCRIPTORS;
 export const ONEBOT_ACTION_METHODS = Object.keys(DESCRIPTORS) as readonly OneBotActionMethod[];
 
-const asRecord = (value: unknown): Record<string, unknown> =>
-	typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
+const parseJsonIfString = (value: unknown): unknown => {
+	if (typeof value !== "string") return value;
+	const trimmed = value.trim();
+	if (
+		(trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+		(trimmed.startsWith("[") && trimmed.endsWith("]"))
+	) {
+		try {
+			return JSON.parse(trimmed) as unknown;
+		} catch {
+			return value;
+		}
+	}
+	return value;
+};
+
+const asRecord = (value: unknown): Record<string, unknown> => {
+	const parsed = parseJsonIfString(value);
+	return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+		? (parsed as Record<string, unknown>)
 		: {};
+};
+
+const toIdString = (value: unknown): string | undefined => {
+	if (typeof value === "string" && value.trim().length > 0) return value.trim();
+	if (typeof value === "number" && Number.isFinite(value)) return String(value);
+	return undefined;
+};
+
+const pickId = (record: Record<string, unknown>, keys: readonly string[]): string | undefined => {
+	for (const key of keys) {
+		const value = toIdString(record[key]);
+		if (value !== undefined) return value;
+	}
+	return undefined;
+};
 
 const asString = (value: unknown, label: string): string => {
-	if (typeof value === "string" && value.length > 0) return value;
+	const id = toIdString(value);
+	if (id !== undefined) return id;
 	throw new Error(`${label} is required`);
 };
 
 const asNumber = (value: unknown, label: string): number => {
 	if (typeof value === "number" && Number.isFinite(value)) return value;
+	if (typeof value === "string" && value.trim().length > 0) {
+		const parsed = Number(value.trim());
+		if (Number.isFinite(parsed)) return parsed;
+	}
 	throw new Error(`${label} must be a number`);
 };
 
-const asBoolean = (value: unknown, fallback = false): boolean =>
-	typeof value === "boolean" ? value : fallback;
+const asBoolean = (value: unknown, fallback = false): boolean => {
+	if (typeof value === "boolean") return value;
+	if (value === "true") return true;
+	if (value === "false") return false;
+	return fallback;
+};
 
-const asTarget = (value: unknown): OutboundTarget => {
-	const record = asRecord(value);
-	const kind = record.kind;
-	if (kind !== "private" && kind !== "group")
-		throw new Error("target.kind must be private or group");
+const parseTargetColon = (
+	raw: string,
+): { kind: "private" | "group"; platformConversationId: string; userId?: string } | undefined => {
+	const match = /^(private|group):([^:]+)(?::([^:]+))?$/u.exec(raw.trim());
+	if (!match) return undefined;
+	const kind = match[1] as "private" | "group";
+	const platformConversationId = match[2]!.trim();
+	const userId = match[3]?.trim();
+	if (platformConversationId.length === 0) return undefined;
 	return {
-		channelId: typeof record.channelId === "string" ? record.channelId : "onebot",
 		kind,
-		platformConversationId: asString(
-			record.platformConversationId,
-			"target.platformConversationId",
-		),
+		platformConversationId,
+		...(userId !== undefined && userId.length > 0 ? { userId } : {}),
 	};
 };
 
-const asParts = (value: unknown): MessagePart[] => {
-	if (!Array.isArray(value)) throw new Error("parts must be an array");
-	return value.map((part, index) => {
-		const parsed = messagePartSchema.safeParse(part);
+const resolveKind = (
+	targetRecord: Record<string, unknown>,
+	rootRecord: Record<string, unknown>,
+): "private" | "group" | undefined => {
+	for (const candidate of [
+		targetRecord.kind,
+		targetRecord.type,
+		targetRecord.targetKind,
+		targetRecord.target_type,
+		targetRecord.targetType,
+		targetRecord.scene,
+		targetRecord.chatType,
+		targetRecord.message_type,
+		targetRecord.messageType,
+		rootRecord["target.kind"],
+		rootRecord.kind,
+		rootRecord.targetKind,
+		rootRecord.target_type,
+		rootRecord.targetType,
+		rootRecord.scene,
+		rootRecord.chatType,
+		rootRecord.message_type,
+		rootRecord.messageType,
+		rootRecord.type,
+	]) {
+		if (candidate === "private" || candidate === "group") return candidate;
+		if (candidate === "friend" || candidate === "user" || candidate === "direct") return "private";
+	}
+	return undefined;
+};
+
+const asTarget = (value: unknown, rootInput?: Record<string, unknown>): OutboundTarget => {
+	const root = rootInput ?? asRecord(value);
+	const paramsRecord = asRecord(root.params);
+	const effectiveRoot = Object.keys(paramsRecord).length > 0 ? { ...paramsRecord, ...root } : root;
+	const rawTarget = value ?? effectiveRoot.target;
+	if (typeof rawTarget === "string") {
+		const colon = parseTargetColon(rawTarget);
+		if (colon !== undefined) {
+			return {
+				channelId: typeof effectiveRoot.channelId === "string" ? effectiveRoot.channelId : "onebot",
+				kind: colon.kind,
+				platformConversationId: colon.platformConversationId,
+			};
+		}
+	}
+	const record = asRecord(rawTarget);
+	const groupId =
+		pickId(record, ["groupId", "group_id"]) ?? pickId(effectiveRoot, ["groupId", "group_id"]);
+	const validGroupId = groupId !== undefined && groupId !== "0" ? groupId : undefined;
+	let kind = resolveKind(record, effectiveRoot);
+	if (kind === undefined) {
+		if (validGroupId !== undefined) {
+			kind = "group";
+		} else if (
+			pickId(record, [
+				"platformConversationId",
+				"userId",
+				"user_id",
+				"targetId",
+				"target_id",
+				"peerId",
+				"peer_id",
+				"chatId",
+				"chat_id",
+				"qq",
+				"id",
+			]) !== undefined ||
+			pickId(effectiveRoot, [
+				"target.platformConversationId",
+				"target.id",
+				"platformConversationId",
+				"userId",
+				"user_id",
+				"targetId",
+				"target_id",
+				"peerId",
+				"peer_id",
+				"chatId",
+				"chat_id",
+				"qq",
+				"id",
+			]) !== undefined
+		) {
+			kind = "private";
+		}
+	}
+	if (kind !== "private" && kind !== "group") {
+		throw new Error("target.kind must be private or group");
+	}
+	const platformConversationId =
+		kind === "group"
+			? (pickId(record, [
+					"platformConversationId",
+					"groupId",
+					"group_id",
+					"targetId",
+					"target_id",
+					"chatId",
+					"chat_id",
+					"id",
+				]) ??
+				validGroupId ??
+				pickId(effectiveRoot, [
+					"target.platformConversationId",
+					"target.id",
+					"platformConversationId",
+					"targetId",
+					"target_id",
+					"chatId",
+					"chat_id",
+					"id",
+				]))
+			: (pickId(record, [
+					"platformConversationId",
+					"userId",
+					"user_id",
+					"targetId",
+					"target_id",
+					"peerId",
+					"peer_id",
+					"chatId",
+					"chat_id",
+					"qq",
+					"id",
+				]) ??
+				pickId(effectiveRoot, [
+					"target.platformConversationId",
+					"target.id",
+					"platformConversationId",
+					"userId",
+					"user_id",
+					"targetId",
+					"target_id",
+					"peerId",
+					"peer_id",
+					"chatId",
+					"chat_id",
+					"qq",
+					"id",
+				]));
+	return {
+		channelId:
+			typeof record.channelId === "string"
+				? record.channelId
+				: typeof effectiveRoot.channelId === "string"
+					? effectiveRoot.channelId
+					: "onebot",
+		kind,
+		platformConversationId: asString(platformConversationId, "target.platformConversationId"),
+	};
+};
+
+const asParts = (value: unknown, rootInput?: Record<string, unknown>): MessagePart[] => {
+	const root = rootInput ?? {};
+	const paramsRecord = asRecord(root.params);
+	const raw =
+		value ??
+		paramsRecord.parts ??
+		root.text ??
+		root.message ??
+		root.content ??
+		paramsRecord.text ??
+		paramsRecord.message;
+	const parsedValue = parseJsonIfString(raw);
+	if (typeof parsedValue === "string" && parsedValue.length > 0) {
+		return [{ text: parsedValue, type: "text" }];
+	}
+	const list =
+		!Array.isArray(parsedValue) &&
+		typeof parsedValue === "object" &&
+		parsedValue !== null &&
+		"type" in parsedValue
+			? [parsedValue]
+			: parsedValue;
+	if (!Array.isArray(list)) throw new Error("parts must be an array");
+	return list.map((part, index) => {
+		const candidate =
+			typeof part === "string" ? { text: part, type: "text" } : parseJsonIfString(part);
+		const parsed = messagePartSchema.safeParse(candidate);
 		if (!parsed.success) {
 			throw new Error(
 				`parts[${index}] is invalid: ${parsed.error.issues[0]?.message ?? "invalid"}`,
@@ -252,20 +470,54 @@ export class OneBotActionFacade {
 	}
 
 	#targetId(method: OneBotActionMethod, input: Record<string, unknown>): string | undefined {
-		const target = asRecord(input.target);
-		if (method === "rawAction") return typeof input.action === "string" ? input.action : undefined;
-		if (method === "send" || method === "sendForward" || method === "readHistory") {
-			return typeof target.platformConversationId === "string"
-				? target.platformConversationId
-				: undefined;
+		if (method === "rawAction") return toIdString(input.action);
+		if (
+			method === "send" ||
+			method === "sendForward" ||
+			method === "readHistory" ||
+			method === "setTyping"
+		) {
+			try {
+				return asTarget(input.target, input).platformConversationId;
+			} catch {
+				const target = asRecord(input.target);
+				return pickId(target, [
+					"platformConversationId",
+					"id",
+					"targetId",
+					"target_id",
+					"userId",
+					"user_id",
+					"groupId",
+					"group_id",
+				]);
+			}
 		}
-		return (
-			(typeof input.groupId === "string" ? input.groupId : undefined) ??
-			(typeof input.userId === "string" ? input.userId : undefined) ??
-			(typeof input.messageId === "string" ? input.messageId : undefined) ??
-			(typeof input.platformMessageId === "string" ? input.platformMessageId : undefined) ??
-			(typeof input.fileId === "string" ? input.fileId : undefined)
-		);
+		if (method === "poke") {
+			const targetRecord = asRecord(input.target);
+			const colon = typeof input.target === "string" ? parseTargetColon(input.target) : undefined;
+			const userId =
+				pickId(input, ["userId", "user_id", "targetId", "target_id", "qq", "id"]) ??
+				pickId(targetRecord, ["userId", "user_id", "targetId", "target_id", "qq", "id"]) ??
+				colon?.userId;
+			if (userId !== undefined) return userId;
+			try {
+				return asTarget(input.target, input).platformConversationId;
+			} catch {
+				return undefined;
+			}
+		}
+		return pickId(input, [
+			"groupId",
+			"group_id",
+			"userId",
+			"user_id",
+			"messageId",
+			"message_id",
+			"platformMessageId",
+			"fileId",
+			"file_id",
+		]);
 	}
 
 	async #execute(
@@ -277,9 +529,11 @@ export class OneBotActionFacade {
 		if (channel === undefined) throw new Error("channel-unavailable");
 		switch (method) {
 			case "send": {
-				const target = asTarget(input.target);
-				const parts = asParts(input.parts);
-				const reply = asStringOptional(input.replyToPlatformMessageId);
+				const target = asTarget(input.target, input);
+				const parts = asParts(input.parts, input);
+				const reply = toIdString(
+					input.replyToPlatformMessageId ?? input.reply_to_message_id ?? input.replyToMessageId,
+				);
 				if (asBoolean(input.forward)) return channel.sendForward(target, parts);
 				return adapter.send(
 					target,
@@ -288,99 +542,138 @@ export class OneBotActionFacade {
 				);
 			}
 			case "sendForward":
-				return channel.sendForward(asTarget(input.target), asParts(input.parts));
+				return channel.sendForward(asTarget(input.target, input), asParts(input.parts, input));
 			case "lookupMessage":
-				return channel.lookupMessage(asString(input.platformMessageId, "platformMessageId"));
-			case "readHistory":
-				return channel.readHistory(asTarget(input.target), {
-					...(typeof input.limit === "number" ? { limit: input.limit } : {}),
-					...(typeof input.sinceMs === "number" ? { sinceMs: input.sinceMs } : {}),
+				return channel.lookupMessage(
+					asString(
+						pickId(input, ["platformMessageId", "messageId", "message_id", "id"]),
+						"platformMessageId",
+					),
+				);
+			case "readHistory": {
+				const limitRaw = input.limit ?? input.count;
+				const limit = limitRaw === undefined ? undefined : asNumber(limitRaw, "limit");
+				const sinceMs =
+					input.sinceMs === undefined ? undefined : asNumber(input.sinceMs, "sinceMs");
+				return channel.readHistory(asTarget(input.target, input), {
+					...(limit === undefined ? {} : { limit }),
+					...(sinceMs === undefined ? {} : { sinceMs }),
 				});
-			case "poke":
-				return channel.poke(asTarget(input.target), asString(input.userId, "userId"));
+			}
+			case "poke": {
+				const target = asTarget(input.target, input);
+				const targetRecord = asRecord(input.target);
+				const colon = typeof input.target === "string" ? parseTargetColon(input.target) : undefined;
+				const userId =
+					pickId(input, ["userId", "user_id", "qq"]) ??
+					pickId(targetRecord, ["userId", "user_id", "qq"]) ??
+					colon?.userId ??
+					(target.kind === "private"
+						? target.platformConversationId
+						: (pickId(input, ["targetId", "target_id", "id"]) ??
+							pickId(targetRecord, ["targetId", "target_id", "id"])));
+				return channel.poke(target, asString(userId, "userId"));
+			}
 			case "react":
 				return channel.react(
-					asString(input.messageId, "messageId"),
-					asString(input.emojiId, "emojiId"),
+					asString(pickId(input, ["messageId", "message_id", "platformMessageId"]), "messageId"),
+					asString(pickId(input, ["emojiId", "emoji_id", "emoji"]), "emojiId"),
 					asBoolean(input.set, true),
 				);
 			case "setTyping":
-				return channel.setTyping(asTarget(input.target), asBoolean(input.typing, true));
+				return channel.setTyping(asTarget(input.target, input), asBoolean(input.typing, true));
 			case "deleteMessage":
-				return channel.deleteMessage(asString(input.messageId, "messageId"));
+				return channel.deleteMessage(
+					asString(pickId(input, ["messageId", "message_id", "platformMessageId"]), "messageId"),
+				);
 			case "markRead":
-				return channel.markRead(asString(input.messageId, "messageId"));
+				return channel.markRead(
+					asString(pickId(input, ["messageId", "message_id", "platformMessageId"]), "messageId"),
+				);
 			case "listGroupFiles":
-				return channel.listGroupFiles(asString(input.groupId, "groupId"));
+				return channel.listGroupFiles(asString(pickId(input, ["groupId", "group_id"]), "groupId"));
 			case "fetchGroupFile":
 				return channel.fetchGroupFile(
-					asString(input.groupId, "groupId"),
-					asString(input.fileId, "fileId"),
-					typeof input.busid === "number" ? input.busid : undefined,
+					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					asString(pickId(input, ["fileId", "file_id"]), "fileId"),
+					input.busid === undefined ? undefined : asNumber(input.busid, "busid"),
 				);
 			case "uploadGroupFile":
 				return channel.uploadGroupFile(
-					asString(input.groupId, "groupId"),
+					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
 					asString(input.file, "file"),
 					asString(input.name, "name"),
 					asStringOptional(input.folder),
 				);
 			case "deleteGroupFile":
 				return channel.deleteGroupFile(
-					asString(input.groupId, "groupId"),
-					asString(input.fileId, "fileId"),
-					typeof input.busid === "number" ? input.busid : undefined,
+					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					asString(pickId(input, ["fileId", "file_id"]), "fileId"),
+					input.busid === undefined ? undefined : asNumber(input.busid, "busid"),
 				);
 			case "groupBan":
 				return channel.groupBan(
-					asString(input.groupId, "groupId"),
-					asString(input.userId, "userId"),
-					asNumber(input.durationSeconds, "durationSeconds"),
+					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					asString(pickId(input, ["userId", "user_id", "qq"]), "userId"),
+					asNumber(
+						input.durationSeconds ?? input.duration_seconds ?? input.duration,
+						"durationSeconds",
+					),
 				);
 			case "groupWholeBan":
-				return channel.groupWholeBan(asString(input.groupId, "groupId"), asBoolean(input.enable));
+				return channel.groupWholeBan(
+					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					asBoolean(input.enable, true),
+				);
 			case "groupKick":
 				return channel.groupKick(
-					asString(input.groupId, "groupId"),
-					asString(input.userId, "userId"),
-					asBoolean(input.rejectAddRequest),
+					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					asString(pickId(input, ["userId", "user_id", "qq"]), "userId"),
+					asBoolean(input.rejectAddRequest ?? input.reject_add_request),
 				);
 			case "groupSetAdmin":
 				return channel.groupSetAdmin(
-					asString(input.groupId, "groupId"),
-					asString(input.userId, "userId"),
-					asBoolean(input.enable),
+					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					asString(pickId(input, ["userId", "user_id", "qq"]), "userId"),
+					asBoolean(input.enable, true),
 				);
 			case "groupSetCard":
 				return channel.groupSetCard(
-					asString(input.groupId, "groupId"),
-					asString(input.userId, "userId"),
+					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					asString(pickId(input, ["userId", "user_id", "qq"]), "userId"),
 					asString(input.card, "card"),
 				);
 			case "groupSetName":
 				return channel.groupSetName(
-					asString(input.groupId, "groupId"),
-					asString(input.groupName, "groupName"),
+					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					asString(input.groupName ?? input.group_name ?? input.name, "groupName"),
 				);
 			case "groupLeave":
-				return channel.groupLeave(asString(input.groupId, "groupId"), asBoolean(input.dismiss));
+				return channel.groupLeave(
+					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					asBoolean(input.dismiss ?? input.is_dismiss),
+				);
 			case "groupSetSpecialTitle":
 				return channel.groupSetSpecialTitle(
-					asString(input.groupId, "groupId"),
-					asString(input.userId, "userId"),
-					asString(input.title, "title"),
+					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					asString(pickId(input, ["userId", "user_id", "qq"]), "userId"),
+					asString(input.title ?? input.special_title ?? input.specialTitle, "title"),
 				);
 			case "setAvatar":
 				return channel.setAvatar(asString(input.file, "file"));
 			case "setProfile":
-				return channel.setProfile(asRecord(input.profile));
+				return channel.setProfile(asRecord(input.profile ?? input));
 			case "setLongnick":
-				return channel.setLongnick(asString(input.longnick, "longnick"));
+				return channel.setLongnick(asString(input.longnick ?? input.longNick, "longnick"));
 			case "setOnlineStatus":
 				return channel.setOnlineStatus(
 					asNumber(input.status, "status"),
-					typeof input.extStatus === "number" ? input.extStatus : undefined,
-					typeof input.batteryStatus === "number" ? input.batteryStatus : undefined,
+					input.extStatus !== undefined || input.ext_status !== undefined
+						? asNumber(input.extStatus ?? input.ext_status, "extStatus")
+						: undefined,
+					input.batteryStatus !== undefined || input.battery_status !== undefined
+						? asNumber(input.batteryStatus ?? input.battery_status, "batteryStatus")
+						: undefined,
 				);
 			case "rawAction":
 				return channel.rawAction(asString(input.action, "action"), asRecord(input.params));

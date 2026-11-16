@@ -135,6 +135,26 @@ function scheduleInput(input: Record<string, unknown>) {
 	};
 }
 
+async function resolveConversationScope(
+	context: PluginContext,
+	conversationId: string | undefined,
+): Promise<{ readonly canonicalId?: string; readonly aliases: ReadonlySet<string> }> {
+	if (conversationId === undefined || conversationId.trim().length === 0) {
+		return { aliases: new Set() };
+	}
+	const trimmed = conversationId.trim();
+	const aliases = new Set<string>([trimmed]);
+	try {
+		const found = await context.conversations?.get(trimmed);
+		if (found !== undefined) {
+			aliases.add(found.id);
+			aliases.add(found.durableConversationId);
+			return { aliases, canonicalId: found.id };
+		}
+	} catch {}
+	return { aliases, canonicalId: trimmed };
+}
+
 /** Registers the `proactive-scheduler.*` model tools under host-enforced ToolPolicy. */
 export function registerProactiveSchedulerTools(
 	context: PluginContext,
@@ -145,13 +165,14 @@ export function registerProactiveSchedulerTools(
 		description:
 			"Schedule a durable reminder, nudge, proactive message, or workflow follow-up in the current conversation. Bounds are enforced by policy.",
 		async execute(input, invocation) {
-			const conversationId = invocation.conversationId;
+			const scope = await resolveConversationScope(context, invocation.conversationId);
+			const conversationId = scope.canonicalId;
 			if (conversationId === undefined || conversationId.trim().length === 0) {
 				return text({ error: "conversation_required" });
 			}
 			try {
 				const requested = asString(input, "conversationId");
-				if (requested !== undefined && requested !== conversationId) {
+				if (requested !== undefined && !scope.aliases.has(requested)) {
 					return await deny(context, "cross_conversation_denied", input, invocation);
 				}
 				const task = await service.createTask(
@@ -204,14 +225,19 @@ export function registerProactiveSchedulerTools(
 		description:
 			"List durable proactive/scheduled tasks. Conversation-scoped by default; admins may query another conversation.",
 		async execute(input, invocation) {
-			const requested = asString(input, "conversationId");
-			const conversationId = invocation.conversationId;
-			if (requested !== undefined && requested !== conversationId && !isAdmin(invocation)) {
+			const scope = await resolveConversationScope(context, invocation.conversationId);
+			const requestedRaw = asString(input, "conversationId");
+			const conversationId = scope.canonicalId;
+			if (requestedRaw !== undefined && !scope.aliases.has(requestedRaw) && !isAdmin(invocation)) {
 				return await deny(context, "cross_conversation_denied", input, invocation);
 			}
-			if (requested === undefined && conversationId === undefined && !isAdmin(invocation)) {
+			if (requestedRaw === undefined && conversationId === undefined && !isAdmin(invocation)) {
 				return await deny(context, "conversation_required", input, invocation);
 			}
+			const requested =
+				requestedRaw !== undefined && scope.aliases.has(requestedRaw)
+					? (conversationId ?? requestedRaw)
+					: requestedRaw;
 			const kind = scheduledTaskKindSchema.safeParse(input.kind);
 			const tasks = await service.listTasks({
 				...(requested === undefined ? {} : { conversationId: requested }),
@@ -250,9 +276,10 @@ export function registerProactiveSchedulerTools(
 		description:
 			"Cancel one proactive/scheduled task, or every scheduled task in the current conversation. Cross-conversation bulk cancel is admin only.",
 		async execute(input, invocation) {
+			const scope = await resolveConversationScope(context, invocation.conversationId);
 			const taskId = asString(input, "taskId");
-			const requested = asString(input, "conversationId");
-			const conversationId = invocation.conversationId;
+			const requestedRaw = asString(input, "conversationId");
+			const conversationId = scope.canonicalId;
 			const global = input.scope === "global";
 			if (global && !isAdmin(invocation)) {
 				return await deny(context, "admin_required", input, invocation);
@@ -260,14 +287,18 @@ export function registerProactiveSchedulerTools(
 			if (taskId !== undefined) {
 				const task = await service.repository.getTask(taskId);
 				if (task === undefined) return text({ error: "unknown_task" });
-				if (task.conversationId !== conversationId && !isAdmin(invocation)) {
+				if (!scope.aliases.has(task.conversationId) && !isAdmin(invocation)) {
 					return await deny(context, "cross_conversation_denied", input, invocation);
 				}
 				return text({ cancelled: await service.cancelTask(taskId, invocation.userId ?? "agent") });
 			}
-			if (requested !== undefined && requested !== conversationId && !isAdmin(invocation)) {
+			if (requestedRaw !== undefined && !scope.aliases.has(requestedRaw) && !isAdmin(invocation)) {
 				return await deny(context, "cross_conversation_denied", input, invocation);
 			}
+			const requested =
+				requestedRaw !== undefined && scope.aliases.has(requestedRaw)
+					? (conversationId ?? requestedRaw)
+					: requestedRaw;
 			const target = requested ?? conversationId;
 			if (target === undefined) {
 				if (!isAdmin(invocation)) {
@@ -305,11 +336,12 @@ export function registerProactiveSchedulerTools(
 	register({
 		description: "Read the status and recent decision/run history for one scheduled task in scope.",
 		async execute(input, invocation) {
+			const scope = await resolveConversationScope(context, invocation.conversationId);
 			const taskId = asString(input, "taskId");
 			if (taskId === undefined) return text({ error: "taskId_required" });
 			const result = await service.getTask(taskId);
 			if (result === undefined) return text({ error: "unknown_task" });
-			if (result.task.conversationId !== invocation.conversationId && !isAdmin(invocation)) {
+			if (!scope.aliases.has(result.task.conversationId) && !isAdmin(invocation)) {
 				return await deny(context, "cross_conversation_denied", input, invocation);
 			}
 			return text({

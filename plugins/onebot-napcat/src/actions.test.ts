@@ -262,4 +262,124 @@ describe("OneBot action policy and audit", () => {
 			await oneBotNapCatPlugin.teardown?.(harness.context);
 		}
 	});
+
+	test("exposes structured JSON schemas for all registered OneBot tools", async () => {
+		const harness = await createHarness(base);
+		try {
+			const tools = harness.context.tools.list();
+			expect(tools.length).toBeGreaterThan(0);
+			for (const tool of tools) {
+				const properties = (tool.parameters as { properties?: Record<string, unknown> }).properties;
+				expect(properties).toBeDefined();
+				expect(Object.keys(properties ?? {}).length).toBeGreaterThan(0);
+			}
+		} finally {
+			await oneBotNapCatPlugin.teardown?.(harness.context);
+		}
+	});
+
+	test("normalizes LLM-coerced and OneBot-style tool inputs for poke, send, and readHistory", async () => {
+		const harness = await createHarness(base);
+		try {
+			const pokeTargetType = await harness.context.tools.invoke("onebot-napcat.poke", {
+				target_id: "10002",
+				target_type: "private",
+			});
+			expect(pokeTargetType.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "friend_poke",
+				params: { user_id: "10002" },
+			});
+
+			const pokeScene = await harness.context.tools.invoke("onebot-napcat.poke", {
+				scene: "private",
+				user_id: "10002",
+			});
+			expect(pokeScene.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "friend_poke",
+				params: { user_id: "10002" },
+			});
+
+			const pokeJsonTarget = await harness.context.tools.invoke("onebot-napcat.poke", {
+				target: '{"kind": "private", "id": "10002"}',
+				userId: "10002",
+			});
+			expect(pokeJsonTarget.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "friend_poke",
+				params: { user_id: "10002" },
+			});
+
+			const pokeColonTarget = await harness.context.tools.invoke("onebot-napcat.poke", {
+				target: "private:10002",
+			});
+			expect(pokeColonTarget.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "friend_poke",
+				params: { user_id: "10002" },
+			});
+
+			const pokeGroup = await harness.context.tools.invoke("onebot-napcat.poke", {
+				group_id: "20001",
+				user_id: 10002,
+			});
+			expect(pokeGroup.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "group_poke",
+				params: { group_id: "20001", user_id: "10002" },
+			});
+
+			const sendTargetType = await harness.context.tools.invoke("onebot-napcat.send", {
+				parts: '[{"type": "text", "text": "Synthetic private message"}]',
+				target_id: "10002",
+				target_type: "private",
+			});
+			expect(sendTargetType.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "send_private_msg",
+				params: {
+					message: [{ data: { text: "Synthetic private message" }, type: "text" }],
+					user_id: "10002",
+				},
+			});
+
+			const sendScene = await harness.context.tools.invoke("onebot-napcat.send", {
+				parts: '[{"type": "text", "text": "Synthetic private message"}]',
+				scene: "private",
+				user_id: "10002",
+			});
+			expect(sendScene.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "send_private_msg",
+				params: {
+					message: [{ data: { text: "Synthetic private message" }, type: "text" }],
+					user_id: "10002",
+				},
+			});
+
+			const sendShorthand = await harness.context.tools.invoke("onebot-napcat.send", {
+				message: "Synthetic shorthand message",
+				user_id: 10002,
+			});
+			expect(sendShorthand.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "send_private_msg",
+				params: {
+					message: [{ data: { text: "Synthetic shorthand message" }, type: "text" }],
+					user_id: "10002",
+				},
+			});
+
+			const history = await harness.context.tools.invoke("onebot-napcat.readHistory", {
+				count: 5,
+				message_type: "private",
+				user_id: 10003,
+			});
+			expect(history.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)?.action).toBe("get_friend_msg_history");
+		} finally {
+			await oneBotNapCatPlugin.teardown?.(harness.context);
+		}
+	});
 });

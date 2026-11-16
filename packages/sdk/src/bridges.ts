@@ -259,6 +259,9 @@ export class LocalToolBridge {
 		}
 		const decision = resolveToolPolicyAccess(tool, {
 			...context,
+			...(context.allowedTools === undefined
+				? {}
+				: { conversationAllowedTools: context.allowedTools }),
 			grantedPermissions: this.#grantedPermissions,
 		});
 		if (!decision.allowed) {
@@ -905,9 +908,43 @@ export function createPluginToolsExtension(
 					tool: tool.name,
 				});
 				const policy = resolveToolPolicy(tool);
-				const decision = resolveToolPolicyAccess(tool, {
+				const resolvedPolicyContext = await policyContextFor(tool, invocationContext);
+				const mergedCapabilities =
+					resolvedPolicyContext.channelCapabilities !== undefined ||
+					resolvedPolicyContext.conversationCapabilities !== undefined ||
+					invocationContext.conversationCapabilities !== undefined
+						? [
+								...new Set([
+									...(invocationContext.conversationCapabilities ?? []),
+									...(resolvedPolicyContext.channelCapabilities ?? []),
+									...(resolvedPolicyContext.conversationCapabilities ?? []),
+								]),
+							]
+						: undefined;
+				const mergedAllowedTools =
+					resolvedPolicyContext.allowedTools ??
+					resolvedPolicyContext.conversationAllowedTools ??
+					invocationContext.allowedTools;
+				const effectiveInvocationContext: ToolInvocationContext = {
 					...invocationContext,
-					...(await policyContextFor(tool, invocationContext)),
+					...(resolvedPolicyContext.userId === undefined
+						? {}
+						: { userId: resolvedPolicyContext.userId }),
+					...(resolvedPolicyContext.isAdmin === undefined
+						? {}
+						: { isAdmin: resolvedPolicyContext.isAdmin }),
+					...(resolvedPolicyContext.role === undefined ? {} : { role: resolvedPolicyContext.role }),
+					...(resolvedPolicyContext.taskKind === undefined
+						? {}
+						: { taskKind: resolvedPolicyContext.taskKind }),
+					...(mergedAllowedTools === undefined ? {} : { allowedTools: mergedAllowedTools }),
+					...(mergedCapabilities === undefined
+						? {}
+						: { conversationCapabilities: mergedCapabilities }),
+				};
+				const decision = resolveToolPolicyAccess(tool, {
+					...effectiveInvocationContext,
+					...resolvedPolicyContext,
 				});
 				if (!decision.allowed) {
 					logDenied(decision.reason ?? "denied");
@@ -953,7 +990,7 @@ export function createPluginToolsExtension(
 					release = await semaphore.acquire(controller.signal);
 					if (timedOut) throw new Error(`Tool ${tool.name} timed out after ${policy.timeoutMs}ms`);
 					const execution = Promise.resolve().then(() =>
-						invoke(tool.name, input, invocationContext),
+						invoke(tool.name, input, effectiveInvocationContext),
 					);
 					const timeout = new Promise<never>((_resolve, reject) => {
 						if (controller.signal.aborted) {

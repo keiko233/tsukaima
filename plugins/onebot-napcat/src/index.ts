@@ -88,11 +88,309 @@ const TOOL_DESCRIPTIONS: Record<OneBotActionMethod, string> = {
 	uploadGroupFile: "Upload a file into a NapCat group.",
 };
 
-const TOOL_PARAMETERS = {
+const TARGET_SCHEMA = {
 	additionalProperties: true,
-	properties: {},
+	description:
+		"Target chat. Prefer { kind: 'private' | 'group', platformConversationId: '<QQ user_id or group_id>' }.",
+	properties: {
+		channelId: { type: "string" },
+		kind: { enum: ["private", "group"], type: "string" },
+		platformConversationId: {
+			description: "QQ user_id (for private chat) or group_id (for group chat).",
+			type: "string",
+		},
+	},
+	required: ["kind", "platformConversationId"],
 	type: "object",
 } as const;
+
+const MESSAGE_PART_SCHEMA = {
+	additionalProperties: true,
+	properties: {
+		mediaId: { type: "string" },
+		mimeType: { type: "string" },
+		name: { type: "string" },
+		sha256: { type: "string" },
+		text: { type: "string" },
+		type: {
+			enum: ["text", "image", "sticker", "audio", "video", "file", "channel-native"],
+			type: "string",
+		},
+		url: { type: "string" },
+	},
+	required: ["type"],
+	type: "object",
+} as const;
+
+const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unknown>> = {
+	deleteGroupFile: {
+		additionalProperties: true,
+		properties: {
+			busid: { type: "integer" },
+			fileId: { type: "string" },
+			groupId: { type: "string" },
+		},
+		required: ["groupId", "fileId"],
+		type: "object",
+	},
+	deleteMessage: {
+		additionalProperties: true,
+		properties: {
+			messageId: { type: "string" },
+		},
+		required: ["messageId"],
+		type: "object",
+	},
+	fetchGroupFile: {
+		additionalProperties: true,
+		properties: {
+			busid: { type: "integer" },
+			fileId: { type: "string" },
+			groupId: { type: "string" },
+		},
+		required: ["groupId", "fileId"],
+		type: "object",
+	},
+	groupBan: {
+		additionalProperties: true,
+		properties: {
+			durationSeconds: { minimum: 0, type: "integer" },
+			groupId: { type: "string" },
+			userId: { type: "string" },
+		},
+		required: ["groupId", "userId", "durationSeconds"],
+		type: "object",
+	},
+	groupKick: {
+		additionalProperties: true,
+		properties: {
+			groupId: { type: "string" },
+			rejectAddRequest: { type: "boolean" },
+			userId: { type: "string" },
+		},
+		required: ["groupId", "userId"],
+		type: "object",
+	},
+	groupLeave: {
+		additionalProperties: true,
+		properties: {
+			dismiss: { type: "boolean" },
+			groupId: { type: "string" },
+		},
+		required: ["groupId"],
+		type: "object",
+	},
+	groupSetAdmin: {
+		additionalProperties: true,
+		properties: {
+			enable: { type: "boolean" },
+			groupId: { type: "string" },
+			userId: { type: "string" },
+		},
+		required: ["groupId", "userId"],
+		type: "object",
+	},
+	groupSetCard: {
+		additionalProperties: true,
+		properties: {
+			card: { type: "string" },
+			groupId: { type: "string" },
+			userId: { type: "string" },
+		},
+		required: ["groupId", "userId", "card"],
+		type: "object",
+	},
+	groupSetName: {
+		additionalProperties: true,
+		properties: {
+			groupId: { type: "string" },
+			groupName: { type: "string" },
+		},
+		required: ["groupId", "groupName"],
+		type: "object",
+	},
+	groupSetSpecialTitle: {
+		additionalProperties: true,
+		properties: {
+			groupId: { type: "string" },
+			title: { type: "string" },
+			userId: { type: "string" },
+		},
+		required: ["groupId", "userId", "title"],
+		type: "object",
+	},
+	groupWholeBan: {
+		additionalProperties: true,
+		properties: {
+			enable: { type: "boolean" },
+			groupId: { type: "string" },
+		},
+		required: ["groupId"],
+		type: "object",
+	},
+	listGroupFiles: {
+		additionalProperties: true,
+		properties: {
+			groupId: { type: "string" },
+		},
+		required: ["groupId"],
+		type: "object",
+	},
+	lookupMessage: {
+		additionalProperties: true,
+		properties: {
+			messageId: { type: "string" },
+			platformMessageId: { type: "string" },
+		},
+		required: ["platformMessageId"],
+		type: "object",
+	},
+	markRead: {
+		additionalProperties: true,
+		properties: {
+			messageId: { type: "string" },
+		},
+		required: ["messageId"],
+		type: "object",
+	},
+	poke: {
+		additionalProperties: true,
+		properties: {
+			groupId: {
+				description: "Optional QQ group_id when poking a member inside a group.",
+				type: "string",
+			},
+			target: TARGET_SCHEMA,
+			userId: {
+				description:
+					"QQ user_id to poke. In private chat, defaults to target.platformConversationId.",
+				type: "string",
+			},
+		},
+		type: "object",
+	},
+	rawAction: {
+		additionalProperties: true,
+		properties: {
+			action: { type: "string" },
+			params: { additionalProperties: true, type: "object" },
+		},
+		required: ["action"],
+		type: "object",
+	},
+	react: {
+		additionalProperties: true,
+		properties: {
+			emojiId: { type: "string" },
+			messageId: { type: "string" },
+			set: { type: "boolean" },
+		},
+		required: ["messageId", "emojiId"],
+		type: "object",
+	},
+	readHistory: {
+		additionalProperties: true,
+		properties: {
+			groupId: { type: "string" },
+			limit: { maximum: 50, minimum: 1, type: "integer" },
+			sinceMs: { minimum: 0, type: "integer" },
+			target: TARGET_SCHEMA,
+			userId: { type: "string" },
+		},
+		type: "object",
+	},
+	send: {
+		additionalProperties: true,
+		properties: {
+			forward: { type: "boolean" },
+			groupId: { type: "string" },
+			parts: {
+				description: "Ordered message parts, e.g. [{ type: 'text', text: 'Hello' }].",
+				items: MESSAGE_PART_SCHEMA,
+				type: "array",
+			},
+			replyToPlatformMessageId: { type: "string" },
+			target: TARGET_SCHEMA,
+			text: {
+				description: "Plain-text message shorthand when parts is omitted.",
+				type: "string",
+			},
+			userId: { type: "string" },
+		},
+		type: "object",
+	},
+	sendForward: {
+		additionalProperties: true,
+		properties: {
+			groupId: { type: "string" },
+			parts: {
+				items: MESSAGE_PART_SCHEMA,
+				type: "array",
+			},
+			target: TARGET_SCHEMA,
+			text: { type: "string" },
+			userId: { type: "string" },
+		},
+		type: "object",
+	},
+	setAvatar: {
+		additionalProperties: true,
+		properties: {
+			file: { type: "string" },
+		},
+		required: ["file"],
+		type: "object",
+	},
+	setLongnick: {
+		additionalProperties: true,
+		properties: {
+			longnick: { type: "string" },
+		},
+		required: ["longnick"],
+		type: "object",
+	},
+	setOnlineStatus: {
+		additionalProperties: true,
+		properties: {
+			batteryStatus: { type: "integer" },
+			extStatus: { type: "integer" },
+			status: { type: "integer" },
+		},
+		required: ["status"],
+		type: "object",
+	},
+	setProfile: {
+		additionalProperties: true,
+		properties: {
+			company: { type: "string" },
+			email: { type: "string" },
+			nickname: { type: "string" },
+			personalNote: { type: "string" },
+			profile: { additionalProperties: true, type: "object" },
+		},
+		type: "object",
+	},
+	setTyping: {
+		additionalProperties: true,
+		properties: {
+			target: TARGET_SCHEMA,
+			typing: { type: "boolean" },
+			userId: { type: "string" },
+		},
+		type: "object",
+	},
+	uploadGroupFile: {
+		additionalProperties: true,
+		properties: {
+			file: { type: "string" },
+			folder: { type: "string" },
+			groupId: { type: "string" },
+			name: { type: "string" },
+		},
+		required: ["groupId", "file", "name"],
+		type: "object",
+	},
+};
 
 const endpointFor = (config: OneBotConfig): string =>
 	config.mode === "reverse"
@@ -281,6 +579,7 @@ function registerTools(context: PluginContext, runtime: OneBotRuntime): void {
 				const actor: OneBotActionActor = {
 					...(toolContext.userId === undefined ? {} : { actorId: toolContext.userId }),
 					actorKind: "agent",
+					...(toolContext.isAdmin === true ? { trustedAdmin: true } : {}),
 				};
 				const outcome = await facade.run(method, input, actor);
 				if (!outcome.ok) throw new Error(`OneBot action denied or failed: ${outcome.reason}`);
@@ -289,7 +588,7 @@ function registerTools(context: PluginContext, runtime: OneBotRuntime): void {
 				} satisfies ToolResult;
 			},
 			name: `onebot-napcat.${method}`,
-			parameters: TOOL_PARAMETERS,
+			parameters: TOOL_PARAMETERS_BY_METHOD[method],
 			requiredPermissions: ONEBOT_ACTION_PERMISSIONS[method],
 		});
 	}

@@ -310,7 +310,8 @@ export class ProactiveSchedulerService {
 		const conversation = await this.#conversations.get(parsed.conversationId);
 		if (conversation === undefined)
 			throw new Error(`Unknown conversation ${parsed.conversationId}`);
-		const policy = await this.#repository.effectivePolicy(parsed.conversationId);
+		const canonicalConversationId = conversation.id;
+		const policy = await this.#repository.effectivePolicy(canonicalConversationId);
 		if (parsed.delayMs > policy.maxDelayMs) {
 			throw new Error(`delayMs exceeds policy maxDelayMs (${policy.maxDelayMs})`);
 		}
@@ -321,7 +322,7 @@ export class ProactiveSchedulerService {
 		if (maxAttempts > policy.maxAttempts) {
 			throw new Error(`maxAttempts exceeds policy maxAttempts (${policy.maxAttempts})`);
 		}
-		const pending = await this.#repository.pendingTasksForConversation(parsed.conversationId);
+		const pending = await this.#repository.pendingTasksForConversation(canonicalConversationId);
 		if (pending.length >= policy.maxPendingPerConversation) {
 			throw new Error(
 				`conversation already has ${pending.length} pending tasks (limit ${policy.maxPendingPerConversation})`,
@@ -332,7 +333,7 @@ export class ProactiveSchedulerService {
 			throw new Error("repeat.untilMs must be in the future");
 		}
 		this.#logger.trace("task create requested", {
-			conversationId: parsed.conversationId,
+			conversationId: canonicalConversationId,
 			createdBy: createdBy.id,
 			delayMs: parsed.delayMs,
 			kind: parsed.kind,
@@ -343,7 +344,7 @@ export class ProactiveSchedulerService {
 			attempts: 0,
 			cancelIfReplied: parsed.cancelIfReplied ?? false,
 			chatObjectId: parsed.chatObjectId ?? conversation.chatObjectId,
-			conversationId: parsed.conversationId,
+			conversationId: canonicalConversationId,
 			createdAtMs: now,
 			createdById: createdBy.id,
 			createdByKind: createdBy.kind,
