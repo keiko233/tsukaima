@@ -686,7 +686,7 @@ export const workspaceSessions = sqliteTable(
 			.notNull()
 			.references(() => chatObjects.id, { onDelete: "cascade" }),
 		createdAtMs: integer("created_at_ms").notNull(),
-		goal: text("goal").notNull(),
+		goal: text("goal"),
 		id: text("id")
 			.primaryKey()
 			.references(() => conversations.id, { onDelete: "cascade" }),
@@ -697,15 +697,59 @@ export const workspaceSessions = sqliteTable(
 			onDelete: "set null",
 		}),
 		repositoryRoot: text("repository_root").notNull(),
-		taskId: text("task_id")
-			.notNull()
-			.references(() => codingTasks.id, { onDelete: "cascade" }),
+		tagsJson: text("tags_json").notNull().default("[]"),
+		taskId: text("task_id").references(() => codingTasks.id, { onDelete: "set null" }),
 		updatedAtMs: integer("updated_at_ms").notNull(),
 	},
 	(table) => [
 		index("workspace_sessions_task_idx").on(table.taskId),
 		index("workspace_sessions_parent_idx").on(table.parentSessionId),
 		index("workspace_sessions_recent_idx").on(table.updatedAtMs),
+	],
+);
+
+/**
+ * A workspace-local execution checklist. These rows belong to the coding task, not to the
+ * long-term memory store: they are replaced atomically by the agent and survive compaction.
+ */
+export const workspaceTodos = sqliteTable(
+	"workspace_todos",
+	{
+		content: text("content").notNull(),
+		createdAtMs: integer("created_at_ms").notNull(),
+		id: text("id").primaryKey(),
+		sortOrder: integer("sort_order").notNull(),
+		status: text("status", {
+			enum: ["pending", "in_progress", "completed", "cancelled"],
+		}).notNull(),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+		workspaceSessionId: text("workspace_session_id")
+			.notNull()
+			.references(() => workspaceSessions.id, { onDelete: "cascade" }),
+	},
+	(table) => [index("workspace_todos_workspace_idx").on(table.workspaceSessionId, table.sortOrder)],
+);
+
+/**
+ * A conversation the user explicitly pulled into a workspace turn. The reference is retained so
+ * the inspector can show provenance without subscribing the workspace to future messages.
+ */
+export const workspaceReferences = sqliteTable(
+	"workspace_references",
+	{
+		createdAtMs: integer("created_at_ms").notNull(),
+		id: text("id").primaryKey(),
+		messageId: text("message_id").references(() => messages.id, { onDelete: "set null" }),
+		sourceSessionId: text("source_session_id")
+			.notNull()
+			.references(() => workspaceSessions.id, { onDelete: "cascade" }),
+		targetSessionId: text("target_session_id")
+			.notNull()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+	},
+	(table) => [
+		index("workspace_references_source_idx").on(table.sourceSessionId, table.createdAtMs),
+		index("workspace_references_target_idx").on(table.targetSessionId),
 	],
 );
 

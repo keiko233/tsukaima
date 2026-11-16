@@ -107,18 +107,47 @@ export const workspaceTaskStatusSchema = z.enum([
 ]);
 export type WorkspaceTaskStatus = z.infer<typeof workspaceTaskStatusSchema>;
 
+export const workspaceTodoStatusSchema = z.enum([
+	"pending",
+	"in_progress",
+	"completed",
+	"cancelled",
+]);
+export type WorkspaceTodoStatus = z.infer<typeof workspaceTodoStatusSchema>;
+
+export const workspaceTodoSchema = z.object({
+	content: z.string(),
+	createdAt: z.string(),
+	id: z.string(),
+	sortOrder: z.number().int().nonnegative(),
+	status: workspaceTodoStatusSchema,
+	updatedAt: z.string(),
+});
+export type WorkspaceTodo = z.infer<typeof workspaceTodoSchema>;
+
+export const workspaceReferenceSchema = z.object({
+	createdAt: z.string(),
+	id: z.string(),
+	kind: z.string(),
+	messageId: z.string().nullable(),
+	sessionId: z.string(),
+	title: z.string(),
+});
+export type WorkspaceReference = z.infer<typeof workspaceReferenceSchema>;
+
 export const workspaceSummarySchema = z.object({
 	baseRef: z.string(),
 	chatObjectId: z.string(),
 	createdAt: z.string(),
-	goal: z.string(),
+	goal: z.string().nullable(),
 	id: z.string(),
 	latestMessage: messageSummarySchema.nullable(),
 	mode: workspaceModeSchema,
 	parentSessionId: z.string().nullable(),
 	repositoryRoot: z.string(),
-	taskId: z.string(),
-	taskStatus: workspaceTaskStatusSchema,
+	tags: z.array(z.string()),
+	taskId: z.string().nullable(),
+	taskStatus: workspaceTaskStatusSchema.nullable(),
 	title: z.string(),
 	updatedAt: z.string(),
 });
@@ -172,7 +201,9 @@ export type SessionDetail = z.infer<typeof sessionDetailSchema>;
 
 export const workspaceDetailSchema = z.object({
 	proposals: z.array(workspaceProposalSummarySchema),
+	references: z.array(workspaceReferenceSchema),
 	session: sessionDetailSchema,
+	todos: z.array(workspaceTodoSchema),
 	workspace: workspaceSummarySchema,
 });
 export type WorkspaceDetail = z.infer<typeof workspaceDetailSchema>;
@@ -730,6 +761,15 @@ export const sessionsSendInputSchema = z.object({
 	 * and `follow-up` runs after the current turn settles.
 	 */
 	mode: messageDeliveryModeSchema.optional(),
+	references: z
+		.array(
+			z.object({
+				messageId: z.string().min(1).optional(),
+				sessionId: z.string().min(1),
+			}),
+		)
+		.max(10)
+		.optional(),
 	sessionId: z.string().min(1),
 	target: z.enum(["channel", "tsukaima"]),
 	text: z.string().trim().min(1).max(8_000),
@@ -737,10 +777,47 @@ export const sessionsSendInputSchema = z.object({
 
 export const workspaceCreateInputSchema = z.object({
 	baseRef: z.string().trim().min(1).max(200).optional(),
-	goal: z.string().trim().min(1).max(8_000),
+	goal: z.string().trim().min(1).max(8_000).optional(),
 	mode: workspaceModeSchema.optional(),
 	parentSessionId: z.string().min(1).optional(),
+	tags: z.array(z.string().trim().min(1).max(32)).max(8).optional(),
 });
+
+export const workspaceUpdateInputSchema = z.object({
+	sessionId: z.string().min(1),
+	tags: z.array(z.string().trim().min(1).max(32)).max(8).optional(),
+	title: z.string().trim().min(1).max(120).optional(),
+});
+
+export const workspaceTodosInputSchema = z.object({ sessionId: z.string().min(1) });
+
+export const workspaceTodoWriteInputSchema = z.object({
+	items: z
+		.array(
+			z.object({
+				content: z.string().trim().min(1).max(500),
+				status: workspaceTodoStatusSchema.optional(),
+			}),
+		)
+		.max(50),
+	sessionId: z.string().min(1),
+});
+
+export const sessionsSearchInputSchema = z.object({
+	limit: z.number().int().min(1).max(25).optional(),
+	query: z.string().trim().max(200).optional(),
+});
+
+export const sessionsSearchOutputSchema = z.array(
+	z.object({
+		chatId: z.string(),
+		chatTitle: z.string(),
+		id: z.string(),
+		kind: z.string(),
+		title: z.string(),
+		updatedAt: z.string(),
+	}),
+);
 
 export const workspaceGetInputSchema = z.object({ sessionId: z.string().min(1) });
 
@@ -1463,6 +1540,7 @@ export const appContract = oc.router({
 				.output(okSchema)
 				.meta({ audit: true }),
 			runSteps: oc.input(runStepsInputSchema).output(runStepsSchema),
+			search: oc.input(sessionsSearchInputSchema).output(sessionsSearchOutputSchema),
 			send: oc.input(sessionsSendInputSchema).output(messageSummarySchema).meta({ audit: true }),
 			setReceiving: oc.input(sessionIdInputSchema).output(okSchema).meta({ audit: true }),
 			update: oc.input(sessionsUpdateInputSchema).output(okSchema).meta({ audit: true }),
@@ -1470,10 +1548,18 @@ export const appContract = oc.router({
 		workspace: {
 			create: oc
 				.input(workspaceCreateInputSchema)
-				.output(createLocalChatOutputSchema.extend({ taskId: z.string() }))
+				.output(createLocalChatOutputSchema.extend({ taskId: z.string().nullable() }))
 				.meta({ audit: true }),
 			get: oc.input(workspaceGetInputSchema).output(workspaceDetailSchema.nullable()),
 			list: oc.input(workspaceListInputSchema).output(z.array(workspaceSummarySchema)),
+			todos: oc
+				.input(workspaceTodosInputSchema)
+				.output(z.array(workspaceTodoSchema))
+				.meta({ audit: true }),
+			update: oc
+				.input(workspaceUpdateInputSchema)
+				.output(workspaceSummarySchema)
+				.meta({ audit: true }),
 		},
 		runtime: {
 			cancelRestart: oc
