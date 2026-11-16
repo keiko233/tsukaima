@@ -78,7 +78,8 @@ ssh root@10.0.0.6 \
   < ops/deploy/bootstrap-host.sh
 
 # 2. Add the printed public key to the fork with write access:
-gh repo deploy-key add /tmp/tsukaima-deploy.pub \
+gh repo deploy-key add \
+  <(ssh root@10.0.0.6 cat /root/.ssh/tsukaima_deploy_ed25519.pub) \
   --repo <you>/tsukaima --title tsukaima-host --allow-write
 
 # 3. Re-run the bootstrap to clone the fork and finish setup.
@@ -167,8 +168,10 @@ curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7420/readyz
 curl -fsS http://tsukaima.lan/healthz
 ```
 
-Sign in at `http://tsukaima.lan` with the bootstrap administrator. The password is in
-`/opt/tsukaima/secrets/initial-admin-password.txt`; change it in the UI after the first login.
+Sign in at `http://tsukaima.lan` with the bootstrap administrator. The current `10.0.0.6`
+deployment also binds `http://10.0.0.6:7420` because local DNS may not yet map `tsukaima.lan`. The
+password is in `/opt/tsukaima/secrets/initial-admin-password.txt`; change it in the UI after the
+first login.
 
 Rollback is an image swap, not a git rewrite:
 

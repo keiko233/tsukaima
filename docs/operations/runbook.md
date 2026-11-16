@@ -21,7 +21,7 @@ is the direct source-checkout equivalent of the container entrypoint.
 
 | Requirement | Notes |
 | --- | --- |
-| Bun `1.4.4` | Runtime for the server, plugins, and tools. |
+| Bun latest | Runtime for the server, plugins, and tools; the image uses `oven/bun:latest`. |
 | Single writer process | Only one server may open `domain.sqlite` and `durable.sqlite` for writes. |
 | Writable data directory | `TSUKAIMA_DATA_DIR` holds both databases, `blobs/`, plugin worktrees, and drill output. |
 | Reverse proxy (recommended) | Terminate TLS, forward `/api`, `/rpc`, `/events`, and the WebUI. List it in `TSUKAIMA_TRUSTED_PROXIES`. |
