@@ -6,6 +6,7 @@
 	"exports": {
 		".": "./src/index.ts",
 		"./manifest": "./src/manifest.ts",
+		"./model-capabilities": "./src/model-capabilities.ts",
 		"./ui": "./src/ui/index.tsx",
 		"./i18n": "./src/i18n/index.ts"
 	},
