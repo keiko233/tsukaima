@@ -10,7 +10,16 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 HOST="${HOST:-root@10.0.0.6}"
 ROOT="${ROOT:-/opt/tsukaima}"
-DEPLOYER="${DEPLOYER:-${TSUKAIMA_DEPLOYER:-$(git config user.name || whoami)}}"
+if [[ -z "${DEPLOYER:-}" ]]; then
+	if [[ -n "${TSUKAIMA_DEPLOYER:-}" ]]; then
+		DEPLOYER="$TSUKAIMA_DEPLOYER"
+	elif [[ "$(git branch --show-current)" == deploy/* ]]; then
+		DEPLOYER="$(git branch --show-current)"
+		DEPLOYER="${DEPLOYER#deploy/}"
+	else
+		DEPLOYER="$(git config user.name || whoami)"
+	fi
+fi
 DEPLOYER="${DEPLOYER//[^A-Za-z0-9_.-]/-}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-deploy/$DEPLOYER}"
 SYNC="${SYNC:-1}"
