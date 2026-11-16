@@ -97,7 +97,7 @@ The bootstrap creates:
 | `/opt/tsukaima/secrets/initial-admin-password.txt` | generated first password, mode 0600 |
 | `/opt/tsukaima/backups` | pre-deploy data archives, five retained |
 | `/opt/tsukaima/deployments` | JSON deployment records |
-| `/opt/tsukaima/compose.yaml` | deployment compose file |
+| `/opt/tsukaima/compose.yaml` | symlink to the committed `repo/compose.yaml` (repo and compose stay siblings, but the file is versioned) |
 | `/opt/tsukaima/.env` | image tag, version, deployer, public URL |
 
 It also adds an idempotent `tsukaima.lan` block to `/opt/caddy/Caddyfile` and reloads Caddy when
