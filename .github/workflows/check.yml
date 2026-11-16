@@ -14,6 +14,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: bun install --frozen-lockfile
+      - run: git restore --source=HEAD -- packages/migration/fixtures
       - run: bun run check:version
       - run: bun tools/ops/version.ts check --upstream origin/main
       - run: bun run check:secrets
