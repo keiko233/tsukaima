@@ -330,6 +330,9 @@ describe("fake NapCat integration", () => {
 					}[];
 			  }
 			| undefined;
+		// The reply turn is the first model call; `after.reply` memory extraction reuses the same
+		// model afterwards, so keep the first context instead of racing with the later call.
+		let modelCalls = 0;
 		const { lifecycle } = createApp(
 			{
 				TSUKAIMA_DATA_DIR: directory,
@@ -340,6 +343,8 @@ describe("fake NapCat integration", () => {
 				model: createSlowStreamingModel(["nice pic"], {
 					delayMs: 5,
 					onContext: (context) => {
+						modelCalls += 1;
+						if (modelCalls > 1) return;
 						observedContext = context as typeof observedContext;
 					},
 					supportsImage: true,
