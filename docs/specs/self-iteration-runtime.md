@@ -61,6 +61,7 @@ explicitly grants them:
 | --- | --- | --- |
 | `self-iteration.analyze` | analysis+ | scoped read/search/test |
 | `self-iteration.worktree` | patch | create bounded worktree |
+| `self-iteration.upstream` | patch | stage an upstream merge in the worktree, or abort it |
 | `self-iteration.edit` | patch | validated patch/edit |
 | `self-iteration.test` | patch | run declared commands with timeout |
 | `self-iteration.build` | proposal | build/build artifact |

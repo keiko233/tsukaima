@@ -22,3 +22,4 @@ plugins/*/src/paraglide/
 
 # inlang module cache
 plugins/*/project.inlang/cache/
+apps/web/project.inlang/cache/

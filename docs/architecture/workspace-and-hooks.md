@@ -72,6 +72,23 @@ Workspace-only coding-agent tools:
 The coding-agent extension is installed process-wide but filtered out for chat, IM, task, and
 plugin sessions in `applySessionToolPolicy`.
 
+## Upstream upgrades
+
+Settings → Upgrades compares the running checkout with `TSUKAIMA_UPGRADE_REMOTE`
+(`origin` by default) and the branch currently checked out. The comparison fetches the remote
+first and counts commits on both sides.
+
+| Checkout state | Upgrade path |
+| --- | --- |
+| Clean, no local commits | Merge `origin/<branch>` with `--ff-only`, then schedule the update restart |
+| Local commits | Create a `proposal` workspace; the agent merges with `self-iteration.upstream` and proposes the result |
+| Uncommitted changes | No automatic merge; commit or discard them first |
+
+Finalizing an upgrade re-checks that the upstream target commit is an ancestor of `HEAD`, then
+schedules the existing one-minute update window. The workspace's own branch is merged with
+`--no-ff`; uncommitted workspace changes are committed first. The host supervisor still owns
+the image/container switch.
+
 ## Shared delivery
 
 `SessionMessagingService` is the local ingress for chat messages, workspace commands, and reserved

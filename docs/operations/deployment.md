@@ -214,3 +214,20 @@ Promote a proposal by applying it to the deployment branch, bumping `VERSION`, c
 running `bun run ops:deploy`. The host build remains the only path that replaces the running image.
 The container's `.git` is replaced with each image, so durable work belongs in the proposal record
 or a commit, not in a container worktree.
+
+## 8. Upstream upgrades from Settings
+
+Settings → Upgrades compares the checkout with `TSUKAIMA_UPGRADE_REMOTE` (default `origin`) and
+the current branch. The server fetches that remote and shows ahead/behind counts, the current and
+upstream `VERSION`, and the chosen path:
+
+- A clean checkout with no local commits merges with `--ff-only` and schedules the standard
+  one-minute update restart.
+- A checkout with local commits creates a governed `proposal` workspace. The workspace merges the
+  upstream ref inside its worktree using `self-iteration.upstream`, and finalize merges that
+  branch back with `--no-ff` after a proposal exists.
+- Uncommitted changes are never merged automatically. Commit or discard them first.
+
+Finalize verifies that the upstream commit is an ancestor of the live `HEAD` before scheduling the
+restart. This changes the source checkout only; the host-side image build and container replacement
+remain operator-controlled as described above.
