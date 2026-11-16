@@ -65,6 +65,14 @@ fi
 image="tsukaima:$image_version"
 source_url="$(git remote get-url upstream 2>/dev/null || echo https://github.com/example-org/tsukaima.git)"
 
+# Keep enough room for the build, data archive, and previous image. Build cache and stale
+# Tsukaima images/backups are reclaimable; unrelated host images are never touched.
+docker builder prune -f >/dev/null 2>&1 || true
+available_kb="$(df -Pk "$ROOT" | awk 'NR==2 {print $4}')"
+if [[ -n "$available_kb" && "$available_kb" -lt 4194304 ]]; then
+	fail "less than 4 GiB free on $ROOT; prune Docker images/backups before deploying"
+fi
+
 echo "Deploying $image"
 echo "  commit:   $commit"
 echo "  branch:   $DEPLOY_BRANCH"
@@ -167,8 +175,15 @@ EOF
 chmod 600 "$ROOT/deployments/$TIMESTAMP.json"
 
 # Retain a small rollback window without filling the host disk.
-ls -1t "$ROOT/backups"/data-*.tgz 2>/dev/null | tail -n +6 | xargs -r rm -f
+ls -1t "$ROOT/backups"/data-*.tgz 2>/dev/null | tail -n +4 | xargs -r rm -f
 ls -1t "$ROOT/deployments"/*.json 2>/dev/null | tail -n +21 | xargs -r rm -f
+
+# Keep only the running image and the one rollback target.
+while IFS= read -r tag; do
+	[[ -z "$tag" || "$tag" == *":<none>" ]] && continue
+	[[ "$tag" == "$image" || "$tag" == "$previous_image" ]] && continue
+	docker image rm "$tag" >/dev/null 2>&1 || true
+done < <(docker image ls tsukaima --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true)
 
 health="$(curl -fsS "$health_url/healthz" || true)"
 echo "$health"

@@ -96,7 +96,7 @@ The bootstrap creates:
 | `/opt/tsukaima/data` | mounted at `/data` in the container, owned by uid 1000 |
 | `/opt/tsukaima/secrets/runtime.env` | auth secret and admin bootstrap, mode 0600 |
 | `/opt/tsukaima/secrets/initial-admin-password.txt` | generated first password, mode 0600 |
-| `/opt/tsukaima/backups` | pre-deploy data archives, five retained |
+| `/opt/tsukaima/backups` | pre-deploy data archives, three retained |
 | `/opt/tsukaima/deployments` | JSON deployment records |
 | `/opt/tsukaima/compose.yaml` | symlink to the committed `repo/compose.yaml` (repo and compose stay siblings, but the file is versioned) |
 | `/opt/tsukaima/.env` | image tag, version, deployer, public URL |
@@ -157,8 +157,9 @@ merged individually; the deployment branch is never force-pushed.
 5. Builds with `oven/bun:latest`, stops the old container only after the build succeeds, archives
    `data` (except logs), and starts the new image.
 6. Polls `/readyz`; on failure it prints container logs and restores the previous image.
-7. Records the deployment under `/opt/tsukaima/deployments` and keeps the previous image and five
-   data archives for rollback.
+7. Records the deployment under `/opt/tsukaima/deployments`, keeps the previous image, and retains
+   three data archives for rollback. Older Tsukaima images and build cache are pruned before the
+   next build; unrelated host images are never touched.
 
 ## 7. Verification and rollback
 
