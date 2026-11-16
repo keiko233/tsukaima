@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
+import { lstat, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isPathWithinAllowlist, WorktreeError, WorktreeManager } from "../src/index.ts";
 import { cleanupTestRepo, createTestRepo } from "./helpers.ts";
@@ -35,6 +36,17 @@ describe("WorktreeManager", () => {
 		expect(info.branchName).toBe("tsukaima-iteration/test-create");
 		expect(info.baseRef).toBe("HEAD");
 		await manager.cleanup("test-create");
+	});
+
+	test("links the repository node_modules into the worktree", async () => {
+		await mkdir(join(repoPath, "node_modules", "fixture"), { recursive: true });
+		await writeFile(join(repoPath, "node_modules", "fixture", "index.js"), "export {};\n");
+		const info = await manager.create("test-dependencies", "HEAD");
+		const link = await lstat(join(info.path, "node_modules"));
+		expect(link.isSymbolicLink()).toBe(true);
+		expect(existsSync(join(info.path, "node_modules", "fixture", "index.js"))).toBe(true);
+		await manager.cleanup("test-dependencies");
+		await rm(join(repoPath, "node_modules"), { force: true, recursive: true });
 	});
 
 	test("cleanup removes worktree directory", async () => {

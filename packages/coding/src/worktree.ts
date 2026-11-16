@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { lstat, mkdir, realpath, rm } from "node:fs/promises";
+import { lstat, mkdir, realpath, rm, symlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export interface WorktreeManagerConfig {
@@ -45,6 +45,7 @@ export class WorktreeManager {
 		if (result.exitCode !== 0) {
 			throw new WorktreeError(`Failed to create worktree: ${result.stderr.trim()}`);
 		}
+		await this.#linkNodeModules(worktreePath);
 		const info: WorktreeInfo = { baseRef, branchName, path: worktreePath, taskId };
 		this.#active.set(taskId, info);
 		return info;
@@ -89,6 +90,19 @@ export class WorktreeManager {
 		if (result.exitCode !== 0) {
 			throw new WorktreeError(`Base ref "${baseRef}" does not resolve to a commit`);
 		}
+	}
+
+	/**
+	 * Worktrees live outside the repository (normally on the persistent /data volume), so the
+	 * checkout has no dependencies. Reuse the image/host install through a symlink; failed links
+	 * are non-fatal because the project may genuinely have no node_modules yet.
+	 */
+	async #linkNodeModules(worktreePath: string): Promise<void> {
+		const source = join(this.#config.repositoryPath, "node_modules");
+		const target = join(worktreePath, "node_modules");
+		if (!(await lstat(source).catch(() => undefined))) return;
+		if (await lstat(target).catch(() => undefined)) return;
+		await symlink(source, target, "dir").catch(() => undefined);
 	}
 
 	async #git(args: readonly string[]): Promise<GitExecResult> {

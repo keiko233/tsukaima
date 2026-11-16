@@ -187,8 +187,14 @@ start the previous image. Do not restore data under a newer schema.
 
 ## 8. Self-iteration boundary
 
-The container runs the self-iteration plugin in proposal/worktree mode. It has `git`, `bun`,
-`ripgrep`, and a writable `/data` volume, but no Docker socket and no host checkout by default.
-Promote a proposed change by committing it in the deployment checkout, merging mainline, and
-running `bun run ops:deploy`; the host build stays the only path that replaces the running image.
-This keeps self-edit, review, versioning, and release authority separate.
+The container runs the self-iteration plugin in proposal/worktree mode. The image includes the
+repository `.git` at `/app`, and worktrees live under `/data/worktrees`; each new worktree gets a
+`node_modules` symlink back to the image install so tests and builds can run without a second
+install. It has `git`, `bun`, and `ripgrep`, but no Docker socket and no host checkout, so a
+proposal cannot replace the running image.
+
+Promote a proposed change by applying it to the deployment checkout, merging mainline, and running
+`bun run ops:deploy`; the host build stays the only path that replaces the running image. The
+running container's `.git` is replaced with each image, so durable work belongs in the proposal
+record or a fork commit, not in a container worktree. This keeps self-edit, review, versioning, and
+release authority separate.
