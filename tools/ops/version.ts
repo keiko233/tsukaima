@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const SEMVER =
@@ -52,6 +52,28 @@ export function checkManifestVersions(root: string, expected: string): VersionCh
 
 export function forkFileName(file: string): string {
 	return file.replaceAll("\\", "/");
+}
+
+/**
+ * Mainline-only version bump. It updates VERSION and every workspace package manifest together so
+ * a release tag can never disagree with the packages it ships.
+ */
+export function bumpVersions(root: string, next: string): readonly string[] {
+	if (parseSemver(next) === null) throw new Error(`not a semantic version: ${next}`);
+	const changed: string[] = [];
+	const versionPath = join(root, "VERSION");
+	const current = readFileSync(versionPath, "utf8").trim();
+	if (current === next) return changed;
+	writeFileSync(versionPath, `${next}\n`);
+	changed.push("VERSION");
+	for (const path of workspaceManifestPaths(root)) {
+		const manifest = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+		if (manifest.version === next) continue;
+		manifest.version = next;
+		writeFileSync(path, `${JSON.stringify(manifest, null, "\t")}\n`);
+		changed.push(forkFileName(path.slice(root.length + 1)));
+	}
+	return changed;
 }
 
 function git(root: string, args: readonly string[]): string {
@@ -219,6 +241,7 @@ function usage(): string {
 
 Commands:
   show [--deployer <name>] [--fork]   Print the version used for an image/build.
+  bump <X.Y.Z>                        Mainline-only VERSION + workspace version bump.
   check [--upstream <ref>]            Validate VERSION, workspace manifests, and fork authority.
   release-check --tag <vX.Y.Z>        Validate a mainline release tag (also checks origin/main).
                      [--allow-detached]  CI checks out a tag in detached HEAD.
@@ -246,6 +269,18 @@ if (import.meta.main) {
 					fork: argv.includes("--fork"),
 				}),
 			);
+		} else if (command === "bump") {
+			const next = argv[1];
+			if (next === undefined)
+				throw new Error("bump requires a semantic version, for example 0.1.1");
+			const branch = tryGit(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+			if (branch !== "main") throw new Error(`version bumps happen on main, not ${branch}`);
+			const dirty = tryGit(root, ["status", "--porcelain"]);
+			if (dirty !== undefined && dirty.length > 0) {
+				throw new Error("commit or stash changes before bumping versions");
+			}
+			const changed = bumpVersions(root, next);
+			console.log(changed.length === 0 ? `already at ${next}` : `bumped:\n${changed.join("\n")}`);
 		} else if (command === "check") {
 			const version = readFileSync(join(root, "VERSION"), "utf8").trim();
 			if (parseSemver(version) === null) throw new Error(`VERSION is not semantic: ${version}`);
