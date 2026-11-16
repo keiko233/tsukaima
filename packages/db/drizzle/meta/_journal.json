@@ -85,6 +85,13 @@
 			"when": 1794591824685,
 			"tag": "0011_black_dust",
 			"breakpoints": true
+		},
+		{
+			"idx": 12,
+			"version": "6",
+			"when": 1794843805889,
+			"tag": "0012_flawless_doomsday",
+			"breakpoints": true
 		}
 	]
 }

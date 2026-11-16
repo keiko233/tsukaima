@@ -173,7 +173,9 @@ export const chatObjects = sqliteTable(
 		channelId: text("channel_id"),
 		createdAt: text("created_at").notNull().default(now),
 		id: text("id").primaryKey(),
-		kind: text("kind", { enum: ["private", "group", "webui", "task", "plugin"] }).notNull(),
+		kind: text("kind", {
+			enum: ["private", "group", "webui", "workspace", "task", "plugin"],
+		}).notNull(),
 		muted: integer("muted").notNull().default(0),
 		pinned: integer("pinned").notNull().default(0),
 		platformConversationId: text("platform_conversation_id"),
@@ -204,7 +206,9 @@ export const conversations = sqliteTable(
 		durableConversationId: text("durable_conversation_id").notNull(),
 		id: text("id").primaryKey(),
 		isReceiving: integer("is_receiving").notNull().default(0),
-		kind: text("kind", { enum: ["private", "group", "webui", "task", "plugin"] }).notNull(),
+		kind: text("kind", {
+			enum: ["private", "group", "webui", "workspace", "task", "plugin"],
+		}).notNull(),
 		platformConversationId: text("platform_conversation_id"),
 		status: text("status").notNull().default("active"),
 		title: text("title"),
@@ -666,6 +670,106 @@ export const codingDeployments = sqliteTable(
 		index("coding_deployments_task_idx").on(table.taskId, table.createdAtMs),
 		index("coding_deployments_status_idx").on(table.status, table.updatedAtMs),
 	],
+);
+
+/**
+ * A workspace is the execution-facing side of a chat object: one durable conversation whose
+ * agent owns a coding task and can inspect or patch the running repository through the
+ * governed self-iteration tools. The conversation and chat object are ordinary session rows so
+ * transcripts, live runs, and queue/interrupt semantics stay shared with chat.
+ */
+export const workspaceSessions = sqliteTable(
+	"workspace_sessions",
+	{
+		baseRef: text("base_ref").notNull(),
+		chatObjectId: text("chat_object_id")
+			.notNull()
+			.references(() => chatObjects.id, { onDelete: "cascade" }),
+		createdAtMs: integer("created_at_ms").notNull(),
+		goal: text("goal").notNull(),
+		id: text("id")
+			.primaryKey()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		mode: text("mode", {
+			enum: ["analysis", "patch", "proposal", "maintenance"],
+		}).notNull(),
+		parentSessionId: text("parent_session_id").references(() => conversations.id, {
+			onDelete: "set null",
+		}),
+		repositoryRoot: text("repository_root").notNull(),
+		taskId: text("task_id")
+			.notNull()
+			.references(() => codingTasks.id, { onDelete: "cascade" }),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+	},
+	(table) => [
+		index("workspace_sessions_task_idx").on(table.taskId),
+		index("workspace_sessions_parent_idx").on(table.parentSessionId),
+		index("workspace_sessions_recent_idx").on(table.updatedAtMs),
+	],
+);
+
+/**
+ * Durable prompt injections and reserved turns.
+ *
+ * `context` hooks are consumed once before the next agent turn. `runtime` hooks stay active
+ * until they expire and are re-rendered on every turn (restart countdowns use this). `resume`
+ * hooks either wait for a due time or for the next process boot, then submit a turn so the
+ * assistant can return to work it promised to finish.
+ */
+export const promptHooks = sqliteTable(
+	"prompt_hooks",
+	{
+		afterRestart: integer("after_restart", { mode: "boolean" }).notNull().default(false),
+		createdAtMs: integer("created_at_ms").notNull(),
+		createdBy: text("created_by").notNull(),
+		dedupeKey: text("dedupe_key"),
+		deliverAtMs: integer("deliver_at_ms"),
+		expiresAtMs: integer("expires_at_ms"),
+		id: text("id").primaryKey(),
+		kind: text("kind", { enum: ["context", "resume", "runtime"] }).notNull(),
+		lastError: text("last_error"),
+		metadataJson: text("metadata_json").notNull().default("{}"),
+		prompt: text("prompt").notNull(),
+		sourceSessionId: text("source_session_id").references(() => conversations.id, {
+			onDelete: "set null",
+		}),
+		startsAtMs: integer("starts_at_ms").notNull(),
+		status: text("status", {
+			enum: ["pending", "scheduled", "running", "fired", "cancelled", "failed"],
+		}).notNull(),
+		targetSessionId: text("target_session_id").references(() => conversations.id, {
+			onDelete: "cascade",
+		}),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+	},
+	(table) => [
+		uniqueIndex("prompt_hooks_dedupe_unique")
+			.on(table.dedupeKey)
+			.where(sql`${table.dedupeKey} IS NOT NULL`),
+		index("prompt_hooks_target_idx").on(table.targetSessionId, table.status),
+		index("prompt_hooks_delivery_idx").on(table.status, table.deliverAtMs),
+	],
+);
+
+/** One graceful restart/update intent. Only one row may be scheduled at a time. */
+export const runtimeRestarts = sqliteTable(
+	"runtime_restarts",
+	{
+		completedAtMs: integer("completed_at_ms"),
+		createdAtMs: integer("created_at_ms").notNull(),
+		executeAtMs: integer("execute_at_ms").notNull(),
+		id: text("id").primaryKey(),
+		metadataJson: text("metadata_json").notNull().default("{}"),
+		mode: text("mode", { enum: ["restart", "update"] }).notNull(),
+		reason: text("reason").notNull(),
+		requestedBy: text("requested_by").notNull(),
+		status: text("status", {
+			enum: ["scheduled", "cancelled", "executing", "completed", "failed"],
+		}).notNull(),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+	},
+	(table) => [index("runtime_restarts_status_idx").on(table.status, table.executeAtMs)],
 );
 
 /**

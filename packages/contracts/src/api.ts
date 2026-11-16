@@ -13,7 +13,7 @@ import {
  * wire surface cannot drift between the two sides.
  */
 
-const chatKindSchema = z.enum(["private", "group", "webui", "task", "plugin"]);
+const chatKindSchema = z.enum(["private", "group", "webui", "workspace", "task", "plugin"]);
 
 export const logLevels = ["trace", "debug", "info", "warn", "error"] as const;
 export const logLevelSchema = z.enum(logLevels);
@@ -92,6 +92,65 @@ export const chatSummarySchema = z.object({
 });
 export type ChatSummary = z.infer<typeof chatSummarySchema>;
 
+export const workspaceModeSchema = z.enum(["analysis", "patch", "proposal", "maintenance"]);
+export type WorkspaceMode = z.infer<typeof workspaceModeSchema>;
+
+export const workspaceTaskStatusSchema = z.enum([
+	"awaiting_approval",
+	"approved",
+	"cancelled",
+	"completed",
+	"deploying",
+	"failed",
+	"in_progress",
+	"pending",
+]);
+export type WorkspaceTaskStatus = z.infer<typeof workspaceTaskStatusSchema>;
+
+export const workspaceSummarySchema = z.object({
+	baseRef: z.string(),
+	chatObjectId: z.string(),
+	createdAt: z.string(),
+	goal: z.string(),
+	id: z.string(),
+	latestMessage: messageSummarySchema.nullable(),
+	mode: workspaceModeSchema,
+	parentSessionId: z.string().nullable(),
+	repositoryRoot: z.string(),
+	taskId: z.string(),
+	taskStatus: workspaceTaskStatusSchema,
+	title: z.string(),
+	updatedAt: z.string(),
+});
+export type WorkspaceSummary = z.infer<typeof workspaceSummarySchema>;
+
+export const workspaceProposalSummarySchema = z.object({
+	changedFiles: z.array(z.string()),
+	id: z.string(),
+	requiresRestart: z.boolean(),
+	status: z.string(),
+	title: z.string(),
+});
+export type WorkspaceProposalSummary = z.infer<typeof workspaceProposalSummarySchema>;
+
+/** How a message enters a running or idle durable conversation. */
+export const messageDeliveryModeSchema = z.enum(["queue", "interrupt", "follow-up"]);
+export type MessageDeliveryMode = z.infer<typeof messageDeliveryModeSchema>;
+
+export const restartModeSchema = z.enum(["restart", "update"]);
+export type RestartMode = z.infer<typeof restartModeSchema>;
+
+export const restartStatusSchema = z.object({
+	createdAt: z.string(),
+	executeAt: z.string(),
+	id: z.string(),
+	mode: restartModeSchema,
+	reason: z.string(),
+	requestedBy: z.string(),
+	status: z.enum(["scheduled", "cancelled", "executing", "completed", "failed"]),
+});
+export type RestartStatus = z.infer<typeof restartStatusSchema>;
+
 export const sessionDetailSchema = z.object({
 	channelId: z.string().nullable(),
 	chat: z.object({
@@ -110,6 +169,13 @@ export const sessionDetailSchema = z.object({
 	updatedAt: z.string(),
 });
 export type SessionDetail = z.infer<typeof sessionDetailSchema>;
+
+export const workspaceDetailSchema = z.object({
+	proposals: z.array(workspaceProposalSummarySchema),
+	session: sessionDetailSchema,
+	workspace: workspaceSummarySchema,
+});
+export type WorkspaceDetail = z.infer<typeof workspaceDetailSchema>;
 
 export const sessionContextSectionSchema = z.object({
 	key: z.string(),
@@ -659,9 +725,33 @@ export const sessionsCreateInputSchema = z.object({
 });
 
 export const sessionsSendInputSchema = z.object({
+	/**
+	 * `queue` is inserted at the next safe step, `interrupt` cancels the current generation,
+	 * and `follow-up` runs after the current turn settles.
+	 */
+	mode: messageDeliveryModeSchema.optional(),
 	sessionId: z.string().min(1),
 	target: z.enum(["channel", "tsukaima"]),
 	text: z.string().trim().min(1).max(8_000),
+});
+
+export const workspaceCreateInputSchema = z.object({
+	baseRef: z.string().trim().min(1).max(200).optional(),
+	goal: z.string().trim().min(1).max(8_000),
+	mode: workspaceModeSchema.optional(),
+	parentSessionId: z.string().min(1).optional(),
+});
+
+export const workspaceGetInputSchema = z.object({ sessionId: z.string().min(1) });
+
+export const workspaceListInputSchema = z
+	.object({ includeArchived: z.boolean().optional() })
+	.optional();
+
+export const runtimeScheduleRestartInputSchema = z.object({
+	delaySeconds: z.number().int().min(1).max(86_400).optional(),
+	mode: restartModeSchema.optional(),
+	reason: z.string().trim().min(1).max(500).optional(),
 });
 
 export const sessionsUpdateInputSchema = z.object({
@@ -1376,6 +1466,24 @@ export const appContract = oc.router({
 			send: oc.input(sessionsSendInputSchema).output(messageSummarySchema).meta({ audit: true }),
 			setReceiving: oc.input(sessionIdInputSchema).output(okSchema).meta({ audit: true }),
 			update: oc.input(sessionsUpdateInputSchema).output(okSchema).meta({ audit: true }),
+		},
+		workspace: {
+			create: oc
+				.input(workspaceCreateInputSchema)
+				.output(createLocalChatOutputSchema.extend({ taskId: z.string() }))
+				.meta({ audit: true }),
+			get: oc.input(workspaceGetInputSchema).output(workspaceDetailSchema.nullable()),
+			list: oc.input(workspaceListInputSchema).output(z.array(workspaceSummarySchema)),
+		},
+		runtime: {
+			cancelRestart: oc
+				.output(z.object({ cancelled: z.boolean(), restart: restartStatusSchema.nullable() }))
+				.meta({ audit: true }),
+			restartStatus: oc.output(restartStatusSchema.nullable()),
+			scheduleRestart: oc
+				.input(runtimeScheduleRestartInputSchema)
+				.output(restartStatusSchema)
+				.meta({ audit: true }),
 		},
 		settings: {
 			get: oc.output(settingsViewSchema),
