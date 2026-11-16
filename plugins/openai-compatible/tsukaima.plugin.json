@@ -70,9 +70,9 @@
 		}
 	},
 	"configEnv": {
-		"baseUrl": "ELAINA_OPENAI_BASE_URL",
-		"apiKey": "ELAINA_OPENAI_API_KEY",
-		"modelId": "ELAINA_OPENAI_MODEL_ID"
+		"baseUrl": "TSUKAIMA_OPENAI_BASE_URL",
+		"apiKey": "TSUKAIMA_OPENAI_API_KEY",
+		"modelId": "TSUKAIMA_OPENAI_MODEL_ID"
 	},
 	"secretKeys": ["apiKey"],
 	"ui": []

@@ -19,7 +19,7 @@ import {
 	usePluginPanel,
 	usePluginRpc,
 	usePluginToast,
-} from "@elaina/sdk/ui";
+} from "@tsukaima/sdk/ui";
 import {
 	ChevronRight,
 	Download,

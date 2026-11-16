@@ -1,6 +1,6 @@
 # API design
 
-The WebUI and admin tools call Elaina through oRPC procedures mounted on Elysia. Zod schemas define every input and output. The contracts are the single source of truth for client types.
+The WebUI and admin tools call Tsukaima through oRPC procedures mounted on Elysia. Zod schemas define every input and output. The contracts are the single source of truth for client types.
 
 ## API boundaries
 
@@ -33,7 +33,7 @@ request headers used to resolve the signed session cookie.
 
 ```ts
 type ApiContext = {
-  lifecycle: ElainaLifecycle;
+  lifecycle: TsukaimaLifecycle;
   auth: AuthService;
   headers: Headers;
 };
@@ -111,7 +111,7 @@ Returns:
 
 ## Auth
 
-Initial release has one administrator. Better Auth 1.7 is the authentication authority; Elaina does
+Initial release has one administrator. Better Auth 1.7 is the authentication authority; Tsukaima does
 not implement password hashing, token storage, or session validation itself.
 
 Native Better Auth routes mounted on Elysia:
@@ -131,10 +131,10 @@ The only oRPC auth procedure is:
 
 Behaviour:
 
-- Bootstrap: on first start, if `auth_user` is empty, `ELAINA_ADMIN_USERNAME` and
-  `ELAINA_ADMIN_PASSWORD` are passed to Better Auth's server-side `signUpEmail` API with the
-  username plugin. The fixed account email comes from `ELAINA_ADMIN_EMAIL` or
-  `admin@elaina.invalid`. Afterwards the database row is authoritative; changing the environment
+- Bootstrap: on first start, if `auth_user` is empty, `TSUKAIMA_ADMIN_USERNAME` and
+  `TSUKAIMA_ADMIN_PASSWORD` are passed to Better Auth's server-side `signUpEmail` API with the
+  username plugin. The fixed account email comes from `TSUKAIMA_ADMIN_EMAIL` or
+  `admin@tsukaima.invalid`. Afterwards the database row is authoritative; changing the environment
   does not rotate the password.
 - Public sign-up is closed. The Elysia auth handler rejects every `/api/auth/sign-up/*` request; only
   the in-process bootstrap call can create the first account.
@@ -143,15 +143,15 @@ Behaviour:
   variables. There is no "unconfigured means allow" path.
 - Passwords are hashed and verified by Better Auth (scrypt by default). Sessions live in
   `auth_session` for 7 days and are refreshed once per day. A restart does not invalidate them.
-- The cookie is `elaina.session_token`, `HttpOnly`, `SameSite=Lax`, and `Secure` when the public URL
-  is HTTPS or `ELAINA_AUTH_SECURE_COOKIES=true`.
+- The cookie is `tsukaima.session_token`, `HttpOnly`, `SameSite=Lax`, and `Secure` when the public URL
+  is HTTPS or `TSUKAIMA_AUTH_SECURE_COOKIES=true`.
 - Sign-in is limited to 5 attempts per 60 seconds per client IP, with an in-process per-instance
   store. A direct Bun connection uses the socket peer address injected by the auth route; a
   spoofed `X-Forwarded-For` cannot change that bucket. Behind a reverse proxy, set
-  `ELAINA_TRUSTED_PROXIES` to the proxy IP/CIDR list so Better Auth may walk the forwarded chain
+  `TSUKAIMA_TRUSTED_PROXIES` to the proxy IP/CIDR list so Better Auth may walk the forwarded chain
   from the right; unlisted proxies are never trusted.
-- Browser origins are checked against `ELAINA_PUBLIC_URL`, `ELAINA_WEB_ORIGIN`, and the
-  comma-separated `ELAINA_TRUSTED_ORIGINS`. In non-production mode the Vite origins
+- Browser origins are checked against `TSUKAIMA_PUBLIC_URL`, `TSUKAIMA_WEB_ORIGIN`, and the
+  comma-separated `TSUKAIMA_TRUSTED_ORIGINS`. In non-production mode the Vite origins
   `http://127.0.0.1:7421` and `http://localhost:7421` are trusted by default; production requires
   an explicit list.
 - Audit rows for successful sign-in, sign-out, and mutating admin actions carry
@@ -161,7 +161,7 @@ Behaviour:
 
 ### Audit actors
 
-`ElainaLifecycle.writeAudit` accepts optional `actorId` and `actorKind` fields from the SDK's
+`TsukaimaLifecycle.writeAudit` accepts optional `actorId` and `actorKind` fields from the SDK's
 `AuditEntry`. Better Auth's session hooks and the oRPC admin middleware supply the real administrator
 actor where it is known; background services keep the default WebUI actor unless they have a more
 specific identity.

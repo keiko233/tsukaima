@@ -2,10 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LiveEvent, MessageEnvelope } from "@elaina/contracts";
+import type { LiveEvent, MessageEnvelope } from "@tsukaima/contracts";
 import { createApp } from "../src/app.ts";
 import { signIn as signInViaBetterAuth } from "./test-auth.ts";
-import { createSlowStreamingModel } from "@elaina/core";
+import { createSlowStreamingModel } from "@tsukaima/core";
 
 const directories: string[] = [];
 
@@ -16,16 +16,16 @@ afterEach(async () => {
 });
 
 async function createDirectory(): Promise<string> {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-events-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-events-"));
 	directories.push(directory);
 	return directory;
 }
 
 const adminEnv = (directory: string): Record<string, string> => ({
-	ELAINA_ADMIN_PASSWORD: "correct-horse",
-	ELAINA_ADMIN_USERNAME: "elaina",
-	ELAINA_DATA_DIR: directory,
-	ELAINA_PORT: "7420",
+	TSUKAIMA_ADMIN_PASSWORD: "correct-horse",
+	TSUKAIMA_ADMIN_USERNAME: "tsukaima",
+	TSUKAIMA_DATA_DIR: directory,
+	TSUKAIMA_PORT: "7420",
 });
 
 const envelope = (id: string, text: string): MessageEnvelope => ({
@@ -42,7 +42,7 @@ const envelope = (id: string, text: string): MessageEnvelope => ({
 type App = ReturnType<typeof createApp>["app"];
 
 async function signIn(app: App): Promise<string> {
-	return signInViaBetterAuth(app, "elaina", "correct-horse");
+	return signInViaBetterAuth(app, "tsukaima", "correct-horse");
 }
 
 interface SseFrame {
@@ -199,7 +199,7 @@ describe("authenticated live event stream", () => {
 		// path submits immediately, which is what a live run needs to be observable here.
 		const { createLocalChat, sendMessage } = await import("../src/services/webui.ts");
 		const chat = await createLocalChat(lifecycle, { sessionTitle: "Live", title: "Live" });
-		await sendMessage(lifecycle, { sessionId: chat.sessionId, target: "elaina", text: "hello" });
+		await sendMessage(lifecycle, { sessionId: chat.sessionId, target: "tsukaima", text: "hello" });
 
 		// Collect run.delta frames until the run settles. A delta carries only the fields that
 		// moved, so this also proves the stream is incremental rather than a full snapshot per tick.
@@ -241,7 +241,7 @@ describe("authenticated live event stream", () => {
 			sessionTitle: "Reconnect",
 			title: "Reconnect",
 		});
-		await sendMessage(lifecycle, { sessionId: chat.sessionId, target: "elaina", text: "hello" });
+		await sendMessage(lifecycle, { sessionId: chat.sessionId, target: "tsukaima", text: "hello" });
 
 		let active: Awaited<ReturnType<typeof lifecycle.liveRuns.snapshots>>[number] | undefined;
 		for (let attempt = 0; attempt < 20 && active === undefined; attempt += 1) {

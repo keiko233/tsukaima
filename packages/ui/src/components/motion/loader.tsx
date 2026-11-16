@@ -2,9 +2,9 @@
 
 import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useId, useState } from "react";
-import { EASE_IN_OUT } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { EASE_IN_OUT } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export type LoaderVariant =
 	| "spinner"

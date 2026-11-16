@@ -4,7 +4,7 @@ Memory is not a free-form scratchpad. It is scoped, auditable, versioned, and re
 
 ## Goals
 
-- Let Elaina continue conversations across sessions.
+- Let Tsukaima continue conversations across sessions.
 - Separate private, conversation-local, persona, and project knowledge.
 - Avoid accidental leakage between users.
 - Allow admin review and correction.

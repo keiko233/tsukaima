@@ -6,12 +6,12 @@ import type {
 	IterationTaskConstraints,
 	IterationTaskStatus,
 	ReloadController,
-} from "@elaina/coding";
+} from "@tsukaima/coding";
 
 export const SELF_ITERATION_PLUGIN_ID = "self-iteration";
 export const SELF_ITERATION_RPC_PREFIX = `${SELF_ITERATION_PLUGIN_ID}.`;
 /** Host-provided store, repository root, worktree root, and supervised reload controller. */
-export const SELF_ITERATION_HOST_BINDING = "elaina.self-iteration.host";
+export const SELF_ITERATION_HOST_BINDING = "tsukaima.self-iteration.host";
 export const SELF_ITERATION_POLICY_KEY = "self-iteration.policy";
 
 /** Bounded policy edited in the WebUI and applied by every tool. */

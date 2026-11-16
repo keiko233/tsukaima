@@ -4,7 +4,7 @@ import {
 	pluginManifestSchema,
 	type PluginLogger,
 	type PluginModelProvider,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import {
 	modelCapabilities,
 	modelInputModalities,
@@ -53,9 +53,9 @@ function asFetch(handler: () => Promise<Response>): typeof globalThis.fetch {
 }
 
 describe("openai-compatible plugin", () => {
-	test("manifest matches the packaged elaina.plugin.json", async () => {
+	test("manifest matches the packaged tsukaima.plugin.json", async () => {
 		const packaged = (await Bun.file(
-			new URL("../elaina.plugin.json", import.meta.url),
+			new URL("../tsukaima.plugin.json", import.meta.url),
 		).json()) as unknown;
 		expect(pluginManifestSchema.parse(packaged)).toEqual(openAiCompatibleManifest);
 	});

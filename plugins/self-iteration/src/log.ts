@@ -1,4 +1,4 @@
-import type { PluginLogger } from "@elaina/sdk";
+import type { PluginLogger } from "@tsukaima/sdk";
 
 /** Log levels a plugin can emit. Mirrors `PluginLogger` without `child`. */
 export type ScopedLogLevel = "trace" | "debug" | "info" | "warn" | "error";

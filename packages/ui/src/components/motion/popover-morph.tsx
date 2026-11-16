@@ -27,10 +27,10 @@ import {
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { usePopoverPortalPosition } from "@elaina/ui/components/motion/popover-position";
-import { EASE_OUT } from "@elaina/ui/lib/ease";
-import { FOCUSABLE_SELECTOR } from "@elaina/ui/lib/focusable";
-import { cn } from "@elaina/ui/lib/utils";
+import { usePopoverPortalPosition } from "@tsukaima/ui/components/motion/popover-position";
+import { EASE_OUT } from "@tsukaima/ui/lib/ease";
+import { FOCUSABLE_SELECTOR } from "@tsukaima/ui/lib/focusable";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 type Side = "top" | "bottom";
 type Align = "start" | "end";

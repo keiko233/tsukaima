@@ -16,7 +16,7 @@ describe("plugin i18n", () => {
 
 		const zh = source.bind("zh-cn");
 		expect(zh.locale).toBe("zh-cn");
-		expect(zh.t("greeting", { name: "Elaina" })).toBe("你好 Elaina");
+		expect(zh.t("greeting", { name: "Tsukaima" })).toBe("你好 Tsukaima");
 		expect(zh.t("only_en")).toBe("English only");
 		expect(zh.t("missing_key")).toBe("missing_key");
 		expect(source.bind("fr").locale).toBe("en");
@@ -50,7 +50,7 @@ describe("plugin i18n", () => {
 		});
 		expect(source.bind("zh-cn").t("greeting")).toBe("你好");
 		expect(source.bind("en").t("greeting")).toBe("Hello");
-		expect(source.bind("zh-cn").t("farewell", { name: "Elaina" })).toBe("再见 Elaina");
+		expect(source.bind("zh-cn").t("farewell", { name: "Tsukaima" })).toBe("再见 Tsukaima");
 	});
 });
 

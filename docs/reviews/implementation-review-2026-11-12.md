@@ -13,13 +13,13 @@ At review time the repository was green:
 
 ```sh
 bun run check                     # lint, format, typecheck, 145 tests / 29 files
-bun run --filter '@elaina/web' build
+bun run --filter '@tsukaima/web' build
 ```
 
 The server also boots and answers correctly:
 
 ```sh
-ELAINA_DATA_DIR=$(mktemp -d) ELAINA_PORT=7499 bun run apps/server/src/main.ts
+TSUKAIMA_DATA_DIR=$(mktemp -d) TSUKAIMA_PORT=7499 bun run apps/server/src/main.ts
 curl http://127.0.0.1:7499/healthz        # {"state":"ready",...}
 curl -o /dev/null -w '%{http_code}' http://127.0.0.1:7499/readyz   # 204
 curl -X POST http://127.0.0.1:7499/rpc/admin/plugins/list -d '{}'
@@ -65,7 +65,7 @@ curl -X POST http://127.0.0.1:7499/rpc/admin/plugins/list -d '{}'
 
 3. **No authentication.** The design has an `auth` namespace; the implementation hard-coded the
    audit actor to `webui-admin` and left every admin procedure open to anyone who could reach
-   the port (mitigated only by the default `127.0.0.1` bind). `ELAINA_WEB_ORIGIN` was parsed but
+   the port (mitigated only by the default `127.0.0.1` bind). `TSUKAIMA_WEB_ORIGIN` was parsed but
    never read, and there was no CORS handling.
 4. **Persona and memory were not wired into the runtime.** `personas` and `memories` were only
    written by the migration package; the model call had no system prompt and no memory
@@ -80,7 +80,7 @@ curl -X POST http://127.0.0.1:7499/rpc/admin/plugins/list -d '{}'
 
 ### P2 — hygiene
 
-8. Dead or unwired code: `@elaina/chaos` and `@elaina/coding` had no runtime importers,
+8. Dead or unwired code: `@tsukaima/chaos` and `@tsukaima/coding` had no runtime importers,
    `UserService` in `apps/server/src/services/users.ts` was unused, and the tables `activities`,
    `activityMessages`, `memoryLinks`, and `pluginGrants` had zero references. Third-party worker
    plugins had no loader; the registry only installed built-ins.
@@ -112,7 +112,7 @@ round-trip test and a boundary test now exist; there is still no WebUI test suit
 
 Verified on the integration tree:
 
-- `bun run lint`, `bun run format:check`, `bun run typecheck`, `bun run --filter '@elaina/web' build` all pass.
+- `bun run lint`, `bun run format:check`, `bun run typecheck`, `bun run --filter '@tsukaima/web' build` all pass.
 - `bun test` → 150 tests across 31 files, 0 failures (was 145/29).
 - A boot against a copy of the development domain database applied migration
   `0003_wise_darkhawk` in place (drops `activities`, `activity_messages`, `memory_links`,
@@ -144,7 +144,7 @@ row with no automatic retry.
 
 Findings 3 and 4 are resolved:
 
-- Persona and memory are injected as pi-durable prompt sections (`elaina-persona`, `elaina-memory`)
+- Persona and memory are injected as pi-durable prompt sections (`tsukaima-persona`, `tsukaima-memory`)
   rendered per conversation from the domain database, with keyword retrieval, importance/recency
   ranking, a character budget, and a provider that degrades to `undefined` on any error.
 - Admin authentication exists: `auth.status`/`login`/`logout`, an `adminBase` guard that rejects all
@@ -157,7 +157,7 @@ points. Finding 5 is partly resolved; finding 6 (realtime) is untouched.
 
 Integration verification for this round:
 
-- `bun run check` → 166 tests across 34 files, 0 failures; `bun run --filter '@elaina/web' build` passes.
+- `bun run check` → 166 tests across 34 files, 0 failures; `bun run --filter '@tsukaima/web' build` passes.
 - A live server against a copy of the development database served `healthz` 200, `readyz` 204,
   rejected `admin/chats/list` with 401, accepted `auth/login`, then served the same call with 200
   using the session cookie, and rejected a wrong password with `UNAUTHENTICATED`.

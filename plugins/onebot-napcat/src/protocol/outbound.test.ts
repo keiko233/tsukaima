@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { MessagePart } from "@elaina/contracts";
-import type { OutboundTarget } from "@elaina/sdk";
+import type { MessagePart } from "@tsukaima/contracts";
+import type { OutboundTarget } from "@tsukaima/sdk";
 import { OneBotChannel, outboundActionTimeoutMs, toSegments } from "./channel.ts";
 import type { OneBotConfig, OneBotTransport, OneBotTransportFactory } from "./types.ts";
 

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { logLevelSchema } from "@elaina/contracts";
+import { logLevelSchema } from "@tsukaima/contracts";
 import { z } from "zod";
 
 const DEFAULT_LOG_BUFFER_CAPACITY = 5_000;
@@ -29,7 +29,7 @@ const configurationSchema = z.object({
 	trustedProxies: z.array(z.string().min(1)),
 });
 
-export type ElainaConfig = z.infer<typeof configurationSchema>;
+export type TsukaimaConfig = z.infer<typeof configurationSchema>;
 
 function parseOptionalPositiveInt(
 	rawValue: string | undefined,
@@ -44,27 +44,27 @@ function parseOptionalPositiveInt(
 	return parsed;
 }
 
-export function loadConfig(env: Record<string, string | undefined>): ElainaConfig {
-	const port = Number(env.ELAINA_PORT ?? "7420");
-	const publicUrl = env.ELAINA_PUBLIC_URL ?? `http://127.0.0.1:${port}`;
+export function loadConfig(env: Record<string, string | undefined>): TsukaimaConfig {
+	const port = Number(env.TSUKAIMA_PORT ?? "7420");
+	const publicUrl = env.TSUKAIMA_PUBLIC_URL ?? `http://127.0.0.1:${port}`;
 	const isProduction = env.NODE_ENV === "production";
-	const webOrigin = env.ELAINA_WEB_ORIGIN || (isProduction ? undefined : "http://127.0.0.1:7421");
-	const trustedOrigins = (env.ELAINA_TRUSTED_ORIGINS ?? "")
+	const webOrigin = env.TSUKAIMA_WEB_ORIGIN || (isProduction ? undefined : "http://127.0.0.1:7421");
+	const trustedOrigins = (env.TSUKAIMA_TRUSTED_ORIGINS ?? "")
 		.split(",")
 		.map((origin) => origin.trim())
 		.filter((origin) => origin.length > 0);
-	const trustedProxies = (env.ELAINA_TRUSTED_PROXIES ?? "")
+	const trustedProxies = (env.TSUKAIMA_TRUSTED_PROXIES ?? "")
 		.split(",")
 		.map((proxy) => proxy.trim())
 		.filter((proxy) => proxy.length > 0);
-	const rawDrillInterval = env.ELAINA_BACKUP_DRILL_INTERVAL_MS?.trim() ?? "";
+	const rawDrillInterval = env.TSUKAIMA_BACKUP_DRILL_INTERVAL_MS?.trim() ?? "";
 	const parsedDrillInterval = rawDrillInterval === "" ? undefined : Number(rawDrillInterval);
 	if (
 		parsedDrillInterval !== undefined &&
 		(!Number.isFinite(parsedDrillInterval) || parsedDrillInterval < 0)
 	) {
 		throw new Error(
-			"ELAINA_BACKUP_DRILL_INTERVAL_MS must be a non-negative number of milliseconds",
+			"TSUKAIMA_BACKUP_DRILL_INTERVAL_MS must be a non-negative number of milliseconds",
 		);
 	}
 	// Zero disables the scheduler, matching the documented "unset or 0" behavior.
@@ -73,18 +73,18 @@ export function loadConfig(env: Record<string, string | undefined>): ElainaConfi
 			? undefined
 			: parsedDrillInterval;
 
-	const dataDir = env.ELAINA_DATA_DIR ?? "./data";
-	const rawLogLevel = env.ELAINA_LOG_LEVEL?.trim();
+	const dataDir = env.TSUKAIMA_DATA_DIR ?? "./data";
+	const rawLogLevel = env.TSUKAIMA_LOG_LEVEL?.trim();
 	const logLevelFromEnv = rawLogLevel !== undefined && rawLogLevel.length > 0;
 	const logBufferCapacity =
-		parseOptionalPositiveInt(env.ELAINA_LOG_BUFFER_CAPACITY, "ELAINA_LOG_BUFFER_CAPACITY") ??
+		parseOptionalPositiveInt(env.TSUKAIMA_LOG_BUFFER_CAPACITY, "TSUKAIMA_LOG_BUFFER_CAPACITY") ??
 		DEFAULT_LOG_BUFFER_CAPACITY;
 	const logRetentionDays = parseOptionalPositiveInt(
-		env.ELAINA_LOG_RETENTION_DAYS,
-		"ELAINA_LOG_RETENTION_DAYS",
+		env.TSUKAIMA_LOG_RETENTION_DAYS,
+		"TSUKAIMA_LOG_RETENTION_DAYS",
 	);
-	const logFileEnabled = env.ELAINA_LOG_FILE_ENABLED?.trim().toLowerCase() !== "false";
-	const rawLogDir = env.ELAINA_LOG_DIR?.trim();
+	const logFileEnabled = env.TSUKAIMA_LOG_FILE_ENABLED?.trim().toLowerCase() !== "false";
+	const rawLogDir = env.TSUKAIMA_LOG_DIR?.trim();
 	const logDir = logFileEnabled
 		? rawLogDir && rawLogDir.length > 0
 			? rawLogDir
@@ -92,14 +92,14 @@ export function loadConfig(env: Record<string, string | undefined>): ElainaConfi
 		: undefined;
 
 	const config = configurationSchema.parse({
-		adminEmail: env.ELAINA_ADMIN_EMAIL || undefined,
-		adminPassword: env.ELAINA_ADMIN_PASSWORD || undefined,
-		adminUsername: env.ELAINA_ADMIN_USERNAME || undefined,
-		authSecret: env.ELAINA_AUTH_SECRET || env.BETTER_AUTH_SECRET || undefined,
+		adminEmail: env.TSUKAIMA_ADMIN_EMAIL || undefined,
+		adminPassword: env.TSUKAIMA_ADMIN_PASSWORD || undefined,
+		adminUsername: env.TSUKAIMA_ADMIN_USERNAME || undefined,
+		authSecret: env.TSUKAIMA_AUTH_SECRET || env.BETTER_AUTH_SECRET || undefined,
 		...(backupDrillIntervalMs === undefined ? {} : { backupDrillIntervalMs }),
-		backupDrillRoot: env.ELAINA_BACKUP_DRILL_ROOT || undefined,
+		backupDrillRoot: env.TSUKAIMA_BACKUP_DRILL_ROOT || undefined,
 		dataDir,
-		host: env.ELAINA_HOST ?? "127.0.0.1",
+		host: env.TSUKAIMA_HOST ?? "127.0.0.1",
 		logBufferCapacity,
 		...(logDir === undefined ? {} : { logDir }),
 		logFileEnabled,
@@ -108,7 +108,7 @@ export function loadConfig(env: Record<string, string | undefined>): ElainaConfi
 		...(logRetentionDays === undefined ? {} : { logRetentionDays }),
 		port,
 		publicUrl,
-		secureCookies: env.ELAINA_AUTH_SECURE_COOKIES === "true" || publicUrl.startsWith("https://"),
+		secureCookies: env.TSUKAIMA_AUTH_SECURE_COOKIES === "true" || publicUrl.startsWith("https://"),
 		webOrigin,
 		trustedOrigins: [
 			...new Set([
@@ -121,7 +121,7 @@ export function loadConfig(env: Record<string, string | undefined>): ElainaConfi
 	});
 
 	if (env.NODE_ENV === "production" && config.authSecret === undefined) {
-		throw new Error("ELAINA_AUTH_SECRET (or BETTER_AUTH_SECRET) is required in production");
+		throw new Error("TSUKAIMA_AUTH_SECRET (or BETTER_AUTH_SECRET) is required in production");
 	}
 
 	return config;

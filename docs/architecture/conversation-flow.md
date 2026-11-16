@@ -85,7 +85,7 @@ Resolution:
 
 1. Find or create a `chat_objects` row by `(channel_id, kind, platform_conversation_id)`.
 2. Find the chat object's active receiving session (`is_receiving = 1`).
-3. If none exists, create one Elaina session and its durable conversation. Existing
+3. If none exists, create one Tsukaima session and its durable conversation. Existing
    sessions are never moved automatically.
 4. Admit the message through the receiving session's durable conversation.
 5. Index the domain message under both the chat object and the receiving session.

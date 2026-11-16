@@ -1,15 +1,15 @@
 # OneBot / NapCat integration
 
-Elaina's first channel is NapCat's OneBot v11 WebSocket server. Elaina is the WebSocket client. This preserves the current DSH topology and makes cutover straightforward.
+Tsukaima's first channel is NapCat's OneBot v11 WebSocket server. Tsukaima is the WebSocket client. This preserves the current DSH topology and makes cutover straightforward.
 
 ## Transport modes
 
 | Mode | Role | First release |
 | --- | --- | --- |
-| Forward WebSocket | Elaina connects to `ws://napcat:3001` | Yes |
-| Reverse WebSocket | NapCat connects to Elaina | Later |
+| Forward WebSocket | Tsukaima connects to `ws://napcat:3001` | Yes |
+| Reverse WebSocket | NapCat connects to Tsukaima | Later |
 | HTTP server | NapCat accepts API calls | Optional |
-| HTTP client | Elaina calls NapCat HTTP | Optional |
+| HTTP client | Tsukaima calls NapCat HTTP | Optional |
 
 WebSocket is the primary event channel. HTTP may be used for API calls when useful, but actions must still be recorded and correlated.
 
@@ -24,10 +24,10 @@ Any key can fall back to an environment variable through the manifest's `configE
 
 | Config key | Environment fallback | Secret |
 | --- | --- | --- |
-| `wsUrl` | `ELAINA_ONEBOT_WS_URL` | no |
-| `accessToken` | `ELAINA_ONEBOT_ACCESS_TOKEN` | yes |
+| `wsUrl` | `TSUKAIMA_ONEBOT_WS_URL` | no |
+| `accessToken` | `TSUKAIMA_ONEBOT_ACCESS_TOKEN` | yes |
 | `channelId` | - | no (defaults to `onebot`) |
-| `botAccountId` | - | no (defaults to `elaina-server`) |
+| `botAccountId` | - | no (defaults to `tsukaima-server`) |
 | `reconnect` | - | no |
 
 Clearing a stored value falls back to the environment value, matching provider settings.
@@ -152,7 +152,7 @@ Implementations must be tolerant of extra fields and numeric/string ID variants.
 
 ### Segment mapping
 
-| OneBot segment | Elaina part | Notes |
+| OneBot segment | Tsukaima part | Notes |
 | --- | --- | --- |
 | `text` | text | Preserve text as received |
 | `face` | sticker | QQ face/sticker |
@@ -167,7 +167,7 @@ Implementations must be tolerant of extra fields and numeric/string ID variants.
 | `xml` | generic | Rare; retain raw |
 | unknown | channel-native | Never drop silently |
 
-Elaina preserves segment order. `raw_message` is not treated as authoritative when segments exist.
+Tsukaima preserves segment order. `raw_message` is not treated as authoritative when segments exist.
 
 ### Media handling
 
@@ -362,9 +362,9 @@ Actions that can affect real QQ users require audit and are rate-limited.
 
 ## Outbound conversion
 
-Elaina normalized output converts to OneBot segments.
+Tsukaima normalized output converts to OneBot segments.
 
-| Elaina output | OneBot segment |
+| Tsukaima output | OneBot segment |
 | --- | --- |
 | text | `text` |
 | image | `image` |
@@ -413,10 +413,10 @@ Do not expose:
 
 1. Configure NapCat account-specific WebSocket server.
 2. Keep DSH disconnected.
-3. Configure Elaina's secret and outbound connection.
-4. Start Elaina.
+3. Configure Tsukaima's secret and outbound connection.
+4. Start Tsukaima.
 5. Verify health.
 6. Verify fake/imported conversation rendering in WebUI.
 7. Perform manual smoke test only when ready.
 
-Do not run DSH and Elaina against NapCat simultaneously during cutover unless explicitly performing a supervised dual-connection test.
+Do not run DSH and Tsukaima against NapCat simultaneously during cutover unless explicitly performing a supervised dual-connection test.

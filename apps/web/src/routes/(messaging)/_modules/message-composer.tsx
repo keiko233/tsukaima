@@ -2,13 +2,13 @@
 
 import { MessageCircle, Send } from "lucide-react";
 import { useEffect, useState } from "react";
-import { PromptInput } from "@elaina/ui/components/agents/prompt-input";
-import { Select, SelectContent, SelectItem, SelectTrigger } from "@elaina/ui/components/motion/select";
+import { PromptInput } from "@tsukaima/ui/components/agents/prompt-input";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@tsukaima/ui/components/motion/select";
 import type { MessageSummary } from "@/lib/api";
-import { cn } from "@elaina/ui/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 
-type DeliveryTarget = "channel" | "elaina";
+type DeliveryTarget = "channel" | "tsukaima";
 
 export function MessageComposer({
 	channelConnected,
@@ -25,16 +25,16 @@ export function MessageComposer({
 	sending: boolean;
 	sessionId: string;
 }) {
-	const draftKey = `elaina.webui.draft.${sessionId}`;
-	const targetKey = `elaina.webui.target.${sessionId}`;
+	const draftKey = `tsukaima.webui.draft.${sessionId}`;
+	const targetKey = `tsukaima.webui.target.${sessionId}`;
 	const [text, setText] = useState(() => localStorage.getItem(draftKey) ?? "");
 	const [target, setTarget] = useState<DeliveryTarget>(() => {
 		const stored = localStorage.getItem(targetKey);
-		return stored === "channel" ? "channel" : "elaina";
+		return stored === "channel" ? "channel" : "tsukaima";
 	});
 
 	useEffect(() => {
-		if (!externalEligible || !channelConnected) setTarget("elaina");
+		if (!externalEligible || !channelConnected) setTarget("tsukaima");
 	}, [channelConnected, externalEligible]);
 
 	const updateText = (next: string) => {
@@ -76,16 +76,16 @@ export function MessageComposer({
 						<MessageCircle className="size-3 text-muted-foreground" />
 					)}
 					<span className="truncate text-muted-foreground">
-						{target === "channel" ? m.send_to_channel() : m.send_to_elaina()}
+						{target === "channel" ? m.send_to_channel() : m.send_to_tsukaima()}
 					</span>
 				</span>
 			</SelectTrigger>
 			<SelectContent className="right-auto w-60 shadow-none">
-				<SelectItem value="elaina" className="py-2">
+				<SelectItem value="tsukaima" className="py-2">
 					<span className="block">
-						<span className="block text-sm text-foreground">{m.send_to_elaina()}</span>
+						<span className="block text-sm text-foreground">{m.send_to_tsukaima()}</span>
 						<span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
-							{m.composer_hint_elaina()}
+							{m.composer_hint_tsukaima()}
 						</span>
 					</span>
 				</SelectItem>
@@ -117,7 +117,7 @@ export function MessageComposer({
 					className={cn(sending && "opacity-80")}
 				/>
 				<p className="mt-1 px-1.5 text-[10px] leading-4 text-muted-foreground/80">
-					{target === "channel" ? m.composer_hint_channel() : m.composer_hint_elaina()}
+					{target === "channel" ? m.composer_hint_channel() : m.composer_hint_tsukaima()}
 				</p>
 			</div>
 		</div>

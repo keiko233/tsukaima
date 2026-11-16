@@ -2,8 +2,8 @@
 
 import { Archive, Brain, Minimize2, Pencil, Radio, RotateCcw, Square } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Button } from "@elaina/ui/components/motion/button";
-import { cn } from "@elaina/ui/lib/utils";
+import { Button } from "@tsukaima/ui/components/motion/button";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 
 const inputClass =

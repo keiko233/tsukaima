@@ -1,12 +1,12 @@
 {
-	"name": "@elaina/migration-cli",
+	"name": "@tsukaima/migration-cli",
 	"version": "0.1.0",
 	"private": true,
 	"bin": {
-		"elaina-migration": "./src/cli.ts"
+		"tsukaima-migration": "./src/cli.ts"
 	},
 	"type": "module",
 	"dependencies": {
-		"@elaina/migration": "workspace:*"
+		"@tsukaima/migration": "workspace:*"
 	}
 }

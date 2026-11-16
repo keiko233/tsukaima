@@ -2,15 +2,15 @@ import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { ContractRouterClient } from "@orpc/contract";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
-import type { AppContract } from "@elaina/contracts";
+import type { AppContract } from "@tsukaima/contracts";
 import { runtimeUrl } from "./runtime-url";
 
 /**
- * The WebUI talks to the server exclusively through the oRPC contract in `@elaina/contracts`.
+ * The WebUI talks to the server exclusively through the oRPC contract in `@tsukaima/contracts`.
  * Types are never declared here: they are re-exported from the contract, and the client/router
  * utilities are inferred from it, so the wire surface stays in lockstep with the server.
  */
-export { logLevels } from "@elaina/contracts";
+export { logLevels } from "@tsukaima/contracts";
 export type {
 	AuthStatus,
 	ChatSummary,
@@ -34,7 +34,7 @@ export type {
 	SettingsView,
 	UserDetail,
 	UserSummary,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 
 const RPC_URL = runtimeUrl("/rpc");
 

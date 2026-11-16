@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runBackupDrill } from "@elaina/migration";
+import { runBackupDrill } from "@tsukaima/migration";
 import { BackupDrillScheduler } from "../../apps/server/src/services/backup-drill-scheduler.ts";
 import { createLogger } from "../../apps/server/src/logging.ts";
 import { drillOptionsFromEnv, parseBackupDrillArgs } from "./backup-drill.ts";
@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 async function dataDirectory(): Promise<string> {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-backup-drill-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-backup-drill-"));
 	directories.push(directory);
 	await fs.mkdir(join(directory, "blobs"), { recursive: true });
 	for (const name of ["domain.sqlite", "durable.sqlite"]) {
@@ -36,7 +36,7 @@ async function dataDirectory(): Promise<string> {
 }
 
 const quietLogger = () =>
-	createLogger({ level: "error", sink: () => undefined, target: "elaina::test" });
+	createLogger({ level: "error", sink: () => undefined, target: "tsukaima::test" });
 
 describe("backup drill", () => {
 	test("backs up, restores into staging, and verifies SQLite and blob hashes", async () => {
@@ -117,18 +117,18 @@ describe("backup drill", () => {
 	test("CLI parser and environment defaults are data-only and avoid fixed hosts", () => {
 		const parsed = parseBackupDrillArgs([
 			"--data-dir",
-			"/tmp/elaina-data",
+			"/tmp/tsukaima-data",
 			"--run-id",
 			"cli-run",
 			"--keep-staging",
 		]);
 		expect(parsed).toMatchObject({
-			dataDir: "/tmp/elaina-data",
+			dataDir: "/tmp/tsukaima-data",
 			keepStaging: true,
 			runId: "cli-run",
 		});
 		const options = drillOptionsFromEnv(
-			{ ELAINA_DATA_DIR: "/tmp/env-data" },
+			{ TSUKAIMA_DATA_DIR: "/tmp/env-data" },
 			{
 				help: false,
 				keepStaging: false,

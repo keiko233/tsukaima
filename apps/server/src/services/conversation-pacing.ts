@@ -1,4 +1,4 @@
-import type { ConversationPolicy } from "@elaina/contracts";
+import type { ConversationPolicy } from "@tsukaima/contracts";
 
 type ConversationPacingState = {
 	lurkAtMs?: number;

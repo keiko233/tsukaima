@@ -8,7 +8,7 @@ import {
 
 /**
  * Domain-agnostic seam for the persona and memory prompt sections. The server implements it
- * over Drizzle; `@elaina/core` never imports `@elaina/db`. Implementations must degrade to
+ * over Drizzle; `@tsukaima/core` never imports `@tsukaima/db`. Implementations must degrade to
  * `undefined` on any failure so prompt rendering can never break a model run.
  */
 export interface ContextPromptProvider {
@@ -21,16 +21,16 @@ export interface ContextPromptProvider {
 }
 
 /**
- * Installed extension that carries the Elaina context sections. Registry section keys match
- * `/^[a-z][a-z0-9_-]*$/`, so the dotted `elaina.persona` form is not available.
+ * Installed extension that carries the Tsukaima context sections. Registry section keys match
+ * `/^[a-z][a-z0-9_-]*$/`, so the dotted `tsukaima.persona` form is not available.
  */
-export const CONTEXT_EXTENSION_NAME = "elaina-context";
+export const CONTEXT_EXTENSION_NAME = "tsukaima-context";
 /** Section key for the conversation's persona (rendered before policy and memories). */
-export const PERSONA_SECTION_KEY = "elaina-persona";
+export const PERSONA_SECTION_KEY = "tsukaima-persona";
 /** Section key for the compact conversation policy/trigger contract. */
-export const POLICY_SECTION_KEY = "elaina-policy";
+export const POLICY_SECTION_KEY = "tsukaima-policy";
 /** Section key for the conversation's retrieved memories. */
-export const MEMORY_SECTION_KEY = "elaina-memory";
+export const MEMORY_SECTION_KEY = "tsukaima-memory";
 
 export interface ContextExtensionOptions {
 	/** Section key overrides, mainly for tests and wrapping experiments. */

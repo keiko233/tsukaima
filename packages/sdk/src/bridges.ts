@@ -15,7 +15,7 @@ import type {
 	PluginRequestApi,
 	PluginSettingsApi,
 } from "./host.ts";
-import type { MessageEnvelope } from "@elaina/contracts";
+import type { MessageEnvelope } from "@tsukaima/contracts";
 import type {
 	PluginChannelApi,
 	PluginConfig,
@@ -53,8 +53,8 @@ import type {
 	PluginUiDefinition,
 	ToolInvocationContext,
 } from "./types.ts";
-import { pluginStatusInputSchema } from "@elaina/contracts";
-import type { PluginStatusSnapshot } from "@elaina/contracts";
+import { pluginStatusInputSchema } from "@tsukaima/contracts";
+import type { PluginStatusSnapshot } from "@tsukaima/contracts";
 
 export {
 	DEFAULT_TOOL_POLICY,
@@ -315,7 +315,7 @@ export class LocalUiBridge {
 	setStatus(input: unknown): void {
 		if (!hasPermission(this.#grantedPermissions, "ui.panel")) {
 			console.warn(
-				`elaina: plugin ${this.#pluginId} is not granted permission ui.panel; status dropped`,
+				`tsukaima: plugin ${this.#pluginId} is not granted permission ui.panel; status dropped`,
 			);
 			return;
 		}
@@ -326,7 +326,7 @@ export class LocalUiBridge {
 		}
 		const parsed = pluginStatusInputSchema.safeParse(input);
 		if (!parsed.success) {
-			console.warn("elaina: dropped invalid plugin status", parsed.error.message);
+			console.warn("tsukaima: dropped invalid plugin status", parsed.error.message);
 			return;
 		}
 		const metrics = parsed.data.metrics;
@@ -335,7 +335,7 @@ export class LocalUiBridge {
 			(metrics !== undefined && Object.keys(metrics).length > 32) ||
 			(details !== undefined && Object.keys(details).length > 32)
 		) {
-			console.warn("elaina: dropped plugin status with too many fields");
+			console.warn("tsukaima: dropped plugin status with too many fields");
 			return;
 		}
 		const status: PluginStatusSnapshot = {
@@ -343,7 +343,7 @@ export class LocalUiBridge {
 			updatedAt: new Date().toISOString(),
 		};
 		if (JSON.stringify(status).length > 8192) {
-			console.warn("elaina: dropped oversized plugin status");
+			console.warn("tsukaima: dropped oversized plugin status");
 			return;
 		}
 		this.#status = status;
@@ -755,7 +755,7 @@ class ToolSemaphore {
 	}
 }
 
-export const PLUGIN_TOOLS_EXTENSION_NAME = "elaina-plugin-tools";
+export const PLUGIN_TOOLS_EXTENSION_NAME = "tsukaima-plugin-tools";
 
 /**
  * OpenAI-compatible providers only accept function names matching `^[a-zA-Z0-9_-]{1,64}$`.

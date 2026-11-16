@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { MessageEnvelope } from "@elaina/contracts";
-import { conversations, messages as messagesTable } from "@elaina/db";
+import type { MessageEnvelope } from "@tsukaima/contracts";
+import { conversations, messages as messagesTable } from "@tsukaima/db";
 import { eq } from "drizzle-orm";
 import { createApp } from "../src/app.ts";
 import {
@@ -39,12 +39,12 @@ const envelope = (id: string, text: string, timestampMs = Date.now()): MessageEn
 });
 
 async function createLifecycle() {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-webui-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-webui-"));
 	directories.push(directory);
 	const { lifecycle } = createApp({
-		ELAINA_DATA_DIR: directory,
-		ELAINA_PORT: "7420",
-		ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+		TSUKAIMA_DATA_DIR: directory,
+		TSUKAIMA_PORT: "7420",
+		TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 	});
 	await lifecycle.start();
 	return lifecycle;
@@ -113,7 +113,7 @@ describe("WebUI chat and session service", () => {
 		}
 	});
 
-	test("sends a local message to Elaina and returns the durable assistant reply", async () => {
+	test("sends a local message to Tsukaima and returns the durable assistant reply", async () => {
 		const lifecycle = await createLifecycle();
 		try {
 			const chat = await createLocalChat(lifecycle, {
@@ -122,15 +122,15 @@ describe("WebUI chat and session service", () => {
 			});
 			const sent = await sendMessage(lifecycle, {
 				sessionId: chat.sessionId,
-				target: "elaina",
-				text: "hello elaina",
+				target: "tsukaima",
+				text: "hello tsukaima",
 			});
 			expect(sent.deliveryStatus).toBe("accepted");
 			const messages = await waitFor(async () => {
 				const rows = await listMessages(lifecycle, chat.sessionId);
 				return rows.some((message) => message.senderKind === "assistant") ? rows : undefined;
 			});
-			expect(messages[0]?.contentText).toBe("hello elaina");
+			expect(messages[0]?.contentText).toBe("hello tsukaima");
 			expect(messages.at(-1)?.contentText).toBe("ok");
 			expect(messages.at(-1)?.senderKind).toBe("assistant");
 		} finally {
@@ -315,7 +315,7 @@ describe("WebUI chat and session service", () => {
 
 			await sendMessage(lifecycle, {
 				sessionId: chat.sessionId,
-				target: "elaina",
+				target: "tsukaima",
 				text: "Remember that my favorite drink is Darjeeling tea.",
 			});
 			await waitFor(async () => {

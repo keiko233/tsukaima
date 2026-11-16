@@ -14,16 +14,16 @@ import {
 	Terminal,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Button, IconButton } from "@elaina/ui/components/motion/button";
+import { Button, IconButton } from "@tsukaima/ui/components/motion/button";
 import {
 	MorphPopover,
 	MorphPopoverContent,
 	MorphPopoverTrigger,
-} from "@elaina/ui/components/motion/popover-morph";
+} from "@tsukaima/ui/components/motion/popover-morph";
 import { orpc } from "@/lib/api";
 import { authClient, authSessionQueryKey, authSessionQueryOptions } from "@/lib/auth";
 import { applyTheme, getInitialTheme, type Theme } from "@/lib/theme";
-import { cn } from "@elaina/ui/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { LogPanel } from "./log-panel";
 
@@ -82,9 +82,9 @@ export function TopBar({
 					<span className="grid size-6 place-items-center rounded-md bg-primary text-primary-foreground">
 						<Sparkles className="size-3.5" />
 					</span>
-					<span className="truncate text-[13px] font-semibold tracking-tight">Elaina</span>
+					<span className="truncate text-[13px] font-semibold tracking-tight">Tsukaima</span>
 					<span className="hidden truncate text-[10.5px] text-muted-foreground sm:block">
-						Elaina Admin
+						Tsukaima Admin
 					</span>
 				</div>
 

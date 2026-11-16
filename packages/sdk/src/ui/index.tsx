@@ -44,19 +44,19 @@ export type {
 	PluginUiModule,
 	ResolvedPluginUi,
 } from "./define.ts";
-export { Button, ButtonLink, IconButton } from "@elaina/ui/components/motion/button";
+export { Button, ButtonLink, IconButton } from "@tsukaima/ui/components/motion/button";
 export type {
 	ButtonProps,
 	ButtonSize,
 	ButtonVariant,
 	IconButtonProps,
-} from "@elaina/ui/components/motion/button";
-export { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@elaina/ui/components/motion/card";
-export { Checkbox } from "@elaina/ui/components/motion/checkbox";
-export { Input } from "@elaina/ui/components/motion/input";
-export { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@elaina/ui/components/motion/select";
-export { Switch } from "@elaina/ui/components/motion/switch";
-export { Tabs, TabsContent, TabsList, TabsTrigger } from "@elaina/ui/components/motion/tabs";
-export { cn } from "@elaina/ui/lib/utils";
+} from "@tsukaima/ui/components/motion/button";
+export { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
+export { Checkbox } from "@tsukaima/ui/components/motion/checkbox";
+export { Input } from "@tsukaima/ui/components/motion/input";
+export { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@tsukaima/ui/components/motion/select";
+export { Switch } from "@tsukaima/ui/components/motion/switch";
+export { Tabs, TabsContent, TabsList, TabsTrigger } from "@tsukaima/ui/components/motion/tabs";
+export { cn } from "@tsukaima/ui/lib/utils";
 export type { PluginI18n, PluginI18nSource } from "../i18n/index.ts";
 export { statusText } from "../i18n/index.ts";

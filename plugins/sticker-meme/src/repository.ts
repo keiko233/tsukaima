@@ -1,4 +1,4 @@
-import type { PluginDatabaseApi } from "@elaina/sdk";
+import type { PluginDatabaseApi } from "@tsukaima/sdk";
 import {
 	EMPTY_SEMANTIC_PROFILE,
 	normalizeLabels,

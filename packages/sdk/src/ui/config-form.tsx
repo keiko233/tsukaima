@@ -1,15 +1,15 @@
 "use client";
 
-import { Input } from "@elaina/ui/components/motion/input";
-import { Button } from "@elaina/ui/components/motion/button";
+import { Input } from "@tsukaima/ui/components/motion/input";
+import { Button } from "@tsukaima/ui/components/motion/button";
 import {
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-} from "@elaina/ui/components/motion/select";
-import { Switch } from "@elaina/ui/components/motion/switch";
+} from "@tsukaima/ui/components/motion/select";
+import { Switch } from "@tsukaima/ui/components/motion/switch";
 import { useEffect, useState, type ReactNode } from "react";
 import { Field } from "./components.tsx";
 

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray, lte } from "drizzle-orm";
-import { pluginTasks, type ElainaDatabase } from "@elaina/db";
-import { ConversationExecutionLock, withConversationLock } from "@elaina/core";
+import { pluginTasks, type TsukaimaDatabase } from "@tsukaima/db";
+import { ConversationExecutionLock, withConversationLock } from "@tsukaima/core";
 import {
 	hasPermission,
 	type PluginPermission,
@@ -15,7 +15,7 @@ import {
 	type PluginTaskUpdateInput,
 	type PluginTaskWatchEvent,
 	type PluginTasksApi,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import type { HookBus } from "./hook-bus.ts";
 
@@ -30,7 +30,7 @@ const DEFAULT_TASK_PERMISSIONS: readonly PluginPermission[] = [
 ];
 
 export interface PluginTaskServiceOptions {
-	readonly database: ElainaDatabase | (() => ElainaDatabase | undefined);
+	readonly database: TsukaimaDatabase | (() => TsukaimaDatabase | undefined);
 	readonly hooks?: HookBus;
 	readonly logger?: Logger;
 	readonly lock?: ConversationExecutionLock;
@@ -79,7 +79,7 @@ function taskFromRow(row: TaskRow): PluginTask {
  * start their own timers. Conversation-scoped handlers share the host execution lock.
  */
 export class PluginTaskService {
-	readonly #database: () => ElainaDatabase | undefined;
+	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #hooks: HookBus | undefined;
 	readonly #logger: Logger | undefined;
 	readonly #lock: ConversationExecutionLock;
@@ -97,7 +97,7 @@ export class PluginTaskService {
 		this.#database =
 			typeof options.database === "function"
 				? options.database
-				: () => options.database as ElainaDatabase;
+				: () => options.database as TsukaimaDatabase;
 		this.#hooks = options.hooks;
 		this.#logger = options.logger;
 		this.#lock = options.lock ?? new ConversationExecutionLock();
@@ -510,7 +510,7 @@ export class PluginTaskService {
 		}
 	}
 
-	#requireDatabase(): ElainaDatabase {
+	#requireDatabase(): TsukaimaDatabase {
 		const database = this.#database();
 		if (database === undefined) throw new Error("Domain database is not ready");
 		return database;

@@ -1,6 +1,6 @@
 # DSH baseline audit record
 
-This is the secret-free, reproducible record for the DSH deployment compared against the Elaina
+This is the secret-free, reproducible record for the DSH deployment compared against the Tsukaima
 parity work. It is derived from the read-only audit in
 [the DSH baseline spec](../specs/dsh-baseline.md). The committed fixture at
 `packages/migration/fixtures/dsh-baseline/` reproduces the observed schema shapes with synthetic

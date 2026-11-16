@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import type { ChannelRequest } from "@elaina/contracts";
-import { type ElainaDatabase, requests } from "@elaina/db";
-import type { AuditEntry } from "@elaina/sdk";
+import type { ChannelRequest } from "@tsukaima/contracts";
+import { type TsukaimaDatabase, requests } from "@tsukaima/db";
+import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 
@@ -11,7 +11,7 @@ export type RequestResolutionStatus = "approved" | "rejected" | "failed" | "unce
 export interface RequestServiceOptions {
 	readonly audit: (entry: AuditEntry) => Promise<void>;
 	readonly channels: ChannelRegistry;
-	readonly database: () => ElainaDatabase | undefined;
+	readonly database: () => TsukaimaDatabase | undefined;
 	readonly logger: Logger;
 }
 
@@ -22,7 +22,7 @@ export interface RequestServiceOptions {
 export class RequestService {
 	readonly #audit: (entry: AuditEntry) => Promise<void>;
 	readonly #channels: ChannelRegistry;
-	readonly #database: () => ElainaDatabase | undefined;
+	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #logger: Logger;
 	readonly #inFlight = new Set<string>();
 
@@ -161,7 +161,7 @@ export class RequestService {
 		}
 	}
 
-	#requireDatabase(): ElainaDatabase {
+	#requireDatabase(): TsukaimaDatabase {
 		const database = this.#database();
 		if (database === undefined) throw new Error("Domain database is not ready");
 		return database;

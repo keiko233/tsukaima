@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { BusyArbitrationInput } from "@elaina/core";
-import { conversationPolicySchema, defaultConversationPolicy } from "@elaina/contracts";
+import type { BusyArbitrationInput } from "@tsukaima/core";
+import { conversationPolicySchema, defaultConversationPolicy } from "@tsukaima/contracts";
 import { Logger } from "../src/logging.ts";
 import {
 	buildSidechatPrompt,

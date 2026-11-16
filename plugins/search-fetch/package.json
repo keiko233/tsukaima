@@ -1,5 +1,5 @@
 {
-	"name": "@elaina-plugin/search-fetch",
+	"name": "@tsukaima-plugin/search-fetch",
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
@@ -7,9 +7,9 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
-		"@elaina/sdk": "workspace:*",
-		"@elaina/ui": "workspace:*",
 		"@inlang/paraglide-js": "^3.2.2",
+		"@tsukaima/sdk": "workspace:*",
+		"@tsukaima/ui": "workspace:*",
 		"lucide-react": "^1.72.0",
 		"zod": "4.6.7"
 	},
@@ -19,7 +19,7 @@
 		"react": "^19.3.1",
 		"react-dom": "^19.3.1"
 	},
-	"elaina": {
+	"tsukaima": {
 		"id": "search-fetch",
 		"ui": "./src/ui.tsx"
 	}

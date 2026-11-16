@@ -65,7 +65,7 @@ Selection is recorded per generation. Plugin A can request `plugin:a`; feature B
 ### Sidechat classifier
 
 The sidechat classifier is not a routing policy; plugins advertise which of their models may run
-it. A descriptor that carries `chat.sidechat` (`MODEL_CAPABILITIES.sidechat` in `@elaina/sdk`) is
+it. A descriptor that carries `chat.sidechat` (`MODEL_CAPABILITIES.sidechat` in `@tsukaima/sdk`) is
 eligible, so the provider decides that a model is fast or cheap enough instead of the host
 assuming every chat model fits. `openai-compatible` exposes this as a per-model toggle, on by
 default.

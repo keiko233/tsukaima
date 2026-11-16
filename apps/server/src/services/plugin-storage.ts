@@ -1,11 +1,11 @@
 import { and, eq } from "drizzle-orm";
-import { pluginKvStorage, type ElainaDatabase } from "@elaina/db";
+import { pluginKvStorage, type TsukaimaDatabase } from "@tsukaima/db";
 import {
 	SqlitePluginStorage,
 	type PluginPermission,
 	type PluginStorageDriver,
 	type PluginStorageRow,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 
 function toRow(row: typeof pluginKvStorage.$inferSelect): PluginStorageRow {
 	return {
@@ -20,9 +20,9 @@ function toRow(row: typeof pluginKvStorage.$inferSelect): PluginStorageRow {
 
 /** Durable `pluginKvStorage` driver shared by every plugin storage bridge. */
 export class PluginStorageStore {
-	readonly #database: () => ElainaDatabase | undefined;
+	readonly #database: () => TsukaimaDatabase | undefined;
 
-	constructor(database: () => ElainaDatabase | undefined) {
+	constructor(database: () => TsukaimaDatabase | undefined) {
 		this.#database = database;
 	}
 

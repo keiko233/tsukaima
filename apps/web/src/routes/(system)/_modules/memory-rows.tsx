@@ -1,5 +1,5 @@
 import { Pin } from "lucide-react";
-import type { MemoryRow } from "@elaina/contracts";
+import type { MemoryRow } from "@tsukaima/contracts";
 
 /** Pure row renderer shared by the memories page and its WebUI smoke test. */
 export function MemoryRows({

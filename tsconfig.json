@@ -17,10 +17,10 @@
 		"noEmit": true,
 		"baseUrl": ".",
 		"paths": {
-			"@elaina/contracts": ["./packages/contracts/src/index.ts"],
-			"@elaina/core": ["./packages/core/src/index.ts"],
-			"@elaina/db": ["./packages/db/src/index.ts"],
-			"@elaina/durable": ["./packages/durable/src/index.ts"]
+			"@tsukaima/contracts": ["./packages/contracts/src/index.ts"],
+			"@tsukaima/core": ["./packages/core/src/index.ts"],
+			"@tsukaima/db": ["./packages/db/src/index.ts"],
+			"@tsukaima/durable": ["./packages/durable/src/index.ts"]
 		}
 	},
 	"include": [

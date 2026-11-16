@@ -3,14 +3,14 @@ import type {
 	ChannelRequest,
 	MessageEnvelope,
 	MessagePart,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 import type {
 	ChannelHistoryItem,
 	ChannelHistoryOptions,
 	OutboundTarget,
 	PluginLogger,
 	SendOptions,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import type { WebSocket as BunWebSocket, WebSocketOptions } from "bun";
 import {
 	createSafeLogger,

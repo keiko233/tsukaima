@@ -4,10 +4,10 @@ import {
 	codingDeployments,
 	codingProposals,
 	codingTasks,
-	type ElainaDatabase,
+	type TsukaimaDatabase,
 	migrateDomainDatabase,
 	openDomainDatabase,
-} from "@elaina/db";
+} from "@tsukaima/db";
 import { randomUUID } from "node:crypto";
 import { ApprovalError } from "./approval.ts";
 import type {
@@ -64,7 +64,7 @@ const TASK_STATUSES: readonly IterationTaskStatus[] = [
 	"pending",
 ];
 
-type DatabaseSource = string | (() => ElainaDatabase | undefined);
+type DatabaseSource = string | (() => TsukaimaDatabase | undefined);
 
 function parseJsonArray<T>(value: string | null, fallback: readonly T[] = []): readonly T[] {
 	if (value === null) return fallback;
@@ -186,9 +186,9 @@ function taskJson(value: readonly unknown[] | undefined): string {
  */
 export class DomainCodingStore {
 	readonly databasePath: string | undefined;
-	readonly #databaseProvider: (() => ElainaDatabase | undefined) | undefined;
-	#database: ElainaDatabase | undefined;
-	#databasePromise: Promise<ElainaDatabase> | undefined;
+	readonly #databaseProvider: (() => TsukaimaDatabase | undefined) | undefined;
+	#database: TsukaimaDatabase | undefined;
+	#databasePromise: Promise<TsukaimaDatabase> | undefined;
 
 	constructor(database: DatabaseSource) {
 		if (typeof database === "string") {
@@ -199,7 +199,7 @@ export class DomainCodingStore {
 		}
 	}
 
-	async #db(): Promise<ElainaDatabase> {
+	async #db(): Promise<TsukaimaDatabase> {
 		if (this.#database !== undefined) return this.#database;
 		if (this.#databaseProvider !== undefined) {
 			const database = this.#databaseProvider();

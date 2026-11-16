@@ -26,9 +26,9 @@ import {
 	type KeyboardEvent,
 	type ReactNode,
 } from "react";
-import { EASE_OUT, SPRING_SWAP } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { EASE_OUT, SPRING_SWAP } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 /** English defaults. Override per instance with `labels`, or app-wide with `LocaleProvider`. */
 export const tabsMessages = {

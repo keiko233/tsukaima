@@ -16,7 +16,7 @@ import {
 	type PluginMediaApi,
 	type PluginMediaRecord,
 	type PluginMediaStoreInput,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import { readZipEntries } from "./archive.ts";
 import { createAnimatedConverter, tgsToGif, webmToGif } from "./animated.ts";
 import {
@@ -239,7 +239,7 @@ async function seedItem(
 describe("sticker-meme schema and manifest", () => {
 	test("manifest matches the packaged plugin manifest and migrations create namespaced tables", async () => {
 		const packaged = (await Bun.file(
-			new URL("../elaina.plugin.json", import.meta.url),
+			new URL("../tsukaima.plugin.json", import.meta.url),
 		).json()) as unknown;
 		const parsed = pluginManifestSchema.parse(packaged);
 		expect(bundledManifestEquality(parsed, stickerMemeManifest)).toBe(true);
@@ -301,7 +301,7 @@ describe("sticker import and export", () => {
 					},
 				],
 				name: "Imported",
-				personaIds: ["elaina"],
+				personaIds: ["tsukaima"],
 				source: "imported",
 				tags: ["greeting"],
 			},
@@ -346,7 +346,7 @@ describe("sticker import and export", () => {
 		expect(exported.manifest.packs[0]).toMatchObject({
 			id: "pack-import",
 			name: "Imported",
-			personaIds: ["elaina"],
+			personaIds: ["tsukaima"],
 		});
 	});
 
@@ -366,7 +366,7 @@ describe("sticker import and export", () => {
 		expect(media.storeCalls).toBe(0);
 		expect(await repository.listPacks()).toHaveLength(0);
 
-		const directory = await mkdtemp(join(tmpdir(), "elaina-sticker-dir-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-sticker-dir-"));
 		directories.push(directory);
 		await mkdir(join(directory, "images"), { recursive: true });
 		await writeFile(join(directory, "manifest.json"), JSON.stringify(manifest));
@@ -389,7 +389,7 @@ describe("sticker import and export", () => {
 	test("imports a DSH meme-packs directory with a sqlite memes table", async () => {
 		const { media, repository } = baseFixture();
 		const service = new StickerImportService({ media, repository });
-		const root = await mkdtemp(join(tmpdir(), "elaina-dsh-meme-"));
+		const root = await mkdtemp(join(tmpdir(), "tsukaima-dsh-meme-"));
 		directories.push(root);
 		const packDir = join(root, "meme-packs", "dsh-pack");
 		await mkdir(packDir, { recursive: true });
@@ -486,7 +486,7 @@ describe("sticker selection and send tokens", () => {
 		await repository.savePack({
 			id: "pack-main",
 			name: "Main",
-			personaIds: ["elaina"],
+			personaIds: ["tsukaima"],
 			tags: ["greeting"],
 		});
 		await repository.savePack({ enabled: false, id: "pack-off", name: "Off" });
@@ -539,7 +539,7 @@ describe("sticker selection and send tokens", () => {
 		const setup = await setupSelection();
 		const results = await setup.selection.search({
 			emotion: "joy",
-			personaId: "elaina",
+			personaId: "tsukaima",
 			query: "happy",
 			tags: ["greeting"],
 		});
@@ -1415,7 +1415,7 @@ describe("animated sticker conversion", () => {
 	test.skipIf(ffmpeg === undefined)(
 		"converts a webm video sticker to GIF with ffmpeg",
 		async () => {
-			const directory = await mkdtemp(join(tmpdir(), "elaina-webm-test-"));
+			const directory = await mkdtemp(join(tmpdir(), "tsukaima-webm-test-"));
 			directories.push(directory);
 			const input = join(directory, "input.webm");
 			const result = await Bun.spawn([

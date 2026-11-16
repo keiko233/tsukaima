@@ -8,8 +8,8 @@ import {
 	sha256Hex,
 	type HealthCheckResult,
 	type ReloadController,
-} from "@elaina/coding";
-import type { AuditEntry, PluginLogger, PluginStorage } from "@elaina/sdk";
+} from "@tsukaima/coding";
+import type { AuditEntry, PluginLogger, PluginStorage } from "@tsukaima/sdk";
 import { SELF_ITERATION_HOST_BINDING } from "./domain.ts";
 import { selfIterationPlugin } from "./index.ts";
 import { SelfIterationService } from "./service.ts";
@@ -34,7 +34,7 @@ class MemoryStorage implements PluginStorage {
 }
 
 async function git(cwd: string, args: readonly string[]): Promise<void> {
-	execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@elaina.local", ...args], {
+	execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@tsukaima.local", ...args], {
 		cwd,
 	});
 }
@@ -81,7 +81,7 @@ interface Fixture {
 }
 
 async function fixture(): Promise<Fixture> {
-	const root = await fs.mkdtemp(join(tmpdir(), "elaina-self-iteration-"));
+	const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-self-iteration-"));
 	directories.push(root);
 	const repo = join(root, "repo");
 	const worktrees = join(root, "worktrees");
@@ -447,7 +447,7 @@ describe("SelfIterationService", () => {
 		expect(rpc).toContain("deployments.rollback");
 		expect(rpc).toContain("approvals.resolve");
 		expect(rpc).toContain("policy.update");
-		expect(SELF_ITERATION_HOST_BINDING).toBe("elaina.self-iteration.host");
+		expect(SELF_ITERATION_HOST_BINDING).toBe("tsukaima.self-iteration.host");
 		expect(logs.some((entry) => entry.level === "debug" && entry.message.includes("setup"))).toBe(
 			true,
 		);

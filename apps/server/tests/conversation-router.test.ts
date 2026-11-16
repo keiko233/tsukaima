@@ -2,9 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { MessageEnvelope } from "@elaina/contracts";
-import { identities, messages, users } from "@elaina/db";
-import type { ChannelAdapter, ChannelDiagnostics } from "@elaina/sdk";
+import type { MessageEnvelope } from "@tsukaima/contracts";
+import { identities, messages, users } from "@tsukaima/db";
+import type { ChannelAdapter, ChannelDiagnostics } from "@tsukaima/sdk";
 import { createApp } from "../src/app.ts";
 import type { ChannelRegistry } from "../src/services/channel-registry.ts";
 
@@ -28,11 +28,11 @@ const envelope = (id: string, text: string): MessageEnvelope => ({
 });
 
 async function createLifecycle() {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-router-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-router-"));
 	directories.push(directory);
 	const { lifecycle } = createApp({
-		ELAINA_DATA_DIR: directory,
-		ELAINA_PORT: "7420",
+		TSUKAIMA_DATA_DIR: directory,
+		TSUKAIMA_PORT: "7420",
 	});
 	await lifecycle.start();
 	return lifecycle;

@@ -1,5 +1,5 @@
-import type { MessagePart } from "@elaina/contracts";
-import type { AuditEntry, PluginLogger, PluginMediaApi } from "@elaina/sdk";
+import type { MessagePart } from "@tsukaima/contracts";
+import type { AuditEntry, PluginLogger, PluginMediaApi } from "@tsukaima/sdk";
 import { normalizeText, sanitizeModelText } from "./domain.ts";
 import { elapsedMs, traceLog } from "./logging.ts";
 import { STICKER_MEME_DIRECTIVE_PATTERN } from "./manifest.ts";

@@ -1,4 +1,4 @@
-import type { PluginContext, PluginLogger, ToolResult } from "@elaina/sdk";
+import type { PluginContext, PluginLogger, ToolResult } from "@tsukaima/sdk";
 import { elapsedMs, traceLog } from "./logging.ts";
 import type { StickerSearchInput, StickerSelectionService } from "./selection.ts";
 

@@ -16,10 +16,10 @@ import {
 	type AgentCodeLanguage,
 	AgentCodeLine,
 	useAgentCodeTokens,
-} from "@elaina/ui/components/agents/agent-code";
-import { SPRING_PRESS } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+} from "@tsukaima/ui/components/agents/agent-code";
+import { SPRING_PRESS } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export const codeBlockMessages = {
 	writing: "Writing",

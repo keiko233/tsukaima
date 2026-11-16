@@ -1,4 +1,4 @@
-import type { RunStep } from "@elaina/contracts";
+import type { RunStep } from "@tsukaima/contracts";
 
 /** Cap for a single tool argument line, so one huge payload cannot dominate the panel. */
 const MAX_ARGUMENTS_CHARS = 400;
@@ -102,7 +102,7 @@ export function collectRunSteps(
 	// window, not the previous assistant entry.
 	let startIndex = 0;
 	for (let index = endIndex; index >= 0; index -= 1) {
-		if (entries[index]?.kind === "elaina.activityWindow") {
+		if (entries[index]?.kind === "tsukaima.activityWindow") {
 			startIndex = index;
 			break;
 		}

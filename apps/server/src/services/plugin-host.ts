@@ -6,7 +6,7 @@ import {
 	LocalStorageBridge,
 	providerSafeToolName,
 	type AuditEntry,
-	type ElainaPlugin,
+	type TsukaimaPlugin,
 	type PluginContext,
 	type PluginEvents,
 	type PluginLogger,
@@ -22,7 +22,7 @@ import {
 	type PluginToolInvocationResult,
 	type PluginUiRegistry,
 	type ToolInvocationContext,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import {
 	PluginLifecycleManager,
 	PluginRegistry,
@@ -34,8 +34,8 @@ import {
 	type PluginLifecycleUpgradeOptions,
 	type PluginMigration,
 	type PluginInstallState,
-} from "@elaina/plugin-registry";
-import type { PluginStatusSnapshot } from "@elaina/contracts";
+} from "@tsukaima/plugin-registry";
+import type { PluginStatusSnapshot } from "@tsukaima/contracts";
 import type { Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 import type { HookBus } from "./hook-bus.ts";
@@ -45,13 +45,13 @@ import type { PluginStatusStore } from "./plugin-status.ts";
 import type { PluginStorageStore } from "./plugin-storage.ts";
 import type { PluginTaskService } from "./plugin-task-service.ts";
 import type { RequestService } from "./request-service.ts";
-import type { MigrationRegistry } from "@elaina/plugin-registry";
+import type { MigrationRegistry } from "@tsukaima/plugin-registry";
 import { createPluginDatabase } from "./plugin-scoped-database.ts";
 import { createPluginCacheBridge } from "./plugin-cache.ts";
 import { createPluginMediaBridge } from "./plugin-media.ts";
 import type { MediaService } from "./media-service.ts";
-import { pluginInstallStates, type ElainaDatabase } from "@elaina/db";
-import type { KeyvCache } from "@elaina/cache";
+import { pluginInstallStates, type TsukaimaDatabase } from "@tsukaima/db";
+import type { KeyvCache } from "@tsukaima/cache";
 import { eq } from "drizzle-orm";
 
 export interface PluginHostOptions {
@@ -66,12 +66,12 @@ export interface PluginHostOptions {
 	readonly onModelMessage?: (message: unknown, pluginId: string) => void;
 	/** Usage from host services (sidechat, memory) attributed to a model capability. */
 	readonly onHostModelMessage?: (message: unknown, capability: string) => void;
-	readonly plugins: readonly ElainaPlugin[];
+	readonly plugins: readonly TsukaimaPlugin[];
 	readonly requests: RequestService;
 	readonly settings: PluginSettingsStore;
 	readonly statuses: PluginStatusStore;
 	readonly cache?: KeyvCache;
-	readonly database?: () => ElainaDatabase | undefined;
+	readonly database?: () => TsukaimaDatabase | undefined;
 	readonly media?: MediaService;
 	readonly migrations?: MigrationRegistry;
 	readonly pluginDatabases?: PluginDatabaseProvider;
@@ -150,7 +150,7 @@ export class PluginHost {
 	readonly #conversationCapabilities:
 		| ((conversationId: string) => Promise<readonly string[]>)
 		| undefined;
-	readonly #plugins = new Map<string, ElainaPlugin>();
+	readonly #plugins = new Map<string, TsukaimaPlugin>();
 	readonly #modelProviders = new Map<string, PluginModelProvider>();
 	readonly #modelProviderOwners = new Map<string, string>();
 	readonly #prepared = new Set<string>();
@@ -161,7 +161,7 @@ export class PluginHost {
 	readonly #statuses: PluginStatusStore;
 	readonly #rpcOwners = new Map<string, string>();
 	readonly #cache: KeyvCache | undefined;
-	readonly #database: (() => ElainaDatabase | undefined) | undefined;
+	readonly #database: (() => TsukaimaDatabase | undefined) | undefined;
 	readonly #media: MediaService | undefined;
 	readonly #migrations: MigrationRegistry | undefined;
 	readonly #pluginDatabases: PluginDatabaseProvider | undefined;
@@ -177,7 +177,7 @@ export class PluginHost {
 		this.#conversations = options.conversations;
 		this.#conversationCapabilities = options.conversationCapabilities;
 		this.#hooks = options.hooks;
-		this.#logger = options.logger.child("elaina::server::plugins");
+		this.#logger = options.logger.child("tsukaima::server::plugins");
 		this.#requests = options.requests;
 		this.channels = options.channels;
 		this.settings = options.settings;
@@ -295,7 +295,7 @@ export class PluginHost {
 		return views;
 	}
 
-	plugin(pluginId: string): ElainaPlugin | undefined {
+	plugin(pluginId: string): TsukaimaPlugin | undefined {
 		return this.#plugins.get(pluginId);
 	}
 
@@ -623,7 +623,7 @@ export class PluginHost {
 		const manifest = await this.#registry.loadManifest(input);
 		await this.#lifecycle.install(manifest, options);
 		this.settings.registerManifest(manifest);
-		const plugin: ElainaPlugin = { manifest, setup() {} };
+		const plugin: TsukaimaPlugin = { manifest, setup() {} };
 		this.#plugins.set(manifest.name, plugin);
 		const installed = this.#registry.get(manifest.name);
 		if (installed !== undefined && installed.enabled) {
@@ -794,7 +794,7 @@ export class PluginHost {
 			});
 	}
 
-	async #ensurePluginDatabase(plugin: ElainaPlugin): Promise<void> {
+	async #ensurePluginDatabase(plugin: TsukaimaPlugin): Promise<void> {
 		const manifest = plugin.manifest;
 		if (manifest.migrations === undefined || plugin.rootDir === undefined) return;
 		if (this.#migrations === undefined || this.#pluginDatabases === undefined) return;
@@ -812,7 +812,7 @@ export class PluginHost {
 		});
 	}
 
-	async #startPlugin(plugin: ElainaPlugin): Promise<void> {
+	async #startPlugin(plugin: TsukaimaPlugin): Promise<void> {
 		const manifest = plugin.manifest;
 		const pluginId = manifest.name;
 		if (this.#started.includes(pluginId)) return;
@@ -1054,7 +1054,7 @@ export class PluginHost {
 			},
 			events,
 			grantedPermissions: manifest.permissions,
-			logger: adaptPluginLogger(this.#logger, `elaina::plugin::${pluginId}`),
+			logger: adaptPluginLogger(this.#logger, `tsukaima::plugin::${pluginId}`),
 			manifest,
 			models,
 			pluginId,

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { normalizeContext } from "@earendil-works/pi-ai";
-import { openDurableStorage } from "@elaina/durable";
+import { openDurableStorage } from "@tsukaima/durable";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +21,7 @@ const envelope = (id: string, text: string) => ({
 
 describe("PiDurableConversationHost", () => {
 	test("aggregates messages in a window", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-core-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const host = new PiDurableConversationHost({ storage });
@@ -65,7 +65,7 @@ describe("PiDurableConversationHost", () => {
 	});
 
 	test("flushes a collecting activity after the inactivity window", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-core-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const host = new PiDurableConversationHost({
@@ -93,7 +93,7 @@ describe("PiDurableConversationHost", () => {
 	});
 
 	test("submits each activity window as a distinct durable input", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-core-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const answers: string[] = [];
@@ -133,7 +133,7 @@ describe("PiDurableConversationHost", () => {
 	// neither the idle settle nor the `burstMaxWaitMs` cap could ever be reached: the activity
 	// window never submitted and the conversation silently stopped replying.
 	test("submits a burst at the max-wait cap when the platform clock runs ahead", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-core-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const host = new PiDurableConversationHost({
@@ -176,7 +176,7 @@ describe("PiDurableConversationHost", () => {
 	// streamed partial from the durable `pi.live` document. Before `onLiveRun` existed a slow
 	// model was indistinguishable from a hung bot: nothing appeared until the answer settled.
 	test("streams partial answer text while a run is in flight", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-core-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const snapshots: string[] = [];
@@ -220,7 +220,7 @@ describe("PiDurableConversationHost", () => {
 	});
 
 	test("clears the live run once the answer settles", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-core-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const states: (string | undefined)[] = [];
@@ -267,7 +267,7 @@ describe("PiDurableConversationHost", () => {
 	});
 
 	test("updates existing conversations when setModel switches provider or after reopening storage", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-core-model-sync-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-model-sync-"));
 		const dbPath = join(directory, "durable.sqlite");
 		try {
 			const answers: string[] = [];
@@ -345,7 +345,7 @@ describe("PiDurableConversationHost", () => {
 });
 
 async function runImageTurnWithVision(supportsImage: boolean) {
-	const directory = await mkdtemp(join(tmpdir(), "elaina-core-image-"));
+	const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-image-"));
 	try {
 		const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 		let observedContext:

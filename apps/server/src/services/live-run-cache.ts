@@ -1,6 +1,6 @@
-import type { LiveRunPatch, LiveRunPhase, LiveRunState, RunStep } from "@elaina/contracts";
-import type { KeyvCache } from "@elaina/cache";
-import type { LiveRunSnapshot } from "@elaina/core";
+import type { LiveRunPatch, LiveRunPhase, LiveRunState, RunStep } from "@tsukaima/contracts";
+import type { KeyvCache } from "@tsukaima/cache";
+import type { LiveRunSnapshot } from "@tsukaima/core";
 import { LiveRunTimeline } from "./live-run-timeline.ts";
 
 /** An active run is readable across a browser reload and a short host restart. */

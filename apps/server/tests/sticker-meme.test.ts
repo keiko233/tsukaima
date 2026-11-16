@@ -4,13 +4,13 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
-import { auditLog, chatObjects, conversations, messages } from "@elaina/db";
+import { auditLog, chatObjects, conversations, messages } from "@tsukaima/db";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	type OneBotTransport,
 	type OneBotTransportFactory,
-} from "@elaina-plugin/onebot-napcat";
-import type { MessagePart } from "@elaina/contracts";
+} from "@tsukaima-plugin/onebot-napcat";
+import type { MessagePart } from "@tsukaima/contracts";
 import { createApp } from "../src/app.ts";
 
 const directories: string[] = [];
@@ -56,14 +56,14 @@ const createOneBotTransportSpy = () => {
 };
 
 async function createLifecycle(onebot: ReturnType<typeof createOneBotTransportSpy>) {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-sticker-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-sticker-"));
 	directories.push(directory);
 	const { lifecycle } = createApp(
 		{
-			ELAINA_DATA_DIR: directory,
-			ELAINA_ONEBOT_WS_URL: "ws://napcat:3001",
-			ELAINA_PORT: "7420",
-			ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			TSUKAIMA_DATA_DIR: directory,
+			TSUKAIMA_ONEBOT_WS_URL: "ws://napcat:3001",
+			TSUKAIMA_PORT: "7420",
+			TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 		},
 		{ pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, onebot.createTransport]]) },
 	);
@@ -151,7 +151,7 @@ describe("sticker-meme host integration", () => {
 						},
 					],
 					name: "Test pack",
-					personaIds: ["elaina"],
+					personaIds: ["tsukaima"],
 					tags: ["greeting"],
 				},
 			})) as { items: number; missingMedia: number };

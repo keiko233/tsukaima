@@ -3,12 +3,12 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Circle, MessageCircle, PanelRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Button } from "@elaina/ui/components/motion/button";
+import { Button } from "@tsukaima/ui/components/motion/button";
 import { orpc, type DeliveryStatus } from "@/lib/api";
 import { messageListOptions, upsertMessagesInCache } from "@/lib/message-cache";
 import { errorMessage, useToast } from "@/lib/toast";
 import { useLiveRun } from "@/lib/live-run-store";
-import { cn } from "@elaina/ui/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { useMediaQuery } from "../../_modules/hooks/use-media-query";
 import { useShellNavigation } from "../../_modules/shell/admin-shell";
@@ -21,8 +21,8 @@ import {
 	type InspectorTab,
 } from "./session-inspector-sidebar";
 
-const CONTEXT_PANEL_KEY = "elaina.webui.context-panel";
-const INSPECTOR_TAB_KEY = "elaina.webui.inspector-tab";
+const CONTEXT_PANEL_KEY = "tsukaima.webui.context-panel";
+const INSPECTOR_TAB_KEY = "tsukaima.webui.inspector-tab";
 
 function storedContextOpen(): boolean {
 	try {

@@ -10,11 +10,11 @@
 		"baseUrl": ".",
 		"paths": {
 			"@/*": ["src/*"],
-			"@elaina/ui/*": ["../../packages/ui/src/*"],
-			"@elaina/ui": ["../../packages/ui/src/index.ts"],
-			"@elaina/sdk/*": ["../../packages/sdk/src/*"],
-			"@elaina/sdk": ["../../packages/sdk/src/index.ts"],
-			"@elaina/contracts": ["../../packages/contracts/src/index.ts"]
+			"@tsukaima/ui/*": ["../../packages/ui/src/*"],
+			"@tsukaima/ui": ["../../packages/ui/src/index.ts"],
+			"@tsukaima/sdk/*": ["../../packages/sdk/src/*"],
+			"@tsukaima/sdk": ["../../packages/sdk/src/index.ts"],
+			"@tsukaima/contracts": ["../../packages/contracts/src/index.ts"]
 		}
 	},
 	"include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"],

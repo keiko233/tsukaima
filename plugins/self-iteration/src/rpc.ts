@@ -1,4 +1,4 @@
-import type { PluginContext, PluginRpcHandler } from "@elaina/sdk";
+import type { PluginContext, PluginRpcHandler } from "@tsukaima/sdk";
 import { SELF_ITERATION_PLUGIN_ID } from "./domain.ts";
 import { elapsedMs, preview, scopedLogger, type ScopedLogger } from "./log.ts";
 import type { SelfIterationService } from "./service.ts";

@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Elaina's coding capability becomes a supervised, auditable plugin for repository analysis,
+Tsukaima's coding capability becomes a supervised, auditable plugin for repository analysis,
 patching, testing, deployment proposals, and controlled reload.
 
 ## Current boundary
@@ -133,5 +133,5 @@ normal QQ conversations unless policy grants them.
 
 ## Acceptance
 
-Elaina can analyze its own repo, create a tested patch, show diff, require approval, produce
+Tsukaima can analyze its own repo, create a tested patch, show diff, require approval, produce
 deployment artifacts, and roll back per record, with no coding tool leak into QQ chat.

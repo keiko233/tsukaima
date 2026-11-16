@@ -1,5 +1,5 @@
 {
-	"name": "@elaina/web",
+	"name": "@tsukaima/web",
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
@@ -14,9 +14,6 @@
 		"i18n:plugins": "bun run scripts/compile-plugin-i18n.ts"
 	},
 	"dependencies": {
-		"@elaina/contracts": "workspace:*",
-		"@elaina/sdk": "workspace:*",
-		"@elaina/ui": "workspace:*",
 		"@inlang/paraglide-js": "^3.2.2",
 		"@orpc/client": "1.16.2",
 		"@orpc/contract": "1.16.2",
@@ -26,6 +23,9 @@
 		"@tanstack/react-query": "^5.107.1",
 		"@tanstack/react-router": "^1.170.46",
 		"@tanstack/react-virtual": "^3.14.26",
+		"@tsukaima/contracts": "workspace:*",
+		"@tsukaima/sdk": "workspace:*",
+		"@tsukaima/ui": "workspace:*",
 		"better-auth": "1.7.22",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",

@@ -29,8 +29,8 @@ import {
 	type SessionParseError,
 } from "./session-v4.ts";
 
-export type ElainaConversationKind = "private" | "group" | "webui" | "task" | "plugin";
-export type ElainaDirection = "inbound" | "outbound" | "system";
+export type TsukaimaConversationKind = "private" | "group" | "webui" | "task" | "plugin";
+export type TsukaimaDirection = "inbound" | "outbound" | "system";
 
 export const DSH_IMPORT_ORDER = [
 	"users",
@@ -90,7 +90,7 @@ export interface NormalizedMessage {
 	readonly conversationId: string;
 	readonly chatObjectId?: string;
 	readonly platformMessageId: string;
-	readonly direction: ElainaDirection;
+	readonly direction: TsukaimaDirection;
 	readonly kind: string;
 	readonly occurredAt: string;
 	readonly ingestedAt: string;
@@ -111,7 +111,7 @@ export interface NormalizedConversation {
 	readonly canonicalId: string;
 	readonly chatObjectId?: string;
 	readonly durableConversationId: string;
-	readonly kind: ElainaConversationKind;
+	readonly kind: TsukaimaConversationKind;
 	readonly channelId: string;
 	readonly platformConversationId: string;
 	readonly title: string;
@@ -126,7 +126,7 @@ export interface NormalizedChatObject {
 	readonly sourceId: string;
 	readonly sourceHash: string;
 	readonly id: string;
-	readonly kind: ElainaConversationKind;
+	readonly kind: TsukaimaConversationKind;
 	readonly channelId: string;
 	readonly platformConversationId: string;
 	readonly title: string;
@@ -406,7 +406,7 @@ function contentText(content: unknown): string {
 	return "";
 }
 
-function mapRole(role: string | undefined): { direction: ElainaDirection; kind: string } {
+function mapRole(role: string | undefined): { direction: TsukaimaDirection; kind: string } {
 	switch (role?.toLowerCase()) {
 		case "assistant":
 			return { direction: "outbound", kind: "assistant" };

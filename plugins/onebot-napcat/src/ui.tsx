@@ -12,7 +12,7 @@ import {
 	usePluginPanel,
 	usePluginRpc,
 	usePluginToast,
-} from "@elaina/sdk/ui";
+} from "@tsukaima/sdk/ui";
 import { useState } from "react";
 import { i18n } from "./i18n.ts";
 import { ONEBOT_PLUGIN_ID } from "./manifest.ts";

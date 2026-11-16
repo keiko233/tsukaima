@@ -1,6 +1,6 @@
-# elaina-chatbot
+# tsukaima
 
-`elaina-chatbot` is a bot-native agent runtime built around Pi components and Bun. It replaces the current DeepSeek Harness (DSH) QQ deployment without importing AstrBot data.
+`tsukaima` is a bot-native agent runtime built around Pi components and Bun. It replaces the current DeepSeek Harness (DSH) QQ deployment without importing AstrBot data.
 
 ## Goals
 
@@ -25,7 +25,7 @@ The core implementation is in place: a Bun workspace with strict TypeScript, an
 Elysia + oRPC API, a SQLite/Drizzle domain schema with automatic startup migrations,
 a Pi Durable conversation host over a Bun SQLite adapter, the built-in
 `onebot-napcat` channel plugin, and a React/TanStack + beUI WebUI that covers chat
-objects/sessions, local Elaina turns, channel sends, the request inbox, settings,
+objects/sessions, local Tsukaima turns, channel sends, the request inbox, settings,
 diagnostics, and logging. The DSH-only migration pipeline (inspect, dry-run, import,
 verify, rollback) also exists.
 
@@ -46,7 +46,7 @@ bun run dev
 - Domain database: SQLite via Drizzle ORM.
 - Models: `pi-ai` plus Magpie; plugins request capabilities, not concrete providers.
 - Coding core: `pi-coding-agent` capabilities wrapped behind a policy-controlled Self-Iteration Runtime.
-- OneBot mode: Elaina actively connects to NapCat's WebSocket server.
+- OneBot mode: Tsukaima actively connects to NapCat's WebSocket server.
 - Migration source: current DSH only.
 - Deployment: local development first; later distribution is a GHCR image. During development, deployment artifacts are generated for manual confirmation.
 - WebUI authorization: single administrator.

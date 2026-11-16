@@ -1,8 +1,8 @@
 "use client";
 
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { liveEventSchema, type LiveEvent } from "@elaina/contracts";
-import type { PluginRow } from "@elaina/contracts";
+import { liveEventSchema, type LiveEvent } from "@tsukaima/contracts";
+import type { PluginRow } from "@tsukaima/contracts";
 import { useEffect } from "react";
 import { orpc } from "./api";
 import { applyRunDelta, setLiveRun } from "./live-run-store";

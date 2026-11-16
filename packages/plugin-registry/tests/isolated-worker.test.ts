@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { BunPluginWorker } from "../src/isolated-worker.ts";
-import { pluginManifestSchema } from "@elaina/sdk";
+import { pluginManifestSchema } from "@tsukaima/sdk";
 
 describe("Bun plugin worker isolation", () => {
 	test("loads a plugin module and invokes its tool in a real worker", async () => {

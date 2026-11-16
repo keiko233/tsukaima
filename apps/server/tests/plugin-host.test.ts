@@ -3,15 +3,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { ChannelRequest, MessageEnvelope } from "@elaina/contracts";
-import { chatObjects, requests } from "@elaina/db";
+import type { ChannelRequest, MessageEnvelope } from "@tsukaima/contracts";
+import { chatObjects, requests } from "@tsukaima/db";
 import {
 	pluginManifestSchema,
 	type ChannelAdapter,
 	type ChannelDiagnostics,
-	type ElainaPlugin,
+	type TsukaimaPlugin,
 	type SendResult,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import { createApp } from "../src/app.ts";
 import { builtinPlugins } from "../src/plugins/builtin.ts";
 
@@ -61,7 +61,7 @@ class FakeChannelAdapter implements ChannelAdapter {
 
 let fakeAdapter: FakeChannelAdapter | undefined;
 
-const fakeChannelPlugin: ElainaPlugin = {
+const fakeChannelPlugin: TsukaimaPlugin = {
 	manifest: pluginManifestSchema.parse({
 		apiVersion: "1",
 		kind: "first-party",
@@ -90,13 +90,13 @@ async function withApp(
 	env: Record<string, string | undefined>,
 	run: (lifecycle: ReturnType<typeof createApp>["lifecycle"]) => Promise<void>,
 ): Promise<void> {
-	const directory = await mkdtemp(join(tmpdir(), "elaina-plugin-host-"));
+	const directory = await mkdtemp(join(tmpdir(), "tsukaima-plugin-host-"));
 	try {
 		const { lifecycle } = createApp(
 			{
-				ELAINA_DATA_DIR: directory,
-				ELAINA_PORT: "7420",
-				ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 				...env,
 			},
 			{ plugins: [...builtinPlugins, fakeChannelPlugin] },
@@ -177,7 +177,7 @@ describe("plugin host", () => {
 
 	test("resolves plugin config from the environment and hides secrets", async () =>
 		withApp(
-			{ ELAINA_ONEBOT_ACCESS_TOKEN: "env-token", ELAINA_ONEBOT_WS_URL: "ws://env.test:3001" },
+			{ TSUKAIMA_ONEBOT_ACCESS_TOKEN: "env-token", TSUKAIMA_ONEBOT_WS_URL: "ws://env.test:3001" },
 			async (lifecycle) => {
 				const initial = await lifecycle.pluginConfigView("onebot-napcat");
 				expect(initial.config.wsUrl).toBe("ws://env.test:3001");
@@ -272,7 +272,7 @@ describe("plugin host", () => {
 		}));
 
 	test("gives each plugin a scoped logger supporting trace and child targets", async () =>
-		withApp({ ELAINA_LOG_LEVEL: "trace" }, async (lifecycle) => {
+		withApp({ TSUKAIMA_LOG_LEVEL: "trace" }, async (lifecycle) => {
 			const context = lifecycle.pluginHost.context("fake-channel");
 			if (context === undefined) throw new Error("fake-channel context missing");
 			context.logger.trace("plugin trace probe", { apiKey: "secret-should-redact", step: 1 });
@@ -285,12 +285,12 @@ describe("plugin host", () => {
 					expect.objectContaining({
 						level: "trace",
 						message: "plugin trace probe",
-						target: "elaina::plugin::fake-channel",
+						target: "tsukaima::plugin::fake-channel",
 					}),
 					expect.objectContaining({
 						level: "debug",
 						message: "child debug probe",
-						target: "elaina::plugin::fake-channel::transport",
+						target: "tsukaima::plugin::fake-channel::transport",
 					}),
 				]),
 			);

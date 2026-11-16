@@ -1,6 +1,6 @@
 # Plugin framework comparison
 
-Elaina needs a plugin system for bot domain hooks, tools, UI, and long-running tasks. We evaluated three sources rather than inventing all concepts from scratch:
+Tsukaima needs a plugin system for bot domain hooks, tools, UI, and long-running tasks. We evaluated three sources rather than inventing all concepts from scratch:
 
 1. **Cordis** — plugin lifecycle, dependency injection, event dispatch, configuration validation, hot reload, and service isolation.
 2. **Pi coding-agent extensions** — tool/provider/MCP registration and lifecycle events for the coding plane.
@@ -14,7 +14,7 @@ Cordis is a meta-framework centered on a reactive Context, services, events, reg
 
 Useful Cordis concepts:
 
-| Concept | Value to Elaina |
+| Concept | Value to Tsukaima |
 | --- | --- |
 | Component lifecycle | Start/dispose semantics for plugin resources |
 | Service dependency injection | Explicit dependency declaration for domain services |
@@ -29,16 +29,16 @@ Risks:
 
 - Unstable RC API.
 - Generic meta-framework abstraction is broader than bot needs.
-- Direct dependency would couple Elaina's core to Cordis services, proxies, fibers, and event semantics.
+- Direct dependency would couple Tsukaima's core to Cordis services, proxies, fibers, and event semantics.
 - DSH plugins target a forked Cordis generation and DSH host APIs, not the public Cordis core.
 
 ## Pi coding-agent extensions
 
 Pi coding-agent extensions provide a mature agent-side extension API: tools, commands, flags, lifecycle events, custom providers, MCP registration, custom message/entry rendering, and session state through custom entries.
 
-Elaina uses Pi concepts in the coding/self-iteration plane, but Pi is not the bot plugin framework:
+Tsukaima uses Pi concepts in the coding/self-iteration plane, but Pi is not the bot plugin framework:
 
-| Pi concept | Elaina use |
+| Pi concept | Tsukaima use |
 | --- | --- |
 | `registerTool` | Model-facing tool contract shape |
 | lifecycle events | Agent/session/tool lifecycle hooks |
@@ -46,13 +46,13 @@ Elaina uses Pi concepts in the coding/self-iteration plane, but Pi is not the bo
 | MCP registration | External tool integration |
 | custom entry/message | Coding session diagnostics/UI state |
 
-Bot conversations still need user identity, channel policy, persona, activity aggregation, memory scope, and outbound IM actions. Those belong to the Elaina plugin SDK, not a generic coding agent extension API.
+Bot conversations still need user identity, channel policy, persona, activity aggregation, memory scope, and outbound IM actions. Those belong to the Tsukaima plugin SDK, not a generic coding agent extension API.
 
 ## Pi Chord
 
 Chord is relevant to reloadable application objects and cross-process plugin surfaces:
 
-| Chord concept | Value to Elaina |
+| Chord concept | Value to Tsukaima |
 | --- | --- |
 | typed contracts | Strong API for plugin-owned objects |
 | registries | Contributing panels/tools/routes |
@@ -64,17 +64,17 @@ Chord is relevant to reloadable application objects and cross-process plugin sur
 
 Chord is more ambitious than needed for the first release and overlaps with Elysia/oRPC/TanStack for HTTP and UI. We do not adopt Chord wholesale now. It remains a reference for:
 
-1. versioned plugin API packages (`@elaina/app/v1`)
+1. versioned plugin API packages (`@tsukaima/app/v1`)
 2. contracts for plugin-provided state/actions
 3. worker lifecycle and reload behavior
 4. registries as data, not arbitrary component injection
 5. UI declarations rather than raw DOM/control-plane access
 
-If Elaina's plugin ecosystem needs full cross-process typed objects and reload rollouts later, Chord can be revisited without changing durable conversation storage.
+If Tsukaima's plugin ecosystem needs full cross-process typed objects and reload rollouts later, Chord can be revisited without changing durable conversation storage.
 
 ## Decision
 
-Use a small Elaina plugin SDK and borrow selectively:
+Use a small Tsukaima plugin SDK and borrow selectively:
 
 - From Cordis: lifecycle/dispose, typed config validation, event modes, explicit service injection, plugin isolation, and reload boundaries.
 - From Pi coding-agent: tool/provider/MCP registration semantics for the coding plane.
@@ -95,14 +95,14 @@ The SDK is intentionally narrower than Cordis or Chord. It is defined in `plugin
 Re-evaluate direct adoption when:
 
 1. Cordis reaches stable API and proves Bun compatibility.
-2. Elaina needs many independent worker objects with cross-process live state.
+2. Tsukaima needs many independent worker objects with cross-process live state.
 3. Plugin reload requires coordinated rollout across hosts.
-4. Plugin authors need a larger object/contract ecosystem than Elaina's own SDK provides.
+4. Plugin authors need a larger object/contract ecosystem than Tsukaima's own SDK provides.
 
 Until then, plugin definitions remain declarative and versioned:
 
 ```ts
-type ElainaPlugin = {
+type TsukaimaPlugin = {
   manifest: PluginManifest;
   prepare?(context: PluginContext): Promise<void>;
   setup(context: PluginContext): Promise<void>;

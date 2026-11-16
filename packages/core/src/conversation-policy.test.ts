@@ -3,12 +3,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { openDurableStorage } from "@elaina/durable";
+import { openDurableStorage } from "@tsukaima/durable";
 import {
 	conversationPolicySchema,
 	defaultConversationPolicy,
 	type MessageEnvelope,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 import {
 	ConversationExecutionLock,
 	LURK_MARKER,
@@ -83,11 +83,11 @@ describe("conversation trigger classification", () => {
 	test("classifies alias and recent activity as soft, otherwise ambient", () => {
 		const aliasPolicy = conversationPolicySchema.parse({
 			...policy,
-			trigger: { ...policy.trigger, selfAliases: ["Elaina"] },
+			trigger: { ...policy.trigger, selfAliases: ["Tsukaima"] },
 		});
 		const alias = classifyConversationTrigger({
 			chatKind: "group",
-			envelope: envelope({ parts: [{ text: "Elaina what do you think?", type: "text" }] }),
+			envelope: envelope({ parts: [{ text: "Tsukaima what do you think?", type: "text" }] }),
 			policy: aliasPolicy,
 		});
 		expect(alias.classification).toBe("soft");
@@ -355,7 +355,7 @@ describe("ConversationExecutionLock", () => {
 
 describe("PiDurableConversationHost policy windows", () => {
 	test("submits long messages immediately and honors max-wait", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-core-policy-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-policy-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const events: string[] = [];

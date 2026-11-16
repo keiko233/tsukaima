@@ -1,6 +1,6 @@
 # Startup lifecycle
 
-Elaina performs migrations and dependency preparation as part of application startup. The HTTP server does not accept traffic until the required boot stages complete.
+Tsukaima performs migrations and dependency preparation as part of application startup. The HTTP server does not accept traffic until the required boot stages complete.
 
 ## Principles
 

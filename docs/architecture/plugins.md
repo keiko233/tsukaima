@@ -76,11 +76,11 @@ the host process but go through the same registry, permission checks, settings s
 
 ```text
 plugins/onebot-napcat/
-  package.json          @elaina-plugin/onebot-napcat
-  elaina.plugin.json    declarative descriptor (kept in sync with the TS manifest by a test)
+  package.json          @tsukaima-plugin/onebot-napcat
+  tsukaima.plugin.json    declarative descriptor (kept in sync with the TS manifest by a test)
   migrations/           plugin-owned SQL files, when the plugin owns tables
   src/manifest.ts       PluginManifest source of truth
-  src/index.ts          export const plugin: ElainaPlugin (with rootDir for migrations)
+  src/index.ts          export const plugin: TsukaimaPlugin (with rootDir for migrations)
   src/*.test.ts
 ```
 

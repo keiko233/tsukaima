@@ -1,4 +1,4 @@
-import type { PluginHookName, PluginRuntime } from "@elaina/sdk";
+import type { PluginHookName, PluginRuntime } from "@tsukaima/sdk";
 import { PluginRegistryError } from "./registry.ts";
 
 export interface PluginWorkerChannel {

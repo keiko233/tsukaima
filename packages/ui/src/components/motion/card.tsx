@@ -3,8 +3,8 @@
 
 import { animate, isDragActive, motion, useMotionValue, useReducedMotion } from "motion/react";
 import { type ComponentPropsWithRef, createContext, useContext, useEffect, useRef } from "react";
-import { SPRING_PRESS } from "@elaina/ui/lib/ease";
-import { cn } from "@elaina/ui/lib/utils";
+import { SPRING_PRESS } from "@tsukaima/ui/lib/ease";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export type CardVariant = "outlined" | "muted";
 export type CardSize = "default" | "compact";

@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BACKGROUND_CONTEXT, openDurableStorage } from "@elaina/durable";
+import { BACKGROUND_CONTEXT, openDurableStorage } from "@tsukaima/durable";
 import {
 	conversationPolicySchema,
 	defaultConversationPolicy,
 	type MessageEnvelope,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 import type { BusyArbitrationInput, BusyArbitrationResult } from "./busy-arbiter.ts";
 import { PiDurableConversationHost } from "./conversation-host.ts";
 import { createSlowStreamingModel } from "./model.ts";
@@ -82,7 +82,7 @@ function contextText(context: unknown): string {
 
 describe("busy sidechat arbitration", () => {
 	test("holds a long pending message while the run works, then submits one merged follow-up", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-busy-wait-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-busy-wait-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const contexts: unknown[] = [];
@@ -145,7 +145,7 @@ describe("busy sidechat arbitration", () => {
 	});
 
 	test("interrupts the working run and re-answers the merged conversation once", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-busy-interrupt-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-busy-interrupt-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const contexts: unknown[] = [];
@@ -203,7 +203,7 @@ describe("busy sidechat arbitration", () => {
 	});
 
 	test("falls back to waiting when the sidechat throws", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-busy-fallback-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-busy-fallback-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const starts: (() => void)[] = [];

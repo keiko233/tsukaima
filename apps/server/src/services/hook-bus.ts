@@ -1,4 +1,4 @@
-import type { PluginHookName } from "@elaina/sdk";
+import type { PluginHookName } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 
 type HookHandler = (payload: unknown) => unknown | Promise<unknown>;
@@ -12,7 +12,7 @@ export class HookBus {
 	readonly #logger: Logger;
 
 	constructor(logger: Logger) {
-		this.#logger = logger.child("elaina::server::hooks");
+		this.#logger = logger.child("tsukaima::server::hooks");
 	}
 
 	on(name: PluginHookName, handler: HookHandler): () => void {

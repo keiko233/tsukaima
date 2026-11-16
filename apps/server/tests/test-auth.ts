@@ -9,9 +9,9 @@ function cookieFromResponse(response: Response): string {
 		typeof response.headers.getSetCookie === "function"
 			? response.headers.getSetCookie()
 			: [response.headers.get("set-cookie") ?? ""];
-	const sessionCookie = setCookies.find((value) => value.startsWith("elaina.session_token="));
+	const sessionCookie = setCookies.find((value) => value.startsWith("tsukaima.session_token="));
 	if (sessionCookie === undefined) {
-		throw new Error(`sign-in did not set an Elaina session cookie: ${setCookies.join(" | ")}`);
+		throw new Error(`sign-in did not set an Tsukaima session cookie: ${setCookies.join(" | ")}`);
 	}
 	return sessionCookie.split(";")[0] ?? "";
 }

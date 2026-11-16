@@ -1,4 +1,4 @@
-import type { ConversationPacingPolicy } from "@elaina/contracts";
+import type { ConversationPacingPolicy } from "@tsukaima/contracts";
 
 type ActivityWindowLikePolicy = {
 	readonly maxMessages?: number;

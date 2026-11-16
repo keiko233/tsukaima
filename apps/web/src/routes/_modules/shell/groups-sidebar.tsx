@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight, MessageCircle, ShieldAlert, Users } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@elaina/ui/components/motion/button";
+import { Button } from "@tsukaima/ui/components/motion/button";
 import { orpc } from "@/lib/api";
 import { m } from "@/paraglide/messages";
 import { formatTimestamp } from "../lib/format";

@@ -2,9 +2,9 @@
 
 import { motion, useMotionValue, useReducedMotion, useSpring } from "motion/react";
 import { useRef, type ReactNode } from "react";
-import { SPRING_MOUSE } from "@elaina/ui/lib/ease";
-import { useHoverCapable } from "@elaina/ui/lib/hooks/use-hover-capable";
-import { cn } from "@elaina/ui/lib/utils";
+import { SPRING_MOUSE } from "@tsukaima/ui/lib/ease";
+import { useHoverCapable } from "@tsukaima/ui/lib/hooks/use-hover-capable";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export interface MagneticProps {
 	children: ReactNode;

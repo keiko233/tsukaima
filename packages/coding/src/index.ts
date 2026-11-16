@@ -1,7 +1,7 @@
 export const CODING_API_VERSION = "0.1.0";
 
 /** Host binding consumed by the self-iteration plugin; the server owns the values. */
-export const SELF_ITERATION_HOST_BINDING = "elaina.self-iteration.host";
+export const SELF_ITERATION_HOST_BINDING = "tsukaima.self-iteration.host";
 
 export type {
 	AuditEvent,

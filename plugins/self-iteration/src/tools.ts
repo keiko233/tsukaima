@@ -1,5 +1,5 @@
-import type { PluginContext, ToolInvocationContext, PluginTool, ToolResult } from "@elaina/sdk";
-import type { StructuredEdit } from "@elaina/coding";
+import type { PluginContext, ToolInvocationContext, PluginTool, ToolResult } from "@tsukaima/sdk";
+import type { StructuredEdit } from "@tsukaima/coding";
 import { SELF_ITERATION_PLUGIN_ID } from "./domain.ts";
 import { elapsedMs, preview, scopedLogger, type ScopedLogger } from "./log.ts";
 import type { SelfIterationService } from "./service.ts";

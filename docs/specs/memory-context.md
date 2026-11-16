@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Elaina preserves useful conversational and cross-session context without allowing memory to
+Tsukaima preserves useful conversational and cross-session context without allowing memory to
 become an unreviewed global prompt-injection channel.
 
 ## Current boundary
@@ -107,9 +107,9 @@ and destructive confirmation. Content is never logged.
 ## Compaction and context budget
 
 - Conversation summaries are memory rows, not rewrites of durable history.
-- `pi-durable` continues managing its internal transcript compaction; Elaina background compaction
+- `pi-durable` continues managing its internal transcript compaction; Tsukaima background compaction
   operates additively by writing `summary` memory rows and pruning oversized tool results during
-  context injection (`elaina-memory` / `elaina-persona`) without mutating `messages` or raw
+  context injection (`tsukaima-memory` / `tsukaima-persona`) without mutating `messages` or raw
   `pi-durable` entries.
 - Use threshold+retention token policy; provider usage can drive a corrected estimate.
 - Preserve exact original entries; compaction is additive.

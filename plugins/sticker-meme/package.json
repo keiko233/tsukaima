@@ -1,5 +1,5 @@
 {
-	"name": "@elaina-plugin/sticker-meme",
+	"name": "@tsukaima-plugin/sticker-meme",
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
@@ -7,10 +7,10 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
-		"@elaina/contracts": "workspace:*",
-		"@elaina/sdk": "workspace:*",
-		"@elaina/ui": "workspace:*",
 		"@inlang/paraglide-js": "^3.2.2",
+		"@tsukaima/contracts": "workspace:*",
+		"@tsukaima/sdk": "workspace:*",
+		"@tsukaima/ui": "workspace:*",
 		"canvas": "^3.2.3",
 		"emojilib": "^4.0.3",
 		"gifenc": "^1.0.3",
@@ -28,7 +28,7 @@
 		"react": "^19.3.1",
 		"react-dom": "^19.3.1"
 	},
-	"elaina": {
+	"tsukaima": {
 		"id": "sticker-meme",
 		"ui": "./src/ui.tsx"
 	}

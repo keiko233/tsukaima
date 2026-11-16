@@ -24,10 +24,10 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { createPortal } from "react-dom";
-import { SharedLayoutBg } from "@elaina/ui/components/motion/shared-layout-bg";
-import { EASE_DRAWER, EASE_OUT, SPRING_LAYOUT, SPRING_PRESS } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { SharedLayoutBg } from "@tsukaima/ui/components/motion/shared-layout-bg";
+import { EASE_DRAWER, EASE_OUT, SPRING_LAYOUT, SPRING_PRESS } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 type SidebarState = "expanded" | "collapsed";
 type SidebarSide = "left" | "right";

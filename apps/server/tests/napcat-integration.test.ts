@@ -3,14 +3,14 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { createSlowStreamingModel } from "@elaina/core";
-import { chatObjects, media, messages } from "@elaina/db";
+import { createSlowStreamingModel } from "@tsukaima/core";
+import { chatObjects, media, messages } from "@tsukaima/db";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	type OneBotTransport,
 	type OneBotTransportFactory,
 	type OneBotTransportEvents,
-} from "@elaina-plugin/onebot-napcat";
+} from "@tsukaima-plugin/onebot-napcat";
 import { createApp } from "../src/app.ts";
 
 const directories: string[] = [];
@@ -97,7 +97,7 @@ async function waitFor<T>(read: () => Promise<T | undefined>, timeoutMs = 5_000)
 
 describe("fake NapCat integration", () => {
 	test("runs message, notice, action, and crash-reconnect flows through the lifecycle", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-napcat-integration-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-napcat-integration-"));
 		directories.push(directory);
 		const transports: FakeNapCatTransport[] = [];
 		const factory: OneBotTransportFactory = () => {
@@ -107,9 +107,9 @@ describe("fake NapCat integration", () => {
 		};
 		const { lifecycle } = createApp(
 			{
-				ELAINA_DATA_DIR: directory,
-				ELAINA_ONEBOT_WS_URL: "ws://napcat:3001",
-				ELAINA_PORT: "7420",
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat:3001",
+				TSUKAIMA_PORT: "7420",
 			},
 			{
 				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, factory]]),
@@ -187,7 +187,7 @@ describe("fake NapCat integration", () => {
 	// empty `displayName`, which failed envelope validation and silently dropped the message, so
 	// the chat never appeared in the WebUI chat list.
 	test("accepts a private message whose sender card is empty", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-napcat-empty-card-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-napcat-empty-card-"));
 		directories.push(directory);
 		const transports: FakeNapCatTransport[] = [];
 		const factory: OneBotTransportFactory = () => {
@@ -197,9 +197,9 @@ describe("fake NapCat integration", () => {
 		};
 		const { lifecycle } = createApp(
 			{
-				ELAINA_DATA_DIR: directory,
-				ELAINA_ONEBOT_WS_URL: "ws://napcat:3001",
-				ELAINA_PORT: "7420",
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat:3001",
+				TSUKAIMA_PORT: "7420",
 			},
 			{
 				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, factory]]),
@@ -241,7 +241,7 @@ describe("fake NapCat integration", () => {
 	// bytes land in the media store the transcript has nothing to render and the model only sees
 	// `[image]`; this covers the download half of that path.
 	test("downloads an inbound image into the media store", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-napcat-image-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-napcat-image-"));
 		directories.push(directory);
 		const transports: FakeNapCatTransport[] = [];
 		const factory: OneBotTransportFactory = () => {
@@ -251,9 +251,9 @@ describe("fake NapCat integration", () => {
 		};
 		const { lifecycle } = createApp(
 			{
-				ELAINA_DATA_DIR: directory,
-				ELAINA_ONEBOT_WS_URL: "ws://napcat:3001",
-				ELAINA_PORT: "7420",
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat:3001",
+				TSUKAIMA_PORT: "7420",
 			},
 			{
 				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, factory]]),
@@ -314,7 +314,7 @@ describe("fake NapCat integration", () => {
 	// vision models receive the image content block (and plugins on `message.received` see the
 	// local `mediaId`/`sha256`) rather than only an `[image]` placeholder.
 	test("passes hydrated OneBot image blocks to a vision model and message.received hook", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-napcat-vision-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-napcat-vision-"));
 		directories.push(directory);
 		const transports: FakeNapCatTransport[] = [];
 		const factory: OneBotTransportFactory = () => {
@@ -332,9 +332,9 @@ describe("fake NapCat integration", () => {
 			| undefined;
 		const { lifecycle } = createApp(
 			{
-				ELAINA_DATA_DIR: directory,
-				ELAINA_ONEBOT_WS_URL: "ws://napcat:3001",
-				ELAINA_PORT: "7420",
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat:3001",
+				TSUKAIMA_PORT: "7420",
 			},
 			{
 				model: createSlowStreamingModel(["nice pic"], {

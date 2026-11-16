@@ -3,11 +3,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Inbox, UserPlus, UserRoundCheck, Users } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@elaina/ui/components/motion/button";
-import { Input } from "@elaina/ui/components/motion/input";
+import { Button } from "@tsukaima/ui/components/motion/button";
+import { Input } from "@tsukaima/ui/components/motion/input";
 import { orpc, type RequestRow } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
-import { cn } from "@elaina/ui/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { formatDateTime } from "../lib/format";
 import { Modal, ModalActions } from "../ui/modal";

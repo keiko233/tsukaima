@@ -68,7 +68,7 @@ Rules:
 - Styling: Tailwind CSS, aligned with beUI tokens.
 - Animation: Motion, as required by beUI components.
 
-beUI provides conversational primitives useful to Elaina, including message bubbles, message scrollers, prompt input, streaming response, agent activity, tool result, file diff, approval card, and chat app layouts. Components are added through its shadcn-compatible registry:
+beUI provides conversational primitives useful to Tsukaima, including message bubbles, message scrollers, prompt input, streaming response, agent activity, tool result, file diff, approval card, and chat app layouts. Components are added through its shadcn-compatible registry:
 
 ```sh
 bunx --bun shadcn add @beui/message-scroller
@@ -95,7 +95,7 @@ Frontend state rules:
   - `durable.sqlite`: conversations, entries, tasks, documents, usage, compactions.
   - `domain.sqlite`: users, personas, memory, plugin registry, policies, audit, migration ledger, media index.
   - `cache.sqlite`: Keyv TTL values, live-run snapshots, and bounded run event streams.
-- Ephemeral KV cache: `keyv` + `@keyv/sqlite` with the Bun SQLite driver, wrapped by `@elaina/cache`.
+- Ephemeral KV cache: `keyv` + `@keyv/sqlite` with the Bun SQLite driver, wrapped by `@tsukaima/cache`.
 - Attachments: content-addressed files plus SQLite metadata.
 
 Use Drizzle for explicit domain schema and queries. Use `pi-durable` APIs for conversation/task operations. Do not write directly to durable tables from domain services.

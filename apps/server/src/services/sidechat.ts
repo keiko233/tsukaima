@@ -1,4 +1,4 @@
-import type { BusyArbitrationInput, BusyArbitrationResult } from "@elaina/core";
+import type { BusyArbitrationInput, BusyArbitrationResult } from "@tsukaima/core";
 import type { Logger } from "../logging.ts";
 
 const MAX_PENDING_CHARS = 3_000;
@@ -103,7 +103,7 @@ export class SidechatService {
 
 	constructor(options: SidechatServiceOptions) {
 		this.#defaultModelId = options.defaultModelId;
-		this.#logger = options.logger.child("elaina::server::sidechat");
+		this.#logger = options.logger.child("tsukaima::server::sidechat");
 		this.#models = options.models;
 	}
 

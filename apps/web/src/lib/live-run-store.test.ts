@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { LiveRunState } from "@elaina/contracts";
+import type { LiveRunState } from "@tsukaima/contracts";
 import {
 	applyRunDelta,
 	clearLiveRun,

@@ -1,5 +1,5 @@
 import type { InfiniteData } from "@tanstack/react-query";
-import type { MessagePage, MessageSummary } from "@elaina/contracts";
+import type { MessagePage, MessageSummary } from "@tsukaima/contracts";
 
 /** Matches the server's default page size; large enough to fill a desktop viewport. */
 export const MESSAGE_PAGE_SIZE = 50;

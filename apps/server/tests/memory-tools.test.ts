@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { conversations, memories } from "@elaina/db";
+import { conversations, memories } from "@tsukaima/db";
 import { createApp } from "../src/app.ts";
 
 const directories: string[] = [];
@@ -15,11 +15,11 @@ afterEach(async () => {
 });
 
 async function setup(env: Record<string, string> = {}) {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-memory-tools-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-memory-tools-"));
 	directories.push(directory);
 	const { lifecycle } = createApp({
-		ELAINA_DATA_DIR: directory,
-		ELAINA_PORT: "7420",
+		TSUKAIMA_DATA_DIR: directory,
+		TSUKAIMA_PORT: "7420",
 		...env,
 	});
 	await lifecycle.start();
@@ -123,7 +123,7 @@ describe("memory tools", () => {
 	});
 
 	test("emits plugin trace and debug logs while running every memory tool", async () => {
-		const { database, lifecycle } = await setup({ ELAINA_LOG_LEVEL: "trace" });
+		const { database, lifecycle } = await setup({ TSUKAIMA_LOG_LEVEL: "trace" });
 		try {
 			const saved = await lifecycle.pluginHost.invokeTool(
 				"memory.save",
@@ -157,12 +157,12 @@ describe("memory tools", () => {
 
 			const pluginEntries = lifecycle.logs
 				.list({ limit: 500 })
-				.filter((entry) => entry.target.startsWith("elaina::plugin::memory"));
+				.filter((entry) => entry.target.startsWith("tsukaima::plugin::memory"));
 			const find = (message: string) => pluginEntries.find((entry) => entry.message === message);
 
 			expect(find("memory plugin ready")).toMatchObject({
 				level: "info",
-				target: "elaina::plugin::memory",
+				target: "tsukaima::plugin::memory",
 			});
 			expect(find("memory plugin ready")?.fields.tools).toEqual([
 				"memory.recall",
@@ -174,7 +174,7 @@ describe("memory tools", () => {
 			const saveStart = find("memory.save start");
 			expect(saveStart).toMatchObject({
 				level: "trace",
-				target: "elaina::plugin::memory::tools",
+				target: "tsukaima::plugin::memory::tools",
 			});
 			expect(saveStart?.fields).toMatchObject({
 				conversationId: "durable-private-tools",

@@ -5,7 +5,7 @@ import {
 	type PersonaSummary,
 	type PolicyRevision,
 	type SessionContextStats,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 
 mock.module("@/paraglide/messages", () => ({
 	m: {
@@ -161,7 +161,7 @@ mock.module("@/paraglide/messages", () => ({
 		policy_sidechat_timeout: () => "Decision timeout (ms)",
 		policy_section_trigger: () => "Trigger and access rules",
 		policy_self_aliases: () => "Self aliases",
-		policy_self_aliases_hint: () => "Names that count as addressing Elaina without an @ mention.",
+		policy_self_aliases_hint: () => "Names that count as addressing Tsukaima without an @ mention.",
 		policy_send_interval: () => "Send interval (ms)",
 		policy_sticker_only: () => "Sticker-only messages",
 		policy_strip_markdown: () => "Strip Markdown from replies",
@@ -212,7 +212,7 @@ const sampleStats: SessionContextStats = {
 		modelId: "claude-sonnet-4",
 		providerId: "anthropic",
 	},
-	personaName: "Elaina",
+	personaName: "Tsukaima",
 	sections: [],
 	tokenSource: "usage",
 	tools: [],
@@ -222,11 +222,11 @@ const sampleStats: SessionContextStats = {
 
 const samplePersona: PersonaSummary = {
 	createdAt: "2026-11-14T10:00:00.000Z",
-	id: "persona-elaina",
+	id: "persona-tsukaima",
 	isActive: true,
-	name: "Elaina",
+	name: "Tsukaima",
 	prompt: "Ashen Witch",
-	selfAliases: ["Elaina", "伊蕾娜"],
+	selfAliases: ["Tsukaima", "伊蕾娜"],
 	summary: "Main persona",
 	version: 3,
 };
@@ -377,14 +377,14 @@ describe("SessionInspectorSidebar views", () => {
 				onChangePersonaId={noop}
 				onRetry={noop}
 				onSavePersona={noop}
-				personaAliases="Elaina, 伊蕾娜"
+				personaAliases="Tsukaima, 伊蕾娜"
 				personaId={samplePersona.id}
 				personas={[samplePersona]}
 			/>,
 		);
 
 		expect(html).toContain("Persona binding");
-		expect(html).toContain("Elaina · v3");
+		expect(html).toContain("Tsukaima · v3");
 		expect(html).toContain("Save persona aliases");
 		expect(html).toContain("Bind to this conversation");
 		expect(html).toContain("Policy history");

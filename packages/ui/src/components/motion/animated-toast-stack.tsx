@@ -5,9 +5,9 @@ import { AlertCircle, Bell, Check, Info, LoaderCircle, type LucideIcon, X } from
 import { AnimatePresence, motion, type Transition, useReducedMotion } from "motion/react";
 import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { EASE_OUT } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { EASE_OUT } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export type ToastStatus = "neutral" | "info" | "loading" | "success" | "error";
 export type ToastPosition =

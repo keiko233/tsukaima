@@ -1,4 +1,4 @@
-import type { PluginStatusSnapshot } from "@elaina/contracts";
+import type { PluginStatusSnapshot } from "@tsukaima/contracts";
 
 type StatusListener = (pluginId: string, status: PluginStatusSnapshot | null) => void;
 

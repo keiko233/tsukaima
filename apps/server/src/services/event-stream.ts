@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { liveEventSchema, type LiveEvent } from "@elaina/contracts";
-import type { ElainaLifecycle } from "../lifecycle.ts";
+import { liveEventSchema, type LiveEvent } from "@tsukaima/contracts";
+import type { TsukaimaLifecycle } from "../lifecycle.ts";
 import { encodeSseEvent, type LogBuffer, type Logger } from "../logging.ts";
 import type { AuthService } from "./auth.ts";
 import type { HookBus } from "./hook-bus.ts";
@@ -167,12 +167,12 @@ function publish(
 }
 
 export function createLiveEventStream(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	request: Request,
 	options?: EventStreamOptions,
 ): Response {
 	const intervalMs = heartbeatInterval(options);
-	const logger = options?.logger?.child("elaina::server::events");
+	const logger = options?.logger?.child("tsukaima::server::events");
 	return createSseResponse(request, (send) => {
 		const hooks: HookBus = lifecycle.hooks;
 		const disposers = [

@@ -2,7 +2,7 @@ import { describe, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BACKGROUND_CONTEXT, openDurableStorage } from "@elaina/durable";
+import { BACKGROUND_CONTEXT, openDurableStorage } from "@tsukaima/durable";
 import { PiDurableConversationHost } from "./conversation-host.ts";
 
 const envelope = (id: string, text: string) => ({
@@ -18,7 +18,7 @@ const envelope = (id: string, text: string) => ({
 
 describe("host", () => {
 	test("works", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-core-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const host = new PiDurableConversationHost({ storage });

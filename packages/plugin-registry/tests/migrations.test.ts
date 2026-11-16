@@ -19,7 +19,7 @@ async function createRegistry(): Promise<{
 	databases: PluginDatabaseStore;
 	registry: MigrationRegistry;
 }> {
-	const directory = await mkdtemp(join(tmpdir(), "elaina-plugin-migrations-"));
+	const directory = await mkdtemp(join(tmpdir(), "tsukaima-plugin-migrations-"));
 	directories.push(directory);
 	const databases = new PluginDatabaseStore({ directory: join(directory, "plugins") });
 	return { databases, registry: new MigrationRegistry({ databases }) };
@@ -60,7 +60,7 @@ describe("plugin migration registry", () => {
 		expect(databases.pathFor("demo")).toEndWith("demo.sqlite");
 		expect(
 			(await databases.open("demo")).query(
-				"SELECT name FROM sqlite_master WHERE name='_elaina_plugin_migrations'",
+				"SELECT name FROM sqlite_master WHERE name='_tsukaima_plugin_migrations'",
 			),
 		).toHaveLength(1);
 	});
@@ -70,10 +70,10 @@ describe("plugin migration registry", () => {
 		await registry.run("demo", migrations);
 		const database = await databases.open("demo");
 		database.exec(
-			"UPDATE _elaina_plugin_migrations SET version = '1.0.0_create_items' WHERE version = '1.0.0'",
+			"UPDATE _tsukaima_plugin_migrations SET version = '1.0.0_create_items' WHERE version = '1.0.0'",
 		);
 		database.exec(
-			"UPDATE _elaina_plugin_migrations SET version = '1.1.0_add_note' WHERE version = '1.1.0'",
+			"UPDATE _tsukaima_plugin_migrations SET version = '1.1.0_add_note' WHERE version = '1.1.0'",
 		);
 
 		const result = await registry.run("demo", migrations);
@@ -127,7 +127,7 @@ describe("plugin migration registry", () => {
 
 describe("legacy plugin table import", () => {
 	test("copies rows into the plugin database and drops the domain tables", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-legacy-plugin-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-legacy-plugin-"));
 		directories.push(directory);
 		const source = new Database(join(directory, "domain.sqlite"), { create: true });
 		source.exec("PRAGMA foreign_keys = ON");
@@ -174,7 +174,7 @@ describe("legacy plugin table import", () => {
 	});
 
 	test("leaves legacy tables in place when the plugin has no target table", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-legacy-orphan-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-legacy-orphan-"));
 		directories.push(directory);
 		const source = new Database(join(directory, "domain.sqlite"), { create: true });
 		source.exec("CREATE TABLE plugin_demo_old (id TEXT PRIMARY KEY);");

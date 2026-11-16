@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { Skeleton } from "@elaina/sdk/ui";
+import { Skeleton } from "@tsukaima/sdk/ui";
 import { orpc } from "@/lib/api";
 import { m } from "@/paraglide/messages";
 import { PluginDetail } from "./plugin-detail";

@@ -5,15 +5,15 @@ import {
 	type ConversationPolicy,
 	conversationCompactionPresets,
 	type ModelCatalogEntry,
-} from "@elaina/contracts";
-import { Button } from "@elaina/ui/components/motion/button";
+} from "@tsukaima/contracts";
+import { Button } from "@tsukaima/ui/components/motion/button";
 import {
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-} from "@elaina/ui/components/motion/select";
+} from "@tsukaima/ui/components/motion/select";
 import { m } from "@/paraglide/messages";
 
 export const fieldClass =

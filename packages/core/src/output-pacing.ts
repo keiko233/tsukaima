@@ -1,4 +1,4 @@
-import type { ConversationPacingPolicy, MessagePart } from "@elaina/contracts";
+import type { ConversationPacingPolicy, MessagePart } from "@tsukaima/contracts";
 
 /** Split fenced code blocks without breaking them, then treat each non-empty line as a unit. */
 export function splitOnNewlines(text: string): string[] {

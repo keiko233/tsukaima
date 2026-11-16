@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
-import type { PluginLogger } from "@elaina/sdk";
+import type { PluginLogger } from "@tsukaima/sdk";
 import { safeRelativePath } from "./domain.ts";
 import { elapsedMs } from "./logging.ts";
 

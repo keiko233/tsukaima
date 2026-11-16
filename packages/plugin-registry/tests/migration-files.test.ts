@@ -14,7 +14,7 @@ afterEach(async () => {
 });
 
 async function pluginRoot(files: Record<string, string>): Promise<string> {
-	const root = await mkdtemp(join(tmpdir(), "elaina-migration-files-"));
+	const root = await mkdtemp(join(tmpdir(), "tsukaima-migration-files-"));
 	directories.push(root);
 	await mkdir(join(root, "migrations"), { recursive: true });
 	for (const [name, sql] of Object.entries(files)) {
@@ -69,7 +69,7 @@ describe("plugin migration files", () => {
 	});
 
 	test("reports a missing migrations directory", async () => {
-		const root = await mkdtemp(join(tmpdir(), "elaina-migration-missing-"));
+		const root = await mkdtemp(join(tmpdir(), "tsukaima-migration-missing-"));
 		directories.push(root);
 		await expect(loadPluginMigrations(root, { directory: "migrations" })).rejects.toThrow(
 			"Cannot read plugin migrations",

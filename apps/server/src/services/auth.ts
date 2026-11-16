@@ -1,15 +1,15 @@
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
-import { authSchema, authUser, type ElainaDatabase } from "@elaina/db";
-import type { AuditEntry } from "@elaina/sdk";
+import { authSchema, authUser, type TsukaimaDatabase } from "@tsukaima/db";
+import type { AuditEntry } from "@tsukaima/sdk";
 import { betterAuth } from "better-auth";
 import { username } from "better-auth/plugins";
 import { eq } from "drizzle-orm";
 import type { Logger } from "../logging.ts";
 
-/** Better Auth owns the cookie; the prefix keeps it visibly scoped to Elaina. */
-export const BETTER_AUTH_COOKIE_PREFIX = "elaina";
+/** Better Auth owns the cookie; the prefix keeps it visibly scoped to Tsukaima. */
+export const BETTER_AUTH_COOKIE_PREFIX = "tsukaima";
 
-const DEFAULT_ADMIN_EMAIL = "admin@elaina.invalid";
+const DEFAULT_ADMIN_EMAIL = "admin@tsukaima.invalid";
 const DATABASE_WAIT_ATTEMPTS = 80;
 const DATABASE_WAIT_MS = 250;
 
@@ -23,7 +23,7 @@ export interface AuthServiceOptions {
 	readonly audit?: ((entry: AuditEntry) => Promise<void>) | undefined;
 	readonly baseUrl: string;
 	readonly credential: AdminCredentialBootstrap;
-	readonly database: () => ElainaDatabase | undefined;
+	readonly database: () => TsukaimaDatabase | undefined;
 	readonly logger: Logger;
 	readonly secret?: string | undefined;
 	readonly secureCookies: boolean;
@@ -45,7 +45,7 @@ export interface AuthStatusResult {
 
 interface BetterAuthFactoryOptions {
 	readonly baseUrl: string;
-	readonly database: ElainaDatabase;
+	readonly database: TsukaimaDatabase;
 	readonly logger: Logger;
 	readonly onSessionCreated: (session: {
 		readonly id: string;
@@ -97,19 +97,19 @@ function createBetterAuth(options: BetterAuthFactoryOptions) {
 			cookiePrefix: BETTER_AUTH_COOKIE_PREFIX,
 			ipAddress: {
 				// Direct connections use the loopback address injected by AuthService.handle().
-				// A reverse proxy must be explicitly listed in ELAINA_TRUSTED_PROXIES before its
+				// A reverse proxy must be explicitly listed in TSUKAIMA_TRUSTED_PROXIES before its
 				// X-Forwarded-For chain is trusted.
 				ipAddressHeaders:
 					options.trustedProxies.length > 0
-						? ["x-forwarded-for", "x-elaina-client-ip"]
-						: ["x-elaina-client-ip"],
+						? ["x-forwarded-for", "x-tsukaima-client-ip"]
+						: ["x-tsukaima-client-ip"],
 				...(options.trustedProxies.length === 0
 					? {}
 					: { trustedProxies: [...options.trustedProxies] }),
 			},
 			useSecureCookies: options.secureCookies,
 		},
-		appName: "Elaina",
+		appName: "Tsukaima",
 		baseURL: options.baseUrl,
 		database: drizzleAdapter(options.database, {
 			provider: "sqlite",
@@ -197,7 +197,7 @@ function notFound(): Response {
 function withClientAddress(request: Request, clientAddress: string | undefined): Request {
 	if (clientAddress === undefined) return request;
 	const headers = new Headers(request.headers);
-	headers.set("x-elaina-client-ip", clientAddress);
+	headers.set("x-tsukaima-client-ip", clientAddress);
 	return new Request(request, { headers });
 }
 
@@ -205,7 +205,7 @@ function withClientAddress(request: Request, clientAddress: string | undefined):
  * Facade over Better Auth.
  *
  * Better Auth owns password hashing, credential and session rows, cookie signing, session
- * refresh, and sign-in rate limiting. Elaina only owns the single-admin bootstrap policy and the
+ * refresh, and sign-in rate limiting. Tsukaima only owns the single-admin bootstrap policy and the
  * oRPC/SSE guard seam. Public sign-up is never exposed: the first administrator is created through
  * the server-side Better Auth API, then `handle()` rejects every external sign-up request.
  */
@@ -213,7 +213,7 @@ export class AuthService {
 	readonly #audit: ((entry: AuditEntry) => Promise<void>) | undefined;
 	readonly #baseUrl: string;
 	readonly #credential: AdminCredentialBootstrap;
-	readonly #database: () => ElainaDatabase | undefined;
+	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #logger: Logger;
 	readonly #secret: string | undefined;
 	readonly #secureCookies: boolean;
@@ -389,7 +389,7 @@ export class AuthService {
 		return auth;
 	}
 
-	async #waitForDatabase(): Promise<ElainaDatabase> {
+	async #waitForDatabase(): Promise<TsukaimaDatabase> {
 		for (let attempt = 0; attempt < DATABASE_WAIT_ATTEMPTS; attempt += 1) {
 			if (this.#stopped) throw new Error("Authentication service stopped");
 			const database = this.#database();
@@ -399,7 +399,10 @@ export class AuthService {
 		throw new Error("Domain database was not ready for Better Auth");
 	}
 
-	async #bootstrapAdministrator(auth: BetterAuthInstance, database: ElainaDatabase): Promise<void> {
+	async #bootstrapAdministrator(
+		auth: BetterAuthInstance,
+		database: TsukaimaDatabase,
+	): Promise<void> {
 		const [existing] = await database
 			.select({ id: authUser.id, username: authUser.username })
 			.from(authUser)
@@ -415,8 +418,8 @@ export class AuthService {
 		const password = this.#credential.password;
 		if (usernameValue === undefined || password === undefined) {
 			const missing = [
-				...(usernameValue === undefined ? ["ELAINA_ADMIN_USERNAME"] : []),
-				...(password === undefined ? ["ELAINA_ADMIN_PASSWORD"] : []),
+				...(usernameValue === undefined ? ["TSUKAIMA_ADMIN_USERNAME"] : []),
+				...(password === undefined ? ["TSUKAIMA_ADMIN_PASSWORD"] : []),
 			];
 			this.#logger.warn(
 				"admin credentials are not configured; WebUI sign-in and the admin API stay locked",

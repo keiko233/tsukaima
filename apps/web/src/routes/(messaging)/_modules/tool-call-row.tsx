@@ -2,9 +2,9 @@
 
 import { ChevronDown, CircleAlert, Wrench } from "lucide-react";
 import { type ReactNode, useId, useMemo, useState } from "react";
-import { AgentCode, type AgentCodeLanguage } from "@elaina/ui/components/agents/agent-code";
-import { AgentDisclosure } from "@elaina/ui/components/agents/agent-disclosure";
-import { cn } from "@elaina/ui/lib/utils";
+import { AgentCode, type AgentCodeLanguage } from "@tsukaima/ui/components/agents/agent-code";
+import { AgentDisclosure } from "@tsukaima/ui/components/agents/agent-disclosure";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export interface ToolCallRowProps {
 	/** Compact single-line JSON of the call arguments, shown truncated in the header. */

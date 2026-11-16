@@ -28,7 +28,7 @@
 				"type": "string",
 				"title": "Access token",
 				"titleKey": "config_access_token",
-				"description": "Token NapCat requires for this connection. Falls back to ELAINA_ONEBOT_ACCESS_TOKEN when empty.",
+				"description": "Token NapCat requires for this connection. Falls back to TSUKAIMA_ONEBOT_ACCESS_TOKEN when empty.",
 				"descriptionKey": "config_access_token_hint"
 			},
 			"actionTimeoutMs": {
@@ -62,7 +62,7 @@
 				"type": "string",
 				"title": "Bot account id",
 				"titleKey": "config_bot_account",
-				"description": "The bot's own account id, used to recognise its own messages. Defaults to elaina-server.",
+				"description": "The bot's own account id, used to recognise its own messages. Defaults to tsukaima-server.",
 				"descriptionKey": "config_bot_account_hint"
 			},
 			"channelId": {
@@ -141,7 +141,7 @@
 					"forward": "config_mode_forward",
 					"reverse": "config_mode_reverse"
 				},
-				"description": "Forward: Elaina dials NapCat. Reverse: NapCat dials Elaina. Defaults to forward.",
+				"description": "Forward: Tsukaima dials NapCat. Reverse: NapCat dials Tsukaima. Defaults to forward.",
 				"descriptionKey": "config_mode_hint"
 			},
 			"nativeSticker": {
@@ -269,14 +269,14 @@
 				"type": "string",
 				"title": "WebSocket URL",
 				"titleKey": "config_ws_url",
-				"description": "NapCat forward WebSocket address, for example ws://127.0.0.1:3001. Falls back to ELAINA_ONEBOT_WS_URL when empty.",
+				"description": "NapCat forward WebSocket address, for example ws://127.0.0.1:3001. Falls back to TSUKAIMA_ONEBOT_WS_URL when empty.",
 				"descriptionKey": "config_ws_url_hint"
 			}
 		}
 	},
 	"configEnv": {
-		"wsUrl": "ELAINA_ONEBOT_WS_URL",
-		"accessToken": "ELAINA_ONEBOT_ACCESS_TOKEN"
+		"wsUrl": "TSUKAIMA_ONEBOT_WS_URL",
+		"accessToken": "TSUKAIMA_ONEBOT_ACCESS_TOKEN"
 	},
 	"secretKeys": ["accessToken"]
 }

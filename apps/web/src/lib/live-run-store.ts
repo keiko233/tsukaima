@@ -1,6 +1,6 @@
 "use client";
 
-import type { LiveRunPatch, LiveRunState } from "@elaina/contracts";
+import type { LiveRunPatch, LiveRunState } from "@tsukaima/contracts";
 import { useSyncExternalStore } from "react";
 
 /**

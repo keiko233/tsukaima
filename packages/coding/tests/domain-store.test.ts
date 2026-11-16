@@ -15,7 +15,7 @@ afterEach(async () => {
 
 describe("DomainCodingStore", () => {
 	test("persists approvals with the ApprovalGate contract", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-coding-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-coding-"));
 		directories.push(directory);
 		const store = new DomainCodingStore(join(directory, "domain.sqlite"));
 		const request = await store.create({
@@ -32,7 +32,7 @@ describe("DomainCodingStore", () => {
 	});
 
 	test("persists proposals with valid transitions", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-coding-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-coding-"));
 		directories.push(directory);
 		const store = new DomainCodingStore(join(directory, "domain.sqlite"));
 		const proposal = await store.create({
@@ -50,7 +50,7 @@ describe("DomainCodingStore", () => {
 	});
 
 	test("persists approvals and proposals across store instances", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-coding-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-coding-"));
 		directories.push(directory);
 		const path = join(directory, "domain.sqlite");
 		const first = new DomainCodingStore(path);

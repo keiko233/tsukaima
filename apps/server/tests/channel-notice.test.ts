@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ChannelNotice, MessageEnvelope } from "@elaina/contracts";
-import { messages } from "@elaina/db";
+import type { ChannelNotice, MessageEnvelope } from "@tsukaima/contracts";
+import { messages } from "@tsukaima/db";
 import { eq } from "drizzle-orm";
 import { createApp } from "../src/app.ts";
 import { listMessages } from "../src/services/webui.ts";
@@ -45,11 +45,11 @@ const pokeNotice = (
 });
 
 async function createLifecycle() {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-notice-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-notice-"));
 	directories.push(directory);
 	const { lifecycle } = createApp({
-		ELAINA_DATA_DIR: directory,
-		ELAINA_PORT: "7420",
+		TSUKAIMA_DATA_DIR: directory,
+		TSUKAIMA_PORT: "7420",
 	});
 	await lifecycle.start();
 	return lifecycle;

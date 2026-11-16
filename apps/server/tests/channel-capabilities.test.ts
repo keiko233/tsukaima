@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { MessageEnvelope } from "@elaina/contracts";
-import type { ChannelAdapter, ChannelCapability, ChannelDiagnostics } from "@elaina/sdk";
+import type { MessageEnvelope } from "@tsukaima/contracts";
+import type { ChannelAdapter, ChannelCapability, ChannelDiagnostics } from "@tsukaima/sdk";
 import { ChannelRegistry } from "../src/services/channel-registry.ts";
 
 class FakeAdapter implements ChannelAdapter {

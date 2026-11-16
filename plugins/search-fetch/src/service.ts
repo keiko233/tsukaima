@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PluginAuditApi, PluginLogger } from "@elaina/sdk";
+import type { PluginAuditApi, PluginLogger } from "@tsukaima/sdk";
 import { SnapshotCache } from "./cache.ts";
 import {
 	MAX_RESULTS,

@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk";
+import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk";
 import type { PluginMigration } from "./migrations.ts";
 import { validatePluginConfig } from "./config.ts";
 

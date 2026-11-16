@@ -6,7 +6,7 @@ import type {
 	PluginManifest,
 	PluginPermission,
 	PluginStorage,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import { PluginRegistryError } from "./registry.ts";
 import type { PluginWorkerChannel } from "./worker.ts";
 import {

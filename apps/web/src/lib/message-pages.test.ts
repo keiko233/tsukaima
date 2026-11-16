@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { InfiniteData } from "@tanstack/react-query";
-import type { MessagePage, MessageSummary } from "@elaina/contracts";
+import type { MessagePage, MessageSummary } from "@tsukaima/contracts";
 import { mergeMessagePages, type MessagePageParam } from "./message-pages";
 
 function message(

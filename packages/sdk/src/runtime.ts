@@ -5,7 +5,7 @@ export type PluginSetup = (context: PluginContext) => Promise<void> | void;
 export type PluginPrepare = (context: PluginContext) => Promise<void> | void;
 export type PluginTeardown = (context: PluginContext) => Promise<void> | void;
 
-export interface ElainaPlugin {
+export interface TsukaimaPlugin {
 	manifest: PluginContext["manifest"];
 	/**
 	 * Absolute plugin package root. The host resolves manifest-declared paths such as the
@@ -18,7 +18,7 @@ export interface ElainaPlugin {
 }
 
 export interface PluginRuntimeOptions {
-	plugin: ElainaPlugin;
+	plugin: TsukaimaPlugin;
 	context: PluginContext;
 }
 
@@ -42,7 +42,7 @@ export type HostPluginBridge = {
 };
 
 export class PluginRuntime {
-	readonly #plugin: ElainaPlugin;
+	readonly #plugin: TsukaimaPlugin;
 	readonly #context: PluginContext;
 	readonly state: PluginRuntimeState = { started: false };
 	#hostBridge!: HostPluginBridge;

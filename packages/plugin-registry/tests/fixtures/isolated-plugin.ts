@@ -1,6 +1,6 @@
-import { pluginManifestSchema, type ElainaPlugin } from "@elaina/sdk";
+import { pluginManifestSchema, type TsukaimaPlugin } from "@tsukaima/sdk";
 
-export const plugin: ElainaPlugin = {
+export const plugin: TsukaimaPlugin = {
 	manifest: pluginManifestSchema.parse({
 		apiVersion: "1",
 		kind: "third-party",

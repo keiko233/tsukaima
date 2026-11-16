@@ -12,11 +12,11 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { AgentDisclosure } from "@elaina/ui/components/agents/agent-disclosure";
-import { ThinkingShimmer } from "@elaina/ui/components/agents/loading-states/thinking-shimmer";
-import { EASE_OUT, SPRING_LAYOUT, SPRING_SWAP } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { AgentDisclosure } from "@tsukaima/ui/components/agents/agent-disclosure";
+import { ThinkingShimmer } from "@tsukaima/ui/components/agents/loading-states/thinking-shimmer";
+import { EASE_OUT, SPRING_LAYOUT, SPRING_SWAP } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { ActivityRow } from "./activity-row";
 import { type AgentActivityTranslate, agentActivityMessages } from "./messages";
 import type { AgentActivityContentType, AgentActivityItem, AgentActivityProps } from "./types";

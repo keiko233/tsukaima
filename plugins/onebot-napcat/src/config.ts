@@ -99,7 +99,7 @@ export function resolveOneBotState(input: OneBotPluginConfig): ResolvedOneBotSta
 		return { channelId, key, settings: input };
 	}
 	const channel: OneBotConfig = {
-		botAccountId: input.botAccountId ?? "elaina-server",
+		botAccountId: input.botAccountId ?? "tsukaima-server",
 		channelId,
 		mode,
 		reconnect: input.reconnect ?? DEFAULT_RECONNECT,

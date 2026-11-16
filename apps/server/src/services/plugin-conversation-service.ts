@@ -1,11 +1,11 @@
 import { desc, eq } from "drizzle-orm";
-import { consumeProactiveMarkers, type ConversationPolicy } from "@elaina/contracts";
+import { consumeProactiveMarkers, type ConversationPolicy } from "@tsukaima/contracts";
 import {
 	withConversationLock,
 	type ConversationExecutionLock,
 	type PiDurableConversationHost,
-} from "@elaina/core";
-import { chatObjects, conversations, messages, type ElainaDatabase } from "@elaina/db";
+} from "@tsukaima/core";
+import { chatObjects, conversations, messages, type TsukaimaDatabase } from "@tsukaima/db";
 import {
 	hasPermission,
 	type AuditEntry,
@@ -15,7 +15,7 @@ import {
 	type PluginConversationsApi,
 	type PluginConversationSummary,
 	type PluginPermission,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import { previewText, type Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
@@ -34,7 +34,7 @@ interface ResolvedConversation extends PluginConversationSummary {
 export interface PluginConversationServiceOptions {
 	readonly audit: (entry: AuditEntry) => Promise<void>;
 	readonly channels: ChannelRegistry;
-	readonly database: () => ElainaDatabase | undefined;
+	readonly database: () => TsukaimaDatabase | undefined;
 	readonly host: () => PiDurableConversationHost | undefined;
 	readonly lock?: ConversationExecutionLock;
 	readonly logger: Logger;
@@ -76,7 +76,7 @@ function insideQuietHours(policy: ConversationPolicy, nowMs: number): boolean {
 export class PluginConversationService {
 	readonly #audit: PluginConversationServiceOptions["audit"];
 	readonly #channels: ChannelRegistry;
-	readonly #database: () => ElainaDatabase | undefined;
+	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #host: () => PiDurableConversationHost | undefined;
 	readonly #lock: ConversationExecutionLock | undefined;
 	readonly #logger: Logger;
@@ -90,7 +90,7 @@ export class PluginConversationService {
 		this.#database = options.database;
 		this.#host = options.host;
 		this.#lock = options.lock;
-		this.#logger = options.logger.child("elaina::server::plugin-conversations");
+		this.#logger = options.logger.child("tsukaima::server::plugin-conversations");
 		this.#policy = options.policy;
 		this.#replyDispatcher = options.replyDispatcher;
 		this.#now = options.now ?? Date.now;
@@ -139,7 +139,7 @@ export class PluginConversationService {
 		}
 	}
 
-	#requireDatabase(): ElainaDatabase {
+	#requireDatabase(): TsukaimaDatabase {
 		const database = this.#database();
 		if (database === undefined) throw new Error("Domain database is not ready");
 		return database;

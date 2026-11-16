@@ -1,4 +1,4 @@
-import type { PluginContext, PluginLogger, PluginRpcHandler } from "@elaina/sdk";
+import type { PluginContext, PluginLogger, PluginRpcHandler } from "@tsukaima/sdk";
 import {
 	CONVERSATION_POLICY_SCOPE,
 	GLOBAL_POLICY_SCOPE,

@@ -777,7 +777,7 @@ export interface DshConversationIdentity {
 	readonly isWorkspaceOnly: boolean;
 }
 
-/** Map NapCat group/private ids and DSH workspace/test sessions to Elaina chat objects. */
+/** Map NapCat group/private ids and DSH workspace/test sessions to Tsukaima chat objects. */
 export function mapDshConversationIdentity(input: {
 	readonly sessionId: string;
 	readonly workspace?: string | null;

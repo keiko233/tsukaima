@@ -1,4 +1,4 @@
-import type { ElainaPlugin, PluginContext } from "@elaina/sdk";
+import type { TsukaimaPlugin, PluginContext } from "@tsukaima/sdk";
 import {
 	type SelfIterationHostBinding,
 	SELF_ITERATION_HOST_BINDING,
@@ -52,7 +52,7 @@ async function updateStatus(context: PluginContext, service: SelfIterationServic
 	}
 }
 
-export const selfIterationPlugin: ElainaPlugin = {
+export const selfIterationPlugin: TsukaimaPlugin = {
 	manifest: SELF_ITERATION_MANIFEST,
 	async setup(context) {
 		const startedAt = performance.now();

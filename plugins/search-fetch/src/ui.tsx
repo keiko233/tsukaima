@@ -20,7 +20,7 @@ import {
 	usePluginPanel,
 	usePluginRpc,
 	usePluginToast,
-} from "@elaina/sdk/ui";
+} from "@tsukaima/sdk/ui";
 import { RefreshCw, Save, Search, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { i18n } from "./i18n.ts";

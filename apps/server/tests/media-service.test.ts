@@ -2,13 +2,18 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { media, migrateDomainDatabase, openDomainDatabase, type ElainaDatabase } from "@elaina/db";
+import {
+	media,
+	migrateDomainDatabase,
+	openDomainDatabase,
+	type TsukaimaDatabase,
+} from "@tsukaima/db";
 import { createLogger } from "../src/logging.ts";
 import { MediaService } from "../src/services/media-service.ts";
 import { createPluginMediaBridge } from "../src/services/plugin-media.ts";
 
 const directories: string[] = [];
-const logger = createLogger({ level: "error", target: "elaina::test" });
+const logger = createLogger({ level: "error", target: "tsukaima::test" });
 
 afterEach(async () => {
 	await Promise.all(
@@ -17,11 +22,11 @@ afterEach(async () => {
 });
 
 async function openFixture(): Promise<{
-	database: ElainaDatabase;
+	database: TsukaimaDatabase;
 	directory: string;
 	service: MediaService;
 }> {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-media-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-media-"));
 	directories.push(directory);
 	const database = await openDomainDatabase(join(directory, "domain.sqlite"));
 	migrateDomainDatabase(database);

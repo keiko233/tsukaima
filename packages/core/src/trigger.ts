@@ -4,10 +4,10 @@ import {
 	messagePartsText,
 	type TriggerClassification,
 	type TriggerDecision,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 
 /** Exact model-visible marker that means "stay silent for this turn". */
-export const LURK_MARKER = "ELAINA_LURK";
+export const LURK_MARKER = "TSUKAIMA_LURK";
 
 export interface ResolvedReplyTarget {
 	readonly direction: "inbound" | "outbound" | "system";
@@ -127,7 +127,7 @@ const isReplyToBot = (input: TriggerClassificationInput): boolean => {
 	return (
 		target.direction === "outbound" ||
 		target.senderKind === "assistant" ||
-		target.senderExternalId === "elaina"
+		target.senderExternalId === "tsukaima"
 	);
 };
 

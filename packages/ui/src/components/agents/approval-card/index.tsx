@@ -12,15 +12,15 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AgentDisclosure } from "@elaina/ui/components/agents/agent-disclosure";
-import { ActionSwapRollText } from "@elaina/ui/components/motion/action-swap-roll";
-import { Button } from "@elaina/ui/components/motion/button";
-import { Checkbox } from "@elaina/ui/components/motion/checkbox";
-import { Input } from "@elaina/ui/components/motion/input";
-import { RadioGroup, RadioGroupItem } from "@elaina/ui/components/motion/radio";
-import { EASE_OUT, SPRING_SWAP } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { AgentDisclosure } from "@tsukaima/ui/components/agents/agent-disclosure";
+import { ActionSwapRollText } from "@tsukaima/ui/components/motion/action-swap-roll";
+import { Button } from "@tsukaima/ui/components/motion/button";
+import { Checkbox } from "@tsukaima/ui/components/motion/checkbox";
+import { Input } from "@tsukaima/ui/components/motion/input";
+import { RadioGroup, RadioGroupItem } from "@tsukaima/ui/components/motion/radio";
+import { EASE_OUT, SPRING_SWAP } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { type ApprovalCardMessages, approvalCardMessages } from "./messages";
 import type {
 	ApprovalCardAnswer,

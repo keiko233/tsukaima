@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { orpc } from "@/lib/api";
-import { cn } from "@elaina/ui/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { toStepRows } from "./run-step-items";
 

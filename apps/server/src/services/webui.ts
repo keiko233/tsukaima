@@ -9,7 +9,7 @@ import {
 	type SessionContextStats,
 	type SessionsAbortResult,
 	type SessionsCompactResult,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 import {
 	chatObjects,
 	conversationMembers,
@@ -19,8 +19,8 @@ import {
 	requests,
 	userAliases,
 	users,
-} from "@elaina/db";
-import type { ElainaLifecycle } from "../lifecycle.ts";
+} from "@tsukaima/db";
+import type { TsukaimaLifecycle } from "../lifecycle.ts";
 import { collectRunSteps } from "./run-steps.ts";
 
 type ChatKind = "private" | "group" | "webui" | "task" | "plugin";
@@ -116,14 +116,14 @@ function toMessageSummary(row: MessageRow): MessageSummary {
 			? "assistant"
 			: row.senderExternalId === "webui-admin"
 				? "system"
-				: row.senderExternalId === "elaina"
+				: row.senderExternalId === "tsukaima"
 					? "assistant"
 					: "human",
 		triggerClassification: row.triggerClassification,
 	};
 }
 
-function requireDatabase(lifecycle: ElainaLifecycle) {
+function requireDatabase(lifecycle: TsukaimaLifecycle) {
 	const database = lifecycle.domainDatabase;
 	if (database === undefined) throw new Error("Database is not ready");
 	return database;
@@ -170,7 +170,7 @@ function decodeMessageCursor(cursor: string): MessageCursor {
 }
 
 export async function listChats(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	options: { status?: "active" | "archived" | "all" } = {},
 ): Promise<ChatSummary[]> {
 	const database = requireDatabase(lifecycle);
@@ -254,7 +254,7 @@ export async function listChats(
 }
 
 export async function getSession(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	sessionId: string,
 ): Promise<SessionDetail | null> {
 	const database = requireDatabase(lifecycle);
@@ -298,11 +298,11 @@ export async function getSession(
 
 function contextSectionLabel(key: string): string {
 	switch (key) {
-		case "elaina-persona":
+		case "tsukaima-persona":
 			return "Persona";
-		case "elaina-policy":
+		case "tsukaima-policy":
 			return "Policy";
-		case "elaina-memory":
+		case "tsukaima-memory":
 			return "Memories";
 		case "instructions":
 			return "Instructions";
@@ -314,7 +314,7 @@ function contextSectionLabel(key: string): string {
 }
 
 export async function getSessionContextStats(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	sessionId: string,
 ): Promise<SessionContextStats | null> {
 	const database = requireDatabase(lifecycle);
@@ -353,7 +353,7 @@ export async function getSessionContextStats(
 }
 
 export async function compactSessionContext(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	input: { instructions?: string; sessionId: string },
 ): Promise<SessionsCompactResult> {
 	const database = requireDatabase(lifecycle);
@@ -385,7 +385,7 @@ export async function compactSessionContext(
 }
 
 export async function resetSessionContext(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	input: { handoff?: string; sessionId: string },
 ): Promise<void> {
 	const database = requireDatabase(lifecycle);
@@ -411,7 +411,7 @@ export async function resetSessionContext(
 }
 
 export async function abortSessionRun(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	sessionId: string,
 ): Promise<SessionsAbortResult> {
 	const database = requireDatabase(lifecycle);
@@ -439,7 +439,7 @@ export async function abortSessionRun(
 }
 
 export async function createLocalChat(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	input: { sessionTitle: string; title: string },
 ): Promise<{ chatId: string; sessionId: string }> {
 	const database = requireDatabase(lifecycle);
@@ -477,7 +477,7 @@ export async function createLocalChat(
 }
 
 export async function createSession(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	chatObjectId: string,
 	title: string,
 ): Promise<{ id: string }> {
@@ -518,7 +518,7 @@ export async function createSession(
 }
 
 export async function updateSession(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	sessionId: string,
 	patch: { status?: "active" | "archived"; title?: string },
 ): Promise<void> {
@@ -558,7 +558,7 @@ export async function updateSession(
 }
 
 export async function setReceivingSession(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	sessionId: string,
 ): Promise<void> {
 	const database = requireDatabase(lifecycle);
@@ -587,7 +587,7 @@ export async function setReceivingSession(
 }
 
 export async function listMessages(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	sessionId: string,
 ): Promise<MessageSummary[]> {
 	const database = requireDatabase(lifecycle);
@@ -614,7 +614,7 @@ export async function listMessages(
  * would skip or repeat every message that shares a millisecond with the page boundary.
  */
 export async function listMessagePage(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	input: { cursor?: string | undefined; limit?: number | undefined; sessionId: string },
 ): Promise<MessagePage> {
 	const database = requireDatabase(lifecycle);
@@ -661,7 +661,7 @@ export async function listMessagePage(
 
 /** The transcript row a live event points at, or `null` when it has been removed. */
 export async function getSessionMessage(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	input: { durableEntryId?: string | undefined; messageId?: string | undefined; sessionId: string },
 ): Promise<MessageSummary | null> {
 	const database = requireDatabase(lifecycle);
@@ -691,7 +691,7 @@ export async function getSessionMessage(
  * caller identifies the turn by the assistant message's `durableEntryId`.
  */
 export async function listRunSteps(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	input: { entryId: string; sessionId: string },
 ): Promise<{ durationSeconds?: number; steps: RunStep[] }> {
 	const database = requireDatabase(lifecycle);
@@ -732,8 +732,8 @@ export async function listRunSteps(
 }
 
 export async function sendMessage(
-	lifecycle: ElainaLifecycle,
-	input: { sessionId: string; target: "channel" | "elaina"; text: string },
+	lifecycle: TsukaimaLifecycle,
+	input: { sessionId: string; target: "channel" | "tsukaima"; text: string },
 ): Promise<MessageSummary> {
 	const database = requireDatabase(lifecycle);
 	const [session] = await database
@@ -898,7 +898,7 @@ export async function sendMessage(
 	return toMessageSummary(saved);
 }
 
-export async function listUsers(lifecycle: ElainaLifecycle): Promise<
+export async function listUsers(lifecycle: TsukaimaLifecycle): Promise<
 	Array<{
 		displayName: string;
 		identities: Array<{
@@ -948,7 +948,7 @@ export async function listUsers(lifecycle: ElainaLifecycle): Promise<
 	}));
 }
 
-export async function getUser(lifecycle: ElainaLifecycle, userId: string) {
+export async function getUser(lifecycle: TsukaimaLifecycle, userId: string) {
 	const knownUsers = await listUsers(lifecycle);
 	const user = knownUsers.find((entry) => entry.id === userId);
 	if (user === undefined) return null;
@@ -995,7 +995,7 @@ export async function getUser(lifecycle: ElainaLifecycle, userId: string) {
 	};
 }
 
-export async function listGroups(lifecycle: ElainaLifecycle) {
+export async function listGroups(lifecycle: TsukaimaLifecycle) {
 	const database = requireDatabase(lifecycle);
 	const groups = await database
 		.select()
@@ -1042,7 +1042,7 @@ export async function listGroups(lifecycle: ElainaLifecycle) {
 	});
 }
 
-export async function getGroup(lifecycle: ElainaLifecycle, groupId: string) {
+export async function getGroup(lifecycle: TsukaimaLifecycle, groupId: string) {
 	const groups = await listGroups(lifecycle);
 	const group = groups.find((entry) => entry.id === groupId);
 	if (group === undefined) return null;
@@ -1081,7 +1081,7 @@ export async function getGroup(lifecycle: ElainaLifecycle, groupId: string) {
 }
 
 export async function listRequests(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	options: { status?: "all" | "pending" | "processed" } = {},
 ): Promise<RequestRow[]> {
 	const database = requireDatabase(lifecycle);
@@ -1105,7 +1105,7 @@ export async function listRequests(
 }
 
 export async function getRequest(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	requestId: string,
 ): Promise<RequestRow | null> {
 	const database = requireDatabase(lifecycle);
@@ -1114,7 +1114,7 @@ export async function getRequest(
 }
 
 export async function respondToRequest(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	input: { action: "approve" | "reject"; reason?: string; requestId: string },
 ): Promise<RequestRow> {
 	await lifecycle.resolveChannelRequest(input.requestId, input.action, input.reason);

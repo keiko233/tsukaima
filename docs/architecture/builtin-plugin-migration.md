@@ -9,7 +9,7 @@ under `plugins/`, and what must still become a plugin. It is the working plan fo
 The server has exactly one plugin composition root:
 
 `apps/server/src/plugins/builtin.ts` imports `oneBotNapCatPlugin` and exports
-`builtinPlugins`. `ElainaLifecycle` receives that list through `options.plugins` and hands it to
+`builtinPlugins`. `TsukaimaLifecycle` receives that list through `options.plugins` and hands it to
 `PluginHost`.
 
 That means the host seam already exists:
@@ -20,7 +20,7 @@ That means the host seam already exists:
 - It aggregates tools, settings, hooks, channel adapters, request persistence, and audit.
 
 The remaining problem is not "there is no plugin system". It is that several capabilities never
-became plugins and are still wired directly into `ElainaLifecycle`, `adminRouter`, or the WebUI.
+became plugins and are still wired directly into `TsukaimaLifecycle`, `adminRouter`, or the WebUI.
 
 ## 2. What is already a plugin
 
@@ -235,9 +235,9 @@ Recommended order, each step keeping `bun run check` green:
 A capability counts as migrated only when:
 
 1. Its implementation lives under `plugins/<name>/`.
-2. It has `package.json` and `elaina.plugin.json`.
-3. It exports `ElainaPlugin` and is listed in `apps/server/src/plugins/builtin.ts`.
-4. It uses only `@elaina/sdk`, `@elaina/contracts`, and explicitly approved libraries.
+2. It has `package.json` and `tsukaima.plugin.json`.
+3. It exports `TsukaimaPlugin` and is listed in `apps/server/src/plugins/builtin.ts`.
+4. It uses only `@tsukaima/sdk`, `@tsukaima/contracts`, and explicitly approved libraries.
 5. It declares permissions, config schema, secret keys, hooks, tools, and UI contributions.
 6. It has tests for setup, teardown, permissions, settings, and its main behavior.
 7. The server has no direct import of its constants or internals outside the composition root.

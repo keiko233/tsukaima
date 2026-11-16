@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
-import type { ChannelRequest, MessageEnvelope } from "@elaina/contracts";
+import type { ChannelRequest, MessageEnvelope } from "@tsukaima/contracts";
 import type { OneBotTransport, OneBotTransportFactory } from "./protocol/index.ts";
 import {
 	createPluginContext,
@@ -8,7 +8,7 @@ import {
 	type ChannelAdapter,
 	type PluginChannelRegistry,
 	type PluginSettingsApi,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import { ONEBOT_TRANSPORT_FACTORY_BINDING, oneBotNapCatPlugin } from "./index.ts";
 
 class FakeTransport implements OneBotTransport {
@@ -110,9 +110,9 @@ function createHarness(initial: Record<string, unknown>) {
 }
 
 describe("onebot-napcat plugin", () => {
-	test("manifest matches the packaged elaina.plugin.json", async () => {
+	test("manifest matches the packaged tsukaima.plugin.json", async () => {
 		const packaged = pluginManifestSchema.parse(
-			JSON.parse(await readFile(new URL("../elaina.plugin.json", import.meta.url), "utf8")),
+			JSON.parse(await readFile(new URL("../tsukaima.plugin.json", import.meta.url), "utf8")),
 		);
 		expect(oneBotNapCatPlugin.manifest).toEqual(packaged);
 	});

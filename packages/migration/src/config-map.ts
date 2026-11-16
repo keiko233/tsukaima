@@ -30,7 +30,7 @@ const AREA_DEFINITIONS: Readonly<Record<DshConfigArea, AreaDefinition>> = {
 		target: "model_policies",
 	},
 	"admin-danger": {
-		reason: "Maps admin and destructive-action permissions to Elaina policy",
+		reason: "Maps admin and destructive-action permissions to Tsukaima policy",
 		target: "policies.admin",
 	},
 	"compaction-retention": {

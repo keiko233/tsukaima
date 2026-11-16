@@ -5,7 +5,7 @@ describe("HTML extraction", () => {
 	test("strips scripts, styles, navigation, headers, footers, and comments", () => {
 		const html = `<!doctype html>
 <html lang="en"><head>
-<title>Elaina &amp; friends</title>
+<title>Tsukaima &amp; friends</title>
 <meta name="description" content="A safe &amp; concise page">
 <script>window.secret = "do-not-return";</script>
 <style>.hidden { display: none; }</style>
@@ -37,7 +37,7 @@ describe("HTML extraction", () => {
 			expect(text).not.toContain(forbidden);
 		}
 		const extracted = extractHtmlContent(html);
-		expect(extracted.title).toBe("Elaina & friends");
+		expect(extracted.title).toBe("Tsukaima & friends");
 		expect(extracted.description).toBe("A safe & concise page");
 		expect(extracted.language).toBe("en");
 	});

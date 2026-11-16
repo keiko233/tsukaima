@@ -29,7 +29,7 @@ describe("SupervisedReloadController", () => {
 				},
 			},
 		});
-		const outcome = await controller.reload("elaina", { reason: "test" });
+		const outcome = await controller.reload("tsukaima", { reason: "test" });
 		expect(outcome.success).toBe(true);
 		expect(outcome.postCheck.ok).toBe(true);
 		expect(order).toEqual(["check", "reload", "check"]);
@@ -41,7 +41,7 @@ describe("SupervisedReloadController", () => {
 			healthCheck: () => ({ checkedAtMs: 0, message: "down", ok: false }),
 			reload,
 		});
-		const outcome = await controller.reload("elaina", { reason: "test" });
+		const outcome = await controller.reload("tsukaima", { reason: "test" });
 		expect(outcome.success).toBe(false);
 		expect(outcome.reload).toBeNull();
 		expect(reload.calls).toBe(0);
@@ -64,7 +64,7 @@ describe("SupervisedReloadController", () => {
 				rollbacks.push(outcome.postCheck.message ?? "unknown");
 			},
 		});
-		const outcome = await controller.reload("elaina", {
+		const outcome = await controller.reload("tsukaima", {
 			context: undefined,
 			reason: "test",
 		} as never);

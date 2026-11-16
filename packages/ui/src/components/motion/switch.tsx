@@ -2,7 +2,7 @@
 
 import { animate, motion, MotionConfig, useReducedMotion } from "motion/react";
 import { useEffect, useId, useRef, useState } from "react";
-import { cn } from "@elaina/ui/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 // Heavy, deliberate thumb — high mass keeps the travel weighty without wobble.
 const THUMB_SPRING = { type: "spring", stiffness: 800, damping: 80, mass: 4 } as const;

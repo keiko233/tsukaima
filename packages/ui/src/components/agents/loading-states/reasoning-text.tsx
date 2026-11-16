@@ -2,16 +2,16 @@
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { type ReactNode, useEffect, useId, useState } from "react";
-import { Loader } from "@elaina/ui/components/motion/loader";
-import { TextScramble } from "@elaina/ui/components/motion/text-scramble";
-import { EASE_OUT, SPRING_SWAP } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
+import { Loader } from "@tsukaima/ui/components/motion/loader";
+import { TextScramble } from "@tsukaima/ui/components/motion/text-scramble";
+import { EASE_OUT, SPRING_SWAP } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
 import {
 	TEXT_SHIMMER_CLASS_NAME,
 	TEXT_SHIMMER_KEYFRAMES,
 	textShimmerStyle,
-} from "@elaina/ui/lib/text-shimmer";
-import { cn } from "@elaina/ui/lib/utils";
+} from "@tsukaima/ui/lib/text-shimmer";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { type LoadingStatesMessages, loadingStatesMessages } from "./messages";
 
 const CASCADE_STAGGER = 0.025;

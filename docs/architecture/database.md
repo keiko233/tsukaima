@@ -1,6 +1,6 @@
 # Database design
 
-Elaina has three layers of SQLite storage with separate ownership and migration paths:
+Tsukaima has three layers of SQLite storage with separate ownership and migration paths:
 
 1. `durable.sqlite` — owned by `pi-durable`.
 2. `domain.sqlite` — owned by Drizzle and application services.
@@ -37,7 +37,7 @@ that would collide are rejected instead of sharing a file.
 Plugin databases:
 
 - are opened, migrated, and closed by the host (`PluginDatabaseStore`), not by the plugin;
-- contain their own `_elaina_plugin_migrations` ledger, so deleting the file removes the schema
+- contain their own `_tsukaima_plugin_migrations` ledger, so deleting the file removes the schema
   and its migration history together;
 - may use any table names because isolation is by file, not by the old `plugin_<id>_` prefix
   (existing plugins keep their prefixed names for compatibility);
@@ -46,7 +46,7 @@ Plugin databases:
 
 ### Plugin migration files
 
-Migrations live next to the plugin, not in `elaina.plugin.json`. The manifest only declares the
+Migrations live next to the plugin, not in `tsukaima.plugin.json`. The manifest only declares the
 directory:
 
 ```json
@@ -93,17 +93,17 @@ It contains, conceptually:
 - usage records
 - compaction state
 
-Expected durable documents added by Elaina:
+Expected durable documents added by Tsukaima:
 
 | Document kind         | Scope        | Purpose                                                               |
 | --------------------- | ------------ | --------------------------------------------------------------------- |
-| `elaina.chat.meta`    | conversation | Canonical conversation ID, display name, channel source, policy hints |
-| `elaina.chat.policy`  | conversation | Response mode, quiet hours, rate limits, tool policy                  |
-| `elaina.activity`     | conversation | Aggregated message activity and member envelope IDs                   |
-| `elaina.channel.send` | conversation | Outbound action records and delivery state                            |
-| `elaina.media`        | conversation | References to blob hashes and canonical media IDs                     |
-| `elaina.plugin.state` | conversation | Plugin-owned conversation state                                       |
-| `elaina.iteration`    | conversation | Coding task metadata and approval state                               |
+| `tsukaima.chat.meta`    | conversation | Canonical conversation ID, display name, channel source, policy hints |
+| `tsukaima.chat.policy`  | conversation | Response mode, quiet hours, rate limits, tool policy                  |
+| `tsukaima.activity`     | conversation | Aggregated message activity and member envelope IDs                   |
+| `tsukaima.channel.send` | conversation | Outbound action records and delivery state                            |
+| `tsukaima.media`        | conversation | References to blob hashes and canonical media IDs                     |
+| `tsukaima.plugin.state` | conversation | Plugin-owned conversation state                                       |
+| `tsukaima.iteration`    | conversation | Coding task metadata and approval state                               |
 
 The exact serialization shape is defined in implementation. Every document must be versioned.
 
@@ -184,7 +184,7 @@ Better Auth model names (`user`, `session`, `account`, `verification`) through `
 
 Migration `0005` drops the legacy `admin_credentials` table. Its argon2id hash format is not a
 Better Auth account, so the first run after this change recreates the administrator from
-`ELAINA_ADMIN_USERNAME`/`ELAINA_ADMIN_PASSWORD` when `auth_user` is empty. This is acceptable during
+`TSUKAIMA_ADMIN_USERNAME`/`TSUKAIMA_ADMIN_PASSWORD` when `auth_user` is empty. This is acceptable during
 the pre-deployment phase; a future deployed cutover must keep the bootstrap env values available for
 one start or provide a dedicated credential-import script.
 
@@ -250,7 +250,7 @@ CREATE TABLE user_aliases (
 
 ### chat_objects
 
-Stable communication scope. A chat object can contain many Elaina sessions. External
+Stable communication scope. A chat object can contain many Tsukaima sessions. External
 objects are scoped by channel and platform conversation ID; local WebUI chat objects
 have no external identifiers.
 
@@ -272,7 +272,7 @@ CREATE TABLE chat_objects (
 
 ### conversations
 
-Domain-side metadata for one Elaina session and its durable conversation. `conversations`
+Domain-side metadata for one Tsukaima session and its durable conversation. `conversations`
 is retained as the session table so existing durable IDs remain stable.
 
 ```sql
@@ -390,7 +390,7 @@ unknown rather than inviting a duplicate retry.
 ### Activity state lives in the durable database
 
 There are no `activities` or `activity_messages` tables. Activity windows and message receipts are
-durable documents (`elaina.activityWindow`, `elaina.messageReceipt`) scoped to the conversation,
+durable documents (`tsukaima.activityWindow`, `tsukaima.messageReceipt`) scoped to the conversation,
 because they must be replayed and recovered with the conversation itself. The domain database keeps
 only `messages.activity_id`, the durable activity a message was aggregated into, for display and
 correlation.

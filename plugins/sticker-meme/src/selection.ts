@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AuditEntry, PluginLogger, PluginMediaApi } from "@elaina/sdk";
+import type { AuditEntry, PluginLogger, PluginMediaApi } from "@tsukaima/sdk";
 import { normalizeLabel, sanitizeModelText } from "./domain.ts";
 import type { StickerItem, StickerPack } from "./domain.ts";
 import { elapsedMs, traceLog } from "./logging.ts";

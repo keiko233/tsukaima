@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Extension } from "@earendil-works/pi-durable";
-import { conversationPolicySchema, defaultConversationPolicy } from "@elaina/contracts";
-import { BACKGROUND_CONTEXT, openDurableStorage } from "@elaina/durable";
+import { conversationPolicySchema, defaultConversationPolicy } from "@tsukaima/contracts";
+import { BACKGROUND_CONTEXT, openDurableStorage } from "@tsukaima/durable";
 import { PiDurableConversationHost } from "./conversation-host.ts";
 
 const envelope = (id: string, text: string) => ({
@@ -20,7 +20,7 @@ const envelope = (id: string, text: string) => ({
 
 describe("inspectConversationContext", () => {
 	test("returns undefined for invalid or unknown conversation ids", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-inspect-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-inspect-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const host = new PiDurableConversationHost({ storage });
@@ -34,7 +34,7 @@ describe("inspectConversationContext", () => {
 	});
 
 	test("applies conversation compaction policy to the active agent", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-inspect-compaction-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-inspect-compaction-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const host = new PiDurableConversationHost({ storage });
@@ -103,7 +103,7 @@ describe("inspectConversationContext", () => {
 	});
 
 	test("accounts for prompt sections, offered/deferred tools, omission filters, and free space", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-inspect-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-inspect-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const extension: Extension = {
@@ -149,7 +149,7 @@ describe("inspectConversationContext", () => {
 			const host = new PiDurableConversationHost({
 				contextProvider: {
 					renderMemories: async () => "- [conversation/fact] User likes tea",
-					renderPersona: async () => "You are Elaina, a traveling witch.",
+					renderPersona: async () => "You are Tsukaima, a traveling witch.",
 					renderPolicy: async () => "Conversation contract:\n- Access: private open",
 				},
 				extensions: [extension],
@@ -159,7 +159,7 @@ describe("inspectConversationContext", () => {
 			const conversationId = await host.createConversation();
 			await host.append({
 				conversationId,
-				envelope: envelope("m1", "Hello Elaina, remember anything about tea?"),
+				envelope: envelope("m1", "Hello Tsukaima, remember anything about tea?"),
 				forceSubmit: true,
 				submittedAtMs: 1,
 			});
@@ -202,7 +202,7 @@ describe("inspectConversationContext", () => {
 	});
 
 	test("compacts long context, resets context head with handoff, and aborts pending activity", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-commands-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-commands-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 			const host = new PiDurableConversationHost({

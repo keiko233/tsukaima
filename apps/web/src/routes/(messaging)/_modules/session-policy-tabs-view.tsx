@@ -5,8 +5,8 @@ import type {
 	ModelCatalogEntry,
 	PersonaSummary,
 	PolicyRevision,
-} from "@elaina/contracts";
-import { Button } from "@elaina/ui/components/motion/button";
+} from "@tsukaima/contracts";
+import { Button } from "@tsukaima/ui/components/motion/button";
 import { m } from "@/paraglide/messages";
 import {
 	Field,

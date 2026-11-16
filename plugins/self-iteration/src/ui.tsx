@@ -13,7 +13,7 @@ import {
 	usePluginI18n,
 	usePluginPanel,
 	usePluginToast,
-} from "@elaina/sdk/ui";
+} from "@tsukaima/sdk/ui";
 import { Check, GitBranch, Play, RefreshCw, RotateCcw, Save, ShieldCheck, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { CodingPolicy } from "./domain.ts";

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { PluginI18n } from "@elaina/sdk/i18n";
-import { PluginPanelProvider, type PluginSummary } from "@elaina/sdk/ui";
+import type { PluginI18n } from "@tsukaima/sdk/i18n";
+import { PluginPanelProvider, type PluginSummary } from "@tsukaima/sdk/ui";
 import { oneBotNapCatManifest } from "../../../../plugins/onebot-napcat/src/manifest.ts";
 import oneBotUi from "../../../../plugins/onebot-napcat/src/ui.tsx";
 import openAiUi from "../../../../plugins/openai-compatible/src/ui.tsx";
@@ -15,7 +15,7 @@ import { i18n as proactiveI18n } from "../../../../plugins/proactive-scheduler/s
 import { i18n as searchI18n } from "../../../../plugins/search-fetch/src/i18n.ts";
 import { i18n as selfIterationI18n } from "../../../../plugins/self-iteration/src/i18n.ts";
 import { i18n as stickerI18n } from "../../../../plugins/sticker-meme/src/i18n.ts";
-import type { PluginUiModuleDefinition } from "@elaina/sdk/ui";
+import type { PluginUiModuleDefinition } from "@tsukaima/sdk/ui";
 
 const plugin: PluginSummary = {
 	apiVersion: "1",

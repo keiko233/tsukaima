@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import type { ElainaPlugin, PluginContext } from "@elaina/sdk";
+import type { TsukaimaPlugin, PluginContext } from "@tsukaima/sdk";
 import { recordValue } from "./domain.ts";
 import { StickerImportService } from "./import-service.ts";
 import { LearningService } from "./learning.ts";
@@ -119,7 +119,7 @@ async function updateStatus(context: PluginContext, repository: StickerRepositor
 	});
 }
 
-export const stickerMemePlugin: ElainaPlugin = {
+export const stickerMemePlugin: TsukaimaPlugin = {
 	manifest: stickerMemeManifest,
 	rootDir: fileURLToPath(new URL("../", import.meta.url)),
 	async setup(context) {

@@ -5,8 +5,8 @@ import {
 	classifyConversationTrigger,
 	type PiDurableConversationHost,
 	type ResolvedReplyTarget,
-} from "@elaina/core";
-import type { ConversationPolicy, MessagePart } from "@elaina/contracts";
+} from "@tsukaima/core";
+import type { ConversationPolicy, MessagePart } from "@tsukaima/contracts";
 import {
 	channelNoticeSchema,
 	conversationPolicySchema,
@@ -16,18 +16,18 @@ import {
 	type ChannelNotice,
 	type MessageEnvelope,
 	type TriggerDecision,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 import {
 	chatObjects,
 	conversations,
 	conversationMembers,
 	identities,
 	messages,
-	type ElainaDatabase,
+	type TsukaimaDatabase,
 	users,
 	userAliases,
-} from "@elaina/db";
-import type { AuditEntry } from "@elaina/sdk";
+} from "@tsukaima/db";
+import type { AuditEntry } from "@tsukaima/sdk";
 import { previewText, type Logger } from "../logging.ts";
 import type { ConversationPacingTracker } from "./conversation-pacing.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
@@ -48,7 +48,7 @@ export interface ConversationRouterOptions {
 		policy: ConversationPolicy,
 	) => Promise<void> | void;
 	readonly audit?: (entry: AuditEntry) => Promise<void>;
-	readonly database: () => ElainaDatabase | undefined;
+	readonly database: () => TsukaimaDatabase | undefined;
 	readonly host: () => PiDurableConversationHost | undefined;
 	/** Rate limit for ignored-trigger audit rows, per channel/conversation key. */
 	readonly ignoredAuditIntervalMs?: number;
@@ -105,7 +105,7 @@ const safeChannelId = (envelope: unknown): string => {
 export class ConversationRouter {
 	readonly #applyModelToolPolicy: ConversationRouterOptions["applyModelToolPolicy"];
 	readonly #audit: ConversationRouterOptions["audit"];
-	readonly #database: () => ElainaDatabase | undefined;
+	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #host: () => PiDurableConversationHost | undefined;
 	readonly #ignoredAuditIntervalMs: number;
 	readonly #logger: Logger;
@@ -377,7 +377,7 @@ export class ConversationRouter {
 	}
 
 	async #resolveReplyTarget(
-		database: ElainaDatabase,
+		database: TsukaimaDatabase,
 		chatObjectId: string,
 		replyToEnvelopeId: string | undefined,
 	): Promise<ResolvedReplyTarget | undefined> {
@@ -403,14 +403,14 @@ export class ConversationRouter {
 			senderKind:
 				row.direction === "outbound"
 					? "assistant"
-					: row.senderExternalId === "elaina"
+					: row.senderExternalId === "tsukaima"
 						? "assistant"
 						: "human",
 		};
 	}
 
 	async #persistInbound(
-		database: ElainaDatabase,
+		database: TsukaimaDatabase,
 		input: {
 			classification: "ambient" | "direct" | "soft";
 			envelope: MessageEnvelope;
@@ -807,7 +807,7 @@ export class ConversationRouter {
 		};
 	}
 
-	#requireDatabase(): ElainaDatabase {
+	#requireDatabase(): TsukaimaDatabase {
 		const database = this.#database();
 		if (database === undefined) throw new Error("Domain database is not ready");
 		return database;

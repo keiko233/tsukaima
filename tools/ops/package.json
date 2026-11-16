@@ -1,10 +1,10 @@
 {
-	"name": "@elaina/ops",
+	"name": "@tsukaima/ops",
 	"version": "0.1.0",
 	"private": true,
 	"bin": {
-		"elaina-backup-drill": "./backup-drill.ts",
-		"elaina-secret-scan": "./secret-scan.ts"
+		"tsukaima-backup-drill": "./backup-drill.ts",
+		"tsukaima-secret-scan": "./secret-scan.ts"
 	},
 	"type": "module",
 	"scripts": {
@@ -12,6 +12,6 @@
 		"check:secrets": "bun secret-scan.ts"
 	},
 	"dependencies": {
-		"@elaina/migration": "workspace:*"
+		"@tsukaima/migration": "workspace:*"
 	}
 }

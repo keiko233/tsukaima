@@ -3,7 +3,7 @@ import type {
 	ChannelRequest,
 	MessageEnvelope,
 	MessagePart,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 
 /**
  * Capabilities a channel adapter can offer. Plugins that call channel verbs should check

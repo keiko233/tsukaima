@@ -9,7 +9,7 @@ bun tools/migration/cli.ts snapshot --source /path/to/dsh-home --source /path/to
 bun tools/migration/cli.ts inspect --snapshot /path/to/snapshot --report /path/to/inventory
 bun tools/migration/cli.ts normalize --snapshot /path/to/snapshot --out /path/to/import
 bun tools/migration/cli.ts compress --input /path/to/import --model-policy migration.summarize
-bun tools/migration/cli.ts dry-run --input /path/to/import --target sqlite:/path/to/elaina.db --postgres "$ELAINA_MIGRATION_PGURL"
+bun tools/migration/cli.ts dry-run --input /path/to/import --target sqlite:/path/to/tsukaima.db --postgres "$TSUKAIMA_MIGRATION_PGURL"
 bun tools/migration/cli.ts import --input /path/to/import --resume
 bun tools/migration/cli.ts verify --input /path/to/import --target ...
 bun tools/migration/cli.ts rollback --ledger /path/to/ledger --backup /path/to/backup

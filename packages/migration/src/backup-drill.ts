@@ -236,7 +236,7 @@ export async function runBackupDrill(options: BackupDrillOptions): Promise<Backu
 	const reportPath = join(reportsDir, `${runId}-drill.json`);
 	const report = emptyReport({ now, reportPath, runId, startedAt });
 	const stagingBase =
-		options.stagingRoot ?? (await fs.mkdtemp(join(tmpdir(), "elaina-backup-drill-")));
+		options.stagingRoot ?? (await fs.mkdtemp(join(tmpdir(), "tsukaima-backup-drill-")));
 	const stagingDir = join(stagingBase, runId);
 	let keepStaging = options.keepStaging ?? false;
 	try {

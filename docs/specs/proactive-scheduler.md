@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Elaina supports reminders, follow-up nudges, and supervised proactive messages with durable
+Tsukaima supports reminders, follow-up nudges, and supervised proactive messages with durable
 state, policy limits, and admin observability.
 
 ## Current boundary
@@ -75,7 +75,7 @@ A proactive tick performs:
 10. marker handling
 11. durable decision/outcome log
 
-Supported model markers: `ELAINA_SKIP`, `ELAINA_LURK`, and optional `ELAINA_SCHEDULE_LATER`.
+Supported model markers: `TSUKAIMA_SKIP`, `TSUKAIMA_LURK`, and optional `TSUKAIMA_SCHEDULE_LATER`.
 Markers are consumed and audited, never sent.
 
 State includes last messages, last outbound, unanswered streak, refused count, silence until,

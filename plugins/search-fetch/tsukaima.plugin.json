@@ -44,9 +44,9 @@
 		"type": "object"
 	},
 	"configEnv": {
-		"braveApiKey": "ELAINA_SEARCH_BRAVE_API_KEY",
-		"tavilyApiKey": "ELAINA_SEARCH_TAVILY_API_KEY",
-		"serperApiKey": "ELAINA_SEARCH_SERPER_API_KEY"
+		"braveApiKey": "TSUKAIMA_SEARCH_BRAVE_API_KEY",
+		"tavilyApiKey": "TSUKAIMA_SEARCH_TAVILY_API_KEY",
+		"serperApiKey": "TSUKAIMA_SEARCH_SERPER_API_KEY"
 	},
 	"secretKeys": ["braveApiKey", "serperApiKey", "tavilyApiKey"]
 }

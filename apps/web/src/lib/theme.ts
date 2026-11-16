@@ -1,4 +1,4 @@
-const THEME_KEY = "elaina.webui.theme";
+const THEME_KEY = "tsukaima.webui.theme";
 
 export type Theme = "light" | "dark";
 

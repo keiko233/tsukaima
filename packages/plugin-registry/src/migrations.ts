@@ -63,7 +63,7 @@ export interface MigrationRegistryOptions {
 	readonly now?: () => Date;
 }
 
-const LEDGER_TABLE = "_elaina_plugin_migrations";
+const LEDGER_TABLE = "_tsukaima_plugin_migrations";
 
 interface LedgerRow {
 	readonly applied_at: string;

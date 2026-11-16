@@ -2,8 +2,8 @@
 
 import { motion, useReducedMotion } from "motion/react";
 import { forwardRef, useState } from "react";
-import { EASE_IN_OUT } from "@elaina/ui/lib/ease";
-import { cn } from "@elaina/ui/lib/utils";
+import { EASE_IN_OUT } from "@tsukaima/ui/lib/ease";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { Button, type ButtonProps } from "./base";
 
 export interface MetallicButtonProps extends Omit<ButtonProps, "ripple" | "variant"> {

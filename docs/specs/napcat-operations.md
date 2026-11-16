@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Elaina must operate as the sole bot process on the current NapCat deployment without losing
+Tsukaima must operate as the sole bot process on the current NapCat deployment without losing
 message fidelity, media, notice handling, or recoverable outbound delivery.
 
 ## Current boundary
@@ -27,7 +27,7 @@ message fidelity, media, notice handling, or recoverable outbound delivery.
 
 ### Inbound fidelity
 
-Elaina must normalize, or explicitly mark and store, these OneBot/NapCat cases:
+Tsukaima must normalize, or explicitly mark and store, these OneBot/NapCat cases:
 
 | Class | Required result |
 | --- | --- |

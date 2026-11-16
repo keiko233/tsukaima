@@ -4,7 +4,7 @@ import type {
 	MessagePart,
 	PluginStatusInput,
 	PluginStatusSnapshot,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 import type {
 	PluginAuditApi,
 	PluginChannelRegistry,
@@ -164,7 +164,7 @@ export interface PluginModelDescriptor {
 
 export interface PluginModelInfo extends PluginModelDescriptor {
 	readonly providerId: string;
-	/** Present when the model registry is hosted by Elaina. */
+	/** Present when the model registry is hosted by Tsukaima. */
 	readonly pluginId?: string;
 }
 
@@ -441,7 +441,7 @@ export interface PluginBackgroundTurnResult {
 	readonly skippedReason?: string;
 	/** Cleaned assistant text after marker removal. Never logged by the host. */
 	readonly text?: string;
-	/** Delay requested by `ELAINA_SCHEDULE_LATER` when present. */
+	/** Delay requested by `TSUKAIMA_SCHEDULE_LATER` when present. */
 	readonly scheduleLaterMs?: number;
 }
 

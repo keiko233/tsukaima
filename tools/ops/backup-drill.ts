@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { runBackupDrill, type BackupDrillOptions } from "@elaina/migration";
+import { runBackupDrill, type BackupDrillOptions } from "@tsukaima/migration";
 
 interface CliOptions {
 	readonly dataDir?: string;
@@ -70,7 +70,7 @@ export function drillOptionsFromEnv(
 	env: Record<string, string | undefined>,
 	options: CliOptions,
 ): BackupDrillOptions {
-	const dataDir = options.dataDir ?? env.ELAINA_DATA_DIR ?? "./data";
+	const dataDir = options.dataDir ?? env.TSUKAIMA_DATA_DIR ?? "./data";
 	return {
 		dataDir,
 		...(options.backupRoot === undefined ? {} : { backupRoot: options.backupRoot }),

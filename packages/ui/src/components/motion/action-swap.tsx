@@ -9,8 +9,8 @@ import {
 } from "motion/react";
 import type { ReactNode } from "react";
 import { useState } from "react";
-import { EASE_OUT, SPRING_LAYOUT, SPRING_PRESS, SPRING_SWAP } from "@elaina/ui/lib/ease";
-import { cn } from "@elaina/ui/lib/utils";
+import { EASE_OUT, SPRING_LAYOUT, SPRING_PRESS, SPRING_SWAP } from "@tsukaima/ui/lib/ease";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export type ActionSwapItem = {
 	id: string;

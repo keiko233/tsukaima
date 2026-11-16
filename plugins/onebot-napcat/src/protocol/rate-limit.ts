@@ -1,4 +1,4 @@
-import type { PluginLogger } from "@elaina/sdk";
+import type { PluginLogger } from "@tsukaima/sdk";
 import { createSafeLogger } from "../logging.ts";
 
 /**

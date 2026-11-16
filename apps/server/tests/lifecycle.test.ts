@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { createApp } from "../src/app.ts";
 import { writeRuntimeSettings } from "../src/runtime-settings.ts";
-import type { MessageEnvelope } from "@elaina/contracts";
-import { conversations } from "@elaina/db";
+import type { MessageEnvelope } from "@tsukaima/contracts";
+import { conversations } from "@tsukaima/db";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	type OneBotTransportFactory,
-} from "@elaina-plugin/onebot-napcat";
+} from "@tsukaima-plugin/onebot-napcat";
 
 const envelope = (id: string, text: string): MessageEnvelope => ({
 	channelId: "onebot-test",
@@ -25,12 +25,12 @@ const envelope = (id: string, text: string): MessageEnvelope => ({
 
 describe("server lifecycle with fake model", () => {
 	test("starts, processes a fake-model message, and stops cleanly", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-server-e2e-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-server-e2e-"));
 		try {
 			const { app, lifecycle } = createApp({
-				ELAINA_DATA_DIR: directory,
-				ELAINA_PORT: "7420",
-				ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 			});
 
 			expect(lifecycle.state.state).toBe("starting");
@@ -93,7 +93,7 @@ describe("server lifecycle with fake model", () => {
 	});
 
 	test("connects with the environment OneBot url and reconnects after a settings change", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-server-onebot-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-server-onebot-"));
 		const urls: string[] = [];
 		const connections: Array<{ closeCount: number; emitOpen: () => void }> = [];
 		const transportFactory: OneBotTransportFactory = (url) => {
@@ -118,10 +118,10 @@ describe("server lifecycle with fake model", () => {
 		try {
 			const { lifecycle } = createApp(
 				{
-					ELAINA_DATA_DIR: directory,
-					ELAINA_ONEBOT_WS_URL: "ws://env.example:3001",
-					ELAINA_PORT: "7420",
-					ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+					TSUKAIMA_DATA_DIR: directory,
+					TSUKAIMA_ONEBOT_WS_URL: "ws://env.example:3001",
+					TSUKAIMA_PORT: "7420",
+					TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 				},
 				{
 					pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, transportFactory]]),
@@ -151,12 +151,12 @@ describe("server lifecycle with fake model", () => {
 	});
 
 	test("hot-refreshes active model provider when openai-compatible is configured or toggled", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-server-model-hot-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-server-model-hot-"));
 		try {
 			const { lifecycle } = createApp({
-				ELAINA_DATA_DIR: directory,
-				ELAINA_PORT: "7420",
-				ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 			});
 			await lifecycle.start();
 			expect(lifecycle.routingPolicies[0]?.primary).toEqual({
@@ -199,15 +199,15 @@ describe("server lifecycle with fake model", () => {
 		}
 	});
 
-	test("ELAINA_LOG_LEVEL overrides persisted runtime setting on startup and writes daily log files", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-server-logging-"));
+	test("TSUKAIMA_LOG_LEVEL overrides persisted runtime setting on startup and writes daily log files", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-server-logging-"));
 		try {
 			const first = createApp({
-				ELAINA_DATA_DIR: directory,
-				ELAINA_LOG_BUFFER_CAPACITY: "25",
-				ELAINA_LOG_FILE_ENABLED: "false",
-				ELAINA_PORT: "7420",
-				ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_LOG_BUFFER_CAPACITY: "25",
+				TSUKAIMA_LOG_FILE_ENABLED: "false",
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 			});
 			await first.lifecycle.start();
 			if (first.lifecycle.domainDatabase === undefined) {
@@ -220,11 +220,11 @@ describe("server lifecycle with fake model", () => {
 			expect(entriesWhenDisabled).not.toContain("logs");
 
 			const second = createApp({
-				ELAINA_DATA_DIR: directory,
-				ELAINA_LOG_BUFFER_CAPACITY: "25",
-				ELAINA_LOG_LEVEL: "trace",
-				ELAINA_PORT: "7420",
-				ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_LOG_BUFFER_CAPACITY: "25",
+				TSUKAIMA_LOG_LEVEL: "trace",
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 			});
 			await second.lifecycle.start();
 			expect(second.lifecycle.logger.level).toBe("trace");
@@ -235,9 +235,9 @@ describe("server lifecycle with fake model", () => {
 			await second.lifecycle.stop();
 
 			const logFiles = await readdir(join(directory, "logs"));
-			expect(logFiles.some((name) => /^elaina-\d{4}-\d{2}-\d{2}\.log$/.test(name))).toBe(true);
+			expect(logFiles.some((name) => /^tsukaima-\d{4}-\d{2}-\d{2}\.log$/.test(name))).toBe(true);
 			const logContent = await readFile(join(directory, "logs", logFiles[0]!), "utf8");
-			expect(logContent).toContain("elaina::server::lifecycle");
+			expect(logContent).toContain("tsukaima::server::lifecycle");
 		} finally {
 			await rm(directory, { force: true, recursive: true });
 		}

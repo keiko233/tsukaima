@@ -39,7 +39,7 @@ Concretely, OneBot-specific code is spread across the process core:
 | outbound send path | `services/webui.ts:482` reads `lifecycle.onebotChannel` |
 | diagnostics RPC hard-coded to a single channel | `rpc/admin.ts:91-116` |
 | runtime settings fields | `runtime-settings.ts` (`onebotWsUrl`, `onebotAccessToken`) |
-| env config fields | `config.ts:7-8`, `:23-24` (`ELAINA_ONEBOT_*`) |
+| env config fields | `config.ts:7-8`, `:23-24` (`TSUKAIMA_ONEBOT_*`) |
 
 The domain layer is *almost* channel-generic already (`chat_objects.channelId`,
 `conversations.channelId`, `envelope.channelKind`, `envelope.channelId` all exist), but the
@@ -107,19 +107,19 @@ Root `package.json` adds `"plugins/*"` to `workspaces`; `tsconfig.json` adds
 ### 3.2 Layering rule (the important part)
 
 ```text
-plugins/*  ->  @elaina/sdk, @elaina/contracts, @elaina/db (read-only via host repos)
+plugins/*  ->  @tsukaima/sdk, @tsukaima/contracts, @tsukaima/db (read-only via host repos)
 plugins/*  -/- apps/server        (never)
-apps/server -> @elaina/plugin-registry + one composition root file that imports
+apps/server -> @tsukaima/plugin-registry + one composition root file that imports
                the built-in plugin packages and nothing else
 ```
 
 The composition root is a single file, e.g. `apps/server/src/plugins/builtin.ts`, that
-lists `[@elaina-plugin/onebot-napcat, ...]`. That keeps the app depending on one place
+lists `[@tsukaima-plugin/onebot-napcat, ...]`. That keeps the app depending on one place
 instead of scattering plugin imports, and gives a single toggle point for tests.
 
-### 3.3 Host services (`ElainaHost`)
+### 3.3 Host services (`TsukaimaHost`)
 
-Extract the responsibilities currently trapped in `ElainaLifecycle` into named services
+Extract the responsibilities currently trapped in `TsukaimaLifecycle` into named services
 that a plugin receives through `context`:
 
 | Service | Extracted from | Plugin-facing verbs |
@@ -141,9 +141,9 @@ Built-in plugins follow the documented format (`docs/architecture/plugin-sdk.md`
 
 ```text
 plugins/onebot-napcat/
-  package.json          @elaina-plugin/onebot-napcat
-  elaina.plugin.json    name, version, apiVersion, kind: "builtin", permissions, configSchema
-  src/index.ts          export const plugin: ElainaPlugin = { manifest, setup, teardown }
+  package.json          @tsukaima-plugin/onebot-napcat
+  tsukaima.plugin.json    name, version, apiVersion, kind: "builtin", permissions, configSchema
+  src/index.ts          export const plugin: TsukaimaPlugin = { manifest, setup, teardown }
   src/*.test.ts
 ```
 
@@ -230,7 +230,7 @@ Ordered by how much is in the core today (most entangled first).
    contract in `docs/architecture/startup-lifecycle.md` §4.
 2. **Settings + env mapping.** Replace the fixed `RuntimeSettings` struct with per-plugin
    config validated against `manifest.configSchema`, plus a tiny host-level set
-   (`logLevel`). Keep `ELAINA_ONEBOT_*` as a deprecated fallback that maps to
+   (`logLevel`). Keep `TSUKAIMA_ONEBOT_*` as a deprecated fallback that maps to
    `onebot-napcat` config for one release.
 3. **RPC contribution shape.** Decide whether plugins register oRPC routers directly
    (recommended, mounted under `pluginUi.<namespace>`) or only declare procedure names that
@@ -267,7 +267,7 @@ Status: **Phase A and Phase B are implemented.** Phases C–E remain.
 2. Move `resolveOneBotSettings`, `replaceOneBotChannel`, `processRequest`,
    `resolveChannelRequest`, and the OneBot-specific identity mapping into the plugin;
    ingestion calls `context.conversation.ingest(envelope)`.
-3. Delete `onebot*` members from `ElainaLifecycle`, `config.ts`, `runtime-settings.ts`,
+3. Delete `onebot*` members from `TsukaimaLifecycle`, `config.ts`, `runtime-settings.ts`,
    `rpc/admin.ts`, `services/webui.ts`.
 4. Acceptance: the server boots with `plugins/onebot-napcat` disabled and OneBot simply
    absent (no crash, no dead fields); a live WS test drives ingest through the plugin.

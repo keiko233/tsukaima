@@ -2,7 +2,7 @@
 
 import { type CSSProperties, Fragment, useEffect, useState } from "react";
 import { createHighlighter, type Highlighter } from "shiki";
-import { cn } from "@elaina/ui/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export type AgentCodeLanguage = "bash" | "diff" | "json" | "text" | "tsx" | "typescript";
 

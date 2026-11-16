@@ -1,4 +1,4 @@
-import type { PluginContext, PluginLogger, ToolResult } from "@elaina/sdk";
+import type { PluginContext, PluginLogger, ToolResult } from "@tsukaima/sdk";
 import {
 	MAX_FETCH_URL_LENGTH,
 	MAX_QUERY_LENGTH,

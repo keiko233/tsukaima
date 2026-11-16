@@ -1,5 +1,5 @@
-import type { RunStep } from "@elaina/contracts";
-import type { LiveRunSnapshot } from "@elaina/core";
+import type { RunStep } from "@tsukaima/contracts";
+import type { LiveRunSnapshot } from "@tsukaima/core";
 
 /** Cap for a single argument line, matching the durable run-steps panel. */
 const MAX_ARGUMENTS_CHARS = 400;

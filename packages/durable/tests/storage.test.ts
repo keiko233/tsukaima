@@ -17,7 +17,7 @@ const cases = createStorageConformance({
 		strictEqual: (actual, expected) => expect(actual).toBe(expected),
 	},
 	withStorage: async (use) => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-durable-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-durable-"));
 		try {
 			await use(await openDurableStorage(join(directory, "durable.sqlite")));
 		} finally {

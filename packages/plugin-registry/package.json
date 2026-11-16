@@ -1,5 +1,5 @@
 {
-	"name": "@elaina/plugin-registry",
+	"name": "@tsukaima/plugin-registry",
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
@@ -7,6 +7,6 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
-		"@elaina/sdk": "workspace:*"
+		"@tsukaima/sdk": "workspace:*"
 	}
 }

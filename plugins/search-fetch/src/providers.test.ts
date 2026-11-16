@@ -101,7 +101,7 @@ describe("keyless and optional providers", () => {
 								{
 									snippet: "<b>Witch</b>",
 									timestamp: "2024-01-01T00:00:00Z",
-									title: "Elaina",
+									title: "Tsukaima",
 								},
 							],
 						},
@@ -112,7 +112,7 @@ describe("keyless and optional providers", () => {
 		};
 		const provider = createKeylessProvider(transport);
 		const results = await provider.search(
-			{ maxResults: 5, query: "elaina" },
+			{ maxResults: 5, query: "tsukaima" },
 			{ fetch: transport.fetch, now: () => 0 },
 		);
 		expect(requested).toHaveLength(2);
@@ -120,7 +120,7 @@ describe("keyless and optional providers", () => {
 		expect(results[1]).toMatchObject({
 			domain: "en.wikipedia.org",
 			snippet: "Witch",
-			title: "Elaina",
+			title: "Tsukaima",
 		});
 	});
 
@@ -130,7 +130,10 @@ describe("keyless and optional providers", () => {
 		};
 		const provider = createKeylessProvider(transport);
 		await expect(
-			provider.search({ maxResults: 5, query: "elaina" }, { fetch: transport.fetch, now: () => 0 }),
+			provider.search(
+				{ maxResults: 5, query: "tsukaima" },
+				{ fetch: transport.fetch, now: () => 0 },
+			),
 		).rejects.toThrow();
 	});
 

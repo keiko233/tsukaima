@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import type { MessageEnvelope } from "@elaina/contracts";
+import type { MessageEnvelope } from "@tsukaima/contracts";
 import {
 	auditLog,
 	chatObjects,
@@ -12,12 +12,12 @@ import {
 	messages,
 	migrateDomainDatabase,
 	openDomainDatabase,
-} from "@elaina/db";
+} from "@tsukaima/db";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	type OneBotTransport,
 	type OneBotTransportFactory,
-} from "@elaina-plugin/onebot-napcat";
+} from "@tsukaima-plugin/onebot-napcat";
 import { createApp } from "../src/app.ts";
 import { splitMessageParts } from "../src/services/reply-dispatcher.ts";
 
@@ -87,13 +87,13 @@ async function createLifecycle(
 	directory?: string,
 	reply?: { pendingGraceMs?: number; reconcileIntervalMs?: number },
 ) {
-	const dataDir = directory ?? (await fs.mkdtemp(join(tmpdir(), "elaina-reconcile-")));
+	const dataDir = directory ?? (await fs.mkdtemp(join(tmpdir(), "tsukaima-reconcile-")));
 	if (directory === undefined) directories.push(dataDir);
 	const { lifecycle } = createApp(
 		{
-			ELAINA_DATA_DIR: dataDir,
-			ELAINA_ONEBOT_WS_URL: "ws://napcat:3001",
-			ELAINA_PORT: "7420",
+			TSUKAIMA_DATA_DIR: dataDir,
+			TSUKAIMA_ONEBOT_WS_URL: "ws://napcat:3001",
+			TSUKAIMA_PORT: "7420",
 		},
 		{
 			pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, onebot.factory]]),
@@ -133,8 +133,8 @@ async function insertPending(
 		kind: "onebot-v11",
 		occurredAt: new Date(Date.now() - 120_000).toISOString(),
 		partsJson: JSON.stringify([{ text, type: "text" }]),
-		senderDisplayName: "Elaina",
-		senderExternalId: "elaina",
+		senderDisplayName: "Tsukaima",
+		senderExternalId: "tsukaima",
 	});
 	return id;
 }
@@ -149,7 +149,7 @@ describe("pending outbound reconciliation", () => {
 			onebot.history.push({
 				message: [{ data: { text: "already delivered" }, type: "text" }],
 				message_id: "platform-9001",
-				sender: { user_id: "elaina" },
+				sender: { user_id: "tsukaima" },
 				time: Math.floor(Date.now() / 1_000),
 			});
 			const result = await lifecycle.replyDispatcher.reconcilePendingDeliveries({
@@ -219,7 +219,7 @@ describe("pending outbound reconciliation", () => {
 			onebot.history.push({
 				message: [{ data: { text: "periodic delivery" }, type: "text" }],
 				message_id: "platform-periodic",
-				sender: { user_id: "elaina" },
+				sender: { user_id: "tsukaima" },
 				time: Math.floor(Date.now() / 1_000),
 			});
 			const database = lifecycle.domainDatabase;
@@ -243,7 +243,7 @@ describe("pending outbound reconciliation", () => {
 	});
 
 	test("reconciles stale rows during startup", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-reconcile-startup-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-reconcile-startup-"));
 		directories.push(directory);
 		const seed = await openDomainDatabase(join(directory, "domain.sqlite"));
 		migrateDomainDatabase(seed);
@@ -273,8 +273,8 @@ describe("pending outbound reconciliation", () => {
 			kind: "onebot-v11",
 			occurredAt: new Date(Date.now() - 120_000).toISOString(),
 			partsJson: JSON.stringify([{ text: "startup delivery", type: "text" }]),
-			senderDisplayName: "Elaina",
-			senderExternalId: "elaina",
+			senderDisplayName: "Tsukaima",
+			senderExternalId: "tsukaima",
 		});
 		seed.$client.close();
 
@@ -282,7 +282,7 @@ describe("pending outbound reconciliation", () => {
 		onebot.history.push({
 			message: [{ data: { text: "startup delivery" }, type: "text" }],
 			message_id: "platform-startup",
-			sender: { user_id: "elaina" },
+			sender: { user_id: "tsukaima" },
 			time: Math.floor(Date.now() / 1_000),
 		});
 		const { lifecycle } = await createLifecycle(onebot, directory, { pendingGraceMs: 0 });

@@ -22,8 +22,8 @@ import {
 	type TaskLogEntry,
 	type TaskTimelineEntry,
 	type TestRunResult,
-} from "@elaina/coding";
-import type { PluginAuditApi, PluginLogger, PluginStorage } from "@elaina/sdk";
+} from "@tsukaima/coding";
+import type { PluginAuditApi, PluginLogger, PluginStorage } from "@tsukaima/sdk";
 import { elapsedMs, preview, previewCommand, scopedLogger, type ScopedLogger } from "./log.ts";
 import {
 	constraintsFromPolicy,
@@ -1231,7 +1231,7 @@ export class SelfIterationService {
 			proposalId: proposal.id,
 			taskId: proposal.taskId,
 		});
-		const outcome = await supervised.reload("elaina", {
+		const outcome = await supervised.reload("tsukaima", {
 			proposalId: proposal.id,
 			reason: "self-iteration deployment",
 		});
@@ -1365,7 +1365,7 @@ export class SelfIterationService {
 					: this.#binding.healthCheck(),
 			reload: this.#binding.reload,
 		});
-		const outcome = await supervised.reload("elaina", {
+		const outcome = await supervised.reload("tsukaima", {
 			proposalId: target.proposalId,
 			reason: `rollback of ${target.id}`,
 		});

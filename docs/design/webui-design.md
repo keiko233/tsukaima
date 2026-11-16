@@ -1,4 +1,4 @@
-# Elaina WebUI: Product and Interface Design
+# Tsukaima WebUI: Product and Interface Design
 
 **Status:** implementation-ready design direction, 12 November 2026  
 **Audience:** the next implementation session and reviewers  
@@ -37,16 +37,16 @@ This is a design document, not authorization to perform real external QQ actions
 | --- | --- |
 | Channel / account | The connection and account through which external events and messages are exchanged, such as a particular OneBot account. |
 | Chat object | A stable communication scope, such as a QQ private chat, a QQ group, or a WebUI chat space. Its identity includes the channel/account and external peer or group identity when applicable. |
-| Session | An Elaina conversation context under a chat object, with its own identity, title, lifecycle, message view and AI context. One chat object can have many sessions. |
+| Session | An Tsukaima conversation context under a chat object, with its own identity, title, lifecycle, message view and AI context. One chat object can have many sessions. |
 | Message | A piece of platform, human, AI or system communication, retaining its origin, destination and relevant external identifiers. |
 | User | A known person, bot or other identity. A user is not necessarily a friend; one user may have multiple external identities. |
 | Request | A friend request, group join request or group invitation received from a supported channel, with a separately tracked processing state. |
 
-These labels describe product concepts. Reuse existing repository terminology where appropriate, but preserve the distinctions in data and UI. Creating a new Elaina session must not imply creating a new QQ chat or group. Renaming, archiving or deleting an Elaina session must not imply modifying or deleting external QQ history.
+These labels describe product concepts. Reuse existing repository terminology where appropriate, but preserve the distinctions in data and UI. Creating a new Tsukaima session must not imply creating a new QQ chat or group. Renaming, archiving or deleting an Tsukaima session must not imply modifying or deleting external QQ history.
 
 ### Working assumption: incoming external messages
 
-The user has **not yet confirmed** how an external chat with multiple Elaina sessions should route new messages. For planning, the recommended default is one explicitly designated **receiving session** per external chat object. New external events attach to that session; changing the designation affects subsequent events and does not silently move prior messages. This is an Elaina product rule, not a OneBot capability.
+The user has **not yet confirmed** how an external chat with multiple Tsukaima sessions should route new messages. For planning, the recommended default is one explicitly designated **receiving session** per external chat object. New external events attach to that session; changing the designation affects subsequent events and does not silently move prior messages. This is an Tsukaima product rule, not a OneBot capability.
 
 Treat this as provisional rather than an approved requirement. While implementing, investigate existing durable-conversation behavior and choose a safe, explicit default compatible with the actual system. Preserve external messages and context, avoid duplicating or losing events, and document the final rule and migration. In-flight processing, replay, retries, imports and concurrent changes need defined behavior. Do not silently assume the selected session in the browser is automatically the receiving session. If no safe rule can be inferred without a consequential data decision, isolate that decision and ask a focused question after completing independent work.
 
@@ -56,7 +56,7 @@ Treat this as provisional rather than an approved requirement. While implementin
 
 A single horizontal bar sits above both sidebar and content. At a 1440 px desktop viewport, start with approximately 56 px height; adjust to existing beUI tokens and real content. Use one horizontal separator below it.
 
-- Left: Elaina identity and, where appropriate, a sidebar toggle.
+- Left: Tsukaima identity and, where appropriate, a sidebar toggle.
 - Right: Logs, Plugins, Settings, and an overflow/menu for theme and account actions.
 - Logs open a resizable terminal-style bottom dock with the live ANSI stream, level
   filter, search, follow, and clear actions.
@@ -114,7 +114,7 @@ Use skeleton/loading, no data, unavailable and retry states as appropriate. Iden
 
 List groups with name, ID, account and available member count or connection state. A group selection opens sidebar-local details, preserving the content region. Present group profile, members, associated chats/sessions, relevant events and available management actions using collapsible sections or sidebar-local subviews.
 
-Group actions may include member mute, kick, card changes, group naming, administrator changes and leaving a group, but availability depends on the OneBot implementation, bot role and Elaina permissions. Clearly distinguish unsupported, insufficient permission, offline, pending, success, failure and unknown states. Show a reason for unavailable actions where useful. Actions affecting external users or groups require an appropriately scoped confirmation, a visible result and an audit trail. Do not present actions as working unless backed by a real capability.
+Group actions may include member mute, kick, card changes, group naming, administrator changes and leaving a group, but availability depends on the OneBot implementation, bot role and Tsukaima permissions. Clearly distinguish unsupported, insufficient permission, offline, pending, success, failure and unknown states. Show a reason for unavailable actions where useful. Actions affecting external users or groups require an appropriately scoped confirmation, a visible result and an audit trail. Do not present actions as working unless backed by a real capability.
 
 ## 8. Sidebar: Requests
 
@@ -136,7 +136,7 @@ Use beUI's agent components for AI messages, streaming, activity, tool results a
 
 ### Composer and delivery
 
-Keep a composer at the bottom of the session view. The user must be able to understand the destination before sending: for example, **send to QQ** versus **talk only to Elaina**, if both modes actually exist. The exact available modes must follow the actual backend and permission model; do not claim local-only behavior without isolation. Identify account and target when ambiguity is possible.
+Keep a composer at the bottom of the session view. The user must be able to understand the destination before sending: for example, **send to QQ** versus **talk only to Tsukaima**, if both modes actually exist. The exact available modes must follow the actual backend and permission model; do not claim local-only behavior without isolation. Identify account and target when ambiguity is possible.
 
 Show sending, confirmed success, failure and uncertain/timeout states; preserve drafts through navigation and disconnection where feasible. Avoid automatic retries that could duplicate an external send when the result is uncertain. Provide supported media and reply controls only when backed by capabilities. Explicitly handle read-only or disconnected sessions.
 

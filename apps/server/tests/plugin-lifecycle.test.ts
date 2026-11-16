@@ -22,10 +22,10 @@ const baseManifest = {
 };
 
 async function createLifecycle() {
-	const directory = await mkdtemp(join(tmpdir(), "elaina-plugin-host-lifecycle-"));
+	const directory = await mkdtemp(join(tmpdir(), "tsukaima-plugin-host-lifecycle-"));
 	directories.push(directory);
 	const { lifecycle } = createApp(
-		{ ELAINA_DATA_DIR: directory, ELAINA_PORT: "7420" },
+		{ TSUKAIMA_DATA_DIR: directory, TSUKAIMA_PORT: "7420" },
 		{ plugins: [] },
 	);
 	await lifecycle.start();

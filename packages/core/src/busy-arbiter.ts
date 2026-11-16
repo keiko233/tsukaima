@@ -1,4 +1,4 @@
-import type { ConversationPolicy } from "@elaina/contracts";
+import type { ConversationPolicy } from "@tsukaima/contracts";
 
 /** What to do with a pending activity window while a model run is already working. */
 export type BusyArbitrationDecision = "interrupt" | "steer" | "wait";

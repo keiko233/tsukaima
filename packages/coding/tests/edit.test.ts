@@ -19,13 +19,13 @@ let outsidePath: string;
 const gitSync = (cwd: string, args: readonly string[]): void => {
 	execFileSync(
 		"git",
-		["-c", "user.name=elaina-test", "-c", "user.email=test@elaina.local", ...args],
+		["-c", "user.name=tsukaima-test", "-c", "user.email=test@tsukaima.local", ...args],
 		{ cwd },
 	);
 };
 
 beforeAll(async () => {
-	rootPath = await fs.mkdtemp(join(tmpdir(), "elaina-coding-edit-"));
+	rootPath = await fs.mkdtemp(join(tmpdir(), "tsukaima-coding-edit-"));
 	repoPath = join(rootPath, "repo");
 	await fs.mkdir(join(repoPath, "src"), { recursive: true });
 	await fs.writeFile(join(repoPath, "src", "app.ts"), "export const value = 'old';\n");

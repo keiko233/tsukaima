@@ -30,9 +30,9 @@ The current plugin surface has three gaps:
 | Navigation     | `/plugins` becomes a two-pane route: plugin list on the left, selected plugin on the right. Deep-linkable as `/plugins/$pluginId`.                                                                                         |
 | Trusted UI     | Built-in and first-party plugins may ship a React panel that is bundled into the admin app at build time.                                                                                                                  |
 | Third-party UI | A third-party plugin may ship a React panel, but only when it is built into the admin bundle from the workspace. Opening it shows a confirmation warning first; runtime-installed plugins still fall back to data-only UI. |
-| UI kit         | `@elaina/sdk/ui` exports a curated React kit that uses the host theme tokens. It is the only supported visual layer for plugin panels.                                                                                     |
+| UI kit         | `@tsukaima/sdk/ui` exports a curated React kit that uses the host theme tokens. It is the only supported visual layer for plugin panels.                                                                                     |
 | Status         | `context.ui.setStatus()` publishes a validated, bounded snapshot. The host stores it, includes it in `admin.plugins.list`, and streams `plugin.status` live events.                                                        |
-| i18n           | `@elaina/sdk/i18n` binds a plugin's Paraglide-compiled messages to the host locale. A runtime-dictionary fallback exists for plugins without a build step.                                                                 |
+| i18n           | `@tsukaima/sdk/i18n` binds a plugin's Paraglide-compiled messages to the host locale. A runtime-dictionary fallback exists for plugins without a build step.                                                                 |
 | Config         | The existing JSON-schema config form moves into the shared kit and is reused by the fallback page and by custom panels.                                                                                                    |
 | Isolation      | Each panel is wrapped in an error boundary and loaded lazily. One plugin cannot blank the admin page.                                                                                                                      |
 
@@ -63,10 +63,10 @@ Runtime-installed plugins are not part of the bundle and therefore use the fallb
 ```text
 packages/sdk/
   src/index.ts                  server-safe exports (unchanged)
-  src/ui/index.tsx              @elaina/sdk/ui
+  src/ui/index.tsx              @tsukaima/sdk/ui
   src/ui/components/*.tsx       shared primitives
   src/ui/plugin/*.tsx           PluginPage, PluginPanel, PluginErrorBoundary
-  src/i18n/index.ts             @elaina/sdk/i18n
+  src/i18n/index.ts             @tsukaima/sdk/i18n
 
 plugins/onebot-napcat/
   src/ui.tsx                    trusted panel entry
@@ -87,7 +87,7 @@ apps/server/src/services/
   plugin-status.ts              in-memory status store
 ```
 
-`@elaina/sdk/ui` is a subpath export so server code never imports React:
+`@tsukaima/sdk/ui` is a subpath export so server code never imports React:
 
 ```json
 {
@@ -164,7 +164,7 @@ Trusted plugins add a browser entry that is separate from their server entry:
 
 ```tsx
 // plugins/onebot-napcat/src/ui.tsx
-import { definePluginUi } from "@elaina/sdk/ui";
+import { definePluginUi } from "@tsukaima/sdk/ui";
 import { i18n } from "./i18n.ts";
 import { ConnectionPanel } from "./panels/connection.tsx";
 import { EventsPanel } from "./panels/events.tsx";
@@ -221,7 +221,7 @@ export interface PluginPanelContext {
 ```
 
 ```tsx
-import { usePluginPanel, Button, StatusBadge, StatGrid } from "@elaina/sdk/ui";
+import { usePluginPanel, Button, StatusBadge, StatGrid } from "@tsukaima/sdk/ui";
 
 export function ConnectionPanel() {
   const { status, rpc, i18n, notify } = usePluginPanel();
@@ -304,7 +304,7 @@ Every field must be labelled and explained. The schema carries the copy, not the
 - `title`/`description` are the English fallback shown by the host's generic plugin page.
 - `titleKey`/`descriptionKey` are keys in the plugin's own Paraglide catalog; `translate`
   resolves them, and a key that is missing from the catalog falls back to the literal.
-- `enumLabels` maps each `enum` value to a message key, so a mode reads "Forward (Elaina
+- `enumLabels` maps each `enum` value to a message key, so a mode reads "Forward (Tsukaima
   connects out)" instead of the raw value.
 - `default` is used as the enum placeholder and as the initial switch state, so an unset
   field never renders as an empty "Select".
@@ -321,8 +321,8 @@ Workspace plugins declare their browser entry in `package.json`:
 
 ```json
 {
-  "name": "@elaina-plugin/onebot-napcat",
-  "elaina": {
+  "name": "@tsukaima-plugin/onebot-napcat",
+  "tsukaima": {
     "id": "onebot-napcat",
     "ui": "./src/ui.tsx"
   }
@@ -331,7 +331,7 @@ Workspace plugins declare their browser entry in `package.json`:
 
 The WebUI resolves entries with `import.meta.glob("../../../../plugins/*/src/ui.tsx")` and a lazy
 import per plugin id. Missing entries are a normal state, not an error: the generic fallback page
-is shown. The `elaina` field documents intent for tooling and future runtime installation; the
+is shown. The `tsukaima` field documents intent for tooling and future runtime installation; the
 glob is what actually bundles code into the admin app today.
 
 Implementation notes:
@@ -358,7 +358,7 @@ export class PluginStatusStore {
 ```
 
 `PluginHost` creates a `LocalUiBridge` per plugin with an `onStatus` sink that writes to the
-store. `ElainaLifecycle` exposes `pluginStatuses()` and `subscribePluginStatus()` for the event
+store. `TsukaimaLifecycle` exposes `pluginStatuses()` and `subscribePluginStatus()` for the event
 stream.
 
 `admin.plugins.list` rows gain:
@@ -501,7 +501,7 @@ that compiled runtime to the host locale:
 
 ```ts
 // plugins/onebot-napcat/src/i18n.ts
-import { bindParaglide } from "@elaina/sdk/i18n";
+import { bindParaglide } from "@tsukaima/sdk/i18n";
 import { m } from "./paraglide/messages.js";
 import * as runtime from "./paraglide/runtime.js";
 
@@ -627,7 +627,7 @@ Rules:
 - Motion is optional and respects `prefers-reduced-motion`; the kit does not require `motion`.
 
 Phase 1 implements the kit as a small, token-based layer. Phase 2 may extract the app's beUI
-primitives into a shared `@elaina/ui` package and make the kit a re-export. Until then, the kit
+primitives into a shared `@tsukaima/ui` package and make the kit a re-export. Until then, the kit
 must stay visually aligned by using the same token recipes and by reviewing both surfaces
 together.
 
@@ -653,12 +653,12 @@ together.
    fields, RPC `pluginId`, and the in-memory store. Add `ui.panel` to built-in manifests.
 2. **Two-pane plugin page.** Add the layout, sidebar, detail route, search, fallback page, and
    config form reuse. This ships a usable page before any custom panel exists.
-3. **SDK UI kit.** Add `@elaina/sdk/ui`, the Vite registry plugin, Tailwind sources, React
+3. **SDK UI kit.** Add `@tsukaima/sdk/ui`, the Vite registry plugin, Tailwind sources, React
    dedupe, and the panel context/error boundary.
 4. **First panels.** Add `onebot-napcat/src/ui.tsx` (connection status, metrics, reconnect
    action) and `openai-compatible/src/ui.tsx` (connection settings, model discovery, multi-model
    enablement, capability metadata, and reasoning defaults).
-5. **Plugin i18n.** Add `@elaina/sdk/i18n`, the Paraglide binding, per-plugin inlang projects,
+5. **Plugin i18n.** Add `@tsukaima/sdk/i18n`, the Paraglide binding, per-plugin inlang projects,
    and localized panel chrome for both built-ins.
 6. **Third-party declarative UI.** Extend the manifest UI schema with layout primitives
    (`status`, `stats`, `table`, `form`, `actions`) rendered by the host. Keep the iframe tier
@@ -673,7 +673,7 @@ does not require plugin i18n.
    confirmation modal for `kind: "third-party"`. Runtime-installed panels remain out of scope
    until an iframe sandbox and postMessage bridge exist.
 2. **UI kit source.** The existing beUI components were extracted into `packages/ui`
-   (`@elaina/ui`); `@elaina/sdk/ui` composes that kit for plugin panels.
+   (`@tsukaima/ui`); `@tsukaima/sdk/ui` composes that kit for plugin panels.
 3. **i18n authoring.** Hybrid: `bindParaglide` for compiled plugin projects (both built-ins use
    it) and `createDictionaryI18n` for plugins without a build step.
 4. **Enable/disable.** `admin.plugins.setEnabled` persists the choice in the domain `meta` table
@@ -700,5 +700,5 @@ React tier and are unaffected.
   caps.
 - `/plugins` and `/plugins/$pluginId` with a plugin list, search, status dots, detail header,
   status card, config form, manifest facts, panel tabs, and error boundaries.
-- `@elaina/sdk/ui` and `@elaina/sdk/i18n`, plus panels for `onebot-napcat` and
+- `@tsukaima/sdk/ui` and `@tsukaima/sdk/i18n`, plus panels for `onebot-napcat` and
   `openai-compatible`.

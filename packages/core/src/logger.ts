@@ -1,5 +1,5 @@
 /**
- * Structured logging contract for `@elaina/core`.
+ * Structured logging contract for `@tsukaima/core`.
  *
  * The package never owns a logging backend: callers inject the server/app logger
  * (which already implements this shape) and tests can inject a collector. When no

@@ -3,18 +3,18 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { PiDurableConversationHost, createOpenAICompatibleModelPort } from "@elaina/core";
-import { auditLog } from "@elaina/db";
-import { BACKGROUND_CONTEXT, openDurableStorage } from "@elaina/durable";
+import { PiDurableConversationHost, createOpenAICompatibleModelPort } from "@tsukaima/core";
+import { auditLog } from "@tsukaima/db";
+import { BACKGROUND_CONTEXT, openDurableStorage } from "@tsukaima/durable";
 import {
 	createPluginToolsExtension,
 	pluginManifestSchema,
 	providerSafeToolName,
-	type ElainaPlugin,
-} from "@elaina/sdk";
-import type { MessageEnvelope } from "@elaina/contracts";
+	type TsukaimaPlugin,
+} from "@tsukaima/sdk";
+import type { MessageEnvelope } from "@tsukaima/contracts";
 import { loadConfig } from "../src/config.ts";
-import { ElainaLifecycle } from "../src/lifecycle.ts";
+import { TsukaimaLifecycle } from "../src/lifecycle.ts";
 import { builtinPlugins } from "../src/plugins/builtin.ts";
 
 const directories: string[] = [];
@@ -112,7 +112,7 @@ const echoTool = {
 	requiredPermissions: ["conversation.read"] as const,
 };
 
-function fakeToolsPlugin(seen: Record<string, unknown>[]): ElainaPlugin {
+function fakeToolsPlugin(seen: Record<string, unknown>[]): TsukaimaPlugin {
 	return {
 		manifest: pluginManifestSchema.parse({
 			apiVersion: "1",
@@ -145,14 +145,14 @@ async function waitFor<T>(read: () => T | undefined, timeoutMs = 10_000): Promis
 
 describe("plugin tools", () => {
 	test("offers plugin tools to the model and routes the call through the plugin host", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-plugin-tools-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-plugin-tools-"));
 		directories.push(directory);
 		const { model, requests } = createCapturingModel();
 		const seen: Record<string, unknown>[] = [];
-		const lifecycle = new ElainaLifecycle(
+		const lifecycle = new TsukaimaLifecycle(
 			loadConfig({
-				ELAINA_DATA_DIR: directory,
-				ELAINA_PORT: "7420",
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_PORT: "7420",
 			}),
 			{
 				env: {},
@@ -201,7 +201,7 @@ describe("plugin tools", () => {
 	});
 
 	test("backfills the tools extension for a conversation created before installation", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-plugin-tools-backfill-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-plugin-tools-backfill-"));
 		directories.push(directory);
 		const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 		const { model, requests } = createCapturingModel();

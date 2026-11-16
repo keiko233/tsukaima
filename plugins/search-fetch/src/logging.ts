@@ -1,4 +1,4 @@
-import type { PluginLogger } from "@elaina/sdk";
+import type { PluginLogger } from "@tsukaima/sdk";
 
 /** Cap for user-supplied text previews so a single log field cannot flood the sink. */
 export const LOG_PREVIEW_CHARS = 120;

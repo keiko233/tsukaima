@@ -7,7 +7,7 @@ import type {
 	PluginMediaApi,
 	PluginMediaRecord,
 	PluginMediaSource,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import {
 	decodeBase64,
 	encodeBase64,
@@ -50,7 +50,7 @@ export interface StickerImportReport {
 export interface StickerExportResult {
 	readonly files: readonly ImportFile[];
 	readonly manifest: {
-		readonly format: "elaina-sticker-pack";
+		readonly format: "tsukaima-sticker-pack";
 		readonly packs: readonly {
 			readonly id: string;
 			readonly items: readonly {
@@ -577,7 +577,7 @@ export class StickerImportService {
 		});
 		return {
 			files,
-			manifest: { format: "elaina-sticker-pack", packs: exportedPacks, version: 1 },
+			manifest: { format: "tsukaima-sticker-pack", packs: exportedPacks, version: 1 },
 			warnings,
 		};
 	}

@@ -1,7 +1,7 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
 	"plugin_name": "Self-iteration",
-	"plugin_description": "Analyze, patch, test, review, deploy, and roll back Elaina safely.",
+	"plugin_description": "Analyze, patch, test, review, deploy, and roll back Tsukaima safely.",
 	"panel_self_iteration": "Self-iteration runtime",
 	"title": "Self-iteration runtime",
 	"description": "Chat creates tasks and proposes patches; the WebUI reviews approvals, deploys, and rolls back with health gates.",
@@ -18,7 +18,7 @@
 	"task_mode": "Mode",
 	"task_status": "Status",
 	"task_id_placeholder": "Task id",
-	"goal_placeholder": "What should Elaina change?",
+	"goal_placeholder": "What should Tsukaima change?",
 	"task_create": "Create task",
 	"task_created": "Task created",
 	"task_detail": "Task detail",

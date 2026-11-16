@@ -1,7 +1,7 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
 	"plugin_name": "自我迭代",
-	"plugin_description": "安全地分析、修改、测试、审查、部署并回滚 Elaina 自身。",
+	"plugin_description": "安全地分析、修改、测试、审查、部署并回滚 Tsukaima 自身。",
 	"panel_self_iteration": "自我迭代运行时",
 	"title": "自我迭代运行时",
 	"description": "聊天创建任务并提交补丁；WebUI 负责审批、部署以及带健康检查的回滚。",
@@ -18,7 +18,7 @@
 	"task_mode": "模式",
 	"task_status": "状态",
 	"task_id_placeholder": "任务 id",
-	"goal_placeholder": "希望 Elaina 修改什么？",
+	"goal_placeholder": "希望 Tsukaima 修改什么？",
 	"task_create": "创建任务",
 	"task_created": "任务已创建",
 	"task_detail": "任务详情",

@@ -1,4 +1,4 @@
-import type { ElainaPlugin, PluginContext, ToolResult } from "@elaina/sdk";
+import type { TsukaimaPlugin, PluginContext, ToolResult } from "@tsukaima/sdk";
 import {
 	ONEBOT_ACTION_METHODS,
 	ONEBOT_ACTION_PERMISSIONS,
@@ -309,7 +309,7 @@ function registerRpcs(context: PluginContext, runtime: OneBotRuntime): void {
 	}
 }
 
-export const oneBotNapCatPlugin: ElainaPlugin = {
+export const oneBotNapCatPlugin: TsukaimaPlugin = {
 	manifest: oneBotNapCatManifest,
 	async setup(context) {
 		const runtime: OneBotRuntime = { settings: {} };

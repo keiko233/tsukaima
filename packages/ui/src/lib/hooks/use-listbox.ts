@@ -1,8 +1,8 @@
 "use client";
 
 import { type KeyboardEvent, type RefObject, useEffect, useMemo, useRef } from "react";
-import { useOnOpen } from "@elaina/ui/lib/hooks/use-on-open";
-import { useRowCursor } from "@elaina/ui/lib/hooks/use-row-cursor";
+import { useOnOpen } from "@tsukaima/ui/lib/hooks/use-on-open";
+import { useRowCursor } from "@tsukaima/ui/lib/hooks/use-row-cursor";
 
 export interface ListboxRow {
 	id: string;

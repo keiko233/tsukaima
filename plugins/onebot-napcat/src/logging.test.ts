@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { PluginLogger } from "@elaina/sdk";
-import { createPluginContext } from "@elaina/sdk";
+import type { PluginLogger } from "@tsukaima/sdk";
+import { createPluginContext } from "@tsukaima/sdk";
 import { OneBotActionFacade } from "./actions.ts";
 import type { OneBotChannelAdapter } from "./adapter.ts";
 import { ONEBOT_TRANSPORT_FACTORY_BINDING, oneBotNapCatPlugin } from "./index.ts";

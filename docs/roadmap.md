@@ -57,7 +57,7 @@
 - [x] 2. Add LLM compression hook through the configured model.
 - [x] 3. Add dry-run, import, verify, rollback.
 - [ ] 4. Import selected DSH sessions, personas, memory, stickers, and settings.
-- [ ] 5. Cut NapCat connection from DSH to Elaina.
+- [ ] 5. Cut NapCat connection from DSH to Tsukaima.
 
 ## Phase 7 — Stabilization
 

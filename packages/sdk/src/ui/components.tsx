@@ -1,8 +1,8 @@
 "use client";
 
-import type { PluginStatusLevel, PluginStatusSnapshot } from "@elaina/contracts";
-import { Loader } from "@elaina/ui/components/motion/loader";
-import { cn } from "@elaina/ui/lib/utils";
+import type { PluginStatusLevel, PluginStatusSnapshot } from "@tsukaima/contracts";
+import { Loader } from "@tsukaima/ui/components/motion/loader";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { AlertTriangle, CheckCircle2, CircleHelp, Info, XCircle } from "lucide-react";
 import type { ComponentPropsWithRef, ReactNode } from "react";
 

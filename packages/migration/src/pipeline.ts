@@ -6,7 +6,7 @@ import {
 	chatObjects,
 	conversationMembers,
 	conversations,
-	type ElainaDatabase,
+	type TsukaimaDatabase,
 	identities,
 	media,
 	memories,
@@ -21,7 +21,7 @@ import {
 	requests,
 	userAliases,
 	users,
-} from "@elaina/db";
+} from "@tsukaima/db";
 import { DSH_SOURCE, type SnapshotSource } from "./dsh-inspect.ts";
 import { FakeCompressor, type Compressor, type CompressionResult } from "./compressor.ts";
 import {
@@ -477,7 +477,7 @@ async function collectSourceSecretValues(source: SnapshotSource): Promise<string
 	return [...new Set(values.filter((value) => value.trim() !== ""))];
 }
 
-function serializeDatabase(database: ElainaDatabase): string {
+function serializeDatabase(database: TsukaimaDatabase): string {
 	const client = database.$client;
 	const tables = client
 		.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
@@ -494,7 +494,7 @@ function serializeDatabase(database: ElainaDatabase): string {
 	return chunks.join("\n");
 }
 
-function referenceIssues(database: ElainaDatabase): string[] {
+function referenceIssues(database: TsukaimaDatabase): string[] {
 	const client = database.$client;
 	const issues: string[] = [];
 	const checks: readonly [string, string][] = [
@@ -533,7 +533,7 @@ function referenceIssues(database: ElainaDatabase): string[] {
 }
 
 export function renderConversationReadOnly(
-	database: ElainaDatabase,
+	database: TsukaimaDatabase,
 	conversationId: string,
 ): RenderedConversation {
 	const client = database.$client;
@@ -562,7 +562,7 @@ export function renderConversationReadOnly(
 	};
 }
 
-function pluginConfigIssues(database: ElainaDatabase): string[] {
+function pluginConfigIssues(database: TsukaimaDatabase): string[] {
 	const client = database.$client;
 	const issues: string[] = [];
 	const tables = new Map(
@@ -625,7 +625,7 @@ export function createPipeline(target: string, options: PipelineOptions = {}): M
 	const reportsDir = options.reportsDir ?? (backupRoot === "" ? "" : join(backupRoot, "reports"));
 
 	const withDatabase = async <T>(
-		callback: (database: ElainaDatabase) => Promise<T>,
+		callback: (database: TsukaimaDatabase) => Promise<T>,
 	): Promise<T> => {
 		const database = await openDomainDatabase(databasePath);
 		try {

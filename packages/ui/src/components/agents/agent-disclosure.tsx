@@ -2,8 +2,8 @@
 
 import { motion, type HTMLMotionProps, useReducedMotion } from "motion/react";
 import type { CSSProperties } from "react";
-import { EASE_OUT } from "@elaina/ui/lib/ease";
-import { cn } from "@elaina/ui/lib/utils";
+import { EASE_OUT } from "@tsukaima/ui/lib/ease";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export interface AgentDisclosureProps extends Omit<HTMLMotionProps<"div">, "animate" | "initial"> {
 	open: boolean;

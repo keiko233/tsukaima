@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { memories, openDomainDatabase } from "@elaina/db";
+import { memories, openDomainDatabase } from "@tsukaima/db";
 import { createPipeline, inspectDshSnapshot, normalizeSnapshot } from "./index.ts";
 
 const testRoot = join(import.meta.dir, "../../../.test-data/migration-kit");
@@ -35,8 +35,8 @@ beforeEach(async () => {
 		join(snapshotRoot, "personas/personas.json"),
 		JSON.stringify([
 			{
-				id: "elaina",
-				name: "Elaina",
+				id: "tsukaima",
+				name: "Tsukaima",
 				summary: "Primary persona",
 				prompt: "Be friendly",
 				behavior: { reply: "concise" },

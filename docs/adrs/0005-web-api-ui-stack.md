@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Elaina needs a strongly typed server API, a modern IM-style admin UI, and a small operational footprint. Bun is already the runtime. The project should avoid manually maintaining client/server types and should reuse mature UI primitives where possible.
+Tsukaima needs a strongly typed server API, a modern IM-style admin UI, and a small operational footprint. Bun is already the runtime. The project should avoid manually maintaining client/server types and should reuse mature UI primitives where possible.
 
 ## Decision
 

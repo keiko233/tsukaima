@@ -42,8 +42,8 @@ import {
 	messagePartsText,
 	type MessageEnvelope,
 	type TriggerClassification,
-} from "@elaina/contracts";
-import type { SqliteStorage } from "@elaina/durable";
+} from "@tsukaima/contracts";
+import type { SqliteStorage } from "@tsukaima/durable";
 import {
 	createContextExtension,
 	MEMORY_SECTION_KEY,
@@ -181,7 +181,7 @@ const activityWindowDoc = defineDocFamily<ActivityWindowDocument, ActivityWindow
 );
 
 const messageReceiptDefinition = {
-	kind: "elaina.messageReceipt",
+	kind: "tsukaima.messageReceipt",
 	version: 1,
 	family: true,
 	scope: "conversation",

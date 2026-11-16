@@ -3,13 +3,13 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
-import type { MessageEnvelope } from "@elaina/contracts";
-import { conversations, messages } from "@elaina/db";
+import type { MessageEnvelope } from "@tsukaima/contracts";
+import { conversations, messages } from "@tsukaima/db";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	type OneBotTransport,
 	type OneBotTransportFactory,
-} from "@elaina-plugin/onebot-napcat";
+} from "@tsukaima-plugin/onebot-napcat";
 import { createApp } from "../src/app.ts";
 import { createLocalChat, sendMessage } from "../src/services/webui.ts";
 
@@ -70,14 +70,14 @@ const createOneBotTransportSpy = () => {
 };
 
 async function createLifecycle(options: { onebot?: OneBotTransportFactory } = {}) {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-reply-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-reply-"));
 	directories.push(directory);
 	const { lifecycle } = createApp(
 		{
-			ELAINA_DATA_DIR: directory,
-			ELAINA_PORT: "7420",
-			ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
-			...(options.onebot === undefined ? {} : { ELAINA_ONEBOT_WS_URL: "ws://napcat:3001" }),
+			TSUKAIMA_DATA_DIR: directory,
+			TSUKAIMA_PORT: "7420",
+			TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			...(options.onebot === undefined ? {} : { TSUKAIMA_ONEBOT_WS_URL: "ws://napcat:3001" }),
 		},
 		options.onebot === undefined
 			? {}
@@ -121,7 +121,7 @@ describe("reply dispatcher", () => {
 						.select()
 						.from(messages)
 						.where(
-							and(eq(messages.direction, "outbound"), eq(messages.senderExternalId, "elaina")),
+							and(eq(messages.direction, "outbound"), eq(messages.senderExternalId, "tsukaima")),
 						);
 					return rows.find((row) => row.deliveryStatus === "sent");
 				});
@@ -167,7 +167,7 @@ describe("reply dispatcher", () => {
 				const replies = await database
 					.select()
 					.from(messages)
-					.where(eq(messages.senderExternalId, "elaina"));
+					.where(eq(messages.senderExternalId, "tsukaima"));
 				expect(replies).toHaveLength(1);
 			} finally {
 				await lifecycle.stop();
@@ -188,8 +188,8 @@ describe("reply dispatcher", () => {
 			});
 			await sendMessage(lifecycle, {
 				sessionId: chat.sessionId,
-				target: "elaina",
-				text: "hello elaina",
+				target: "tsukaima",
+				text: "hello tsukaima",
 			});
 			const reply = await waitFor(async () => {
 				const rows = await database
@@ -198,7 +198,7 @@ describe("reply dispatcher", () => {
 					.where(
 						and(
 							eq(messages.conversationId, chat.sessionId),
-							eq(messages.senderExternalId, "elaina"),
+							eq(messages.senderExternalId, "tsukaima"),
 						),
 					);
 				return rows[0];

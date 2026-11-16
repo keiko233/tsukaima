@@ -4,10 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { Puzzle, Search } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
-import { Input } from "@elaina/ui/components/motion/input";
-import { Skeleton, StatusDot } from "@elaina/sdk/ui";
+import { Input } from "@tsukaima/ui/components/motion/input";
+import { Skeleton, StatusDot } from "@tsukaima/sdk/ui";
 import { orpc, type PluginRow } from "@/lib/api";
-import { cn } from "@elaina/ui/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { useMediaQuery } from "@/routes/_modules/hooks/use-media-query";
 import { m } from "@/paraglide/messages";
 

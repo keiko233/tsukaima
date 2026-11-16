@@ -5,9 +5,9 @@ import * as schema from "./schema.ts";
 
 export * from "./schema.ts";
 
-export type ElainaDatabase = ReturnType<typeof drizzle<typeof schema>>;
+export type TsukaimaDatabase = ReturnType<typeof drizzle<typeof schema>>;
 
-export async function openDomainDatabase(path: string): Promise<ElainaDatabase> {
+export async function openDomainDatabase(path: string): Promise<TsukaimaDatabase> {
 	const database = new Database(path, { create: true });
 	database.run("PRAGMA journal_mode = WAL");
 	database.run("PRAGMA synchronous = NORMAL");
@@ -16,6 +16,6 @@ export async function openDomainDatabase(path: string): Promise<ElainaDatabase> 
 	return drizzle(database, { schema });
 }
 
-export function migrateDomainDatabase(database: ElainaDatabase): void {
+export function migrateDomainDatabase(database: TsukaimaDatabase): void {
 	migrate(database, { migrationsFolder: new URL("../drizzle", import.meta.url).pathname });
 }

@@ -1,4 +1,4 @@
-import { adminEventSchema, type AdminEvent } from "@elaina/contracts";
+import { adminEventSchema, type AdminEvent } from "@tsukaima/contracts";
 
 type AdminEventSubscriber = (event: AdminEvent) => void;
 

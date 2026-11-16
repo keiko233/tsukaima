@@ -3,7 +3,7 @@ import type {
 	ChannelRequest,
 	MessageEnvelope,
 	MessagePart,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 import type {
 	ChannelAdapter,
 	ChannelCapability,
@@ -15,7 +15,7 @@ import type {
 	PluginLogger,
 	SendOptions,
 	SendResult,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import { OneBotChannel } from "./protocol/channel.ts";
 import type {
 	OneBotConfig,

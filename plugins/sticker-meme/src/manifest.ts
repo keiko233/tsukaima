@@ -1,4 +1,4 @@
-import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk/manifest";
+import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk/manifest";
 
 export const STICKER_MEME_PLUGIN_ID = "sticker-meme";
 export const STICKER_MEME_RPC_PREFIX = `${STICKER_MEME_PLUGIN_ID}.`;
@@ -8,12 +8,12 @@ export const STICKER_MEME_DIRECTIVE_PATTERN =
 export const stickerMemeManifest: PluginManifest = pluginManifestSchema.parse({
 	apiVersion: "1",
 	configEnv: {
-		semanticApiKey: "ELAINA_SEMANTIC_API_KEY",
-		semanticBaseUrl: "ELAINA_SEMANTIC_BASE_URL",
-		semanticModel: "ELAINA_SEMANTIC_MODEL",
-		semanticProviderId: "ELAINA_SEMANTIC_PROVIDER_ID",
-		telegramApiBaseUrl: "ELAINA_TELEGRAM_API_BASE_URL",
-		telegramBotToken: "ELAINA_TELEGRAM_BOT_TOKEN",
+		semanticApiKey: "TSUKAIMA_SEMANTIC_API_KEY",
+		semanticBaseUrl: "TSUKAIMA_SEMANTIC_BASE_URL",
+		semanticModel: "TSUKAIMA_SEMANTIC_MODEL",
+		semanticProviderId: "TSUKAIMA_SEMANTIC_PROVIDER_ID",
+		telegramApiBaseUrl: "TSUKAIMA_TELEGRAM_API_BASE_URL",
+		telegramBotToken: "TSUKAIMA_TELEGRAM_BOT_TOKEN",
 	},
 	configSchema: {
 		properties: {

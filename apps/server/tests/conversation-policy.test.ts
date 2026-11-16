@@ -3,8 +3,8 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { MessageEnvelope } from "@elaina/contracts";
-import { CONTEXT_EXTENSION_NAME, createContextExtension } from "@elaina/core";
+import type { MessageEnvelope } from "@tsukaima/contracts";
+import { CONTEXT_EXTENSION_NAME, createContextExtension } from "@tsukaima/core";
 import {
 	auditLog,
 	chatObjects,
@@ -15,15 +15,15 @@ import {
 	personaBindings,
 	personas,
 	policies,
-	type ElainaDatabase,
-} from "@elaina/db";
+	type TsukaimaDatabase,
+} from "@tsukaima/db";
 import { createApp } from "../src/app.ts";
 import { createLogger } from "../src/logging.ts";
 import { ConversationPolicyService } from "../src/services/conversation-policy.ts";
 import { DrizzleContextProvider } from "../src/services/context-provider.ts";
 
 const directories: string[] = [];
-const logger = createLogger({ level: "error", target: "elaina::test" });
+const logger = createLogger({ level: "error", target: "tsukaima::test" });
 
 afterEach(async () => {
 	await Promise.all(
@@ -31,15 +31,15 @@ afterEach(async () => {
 	);
 });
 
-async function openFixture(): Promise<ElainaDatabase> {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-policy-"));
+async function openFixture(): Promise<TsukaimaDatabase> {
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-policy-"));
 	directories.push(directory);
 	const database = await openDomainDatabase(join(directory, "domain.sqlite"));
 	migrateDomainDatabase(database);
 	return database;
 }
 
-async function seedSession(database: ElainaDatabase): Promise<void> {
+async function seedSession(database: TsukaimaDatabase): Promise<void> {
 	const now = new Date().toISOString();
 	await database.insert(chatObjects).values({
 		createdAt: now,
@@ -61,7 +61,7 @@ async function seedSession(database: ElainaDatabase): Promise<void> {
 	});
 }
 
-function service(database: ElainaDatabase): ConversationPolicyService {
+function service(database: TsukaimaDatabase): ConversationPolicyService {
 	return new ConversationPolicyService({
 		database: () => database,
 		host: () => undefined,
@@ -128,12 +128,12 @@ describe("conversation policy service", () => {
 
 			const second = await policyService.update({
 				conversationId: "session-1",
-				policy: { trigger: { selfAliases: ["Elaina"] } },
+				policy: { trigger: { selfAliases: ["Tsukaima"] } },
 				scope: "conversation",
 			});
 			expect(second.policy.version).toBe(2);
 			expect(second.policy.pacing.burstSettleMs).toBe(123);
-			expect(second.policy.trigger.selfAliases).toEqual(["Elaina"]);
+			expect(second.policy.trigger.selfAliases).toEqual(["Tsukaima"]);
 
 			const history = await policyService.history({
 				conversationId: "session-1",
@@ -336,12 +336,12 @@ describe("conversation policy service", () => {
 			await seedSession(database);
 			const policyService = service(database);
 			await database.insert(personas).values({
-				aliasesJson: JSON.stringify(["Elaina"]),
+				aliasesJson: JSON.stringify(["Tsukaima"]),
 				behaviorJson: "{}",
 				id: "persona-1",
 				isActive: 1,
-				name: "Elaina",
-				promptJson: JSON.stringify("You are Elaina."),
+				name: "Tsukaima",
+				promptJson: JSON.stringify("You are Tsukaima."),
 				summary: "Traveler",
 				version: 1,
 			});
@@ -361,9 +361,9 @@ describe("conversation policy service", () => {
 			);
 			expect(extension.name).toBe(CONTEXT_EXTENSION_NAME);
 			expect(extension.sections?.map((section) => section.key)).toEqual([
-				"elaina-persona",
-				"elaina-policy",
-				"elaina-memory",
+				"tsukaima-persona",
+				"tsukaima-policy",
+				"tsukaima-memory",
 			]);
 			const provider = new DrizzleContextProvider({
 				database: () => database,
@@ -372,8 +372,8 @@ describe("conversation policy service", () => {
 			});
 			const text = await provider.renderPolicy("41");
 			if (text === undefined) throw new Error("Expected policy text");
-			expect(text).toContain("Speak as: Elaina");
-			expect(text).toContain("ELAINA_LURK");
+			expect(text).toContain("Speak as: Tsukaima");
+			expect(text).toContain("TSUKAIMA_LURK");
 			expect(text).not.toContain("persona_bindings");
 			expect(text).not.toContain("onebot");
 			expect(text).not.toContain("SQL");
@@ -384,9 +384,9 @@ describe("conversation policy service", () => {
 });
 
 async function createLifecycle() {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-policy-e2e-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-policy-e2e-"));
 	directories.push(directory);
-	const { lifecycle } = createApp({ ELAINA_DATA_DIR: directory, ELAINA_PORT: "7420" });
+	const { lifecycle } = createApp({ TSUKAIMA_DATA_DIR: directory, TSUKAIMA_PORT: "7420" });
 	await lifecycle.start();
 	return lifecycle;
 }
@@ -432,7 +432,7 @@ describe("conversation policy ingestion", () => {
 			if (database === undefined) throw new Error("database missing");
 			const outboundCount = async () =>
 				(await database.select().from(messages)).filter(
-					(row) => row.direction === "outbound" && row.senderExternalId === "elaina",
+					(row) => row.direction === "outbound" && row.senderExternalId === "tsukaima",
 				).length;
 			await lifecycle.processEnvelope(privateEnvelope("cooldown-1", "first"));
 			const startedAt = Date.now();
@@ -473,7 +473,7 @@ describe("conversation policy ingestion", () => {
 			expect(rows).toHaveLength(1);
 			expect(rows[0]?.triggerClassification).toBe("ambient");
 
-			const direct = groupEnvelope("direct-1", "Elaina hello");
+			const direct = groupEnvelope("direct-1", "Tsukaima hello");
 			direct.raw = { self_id: "bot-1" };
 			direct.mentions = [{ id: "bot-1" }];
 			await lifecycle.processEnvelope(direct);

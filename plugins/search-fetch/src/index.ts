@@ -1,4 +1,4 @@
-import type { ElainaPlugin, PluginContext, PluginLogger } from "@elaina/sdk";
+import type { TsukaimaPlugin, PluginContext, PluginLogger } from "@tsukaima/sdk";
 import { SnapshotCache } from "./cache.ts";
 import { recordValue, type SearchProvider } from "./domain.ts";
 import { SearchEngine } from "./engine.ts";
@@ -219,7 +219,7 @@ function pluginLoggers(logger: PluginLogger): PluginLoggers {
 	};
 }
 
-export const searchFetchPlugin: ElainaPlugin = {
+export const searchFetchPlugin: TsukaimaPlugin = {
 	manifest: searchFetchManifest,
 	async setup(context) {
 		const config = recordValue((await context.settings?.get()) ?? {});

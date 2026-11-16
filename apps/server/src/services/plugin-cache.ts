@@ -1,10 +1,10 @@
-import type { KeyvCache } from "@elaina/cache";
+import type { KeyvCache } from "@tsukaima/cache";
 import {
 	hasPermission,
 	type PluginCacheApi,
 	type PluginCacheSetOptions,
 	type PluginPermission,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 
 const CACHE_PERMISSIONS = ["cache.read", "cache.write", "cache.publish"] as const;
 

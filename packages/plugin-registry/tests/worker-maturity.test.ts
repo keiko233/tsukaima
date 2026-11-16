@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { pluginManifestSchema, type AuditEntry, type PluginStorage } from "@elaina/sdk";
+import { pluginManifestSchema, type AuditEntry, type PluginStorage } from "@tsukaima/sdk";
 import { BunPluginWorker, PLUGIN_WORKER_PROTOCOL_VERSION } from "../src/index.ts";
 
 const maturityManifest = pluginManifestSchema.parse({

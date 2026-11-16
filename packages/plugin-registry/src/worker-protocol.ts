@@ -1,4 +1,4 @@
-import type { PluginHookName, PluginManifest, PluginPermission } from "@elaina/sdk";
+import type { PluginHookName, PluginManifest, PluginPermission } from "@tsukaima/sdk";
 
 export const PLUGIN_WORKER_PROTOCOL_VERSION = "1";
 export const PLUGIN_WORKER_HOST_VERSION = "1";

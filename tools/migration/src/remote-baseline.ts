@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type DshBaseline, extractDshBaseline } from "@elaina/migration";
+import { type DshBaseline, extractDshBaseline } from "@tsukaima/migration";
 
 export interface RemoteDshBaselineTarget {
 	readonly host: string;
@@ -451,7 +451,7 @@ function schemaOnlyDatabase(databasePath) {
 	tempCounter += 1;
 	const tempPath = path.join(
 		os.tmpdir(),
-		'elaina-audit-' + process.pid + '-' + tempCounter + '.db',
+		'tsukaima-audit-' + process.pid + '-' + tempCounter + '.db',
 	);
 	let target = null;
 	try {
@@ -990,9 +990,9 @@ trap 'rm -rf "$tmp"' EXIT
 
 image="$(docker inspect --format '{{.Config.Image}}' "$container")"
 
-cat > "$tmp/inspect.cjs" <<'__ELAINA_DSH_INSPECT__'
+cat > "$tmp/inspect.cjs" <<'__TSUKAIMA_DSH_INSPECT__'
 ${REMOTE_INSPECT_SCRIPT}
-__ELAINA_DSH_INSPECT__
+__TSUKAIMA_DSH_INSPECT__
 
 docker exec -i -e DSH_IMAGE="$image" "$container" node --experimental-sqlite --no-warnings - < "$tmp/inspect.cjs" | tar -C "$tmp" -xf -
 rm -f "$tmp/inspect.cjs"
@@ -1027,7 +1027,7 @@ export async function runRemoteDshBaseline(target: RemoteDshBaselineTarget): Pro
 	if (exitCode !== 0) {
 		throw new Error(`Remote DSH audit failed: ${errorText.trim() || `exit ${exitCode}`}`);
 	}
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-dsh-baseline-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-dsh-baseline-"));
 	const snapshot = join(directory, "snapshot");
 	const archivePath = join(directory, "audit.tar");
 	try {

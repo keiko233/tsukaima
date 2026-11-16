@@ -25,7 +25,7 @@ In scope:
 8. meme packs
 9. schedule storage
 10. friend/group request ledgers
-11. settings that map to Elaina policy
+11. settings that map to Tsukaima policy
 12. referenced media
 
 Out of scope:
@@ -67,7 +67,7 @@ Implement schema version detection:
 4. preserve unknown fields in source envelope
 5. build users, chat objects, sessions, messages, attachments, references
 6. map workspace-only and test sessions to admin/test conversations
-7. map napcat group/private IDs to Elaina chat objects
+7. map napcat group/private IDs to Tsukaima chat objects
 
 Large streams are bounded, resumable, and report malformed/missing/unsupported records without
 dropping valid ones.
@@ -77,7 +77,7 @@ dropping valid ones.
 `config.yaml` maps source settings to target classes; unknown settings land in review. Mapping
 groups:
 
-| DSH area | Elaina target |
+| DSH area | Tsukaima target |
 | --- | --- |
 | provider/model | plugin model catalog/policy |
 | NapCat transport/access | NapCat plugin config/policy |
@@ -96,7 +96,7 @@ review, and discard classifications.
 ## Memory and profile importer
 
 1. parse Mnemon spaces/items/documents without executing providers
-2. map to Elaina memory scopes/kinds
+2. map to Tsukaima memory scopes/kinds
 3. import archive/recent/shared/cross data with provenance
 4. map human-profile counters to scheduler operational state
 5. preserve timestamps and confidence
@@ -169,7 +169,7 @@ with pre-import snapshot restoration as the authoritative rollback path):
 4. final snapshot
 5. final import
 6. verify
-7. point NapCat to Elaina
+7. point NapCat to Tsukaima
 8. smoke test on admin-selected conversations
 9. keep DSH data untouched for rollback
 
@@ -187,5 +187,5 @@ with pre-import snapshot restoration as the authoritative rollback path):
 
 ## Acceptance
 
-A local copy of the real DSH deployment can be dry-run imported into a lab Elaina with a
+A local copy of the real DSH deployment can be dry-run imported into a lab Tsukaima with a
 complete review report and no secret leakage; rollback restores the lab state.

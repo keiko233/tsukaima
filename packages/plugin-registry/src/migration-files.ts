@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
-import type { PluginMigrationsDeclaration } from "@elaina/sdk/manifest";
+import type { PluginMigrationsDeclaration } from "@tsukaima/sdk/manifest";
 import {
 	MigrationRegistryError,
 	compareMigrationVersions,

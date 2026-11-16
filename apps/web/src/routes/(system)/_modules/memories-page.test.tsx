@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { MemoryRow } from "@elaina/contracts";
+import type { MemoryRow } from "@tsukaima/contracts";
 import { MemoryRows } from "./memory-rows";
 
 const memory: MemoryRow = {

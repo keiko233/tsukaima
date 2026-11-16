@@ -1,13 +1,13 @@
-import type { ConversationPolicy, MemoryScope, MemoryStatus } from "@elaina/contracts";
+import type { ConversationPolicy, MemoryScope, MemoryStatus } from "@tsukaima/contracts";
 import {
 	pluginManifestSchema,
-	type ElainaPlugin,
+	type TsukaimaPlugin,
 	type PluginContext,
 	type PluginLogger,
 	type PluginTool,
 	type ToolInvocationContext,
 	type ToolResult,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import { previewText } from "../logging.ts";
 import type { MemoryService } from "../services/memory-service.ts";
 import { MEMORY_SERVICE_BINDING } from "../services/memory-service.ts";
@@ -16,7 +16,7 @@ const MAX_RECALL_LIMIT = 20;
 const MAX_PREVIEW_LENGTH = 120;
 
 /**
- * Plugin tools log under `elaina::plugin::memory::tools`; `child` is optional in the SDK,
+ * Plugin tools log under `tsukaima::plugin::memory::tools`; `child` is optional in the SDK,
  * so fall back to the plugin-scoped logger when a host does not provide it.
  */
 function toolsLogger(context: PluginContext): PluginLogger {
@@ -530,7 +530,7 @@ function forgetTool(context: PluginContext, log: PluginLogger): PluginTool {
  * conversation policy first, so model access cannot bypass `memoryEnabled`,
  * `sharedMemoryWriteEnabled`, or the tool allowlist enforced by the plugin-host adapter.
  */
-export const memoryPlugin: ElainaPlugin = {
+export const memoryPlugin: TsukaimaPlugin = {
 	manifest: pluginManifestSchema.parse({
 		apiVersion: "1",
 		kind: "builtin",

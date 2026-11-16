@@ -1,5 +1,5 @@
 import { Api } from "grammy";
-import type { PluginLogger } from "@elaina/sdk";
+import type { PluginLogger } from "@tsukaima/sdk";
 import { elapsedMs, logErrorMessage, traceLog } from "./logging.ts";
 
 const TELEGRAM_HOSTS = new Set(["t.me", "telegram.me", "telegram.dog", "www.t.me"]);

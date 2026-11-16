@@ -16,7 +16,7 @@ export interface BackupDrillSchedulerOptions {
 
 /**
  * Runs backup/restore drills on a fixed interval. It is opt-in: the lifecycle only starts it
- * when `ELAINA_BACKUP_DRILL_INTERVAL_MS` (or an embedding option) is configured, and an
+ * when `TSUKAIMA_BACKUP_DRILL_INTERVAL_MS` (or an embedding option) is configured, and an
  * overlapping interval is skipped rather than queued. Operators can always trigger a drill
  * explicitly through the lifecycle method or the `ops:backup-drill` CLI.
  */

@@ -15,7 +15,7 @@ import {
 	Terminal,
 } from "lucide-react";
 import { Component, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { PluginPanelIcon, PluginUiModuleDefinition } from "@elaina/sdk/ui";
+import type { PluginPanelIcon, PluginUiModuleDefinition } from "@tsukaima/sdk/ui";
 import {
 	Alert,
 	Button,
@@ -30,9 +30,9 @@ import {
 	UiComponentRenderer,
 	statusText,
 	usePluginPanel,
-} from "@elaina/sdk/ui";
-import type { PluginUiDefinition } from "@elaina/sdk";
-import type { PluginI18n } from "@elaina/sdk/i18n";
+} from "@tsukaima/sdk/ui";
+import type { PluginUiDefinition } from "@tsukaima/sdk";
+import type { PluginI18n } from "@tsukaima/sdk/i18n";
 import type { PluginRow, PluginStatusSnapshot } from "@/lib/api";
 import { client, orpc } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";

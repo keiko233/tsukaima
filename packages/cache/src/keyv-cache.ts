@@ -56,7 +56,7 @@ export class KeyvCache {
 	};
 
 	constructor(options: KeyvCacheOptions = {}) {
-		this.#namespace = options.namespace ?? "elaina";
+		this.#namespace = options.namespace ?? "tsukaima";
 		this.#defaultTtlMs = options.defaultTtlMs;
 		this.#onError = options.onError;
 		this.bus = new CacheBus({
@@ -74,7 +74,7 @@ export class KeyvCache {
 				busyTimeout: 5_000,
 				clearExpiredInterval: 30_000,
 				driver: "bun:sqlite",
-				table: options.table ?? "elaina_cache",
+				table: options.table ?? "tsukaima_cache",
 				uri: `sqlite://${options.path}`,
 				wal: true,
 			});

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { migrateDomainDatabase, openDomainDatabase } from "@elaina/db";
+import { migrateDomainDatabase, openDomainDatabase } from "@tsukaima/db";
 import { DomainCodingStore } from "../src/domain-store.ts";
 import type { IterationTaskConstraints } from "../src/types.ts";
 
@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 
 async function storePath(): Promise<{ directory: string; path: string }> {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-coding-runtime-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-coding-runtime-"));
 	directories.push(directory);
 	return { directory, path: join(directory, "domain.sqlite") };
 }

@@ -2,9 +2,9 @@
 
 import { ChevronRight, RefreshCw, X } from "lucide-react";
 import { useState } from "react";
-import type { SessionContextStats } from "@elaina/contracts";
-import { Button } from "@elaina/ui/components/motion/button";
-import { cn } from "@elaina/ui/lib/utils";
+import type { SessionContextStats } from "@tsukaima/contracts";
+import { Button } from "@tsukaima/ui/components/motion/button";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { InlineError } from "../../_modules/shell/primitives";
 
@@ -34,11 +34,11 @@ export function formatHeadlinePercent(usedPercent: number, contextWindow: number
 
 function localizedSectionLabel(key: string, fallback: string): string {
 	switch (key) {
-		case "elaina-persona":
+		case "tsukaima-persona":
 			return m.context_section_persona();
-		case "elaina-policy":
+		case "tsukaima-policy":
 			return m.context_section_policy();
-		case "elaina-memory":
+		case "tsukaima-memory":
 			return m.context_section_memories();
 		case "instructions":
 			return m.context_section_instructions();

@@ -4,14 +4,14 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { DomainCodingStore, type ReloadController } from "@elaina/coding";
-import { createOpenAICompatibleModelPort } from "@elaina/core";
-import { conversations } from "@elaina/db";
-import type { MessageEnvelope } from "@elaina/contracts";
-import { providerSafeToolName } from "@elaina/sdk";
-import { SELF_ITERATION_HOST_BINDING } from "@elaina-plugin/self-iteration";
+import { DomainCodingStore, type ReloadController } from "@tsukaima/coding";
+import { createOpenAICompatibleModelPort } from "@tsukaima/core";
+import { conversations } from "@tsukaima/db";
+import type { MessageEnvelope } from "@tsukaima/contracts";
+import { providerSafeToolName } from "@tsukaima/sdk";
+import { SELF_ITERATION_HOST_BINDING } from "@tsukaima-plugin/self-iteration";
 import { loadConfig } from "../src/config.ts";
-import { ElainaLifecycle } from "../src/lifecycle.ts";
+import { TsukaimaLifecycle } from "../src/lifecycle.ts";
 
 const directories: string[] = [];
 
@@ -62,14 +62,14 @@ const envelope = (id: string, channelId = "onebot-self-iteration"): MessageEnvel
 });
 
 async function fixture() {
-	const root = await fs.mkdtemp(join(tmpdir(), "elaina-self-iteration-server-"));
+	const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-self-iteration-server-"));
 	directories.push(root);
 	const repo = join(root, "repo");
 	await fs.mkdir(join(repo, "src"), { recursive: true });
 	await fs.writeFile(join(repo, "README.md"), "# Server fixture\n");
 	await fs.writeFile(join(repo, "package.json"), '{"name":"fixture"}\n');
 	const git = (args: readonly string[]) =>
-		execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@elaina.local", ...args], {
+		execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@tsukaima.local", ...args], {
 			cwd: repo,
 		});
 	git(["init", "-b", "main"]);
@@ -84,8 +84,8 @@ async function fixture() {
 		},
 	};
 	const { model, requests } = createCapturingModel();
-	const lifecycle = new ElainaLifecycle(
-		loadConfig({ ELAINA_DATA_DIR: join(root, "data"), ELAINA_PORT: "7422" }),
+	const lifecycle = new TsukaimaLifecycle(
+		loadConfig({ TSUKAIMA_DATA_DIR: join(root, "data"), TSUKAIMA_PORT: "7422" }),
 		{
 			env: {},
 			model,

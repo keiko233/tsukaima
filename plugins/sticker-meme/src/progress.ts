@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PluginContext } from "@elaina/sdk";
+import type { PluginContext } from "@tsukaima/sdk";
 
 export type StickerJobKind =
 	| "telegram.import"

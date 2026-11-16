@@ -6,19 +6,19 @@ import { type ComponentPropsWithRef, createContext, type ReactNode, useContext }
 import {
 	MessageSideContext,
 	type MessageSide,
-} from "@elaina/ui/components/agents/message-context";
-import { EASE_OUT } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+} from "@tsukaima/ui/components/agents/message-context";
+import { EASE_OUT } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export {
 	MessageBubble,
 	MessageBubbleCollapsible,
 	MessageBubbleContent,
 	MessageBubbleGroup,
-} from "@elaina/ui/components/agents/message-bubble";
-export type { MessageScrollerProps } from "@elaina/ui/components/agents/message-scroller";
-export { MessageScroller } from "@elaina/ui/components/agents/message-scroller";
+} from "@tsukaima/ui/components/agents/message-bubble";
+export type { MessageScrollerProps } from "@tsukaima/ui/components/agents/message-scroller";
+export { MessageScroller } from "@tsukaima/ui/components/agents/message-scroller";
 
 export type MessageFrom = "user" | "assistant";
 

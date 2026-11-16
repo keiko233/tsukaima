@@ -1,5 +1,5 @@
 {
-	"name": "@elaina/core",
+	"name": "@tsukaima/core",
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
@@ -10,8 +10,8 @@
 		"@earendil-works/chord": "1.5.2",
 		"@earendil-works/pi-ai": "1.5.2",
 		"@earendil-works/pi-durable": "1.5.2",
-		"@elaina/contracts": "workspace:*",
-		"@elaina/durable": "workspace:*",
+		"@tsukaima/contracts": "workspace:*",
+		"@tsukaima/durable": "workspace:*",
 		"zod": "4.6.7"
 	}
 }

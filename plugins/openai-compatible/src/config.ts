@@ -3,7 +3,7 @@ import {
 	type PluginModelDescriptor,
 	type PluginModelInputModality,
 	type PluginModelReasoningLevel,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import { z } from "zod";
 
 export const openAiCompatibleReasoningLevelSchema = z.enum([

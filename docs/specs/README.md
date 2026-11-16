@@ -1,4 +1,4 @@
-# Elaina implementation specs
+# Tsukaima implementation specs
 
 These specs translate the 2026-11-13 DSH feature audit into concrete, testable work. They are
 implementation specifications, not aspirational architecture. Each spec states the current
@@ -53,5 +53,5 @@ The cross-cutting operational items are complete; current status stays in `docs/
   WebUI stack, covering sign-in/session persistence, local messaging, conversation policy revisions,
   and every built-in plugin panel.
 - `bun run check:secrets` scans tracked files offline, `bun run ops:backup-drill` runs SQLite + blob
-  backup/restore drills (schedulable through `@elaina/server`), and `docs/operations/runbook.md`
+  backup/restore drills (schedulable through `@tsukaima/server`), and `docs/operations/runbook.md`
   documents production operation.

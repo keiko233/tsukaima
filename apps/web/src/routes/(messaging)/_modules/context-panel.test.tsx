@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { SessionContextStats } from "@elaina/contracts";
+import type { SessionContextStats } from "@tsukaima/contracts";
 
 mock.module("@/paraglide/messages", () => ({
 	m: {
@@ -95,11 +95,11 @@ const sampleStats: SessionContextStats = {
 		modelId: "claude-sonnet-4",
 		providerId: "anthropic",
 	},
-	personaName: "Elaina",
+	personaName: "Tsukaima",
 	sections: [
-		{ key: "elaina-persona", label: "Persona", tokens: 11_300 },
-		{ key: "elaina-policy", label: "Policy", tokens: 6_100 },
-		{ key: "elaina-memory", label: "Memories", tokens: 4_500 },
+		{ key: "tsukaima-persona", label: "Persona", tokens: 11_300 },
+		{ key: "tsukaima-policy", label: "Policy", tokens: 6_100 },
+		{ key: "tsukaima-memory", label: "Memories", tokens: 4_500 },
 	],
 	tokenSource: "usage",
 	tools: [

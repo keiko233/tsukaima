@@ -14,16 +14,16 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { Button } from "@elaina/ui/components/motion/button";
+import { Button } from "@tsukaima/ui/components/motion/button";
 import {
 	MorphPopover,
 	MorphPopoverContent,
 	MorphPopoverTrigger,
-} from "@elaina/ui/components/motion/popover-morph";
-import { Select, SelectContent, SelectItem, SelectTrigger } from "@elaina/ui/components/motion/select";
-import { SPRING_SWAP } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+} from "@tsukaima/ui/components/motion/popover-morph";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@tsukaima/ui/components/motion/select";
+import { SPRING_SWAP } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 /** English defaults. Override per instance with `labels`, or app-wide with `LocaleProvider`. */
 export const promptInputMessages = {

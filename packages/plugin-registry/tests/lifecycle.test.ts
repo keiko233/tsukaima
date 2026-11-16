@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pluginManifestSchema } from "@elaina/sdk";
+import { pluginManifestSchema } from "@tsukaima/sdk";
 import { PluginDatabaseStore } from "../src/plugin-database.ts";
 import { MigrationRegistry } from "../src/migrations.ts";
 import { PluginLifecycleError, PluginLifecycleManager } from "../src/lifecycle.ts";
@@ -27,7 +27,7 @@ const manifest = (version: string) =>
 	});
 
 async function setup(options: { maxFailures?: number } = {}) {
-	const directory = await mkdtemp(join(tmpdir(), "elaina-plugin-lifecycle-"));
+	const directory = await mkdtemp(join(tmpdir(), "tsukaima-plugin-lifecycle-"));
 	directories.push(directory);
 	const databases = new PluginDatabaseStore({ directory: join(directory, "plugins") });
 	let config: Record<string, unknown> = {};

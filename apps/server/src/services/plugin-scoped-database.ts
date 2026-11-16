@@ -1,6 +1,6 @@
-import { assertPluginSqlIsolated, pluginSqlPrefix } from "@elaina/plugin-registry";
-import type { PluginDatabaseConnection } from "@elaina/plugin-registry";
-import type { PluginDatabaseApi } from "@elaina/sdk";
+import { assertPluginSqlIsolated, pluginSqlPrefix } from "@tsukaima/plugin-registry";
+import type { PluginDatabaseConnection } from "@tsukaima/plugin-registry";
+import type { PluginDatabaseApi } from "@tsukaima/sdk";
 
 /**
  * Facade over one plugin's own SQLite file. The file already isolates the plugin from core and

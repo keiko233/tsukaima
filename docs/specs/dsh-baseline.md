@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Preserve the exact deployment baseline used for the Elaina parity comparison and prevent future
+Preserve the exact deployment baseline used for the Tsukaima parity comparison and prevent future
 work from being driven by assumptions about a generic DeepSeek Harness install.
 
 ## Current baseline

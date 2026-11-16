@@ -15,16 +15,16 @@ import {
 	MessageSquare,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { Button } from "@elaina/ui/components/motion/button";
-import { Input } from "@elaina/ui/components/motion/input";
+import { Button } from "@tsukaima/ui/components/motion/button";
+import { Input } from "@tsukaima/ui/components/motion/input";
 import {
 	MorphPopover,
 	MorphPopoverContent,
 	MorphPopoverTrigger,
-} from "@elaina/ui/components/motion/popover-morph";
+} from "@tsukaima/ui/components/motion/popover-morph";
 import { orpc, type ChatSummary, type SessionSummary } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
-import { cn } from "@elaina/ui/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { formatTimestamp, previewText } from "../lib/format";
 import { Modal, ModalActions } from "../ui/modal";

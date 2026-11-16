@@ -3,8 +3,8 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { MessageEnvelope } from "@elaina/contracts";
-import { PiDurableConversationHost, createFakeModel } from "@elaina/core";
+import type { MessageEnvelope } from "@tsukaima/contracts";
+import { PiDurableConversationHost, createFakeModel } from "@tsukaima/core";
 import {
 	conversationMembers,
 	conversations,
@@ -15,13 +15,13 @@ import {
 	personaBindings,
 	personas,
 	users,
-	type ElainaDatabase,
-} from "@elaina/db";
-import { openDurableStorage } from "@elaina/durable";
+	type TsukaimaDatabase,
+} from "@tsukaima/db";
+import { openDurableStorage } from "@tsukaima/durable";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	type OneBotTransportFactory,
-} from "@elaina-plugin/onebot-napcat";
+} from "@tsukaima-plugin/onebot-napcat";
 import { createApp } from "../src/app.ts";
 import { createLogger } from "../src/logging.ts";
 import {
@@ -37,10 +37,10 @@ afterEach(async () => {
 	);
 });
 
-const logger = createLogger({ level: "error", target: "elaina::test" });
+const logger = createLogger({ level: "error", target: "tsukaima::test" });
 
-async function openFixture(): Promise<{ database: ElainaDatabase; directory: string }> {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-context-"));
+async function openFixture(): Promise<{ database: TsukaimaDatabase; directory: string }> {
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-context-"));
 	directories.push(directory);
 	const database = await openDomainDatabase(join(directory, "domain.sqlite"));
 	migrateDomainDatabase(database);
@@ -48,7 +48,7 @@ async function openFixture(): Promise<{ database: ElainaDatabase; directory: str
 }
 
 function provider(
-	database: ElainaDatabase | (() => ElainaDatabase | undefined),
+	database: TsukaimaDatabase | (() => TsukaimaDatabase | undefined),
 	overrides: Partial<Pick<DrizzleContextProviderOptions, "budgetChars" | "memoryTopK">> = {},
 ): DrizzleContextProvider {
 	return new DrizzleContextProvider({
@@ -59,7 +59,7 @@ function provider(
 }
 
 async function insertMemory(
-	database: ElainaDatabase,
+	database: TsukaimaDatabase,
 	row: {
 		content?: string;
 		conversationId?: string;
@@ -87,7 +87,7 @@ async function insertMemory(
 	});
 }
 
-async function seedContextFixture(database: ElainaDatabase): Promise<void> {
+async function seedContextFixture(database: TsukaimaDatabase): Promise<void> {
 	const now = new Date().toISOString();
 	await database.insert(users).values([
 		{ id: "user-member", kind: "human" },
@@ -463,15 +463,15 @@ const createOneBotTransportSpy = () => {
 
 describe("activity and reply hooks", () => {
 	test("fires activity.opened, activity.closed, and before.reply around a delivered answer", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-context-hooks-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-context-hooks-"));
 		directories.push(directory);
 		const onebot = createOneBotTransportSpy();
 		const { lifecycle } = createApp(
 			{
-				ELAINA_DATA_DIR: directory,
-				ELAINA_ONEBOT_WS_URL: "ws://napcat:3001",
-				ELAINA_PORT: "7420",
-				ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat:3001",
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 			},
 			{
 				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, onebot.createTransport]]),

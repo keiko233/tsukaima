@@ -4,15 +4,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { MessageEnvelope, MessagePart } from "@elaina/contracts";
-import { chatObjects, conversations, messages } from "@elaina/db";
+import type { MessageEnvelope, MessagePart } from "@tsukaima/contracts";
+import { chatObjects, conversations, messages } from "@tsukaima/db";
 import {
 	pluginManifestSchema,
 	type ChannelAdapter,
 	type ChannelDiagnostics,
-	type ElainaPlugin,
+	type TsukaimaPlugin,
 	type SendResult,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import { createApp } from "../src/app.ts";
 
 const directories: string[] = [];
@@ -45,7 +45,7 @@ class RecordingAdapter implements ChannelAdapter {
 const adapter = new RecordingAdapter();
 let unauthorizedCalled = false;
 
-const channelPlugin: ElainaPlugin = {
+const channelPlugin: TsukaimaPlugin = {
 	manifest: pluginManifestSchema.parse({
 		apiVersion: "1",
 		kind: "first-party",
@@ -58,7 +58,7 @@ const channelPlugin: ElainaPlugin = {
 	},
 };
 
-const unauthorizedPlugin: ElainaPlugin = {
+const unauthorizedPlugin: TsukaimaPlugin = {
 	manifest: pluginManifestSchema.parse({
 		apiVersion: "1",
 		kind: "first-party",
@@ -74,7 +74,7 @@ const unauthorizedPlugin: ElainaPlugin = {
 	},
 };
 
-const firstPlugin: ElainaPlugin = {
+const firstPlugin: TsukaimaPlugin = {
 	manifest: pluginManifestSchema.parse({
 		apiVersion: "1",
 		kind: "first-party",
@@ -90,7 +90,7 @@ const firstPlugin: ElainaPlugin = {
 	},
 };
 
-const secondPlugin: ElainaPlugin = {
+const secondPlugin: TsukaimaPlugin = {
 	manifest: pluginManifestSchema.parse({
 		apiVersion: "1",
 		kind: "first-party",
@@ -115,7 +115,7 @@ const secondPlugin: ElainaPlugin = {
 	},
 };
 
-const batchedPlugin: ElainaPlugin = {
+const batchedPlugin: TsukaimaPlugin = {
 	manifest: pluginManifestSchema.parse({
 		apiVersion: "1",
 		kind: "first-party",
@@ -137,12 +137,12 @@ const batchedPlugin: ElainaPlugin = {
 
 describe("reply.transform hook", () => {
 	test("runs trusted handlers in order, gates permissions, and preserves media parts", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-reply-transform-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-reply-transform-"));
 		directories.push(directory);
 		unauthorizedCalled = false;
 		adapter.sent.length = 0;
 		const { lifecycle } = createApp(
-			{ ELAINA_DATA_DIR: directory, ELAINA_PORT: "7420" },
+			{ TSUKAIMA_DATA_DIR: directory, TSUKAIMA_PORT: "7420" },
 			{ plugins: [unauthorizedPlugin, channelPlugin, firstPlugin, secondPlugin] },
 		);
 		await lifecycle.start();
@@ -195,11 +195,11 @@ describe("reply.transform hook", () => {
 	});
 
 	test("applies a text-only transform to the delivered text", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-reply-text-transform-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-reply-text-transform-"));
 		directories.push(directory);
 		adapter.sent.length = 0;
 		const { lifecycle } = createApp(
-			{ ELAINA_DATA_DIR: directory, ELAINA_PORT: "7420" },
+			{ TSUKAIMA_DATA_DIR: directory, TSUKAIMA_PORT: "7420" },
 			{ plugins: [channelPlugin, firstPlugin] },
 		);
 		await lifecycle.start();
@@ -238,11 +238,11 @@ describe("reply.transform hook", () => {
 	});
 
 	test("sends interleaved text and media as separate ordered messages", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-reply-batches-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-reply-batches-"));
 		directories.push(directory);
 		adapter.sent.length = 0;
 		const { lifecycle } = createApp(
-			{ ELAINA_DATA_DIR: directory, ELAINA_PORT: "7420" },
+			{ TSUKAIMA_DATA_DIR: directory, TSUKAIMA_PORT: "7420" },
 			{ plugins: [channelPlugin, batchedPlugin] },
 		);
 		await lifecycle.start();

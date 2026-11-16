@@ -3,7 +3,7 @@ import {
 	type PluginMediaApi,
 	type PluginMediaRecord,
 	type PluginMediaStoreInput,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import type { MediaKind, MediaService, StoredMedia } from "./media-service.ts";
 
 const MEDIA_KINDS: readonly MediaKind[] = ["image", "sticker", "audio", "video", "file"];

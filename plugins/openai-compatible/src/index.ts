@@ -1,5 +1,5 @@
-import { createOpenAICompatibleModelPort } from "@elaina/core";
-import type { ElainaPlugin } from "@elaina/sdk";
+import { createOpenAICompatibleModelPort } from "@tsukaima/core";
+import type { TsukaimaPlugin } from "@tsukaima/sdk";
 import { z } from "zod";
 import {
 	modelCapabilities,
@@ -46,7 +46,7 @@ const unsubscribers = new WeakMap<object, () => void>();
  * A model provider plugin. It registers a factory rather than a live port so the host can
  * decide when to build the model catalog and can inject usage accounting.
  */
-export const openAiCompatiblePlugin: ElainaPlugin = {
+export const openAiCompatiblePlugin: TsukaimaPlugin = {
 	manifest: openAiCompatibleManifest,
 	prepare(context) {
 		context.models.registerProvider({

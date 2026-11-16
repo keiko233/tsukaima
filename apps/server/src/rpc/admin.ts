@@ -1,7 +1,7 @@
 import { ORPCError } from "@orpc/server";
-import { MODEL_CAPABILITIES } from "@elaina/sdk";
-import { conversations, modelPolicies, type memories } from "@elaina/db";
-import { adminBase, type ElainaApiContext } from "./base.ts";
+import { MODEL_CAPABILITIES } from "@tsukaima/sdk";
+import { conversations, modelPolicies, type memories } from "@tsukaima/db";
+import { adminBase, type TsukaimaApiContext } from "./base.ts";
 import {
 	abortSessionRun,
 	compactSessionContext,
@@ -40,7 +40,7 @@ function toMemoryRow(row: MemoryDbRow) {
 }
 
 async function auditMemory(
-	context: ElainaApiContext,
+	context: TsukaimaApiContext,
 	action: string,
 	memory: { id: string; kind: string; scope: string; status: string },
 ): Promise<void> {
@@ -54,7 +54,7 @@ async function auditMemory(
 	});
 }
 
-type LifecycleModelPolicy = ElainaApiContext["lifecycle"]["routingPolicies"][number];
+type LifecycleModelPolicy = TsukaimaApiContext["lifecycle"]["routingPolicies"][number];
 
 /** Normalizes the readonly policy list owned by the lifecycle into the mutable contract shape. */
 function toContractPolicies(policies: readonly LifecycleModelPolicy[]) {
@@ -81,7 +81,7 @@ function toContractPolicies(policies: readonly LifecycleModelPolicy[]) {
  * The stored setting is a bare model id, so duplicate ids collapse to one entry and the active
  * provider wins the tie — the same preference the classifier applies at run time.
  */
-async function settingsView(context: ElainaApiContext) {
+async function settingsView(context: TsukaimaApiContext) {
 	const settings = await readRuntimeSettings(context.lifecycle.domainDatabase);
 	const activeProviderId = context.lifecycle.activeModelProviderId;
 	const catalog = await context.lifecycle.pluginHost.listModels({
@@ -561,11 +561,13 @@ export const adminRouter = {
 			try {
 				return await sendMessage(context.lifecycle, input);
 			} catch (error) {
-				context.lifecycle.logger.child("elaina::server::rpc").error("session message send failed", {
-					error: error instanceof Error ? error.message : String(error),
-					sessionId: input.sessionId,
-					target: input.target,
-				});
+				context.lifecycle.logger
+					.child("tsukaima::server::rpc")
+					.error("session message send failed", {
+						error: error instanceof Error ? error.message : String(error),
+						sessionId: input.sessionId,
+						target: input.target,
+					});
 				throw error;
 			}
 		}),

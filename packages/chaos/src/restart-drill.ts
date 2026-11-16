@@ -8,7 +8,7 @@ import {
 import type { ChaoticStorageOptions } from "./open-chaotic-storage.ts";
 import { openChaoticStorage } from "./open-chaotic-storage.ts";
 
-const restartDrillEntry = defineEntry<{ readonly reason: string }>("elaina.restartDrill");
+const restartDrillEntry = defineEntry<{ readonly reason: string }>("tsukaima.restartDrill");
 
 export interface RestartDrillResult {
 	readonly committedBeforeRestart: boolean;

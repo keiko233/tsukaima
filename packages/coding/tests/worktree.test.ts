@@ -32,7 +32,7 @@ describe("WorktreeManager", () => {
 	test("creates worktree with expected branch and path", async () => {
 		const info = await manager.create("test-create", "HEAD");
 		expect(existsSync(info.path)).toBe(true);
-		expect(info.branchName).toBe("elaina-iteration/test-create");
+		expect(info.branchName).toBe("tsukaima-iteration/test-create");
 		expect(info.baseRef).toBe("HEAD");
 		await manager.cleanup("test-create");
 	});

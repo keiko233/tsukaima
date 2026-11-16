@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PluginDatabaseApi } from "@elaina/sdk";
+import type { PluginDatabaseApi } from "@tsukaima/sdk";
 import {
 	CONVERSATION_POLICY_SCOPE,
 	type DecisionRecord,

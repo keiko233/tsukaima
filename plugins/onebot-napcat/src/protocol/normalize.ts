@@ -5,8 +5,8 @@ import {
 	type ChannelRequest,
 	type MessageEnvelope,
 	type MessagePart,
-} from "@elaina/contracts";
-import type { PluginLogger } from "@elaina/sdk";
+} from "@tsukaima/contracts";
+import type { PluginLogger } from "@tsukaima/sdk";
 import { createSafeLogger, segmentTypeCounts, singleLinePreview } from "../logging.ts";
 import type { OneBotIntervalRateLimiter } from "./rate-limit.ts";
 import type {

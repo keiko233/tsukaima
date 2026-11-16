@@ -29,11 +29,11 @@ import {
 	MorphPopover,
 	MorphPopoverContent,
 	MorphPopoverTrigger,
-} from "@elaina/ui/components/motion/popover-morph";
-import { EASE_OUT, SPRING_LAYOUT } from "@elaina/ui/lib/ease";
-import { useTouchCapable } from "@elaina/ui/lib/hooks/use-touch-capable";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+} from "@tsukaima/ui/components/motion/popover-morph";
+import { EASE_OUT, SPRING_LAYOUT } from "@tsukaima/ui/lib/ease";
+import { useTouchCapable } from "@tsukaima/ui/lib/hooks/use-touch-capable";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export const aiSidebarMessages = {
 	label: "Resources",

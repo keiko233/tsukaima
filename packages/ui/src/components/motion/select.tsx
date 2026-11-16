@@ -23,9 +23,9 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { EASE_OUT } from "@elaina/ui/lib/ease";
-import { type ListboxRow, useListbox } from "@elaina/ui/lib/hooks/use-listbox";
-import { cn } from "@elaina/ui/lib/utils";
+import { EASE_OUT } from "@tsukaima/ui/lib/ease";
+import { type ListboxRow, useListbox } from "@tsukaima/ui/lib/hooks/use-listbox";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 // One progress value drives the surface, gap, corners and chevron. This short
 // spring suits the full reveal distance; each reader clamps its small internal

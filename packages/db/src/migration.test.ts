@@ -13,7 +13,7 @@ afterEach(async () => {
 });
 
 test("backfills legacy conversations into stable chat objects and receiving sessions", async () => {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-migration-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-migration-"));
 	directories.push(directory);
 	const database = new Database(join(directory, "domain.sqlite"), { create: true });
 	const migrations = join(import.meta.dir, "../drizzle");

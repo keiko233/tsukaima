@@ -4,9 +4,9 @@ This file is the cross-session handoff record. Update it whenever implementation
 
 ## Current status
 
-- Project name: `elaina-chatbot`.
-- Repository initialized at `/home/keiko/Code/elaina-chatbot` on branch `main`.
-- First commit: `5dc80bc Add Elaina Chatbot architecture and DSH migration plan`.
+- Project name: `tsukaima`.
+- Repository initialized at `/home/keiko/Code/tsukaima` on branch `main`.
+- First commit: `5dc80bc Add Tsukaima Chatbot architecture and DSH migration plan`.
 - Current phase: implementation-spec Phases 0–9 and the Release Readiness checklist are complete.
   The closed reply loop, oRPC contract layer, ingest boundary, persona/memory injection, admin
   authentication, plugin host, feature plugins (`onebot-napcat`, `openai-compatible`,
@@ -30,10 +30,10 @@ This file is the cross-session handoff record. Update it whenever implementation
   - `plugins/onebot-napcat`: built-in channel plugin that owns the OneBot channel lifecycle, settings, diagnostics, and request resolution.
   - `plugins/openai-compatible`: built-in model-provider plugin. It registers a provider factory with the host; its API key, base URL, discovered multi-model catalog, enablement, and capability metadata live in plugin config and environment fallbacks, not in host runtime settings.
   - `packages/chaos`: transient storage failure injection, restart drill, rate limiting, idempotent ingestion, and abuse guards.
-  - `tools/ops`: offline secret scanner (`check:secrets`), and the reusable SQLite + blob backup/restore drill (`ops:backup-drill`). The drill logic itself lives in `packages/migration/src/backup-drill.ts` and is reused by `@elaina/server` scheduling.
+  - `tools/ops`: offline secret scanner (`check:secrets`), and the reusable SQLite + blob backup/restore drill (`ops:backup-drill`). The drill logic itself lives in `packages/migration/src/backup-drill.ts` and is reused by `@tsukaima/server` scheduling.
 - Runtime target is Bun.
 - Runtime settings are limited to interface/log level concerns. Provider and channel configuration are owned by their plugins; secret values are never returned by the API.
-- Built-in plugins are loaded from `apps/server/src/plugins/builtin.ts`; the OneBot channel is now a plugin, not lifecycle code. `ElainaLifecycle` no longer holds channel, request, or identity-resolution logic.
+- Built-in plugins are loaded from `apps/server/src/plugins/builtin.ts`; the OneBot channel is now a plugin, not lifecycle code. `TsukaimaLifecycle` no longer holds channel, request, or identity-resolution logic.
 - Assistant answers are delivered back to their origin channel by `apps/server/src/services/reply-dispatcher.ts`.
   The durable host observes the settled submission (`onAnswer`), the dispatcher claims the outbound
   row through the `(conversationId, durableEntryId)` unique index before sending, so delivery is
@@ -43,7 +43,7 @@ This file is the cross-session handoff record. Update it whenever implementation
   identity resolution runs in a single synchronous transaction, so concurrent messages from a new
   user cannot create a duplicate user or a racing canonical identity.
 - Persona and memory are injected into every model request as pi-durable prompt sections
-  (`elaina-persona`, `elaina-memory`) rendered per conversation from the domain database by
+  (`tsukaima-persona`, `tsukaima-memory`) rendered per conversation from the domain database by
   `apps/server/src/services/context-provider.ts`. Retrieval ranks by keyword overlap, then
   importance, then recency; a 4000-character budget caps the injected text, and any provider error
   degrades to no injection rather than failing the turn. Memory content is never logged.
@@ -53,9 +53,9 @@ This file is the cross-session handoff record. Update it whenever implementation
   request headers to `auth.api.getSession` and reject anonymous access with `UNAUTHENTICATED`.
   Better Auth stores `auth_user`/`auth_account`/`auth_session`/`auth_verification` in the domain
   database. The first administrator is bootstrapped from
-  `ELAINA_ADMIN_USERNAME`/`ELAINA_ADMIN_PASSWORD`; with no stored user and no environment
+  `TSUKAIMA_ADMIN_USERNAME`/`TSUKAIMA_ADMIN_PASSWORD`; with no stored user and no environment
   credential the whole admin surface stays locked. Sessions survive restarts and use
-  `elaina.session_token`, `HttpOnly`, `SameSite=Lax`.
+  `tsukaima.session_token`, `HttpOnly`, `SameSite=Lax`.
 - Audit entries now accept an optional actor. Better Auth session hooks record sign-in/sign-out as
   `admin:<username>`, the RPC middleware records mutating admin calls with the same actor, and the
   old supplementary audit shim has been removed.
@@ -80,15 +80,15 @@ This file is the cross-session handoff record. Update it whenever implementation
 - Plugin configuration lives in the domain `meta` table under `plugin-config:<pluginId>` with `manifest.configEnv` fallbacks. `/admin/settings` exposes only host settings (`logLevel`, active `modelProviderId`) plus generic plugin config views; the former `onebot*` and `openAi*` wire aliases are gone.
 - `adminBase` authenticates every admin procedure and audits only procedures whose contract metadata says `audit: true`. Mutations are declared in `packages/contracts/src/api.ts`; successful and failed calls both produce an `admin.rpc` row, and adding a new mutation cannot silently bypass audit by forgetting a path list.
 - Plugin host surfaces now include `models.registerProvider`, `rpc.register`, and `ui.register` aggregation. The model provider factory can report `isConfigured()`; the lifecycle falls back to the deterministic fake model when the provider is absent, unconfigured, or fails to build.
-- `ElainaPlugin.prepare(context)` runs before the conversation host is built, so model providers and other host-surface registrations exist before model selection. `setup(context)` still runs later for channel adapters and runtime work.
+- `TsukaimaPlugin.prepare(context)` runs before the conversation host is built, so model providers and other host-surface registrations exist before model selection. `setup(context)` still runs later for channel adapters and runtime work.
 - OneBot settings apply live through the plugin's `settings.onChange`: changing the WebSocket URL or access token restarts the channel and reconnects without a server restart. Provider settings still require a restart.
 - Runtime logging uses structured records rendered in Rust `tracing` style, with a bounded in-memory buffer, SSE delivery, and a Shiki ANSI-rendered diagnostics viewer.
 - TanStack file-based routing, Paraglide i18n (`en`, `zh-cn`), TanStack Query data wiring, and beUI components under `apps/web/src` are active.
 - WebUI routes are grouped under `(messaging)` and `(system)`. Route-specific code lives in the matching `_modules` directory; shared shell code lives in `routes/_modules`.
-- `chat_objects` is separate from `conversations`, which now represents Elaina sessions. Each external chat object has one explicit receiving session for new messages.
+- `chat_objects` is separate from `conversations`, which now represents Tsukaima sessions. Each external chat object has one explicit receiving session for new messages.
 - Incoming messages are protected by a durable message receipt plus `(chat_object_id, platform_message_id)` uniqueness. Activity windows flush after inactivity and resume after restart.
 - The request inbox persists OneBot friend/group request events separately from chat turns. Decisions are capability- and connection-aware; timeouts remain uncertain.
-- Conversation policy is a versioned durable document (`elaina.conversationPolicy`) owned by the
+- Conversation policy is a versioned durable document (`tsukaima.conversationPolicy`) owned by the
   domain `policies` table. Global defaults inherit into conversation overrides, every update
   writes a new active revision and keeps previous rows with `isActive = 0` for history. The
   policy owns access (`privateAccess`/`groupAccess`), allowlist/keywords/aliases/peer bots,
@@ -98,7 +98,7 @@ This file is the cross-session handoff record. Update it whenever implementation
   `conversation.trigger-ignored` audit row. Ambient messages persist with
   `messages.trigger_classification = 'ambient'` and group context but never enter the activity
   window. Direct/soft turns receive a compact trigger contract and the model may return
-  `ELAINA_LURK`; that marker is suppressed before outbound history/channel dispatch and recorded
+  `TSUKAIMA_LURK`; that marker is suppressed before outbound history/channel dispatch and recorded
   as an audited no-send (`message.lurk`).
 - Burst settle, max-wait, max-count, cooldown/rate-limit aggregation, and steer-then-follow-up
   all run under a shared per-conversation execution lock. While a run is working, a fast
@@ -119,16 +119,16 @@ This file is the cross-session handoff record. Update it whenever implementation
   rate limit, output chunking/delay/typing/Markdown, tool allowlist, persona binding, and policy
   history). All mutations use authenticated oRPC admin routes and are audited.
 - `messages.activity_id` was dropped from the Drizzle schema and removed from server writes and
-  tests (migration `0011_black_dust.sql`). Runtime turn/activity IDs stay inside `@elaina/core`
+  tests (migration `0011_black_dust.sql`). Runtime turn/activity IDs stay inside `@tsukaima/core`
   (`conversation-host.ts`), `memory-service.ts`, and `event-stream.ts`; they are not persisted on
   `messages`.
 - `runtimeSettingsSchema`/`runtimeSettingsPatchSchema` have exactly one definition in
   `packages/contracts/src/api.ts`; `apps/server/src/runtime-settings.ts` imports them from
-  `@elaina/contracts`. `remoteModelsInputSchema` no longer has a server duplicate.
+  `@tsukaima/contracts`. `remoteModelsInputSchema` no longer has a server duplicate.
 - A Playwright Chromium E2E suite (`e2e/*.spec.ts`, root `playwright.config.ts`,
   `bun run test:e2e`) starts an isolated stack: a temporary data directory, the real
-  `@elaina/server` with a fake model provider and bootstrap admin credentials from env, and a
-  `@elaina/web` Vite server on ephemeral ports. It covers sign-in/session persistence, local
+  `@tsukaima/server` with a fake model provider and bootstrap admin credentials from env, and a
+  `@tsukaima/web` Vite server on ephemeral ports. It covers sign-in/session persistence, local
   messaging, conversation policy revisions, and every built-in plugin panel.
 - `bun run check:secrets` scans `git ls-files` offline for private keys, provider tokens, JWTs,
   credential assignments, password-bearing connection strings, and forbidden sensitive files. It
@@ -136,8 +136,8 @@ This file is the cross-session handoff record. Update it whenever implementation
 - `bun run ops:backup-drill` checkpoints both SQLite databases, snapshots `domain.sqlite`,
   `durable.sqlite`, and the blob directory, verifies manifest hashes, restores into isolated
   staging, runs `PRAGMA integrity_check`, compares blob SHA-256 and file counts, and writes a
-  secret-free report. `@elaina/server` can schedule it via
-  `ELAINA_BACKUP_DRILL_INTERVAL_MS`; it is disabled by default and in tests.
+  secret-free report. `@tsukaima/server` can schedule it via
+  `TSUKAIMA_BACKUP_DRILL_INTERVAL_MS`; it is disabled by default and in tests.
 - `docs/operations/runbook.md` documents deployment prerequisites, secrets, NapCat setup,
   `/healthz`/`/readyz`, the offline DSH snapshot → dry-run → import → verify → rollback workflow,
   scheduled drills, and supervised self-iteration reload recovery.
@@ -161,9 +161,9 @@ This file is the cross-session handoff record. Update it whenever implementation
 | Self-iteration deployment | Local development first; agent creates deployment proposals/artifacts; later GHCR image |
 | WebUI authorization       | One administrator                                                                       |
 | Authentication            | Better Auth with SQLite-backed users and sessions                                       |
-| OneBot mode               | Elaina actively connects to NapCat WebSocket server                                     |
+| OneBot mode               | Tsukaima actively connects to NapCat WebSocket server                                     |
 | LLM-assisted migration    | Allowed, especially for conversation compression and memory extraction                  |
-| Project name              | `elaina-chatbot`                                                                        |
+| Project name              | `tsukaima`                                                                        |
 
 ## Design documents already written
 
@@ -189,7 +189,7 @@ This file may fall behind individual documents during rapid edits, but the docum
 
 ## Plugin framework evaluation
 
-The current plugin design is a small Elaina SDK informed by Cordis, Pi coding-agent extensions, and Pi Chord. It is documented in `docs/architecture/plugin-frameworks.md`.
+The current plugin design is a small Tsukaima SDK informed by Cordis, Pi coding-agent extensions, and Pi Chord. It is documented in `docs/architecture/plugin-frameworks.md`.
 
 Current position:
 
@@ -197,7 +197,7 @@ Current position:
 - Do not treat DSH plugins as Cordis-compatible packages.
 - Use Pi concepts for the coding/self-iteration plane.
 - Use Chord only as a design reference for versioned API packages, workers, reload, and UI registries.
-- Keep bot plugin APIs in the Elaina SDK with explicit permissions and policy.
+- Keep bot plugin APIs in the Tsukaima SDK with explicit permissions and policy.
 
 ## What has not been decided yet
 
@@ -229,7 +229,7 @@ Verified baseline (this working tree):
 
 ```sh
 bun run check:secrets
-bun --filter '@elaina/web' check:i18n && bun --filter '@elaina/web' lint:i18n && bun --filter '@elaina/web' build
+bun --filter '@tsukaima/web' check:i18n && bun --filter '@tsukaima/web' lint:i18n && bun --filter '@tsukaima/web' build
 bun run check
 bun run test:e2e
 ```
@@ -264,7 +264,7 @@ The implementation phases are done. Remaining work is operational:
    production copy, and keep the rollback run id until the cutover is accepted.
 2. **NapCat cutover**: connect the production bot account, validate channel diagnostics, and tune
    conversation policies per group.
-3. **Scheduled operations**: enable `ELAINA_BACKUP_DRILL_INTERVAL_MS` in production and alert on
+3. **Scheduled operations**: enable `TSUKAIMA_BACKUP_DRILL_INTERVAL_MS` in production and alert on
    failed drill reports; keep `bun run check:secrets` in CI.
 4. **Ongoing review**: use the self-iteration approval/deployment flow for every runtime change.
 
@@ -292,7 +292,7 @@ The full built-in plugin inventory and migration order are tracked in
   media-aware: each text unit and each sticker/image is delivered as its own message batch in
   source order, with platform-length splitting inside a batch.
 - Better Auth sign-in throttling is per client IP. Direct connections use Bun's socket peer
-  address; reverse proxies must be listed in `ELAINA_TRUSTED_PROXIES` before their forwarded chain
+  address; reverse proxies must be listed in `TSUKAIMA_TRUSTED_PROXIES` before their forwarded chain
   is trusted. There is no password-rotation UI or multi-admin model yet. Migration `0005` drops the legacy
   `admin_credentials` table; an existing deployment must have the bootstrap env values available
   for the first run after upgrade or use a dedicated credential-import tool.

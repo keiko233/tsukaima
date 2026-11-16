@@ -6,8 +6,8 @@ import {
 	AnimatedSidebarProvider,
 	type AnimatedSidebarProviderProps,
 	useAnimatedSidebar,
-} from "@elaina/ui/components/motion/animated-sidebar";
-import { cn } from "@elaina/ui/lib/utils";
+} from "@tsukaima/ui/components/motion/animated-sidebar";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 /**
  * Shell width below which a docked sidebar leaves too little room for the

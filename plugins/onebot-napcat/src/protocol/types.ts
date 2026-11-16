@@ -1,5 +1,5 @@
-import type { ChannelNotice, MessageEnvelope, MessagePart } from "@elaina/contracts";
-import type { PluginLogger } from "@elaina/sdk";
+import type { ChannelNotice, MessageEnvelope, MessagePart } from "@tsukaima/contracts";
+import type { PluginLogger } from "@tsukaima/sdk";
 
 export type OneBotEvent = {
 	time: number;

@@ -14,16 +14,16 @@ afterEach(async () => {
 });
 
 async function temporaryDataDirectory(): Promise<string> {
-	const path = await fs.mkdtemp(join(tmpdir(), "elaina-server-backup-drill-"));
+	const path = await fs.mkdtemp(join(tmpdir(), "tsukaima-server-backup-drill-"));
 	directories.push(path);
 	return path;
 }
 
 const envFor = (dataDir: string): Record<string, string> => ({
-	ELAINA_DATA_DIR: dataDir,
-	ELAINA_LOG_LEVEL: "error",
-	ELAINA_PORT: "7420",
-	ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+	TSUKAIMA_DATA_DIR: dataDir,
+	TSUKAIMA_LOG_LEVEL: "error",
+	TSUKAIMA_PORT: "7420",
+	TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 });
 
 describe("scheduled backup drills", () => {
@@ -46,21 +46,23 @@ describe("scheduled backup drills", () => {
 
 	test("parses the scheduled interval from the environment and rejects invalid values", () => {
 		expect(
-			loadConfig({ ...envFor("/tmp/elaina-drill-config"), ELAINA_BACKUP_DRILL_INTERVAL_MS: "0" })
-				.backupDrillIntervalMs,
+			loadConfig({
+				...envFor("/tmp/tsukaima-drill-config"),
+				TSUKAIMA_BACKUP_DRILL_INTERVAL_MS: "0",
+			}).backupDrillIntervalMs,
 		).toBeUndefined();
 		expect(
 			loadConfig({
-				...envFor("/tmp/elaina-drill-config"),
-				ELAINA_BACKUP_DRILL_INTERVAL_MS: "3600000",
+				...envFor("/tmp/tsukaima-drill-config"),
+				TSUKAIMA_BACKUP_DRILL_INTERVAL_MS: "3600000",
 			}).backupDrillIntervalMs,
 		).toBe(3_600_000);
 		expect(() =>
 			loadConfig({
-				...envFor("/tmp/elaina-drill-config"),
-				ELAINA_BACKUP_DRILL_INTERVAL_MS: "not-a-number",
+				...envFor("/tmp/tsukaima-drill-config"),
+				TSUKAIMA_BACKUP_DRILL_INTERVAL_MS: "not-a-number",
 			}),
-		).toThrow("ELAINA_BACKUP_DRILL_INTERVAL_MS");
+		).toThrow("TSUKAIMA_BACKUP_DRILL_INTERVAL_MS");
 	});
 
 	test("runs on the configured interval and stops with the lifecycle", async () => {

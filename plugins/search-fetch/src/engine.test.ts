@@ -35,7 +35,7 @@ function provider(
 
 const request = (overrides: Partial<SearchRequest> = {}): SearchRequest => ({
 	maxResults: 5,
-	query: "elaina",
+	query: "tsukaima",
 	...overrides,
 });
 

@@ -1,5 +1,5 @@
 import { lookup } from "node:dns/promises";
-import type { PluginLogger } from "@elaina/sdk";
+import type { PluginLogger } from "@tsukaima/sdk";
 import { MAX_FETCH_URL_LENGTH, truncate } from "./domain.ts";
 import { extractHtmlContent } from "./html.ts";
 import { elapsedMs, hostOf, sanitizedUrl } from "./logging.ts";
@@ -293,7 +293,7 @@ export class SafeFetcher {
 					headers: {
 						accept:
 							"text/html,application/xhtml+xml,text/plain,application/json,application/xml;q=0.9,*/*;q=0.1",
-						"user-agent": "ElainaSearchFetch/0.1 (+safe-fetch)",
+						"user-agent": "TsukaimaSearchFetch/0.1 (+safe-fetch)",
 					},
 					redirect: "manual",
 					signal: controller.signal,

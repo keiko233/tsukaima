@@ -1,4 +1,4 @@
-import type { PluginContext, PluginLogger, PluginRpcHandler } from "@elaina/sdk";
+import type { PluginContext, PluginLogger, PluginRpcHandler } from "@tsukaima/sdk";
 import { elapsedMs, errorSummary, previewText } from "./logging.ts";
 import type { SearchFetchService } from "./service.ts";
 

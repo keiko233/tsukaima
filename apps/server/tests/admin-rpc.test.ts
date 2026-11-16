@@ -8,12 +8,12 @@ import {
 	type DiagnosticsData,
 	logSnapshotSchema,
 	sessionContextStatsSchema,
-} from "@elaina/contracts";
-import { auditLog } from "@elaina/db";
+} from "@tsukaima/contracts";
+import { auditLog } from "@tsukaima/db";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	type OneBotTransport,
-} from "@elaina-plugin/onebot-napcat";
+} from "@tsukaima-plugin/onebot-napcat";
 import { createApp } from "../src/app.ts";
 import { signIn } from "./test-auth.ts";
 
@@ -50,16 +50,16 @@ afterEach(async () => {
 
 describe("admin RPC", () => {
 	test("exposes diagnostics, conversations, plugins, and model policies", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-admin-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-admin-"));
 		directories.push(directory);
 		const onebot = createOneBotTransportSpy();
 		const { app, lifecycle } = createApp(
 			{
-				ELAINA_ADMIN_PASSWORD: TEST_ADMIN.password,
-				ELAINA_ADMIN_USERNAME: TEST_ADMIN.username,
-				ELAINA_DATA_DIR: directory,
-				ELAINA_PORT: "7420",
-				ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+				TSUKAIMA_ADMIN_PASSWORD: TEST_ADMIN.password,
+				TSUKAIMA_ADMIN_USERNAME: TEST_ADMIN.username,
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 			},
 			{
 				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, onebot.createTransport]]),
@@ -97,9 +97,9 @@ describe("admin RPC", () => {
 		expect(
 			logs.entries.every(
 				(entry) =>
-					entry.text.includes("elaina::server") ||
-					entry.text.includes("elaina::plugin::") ||
-					entry.text.includes("elaina::core::"),
+					entry.text.includes("tsukaima::server") ||
+					entry.text.includes("tsukaima::plugin::") ||
+					entry.text.includes("tsukaima::core::"),
 			),
 		).toBe(true);
 
@@ -244,14 +244,14 @@ describe("admin RPC", () => {
 
 describe("admin conversation policy and persona RPC", () => {
 	test("updates policy revisions and binds personas with audit", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-admin-policy-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-admin-policy-"));
 		directories.push(directory);
 		const { app, lifecycle } = createApp({
-			ELAINA_ADMIN_PASSWORD: TEST_ADMIN.password,
-			ELAINA_ADMIN_USERNAME: TEST_ADMIN.username,
-			ELAINA_DATA_DIR: directory,
-			ELAINA_PORT: "7420",
-			ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			TSUKAIMA_ADMIN_PASSWORD: TEST_ADMIN.password,
+			TSUKAIMA_ADMIN_USERNAME: TEST_ADMIN.username,
+			TSUKAIMA_DATA_DIR: directory,
+			TSUKAIMA_PORT: "7420",
+			TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 		});
 		await lifecycle.start();
 		try {
@@ -335,7 +335,7 @@ describe("admin conversation policy and persona RPC", () => {
 			const persona = (await request("admin/personas/upsert", {
 				name: "Admin persona",
 				prompt: "You are the admin-created persona.",
-				selfAliases: ["Elaina"],
+				selfAliases: ["Tsukaima"],
 				summary: "Admin persona",
 			})) as { id: string; version: number };
 			expect(persona.version).toBe(1);
@@ -343,11 +343,11 @@ describe("admin conversation policy and persona RPC", () => {
 				id: persona.id,
 				name: "Admin persona",
 				prompt: "Updated prompt.",
-				selfAliases: ["Elaina", "Lain"],
+				selfAliases: ["Tsukaima", "Lain"],
 				summary: "Admin persona",
 			})) as { id: string; selfAliases: string[]; version: number };
 			expect(bumped.version).toBe(2);
-			expect(bumped.selfAliases).toEqual(["Elaina", "Lain"]);
+			expect(bumped.selfAliases).toEqual(["Tsukaima", "Lain"]);
 
 			const binding = (await request("admin/personas/bindPersona", {
 				conversationId: chat.sessionId,

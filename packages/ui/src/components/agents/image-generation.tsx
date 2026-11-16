@@ -5,10 +5,10 @@ import { Check, CircleAlert, RotateCcw } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useRef } from "react";
-import { EASE_IN_OUT, EASE_OUT, SPRING_PRESS } from "@elaina/ui/lib/ease";
-import { useHoverCapable } from "@elaina/ui/lib/hooks/use-hover-capable";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { EASE_IN_OUT, EASE_OUT, SPRING_PRESS } from "@tsukaima/ui/lib/ease";
+import { useHoverCapable } from "@tsukaima/ui/lib/hooks/use-hover-capable";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export type ImageGenerationStatus = "queued" | "generating" | "refining" | "complete" | "error";
 

@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
-import type { PluginLogger } from "@elaina/sdk";
+import type { PluginLogger } from "@tsukaima/sdk";
 import type { Canvas as NodeCanvas } from "canvas";
 import { elapsedMs, logErrorMessage } from "./logging.ts";
 
@@ -228,7 +228,7 @@ export async function tgsToGif(
 }
 
 function findFfmpeg(ffmpegPath?: string): string | undefined {
-	const configured = ffmpegPath?.trim() || process.env.ELAINA_FFMPEG_PATH?.trim();
+	const configured = ffmpegPath?.trim() || process.env.TSUKAIMA_FFMPEG_PATH?.trim();
 	if (configured !== undefined && configured.length > 0) return configured;
 	return Bun.which("ffmpeg") ?? undefined;
 }
@@ -276,7 +276,7 @@ export async function webmToGif(
 		maxFrames: options.maxFrames,
 		width: options.width,
 	});
-	const directory = await mkdtemp(join(tmpdir(), "elaina-sticker-webm-"));
+	const directory = await mkdtemp(join(tmpdir(), "tsukaima-sticker-webm-"));
 	try {
 		const input = join(directory, "input.webm");
 		const output = join(directory, "output.gif");

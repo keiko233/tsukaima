@@ -169,6 +169,6 @@ export const adminEventSchema = z.discriminatedUnion("type", [
 export type AdminEvent = z.infer<typeof adminEventSchema>;
 
 export const durableDocumentKinds = {
-	activityPolicy: "elaina.conversationPolicy",
-	activityWindow: "elaina.activityWindow",
+	activityPolicy: "tsukaima.conversationPolicy",
+	activityWindow: "tsukaima.activityWindow",
 } as const;

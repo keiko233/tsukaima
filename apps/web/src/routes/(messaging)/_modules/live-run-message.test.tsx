@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 // resolve. Stub the three labels this component reads so the test asserts the real render path.
 mock.module("@/paraglide/messages", () => ({
 	m: {
-		live_run_active_label: () => "Elaina is working",
+		live_run_active_label: () => "Tsukaima is working",
 		live_run_failed: () => "\u8fd0\u884c\u5931\u8d25",
 		live_run_model_call: ({ call }: { call: number }) => `Model call ${call}`,
 		live_run_model_done: () => "Done",
@@ -21,14 +21,14 @@ mock.module("@/paraglide/messages", () => ({
 		live_run_phase_writing: () => "\u8f93\u51fa\u4e2d\u2026",
 		live_run_phase_settled: () => "\u5b8c\u6210",
 		live_run_tool_preparing: () => "\u751f\u6210\u8c03\u7528\u2026",
-		message_sender_elaina: () => "Elaina",
+		message_sender_tsukaima: () => "Tsukaima",
 		run_step_text: () => "Output",
 		run_step_thinking: () => "Thinking",
 		run_steps_show: () => "Show steps",
 		run_steps_summary: () => "Steps",
 	},
 }));
-import type { LiveRunState } from "@elaina/contracts";
+import type { LiveRunState } from "@tsukaima/contracts";
 
 function run(overrides: Partial<LiveRunState> = {}): LiveRunState {
 	return {
@@ -56,7 +56,7 @@ describe("LiveRunMessage", () => {
 	test("renders a working state before any text arrives", () => {
 		const html = render(run());
 		expect(html).toContain("思考中");
-		expect(html).toContain("Elaina");
+		expect(html).toContain("Tsukaima");
 	});
 
 	test("renders streamed partial text", () => {
@@ -120,7 +120,7 @@ describe("LiveRunMessage", () => {
 					},
 					{ kind: "thinking", text: "first I search" },
 					{
-						argumentsText: '{"query":"elaina"}',
+						argumentsText: '{"query":"tsukaima"}',
 						isError: false,
 						kind: "tool",
 						output: "two hits",

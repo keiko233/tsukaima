@@ -2,8 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Sparkles } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@elaina/ui/components/motion/button";
-import { Input } from "@elaina/ui/components/motion/input";
+import { Button } from "@tsukaima/ui/components/motion/button";
+import { Input } from "@tsukaima/ui/components/motion/input";
 import { orpc } from "@/lib/api";
 import { authClient, authSessionQueryKey } from "@/lib/auth";
 import { m } from "@/paraglide/messages";
@@ -66,7 +66,7 @@ function LoginPage() {
 						<Sparkles className="size-4" />
 					</span>
 					<div className="min-w-0">
-						<div className="text-[13px] font-semibold tracking-tight">Elaina</div>
+						<div className="text-[13px] font-semibold tracking-tight">Tsukaima</div>
 						<div className="text-[10.5px] text-muted-foreground">
 							{m.auth_sign_in_subtitle()}
 						</div>

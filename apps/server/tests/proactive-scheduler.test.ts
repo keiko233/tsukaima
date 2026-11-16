@@ -6,17 +6,17 @@ import { join } from "node:path";
 import {
 	type ChannelAdapter,
 	type ChannelDiagnostics,
-	type ElainaPlugin,
+	type TsukaimaPlugin,
 	type PluginToolInvocationResult,
 	type SendResult,
 	pluginManifestSchema,
-} from "@elaina/sdk";
-import { createFakeModel } from "@elaina/core";
-import { messagePartsText, type MessagePart } from "@elaina/contracts";
-import { auditLog, chatObjects, conversations } from "@elaina/db";
+} from "@tsukaima/sdk";
+import { createFakeModel } from "@tsukaima/core";
+import { messagePartsText, type MessagePart } from "@tsukaima/contracts";
+import { auditLog, chatObjects, conversations } from "@tsukaima/db";
 import { builtinPlugins } from "../src/plugins/builtin.ts";
 import { loadConfig } from "../src/config.ts";
-import { ElainaLifecycle } from "../src/lifecycle.ts";
+import { TsukaimaLifecycle } from "../src/lifecycle.ts";
 
 const directories: string[] = [];
 
@@ -63,7 +63,7 @@ class FakeChannelAdapter implements ChannelAdapter {
 
 let adapter: FakeChannelAdapter | undefined;
 
-const fakeChannelPlugin: ElainaPlugin = {
+const fakeChannelPlugin: TsukaimaPlugin = {
 	manifest: pluginManifestSchema.parse({
 		apiVersion: "1",
 		kind: "first-party",
@@ -77,15 +77,18 @@ const fakeChannelPlugin: ElainaPlugin = {
 	},
 };
 
-function createLifecycle(directory: string, responses: string[]): ElainaLifecycle {
-	return new ElainaLifecycle(loadConfig({ ELAINA_DATA_DIR: directory, ELAINA_PORT: "7420" }), {
-		model: createFakeModel({ responses }),
-		plugins: [...builtinPlugins, fakeChannelPlugin],
-	});
+function createLifecycle(directory: string, responses: string[]): TsukaimaLifecycle {
+	return new TsukaimaLifecycle(
+		loadConfig({ TSUKAIMA_DATA_DIR: directory, TSUKAIMA_PORT: "7420" }),
+		{
+			model: createFakeModel({ responses }),
+			plugins: [...builtinPlugins, fakeChannelPlugin],
+		},
+	);
 }
 
 async function createConversation(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	label: string,
 ): Promise<{ chatId: string; conversationId: string; durableConversationId: string }> {
 	const host = lifecycle.conversationHost;
@@ -120,7 +123,7 @@ async function createConversation(
 }
 
 async function seedActiveState(
-	lifecycle: ElainaLifecycle,
+	lifecycle: TsukaimaLifecycle,
 	conversationId: string,
 	options: { readonly warmness?: number } = {},
 ): Promise<void> {
@@ -146,7 +149,7 @@ async function seedActiveState(
 	);
 }
 
-async function enablePolicy(lifecycle: ElainaLifecycle): Promise<void> {
+async function enablePolicy(lifecycle: TsukaimaLifecycle): Promise<void> {
 	await lifecycle.pluginHost.invokeRpc("proactive-scheduler.policies.save", {
 		patch: { enabled: true, probability: 1 },
 		scope: "global",
@@ -164,7 +167,7 @@ function toolText(result: PluginToolInvocationResult): string {
 
 describe("proactive-scheduler host integration", () => {
 	test("creates namespaced tables and keeps proactive disabled by default", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-proactive-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-proactive-"));
 		directories.push(directory);
 		const lifecycle = createLifecycle(directory, []);
 		await lifecycle.start();
@@ -208,7 +211,7 @@ describe("proactive-scheduler host integration", () => {
 	});
 
 	test("runs a proactive tick, consumes markers, and blocks disconnected channels", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-proactive-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-proactive-"));
 		directories.push(directory);
 		const responses: string[] = [];
 		const lifecycle = createLifecycle(directory, responses);
@@ -229,9 +232,9 @@ describe("proactive-scheduler host integration", () => {
 
 			const skipped = await createConversation(lifecycle, "skipped");
 			await seedActiveState(lifecycle, skipped.conversationId);
-			responses.push("ELAINA_SKIP");
+			responses.push("TSUKAIMA_SKIP");
 			await lifecycle.pluginHost.invokeRpc("proactive-scheduler.tick", undefined);
-			expect(sentTexts()).not.toContain("ELAINA_SKIP");
+			expect(sentTexts()).not.toContain("TSUKAIMA_SKIP");
 			const decisions = (await lifecycle.pluginHost.invokeRpc(
 				"proactive-scheduler.decisions.list",
 				{ conversationId: skipped.conversationId },
@@ -262,7 +265,7 @@ describe("proactive-scheduler host integration", () => {
 	});
 
 	test("enforces task persistence across restart and tool scope/admin bounds", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-proactive-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-proactive-"));
 		directories.push(directory);
 		const responses: string[] = [];
 		const first = createLifecycle(directory, responses);

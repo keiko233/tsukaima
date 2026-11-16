@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createPluginContext, pluginManifestSchema, PluginRuntime } from "@elaina/sdk";
+import { createPluginContext, pluginManifestSchema, PluginRuntime } from "@tsukaima/sdk";
 import { PluginRegistry, PluginRegistryError } from "../src/index.ts";
 import { LocalPluginWorker } from "../src/worker.ts";
 

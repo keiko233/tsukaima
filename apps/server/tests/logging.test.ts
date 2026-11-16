@@ -22,14 +22,14 @@ describe("runtime logging", () => {
 			buffer,
 			level: "info",
 			sink: (entry) => entries.push(entry),
-			target: "elaina::test",
+			target: "tsukaima::test",
 		});
 
 		logger.trace("hidden-trace");
 		logger.debug("hidden");
 		logger.info("ready", { accessToken: "secret", stage: "ready" });
 		logger
-			.child("elaina::test::http")
+			.child("tsukaima::test::http")
 			.span("request", { requestId: "req-1" })
 			.warn("slow request", { durationMs: 42 });
 
@@ -39,11 +39,11 @@ describe("runtime logging", () => {
 			stage: "ready",
 		});
 		expect(entries[0]?.text).toMatch(
-			/^\d{4}-\d{2}-\d{2}T.*Z  INFO elaina::test: ready accessToken="\[REDACTED\]" stage="ready"$/,
+			/^\d{4}-\d{2}-\d{2}T.*Z  INFO tsukaima::test: ready accessToken="\[REDACTED\]" stage="ready"$/,
 		);
 		expect(entries[0]?.ansi).toContain("\u001b[1;32m INFO\u001b[0m");
 		expect(entries[1]?.text).toMatch(
-			/Z  WARN request\{requestId="req-1"\}: elaina::test::http: slow request durationMs=42$/,
+			/Z  WARN request\{requestId="req-1"\}: tsukaima::test::http: slow request durationMs=42$/,
 		);
 		expect(entries[1]?.ansi).toContain("\u001b[1;33m WARN\u001b[0m");
 
@@ -53,7 +53,7 @@ describe("runtime logging", () => {
 		expect(entries[2]?.level).toBe("trace");
 		expect(entries[2]?.fields).toEqual({ detail: "raw-string-detail" });
 		expect(entries[2]?.text).toMatch(
-			/Z TRACE elaina::test: visible-trace detail="raw-string-detail"$/,
+			/Z TRACE tsukaima::test: visible-trace detail="raw-string-detail"$/,
 		);
 		expect(entries[2]?.ansi).toContain("\u001b[90mTRACE\u001b[0m");
 	});
@@ -64,7 +64,7 @@ describe("runtime logging", () => {
 			buffer,
 			level: "debug",
 			sink: () => {},
-			target: "elaina::test",
+			target: "tsukaima::test",
 		});
 
 		logger.info("one");
@@ -91,22 +91,22 @@ describe("runtime logging", () => {
 	});
 
 	test("writes daily date-chunked log files and prunes expired files when retentionDays is set", () => {
-		const dir = mkdtempSync(join(tmpdir(), "elaina-daily-logs-"));
+		const dir = mkdtempSync(join(tmpdir(), "tsukaima-daily-logs-"));
 		try {
-			const oldFile = join(dir, "elaina-2020-01-01.log");
+			const oldFile = join(dir, "tsukaima-2020-01-01.log");
 			writeFileSync(oldFile, "old\n", "utf8");
 			const daily = createDailyFileLogSink({ dir, retentionDays: 7 });
 			const logger = createLogger({
 				level: "trace",
 				sinks: [daily.sink],
-				target: "elaina::test",
+				target: "tsukaima::test",
 			});
 			logger.trace("first line", { step: 1 });
 			const currentPath = daily.currentPath();
 			expect(currentPath).toBeDefined();
-			expect(currentPath!).toMatch(/elaina-\d{4}-\d{2}-\d{2}\.log$/);
+			expect(currentPath!).toMatch(/tsukaima-\d{4}-\d{2}-\d{2}\.log$/);
 			const content = readFileSync(currentPath!, "utf8");
-			expect(content).toContain("TRACE elaina::test: first line step=1");
+			expect(content).toContain("TRACE tsukaima::test: first line step=1");
 			expect(() => readFileSync(oldFile, "utf8")).toThrow();
 			daily.close();
 		} finally {

@@ -4,11 +4,11 @@
 import { Check, ChevronDown, Copy, RotateCcw, ThumbsDown, ThumbsUp } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
-import { AgentDisclosure } from "@elaina/ui/components/agents/agent-disclosure";
-import { type CitationItem, CitationList, CitationStack } from "@elaina/ui/components/agents/citations";
-import { EASE_OUT, SPRING_PRESS, SPRING_SWAP } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { AgentDisclosure } from "@tsukaima/ui/components/agents/agent-disclosure";
+import { type CitationItem, CitationList, CitationStack } from "@tsukaima/ui/components/agents/citations";
+import { EASE_OUT, SPRING_PRESS, SPRING_SWAP } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export type StreamingResponseStatus = "streaming" | "complete" | "error";
 export type StreamingResponseFeedback = "up" | "down" | null;

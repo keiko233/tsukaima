@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Elaina imports Telegram sticker sets directly, enriches every sticker with a semantic profile,
+Tsukaima imports Telegram sticker sets directly, enriches every sticker with a semantic profile,
 retrieves candidates safely, learns candidates from chat, sends real media through OneBot, and
 provides admin review.
 
@@ -66,7 +66,7 @@ The primary import path is a Telegram sticker-set reference:
 
 The plugin uses the Bot API `getStickerSet`/`getFile` calls through grammY and a bot token
 configured in the plugin panel, the backend plugin settings form, or
-`ELAINA_TELEGRAM_BOT_TOKEN`. Secret fields are write-only in the API. Re-importing the same set
+`TSUKAIMA_TELEGRAM_BOT_TOKEN`. Secret fields are write-only in the API. Re-importing the same set
 reuses a stable pack id and item ids, dedupes media by SHA-256, and updates metadata in place.
 Static stickers are stored as WebP/PNG.
 
@@ -187,6 +187,6 @@ Model-visible text never includes absolute local paths or raw URLs.
 
 ## Acceptance
 
-Elaina can import `https://t.me/addstickers/<name>` with one configured bot token, classify its
+Tsukaima can import `https://t.me/addstickers/<name>` with one configured bot token, classify its
 stickers semantically, select/send a sticker on QQ, review learned candidates, and prevent
 unreviewed or unavailable media from being sent.

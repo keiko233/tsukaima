@@ -1,4 +1,4 @@
-import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk/manifest";
+import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk/manifest";
 
 export const OPENAI_COMPATIBLE_PLUGIN_ID = "openai-compatible";
 export const OPENAI_COMPATIBLE_PROVIDER_ID = "openai-compatible";
@@ -7,9 +7,9 @@ export const OPENAI_COMPATIBLE_DISCOVER_RPC = "openai-compatible.models.discover
 export const openAiCompatibleManifest: PluginManifest = pluginManifestSchema.parse({
 	apiVersion: "1",
 	configEnv: {
-		apiKey: "ELAINA_OPENAI_API_KEY",
-		baseUrl: "ELAINA_OPENAI_BASE_URL",
-		modelId: "ELAINA_OPENAI_MODEL_ID",
+		apiKey: "TSUKAIMA_OPENAI_API_KEY",
+		baseUrl: "TSUKAIMA_OPENAI_BASE_URL",
+		modelId: "TSUKAIMA_OPENAI_MODEL_ID",
 	},
 	configSchema: {
 		properties: {

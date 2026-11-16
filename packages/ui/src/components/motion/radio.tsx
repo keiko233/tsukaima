@@ -12,8 +12,8 @@ import {
 	useState,
 	type ReactNode,
 } from "react";
-import { SPRING_LAYOUT, SPRING_PRESS } from "@elaina/ui/lib/ease";
-import { cn } from "@elaina/ui/lib/utils";
+import { SPRING_LAYOUT, SPRING_PRESS } from "@tsukaima/ui/lib/ease";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 type RadioCtx = {
 	value: string;

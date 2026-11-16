@@ -1,4 +1,4 @@
-import type { PluginLogger } from "@elaina/sdk";
+import type { PluginLogger } from "@tsukaima/sdk";
 import {
 	MAX_RESULTS,
 	normalizeUrlForDedupe,

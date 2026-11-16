@@ -9,8 +9,8 @@
 		"noUncheckedIndexedAccess": false,
 		"baseUrl": ".",
 		"paths": {
-			"@elaina/ui/*": ["./src/*"],
-			"@elaina/ui": ["./src/index.ts"]
+			"@tsukaima/ui/*": ["./src/*"],
+			"@tsukaima/ui": ["./src/index.ts"]
 		}
 	},
 	"include": ["src/**/*.ts", "src/**/*.tsx"],

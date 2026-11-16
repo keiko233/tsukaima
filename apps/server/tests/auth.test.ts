@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { auditLog } from "@elaina/db";
+import { auditLog } from "@tsukaima/db";
 import { createApp } from "../src/app.ts";
 import { appRouter } from "../src/rpc/index.ts";
 import { signIn, signOut } from "./test-auth.ts";
@@ -71,10 +71,10 @@ async function authPost(
 }
 
 const adminEnv = (directory: string, password = "correct-horse"): Record<string, string> => ({
-	ELAINA_ADMIN_PASSWORD: password,
-	ELAINA_ADMIN_USERNAME: "elaina",
-	ELAINA_DATA_DIR: directory,
-	ELAINA_PORT: "7420",
+	TSUKAIMA_ADMIN_PASSWORD: password,
+	TSUKAIMA_ADMIN_USERNAME: "tsukaima",
+	TSUKAIMA_DATA_DIR: directory,
+	TSUKAIMA_PORT: "7420",
 });
 
 /** Collects every procedure path under `appRouter.admin` so guard coverage is exhaustive. */
@@ -93,7 +93,7 @@ function collectAdminProcedurePaths(router: unknown, prefix = ""): string[] {
 
 describe("admin auth", () => {
 	test("bootstraps from env, signs in through Better Auth, and protects admin procedures", async () => {
-		const directory = await createDirectory("elaina-auth-");
+		const directory = await createDirectory("tsukaima-auth-");
 		const { app, lifecycle } = createApp(adminEnv(directory));
 		await lifecycle.start();
 
@@ -113,33 +113,33 @@ describe("admin auth", () => {
 
 		const wrongPassword = await authPost(app, "sign-in/username", {
 			password: "wrong-password",
-			username: "elaina",
+			username: "tsukaima",
 		});
 		expect(wrongPassword.status).toBe(401);
 		expect(wrongPassword.headers.get("set-cookie")).toBeNull();
 
 		const login = await authPost(app, "sign-in/username", {
 			password: "correct-horse",
-			username: "elaina",
+			username: "tsukaima",
 		});
 		expect(login.status).toBe(200);
 		const loginBody = (await login.json()) as {
 			token?: string;
 			user?: { username?: string };
 		};
-		expect(loginBody.user?.username).toBe("elaina");
+		expect(loginBody.user?.username).toBe("tsukaima");
 		expect(JSON.stringify(loginBody)).not.toContain("correct-horse");
 		const setCookie = login.headers.get("set-cookie") ?? "";
-		expect(setCookie).toContain("elaina.session_token=");
+		expect(setCookie).toContain("tsukaima.session_token=");
 		expect(setCookie).toContain("HttpOnly");
 		expect(setCookie).toContain("SameSite=Lax");
 		expect(setCookie).toContain("Path=/");
 		expect(setCookie).toContain("Max-Age=");
 		expect(setCookie).not.toContain("correct-horse");
 
-		const cookie = await signIn(app, "elaina", "correct-horse");
+		const cookie = await signIn(app, "tsukaima", "correct-horse");
 		const after = await rpc(app, "auth/status", {}, cookie);
-		expect(after.body).toEqual({ authenticated: true, configured: true, username: "elaina" });
+		expect(after.body).toEqual({ authenticated: true, configured: true, username: "tsukaima" });
 
 		const allowed = await rpc(app, "admin/diagnostics/status", {}, cookie);
 		expect(allowed.status).toBe(200);
@@ -150,19 +150,19 @@ describe("admin auth", () => {
 		await rpc(app, "admin/chats/createLocal", { sessionTitle: "Audit", title: "Audit" }, cookie);
 		const auditRows = await database.select().from(auditLog);
 		expect(
-			auditRows.some((row) => row.action === "admin.sign-in" && row.actorId === "admin:elaina"),
+			auditRows.some((row) => row.action === "admin.sign-in" && row.actorId === "admin:tsukaima"),
 		).toBe(true);
 		expect(
 			auditRows.some((row) => row.action === "admin.sign-in-denied" && row.result === "denied"),
 		).toBe(true);
 		const adminActionRow = auditRows.find((row) => row.action === "admin.rpc");
-		expect(adminActionRow?.actorId).toBe("admin:elaina");
+		expect(adminActionRow?.actorId).toBe("admin:tsukaima");
 		expect(adminActionRow?.payloadJson).toContain("admin/chats/createLocal");
 
 		const failing = await rpc(
 			app,
 			"admin/sessions/send",
-			{ sessionId: "missing", target: "elaina", text: "hello" },
+			{ sessionId: "missing", target: "tsukaima", text: "hello" },
 			cookie,
 		);
 		expect(failing.status).toBe(500);
@@ -172,7 +172,7 @@ describe("admin auth", () => {
 				row.result === "failed" &&
 				row.payloadJson?.includes("admin/sessions/send") === true,
 		);
-		expect(failedAudit?.actorId).toBe("admin:elaina");
+		expect(failedAudit?.actorId).toBe("admin:tsukaima");
 
 		// A read procedure is authenticated but must not add a mutation audit row.
 		const beforeReads = (await database.select().from(auditLog)).length;
@@ -192,10 +192,10 @@ describe("admin auth", () => {
 	});
 
 	test("stays locked when no credential is configured anywhere", async () => {
-		const directory = await createDirectory("elaina-auth-unconfigured-");
+		const directory = await createDirectory("tsukaima-auth-unconfigured-");
 		const { app, auth, lifecycle } = createApp({
-			ELAINA_DATA_DIR: directory,
-			ELAINA_PORT: "7420",
+			TSUKAIMA_DATA_DIR: directory,
+			TSUKAIMA_PORT: "7420",
 		});
 		await lifecycle.start();
 		await auth.ensureInitialized();
@@ -219,37 +219,37 @@ describe("admin auth", () => {
 			.find((entry) => entry.message.includes("admin credentials are not configured"));
 		expect(guidance).toBeDefined();
 		const guidanceFields = JSON.stringify(guidance?.fields ?? {});
-		expect(guidanceFields).toContain("ELAINA_ADMIN_USERNAME");
-		expect(guidanceFields).toContain("ELAINA_ADMIN_PASSWORD");
+		expect(guidanceFields).toContain("TSUKAIMA_ADMIN_USERNAME");
+		expect(guidanceFields).toContain("TSUKAIMA_ADMIN_PASSWORD");
 
 		await lifecycle.stop();
 	});
 
 	test("persists the bootstrap credential and never rotates it from env", async () => {
-		const directory = await createDirectory("elaina-auth-persist-");
+		const directory = await createDirectory("tsukaima-auth-persist-");
 
 		const first = createApp(adminEnv(directory, "first-password"));
 		await first.lifecycle.start();
-		await signIn(first.app, "elaina", "first-password");
+		await signIn(first.app, "tsukaima", "first-password");
 		await first.lifecycle.stop();
 
 		const second = createApp(adminEnv(directory, "second-password"));
 		await second.lifecycle.start();
 		const rotated = await authPost(second.app, "sign-in/username", {
 			password: "second-password",
-			username: "elaina",
+			username: "tsukaima",
 		});
 		expect(rotated.status).toBe(401);
-		await signIn(second.app, "elaina", "first-password");
+		await signIn(second.app, "tsukaima", "first-password");
 		await second.lifecycle.stop();
 	});
 
 	test("keeps a Better Auth session across a server restart", async () => {
-		const directory = await createDirectory("elaina-auth-session-persist-");
+		const directory = await createDirectory("tsukaima-auth-session-persist-");
 
 		const first = createApp(adminEnv(directory));
 		await first.lifecycle.start();
-		const cookie = await signIn(first.app, "elaina", "correct-horse");
+		const cookie = await signIn(first.app, "tsukaima", "correct-horse");
 		await first.lifecycle.stop();
 
 		const second = createApp(adminEnv(directory));
@@ -260,17 +260,17 @@ describe("admin auth", () => {
 	});
 
 	test("accepts browser-origin sign-in and sign-out", async () => {
-		const directory = await createDirectory("elaina-auth-origin-");
+		const directory = await createDirectory("tsukaima-auth-origin-");
 		const { app, lifecycle } = createApp({
 			...adminEnv(directory),
-			ELAINA_PUBLIC_URL: "http://localhost:7420",
-			ELAINA_WEB_ORIGIN: "http://localhost:7420",
+			TSUKAIMA_PUBLIC_URL: "http://localhost:7420",
+			TSUKAIMA_WEB_ORIGIN: "http://localhost:7420",
 		});
 		await lifecycle.start();
 
 		const cookie = await signIn(
 			app,
-			"elaina",
+			"tsukaima",
 			"correct-horse",
 			"http://localhost",
 			"http://localhost:7420",
@@ -284,57 +284,57 @@ describe("admin auth", () => {
 	});
 
 	test("accepts the default Vite origin in development", async () => {
-		const directory = await createDirectory("elaina-auth-vite-origin-");
+		const directory = await createDirectory("tsukaima-auth-vite-origin-");
 		const { app, lifecycle } = createApp(adminEnv(directory));
 		await lifecycle.start();
 
 		const cookie = await signIn(
 			app,
-			"elaina",
+			"tsukaima",
 			"correct-horse",
 			"http://localhost",
 			"http://127.0.0.1:7421",
 		);
-		expect(cookie).toContain("elaina.session_token=");
+		expect(cookie).toContain("tsukaima.session_token=");
 
 		await lifecycle.stop();
 	});
 
-	test("accepts additional origins from ELAINA_TRUSTED_ORIGINS", async () => {
-		const directory = await createDirectory("elaina-auth-extra-origin-");
+	test("accepts additional origins from TSUKAIMA_TRUSTED_ORIGINS", async () => {
+		const directory = await createDirectory("tsukaima-auth-extra-origin-");
 		const { app, lifecycle } = createApp({
 			...adminEnv(directory),
-			ELAINA_TRUSTED_ORIGINS: "http://elaina.lan:7420",
+			TSUKAIMA_TRUSTED_ORIGINS: "http://tsukaima.lan:7420",
 		});
 		await lifecycle.start();
 
 		const cookie = await signIn(
 			app,
-			"elaina",
+			"tsukaima",
 			"correct-horse",
 			"http://localhost",
-			"http://elaina.lan:7420",
+			"http://tsukaima.lan:7420",
 		);
-		expect(cookie).toContain("elaina.session_token=");
+		expect(cookie).toContain("tsukaima.session_token=");
 
 		await lifecycle.stop();
 	});
 
 	test("locks sign-in after repeated failures", async () => {
-		const directory = await createDirectory("elaina-auth-lockout-");
+		const directory = await createDirectory("tsukaima-auth-lockout-");
 		const { app, lifecycle } = createApp(adminEnv(directory));
 		await lifecycle.start();
 
 		for (let attempt = 0; attempt < 5; attempt += 1) {
 			const failure = await authPost(app, "sign-in/username", {
 				password: "nope",
-				username: "elaina",
+				username: "tsukaima",
 			});
 			expect(failure.status).toBe(401);
 		}
 		const locked = await authPost(app, "sign-in/username", {
 			password: "correct-horse",
-			username: "elaina",
+			username: "tsukaima",
 		});
 		expect(locked.status).toBe(429);
 		expect(locked.headers.get("retry-after") ?? locked.headers.get("x-retry-after")).not.toBeNull();
@@ -343,7 +343,7 @@ describe("admin auth", () => {
 	});
 
 	test("rate limits per client address without trusting spoofed forwarded headers", async () => {
-		const directory = await createDirectory("elaina-auth-ip-");
+		const directory = await createDirectory("tsukaima-auth-ip-");
 		const { auth, lifecycle } = createApp(adminEnv(directory));
 		await lifecycle.start();
 
@@ -352,7 +352,7 @@ describe("admin auth", () => {
 			if (forwarded !== undefined) headers.set("x-forwarded-for", forwarded);
 			return auth.handle(
 				new Request("http://localhost/api/auth/sign-in/username", {
-					body: JSON.stringify({ password: "nope", username: "elaina" }),
+					body: JSON.stringify({ password: "nope", username: "tsukaima" }),
 					headers,
 					method: "POST",
 				}),
@@ -373,7 +373,7 @@ describe("admin auth", () => {
 	});
 
 	test("rejects every admin procedure without a session", async () => {
-		const directory = await createDirectory("elaina-auth-guard-");
+		const directory = await createDirectory("tsukaima-auth-guard-");
 		const { app, lifecycle } = createApp(adminEnv(directory));
 		await lifecycle.start();
 
@@ -463,7 +463,7 @@ describe("admin auth", () => {
 			"sessions/messages": { sessionId: "session-1" },
 			"sessions/resetContext": { sessionId: "session-1" },
 			"sessions/runSteps": { entryId: "entry-1", sessionId: "session-1" },
-			"sessions/send": { sessionId: "session-1", target: "elaina", text: "hello" },
+			"sessions/send": { sessionId: "session-1", target: "tsukaima", text: "hello" },
 			"sessions/setReceiving": { sessionId: "session-1" },
 			"sessions/update": { sessionId: "session-1" },
 			"settings/get": {},

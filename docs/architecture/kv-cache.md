@@ -1,10 +1,10 @@
 # KV cache
 
-Elaina uses a small Redis-like key/value layer for ephemeral state that must be shared by the
+Tsukaima uses a small Redis-like key/value layer for ephemeral state that must be shared by the
 server, the WebUI event stream, and plugins. The layer is built on **Keyv**, with SQLite as the
 durable adapter and a process-local bus/stream companion.
 
-The package is `@elaina/cache` (`packages/cache`). It is infrastructure, not domain storage:
+The package is `@tsukaima/cache` (`packages/cache`). It is infrastructure, not domain storage:
 durable conversations/tasks remain in `pi-durable`, and domain records remain in Drizzle.
 
 ## Why Keyv
@@ -19,13 +19,13 @@ durable conversations/tasks remain in `pi-durable`, and domain records remain in
 ## Layers
 
 ```text
-@elaina/cache
+@tsukaima/cache
   KeyvCache      Keyv + @keyv/sqlite, logical namespaces, stats, per-key locks
   CacheBus       process-local exact/prefix pub/sub for live consumers
   CacheStream    bounded append-only log (`seq`, `atMs`, `value`) on one Keyv key
 ```
 
-The cache file is `data/cache.sqlite`; its table is `elaina_cache`. It is separate from
+The cache file is `data/cache.sqlite`; its table is `tsukaima_cache`. It is separate from
 `domain.sqlite` and `durable.sqlite` so cache growth, expiry, and corruption never affect the
 source of truth.
 

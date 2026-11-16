@@ -1,6 +1,6 @@
 import { mkdirSync, readdirSync, rmSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
-import { logLevels, type LogLevel } from "@elaina/contracts";
+import { logLevels, type LogLevel } from "@tsukaima/contracts";
 
 export { logLevels, type LogLevel };
 export type LogValue = string | number | boolean | null | LogValue[] | { [key: string]: LogValue };
@@ -254,7 +254,7 @@ function pruneExpiredDailyLogFiles(
 }
 
 export function createDailyFileLogSink(options: DailyFileLogSinkOptions): DailyFileLogSink {
-	const prefix = options.prefix ?? "elaina";
+	const prefix = options.prefix ?? "tsukaima";
 	let dirEnsured = false;
 	let closed = false;
 	let currentDate: string | undefined;
@@ -394,7 +394,7 @@ export class Logger {
 			level: options.level ?? "info",
 			sinks,
 		};
-		return new Logger(runtime, options.target ?? "elaina::server");
+		return new Logger(runtime, options.target ?? "tsukaima::server");
 	}
 
 	get buffer(): LogBuffer {

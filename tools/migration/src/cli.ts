@@ -13,7 +13,7 @@ import {
 	resolveSnapshotTarget,
 	runRemoteSnapshot,
 	snapshotPaths,
-} from "@elaina/migration";
+} from "@tsukaima/migration";
 import { runRemoteDshBaseline } from "./remote-baseline.ts";
 
 interface CliOptions {

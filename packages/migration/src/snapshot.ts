@@ -513,7 +513,7 @@ export async function runRemoteSnapshot(
 	if (exitCode !== 0) {
 		throw new Error(`Remote DSH snapshot failed: ${errorText.trim() || `exit ${exitCode}`}`);
 	}
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-dsh-snapshot-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-dsh-snapshot-"));
 	const archivePath = join(directory, "snapshot.tar");
 	const staging = join(directory, "snapshot");
 	try {

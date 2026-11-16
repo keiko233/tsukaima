@@ -15,10 +15,10 @@ import {
 	useId,
 	useState,
 } from "react";
-import { MessageSideContext } from "@elaina/ui/components/agents/message-context";
-import { EASE_OUT, SPRING_LAYOUT, SPRING_SWAP } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { MessageSideContext } from "@tsukaima/ui/components/agents/message-context";
+import { EASE_OUT, SPRING_LAYOUT, SPRING_SWAP } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export type MessageBubbleVariant = "solid" | "soft" | "tint" | "outline" | "ghost" | "danger";
 export type MessageBubbleAlign = "start" | "end";

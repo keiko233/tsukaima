@@ -1,11 +1,11 @@
 import { eq } from "drizzle-orm";
-import { type ElainaDatabase, meta } from "@elaina/db";
+import { type TsukaimaDatabase, meta } from "@tsukaima/db";
 import {
 	runtimeSettingsPatchSchema,
 	runtimeSettingsSchema,
 	type RuntimeSettings,
 	type RuntimeSettingsPatch,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 
 export { runtimeSettingsPatchSchema, runtimeSettingsSchema };
 export type { RuntimeSettings, RuntimeSettingsPatch };
@@ -47,7 +47,7 @@ function parseValue(value: string | undefined): RuntimeSettings | undefined {
 }
 
 export async function readRuntimeSettings(
-	database: ElainaDatabase | undefined,
+	database: TsukaimaDatabase | undefined,
 ): Promise<RuntimeSettings> {
 	if (database === undefined) return { logLevel: "info" };
 	const rows = await database.select().from(meta).where(eq(meta.key, SETTINGS_KEY)).limit(1);
@@ -55,7 +55,7 @@ export async function readRuntimeSettings(
 }
 
 export async function writeRuntimeSettings(
-	database: ElainaDatabase,
+	database: TsukaimaDatabase,
 	input: RuntimeSettings,
 ): Promise<RuntimeSettings> {
 	const value = JSON.stringify(normalize(runtimeSettingsSchema.parse(input)));
@@ -79,7 +79,7 @@ export function publicRuntimeSettings(settings: RuntimeSettings): PublicRuntimeS
 }
 
 export async function patchRuntimeSettings(
-	database: ElainaDatabase,
+	database: TsukaimaDatabase,
 	patch: RuntimeSettingsPatch,
 ): Promise<RuntimeSettings> {
 	const current = await readRuntimeSettings(database);

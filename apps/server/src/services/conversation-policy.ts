@@ -11,16 +11,16 @@ import {
 	type PersonaBinding,
 	type PersonaSummary,
 	type PolicyRevision,
-} from "@elaina/contracts";
-import type { PiDurableConversationHost } from "@elaina/core";
+} from "@tsukaima/contracts";
+import type { PiDurableConversationHost } from "@tsukaima/core";
 import {
 	chatObjects,
 	conversations,
 	personaBindings,
 	personas,
 	policies,
-	type ElainaDatabase,
-} from "@elaina/db";
+	type TsukaimaDatabase,
+} from "@tsukaima/db";
 import type { Logger } from "../logging.ts";
 
 const nowIso = (): string => new Date().toISOString();
@@ -160,7 +160,7 @@ export function mergeConversationPolicy(
 }
 
 export interface ConversationPolicyServiceOptions {
-	readonly database: () => ElainaDatabase | undefined;
+	readonly database: () => TsukaimaDatabase | undefined;
 	readonly host: () => PiDurableConversationHost | undefined;
 	readonly logger: Logger;
 }
@@ -170,7 +170,7 @@ export interface ConversationPolicyServiceOptions {
  * and persona binding precedence. Channel plugins never see or duplicate these rules.
  */
 export class ConversationPolicyService {
-	readonly #database: () => ElainaDatabase | undefined;
+	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #host: () => PiDurableConversationHost | undefined;
 	readonly #logger: Logger;
 	readonly #synced = new Map<string, string>();
@@ -178,10 +178,10 @@ export class ConversationPolicyService {
 	constructor(options: ConversationPolicyServiceOptions) {
 		this.#database = options.database;
 		this.#host = options.host;
-		this.#logger = options.logger.child("elaina::server::policy");
+		this.#logger = options.logger.child("tsukaima::server::policy");
 	}
 
-	#db(): ElainaDatabase {
+	#db(): TsukaimaDatabase {
 		const database = this.#database();
 		if (database === undefined) throw new Error("Domain database is not ready");
 		return database;
@@ -479,7 +479,7 @@ export class ConversationPolicyService {
 	}
 
 	/**
-	 * Sync the durable `elaina.conversationPolicy` document before an inbound append. The
+	 * Sync the durable `tsukaima.conversationPolicy` document before an inbound append. The
 	 * signature cache avoids a durable commit on every message while still reflecting global
 	 * or conversation changes on the next turn.
 	 */
@@ -579,7 +579,7 @@ export class ConversationPolicyService {
 	}
 
 	async #resolvePersona(
-		database: ElainaDatabase,
+		database: TsukaimaDatabase,
 		session: { chatKind: string; chatObjectId: string | null; conversationId: string },
 	): Promise<PersonaSummary | undefined> {
 		const active = await database

@@ -5,7 +5,7 @@ import {
 	type ConversationPolicy,
 	defaultConversationPolicy,
 	type MessagePart,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 import {
 	boundedReplyDelayMs,
 	type ConversationAnswer,
@@ -13,9 +13,9 @@ import {
 	extractLurkMarker,
 	prepareOutboundParts,
 	withConversationLock,
-} from "@elaina/core";
-import { chatObjects, conversations, messages, type ElainaDatabase } from "@elaina/db";
-import type { AuditEntry, ChannelHistoryItem } from "@elaina/sdk";
+} from "@tsukaima/core";
+import { chatObjects, conversations, messages, type TsukaimaDatabase } from "@tsukaima/db";
+import type { AuditEntry, ChannelHistoryItem } from "@tsukaima/sdk";
 import { previewText, type Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 import type { ConversationPacingTracker } from "./conversation-pacing.ts";
@@ -77,7 +77,7 @@ export function splitMessageParts(
 export interface ReplyDispatcherOptions {
 	readonly audit: (entry: AuditEntry) => Promise<void>;
 	readonly channels: ChannelRegistry;
-	readonly database: () => ElainaDatabase | undefined;
+	readonly database: () => TsukaimaDatabase | undefined;
 	readonly hooks: HookBus;
 	readonly logger: Logger;
 	/** Outbound text chunk size; Phase 2 may supply a pacing-aware value. */
@@ -121,7 +121,7 @@ export interface ReconcilePendingResult {
 export class ReplyDispatcher {
 	readonly #audit: ReplyDispatcherOptions["audit"];
 	readonly #channels: ChannelRegistry;
-	readonly #database: () => ElainaDatabase | undefined;
+	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #hooks: HookBus;
 	readonly #logger: Logger;
 	readonly #now: () => number;
@@ -143,7 +143,7 @@ export class ReplyDispatcher {
 		this.#channels = options.channels;
 		this.#database = options.database;
 		this.#hooks = options.hooks;
-		this.#logger = options.logger.child("elaina::server::reply");
+		this.#logger = options.logger.child("tsukaima::server::reply");
 		this.#splitMaxChars = options.splitMaxChars ?? DEFAULT_SPLIT_MAX_CHARS;
 		this.#pendingGraceMs = options.pendingGraceMs ?? DEFAULT_PENDING_GRACE_MS;
 		this.#reconcileIntervalMs = options.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;
@@ -307,8 +307,8 @@ export class ReplyDispatcher {
 				kind,
 				occurredAt: now,
 				partsJson: JSON.stringify(parts),
-				senderDisplayName: "Elaina",
-				senderExternalId: "elaina",
+				senderDisplayName: "Tsukaima",
+				senderExternalId: "tsukaima",
 				updatedAt: now,
 			})
 			.onConflictDoNothing()
@@ -586,7 +586,7 @@ export class ReplyDispatcher {
 	}
 
 	async #markUncertain(
-		database: ElainaDatabase,
+		database: TsukaimaDatabase,
 		messageId: string,
 		sessionId: string,
 		reason: string,
@@ -608,7 +608,7 @@ export class ReplyDispatcher {
 	}
 
 	async #deliver(
-		database: ElainaDatabase,
+		database: TsukaimaDatabase,
 		target: {
 			channelId: string | null;
 			chatKind: "private" | "group";
@@ -832,7 +832,7 @@ export class ReplyDispatcher {
 	}
 
 	async #quoteTarget(
-		database: ElainaDatabase,
+		database: TsukaimaDatabase,
 		sessionId: string,
 		chatKind: "private" | "group",
 	): Promise<string | undefined> {
@@ -850,7 +850,7 @@ export class ReplyDispatcher {
 	}
 
 	async #fail(
-		database: ElainaDatabase,
+		database: TsukaimaDatabase,
 		messageId: string,
 		sessionId: string,
 		reason: string,

@@ -26,7 +26,7 @@ migrations directory in the manifest; the host loads `<version>_<name>.sql` and 
 1. runs after core migrations, before plugin `prepare()`
 2. applies enabled plugin journals inside that plugin's database
 3. serializes with the core migration lock
-4. records version, checksum, applied at, timing in `_elaina_plugin_migrations` inside the
+4. records version, checksum, applied at, timing in `_tsukaima_plugin_migrations` inside the
    plugin database
 5. rejects duplicate/reordered versions and checksum drift
 6. supports dry-run and rollback
@@ -99,7 +99,7 @@ to the model unless policy allows. Timeout/cancellation releases resources and w
 Clarify the two-tier UI contract alongside `docs/architecture/plugin-ui.md` and `definePluginUi()`:
 
 - **Trusted plugin admin pages** (built-in and first-party `src/ui.tsx` panels) remain build-time
-  React panels using `@elaina/sdk/ui`.
+  React panels using `@tsukaima/sdk/ui`.
 - **Declarative component registry** supports named embeddable slots and third-party fallback UI:
   `approval-card`, `memory-review`, `sticker-grid`, `task-list`, `task-graph`, `diagnostic-card`,
   and `settings-form`.

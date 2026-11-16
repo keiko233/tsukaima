@@ -1,16 +1,16 @@
-import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk/manifest";
+import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk/manifest";
 
 export const SEARCH_FETCH_PLUGIN_ID = "search-fetch";
 export const SEARCH_FETCH_RPC_PREFIX = `${SEARCH_FETCH_PLUGIN_ID}.`;
 /** Host binding used by tests/embedders to inject an offline fetch and DNS resolver. */
-export const SEARCH_FETCH_TRANSPORT_BINDING = "@elaina-plugin/search-fetch/transport";
+export const SEARCH_FETCH_TRANSPORT_BINDING = "@tsukaima-plugin/search-fetch/transport";
 
 export const searchFetchManifest: PluginManifest = pluginManifestSchema.parse({
 	apiVersion: "1",
 	configEnv: {
-		braveApiKey: "ELAINA_SEARCH_BRAVE_API_KEY",
-		serperApiKey: "ELAINA_SEARCH_SERPER_API_KEY",
-		tavilyApiKey: "ELAINA_SEARCH_TAVILY_API_KEY",
+		braveApiKey: "TSUKAIMA_SEARCH_BRAVE_API_KEY",
+		serperApiKey: "TSUKAIMA_SEARCH_SERPER_API_KEY",
+		tavilyApiKey: "TSUKAIMA_SEARCH_TAVILY_API_KEY",
 	},
 	configSchema: {
 		properties: {

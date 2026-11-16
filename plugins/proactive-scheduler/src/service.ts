@@ -8,7 +8,7 @@ import type {
 	PluginTask,
 	PluginTaskExecutionResult,
 	PluginTasksApi,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import {
 	activeHourBucket,
 	compactStateContext,

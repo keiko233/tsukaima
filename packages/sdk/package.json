@@ -1,5 +1,5 @@
 {
-	"name": "@elaina/sdk",
+	"name": "@tsukaima/sdk",
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
@@ -13,8 +13,8 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
-		"@elaina/contracts": "workspace:*",
-		"@elaina/ui": "workspace:*",
+		"@tsukaima/contracts": "workspace:*",
+		"@tsukaima/ui": "workspace:*",
 		"lucide-react": "^1.72.0",
 		"zod": "4.6.7"
 	},

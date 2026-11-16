@@ -14,7 +14,7 @@ import {
 	usePluginI18n,
 	usePluginPanel,
 	usePluginToast,
-} from "@elaina/sdk/ui";
+} from "@tsukaima/sdk/ui";
 import { Ban, Play, RefreshCw, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ProactivePolicy } from "./domain.ts";

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { MessageEnvelope } from "@elaina/contracts";
+import type { MessageEnvelope } from "@tsukaima/contracts";
 import {
 	AbuseGuard,
 	DuplicateEnvelopeIdError,
@@ -76,7 +76,7 @@ describe("chaos rate limit", () => {
 
 describe("chaos transient storage", () => {
 	test("recovers after injected failures and wraps exhaustion", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-chaos-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-chaos-"));
 		try {
 			let callCount = 0;
 			const { storage, close } = await openChaoticStorage(join(directory, "durable.sqlite"), {
@@ -101,7 +101,7 @@ describe("chaos transient storage", () => {
 
 describe("chaos restart drill", () => {
 	test("persists a conversation and entry across reopen", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-restart-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-restart-"));
 		try {
 			const result = await runRestartDrill(join(directory, "durable.sqlite"));
 			expect(result.committedBeforeRestart).toBeTrue();

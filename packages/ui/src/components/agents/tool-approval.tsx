@@ -4,11 +4,11 @@
 import { Check, ChevronDown, CircleAlert, LoaderCircle, ShieldCheck, X } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
-import { AgentCode, type AgentCodeLanguage } from "@elaina/ui/components/agents/agent-code";
-import { AgentDisclosure } from "@elaina/ui/components/agents/agent-disclosure";
-import { EASE_OUT, SPRING_PRESS, SPRING_SWAP } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { AgentCode, type AgentCodeLanguage } from "@tsukaima/ui/components/agents/agent-code";
+import { AgentDisclosure } from "@tsukaima/ui/components/agents/agent-disclosure";
+import { EASE_OUT, SPRING_PRESS, SPRING_SWAP } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export type ToolApprovalStatus =
 	| "pending"

@@ -47,7 +47,7 @@ type FetchMock = Mock<FetchFunction>;
 
 function textResponse(overrides: Record<string, unknown> = {}): Response {
 	return Response.json({
-		choices: [{ finish_reason: "stop", message: { content: "Hello, Elaina." } }],
+		choices: [{ finish_reason: "stop", message: { content: "Hello, Tsukaima." } }],
 		id: "response-1",
 		model: "remote-model",
 		usage: { completion_tokens: 11, prompt_tokens: 19 },
@@ -106,7 +106,7 @@ describe("OpenAI-compatible provider", () => {
 		]);
 		expect(events.at(-1)).toMatchObject({
 			message: {
-				content: [{ text: "Hello, Elaina.", type: "text" }],
+				content: [{ text: "Hello, Tsukaima.", type: "text" }],
 				model: "test-model",
 				provider: "test-provider",
 				responseId: "response-1",
@@ -258,7 +258,7 @@ describe("OpenAI-compatible provider", () => {
 							content: null,
 							tool_calls: [
 								{
-									function: { arguments: '{"path":"/tmp/elaina.txt"}', name: "read_file" },
+									function: { arguments: '{"path":"/tmp/tsukaima.txt"}', name: "read_file" },
 									id: "call-1",
 									type: "function",
 								},
@@ -295,7 +295,7 @@ describe("OpenAI-compatible provider", () => {
 			message: {
 				content: [
 					{
-						arguments: { path: "/tmp/elaina.txt" },
+						arguments: { path: "/tmp/tsukaima.txt" },
 						id: "call-1",
 						name: "read_file",
 						type: "toolCall",

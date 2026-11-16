@@ -11,44 +11,44 @@ import {
 	type LiveRunSnapshot,
 	type ModelPort,
 	type ModelPolicy,
-} from "@elaina/core";
+} from "@tsukaima/core";
 import {
 	DomainCodingStore,
 	NoopReloadController,
 	SELF_ITERATION_HOST_BINDING,
-} from "@elaina/coding";
+} from "@tsukaima/coding";
 import {
 	auditLog,
 	conversations,
 	media,
-	type ElainaDatabase,
+	type TsukaimaDatabase,
 	migrateDomainDatabase,
 	openDomainDatabase,
-} from "@elaina/db";
-import { BACKGROUND_CONTEXT, openDurableStorage, type SqliteStorage } from "@elaina/durable";
-import { KeyvCache } from "@elaina/cache";
+} from "@tsukaima/db";
+import { BACKGROUND_CONTEXT, openDurableStorage, type SqliteStorage } from "@tsukaima/durable";
+import { KeyvCache } from "@tsukaima/cache";
 import { eq } from "drizzle-orm";
 import {
 	createPluginToolsExtension,
 	MODEL_CAPABILITIES,
 	type AuditEntry,
-	type ElainaPlugin,
-} from "@elaina/sdk";
+	type TsukaimaPlugin,
+} from "@tsukaima/sdk";
 import {
 	MigrationRegistry,
 	PluginDatabaseStore,
 	loadPluginMigrations,
 	migrateLegacyPluginTables,
 	wrapPluginSqlConnection,
-} from "@elaina/plugin-registry";
-import { runBackupDrill as executeBackupDrill, type BackupDrillReport } from "@elaina/migration";
+} from "@tsukaima/plugin-registry";
+import { runBackupDrill as executeBackupDrill, type BackupDrillReport } from "@tsukaima/migration";
 import type {
 	ChannelNotice,
 	ChannelRequest,
 	MessageEnvelope,
 	MessagePart,
-} from "@elaina/contracts";
-import { loadConfig, type ElainaConfig } from "./config.ts";
+} from "@tsukaima/contracts";
+import { loadConfig, type TsukaimaConfig } from "./config.ts";
 import {
 	createDailyFileLogSink,
 	createLogger,
@@ -110,7 +110,7 @@ export interface LifecycleOptions {
 	/** Opaque host bindings consumed by built-in plugins in tests or embedders. */
 	readonly pluginBindings?: ReadonlyMap<string, unknown>;
 	/** Overrides the built-in plugin set (tests and future plugin sources). */
-	readonly plugins?: readonly ElainaPlugin[];
+	readonly plugins?: readonly TsukaimaPlugin[];
 	/** Reply chunking, quote behavior, and pending-delivery reconciliation timing. */
 	readonly reply?: {
 		readonly pendingGraceMs?: number;
@@ -128,8 +128,8 @@ export interface LifecycleState {
 	readonly reason?: string;
 }
 
-export class ElainaLifecycle {
-	readonly config: ElainaConfig;
+export class TsukaimaLifecycle {
+	readonly config: TsukaimaConfig;
 	readonly startedAtMs = Date.now();
 	readonly backupDrills: BackupDrillScheduler;
 	/** Redis-like KV layer: durable TTL values, bounded streams, and a process-local bus. */
@@ -151,7 +151,7 @@ export class ElainaLifecycle {
 	/** One lock shared by inbound turns, outbound pacing, tasks, and background turns. */
 	readonly executionLock: ConversationExecutionLock;
 	readonly memory: MemoryService;
-	private readonly plugins: readonly ElainaPlugin[];
+	private readonly plugins: readonly TsukaimaPlugin[];
 	readonly media: MediaService;
 	readonly replyDispatcher: ReplyDispatcher;
 	readonly requestService: RequestService;
@@ -164,10 +164,10 @@ export class ElainaLifecycle {
 	private removeFileSink: (() => void) | undefined;
 
 	conversationHost: PiDurableConversationHost | undefined;
-	domainDatabase: ElainaDatabase | undefined;
+	domainDatabase: TsukaimaDatabase | undefined;
 	durableStorage: SqliteStorage | undefined;
 	lastProcessingError: Error | undefined;
-	logLevel: ElainaConfig["logLevel"];
+	logLevel: TsukaimaConfig["logLevel"];
 	readonly liveRuns: LiveRunCache;
 	readonly logs: LogBuffer;
 	readonly logger: Logger;
@@ -189,7 +189,7 @@ export class ElainaLifecycle {
 	private readonly inboundFailureLoggedAt = new Map<string, number>();
 	private activeProviderId: string | undefined;
 
-	constructor(config: ElainaConfig, options?: LifecycleOptions) {
+	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
 		this.config = config;
 		this.logLevel = config.logLevel;
 		this.customLoggerProvided = options?.logger !== undefined;
@@ -198,11 +198,11 @@ export class ElainaLifecycle {
 			createLogger({
 				capacity: config.logBufferCapacity,
 				level: config.logLevel,
-				target: "elaina::server",
+				target: "tsukaima::server",
 			});
 		this.logs = this.logger.buffer;
 		this.plugins = options?.plugins ?? builtinPlugins;
-		this.runtimeLog = this.logger.child("elaina::server::lifecycle");
+		this.runtimeLog = this.logger.child("tsukaima::server::lifecycle");
 		this.cache = new KeyvCache({
 			onError: (error) => {
 				this.runtimeLog.warn("cache operation failed", {
@@ -444,7 +444,7 @@ export class ElainaLifecycle {
 		});
 	}
 
-	private setLogLevel(level: ElainaConfig["logLevel"]): void {
+	private setLogLevel(level: TsukaimaConfig["logLevel"]): void {
 		this.logLevel = level;
 		this.logger.setLevel(level);
 	}
@@ -570,7 +570,7 @@ export class ElainaLifecycle {
 		const settings = await readRuntimeSettings(this.domainDatabase);
 		if (this.config.logLevelFromEnv) {
 			this.setLogLevel(this.config.logLevel);
-			this.runtimeLog.debug("ELAINA_LOG_LEVEL overrides persisted runtime setting", {
+			this.runtimeLog.debug("TSUKAIMA_LOG_LEVEL overrides persisted runtime setting", {
 				envLogLevel: this.config.logLevel,
 				persistedLogLevel: settings.logLevel,
 			});
@@ -623,7 +623,7 @@ export class ElainaLifecycle {
 			busyArbiter: async (input) => this.sidechatService?.decide(input),
 			contextProvider: this.contextProvider,
 			executionLock: this.executionLock,
-			logger: this.logger.child("elaina::core::host"),
+			logger: this.logger.child("tsukaima::core::host"),
 			model,
 			onActivityEvent: (event) => this.forwardActivityEvent(event),
 			onAnswer: async (answer) => {
@@ -688,7 +688,7 @@ export class ElainaLifecycle {
 		];
 
 		const conversationHost = this.conversationHost;
-		const toolLog = this.logger.child("elaina::server::tools");
+		const toolLog = this.logger.child("tsukaima::server::tools");
 		const pluginTools =
 			conversationHost === undefined
 				? undefined

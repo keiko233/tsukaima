@@ -2,9 +2,9 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { type ConversationPolicy, defaultConversationPolicy } from "@elaina/contracts";
-import { Button } from "@elaina/ui/components/motion/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@elaina/ui/components/motion/card";
+import { type ConversationPolicy, defaultConversationPolicy } from "@tsukaima/contracts";
+import { Button } from "@tsukaima/ui/components/motion/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
 import { orpc } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";

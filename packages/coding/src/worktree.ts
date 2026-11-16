@@ -38,7 +38,7 @@ export class WorktreeManager {
 
 	async create(taskId: string, baseRef: string): Promise<WorktreeInfo> {
 		await this.validateBaseRef(baseRef);
-		const branchName = `elaina-iteration/${taskId}`;
+		const branchName = `tsukaima-iteration/${taskId}`;
 		const worktreePath = join(this.#config.worktreeRoot, taskId);
 		await mkdir(this.#config.worktreeRoot, { recursive: true });
 		const result = await this.#git(["worktree", "add", "-b", branchName, worktreePath, baseRef]);

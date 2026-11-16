@@ -1,5 +1,5 @@
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
-import type { MessagePage, MessageSummary } from "@elaina/contracts";
+import type { MessagePage, MessageSummary } from "@tsukaima/contracts";
 import { client, orpc } from "./api";
 import { mergeMessagePages, messageListInput, type MessagePageParam } from "./message-pages";
 

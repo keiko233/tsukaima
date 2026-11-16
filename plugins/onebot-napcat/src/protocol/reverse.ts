@@ -47,7 +47,7 @@ type SocketData = {
 };
 
 /**
- * Production `ws-reverse` listener. NapCat dials into Elaina, so the token is verified during
+ * Production `ws-reverse` listener. NapCat dials into Tsukaima, so the token is verified during
  * the HTTP upgrade and rejected with 401 before a WebSocket is created.
  */
 export const bunReverseServerFactory: OneBotReverseServerFactory = (

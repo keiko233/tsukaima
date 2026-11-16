@@ -4,7 +4,7 @@ import { readStackRuntime } from "./stack.ts";
 export async function openAuthenticatedPage(page: Page, path = "/"): Promise<void> {
 	const stack = await readStackRuntime();
 	await page.goto(new URL(path, stack.webUrl).toString());
-	await expect(page.getByText("Elaina Admin")).toBeVisible();
+	await expect(page.getByText("Tsukaima Admin")).toBeVisible();
 }
 
 export async function createLocalChat(page: Page, title: string): Promise<void> {

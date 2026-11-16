@@ -1,4 +1,4 @@
-import type { PluginContext, PluginLogger, PluginTool, ToolResult } from "@elaina/sdk";
+import type { PluginContext, PluginLogger, PluginTool, ToolResult } from "@tsukaima/sdk";
 import { scheduledTaskKindSchema } from "./domain.ts";
 import type { ProactiveSchedulerService } from "./service.ts";
 

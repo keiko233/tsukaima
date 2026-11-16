@@ -13,10 +13,10 @@ const SEEDED_MESSAGES = 120;
 function seedTranscript(input: { count: number; databasePath: string; title: string }): void {
 	const script = `
 		import { Database } from "bun:sqlite";
-		const database = new Database(process.env.ELAINA_E2E_DB);
+		const database = new Database(process.env.TSUKAIMA_E2E_DB);
 		const chat = database
 			.query("SELECT id FROM chat_objects WHERE title = ? LIMIT 1")
-			.get(process.env.ELAINA_E2E_TITLE);
+			.get(process.env.TSUKAIMA_E2E_TITLE);
 		if (chat === null) throw new Error("Seeded chat was not found");
 		const session = database
 			.query("SELECT id FROM conversations WHERE chat_object_id = ? LIMIT 1")
@@ -26,7 +26,7 @@ function seedTranscript(input: { count: number; databasePath: string; title: str
 			"INSERT INTO messages (conversation_id, direction, id, kind, occurred_at, content_text, parts_json) VALUES (?, 'inbound', ?, 'webui', ?, ?, ?)",
 		);
 		const base = Date.parse("2026-01-01T00:00:00.000Z");
-		for (let index = 0; index < Number(process.env.ELAINA_E2E_COUNT); index += 1) {
+		for (let index = 0; index < Number(process.env.TSUKAIMA_E2E_COUNT); index += 1) {
 			const text = "seed message " + index;
 			insert.run(
 				session.id,
@@ -41,9 +41,9 @@ function seedTranscript(input: { count: number; databasePath: string; title: str
 	execFileSync("bun", ["-e", script], {
 		env: {
 			...process.env,
-			ELAINA_E2E_COUNT: String(input.count),
-			ELAINA_E2E_DB: input.databasePath,
-			ELAINA_E2E_TITLE: input.title,
+			TSUKAIMA_E2E_COUNT: String(input.count),
+			TSUKAIMA_E2E_DB: input.databasePath,
+			TSUKAIMA_E2E_TITLE: input.title,
 		},
 	});
 }

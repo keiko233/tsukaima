@@ -1,11 +1,11 @@
-import { messagePartSchema, type MessagePart } from "@elaina/contracts";
+import { messagePartSchema, type MessagePart } from "@tsukaima/contracts";
 import type {
 	AuditEntry,
 	ChannelCapability,
 	OutboundTarget,
 	PluginAuditApi,
 	PluginLogger,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import type { OneBotChannelAdapter } from "./adapter.ts";
 import type { OneBotPluginConfig } from "./config.ts";
 import { createSafeLogger } from "./logging.ts";

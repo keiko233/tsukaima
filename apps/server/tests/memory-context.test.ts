@@ -9,8 +9,8 @@ import {
 	messages,
 	migrateDomainDatabase,
 	openDomainDatabase,
-	type ElainaDatabase,
-} from "@elaina/db";
+	type TsukaimaDatabase,
+} from "@tsukaima/db";
 import { createLogger } from "../src/logging.ts";
 import { DrizzleContextProvider } from "../src/services/context-provider.ts";
 import { ConversationPolicyService } from "../src/services/conversation-policy.ts";
@@ -31,10 +31,10 @@ afterEach(async () => {
 });
 
 async function setup(): Promise<{
-	database: ElainaDatabase;
+	database: TsukaimaDatabase;
 	policy: ConversationPolicyService;
 }> {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-memory-context-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-memory-context-"));
 	directories.push(directory);
 	const database = await openDomainDatabase(join(directory, "domain.sqlite"));
 	migrateDomainDatabase(database);
@@ -47,7 +47,7 @@ async function setup(): Promise<{
 }
 
 async function insertConversation(
-	database: ElainaDatabase,
+	database: TsukaimaDatabase,
 	input: { readonly id: string; readonly kind?: "private" | "group" },
 ): Promise<void> {
 	await database.insert(conversations).values({
@@ -67,7 +67,7 @@ async function insertConversation(
 }
 
 function provider(
-	database: ElainaDatabase,
+	database: TsukaimaDatabase,
 	policy: ConversationPolicyService,
 	options: {
 		readonly embed?: (texts: readonly string[]) => Promise<{

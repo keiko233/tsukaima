@@ -1,6 +1,6 @@
 # Self-iteration
 
-Elaina can modify its own plugins, prompts, documentation, and application code, but this is a governed workflow, not direct host shell access from chat.
+Tsukaima can modify its own plugins, prompts, documentation, and application code, but this is a governed workflow, not direct host shell access from chat.
 
 ## Principles
 
@@ -13,7 +13,7 @@ Elaina can modify its own plugins, prompts, documentation, and application code,
 ## Workflow
 
 1. Create `IterationTask` in durable storage with goal, source conversation, and constraints.
-2. Create a git worktree under `/opt/elaina-chatbot/worktrees/<task-id>`.
+2. Create a git worktree under `/opt/tsukaima/worktrees/<task-id>`.
 3. Run the coding runner with read/write/edit/search/bash tools scoped to that worktree.
 4. Require tests relevant to the change.
 5. Generate a patch summary and risk assessment.

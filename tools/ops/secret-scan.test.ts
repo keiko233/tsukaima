@@ -18,7 +18,7 @@ afterEach(async () => {
 });
 
 async function temporaryDirectory(): Promise<string> {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-secret-scan-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-secret-scan-"));
 	directories.push(directory);
 	return directory;
 }
@@ -77,7 +77,7 @@ describe("secret scanner", () => {
 		expect(scanContent("deploy/tls/server.pem", "irrelevant\n")[0]?.rule).toBe(
 			"forbidden-sensitive-file:key-or-database",
 		);
-		expect(scanContent(".env.example", "ELAINA_AUTH_SECRET=\n")).toEqual([]);
+		expect(scanContent(".env.example", "TSUKAIMA_AUTH_SECRET=\n")).toEqual([]);
 	});
 
 	test("reports clean and leaking repository trees", async () => {

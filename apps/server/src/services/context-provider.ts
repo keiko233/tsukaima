@@ -1,13 +1,13 @@
 import { and, desc, eq, inArray, ne, or, sql, type SQL } from "drizzle-orm";
-import type { ContextPromptProvider } from "@elaina/core";
-import type { ConversationPolicy } from "@elaina/contracts";
+import type { ContextPromptProvider } from "@tsukaima/core";
+import type { ConversationPolicy } from "@tsukaima/contracts";
 import {
 	conversationMembers,
 	conversations,
 	memories,
 	messages,
-	type ElainaDatabase,
-} from "@elaina/db";
+	type TsukaimaDatabase,
+} from "@tsukaima/db";
 import { previewText, type Logger } from "../logging.ts";
 import { ConversationPolicyService } from "./conversation-policy.ts";
 import { MemoryService, type RankedMemory } from "./memory-service.ts";
@@ -42,7 +42,7 @@ const LONG_TERM_HEADER = "Known memories, most relevant first:";
  * gates long-term recall and prevents private/group scope leakage.
  */
 export interface DrizzleContextProviderOptions {
-	readonly database: () => ElainaDatabase | undefined;
+	readonly database: () => TsukaimaDatabase | undefined;
 	readonly logger: Logger;
 	/** Combined persona + memory budget override; mainly for tests. */
 	readonly budgetChars?: number;
@@ -112,7 +112,7 @@ export interface ContextInspectionDetails {
 
 export class DrizzleContextProvider implements ContextPromptProvider {
 	readonly #budgetChars: number;
-	readonly #database: () => ElainaDatabase | undefined;
+	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #logger: Logger;
 	readonly #memoryService: MemoryService;
 	readonly #memoryTopK: number;
@@ -121,7 +121,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 
 	constructor(options: DrizzleContextProviderOptions) {
 		this.#database = options.database;
-		this.#logger = options.logger.child("elaina::server::context");
+		this.#logger = options.logger.child("tsukaima::server::context");
 		this.#budgetChars = options.budgetChars ?? PROMPT_BUDGET_CHARS;
 		this.#memoryTopK = options.memoryTopK ?? DEFAULT_MEMORY_TOP_K;
 		this.#personaBudget = Math.floor(this.#budgetChars * PERSONA_BUDGET_FRACTION);
@@ -197,7 +197,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				...new Set([...policy.trigger.selfAliases, ...(persona?.selfAliases ?? [])]),
 			];
 			if (aliases.length > 0) lines.push(`- Self aliases: ${aliases.join(", ")}`);
-			lines.push("- If a reply would be noise, answer with exactly ELAINA_LURK.");
+			lines.push("- If a reply would be noise, answer with exactly TSUKAIMA_LURK.");
 			const rendered = lines.join("\n");
 			this.#logger.debug("rendered policy context", {
 				aliasCount: aliases.length,
@@ -387,7 +387,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	}
 
 	async #scopeFilter(
-		database: ElainaDatabase,
+		database: TsukaimaDatabase,
 		session: { chatKind: string; chatObjectId: string | null; sessionId: string } | undefined,
 		policy: ConversationPolicy,
 	): Promise<SQL | undefined> {
@@ -425,7 +425,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	}
 
 	async #resolveSession(
-		database: ElainaDatabase,
+		database: TsukaimaDatabase,
 		durableConversationId: string,
 	): Promise<{ chatKind: string; chatObjectId: string | null; sessionId: string } | undefined> {
 		const [session] = await database
@@ -450,7 +450,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	 * Conversation participants for `scope = 'user'` memories: recorded members plus recent
 	 * inbound senders. Private chats have no member rows today, so the sender set carries them.
 	 */
-	async #resolveParticipants(database: ElainaDatabase, sessionId: string): Promise<string[]> {
+	async #resolveParticipants(database: TsukaimaDatabase, sessionId: string): Promise<string[]> {
 		const [memberRows, senderRows] = await Promise.all([
 			database
 				.select({ userId: conversationMembers.userId })
@@ -471,7 +471,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	}
 
 	async #recentMessages(
-		database: ElainaDatabase,
+		database: TsukaimaDatabase,
 		sessionId: string | undefined,
 	): Promise<{ contentText: string | null; direction: string; id: string }[]> {
 		if (sessionId === undefined) return [];

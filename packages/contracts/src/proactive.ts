@@ -2,9 +2,9 @@
  * Model-visible proactive output markers. They are consumed before persistence and delivery;
  * none of them may ever reach a channel or the outbound message table.
  */
-export const PROACTIVE_SKIP_MARKER = "ELAINA_SKIP";
-export const PROACTIVE_LURK_MARKER = "ELAINA_LURK";
-export const PROACTIVE_SCHEDULE_LATER_MARKER = "ELAINA_SCHEDULE_LATER";
+export const PROACTIVE_SKIP_MARKER = "TSUKAIMA_SKIP";
+export const PROACTIVE_LURK_MARKER = "TSUKAIMA_LURK";
+export const PROACTIVE_SCHEDULE_LATER_MARKER = "TSUKAIMA_SCHEDULE_LATER";
 
 export const DEFAULT_SCHEDULE_LATER_MS = 30 * 60_000;
 export const MIN_SCHEDULE_LATER_MS = 60_000;
@@ -28,7 +28,7 @@ function clampDelay(value: number, unit: string | undefined): number {
 
 /**
  * Removes every proactive marker from assistant text and reports the highest-priority one.
- * `ELAINA_SKIP` wins over `ELAINA_LURK`, which wins over `ELAINA_SCHEDULE_LATER`.
+ * `TSUKAIMA_SKIP` wins over `TSUKAIMA_LURK`, which wins over `TSUKAIMA_SCHEDULE_LATER`.
  */
 export function consumeProactiveMarkers(text: string): ConsumedProactiveMarkers {
 	const hasSkip = text.includes(PROACTIVE_SKIP_MARKER);

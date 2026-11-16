@@ -8,13 +8,13 @@ import {
 	type ChannelDiagnostics,
 	type SendOptions,
 	type SendResult,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import type {
 	ChannelNotice,
 	ChannelRequest,
 	MessageEnvelope,
 	MessagePart,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 
 export interface ChannelStatus extends ChannelDiagnostics {
 	readonly id: string;

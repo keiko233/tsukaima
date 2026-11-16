@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Radio, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Button } from "@elaina/ui/components/motion/button";
+import { Button } from "@tsukaima/ui/components/motion/button";
 import {
 	Card,
 	CardAction,
@@ -11,20 +11,20 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
-} from "@elaina/ui/components/motion/card";
-import { Input } from "@elaina/ui/components/motion/input";
+} from "@tsukaima/ui/components/motion/card";
+import { Input } from "@tsukaima/ui/components/motion/input";
 import {
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-} from "@elaina/ui/components/motion/select";
-import { Switch } from "@elaina/ui/components/motion/switch";
+} from "@tsukaima/ui/components/motion/select";
+import { Switch } from "@tsukaima/ui/components/motion/switch";
 import { logLevels as LOG_LEVELS, orpc, type LogLevel } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { useLogStream } from "@/lib/use-log-stream";
-import { cn } from "@elaina/ui/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { LogTerminal } from "./log-terminal";
 import { SystemPage } from "./page-header";

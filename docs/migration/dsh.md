@@ -50,7 +50,7 @@ Secrets are never copied into the new repository or migration report.
 
 ## Feature mapping
 
-| DSH capability | Elaina design |
+| DSH capability | Tsukaima design |
 | --- | --- |
 | NapCat bridge | `onebot-napcat` plugin, outbound WS |
 | Per-group/private sessions | Stable durable conversations |
@@ -66,7 +66,7 @@ Secrets are never copied into the new repository or migration report.
 | MCP tools | MCP integration behind tool policy |
 | Scheduled/proactive actions | Durable tasks and scheduler |
 
-No DSH plugin is blindly copied. A feature is either implemented natively or reimplemented as an Elaina plugin after API review.
+No DSH plugin is blindly copied. A feature is either implemented natively or reimplemented as an Tsukaima plugin after API review.
 
 ## Migration Kit
 
@@ -194,13 +194,13 @@ Live-shape handling now includes:
 ## Cutover
 
 1. Complete snapshot/inspect/normalize/dry-run.
-2. Build Elaina image locally.
-3. Run Elaina with fake OneBot and fake model.
+2. Build Tsukaima image locally.
+3. Run Tsukaima with fake OneBot and fake model.
 4. Verify imported conversations in WebUI.
 5. Stop DSH service.
 6. Run final import.
-7. Configure NapCat account WebSocket server and Elaina outbound connection.
-8. Start Elaina; verify NapCat connection and read-only recent history.
+7. Configure NapCat account WebSocket server and Tsukaima outbound connection.
+8. Start Tsukaima; verify NapCat connection and read-only recent history.
 9. Keep DSH data and backup untouched for rollback.
 10. After admin validation, archive or stop the old project without deleting data.
 

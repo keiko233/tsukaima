@@ -6,14 +6,14 @@ Accepted.
 
 ## Context
 
-The existing `conversations` table represented both the external communication scope and the durable Elaina context. A unique `(channel_id, platform_conversation_id)` index therefore prevented one external chat from owning more than one Elaina session.
+The existing `conversations` table represented both the external communication scope and the durable Tsukaima context. A unique `(channel_id, platform_conversation_id)` index therefore prevented one external chat from owning more than one Tsukaima session.
 
 The WebUI design requires a stable chat object that can contain multiple sessions. Incoming external messages also need deterministic ownership without silently moving history when a different session is selected in the browser.
 
 ## Decision
 
 - `chat_objects` is the stable communication scope. External chat objects are identified by channel, kind, and platform conversation ID. Local WebUI chat objects have no external ID.
-- Existing and new `conversations` rows are Elaina sessions. A session owns one durable conversation and one message context.
+- Existing and new `conversations` rows are Tsukaima sessions. A session owns one durable conversation and one message context.
 - Each external chat object has at most one active receiving session, enforced by a partial unique index on `is_receiving = 1`.
 - Incoming external messages always route to the current receiving session. Selecting a different session in the UI does not change routing.
 - Changing the receiving session is explicit and affects only subsequent messages. Previous messages stay in the session where they were ingested.

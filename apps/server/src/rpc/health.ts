@@ -1,7 +1,7 @@
-import { healthResponseSchema } from "@elaina/contracts";
+import { healthResponseSchema } from "@tsukaima/contracts";
 import { apiBase } from "./base.ts";
 
-export type { ElainaApiContext } from "./base.ts";
+export type { TsukaimaApiContext } from "./base.ts";
 
 export const healthRouter = {
 	status: apiBase.health.status.handler(async ({ context }) => {

@@ -26,7 +26,7 @@ Use Better Auth as the sole authentication authority for the single WebUI admini
 - Keep only `auth.status` in oRPC for setup guidance and API clients.
 - Validate oRPC and SSE requests through `auth.api.getSession` with the raw request headers.
 - Reject public sign-up at the Elysia boundary. The in-process bootstrap is the only account creator.
-- Use `ELAINA_ADMIN_USERNAME`/`ELAINA_ADMIN_PASSWORD` only while `auth_user` is empty. The database
+- Use `TSUKAIMA_ADMIN_USERNAME`/`TSUKAIMA_ADMIN_PASSWORD` only while `auth_user` is empty. The database
   remains authoritative afterwards.
 - Add optional actor fields to the SDK audit entry so Better Auth hooks and admin RPC calls record
   `admin:<username>` directly.
@@ -41,7 +41,7 @@ Use Better Auth as the sole authentication authority for the single WebUI admini
   Better Auth routing, origin checks, and disabled sign-up behavior.
 - Sign-in throttling uses an in-process per-instance bucket keyed by client IP. Direct connections
   use Bun's socket peer address rather than trusting client-supplied `X-Forwarded-For`; reverse
-  proxies must be explicitly listed in `ELAINA_TRUSTED_PROXIES`.
+  proxies must be explicitly listed in `TSUKAIMA_TRUSTED_PROXIES`.
 - Migration `0005` drops the legacy `admin_credentials` table. Argon2id hashes are not portable to
   Better Auth accounts; the pre-deployment upgrade path recreates the administrator from the
   bootstrap environment values.

@@ -89,7 +89,7 @@ export function migrateLegacyPluginTables(
 	const imported: LegacyPluginTableImport[] = [];
 	const dropped: string[] = [];
 	const orphaned: string[] = [];
-	const schema = `_elaina_legacy_${options.pluginId.replace(/[^a-z0-9_]/giu, "_")}`;
+	const schema = `_tsukaima_legacy_${options.pluginId.replace(/[^a-z0-9_]/giu, "_")}`;
 
 	options.source.exec(`ATTACH DATABASE ${quoteLiteral(options.target.path)} AS ${schema}`);
 	try {

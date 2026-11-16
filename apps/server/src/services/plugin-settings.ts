@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
-import type { PluginManifest } from "@elaina/sdk";
-import { type ElainaDatabase, meta } from "@elaina/db";
-import { validatePluginConfig } from "@elaina/plugin-registry";
+import type { PluginManifest } from "@tsukaima/sdk";
+import { type TsukaimaDatabase, meta } from "@tsukaima/db";
+import { validatePluginConfig } from "@tsukaima/plugin-registry";
 
 export type PluginConfigValue = Record<string, unknown>;
 
@@ -11,7 +11,7 @@ export interface PluginConfigView {
 }
 
 export interface PluginSettingsStoreOptions {
-	readonly database: () => ElainaDatabase | undefined;
+	readonly database: () => TsukaimaDatabase | undefined;
 	readonly env: Record<string, string | undefined>;
 }
 
@@ -29,7 +29,7 @@ function isEmpty(value: unknown): boolean {
  * manifest's `configEnv` map. Clearing a stored value falls back to the environment again.
  */
 export class PluginSettingsStore {
-	readonly #database: () => ElainaDatabase | undefined;
+	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #env: Record<string, string | undefined>;
 	readonly #manifests = new Map<string, PluginManifest>();
 	readonly #listeners = new Map<string, Set<(value: PluginConfigValue) => Promise<void> | void>>();

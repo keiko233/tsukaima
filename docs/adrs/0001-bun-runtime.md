@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Elaina needs one modern TypeScript runtime for server, workers, CLI tools, tests, and build scripts. Bun offers a built-in SQLite driver, fast startup, native test runner, and built-in HTTP/WebSocket support. Pi's model and coding-agent layers already include Bun compatibility paths.
+Tsukaima needs one modern TypeScript runtime for server, workers, CLI tools, tests, and build scripts. Bun offers a built-in SQLite driver, fast startup, native test runner, and built-in HTTP/WebSocket support. Pi's model and coding-agent layers already include Bun compatibility paths.
 
 ## Decision
 

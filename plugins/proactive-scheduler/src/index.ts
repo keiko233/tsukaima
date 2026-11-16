@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import type { ElainaPlugin, PluginContext } from "@elaina/sdk";
+import type { TsukaimaPlugin, PluginContext } from "@tsukaima/sdk";
 import {
 	PROACTIVE_SCHEDULER_RUN_KIND,
 	PROACTIVE_SCHEDULER_TICK_KIND,
@@ -67,7 +67,7 @@ async function updateStatus(
 	}
 }
 
-export const proactiveSchedulerPlugin: ElainaPlugin = {
+export const proactiveSchedulerPlugin: TsukaimaPlugin = {
 	manifest: proactiveSchedulerManifest,
 	rootDir: fileURLToPath(new URL("../", import.meta.url)),
 	async setup(context) {

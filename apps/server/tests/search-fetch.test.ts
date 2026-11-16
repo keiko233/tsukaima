@@ -3,12 +3,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { auditLog } from "@elaina/db";
-import { resolveToolPolicyAccess } from "@elaina/sdk";
+import { auditLog } from "@tsukaima/db";
+import { resolveToolPolicyAccess } from "@tsukaima/sdk";
 import {
 	SEARCH_FETCH_TRANSPORT_BINDING,
 	type SearchFetchTransportBinding,
-} from "@elaina-plugin/search-fetch";
+} from "@tsukaima-plugin/search-fetch";
 import { createApp } from "../src/app.ts";
 
 const directories: string[] = [];
@@ -21,11 +21,11 @@ afterEach(async () => {
 });
 
 const DDG_HTML = `<html><body>
-<a class="result__a" href="https://example.com/elaina">Elaina result</a>
+<a class="result__a" href="https://example.com/tsukaima">Tsukaima result</a>
 <a class="result__snippet">A useful snippet</a>
 </body></html>`;
 const WIKI_JSON = JSON.stringify({
-	query: { search: [{ snippet: "Witch", title: "Elaina", timestamp: "2024-01-01T00:00:00Z" }] },
+	query: { search: [{ snippet: "Witch", title: "Tsukaima", timestamp: "2024-01-01T00:00:00Z" }] },
 });
 const PAGE_HTML = `<html lang="en"><head><title>Safe page</title></head><body>
 <script>script-secret-body()</script><nav>Menu</nav><p>TOPSECRET PAGE BODY</p></body></html>`;
@@ -56,12 +56,12 @@ function createTransport(): SearchFetchTransportBinding {
 }
 
 async function createLifecycle(env: Record<string, string | undefined> = {}) {
-	const directory = await mkdtemp(join(tmpdir(), "elaina-search-fetch-"));
+	const directory = await mkdtemp(join(tmpdir(), "tsukaima-search-fetch-"));
 	directories.push(directory);
 	const { lifecycle } = createApp(
 		{
-			ELAINA_DATA_DIR: directory,
-			ELAINA_PORT: "7420",
+			TSUKAIMA_DATA_DIR: directory,
+			TSUKAIMA_PORT: "7420",
 			...env,
 		},
 		{
@@ -79,7 +79,7 @@ const decodeTool = (result: {
 describe("search-fetch host integration", () => {
 	test("registers tools and RPCs, redacts secrets, and runs offline searches", async () => {
 		const lifecycle = await createLifecycle({
-			ELAINA_SEARCH_BRAVE_API_KEY: BRAVE_SECRET,
+			TSUKAIMA_SEARCH_BRAVE_API_KEY: BRAVE_SECRET,
 		});
 		try {
 			const entry = (await lifecycle.pluginHost.list()).find(
@@ -120,7 +120,7 @@ describe("search-fetch host integration", () => {
 
 			const web = await lifecycle.pluginHost.invokeTool("search-fetch.web", {
 				language: "en",
-				query: "elaina",
+				query: "tsukaima",
 			});
 			expect(web.ok).toBe(true);
 			if (!web.ok) throw new Error("tool failed");
@@ -130,7 +130,7 @@ describe("search-fetch host integration", () => {
 
 			const testQuery = (await lifecycle.pluginHost.invokeRpc(
 				"search-fetch.testQuery",
-				{ provider: "auto", query: "elaina" },
+				{ provider: "auto", query: "tsukaima" },
 				"search-fetch",
 			)) as {
 				latencyMs: number;
@@ -149,7 +149,7 @@ describe("search-fetch host integration", () => {
 
 	test("fetches safely, scopes snapshots, and audits without bodies or secrets", async () => {
 		const lifecycle = await createLifecycle({
-			ELAINA_SEARCH_BRAVE_API_KEY: BRAVE_SECRET,
+			TSUKAIMA_SEARCH_BRAVE_API_KEY: BRAVE_SECRET,
 		});
 		try {
 			const fetched = await lifecycle.pluginHost.invokeTool(

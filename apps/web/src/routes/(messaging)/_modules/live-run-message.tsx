@@ -9,9 +9,9 @@ import {
 	MessageBubbleContent,
 	MessageContent,
 	MessageHeader,
-} from "@elaina/ui/components/agents/message";
-import type { LiveRunPhase, LiveRunState, RunStep } from "@elaina/contracts";
-import { cn } from "@elaina/ui/lib/utils";
+} from "@tsukaima/ui/components/agents/message";
+import type { LiveRunPhase, LiveRunState, RunStep } from "@tsukaima/contracts";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { ToolCallRow } from "./tool-call-row";
 
@@ -178,7 +178,7 @@ export function LiveRunMessage({ run, now }: LiveRunMessageProps) {
 			</MessageAvatar>
 			<MessageContent>
 				<MessageHeader>
-					<span className="font-medium text-foreground">{m.message_sender_elaina()}</span>
+					<span className="font-medium text-foreground">{m.message_sender_tsukaima()}</span>
 					<span aria-hidden="true">·</span>
 					<span className={cn(working ? "text-primary" : "text-destructive")}>
 						{run.failure === undefined ? phaseLabel(run.phase, working) : m.live_run_failed()}

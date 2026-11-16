@@ -37,7 +37,7 @@ The root route owns the global shell and the nested `Outlet`.
 
 ## Layout
 
-- A 56 px global top bar spans the full window and contains the Elaina identity,
+- A 56 px global top bar spans the full window and contains the Tsukaima identity,
   a terminal-style log toggle, plugins, settings, and the overflow menu. Channel state
   lives in the plugin page and diagnostics, not in the global bar.
 - The log toggle opens a bottom dock with the live ANSI stream, search, level filter,
@@ -57,7 +57,7 @@ the pending request count.
 
 ### Chats
 
-The Chats panel organizes stable chat objects above their Elaina sessions.
+The Chats panel organizes stable chat objects above their Tsukaima sessions.
 
 - Expanding a chat object reveals its sessions without changing the content route.
 - Selecting a child navigates to `/chat/$sessionId`.
@@ -93,11 +93,11 @@ unsupported content. Delivery state is shown for self-authored messages.
 
 The composer offers only capabilities that currently exist:
 
-- **Talk to Elaina** appends a WebUI envelope to the selected session and starts an
-  Elaina turn.
+- **Talk to Tsukaima** appends a WebUI envelope to the selected session and starts an
+  Tsukaima turn.
 - **Send to channel** is available for external private/group sessions only while the
   OneBot WebSocket is connected. It sends directly to the external target without
-  asking Elaina to reply.
+  asking Tsukaima to reply.
 
 Drafts are stored per session in local storage. A failed or uncertain external send is
 not retried automatically.

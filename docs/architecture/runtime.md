@@ -2,7 +2,7 @@
 
 ## Process model
 
-- `elaina-server`: Bun process containing HTTP API, WebSocket gateway for WebUI, channel runtime, agent runner, and scheduler.
+- `tsukaima-server`: Bun process containing HTTP API, WebSocket gateway for WebUI, channel runtime, agent runner, and scheduler.
 - `plugin-worker`: Bun worker/subprocess for selected third-party or long-running plugins.
 - `coding-runner`: subprocess or sandboxed environment for self-iteration jobs.
 - `migration-kit`: Bun CLI used before and during cutover.

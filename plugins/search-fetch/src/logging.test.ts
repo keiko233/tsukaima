@@ -5,7 +5,7 @@ import type {
 	PluginRpcHandler,
 	PluginTool,
 	ToolInvocationContext,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import { SnapshotCache } from "./cache.ts";
 import { domainFromUrl, type SearchProvider, type SearchResult } from "./domain.ts";
 import { SearchEngine } from "./engine.ts";

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AuditEntry } from "@elaina/sdk";
+import type { AuditEntry } from "@tsukaima/sdk";
 import { SnapshotCache } from "./cache.ts";
 import { domainFromUrl, type SearchProvider, type SearchResult } from "./domain.ts";
 import { SearchEngine } from "./engine.ts";

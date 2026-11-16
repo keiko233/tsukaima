@@ -2,14 +2,14 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@elaina/ui/components/motion/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
 import {
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-} from "@elaina/ui/components/motion/select";
+} from "@tsukaima/ui/components/motion/select";
 import { logLevels as LOG_LEVELS, orpc, type LogLevel } from "@/lib/api";
 import { applyLocale } from "@/lib/locale";
 import { errorMessage, useToast } from "@/lib/toast";

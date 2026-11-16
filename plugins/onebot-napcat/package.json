@@ -1,5 +1,5 @@
 {
-	"name": "@elaina-plugin/onebot-napcat",
+	"name": "@tsukaima-plugin/onebot-napcat",
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
@@ -7,10 +7,10 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
-		"@elaina/contracts": "workspace:*",
-		"@elaina/sdk": "workspace:*",
-		"@elaina/ui": "workspace:*",
 		"@inlang/paraglide-js": "^3.2.2",
+		"@tsukaima/contracts": "workspace:*",
+		"@tsukaima/sdk": "workspace:*",
+		"@tsukaima/ui": "workspace:*",
 		"lucide-react": "^1.72.0",
 		"zod": "4.6.7"
 	},
@@ -20,7 +20,7 @@
 		"react": "^19.3.1",
 		"react-dom": "^19.3.1"
 	},
-	"elaina": {
+	"tsukaima": {
 		"id": "onebot-napcat",
 		"ui": "./src/ui.tsx"
 	}

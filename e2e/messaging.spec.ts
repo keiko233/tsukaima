@@ -7,7 +7,7 @@ test.describe("WebUI messaging", () => {
 		const title = `E2E chat ${Date.now()}`;
 		await createLocalChat(page, title);
 
-		const prompt = "Hello Elaina from the end-to-end suite";
+		const prompt = "Hello Tsukaima from the end-to-end suite";
 		const composer = page.getByPlaceholder("Write a message…");
 		await expect(composer).toBeVisible();
 		await composer.fill(prompt);
@@ -17,7 +17,7 @@ test.describe("WebUI messaging", () => {
 		await expect(timeline.getByText(prompt, { exact: true })).toBeVisible();
 		await expect(page.getByPlaceholder("Write a message…")).toHaveValue("");
 		await expect(timeline.getByText("ok", { exact: true })).toBeVisible({ timeout: 30_000 });
-		await expect(timeline.getByText("Elaina", { exact: true }).last()).toBeVisible();
+		await expect(timeline.getByText("Tsukaima", { exact: true }).last()).toBeVisible();
 
 		// Reload proves the conversation and generated reply are durable, not only query cache.
 		await page.reload();

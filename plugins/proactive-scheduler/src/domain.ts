@@ -2,7 +2,7 @@ import {
 	PROACTIVE_LURK_MARKER,
 	PROACTIVE_SCHEDULE_LATER_MARKER,
 	PROACTIVE_SKIP_MARKER,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 import { z } from "zod";
 
 export const scheduledTaskKindSchema = z.enum(["remind", "nudge", "proactive", "workflow"]);

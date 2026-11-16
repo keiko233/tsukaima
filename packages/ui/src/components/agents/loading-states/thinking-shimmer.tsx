@@ -2,9 +2,9 @@
 // beui.dev/components/agents/chat-app
 
 import type { ReactNode } from "react";
-import { TextShimmer } from "@elaina/ui/components/motion/text-shimmer";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { TextShimmer } from "@tsukaima/ui/components/motion/text-shimmer";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { type LoadingStatesMessages, loadingStatesMessages } from "./messages";
 
 export interface ThinkingShimmerProps {

@@ -9,8 +9,8 @@ import {
 	messages,
 	migrateDomainDatabase,
 	openDomainDatabase,
-	type ElainaDatabase,
-} from "@elaina/db";
+	type TsukaimaDatabase,
+} from "@tsukaima/db";
 import { createLogger } from "../src/logging.ts";
 import { ConversationPolicyService } from "../src/services/conversation-policy.ts";
 import { MemoryService } from "../src/services/memory-service.ts";
@@ -33,11 +33,11 @@ async function setup(
 		readonly tasks?: PluginTaskService;
 	} = {},
 ): Promise<{
-	database: ElainaDatabase;
+	database: TsukaimaDatabase;
 	memory: MemoryService;
 	policy: ConversationPolicyService;
 }> {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-memory-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-memory-"));
 	directories.push(directory);
 	const database = await openDomainDatabase(join(directory, "domain.sqlite"));
 	migrateDomainDatabase(database);
@@ -59,7 +59,7 @@ async function setup(
 }
 
 async function seedSession(
-	database: ElainaDatabase,
+	database: TsukaimaDatabase,
 	input: {
 		readonly id: string;
 		readonly kind?: "private" | "group";
@@ -88,7 +88,7 @@ async function seedSession(
 			id: `${input.id}-message-${index}`,
 			kind: "onebot-v11",
 			occurredAt: new Date(Date.parse("2026-11-13T00:00:00.000Z") + index * 1_000).toISOString(),
-			senderExternalId: index % 2 === 0 ? "user-1" : "elaina",
+			senderExternalId: index % 2 === 0 ? "user-1" : "tsukaima",
 			senderUserId: null,
 		});
 	}
@@ -186,7 +186,7 @@ describe("memory lifecycle", () => {
 
 describe("background extraction", () => {
 	test("runs through tasks.create with the deterministic fallback extractor", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-memory-task-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-memory-task-"));
 		directories.push(directory);
 		const database = await openDomainDatabase(join(directory, "domain.sqlite"));
 		migrateDomainDatabase(database);

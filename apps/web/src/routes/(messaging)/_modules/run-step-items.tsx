@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { RunStep } from "@elaina/contracts";
+import type { RunStep } from "@tsukaima/contracts";
 import { m } from "@/paraglide/messages";
 import { ToolCallRow } from "./tool-call-row";
 

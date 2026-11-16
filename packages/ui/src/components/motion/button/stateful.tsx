@@ -3,8 +3,8 @@
 import { Check, Loader2, X } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion, type Variants } from "motion/react";
 import { forwardRef, type ReactNode, useLayoutEffect, useRef, useState } from "react";
-import { EASE_OUT, SPRING_SWAP } from "@elaina/ui/lib/ease";
-import { useMessages } from "@elaina/ui/lib/i18n";
+import { EASE_OUT, SPRING_SWAP } from "@tsukaima/ui/lib/ease";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
 import { Button, type ButtonProps } from "./base";
 
 export type ButtonState = "idle" | "loading" | "success" | "error";

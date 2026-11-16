@@ -152,7 +152,7 @@ async function stopChild(child: ChildProcess | undefined): Promise<void> {
 }
 
 export default async function globalSetup(): Promise<void> {
-	const dataDir = await fs.mkdtemp(join(tmpdir(), "elaina-e2e-"));
+	const dataDir = await fs.mkdtemp(join(tmpdir(), "tsukaima-e2e-"));
 	const serverPort = await freePort();
 	let webPort = await freePort();
 	while (webPort === serverPort) webPort = await freePort();
@@ -168,16 +168,16 @@ export default async function globalSetup(): Promise<void> {
 
 	try {
 		const serverEnv = minimalEnvironment({
-			ELAINA_ADMIN_PASSWORD: password,
-			ELAINA_ADMIN_USERNAME: username,
-			ELAINA_AUTH_SECRET: authSecret,
-			ELAINA_DATA_DIR: join(dataDir, "data"),
-			ELAINA_HOST: "127.0.0.1",
-			ELAINA_LOG_LEVEL: "warn",
-			ELAINA_PORT: String(serverPort),
-			ELAINA_PUBLIC_URL: serverUrl,
-			ELAINA_TRUSTED_ORIGINS: `${webUrl},http://localhost:${webPort}`,
-			ELAINA_WEB_ORIGIN: webUrl,
+			TSUKAIMA_ADMIN_PASSWORD: password,
+			TSUKAIMA_ADMIN_USERNAME: username,
+			TSUKAIMA_AUTH_SECRET: authSecret,
+			TSUKAIMA_DATA_DIR: join(dataDir, "data"),
+			TSUKAIMA_HOST: "127.0.0.1",
+			TSUKAIMA_LOG_LEVEL: "warn",
+			TSUKAIMA_PORT: String(serverPort),
+			TSUKAIMA_PUBLIC_URL: serverUrl,
+			TSUKAIMA_TRUSTED_ORIGINS: `${webUrl},http://localhost:${webPort}`,
+			TSUKAIMA_WEB_ORIGIN: webUrl,
 			NODE_ENV: "test",
 		});
 		server = spawn("bun", ["apps/server/src/main.ts"], {
@@ -197,7 +197,7 @@ export default async function globalSetup(): Promise<void> {
 			minimalEnvironment({ NODE_ENV: "test" }),
 		);
 		const webEnv = minimalEnvironment({
-			ELAINA_SERVER_URL: serverUrl,
+			TSUKAIMA_SERVER_URL: serverUrl,
 			NODE_ENV: "test",
 		});
 		web = spawn(

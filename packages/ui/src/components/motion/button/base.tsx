@@ -9,9 +9,9 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { EASE_OUT, SPRING_PRESS } from "@elaina/ui/lib/ease";
-import { useHoverCapable } from "@elaina/ui/lib/hooks/use-hover-capable";
-import { cn } from "@elaina/ui/lib/utils";
+import { EASE_OUT, SPRING_PRESS } from "@tsukaima/ui/lib/ease";
+import { useHoverCapable } from "@tsukaima/ui/lib/hooks/use-hover-capable";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export type ButtonVariant =
 	| "primary"

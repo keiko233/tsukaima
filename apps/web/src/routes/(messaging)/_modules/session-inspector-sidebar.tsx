@@ -8,9 +8,9 @@ import type {
 	ConversationPolicyView,
 	PersonaSummary,
 	SessionDetail,
-} from "@elaina/contracts";
-import { Button } from "@elaina/ui/components/motion/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@elaina/ui/components/motion/tabs";
+} from "@tsukaima/contracts";
+import { Button } from "@tsukaima/ui/components/motion/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@tsukaima/ui/components/motion/tabs";
 import { orpc } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
@@ -26,7 +26,7 @@ import {
 
 export type InspectorTab = "context" | "commands" | "trigger" | "pacing" | "persona";
 
-const INSPECTOR_TAB_KEY = "elaina.webui.inspector-tab";
+const INSPECTOR_TAB_KEY = "tsukaima.webui.inspector-tab";
 
 function isInspectorTab(value: string | null): value is InspectorTab {
 	return (

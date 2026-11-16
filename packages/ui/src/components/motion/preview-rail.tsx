@@ -10,12 +10,12 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { EASE_OUT, SPRING_LAYOUT } from "@elaina/ui/lib/ease";
-import { useDismiss } from "@elaina/ui/lib/hooks/use-dismiss";
-import { useHoverGesture } from "@elaina/ui/lib/hooks/use-hover-gesture";
-import { useTapGesture } from "@elaina/ui/lib/hooks/use-tap-gesture";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { EASE_OUT, SPRING_LAYOUT } from "@tsukaima/ui/lib/ease";
+import { useDismiss } from "@tsukaima/ui/lib/hooks/use-dismiss";
+import { useHoverGesture } from "@tsukaima/ui/lib/hooks/use-hover-gesture";
+import { useTapGesture } from "@tsukaima/ui/lib/hooks/use-tap-gesture";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 /** English defaults. Override per instance with `labels`, or app-wide with `LocaleProvider`. */
 export const previewRailMessages = {

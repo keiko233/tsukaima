@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, type ReactNode } from "react";
-import type { PluginRow, PluginStatusSnapshot } from "@elaina/contracts";
+import type { PluginRow, PluginStatusSnapshot } from "@tsukaima/contracts";
 import type { PluginI18n } from "../i18n/index.ts";
 
 export type PluginSummary = Pick<

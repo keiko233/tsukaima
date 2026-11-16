@@ -1,4 +1,4 @@
-import type { PluginContext, PluginLogger, PluginRpcHandler } from "@elaina/sdk";
+import type { PluginContext, PluginLogger, PluginRpcHandler } from "@tsukaima/sdk";
 import pLimit from "p-limit";
 import { encodeBase64 } from "./archive.ts";
 import {
@@ -478,7 +478,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		const token = normalizeText(record.token) || normalizeText(settings.telegramBotToken);
 		if (token.length === 0) {
 			throw new Error(
-				"Telegram bot token is not configured. Set telegramBotToken or ELAINA_TELEGRAM_BOT_TOKEN.",
+				"Telegram bot token is not configured. Set telegramBotToken or TSUKAIMA_TELEGRAM_BOT_TOKEN.",
 			);
 		}
 		const apiBaseUrl =

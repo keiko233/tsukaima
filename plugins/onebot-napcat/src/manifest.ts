@@ -1,4 +1,4 @@
-import { pluginManifestSchema, type PluginManifest } from "@elaina/sdk/manifest";
+import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk/manifest";
 
 export const ONEBOT_PLUGIN_ID = "onebot-napcat";
 
@@ -12,7 +12,7 @@ export const ONEBOT_PLUGIN_ID = "onebot-napcat";
 const configProperties = {
 	accessToken: {
 		description:
-			"Token NapCat requires for this connection. Falls back to ELAINA_ONEBOT_ACCESS_TOKEN when empty.",
+			"Token NapCat requires for this connection. Falls back to TSUKAIMA_ONEBOT_ACCESS_TOKEN when empty.",
 		descriptionKey: "config_access_token_hint",
 		title: "Access token",
 		titleKey: "config_access_token",
@@ -46,7 +46,7 @@ const configProperties = {
 	},
 	botAccountId: {
 		description:
-			"The bot's own account id, used to recognise its own messages. Defaults to elaina-server.",
+			"The bot's own account id, used to recognise its own messages. Defaults to tsukaima-server.",
 		descriptionKey: "config_bot_account_hint",
 		title: "Bot account id",
 		titleKey: "config_bot_account",
@@ -123,7 +123,8 @@ const configProperties = {
 	},
 	mode: {
 		default: "forward",
-		description: "Forward: Elaina dials NapCat. Reverse: NapCat dials Elaina. Defaults to forward.",
+		description:
+			"Forward: Tsukaima dials NapCat. Reverse: NapCat dials Tsukaima. Defaults to forward.",
 		descriptionKey: "config_mode_hint",
 		enum: ["forward", "reverse"],
 		enumLabels: {
@@ -260,7 +261,7 @@ const configProperties = {
 	},
 	wsUrl: {
 		description:
-			"NapCat forward WebSocket address, for example ws://127.0.0.1:3001. Falls back to ELAINA_ONEBOT_WS_URL when empty.",
+			"NapCat forward WebSocket address, for example ws://127.0.0.1:3001. Falls back to TSUKAIMA_ONEBOT_WS_URL when empty.",
 		descriptionKey: "config_ws_url_hint",
 		title: "WebSocket URL",
 		titleKey: "config_ws_url",
@@ -272,8 +273,8 @@ const configProperties = {
 export const oneBotNapCatManifest: PluginManifest = pluginManifestSchema.parse({
 	apiVersion: "1",
 	configEnv: {
-		accessToken: "ELAINA_ONEBOT_ACCESS_TOKEN",
-		wsUrl: "ELAINA_ONEBOT_WS_URL",
+		accessToken: "TSUKAIMA_ONEBOT_ACCESS_TOKEN",
+		wsUrl: "TSUKAIMA_ONEBOT_WS_URL",
 	},
 	configSchema: {
 		properties: configProperties,

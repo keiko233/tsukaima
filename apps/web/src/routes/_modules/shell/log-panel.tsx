@@ -17,23 +17,23 @@ import {
 	type KeyboardEvent as ReactKeyboardEvent,
 	type PointerEvent,
 } from "react";
-import { Button, IconButton } from "@elaina/ui/components/motion/button";
-import { Input } from "@elaina/ui/components/motion/input";
+import { Button, IconButton } from "@tsukaima/ui/components/motion/button";
+import { Input } from "@tsukaima/ui/components/motion/input";
 import {
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-} from "@elaina/ui/components/motion/select";
+} from "@tsukaima/ui/components/motion/select";
 import { logLevels as LOG_LEVELS, orpc, type LogLevel } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { useLogStream } from "@/lib/use-log-stream";
-import { cn } from "@elaina/ui/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { LogTerminal } from "@/routes/(system)/_modules/log-terminal";
 
-const HEIGHT_KEY = "elaina.webui.log-panel-height";
+const HEIGHT_KEY = "tsukaima.webui.log-panel-height";
 const MIN_HEIGHT = 200;
 const DEFAULT_HEIGHT = 340;
 

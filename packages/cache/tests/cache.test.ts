@@ -23,7 +23,7 @@ async function temporaryCache(path = false): Promise<KeyvCache> {
 }
 
 async function temporaryDirectory(): Promise<string> {
-	const directory = await mkdtemp(join(tmpdir(), "elaina-cache-"));
+	const directory = await mkdtemp(join(tmpdir(), "tsukaima-cache-"));
 	directories.push(directory);
 	return directory;
 }

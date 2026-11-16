@@ -34,9 +34,9 @@ afterEach(async () => {
 describe("server skeleton", () => {
 	test("reports lifecycle state over RPC", async () => {
 		const { app, lifecycle } = createApp({
-			ELAINA_DATA_DIR: "./.test-data",
-			ELAINA_PORT: "7420",
-			ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			TSUKAIMA_DATA_DIR: "./.test-data",
+			TSUKAIMA_PORT: "7420",
+			TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 		});
 		expect(lifecycle.state.state).toBe("starting");
 		const response = await app.handle(new Request("http://localhost/healthz"));
@@ -47,14 +47,14 @@ describe("server skeleton", () => {
 	});
 
 	test("streams snapshot and live log entries over an authenticated SSE connection", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-server-sse-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-server-sse-"));
 		directories.push(directory);
 		const { app, lifecycle } = createApp({
-			ELAINA_ADMIN_PASSWORD: "test-admin-password",
-			ELAINA_ADMIN_USERNAME: "admin",
-			ELAINA_DATA_DIR: directory,
-			ELAINA_PORT: "7420",
-			ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			TSUKAIMA_ADMIN_PASSWORD: "test-admin-password",
+			TSUKAIMA_ADMIN_USERNAME: "admin",
+			TSUKAIMA_DATA_DIR: directory,
+			TSUKAIMA_PORT: "7420",
+			TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 		});
 		await lifecycle.start();
 		const cookie = await signIn(app, "admin", "test-admin-password");
@@ -98,8 +98,8 @@ describe("server skeleton", () => {
 
 	test("rejects an unauthenticated log stream", async () => {
 		const { app, lifecycle } = createApp({
-			ELAINA_DATA_DIR: "./.test-data",
-			ELAINA_PORT: "7420",
+			TSUKAIMA_DATA_DIR: "./.test-data",
+			TSUKAIMA_PORT: "7420",
 		});
 		const response = await app.handle(new Request("http://localhost/events/logs"));
 		expect(response.status).toBe(401);
@@ -108,19 +108,19 @@ describe("server skeleton", () => {
 
 	test("binds exclusively so a duplicate listener rejects with EADDRINUSE", async () => {
 		const port = await allocatePort();
-		const firstDir = await fs.mkdtemp(join(tmpdir(), "elaina-bind-first-"));
-		const secondDir = await fs.mkdtemp(join(tmpdir(), "elaina-bind-second-"));
+		const firstDir = await fs.mkdtemp(join(tmpdir(), "tsukaima-bind-first-"));
+		const secondDir = await fs.mkdtemp(join(tmpdir(), "tsukaima-bind-second-"));
 		directories.push(firstDir, secondDir);
 		const first = createApp({
-			ELAINA_DATA_DIR: firstDir,
-			ELAINA_HOST: "127.0.0.1",
-			ELAINA_PORT: String(port),
+			TSUKAIMA_DATA_DIR: firstDir,
+			TSUKAIMA_HOST: "127.0.0.1",
+			TSUKAIMA_PORT: String(port),
 		});
 		first.app.listen(listenOptions(first.config));
 		const second = createApp({
-			ELAINA_DATA_DIR: secondDir,
-			ELAINA_HOST: "127.0.0.1",
-			ELAINA_PORT: String(port),
+			TSUKAIMA_DATA_DIR: secondDir,
+			TSUKAIMA_HOST: "127.0.0.1",
+			TSUKAIMA_PORT: String(port),
 		});
 		try {
 			expect(() => second.app.listen(listenOptions(second.config))).toThrow();

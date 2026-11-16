@@ -660,7 +660,7 @@ export const sessionsCreateInputSchema = z.object({
 
 export const sessionsSendInputSchema = z.object({
 	sessionId: z.string().min(1),
-	target: z.enum(["channel", "elaina"]),
+	target: z.enum(["channel", "tsukaima"]),
 	text: z.string().trim().min(1).max(8_000),
 });
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ConversationId, PromptInput } from "@earendil-works/pi-durable";
-import { openDurableStorage } from "@elaina/durable";
+import { openDurableStorage } from "@tsukaima/durable";
 import {
 	CONTEXT_EXTENSION_NAME,
 	MEMORY_SECTION_KEY,
@@ -48,7 +48,7 @@ describe("context extension", () => {
 		const extension = createContextExtension(
 			stubProvider({
 				renderMemories: async () => "Known memories:\n- [global/fact] likes tea",
-				renderPersona: async () => "You are Elaina, a curious traveler.",
+				renderPersona: async () => "You are Tsukaima, a curious traveler.",
 			}),
 		);
 		expect(extension.name).toBe(CONTEXT_EXTENSION_NAME);
@@ -58,7 +58,7 @@ describe("context extension", () => {
 		]);
 		const personaText = await extension.sections?.[0]?.render(renderInput, BACKGROUND_CONTEXT);
 		const memoryText = await extension.sections?.[1]?.render(renderInput, BACKGROUND_CONTEXT);
-		expect(personaText).toContain("Elaina");
+		expect(personaText).toContain("Tsukaima");
 		expect(memoryText).toContain("likes tea");
 	});
 
@@ -78,7 +78,7 @@ describe("context extension", () => {
 
 describe("PiDurableConversationHost context provider", () => {
 	test("renders persona and memory for the conversation that produced the run", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-core-context-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-context-"));
 		try {
 			const calls: string[] = [];
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
@@ -113,7 +113,7 @@ describe("PiDurableConversationHost context provider", () => {
 	});
 
 	test("backfills the extension for conversations created before it existed", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "elaina-core-context-"));
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-context-"));
 		try {
 			const path = join(directory, "durable.sqlite");
 			const legacyStorage = await openDurableStorage(path);

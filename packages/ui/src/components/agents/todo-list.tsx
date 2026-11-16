@@ -12,11 +12,11 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { ActionSwapRollText } from "@elaina/ui/components/motion/action-swap-roll";
-import { AgentDisclosure } from "@elaina/ui/components/agents/agent-disclosure";
-import { EASE_OUT, SPRING_LAYOUT, SPRING_SWAP } from "@elaina/ui/lib/ease";
-import { formatNumber, useLocale, useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { ActionSwapRollText } from "@tsukaima/ui/components/motion/action-swap-roll";
+import { AgentDisclosure } from "@tsukaima/ui/components/agents/agent-disclosure";
+import { EASE_OUT, SPRING_LAYOUT, SPRING_SWAP } from "@tsukaima/ui/lib/ease";
+import { formatNumber, useLocale, useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export type TodoItemStatus = "pending" | "in-progress" | "completed" | "cancelled";
 

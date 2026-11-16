@@ -6,7 +6,7 @@ import {
 	consumeProactiveMarkers,
 	defaultConversationPolicy,
 	type ConversationPolicy,
-} from "@elaina/contracts";
+} from "@tsukaima/contracts";
 import type {
 	PluginBackgroundTurnInput,
 	PluginBackgroundTurnResult,
@@ -23,7 +23,7 @@ import type {
 	PluginTaskUpdateInput,
 	PluginTaskWatchEvent,
 	PluginTasksApi,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import {
 	CONVERSATION_POLICY_SCOPE,
 	DEFAULT_PROACTIVE_POLICY,
@@ -605,7 +605,7 @@ describe("proactive delivery and markers", () => {
 		);
 	});
 
-	test("consumes ELAINA_SKIP/ELAINA_LURK markers without sending and backs off", async () => {
+	test("consumes TSUKAIMA_SKIP/TSUKAIMA_LURK markers without sending and backs off", async () => {
 		const now = Date.UTC(2026, 0, 1, 12, 0);
 		const { conversations, service } = await setup(now, true);
 		await service.repository.saveState({
@@ -629,10 +629,10 @@ describe("proactive delivery and markers", () => {
 		const state = await service.repository.getState("c1");
 		expect(state?.refusedCount).toBe(1);
 		expect(state?.silenceUntilMs).toBeGreaterThan(now);
-		expect(conversations.turns[0]?.prompt).toContain("ELAINA_SKIP");
+		expect(conversations.turns[0]?.prompt).toContain("TSUKAIMA_SKIP");
 	});
 
-	test("schedules later when the model emits ELAINA_SCHEDULE_LATER", async () => {
+	test("schedules later when the model emits TSUKAIMA_SCHEDULE_LATER", async () => {
 		const now = Date.UTC(2026, 0, 1, 12, 0);
 		const { conversations, service } = await setup(now, true);
 		await service.repository.saveState({
@@ -661,14 +661,14 @@ describe("proactive delivery and markers", () => {
 	});
 
 	test("consumes every output marker before text can be delivered", () => {
-		expect(consumeProactiveMarkers("ELAINA_SKIP")).toEqual({ marker: "skip", text: "" });
-		expect(consumeProactiveMarkers("ELAINA_LURK")).toEqual({ marker: "lurk", text: "" });
-		expect(consumeProactiveMarkers("ELAINA_SCHEDULE_LATER 15m")).toEqual({
+		expect(consumeProactiveMarkers("TSUKAIMA_SKIP")).toEqual({ marker: "skip", text: "" });
+		expect(consumeProactiveMarkers("TSUKAIMA_LURK")).toEqual({ marker: "lurk", text: "" });
+		expect(consumeProactiveMarkers("TSUKAIMA_SCHEDULE_LATER 15m")).toEqual({
 			marker: "schedule-later",
 			scheduleLaterMs: 900_000,
 			text: "",
 		});
-		expect(consumeProactiveMarkers("hello ELAINA_SKIP world")).toEqual({
+		expect(consumeProactiveMarkers("hello TSUKAIMA_SKIP world")).toEqual({
 			marker: "skip",
 			text: "hello world",
 		});

@@ -10,7 +10,7 @@ import {
 	type InputHTMLAttributes,
 	type ReactNode,
 } from "react";
-import { cn } from "@elaina/ui/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export type InputClassNames = {
 	root?: string;

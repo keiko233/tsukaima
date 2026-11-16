@@ -4,7 +4,7 @@ import type {
 	PluginLogger,
 	PluginMediaApi,
 	PluginSettingsApi,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import { decodeBase64 } from "./archive.ts";
 import {
 	EMPTY_SEMANTIC_PROFILE,

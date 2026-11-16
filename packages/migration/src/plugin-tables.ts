@@ -1,6 +1,6 @@
-import type { ElainaDatabase } from "@elaina/db";
+import type { TsukaimaDatabase } from "@tsukaima/db";
 
-type PluginDatabase = Pick<ElainaDatabase, "$client">;
+type PluginDatabase = Pick<TsukaimaDatabase, "$client">;
 import type { ImportedMemeItem, ImportedMemePack } from "./meme-import.ts";
 import type { ImportedScheduledTask } from "./schedule-request-import.ts";
 import type { ImportedSchedulerState } from "./memory-import.ts";

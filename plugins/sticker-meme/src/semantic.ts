@@ -1,4 +1,4 @@
-import type { PluginModelInfo, PluginModelRegistry } from "@elaina/sdk";
+import type { PluginModelInfo, PluginModelRegistry } from "@tsukaima/sdk";
 import emojiLibrary from "emojilib";
 import { z } from "zod";
 import {

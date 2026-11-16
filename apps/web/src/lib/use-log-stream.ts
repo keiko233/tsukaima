@@ -1,6 +1,6 @@
 "use client";
 
-import type { LogEntry, LogSnapshot } from "@elaina/contracts";
+import type { LogEntry, LogSnapshot } from "@tsukaima/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { runtimeUrl } from "./runtime-url";
 

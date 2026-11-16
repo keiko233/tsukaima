@@ -12,8 +12,8 @@ import {
 	Wrench,
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { EASE_OUT, SPRING_LAYOUT } from "@elaina/ui/lib/ease";
-import { cn } from "@elaina/ui/lib/utils";
+import { EASE_OUT, SPRING_LAYOUT } from "@tsukaima/ui/lib/ease";
+import { cn } from "@tsukaima/ui/lib/utils";
 import type { AgentActivityTranslate } from "./messages";
 import type {
 	AgentActivityItem,

@@ -1,13 +1,13 @@
 import { Elysia } from "elysia";
 import { RPCHandler } from "@orpc/server/fetch";
 import { ResponseHeadersPlugin } from "@orpc/server/plugins";
-import { media } from "@elaina/db";
-import type { ElainaPlugin } from "@elaina/sdk";
+import { media } from "@tsukaima/db";
+import type { TsukaimaPlugin } from "@tsukaima/sdk";
 import { eq } from "drizzle-orm";
 import { appRouter } from "./rpc/index.ts";
-import type { ElainaApiContext } from "./rpc/base.ts";
-import { loadConfig, type ElainaConfig } from "./config.ts";
-import { ElainaLifecycle, type LifecycleOptions } from "./lifecycle.ts";
+import type { TsukaimaApiContext } from "./rpc/base.ts";
+import { loadConfig, type TsukaimaConfig } from "./config.ts";
+import { TsukaimaLifecycle, type LifecycleOptions } from "./lifecycle.ts";
 import { AuthService } from "./services/auth.ts";
 import {
 	createLiveEventStream,
@@ -19,7 +19,7 @@ import {
  * Bind exclusively so a duplicate or hung process holding the port fails fast
  * with `EADDRINUSE` instead of sharing `SO_REUSEPORT` traffic on Linux.
  */
-export function listenOptions(config: Pick<ElainaConfig, "host" | "port">) {
+export function listenOptions(config: Pick<TsukaimaConfig, "host" | "port">) {
 	return {
 		hostname: config.host,
 		port: config.port,
@@ -37,7 +37,7 @@ export interface CreateAppOptions {
 	/** Opaque host bindings consumed by built-in plugins in tests or embedders. */
 	readonly pluginBindings?: ReadonlyMap<string, unknown>;
 	/** Overrides the built-in plugin set (tests and future plugin sources). */
-	readonly plugins?: readonly ElainaPlugin[];
+	readonly plugins?: readonly TsukaimaPlugin[];
 	/** Reply chunking, quote behavior, and pending-delivery reconciliation timing. */
 	readonly reply?: {
 		readonly pendingGraceMs?: number;
@@ -54,7 +54,7 @@ export interface CreateAppOptions {
  * The oRPC handler shared by the server and tests. `ResponseHeadersPlugin` is what lets the auth
  * procedures attach the session cookie (and the cleared cookie on logout) to their responses.
  */
-export function createRpcHandler(): RPCHandler<ElainaApiContext> {
+export function createRpcHandler(): RPCHandler<TsukaimaApiContext> {
 	return new RPCHandler(appRouter, { plugins: [new ResponseHeadersPlugin()] });
 }
 
@@ -63,8 +63,8 @@ export function createApp(
 	options?: CreateAppOptions,
 ) {
 	const config = loadConfig(env);
-	const lifecycle = new ElainaLifecycle(config, { ...options, env });
-	const httpLog = lifecycle.logger.child("elaina::server::http");
+	const lifecycle = new TsukaimaLifecycle(config, { ...options, env });
+	const httpLog = lifecycle.logger.child("tsukaima::server::http");
 	const auth = new AuthService({
 		audit: (entry) => lifecycle.writeAudit(entry),
 		baseUrl: config.publicUrl,
@@ -74,7 +74,7 @@ export function createApp(
 			username: config.adminUsername,
 		},
 		database: () => lifecycle.domainDatabase,
-		logger: lifecycle.logger.child("elaina::server::auth"),
+		logger: lifecycle.logger.child("tsukaima::server::auth"),
 		secret: config.authSecret,
 		secureCookies: config.secureCookies,
 		trustedOrigins: config.trustedOrigins,
@@ -89,7 +89,7 @@ export function createApp(
 		logger: lifecycle.logger,
 	};
 
-	const app = new Elysia({ name: "elaina-chatbot" })
+	const app = new Elysia({ name: "tsukaima" })
 		.get("/healthz", ({ status }) => {
 			const state = lifecycle.state;
 			const statusCode = state.state === "failed" || state.state === "maintenance" ? 503 : 200;

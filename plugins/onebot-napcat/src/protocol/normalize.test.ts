@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { messageEnvelopeSchema } from "@elaina/contracts";
+import { messageEnvelopeSchema } from "@tsukaima/contracts";
 import { OneBotIntervalRateLimiter } from "./rate-limit.ts";
 import {
 	normalizeOneBotEvent,

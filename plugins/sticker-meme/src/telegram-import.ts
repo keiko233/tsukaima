@@ -1,5 +1,5 @@
 import pLimit from "p-limit";
-import type { PluginLogger, PluginMediaApi, PluginMediaRecord } from "@elaina/sdk";
+import type { PluginLogger, PluginMediaApi, PluginMediaRecord } from "@tsukaima/sdk";
 import { createAnimatedConverter, type AnimatedConverter } from "./animated.ts";
 import {
 	clampConcurrency,

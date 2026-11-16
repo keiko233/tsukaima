@@ -12,7 +12,7 @@ import {
 	type PointerEvent,
 	type ReactNode,
 } from "react";
-import { cn } from "@elaina/ui/lib/utils";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { AppSidebar } from "./app-sidebar";
 import { TopBar } from "./top-bar";
@@ -35,7 +35,7 @@ export function useShellNavigation(): ShellNavigation {
 	return useContext(ShellNavigationContext);
 }
 
-const SIDEBAR_WIDTH_KEY = "elaina.webui.sidebar-width.v2";
+const SIDEBAR_WIDTH_KEY = "tsukaima.webui.sidebar-width.v2";
 const MIN_SIDEBAR_WIDTH = 232;
 const MAX_SIDEBAR_WIDTH = 360;
 const DEFAULT_SIDEBAR_WIDTH = 264;
@@ -124,7 +124,7 @@ export function AdminShell({ children }: { readonly children?: ReactNode }) {
 				<TopBar mobile={mobile} onToggleSidebar={toggleSidebar} />
 				<div className="flex min-h-0 flex-1">
 					<aside
-						aria-label="Elaina"
+						aria-label="Tsukaima"
 						style={{ width: mobile ? "100%" : sidebarWidth }}
 						className={cn(
 							"relative flex min-h-0 shrink-0 flex-col bg-sidebar",

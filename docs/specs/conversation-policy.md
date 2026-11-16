@@ -7,7 +7,7 @@ the model receives a compact conversation contract instead of a DSH-specific pro
 
 ## Current boundary
 
-Elaina has activity windows and durable steering/follow-up. It does not expose policy-driven
+Tsukaima has activity windows and durable steering/follow-up. It does not expose policy-driven
 trigger/access controls, model-visible lurk decisions, cooldowns, burst-queue tuning, or
 humanlike outbound pacing.
 
@@ -57,7 +57,7 @@ type SidechatPolicy = {
 Persist as a versioned document with defaults, validation, and no silent partial update:
 
 - Keep the domain `policies` table (`scope: "global" | "conversation"`) as the authoritative policy
-  store and sync the active `elaina.conversationPolicy` durable document from it on update.
+  store and sync the active `tsukaima.conversationPolicy` durable document from it on update.
 - Map legacy `activityAggregationPolicySchema` (`windowMs`, `maxMessages`) to `burstSettleMs` /
   `burstMaxMessages` and widen or remove the `3_000..10_000` ms clamp in
   `activityAggregationPolicySchema` and `shouldCloseActivityWindow()` to honor `burstMaxWaitMs`.
@@ -83,7 +83,7 @@ For a model-visible soft activity, append a compact trigger context section:
 - media/notice summary
 - allowed decision marker
 
-The model may return `ELAINA_LURK` or a neutral response. This marker must be handled before
+The model may return `TSUKAIMA_LURK` or a neutral response. This marker must be handled before
 output dispatch, must be absent from outbound history, and must produce an audited no-send.
 
 ## Aggregation and queues

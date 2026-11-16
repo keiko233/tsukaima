@@ -1,8 +1,8 @@
 # Plugin SDK
 
-The plugin SDK is the typed surface that Elaina exposes to first-party and third-party plugins. It is intentionally narrower than the internal runtime API.
+The plugin SDK is the typed surface that Tsukaima exposes to first-party and third-party plugins. It is intentionally narrower than the internal runtime API.
 
-Elaina does not adopt Cordis, Pi coding-agent extensions, or Chord wholesale as this plugin surface. It borrows lifecycle, validation, reload, worker, and UI-registry concepts. See `plugin-frameworks.md`.
+Tsukaima does not adopt Cordis, Pi coding-agent extensions, or Chord wholesale as this plugin surface. It borrows lifecycle, validation, reload, worker, and UI-registry concepts. See `plugin-frameworks.md`.
 
 ## Goals
 
@@ -317,7 +317,7 @@ component registry rather than by loading remote modules.
 
 The plugin UI design is now specified in [plugin-ui.md](plugin-ui.md). It adds a two-pane
 `/plugins` route, trusted build-time React panels for built-in/first-party plugins, a shared
-`@elaina/sdk/ui` kit, a status snapshot channel, and `@elaina/sdk/i18n` for Paraglide-compiled
+`@tsukaima/sdk/ui` kit, a status snapshot channel, and `@tsukaima/sdk/i18n` for Paraglide-compiled
 plugin messages. Third-party plugins that ship a panel in the workspace bundle are gated behind
 a confirmation modal; runtime-installed plugins remain data-only until a sandboxed panel tier
 exists.
@@ -342,14 +342,14 @@ Not allowed across boundary:
 
 The worker crashes independently. The host restarts the worker and reports the failure to the WebUI.
 
-The worker protocol is Elaina-specific. It is intentionally not Cordis Context wire-compatible and not Chord-link-compatible.
+The worker protocol is Tsukaima-specific. It is intentionally not Cordis Context wire-compatible and not Chord-link-compatible.
 
 ## Plugin package format
 
 ```text
-my-elaina-plugin/
+my-tsukaima-plugin/
   package.json
-  elaina.plugin.json
+  tsukaima.plugin.json
   migrations/
     0001_init.sql
     0001_init.down.sql
@@ -357,11 +357,11 @@ my-elaina-plugin/
   README.md
 ```
 
-`elaina.plugin.json`:
+`tsukaima.plugin.json`:
 
 ```json
 {
-  "name": "my-elaina-plugin",
+  "name": "my-tsukaima-plugin",
   "version": "0.1.0",
   "apiVersion": "1",
   "kind": "third-party",

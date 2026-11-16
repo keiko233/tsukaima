@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pluginManifestSchema } from "@elaina/sdk";
-import { createPluginContext, PluginRuntime } from "@elaina/sdk";
+import { pluginManifestSchema } from "@tsukaima/sdk";
+import { createPluginContext, PluginRuntime } from "@tsukaima/sdk";
 import { PluginRegistry, PluginRegistryError } from "./registry.ts";
 import { LocalPluginWorker } from "./worker.ts";
 
@@ -44,8 +44,8 @@ function createRuntime() {
 describe("plugin registry", () => {
 	test("loads manifest files and rejects malformed JSON", async () => {
 		const registry = new PluginRegistry();
-		const directory = await mkdtemp(join(tmpdir(), "elaina-plugin-"));
-		const manifestPath = join(directory, "elaina.plugin.json");
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-plugin-"));
+		const manifestPath = join(directory, "tsukaima.plugin.json");
 		const badManifestPath = join(directory, "bad.plugin.json");
 		try {
 			await writeFile(manifestPath, JSON.stringify(manifest));

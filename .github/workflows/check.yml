@@ -16,9 +16,9 @@ jobs:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - run: bun run check:secrets
-      - run: bun run --filter '@elaina/web' check:i18n
-      - run: bun run --filter '@elaina/web' lint:i18n
-      - run: bun run --filter '@elaina/web' build
+      - run: bun run --filter '@tsukaima/web' check:i18n
+      - run: bun run --filter '@tsukaima/web' lint:i18n
+      - run: bun run --filter '@tsukaima/web' build
       - run: bun run check
 
   e2e:

@@ -105,7 +105,7 @@ export function bindParaglide(options: BindParaglideOptions): PluginI18nSource {
 	const warnMissing = (key: string) => {
 		if (missing.has(key)) return;
 		missing.add(key);
-		console.warn(`elaina: missing plugin message "${key}"`);
+		console.warn(`tsukaima: missing plugin message "${key}"`);
 	};
 
 	return {
@@ -164,7 +164,7 @@ export function createDictionaryI18n(options: DictionaryI18nOptions): PluginI18n
 				(key) => {
 					if (missing.has(key)) return;
 					missing.add(key);
-					console.warn(`elaina: missing plugin message "${key}"`);
+					console.warn(`tsukaima: missing plugin message "${key}"`);
 				},
 			);
 		},

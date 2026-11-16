@@ -1,4 +1,4 @@
-import type { PluginManifest } from "@elaina/sdk";
+import type { PluginManifest } from "@tsukaima/sdk";
 import { loadPluginMigrations } from "./migration-files.ts";
 import { MigrationRegistry, MigrationRegistryError, type PluginMigration } from "./migrations.ts";
 import {

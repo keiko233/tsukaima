@@ -1,14 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gt, inArray, isNull, like, lte, or, sql, type SQL } from "drizzle-orm";
-import type { ConversationPolicy, MemoryScope, MemoryStatus } from "@elaina/contracts";
-import { conversations, memories, messages, type ElainaDatabase } from "@elaina/db";
-import type { AuditEntry, PluginPermission, PluginTask } from "@elaina/sdk";
+import type { ConversationPolicy, MemoryScope, MemoryStatus } from "@tsukaima/contracts";
+import { conversations, memories, messages, type TsukaimaDatabase } from "@tsukaima/db";
+import type { AuditEntry, PluginPermission, PluginTask } from "@tsukaima/sdk";
 import { previewText, type Logger } from "../logging.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
 import type { PluginTaskService } from "./plugin-task-service.ts";
 
 export const MEMORY_PLUGIN_ID = "memory";
-export const MEMORY_SERVICE_BINDING = "elaina.memory.service";
+export const MEMORY_SERVICE_BINDING = "tsukaima.memory.service";
 export const MEMORY_EXTRACTION_PROMPT_VERSION = "memory-extract-v1";
 export const MEMORY_COMPACTION_PROMPT_VERSION = "memory-compact-v1";
 
@@ -116,7 +116,7 @@ export interface MemoryEmbeddingOutput {
 export interface MemoryServiceOptions {
 	readonly audit?: (entry: AuditEntry) => Promise<void>;
 	readonly complete?: (prompt: string, modelId?: string) => Promise<string | undefined>;
-	readonly database: () => ElainaDatabase | undefined;
+	readonly database: () => TsukaimaDatabase | undefined;
 	readonly embed?: (texts: readonly string[]) => Promise<MemoryEmbeddingOutput | undefined>;
 	readonly id?: () => string;
 	readonly llmEnabled?: () => boolean;
@@ -551,7 +551,7 @@ export class MemoryService {
 	readonly #complete:
 		| ((prompt: string, modelId?: string) => Promise<string | undefined>)
 		| undefined;
-	readonly #database: () => ElainaDatabase | undefined;
+	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #embed:
 		| ((texts: readonly string[]) => Promise<MemoryEmbeddingOutput | undefined>)
 		| undefined;
@@ -570,13 +570,13 @@ export class MemoryService {
 		this.#embed = options.embed;
 		this.#id = options.id ?? randomUUID;
 		this.#llmEnabled = options.llmEnabled ?? (() => false);
-		this.#logger = options.logger.child("elaina::server::memory");
+		this.#logger = options.logger.child("tsukaima::server::memory");
 		this.#now = options.now ?? (() => new Date());
 		this.#policyService = options.policyService;
 		this.#tasks = options.tasks;
 	}
 
-	#db(): ElainaDatabase {
+	#db(): TsukaimaDatabase {
 		const database = this.#database();
 		if (database === undefined) throw new Error("Domain database is not ready");
 		return database;

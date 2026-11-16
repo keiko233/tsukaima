@@ -5,7 +5,7 @@ import {
 	type PluginLogger,
 	type PluginTool,
 	type ToolInvocationContext,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import { registerSelfIterationTools } from "./tools.ts";
 import type { SelfIterationService } from "./service.ts";
 

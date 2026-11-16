@@ -28,7 +28,7 @@ const toolResult = (
 
 const userTurn = (id: string): StepEntry => ({
 	id,
-	kind: "elaina.activityWindow",
+	kind: "tsukaima.activityWindow",
 	model: [{ content: "hi", role: "user" }],
 });
 

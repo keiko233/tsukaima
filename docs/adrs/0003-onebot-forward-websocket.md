@@ -1,4 +1,4 @@
-# ADR 0003: Elaina actively connects to NapCat WebSocket
+# ADR 0003: Tsukaima actively connects to NapCat WebSocket
 
 ## Status
 
@@ -10,7 +10,7 @@ The current DSH bridge uses outbound WebSocket to NapCat. Reverse WebSocket is c
 
 ## Decision
 
-The first release uses NapCat as the WebSocket server and Elaina as the outbound WebSocket client. Reverse WS support can be added later as another channel transport.
+The first release uses NapCat as the WebSocket server and Tsukaima as the outbound WebSocket client. Reverse WS support can be added later as another channel transport.
 
 ## Requirements
 

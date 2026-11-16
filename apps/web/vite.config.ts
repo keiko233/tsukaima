@@ -6,7 +6,8 @@ import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
 const serverTarget =
-	process.env.ELAINA_SERVER_URL ?? `http://127.0.0.1:${process.env.ELAINA_SERVER_PORT ?? "7420"}`;
+	process.env.TSUKAIMA_SERVER_URL ??
+	`http://127.0.0.1:${process.env.TSUKAIMA_SERVER_PORT ?? "7420"}`;
 
 export default defineConfig({
 	clearScreen: false,

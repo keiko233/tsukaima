@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import type { ChannelRequest, MessageEnvelope } from "@elaina/contracts";
+import type { ChannelRequest, MessageEnvelope } from "@tsukaima/contracts";
 import {
 	createPluginContext,
 	type AuditEntry,
 	type ChannelAdapter,
 	type PluginChannelRegistry,
 	type PluginSettingsApi,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import { ONEBOT_TRANSPORT_FACTORY_BINDING, oneBotNapCatPlugin } from "./index.ts";
 import type {
 	OneBotTransport,

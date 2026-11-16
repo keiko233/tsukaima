@@ -2,8 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { MessagePart } from "@elaina/contracts";
-import { media, type ElainaDatabase } from "@elaina/db";
+import type { MessagePart } from "@tsukaima/contracts";
+import { media, type TsukaimaDatabase } from "@tsukaima/db";
 import type { Logger } from "../logging.ts";
 
 export type MediaKind = "image" | "sticker" | "audio" | "video" | "file";
@@ -109,17 +109,17 @@ function sniffImageMime(bytes: Uint8Array): string | undefined {
  */
 export class MediaService {
 	readonly #blobsDir: string;
-	readonly #database: () => ElainaDatabase | undefined;
+	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #logger: Logger | undefined;
 
 	constructor(options: {
 		readonly blobsDir: string;
-		readonly database: () => ElainaDatabase | undefined;
+		readonly database: () => TsukaimaDatabase | undefined;
 		readonly logger?: Logger;
 	}) {
 		this.#blobsDir = options.blobsDir;
 		this.#database = options.database;
-		this.#logger = options.logger?.child("elaina::server::media");
+		this.#logger = options.logger?.child("tsukaima::server::media");
 	}
 
 	async store(input: MediaStoreInput): Promise<StoredMedia> {
@@ -241,7 +241,7 @@ export class MediaService {
 		await rename(temporary, target);
 	}
 
-	#requireDatabase(): ElainaDatabase {
+	#requireDatabase(): TsukaimaDatabase {
 		const database = this.#database();
 		if (database === undefined) throw new Error("Domain database is not ready");
 		return database;

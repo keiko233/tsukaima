@@ -1,5 +1,5 @@
-import type { ConversationPolicy } from "@elaina/contracts";
-import type { PluginConversationSummary } from "@elaina/sdk";
+import type { ConversationPolicy } from "@tsukaima/contracts";
+import type { PluginConversationSummary } from "@tsukaima/sdk";
 import {
 	dailyKey,
 	type GateResult,

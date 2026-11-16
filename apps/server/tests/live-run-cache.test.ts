@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { KeyvCache } from "@elaina/cache";
-import type { LiveRunSnapshot } from "@elaina/core";
+import { KeyvCache } from "@tsukaima/cache";
+import type { LiveRunSnapshot } from "@tsukaima/core";
 import { LiveRunCache } from "../src/services/live-run-cache.ts";
 
 const caches: KeyvCache[] = [];
@@ -75,7 +75,7 @@ describe("LiveRunCache", () => {
 				attempt: 1,
 				draftTools: [
 					{
-						argumentsText: '{"query":"elaina"}',
+						argumentsText: '{"query":"tsukaima"}',
 						callId: "call-1",
 						toolName: "web_search",
 					},
@@ -90,7 +90,7 @@ describe("LiveRunCache", () => {
 			snapshot({
 				tools: [
 					{
-						argumentsText: '{"query":"elaina"}',
+						argumentsText: '{"query":"tsukaima"}',
 						callId: "call-1",
 						output: "two hits",
 						status: "running",
@@ -118,7 +118,7 @@ describe("LiveRunCache", () => {
 			{ kind: "model", status: "done" },
 			{ kind: "thinking", text: "I should search." },
 			{
-				argumentsText: '{"query":"elaina"}',
+				argumentsText: '{"query":"tsukaima"}',
 				kind: "tool",
 				output: "two hits",
 				toolName: "web_search",

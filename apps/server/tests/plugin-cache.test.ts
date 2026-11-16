@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { KeyvCache } from "@elaina/cache";
+import { KeyvCache } from "@tsukaima/cache";
 import { createPluginCacheBridge } from "../src/services/plugin-cache.ts";
 
 const caches: KeyvCache[] = [];

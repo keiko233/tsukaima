@@ -3,8 +3,8 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { MemoryRow } from "@elaina/contracts";
-import { auditLog, conversations, memories, messages } from "@elaina/db";
+import type { MemoryRow } from "@tsukaima/contracts";
+import { auditLog, conversations, memories, messages } from "@tsukaima/db";
 import { createApp } from "../src/app.ts";
 import { signIn } from "./test-auth.ts";
 
@@ -19,14 +19,14 @@ afterEach(async () => {
 
 describe("admin memory RPC", () => {
 	test("manages review transitions, expiry, compaction, search, and safe audit rows", async () => {
-		const directory = await fs.mkdtemp(join(tmpdir(), "elaina-memory-rpc-"));
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-memory-rpc-"));
 		directories.push(directory);
 		const { app, lifecycle } = createApp({
-			ELAINA_ADMIN_PASSWORD: TEST_ADMIN.password,
-			ELAINA_ADMIN_USERNAME: TEST_ADMIN.username,
-			ELAINA_DATA_DIR: directory,
-			ELAINA_PORT: "7420",
-			ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			TSUKAIMA_ADMIN_PASSWORD: TEST_ADMIN.password,
+			TSUKAIMA_ADMIN_USERNAME: TEST_ADMIN.username,
+			TSUKAIMA_DATA_DIR: directory,
+			TSUKAIMA_PORT: "7420",
+			TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 		});
 		await lifecycle.start();
 		try {

@@ -1,4 +1,4 @@
-import type { PluginLogger } from "@elaina/sdk";
+import type { PluginLogger } from "@tsukaima/sdk";
 
 const BOT_TOKEN_PATTERN = /\/bot\d+:[^/\s]+/giu;
 

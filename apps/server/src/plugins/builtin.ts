@@ -1,17 +1,17 @@
-import { oneBotNapCatPlugin } from "@elaina-plugin/onebot-napcat";
-import { openAiCompatiblePlugin } from "@elaina-plugin/openai-compatible";
-import { proactiveSchedulerPlugin } from "@elaina-plugin/proactive-scheduler";
-import { searchFetchPlugin } from "@elaina-plugin/search-fetch";
-import { selfIterationPlugin } from "@elaina-plugin/self-iteration";
-import { stickerMemePlugin } from "@elaina-plugin/sticker-meme";
-import type { ElainaPlugin } from "@elaina/sdk";
+import { oneBotNapCatPlugin } from "@tsukaima-plugin/onebot-napcat";
+import { openAiCompatiblePlugin } from "@tsukaima-plugin/openai-compatible";
+import { proactiveSchedulerPlugin } from "@tsukaima-plugin/proactive-scheduler";
+import { searchFetchPlugin } from "@tsukaima-plugin/search-fetch";
+import { selfIterationPlugin } from "@tsukaima-plugin/self-iteration";
+import { stickerMemePlugin } from "@tsukaima-plugin/sticker-meme";
+import type { TsukaimaPlugin } from "@tsukaima/sdk";
 import { memoryPlugin } from "./memory.ts";
 
 /**
  * Composition root for built-in plugins. This is the only server file that imports plugin
  * packages, so the app core depends on one place instead of scattered plugin code.
  */
-export const builtinPlugins: readonly ElainaPlugin[] = [
+export const builtinPlugins: readonly TsukaimaPlugin[] = [
 	openAiCompatiblePlugin,
 	oneBotNapCatPlugin,
 	memoryPlugin,

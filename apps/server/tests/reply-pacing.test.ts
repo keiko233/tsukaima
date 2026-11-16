@@ -4,12 +4,12 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
-import { auditLog, chatObjects, conversations, messages } from "@elaina/db";
+import { auditLog, chatObjects, conversations, messages } from "@tsukaima/db";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	type OneBotTransport,
 	type OneBotTransportFactory,
-} from "@elaina-plugin/onebot-napcat";
+} from "@tsukaima-plugin/onebot-napcat";
 import { createApp } from "../src/app.ts";
 import { createLocalChat } from "../src/services/webui.ts";
 
@@ -61,14 +61,14 @@ const createOneBotTransportSpy = (options: { failSendAttempts?: readonly number[
 };
 
 async function createLifecycle(onebot: ReturnType<typeof createOneBotTransportSpy>) {
-	const directory = await fs.mkdtemp(join(tmpdir(), "elaina-pacing-"));
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-pacing-"));
 	directories.push(directory);
 	const { lifecycle } = createApp(
 		{
-			ELAINA_DATA_DIR: directory,
-			ELAINA_ONEBOT_WS_URL: "ws://napcat:3001",
-			ELAINA_PORT: "7420",
-			ELAINA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			TSUKAIMA_DATA_DIR: directory,
+			TSUKAIMA_ONEBOT_WS_URL: "ws://napcat:3001",
+			TSUKAIMA_PORT: "7420",
+			TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 		},
 		{ pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, onebot.createTransport]]) },
 	);
@@ -120,7 +120,7 @@ async function waitFor<T>(read: () => T | Promise<T> | undefined, timeoutMs = 5_
 }
 
 describe("lurk suppression and humanlike output pacing", () => {
-	test("suppresses ELAINA_LURK before outbound history and audits the no-send", async () => {
+	test("suppresses TSUKAIMA_LURK before outbound history and audits the no-send", async () => {
 		const lifecycle = await createLifecycle(createOneBotTransportSpy());
 		try {
 			const chat = await createLocalChat(lifecycle, {
@@ -139,7 +139,7 @@ describe("lurk suppression and humanlike output pacing", () => {
 				activityId: "activity-lurk",
 				conversationId: session.durableConversationId,
 				entryId: "entry-lurk",
-				text: "ELAINA_LURK",
+				text: "TSUKAIMA_LURK",
 			});
 			const outbound = await database
 				.select()

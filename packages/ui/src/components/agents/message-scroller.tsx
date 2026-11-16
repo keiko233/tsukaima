@@ -11,9 +11,9 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { PreviewRail, type PreviewRailItem } from "@elaina/ui/components/motion/preview-rail";
-import { useMessages } from "@elaina/ui/lib/i18n";
-import { cn } from "@elaina/ui/lib/utils";
+import { PreviewRail, type PreviewRailItem } from "@tsukaima/ui/components/motion/preview-rail";
+import { useMessages } from "@tsukaima/ui/lib/i18n";
+import { cn } from "@tsukaima/ui/lib/utils";
 
 export const messageScrollerMessages = {
 	label: "Conversation",

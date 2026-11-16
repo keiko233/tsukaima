@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { RunStep } from "@elaina/contracts";
+import type { RunStep } from "@tsukaima/contracts";
 
 mock.module("@/paraglide/messages", () => ({
 	m: {

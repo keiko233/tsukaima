@@ -20,10 +20,10 @@ import {
 	MessageFooter,
 	MessageHeader,
 	MessageScroller,
-} from "@elaina/ui/components/agents/message";
+} from "@tsukaima/ui/components/agents/message";
 import type { DeliveryStatus, MessageSummary } from "@/lib/api";
-import type { LiveRunState } from "@elaina/contracts";
-import { cn } from "@elaina/ui/lib/utils";
+import type { LiveRunState } from "@tsukaima/contracts";
+import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { runtimeUrl } from "@/lib/runtime-url";
 import { formatDateTime, formatTimestamp } from "../../_modules/lib/format";
@@ -55,7 +55,7 @@ function deliveryClass(status: DeliveryStatus): string {
 }
 
 function senderName(message: MessageSummary): string {
-	if (message.senderKind === "assistant") return m.message_sender_elaina();
+	if (message.senderKind === "assistant") return m.message_sender_tsukaima();
 	if (message.senderExternalId === "webui-admin") return m.message_sender_webui();
 	if (message.senderDisplayName.trim().length === 0) return m.message_sender_unknown();
 	return message.senderDisplayName;

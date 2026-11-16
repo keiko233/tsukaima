@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDomainDatabase, migrateDomainDatabase, type ElainaDatabase } from "@elaina/db";
+import { openDomainDatabase, migrateDomainDatabase, type TsukaimaDatabase } from "@tsukaima/db";
 import { createLogger } from "../src/logging.ts";
 import { HookBus } from "../src/services/hook-bus.ts";
 import { PluginTaskService } from "../src/services/plugin-task-service.ts";
@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 async function setup() {
-	const directory = await mkdtemp(join(tmpdir(), "elaina-plugin-tasks-"));
+	const directory = await mkdtemp(join(tmpdir(), "tsukaima-plugin-tasks-"));
 	directories.push(directory);
 	const database = await openDomainDatabase(join(directory, "domain.sqlite"));
 	migrateDomainDatabase(database);
@@ -35,7 +35,7 @@ const permissions = [
 
 describe("plugin task service", () => {
 	test("creates, reads, lists, watches, dedupes, and cancels durable tasks", async () => {
-		const database: ElainaDatabase = await setup();
+		const database: TsukaimaDatabase = await setup();
 		const hooks = new HookBus(logger);
 		const created: unknown[] = [];
 		const completed: unknown[] = [];

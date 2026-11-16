@@ -4,13 +4,13 @@ import {
 	hasPermission,
 	pluginManifestSchema,
 	PluginRuntime,
-	type ElainaPlugin,
+	type TsukaimaPlugin,
 	type PluginAuditApi,
 	type PluginCacheApi,
 	type PluginCacheSetOptions,
 	type PluginLogger,
 	type PluginStorage,
-} from "@elaina/sdk";
+} from "@tsukaima/sdk";
 import {
 	PLUGIN_WORKER_PROTOCOL_VERSION,
 	type WorkerHostCallResponse,
@@ -143,8 +143,8 @@ async function initialize(message: InitMessageWithProtocol): Promise<void> {
 		);
 	}
 	const imported = (await import(pathToFileURL(message.modulePath).href)) as {
-		default?: ElainaPlugin;
-		plugin?: ElainaPlugin;
+		default?: TsukaimaPlugin;
+		plugin?: TsukaimaPlugin;
 	};
 	const loaded = imported.plugin ?? imported.default;
 	if (loaded === undefined || typeof loaded.setup !== "function") {

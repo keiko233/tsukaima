@@ -18,8 +18,8 @@ Related documents:
 | --- | --- |
 | Bun `1.4.4` | Runtime for the server, plugins, and tools. |
 | Single writer process | Only one server may open `domain.sqlite` and `durable.sqlite` for writes. |
-| Writable data directory | `ELAINA_DATA_DIR` holds both databases, `blobs/`, plugin worktrees, and drill output. |
-| Reverse proxy (recommended) | Terminate TLS, forward `/api`, `/rpc`, `/events`, and the WebUI. List it in `ELAINA_TRUSTED_PROXIES`. |
+| Writable data directory | `TSUKAIMA_DATA_DIR` holds both databases, `blobs/`, plugin worktrees, and drill output. |
+| Reverse proxy (recommended) | Terminate TLS, forward `/api`, `/rpc`, `/events`, and the WebUI. List it in `TSUKAIMA_TRUSTED_PROXIES`. |
 | NapCat instance | OneBot v11 WebSocket server; see [NapCat setup](#3-napcat-websocket-setup). |
 | Chromium (CI only) | `bunx playwright install chromium` for `bun run test:e2e`. |
 
@@ -27,11 +27,11 @@ Build and start:
 
 ```sh
 bun install --frozen-lockfile
-bun run --filter '@elaina/web' build
-NODE_ENV=production bun run --filter '@elaina/server' start
+bun run --filter '@tsukaima/web' build
+NODE_ENV=production bun run --filter '@tsukaima/server' start
 ```
 
-The server binds `ELAINA_HOST:ELAINA_PORT` (default `127.0.0.1:7420`) and the built WebUI is served
+The server binds `TSUKAIMA_HOST:TSUKAIMA_PORT` (default `127.0.0.1:7420`) and the built WebUI is served
 from the same origin behind the proxy.
 
 ## 2. Secrets and environment configuration
@@ -44,29 +44,29 @@ Required for a production boot:
 | Variable | Purpose |
 | --- | --- |
 | `NODE_ENV=production` | Enables the production secret requirement and secure defaults. |
-| `ELAINA_AUTH_SECRET` (or `BETTER_AUTH_SECRET`) | At least 32 characters; required in production. |
-| `ELAINA_PUBLIC_URL` | Exact public HTTPS origin used by Better Auth. |
-| `ELAINA_ADMIN_USERNAME`, `ELAINA_ADMIN_PASSWORD` | First-run administrator bootstrap (password ≥ 8 chars). Keep them available until the first successful boot after upgrade. |
-| `ELAINA_DATA_DIR` | Absolute path to the persistent data directory. |
+| `TSUKAIMA_AUTH_SECRET` (or `BETTER_AUTH_SECRET`) | At least 32 characters; required in production. |
+| `TSUKAIMA_PUBLIC_URL` | Exact public HTTPS origin used by Better Auth. |
+| `TSUKAIMA_ADMIN_USERNAME`, `TSUKAIMA_ADMIN_PASSWORD` | First-run administrator bootstrap (password ≥ 8 chars). Keep them available until the first successful boot after upgrade. |
+| `TSUKAIMA_DATA_DIR` | Absolute path to the persistent data directory. |
 
 Recommended:
 
 | Variable | Purpose |
 | --- | --- |
-| `ELAINA_HOST`, `ELAINA_PORT` | Bind address and port. |
-| `ELAINA_WEB_ORIGIN`, `ELAINA_TRUSTED_ORIGINS` | Browser origins accepted by Better Auth. |
-| `ELAINA_TRUSTED_PROXIES` | Reverse proxies whose forwarded client IP headers may be trusted. |
-| `ELAINA_AUTH_SECURE_COOKIES` | Defaults to `true` when `ELAINA_PUBLIC_URL` is HTTPS. |
-| `ELAINA_LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, or `error` (overrides persisted DB runtime setting on startup when explicitly set). |
-| `ELAINA_LOG_BUFFER_CAPACITY` | In-memory log ring buffer size (default `5000`). |
-| `ELAINA_LOG_FILE_ENABLED` | Set to `false` to disable daily date-chunked file logs (enabled by default). |
-| `ELAINA_LOG_DIR` | Directory for `elaina-YYYY-MM-DD.log` files (default `<data>/logs`). |
-| `ELAINA_LOG_RETENTION_DAYS` | Optional number of days to keep daily log files. |
-| `ELAINA_BACKUP_DRILL_INTERVAL_MS` | Optional scheduled backup drill cadence; unset/`0` disables it. |
-| `ELAINA_BACKUP_DRILL_ROOT` | Optional drill output root (default `<data>/backup-drills`). |
+| `TSUKAIMA_HOST`, `TSUKAIMA_PORT` | Bind address and port. |
+| `TSUKAIMA_WEB_ORIGIN`, `TSUKAIMA_TRUSTED_ORIGINS` | Browser origins accepted by Better Auth. |
+| `TSUKAIMA_TRUSTED_PROXIES` | Reverse proxies whose forwarded client IP headers may be trusted. |
+| `TSUKAIMA_AUTH_SECURE_COOKIES` | Defaults to `true` when `TSUKAIMA_PUBLIC_URL` is HTTPS. |
+| `TSUKAIMA_LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, or `error` (overrides persisted DB runtime setting on startup when explicitly set). |
+| `TSUKAIMA_LOG_BUFFER_CAPACITY` | In-memory log ring buffer size (default `5000`). |
+| `TSUKAIMA_LOG_FILE_ENABLED` | Set to `false` to disable daily date-chunked file logs (enabled by default). |
+| `TSUKAIMA_LOG_DIR` | Directory for `tsukaima-YYYY-MM-DD.log` files (default `<data>/logs`). |
+| `TSUKAIMA_LOG_RETENTION_DAYS` | Optional number of days to keep daily log files. |
+| `TSUKAIMA_BACKUP_DRILL_INTERVAL_MS` | Optional scheduled backup drill cadence; unset/`0` disables it. |
+| `TSUKAIMA_BACKUP_DRILL_ROOT` | Optional drill output root (default `<data>/backup-drills`). |
 
 Plugin-owned secrets use the manifest `configEnv` fallbacks, for example
-`ELAINA_ONEBOT_ACCESS_TOKEN` and `ELAINA_OPENAI_API_KEY`. Prefer storing them in the plugin panel so
+`TSUKAIMA_ONEBOT_ACCESS_TOKEN` and `TSUKAIMA_OPENAI_API_KEY`. Prefer storing them in the plugin panel so
 they live in the domain database rather than the process environment.
 
 Rotation: change the value in the plugin panel or environment, restart the server when a provider
@@ -74,13 +74,13 @@ secret changes, and confirm `bun run check:secrets` still passes before committi
 
 ## 3. NapCat WebSocket setup
 
-Elaina connects **outbound** to NapCat's OneBot v11 WebSocket server.
+Tsukaima connects **outbound** to NapCat's OneBot v11 WebSocket server.
 
 1. In NapCat, enable the WebSocket server (forward mode) and choose a port, for example `3001`.
-2. Set an access token. Elaina sends it as `Authorization: Bearer <token>`.
-3. Restrict network reachability so only the Elaina host can connect.
-4. Configure the `onebot-napcat` plugin (or `ELAINA_ONEBOT_WS_URL` /
-   `ELAINA_ONEBOT_ACCESS_TOKEN` fallbacks):
+2. Set an access token. Tsukaima sends it as `Authorization: Bearer <token>`.
+3. Restrict network reachability so only the Tsukaima host can connect.
+4. Configure the `onebot-napcat` plugin (or `TSUKAIMA_ONEBOT_WS_URL` /
+   `TSUKAIMA_ONEBOT_ACCESS_TOKEN` fallbacks):
 
 ```json
 {
@@ -91,7 +91,7 @@ Elaina connects **outbound** to NapCat's OneBot v11 WebSocket server.
 }
 ```
 
-Reverse mode (`mode: "reverse"`, `host`/`port`) is also supported when NapCat must dial Elaina.
+Reverse mode (`mode: "reverse"`, `host`/`port`) is also supported when NapCat must dial Tsukaima.
 
 Verification:
 
@@ -124,34 +124,34 @@ flags or environment variables; nothing is hard-coded.
 # 1. Read-only snapshot (local copies or a remote target via flags/env)
 bun tools/migration/src/cli.ts snapshot \
   --source /path/to/dsh-home --source /path/to/dsh-workspace \
-  --output /srv/elaina-migration/snapshot
+  --output /srv/tsukaima-migration/snapshot
 
 # 2. Inventory and normalization report
-bun tools/migration/src/cli.ts inspect --source /srv/elaina-migration/snapshot
+bun tools/migration/src/cli.ts inspect --source /srv/tsukaima-migration/snapshot
 
 # 3. Mandatory dry run against the real target database
 bun tools/migration/src/cli.ts dry-run \
-  --source /srv/elaina-migration/snapshot \
-  --target sqlite:/srv/elaina/data/domain.sqlite \
-  --plan /srv/elaina-migration/plan.json
+  --source /srv/tsukaima-migration/snapshot \
+  --target sqlite:/srv/tsukaima/data/domain.sqlite \
+  --plan /srv/tsukaima-migration/plan.json
 
 # 4. Import using the reviewed dry-run plan (creates the pre-import backup first)
 bun tools/migration/src/cli.ts import \
-  --source /srv/elaina-migration/snapshot \
-  --target sqlite:/srv/elaina/data/domain.sqlite \
-  --plan /srv/elaina-migration/plan.json \
-  --backup-dir /srv/elaina/data/migration-backups
+  --source /srv/tsukaima-migration/snapshot \
+  --target sqlite:/srv/tsukaima/data/domain.sqlite \
+  --plan /srv/tsukaima-migration/plan.json \
+  --backup-dir /srv/tsukaima/data/migration-backups
 
 # 5. Verify counts, hashes, references, and the fake-model smoke turn
 bun tools/migration/src/cli.ts verify \
-  --source /srv/elaina-migration/snapshot \
-  --target sqlite:/srv/elaina/data/domain.sqlite
+  --source /srv/tsukaima-migration/snapshot \
+  --target sqlite:/srv/tsukaima/data/domain.sqlite
 
 # 6. Roll back a specific run if verification fails
 bun tools/migration/src/cli.ts rollback \
-  --target sqlite:/srv/elaina/data/domain.sqlite \
+  --target sqlite:/srv/tsukaima/data/domain.sqlite \
   --run-id <run-id> \
-  --backup-dir /srv/elaina/data/migration-backups
+  --backup-dir /srv/tsukaima/data/migration-backups
 ```
 
 Rules:
@@ -172,9 +172,9 @@ counts. The JSON report contains only logical names, counts, hashes, and integri
 Manual run:
 
 ```sh
-bun run ops:backup-drill -- --data-dir /srv/elaina/data
+bun run ops:backup-drill -- --data-dir /srv/tsukaima/data
 # or
-bun tools/ops/backup-drill.ts --data-dir /srv/elaina/data --keep-staging
+bun tools/ops/backup-drill.ts --data-dir /srv/tsukaima/data --keep-staging
 ```
 
 Outputs:
@@ -184,7 +184,7 @@ Outputs:
 
 Exit code `0` means the drill passed; `1` means it failed and the report names the reason.
 
-Scheduling: set `ELAINA_BACKUP_DRILL_INTERVAL_MS` (milliseconds) to run drills on a fixed interval.
+Scheduling: set `TSUKAIMA_BACKUP_DRILL_INTERVAL_MS` (milliseconds) to run drills on a fixed interval.
 The scheduler is disabled by default and in tests, skips an overlapping interval instead of queuing,
 and can also be triggered explicitly through `lifecycle.runBackupDrill()`. A failed drill is logged
 at `warn` with the report path; alert on it.
@@ -229,12 +229,12 @@ Run before every cutover:
 
 ```sh
 bun run check:secrets
-bun --filter '@elaina/web' check:i18n
-bun --filter '@elaina/web' lint:i18n
-bun --filter '@elaina/web' build
+bun --filter '@tsukaima/web' check:i18n
+bun --filter '@tsukaima/web' lint:i18n
+bun --filter '@tsukaima/web' build
 bun run check
 bun run test:e2e
-bun run ops:backup-drill -- --data-dir "$ELAINA_DATA_DIR"
+bun run ops:backup-drill -- --data-dir "$TSUKAIMA_DATA_DIR"
 ```
 
 Then confirm `/healthz` and `/readyz`, open a local WebUI chat, and send one supervised message

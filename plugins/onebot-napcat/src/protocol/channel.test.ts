@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { ChannelRequest, MessageEnvelope } from "@elaina/contracts";
+import type { ChannelRequest, MessageEnvelope } from "@tsukaima/contracts";
 import { OneBotChannel } from "./channel.ts";
 import { normalizeOneBotEvent, normalizeOneBotRequest } from "./normalize.ts";
 import type { OneBotConfig, OneBotTransport, OneBotTransportFactory } from "./types.ts";

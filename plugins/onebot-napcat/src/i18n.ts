@@ -1,4 +1,4 @@
-import { bindParaglide } from "@elaina/sdk/i18n";
+import { bindParaglide } from "@tsukaima/sdk/i18n";
 import { m } from "./paraglide/messages.js";
 import * as runtime from "./paraglide/runtime.js";
 

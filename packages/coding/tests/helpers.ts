@@ -5,9 +5,9 @@ import { join } from "node:path";
 
 const GIT_CONFIG_ARGS = [
 	"-c",
-	"user.name=elaina-test",
+	"user.name=tsukaima-test",
 	"-c",
-	"user.email=test@elaina.local",
+	"user.email=test@tsukaima.local",
 ] as const;
 
 export function gitSync(cwd: string, args: readonly string[]): string {
