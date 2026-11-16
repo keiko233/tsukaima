@@ -11,6 +11,7 @@ export const WORKSPACE_TOOL_NAMES = [
 	"workspace_spawn",
 	"workspace_status",
 	"workspace_send",
+	"session_lookup",
 	"hook_schedule",
 	"hook_list",
 ] as const;
@@ -309,6 +310,29 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 		},
 	});
 
+	const lookupSessions = tool({
+		description:
+			"Find WebUI chat, workspace, or external session ids by title. Use this before targeting another conversation with hook_schedule.",
+		name: "session_lookup",
+		parameters: {
+			properties: {
+				limit: { maximum: 25, minimum: 1, type: "integer" },
+				query: { type: "string" },
+			},
+			required: ["query"],
+			type: "object",
+		},
+		async execute(args, api) {
+			const input = record(args);
+			return run("session_lookup", String(api.conversationId), async () => ({
+				sessions: await options.messaging.searchSessions(
+					stringValue(input, "query", true)!,
+					typeof input.limit === "number" ? input.limit : 10,
+				),
+			}));
+		},
+	});
+
 	const listHooks = tool({
 		description: "List pending context, runtime, and resume hooks for this session.",
 		name: "hook_list",
@@ -332,6 +356,6 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 
 	return {
 		name: WORKSPACE_TOOLS_EXTENSION_NAME,
-		tools: [spawn, status, send, scheduleHook, listHooks],
+		tools: [spawn, status, send, lookupSessions, scheduleHook, listHooks],
 	};
 }

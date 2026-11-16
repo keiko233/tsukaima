@@ -105,6 +105,55 @@ export class SessionMessagingService {
 		return row;
 	}
 
+	async searchSessions(
+		query: string,
+		limit = 10,
+	): Promise<
+		Array<{
+			readonly chatId: string;
+			readonly chatTitle: string;
+			readonly id: string;
+			readonly kind: ChatKind;
+			readonly title: string;
+			readonly updatedAt: string;
+		}>
+	> {
+		const database = this.#db();
+		const rows = await database
+			.select({
+				chatId: chatObjects.id,
+				chatTitle: chatObjects.title,
+				chatKind: chatObjects.kind,
+				id: conversations.id,
+				kind: conversations.kind,
+				title: conversations.title,
+				updatedAt: conversations.updatedAt,
+			})
+			.from(conversations)
+			.innerJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
+			.where(eq(conversations.status, "active"))
+			.orderBy(conversations.updatedAt)
+			.limit(500);
+		const needle = query.trim().toLowerCase();
+		return rows
+			.toReversed()
+			.filter((row) => {
+				if (needle.length === 0) return true;
+				return [row.id, row.title ?? "", row.chatTitle, row.chatKind].some((value) =>
+					value.toLowerCase().includes(needle),
+				);
+			})
+			.slice(0, Math.max(1, Math.min(limit, 25)))
+			.map((row) => ({
+				chatId: row.chatId,
+				chatTitle: row.chatTitle,
+				id: row.id,
+				kind: row.kind as ChatKind,
+				title: row.title ?? row.chatTitle,
+				updatedAt: row.updatedAt,
+			}));
+	}
+
 	async sendAgentMessage(input: SendAgentMessageInput): Promise<SendAgentMessageResult> {
 		const database = this.#db();
 		const host = this.#hostRequired();

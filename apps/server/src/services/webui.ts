@@ -23,6 +23,7 @@ import {
 } from "@tsukaima/db";
 import type { TsukaimaLifecycle } from "../lifecycle.ts";
 import { collectRunSteps } from "./run-steps.ts";
+import { WORKSPACE_TOOL_NAMES } from "./workspace-tools.ts";
 
 type ChatKind = "private" | "group" | "webui" | "workspace" | "task" | "plugin";
 
@@ -325,8 +326,13 @@ export async function getSessionContextStats(
 	const host = lifecycle.conversationHost;
 	if (host === undefined) throw new Error("Conversation host is not ready");
 	const [session] = await database
-		.select({ durableConversationId: conversations.durableConversationId })
+		.select({
+			chatKind: chatObjects.kind,
+			durableConversationId: conversations.durableConversationId,
+			sessionKind: conversations.kind,
+		})
 		.from(conversations)
+		.leftJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
 		.where(eq(conversations.id, sessionId))
 		.limit(1);
 	if (session === undefined) return null;
@@ -336,7 +342,11 @@ export async function getSessionContextStats(
 		session.durableConversationId,
 	);
 	const codingTools = lifecycle.pluginHost.modelToolNames("self-iteration");
-	const omittedTools = policy.capabilities.includes("coding") ? [] : codingTools;
+	const kind = session.chatKind ?? session.sessionKind;
+	const omittedTools = [
+		...(kind === "workspace" && policy.capabilities.includes("coding") ? [] : codingTools),
+		...(kind === "webui" || kind === "workspace" ? [] : WORKSPACE_TOOL_NAMES),
+	];
 	const [inspection, contextDetails] = await Promise.all([
 		host.inspectConversationContext(session.durableConversationId, { omittedTools }),
 		lifecycle.contextProvider.inspectContext(session.durableConversationId),
