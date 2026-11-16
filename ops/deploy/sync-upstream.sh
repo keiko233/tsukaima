@@ -51,7 +51,26 @@ if [[ "$current" != "$DEPLOY_BRANCH" ]]; then
 fi
 
 git config rerere.enabled true
-git fetch --all --prune --tags
+
+# GitHub over HTTPS occasionally resets long-lived TLS connections from home networks. Retry, then
+# fall back to HTTP/1.1, before treating the merge as impossible.
+fetch_with_retry() {
+	local attempt
+	for attempt in 1 2 3; do
+		if git fetch --all --prune --tags; then
+			return 0
+		fi
+		echo "fetch failed (attempt $attempt); retrying with HTTP/1.1" >&2
+		sleep "$attempt"
+		if git -c http.version=HTTP/1.1 fetch --all --prune --tags; then
+			return 0
+		fi
+	done
+	echo "Could not fetch from the remotes after retries. Check network access to GitHub." >&2
+	return 1
+}
+
+fetch_with_retry
 
 if ! git show-ref --verify --quiet refs/remotes/upstream/main; then
 	echo "upstream/main is missing. Add the mainline remote first:" >&2
