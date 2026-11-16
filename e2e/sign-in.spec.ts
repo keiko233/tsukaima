@@ -13,11 +13,11 @@ test.describe("admin sign-in", () => {
 		await page.getByRole("button", { name: "Sign in" }).click();
 
 		await expect.poll(() => new URL(page.url()).pathname).toBe("/");
-		await expect(page.getByText("Tsukaima Admin")).toBeVisible();
+		await expect(page.getByRole("navigation", { name: "Tsukaima" })).toBeVisible();
 
 		await page.reload();
 		await expect.poll(() => new URL(page.url()).pathname).toBe("/");
-		await expect(page.getByText("Tsukaima Admin")).toBeVisible();
+		await expect(page.getByRole("navigation", { name: "Tsukaima" })).toBeVisible();
 
 		// An authenticated visitor on /login is redirected back into the app.
 		await page.goto(new URL("/login", stack.webUrl).toString());
