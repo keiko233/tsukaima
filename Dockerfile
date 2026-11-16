@@ -84,7 +84,9 @@ ENV NODE_ENV=production \
 # /app/.git so governed self-iteration worktrees keep working.
 COPY --from=build --chown=bun:bun /app/node_modules /app/node_modules
 COPY --from=build --chown=bun:bun /runtime /app
-RUN mkdir -p /data && chown bun:bun /data
+# /app itself keeps the WORKDIR owner, and a governed self-iteration reload has to create or
+# replace working-tree entries there. The tree below it already came in as bun:bun.
+RUN mkdir -p /data && chown bun:bun /app /data
 USER bun
 EXPOSE 7420
 VOLUME ["/data"]
