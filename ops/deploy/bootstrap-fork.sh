@@ -60,24 +60,6 @@ git config --local push.autoSetupRemote true
 git config --local merge.conflictStyle zdiff3
 git config --local init.defaultBranch main
 
-if [[ ! -f "$SSH_KEY" ]]; then
-	mkdir -p "$(dirname "$SSH_KEY")"
-	ssh-keygen -q -t ed25519 -N "" -C "tsukaima-${DEPLOYER}@$(uname -n)" -f "$SSH_KEY"
-	echo "Generated SSH key: $SSH_KEY"
-fi
-chmod 600 "$SSH_KEY"
-chmod 644 "$SSH_KEY.pub"
-
-if ! ssh-keygen -F github.com >/dev/null 2>&1; then
-	mkdir -p "$HOME/.ssh"
-	ssh-keyscan -t ed25519 github.com >>"$HOME/.ssh/known_hosts" 2>/dev/null
-fi
-chmod 600 "$HOME/.ssh/known_hosts" 2>/dev/null || true
-
-# Keep the dedicated key scoped to the deployment remotes instead of overriding global SSH.
-GIT_SSH_COMMAND="ssh -i $SSH_KEY -o IdentitiesOnly=yes"
-git config --local core.sshCommand "$GIT_SSH_COMMAND"
-
 github_authenticated() {
 	{ ssh -i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -T git@github.com 2>&1 || true; } |
 		grep -q "successfully authenticated"
@@ -91,15 +73,39 @@ fork_repo() {
 	printf '%s\n' "${url%.git}"
 }
 
-if ! github_authenticated; then
-	if command -v gh >/dev/null 2>&1 && [[ "${AUTO_ADD_KEY:-1}" == "1" ]]; then
-		gh repo deploy-key add "$SSH_KEY.pub" \
-			--repo "$(fork_repo)" --title "tsukaima-${DEPLOYER}-local" --allow-write >/dev/null 2>&1 || true
+needs_ssh_key=0
+case "$FORK_URL" in
+git@* | ssh://*) needs_ssh_key=1 ;;
+esac
+
+if [[ "$needs_ssh_key" == "1" ]]; then
+	if [[ ! -f "$SSH_KEY" ]]; then
+		mkdir -p "$(dirname "$SSH_KEY")"
+		ssh-keygen -q -t ed25519 -N "" -C "tsukaima-${DEPLOYER}@$(uname -n)" -f "$SSH_KEY"
+		echo "Generated SSH key: $SSH_KEY"
 	fi
+	chmod 600 "$SSH_KEY"
+	chmod 644 "$SSH_KEY.pub"
+
+	if ! ssh-keygen -F github.com >/dev/null 2>&1; then
+		mkdir -p "$HOME/.ssh"
+		ssh-keyscan -t ed25519 github.com >>"$HOME/.ssh/known_hosts" 2>/dev/null
+	fi
+	chmod 600 "$HOME/.ssh/known_hosts" 2>/dev/null || true
+
+	# Keep the dedicated key scoped to the deployment remotes instead of overriding global SSH.
+	git config --local core.sshCommand "ssh -i $SSH_KEY -o IdentitiesOnly=yes"
+
 	if ! github_authenticated; then
-		echo "The SSH key is not authorized for GitHub yet. Add this public key and re-run:" >&2
-		cat "$SSH_KEY.pub" >&2
-		exit 3
+		if command -v gh >/dev/null 2>&1 && [[ "${AUTO_ADD_KEY:-1}" == "1" ]]; then
+			gh repo deploy-key add "$SSH_KEY.pub" \
+				--repo "$(fork_repo)" --title "tsukaima-${DEPLOYER}-local" --allow-write >/dev/null 2>&1 || true
+		fi
+		if ! github_authenticated; then
+			echo "The SSH key is not authorized for GitHub yet. Add this public key and re-run:" >&2
+			cat "$SSH_KEY.pub" >&2
+			exit 3
+		fi
 	fi
 fi
 
