@@ -410,4 +410,72 @@ describe("fake NapCat integration", () => {
 			await lifecycle.stop();
 		}
 	});
+
+	// Regression: a plugin-initiated send (the `onebot-napcat.send` tool or its admin RPC) reached
+	// NapCat but wrote no domain row, so a DM the agent started from another conversation never
+	// appeared in the WebUI. Sends and pokes must land in the target transcript.
+	test("records plugin-initiated sends and pokes in the target transcript", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-napcat-outbound-"));
+		directories.push(directory);
+		const transports: FakeNapCatTransport[] = [];
+		const factory: OneBotTransportFactory = () => {
+			const transport = new FakeNapCatTransport();
+			transports.push(transport);
+			return transport;
+		};
+		const { lifecycle } = createApp(
+			{
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001",
+				TSUKAIMA_PORT: "7420",
+			},
+			{
+				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, factory]]),
+				reply: { pendingGraceMs: 0 },
+			},
+		);
+		await lifecycle.start();
+		try {
+			transports[0]?.emitOpen();
+			const sent = await lifecycle.pluginHost.invokeRpc("onebot-napcat.send", {
+				parts: [{ text: "Synthetic outbound message", type: "text" }],
+				target: { channelId: "onebot", kind: "private", platformConversationId: "10002" },
+			});
+			expect(sent).toEqual({ ok: true, result: { platformMessageId: "7001" } });
+
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("Domain database not ready");
+			// The target had never messaged the bot, so the chat object and session are created here.
+			const chats = await database.select().from(chatObjects);
+			const chat = chats.find((row) => row.platformConversationId === "10002");
+			expect(chat?.kind).toBe("private");
+			if (chat === undefined) throw new Error("outbound chat object missing");
+
+			const outbound = await waitFor(async () => {
+				const rows = await database.select().from(messages);
+				return rows.find((row) => row.contentText === "Synthetic outbound message");
+			});
+			expect(outbound.chatObjectId).toBe(chat.id);
+			expect(outbound.direction).toBe("outbound");
+			expect(outbound.deliveryStatus).toBe("sent");
+			expect(outbound.kind).toBe("onebot-v11");
+			expect(outbound.platformMessageId).toBe("7001");
+
+			const poked = (await lifecycle.pluginHost.invokeRpc("onebot-napcat.poke", {
+				target: { channelId: "onebot", kind: "private", platformConversationId: "10002" },
+				userId: "10002",
+			})) as { ok: boolean };
+			expect(poked.ok).toBe(true);
+			const notices = await waitFor(async () => {
+				const rows = await database.select().from(messages);
+				const found = rows.filter((row) => row.kind === "notice");
+				return found.length >= 1 ? found : undefined;
+			});
+			expect(notices[0]?.contentText).toContain("[poke]");
+			expect(notices[0]?.conversationId).toBe(outbound.conversationId);
+			expect(lifecycle.lastProcessingError).toBeUndefined();
+		} finally {
+			await lifecycle.stop();
+		}
+	});
 });

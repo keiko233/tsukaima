@@ -714,8 +714,16 @@ export class ConversationRouter {
 		});
 	}
 
+	/**
+	 * Find the receiving session for an external conversation, creating the chat object and a
+	 * session when the bot is about to act in a conversation it has never seen inbound. Inbound
+	 * envelopes and outbound sends share this path so both land in one transcript.
+	 */
 	async resolveSession(
-		envelope: MessageEnvelope,
+		target: {
+			readonly channelId: string;
+			readonly conversationKey: MessageEnvelope["conversationKey"];
+		},
 		senderDisplayName: string,
 	): Promise<{
 		chatObjectId: string;
@@ -725,12 +733,12 @@ export class ConversationRouter {
 		const host = this.#host();
 		if (host === undefined) throw new Error("Conversation host is not ready");
 		const database = this.#requireDatabase();
-		const kind = envelope.conversationKey.kind;
+		const kind = target.conversationKey.kind;
 		if (kind !== "private" && kind !== "group") {
 			throw new Error(`External processing does not support ${kind} conversations`);
 		}
 		const platformConversationId =
-			kind === "group" ? envelope.conversationKey.groupId : envelope.conversationKey.peerId;
+			kind === "group" ? target.conversationKey.groupId : target.conversationKey.peerId;
 		if (platformConversationId === undefined) {
 			throw new Error("External conversation is missing its platform conversation id");
 		}
@@ -740,7 +748,7 @@ export class ConversationRouter {
 				.from(chatObjects)
 				.where(
 					and(
-						eq(chatObjects.channelId, envelope.channelId),
+						eq(chatObjects.channelId, target.channelId),
 						eq(chatObjects.kind, kind),
 						eq(chatObjects.platformConversationId, platformConversationId),
 					),
@@ -754,7 +762,7 @@ export class ConversationRouter {
 			await database
 				.insert(chatObjects)
 				.values({
-					channelId: envelope.channelId,
+					channelId: target.channelId,
 					createdAt: now,
 					id: randomUUID(),
 					kind,
@@ -806,7 +814,7 @@ export class ConversationRouter {
 		await database
 			.insert(conversations)
 			.values({
-				channelId: envelope.channelId,
+				channelId: target.channelId,
 				chatObjectId: chat.id,
 				durableConversationId,
 				id: sessionId,

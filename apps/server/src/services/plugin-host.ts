@@ -50,6 +50,7 @@ import { createPluginDatabase } from "./plugin-scoped-database.ts";
 import { createPluginCacheBridge } from "./plugin-cache.ts";
 import { createPluginMediaBridge } from "./plugin-media.ts";
 import type { MediaService } from "./media-service.ts";
+import type { OutboundService } from "./outbound.ts";
 import {
 	chatObjects,
 	conversations as conversationsTable,
@@ -80,6 +81,8 @@ export interface PluginHostOptions {
 	readonly database?: () => TsukaimaDatabase | undefined;
 	readonly media?: MediaService;
 	readonly migrations?: MigrationRegistry;
+	/** Host-owned outbound path so plugin sends land in durable history. */
+	readonly outbound?: OutboundService;
 	readonly pluginDatabases?: PluginDatabaseProvider;
 	readonly storage?: PluginStorageStore;
 	readonly tasks?: PluginTaskService;
@@ -170,6 +173,7 @@ export class PluginHost {
 	readonly #database: (() => TsukaimaDatabase | undefined) | undefined;
 	readonly #media: MediaService | undefined;
 	readonly #migrations: MigrationRegistry | undefined;
+	readonly #outbound: OutboundService | undefined;
 	readonly #pluginDatabases: PluginDatabaseProvider | undefined;
 	readonly #storage: PluginStorageStore | undefined;
 	readonly #tasks: PluginTaskService | undefined;
@@ -192,6 +196,7 @@ export class PluginHost {
 		this.#database = options.database;
 		this.#media = options.media;
 		this.#migrations = options.migrations;
+		this.#outbound = options.outbound;
 		this.#pluginDatabases = options.pluginDatabases;
 		this.#storage = options.storage;
 		this.#tasks = options.tasks;
@@ -1165,8 +1170,10 @@ export class PluginHost {
 				: undefined;
 		const tasks = this.#tasks?.apiFor(pluginId, manifest.permissions);
 		const conversations = this.#conversations?.forPlugin(pluginId, manifest.permissions);
+		const outbound = this.#outbound?.forPlugin(pluginId, manifest.permissions);
 		return createPluginContext({
 			channels: this.channels,
+			...(outbound === undefined ? {} : { outbound }),
 			storage,
 			...(cache === undefined ? {} : { cache }),
 			...(tasks === undefined ? {} : { tasks }),

@@ -45,6 +45,7 @@ type PluginContext = {
   rpc: PluginRpcRegistry;
   channel?: PluginChannelApi;
   channels?: PluginChannelRegistry;
+  outbound?: PluginOutboundApi;
   settings?: PluginSettingsApi;
   requests?: PluginRequestApi;
   audit?: PluginAuditApi;
@@ -62,6 +63,11 @@ Implemented host surfaces:
 - `channels.register(adapter)` — a channel plugin owns a transport and registers it. The host
   wires inbound envelopes and requests into its own ingestion pipeline, so adapters never
   touch the durable store directly. See `ChannelAdapter` in `packages/sdk/src/host.ts`.
+- `outbound.send()` / `outbound.recordInteraction()` — plugin-initiated sends go through the
+  host so they become durable `messages` rows in the target conversation, create the chat object
+  when the peer is new, and reach the WebUI through the live event stream. `recordInteraction`
+  stores non-message platform actions such as a poke. A direct `adapter.send()` call skips all
+  of that and is invisible in the transcript; use it only for transport tests.
 - `settings.get()` / `settings.onChange()` — per-plugin config, stored under
   `plugin-config:<pluginId>` in the domain `meta` table, with `manifest.configEnv` fallbacks.
   Writing a patch validates it against `manifest.configSchema` and notifies the plugin, which

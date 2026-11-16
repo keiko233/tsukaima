@@ -172,6 +172,33 @@ export interface ChannelCapabilityNarrowing {
 	readonly deny?: readonly ChannelCapability[];
 }
 
+export interface PluginOutboundSendInput {
+	readonly target: OutboundTarget;
+	readonly parts: readonly MessagePart[];
+	readonly options?: SendOptions;
+}
+
+/**
+ * A platform interaction that is not a message, for example a poke. The plugin performs the
+ * platform call; the host only needs the summary so the interaction stays in durable history.
+ */
+export interface PluginOutboundInteractionInput {
+	readonly target: OutboundTarget;
+	/** One-line history summary, such as `[poke] 10001 -> 10002`. */
+	readonly summary: string;
+	/** Native part type stored with the history row, such as `notice:poke`. */
+	readonly nativeType?: string;
+}
+
+/**
+ * Host-owned outbound path for plugin-initiated sends. Sends are recorded as durable history
+ * before delivery so the WebUI transcript and future turns see them, unlike a raw adapter call.
+ */
+export interface PluginOutboundApi {
+	send(input: PluginOutboundSendInput): Promise<SendResult>;
+	recordInteraction(input: PluginOutboundInteractionInput): Promise<void>;
+}
+
 export interface PluginChannelRegistry {
 	/** Returns a disposer that unregisters the adapter. */
 	register(adapter: ChannelAdapter): () => void;

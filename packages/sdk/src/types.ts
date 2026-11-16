@@ -9,6 +9,7 @@ import type {
 	PluginAuditApi,
 	PluginChannelRegistry,
 	PluginDependencyBag,
+	PluginOutboundApi,
 	PluginRequestApi,
 	PluginSettingsApi,
 } from "./host.ts";
@@ -641,6 +642,8 @@ export interface PluginContext {
 	channel?: PluginChannelApi;
 	/** Present when the plugin declares channel permissions. */
 	channels?: PluginChannelRegistry;
+	/** Host-owned outbound sends that also land in durable history. */
+	outbound?: PluginOutboundApi;
 	/** Per-plugin configuration with host-resolved environment fallbacks. */
 	settings?: PluginSettingsApi;
 	/** Durable request inbox for friend/group requests. */

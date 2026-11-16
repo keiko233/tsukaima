@@ -557,6 +557,7 @@ async function applySettings(
 		getAdapter: () => runtime.adapter,
 		getSettings: () => runtime.settings,
 		logger: context.logger.child?.("actions") ?? context.logger,
+		...(context.outbound === undefined ? {} : { outbound: context.outbound }),
 	});
 	context.logger.info("starting OneBot channel", {
 		endpoint: endpointFor(channelConfig),

@@ -90,6 +90,7 @@ import {
 	RestartReloadController,
 	type RestartIntent,
 } from "./services/restart-coordinator.ts";
+import { OutboundService } from "./services/outbound.ts";
 import { RequestService } from "./services/request-service.ts";
 import { SessionMessagingService } from "./services/session-messaging.ts";
 import { WORKSPACE_TOOL_NAMES, createWorkspaceToolsExtension } from "./services/workspace-tools.ts";
@@ -164,6 +165,7 @@ export class TsukaimaLifecycle {
 	readonly media: MediaService;
 	readonly promptHooks: PromptHookService;
 	readonly replyDispatcher: ReplyDispatcher;
+	readonly outbound: OutboundService;
 	readonly requestService: RequestService;
 	readonly restartCoordinator: RestartCoordinator;
 	readonly sessionMessaging: SessionMessagingService;
@@ -297,6 +299,14 @@ export class TsukaimaLifecycle {
 			pacing: this.conversationPacing,
 			policy: this.conversationPolicy,
 			promptContext: async (sessionId) => this.promptHooks.renderContext(sessionId),
+		});
+		this.outbound = new OutboundService({
+			audit: (entry) => this.writeAudit(entry),
+			channels: this.channels,
+			database: () => this.domainDatabase,
+			hooks: this.hooks,
+			logger: this.runtimeLog,
+			router: () => this.conversationRouter,
 		});
 		this.contextProvider = new DrizzleContextProvider({
 			database: () => this.domainDatabase,
@@ -461,6 +471,7 @@ export class TsukaimaLifecycle {
 			logger: this.logger,
 			migrations: this.pluginMigrations,
 			media: this.media,
+			outbound: this.outbound,
 			pluginDatabases: this.pluginDatabases,
 			onModelMessage: (message, pluginId) => {
 				this.modelUsageLedger.record(

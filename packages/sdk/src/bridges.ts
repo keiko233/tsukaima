@@ -12,6 +12,7 @@ import type {
 	PluginAuditApi,
 	PluginChannelRegistry,
 	PluginDependencyBag,
+	PluginOutboundApi,
 	PluginRequestApi,
 	PluginSettingsApi,
 } from "./host.ts";
@@ -1240,6 +1241,7 @@ export interface PluginContextOptions {
 	conversations?: PluginConversationsApi;
 	channel?: PluginChannelApi;
 	channels?: PluginChannelRegistry;
+	outbound?: PluginOutboundApi;
 	events?: PluginEvents;
 	media?: PluginMediaApi;
 	models?: PluginModelRegistry;
@@ -1310,6 +1312,7 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 		rpc,
 		...(options.channel ? { channel: options.channel } : {}),
 		...(options.channels ? { channels: options.channels } : {}),
+		...(options.outbound ? { outbound: options.outbound } : {}),
 		...(options.settings ? { settings: options.settings } : {}),
 		...(options.requests ? { requests: options.requests } : {}),
 		...(options.audit ? { audit: options.audit } : {}),

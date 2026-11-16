@@ -5,6 +5,7 @@ import type {
 	OutboundTarget,
 	PluginAuditApi,
 	PluginLogger,
+	PluginOutboundApi,
 } from "@tsukaima/sdk";
 import type { OneBotChannelAdapter } from "./adapter.ts";
 import type { OneBotPluginConfig } from "./config.ts";
@@ -348,6 +349,11 @@ export interface OneBotActionFacadeOptions {
 	readonly getAdapter: () => OneBotChannelAdapter | undefined;
 	readonly getSettings: () => OneBotPluginConfig;
 	readonly logger: PluginLogger;
+	/**
+	 * Host-owned outbound path. Without it a send leaves no durable history, so the WebUI never
+	 * shows it; tests that only assert transport traffic can omit it.
+	 */
+	readonly outbound?: PluginOutboundApi;
 }
 
 export type OneBotActionResult =
@@ -363,12 +369,14 @@ export class OneBotActionFacade {
 	readonly #getAdapter: () => OneBotChannelAdapter | undefined;
 	readonly #getSettings: () => OneBotPluginConfig;
 	readonly #logger: PluginLogger;
+	readonly #outbound: PluginOutboundApi | undefined;
 
 	constructor(options: OneBotActionFacadeOptions) {
 		this.#audit = options.audit;
 		this.#getAdapter = options.getAdapter;
 		this.#getSettings = options.getSettings;
 		this.#logger = createSafeLogger(options.logger);
+		this.#outbound = options.outbound;
 	}
 
 	async run(
@@ -534,15 +542,31 @@ export class OneBotActionFacade {
 				const reply = toIdString(
 					input.replyToPlatformMessageId ?? input.reply_to_message_id ?? input.replyToMessageId,
 				);
-				if (asBoolean(input.forward)) return channel.sendForward(target, parts);
+				if (asBoolean(input.forward)) {
+					const result = await channel.sendForward(target, parts);
+					await this.#recordInteraction(target, "forward", parts);
+					return result;
+				}
+				if (this.#outbound !== undefined) {
+					return await this.#outbound.send({
+						parts,
+						target,
+						...(reply === undefined ? {} : { options: { replyToPlatformMessageId: reply } }),
+					});
+				}
 				return adapter.send(
 					target,
 					parts,
 					reply === undefined ? undefined : { replyToPlatformMessageId: reply },
 				);
 			}
-			case "sendForward":
-				return channel.sendForward(asTarget(input.target, input), asParts(input.parts, input));
+			case "sendForward": {
+				const target = asTarget(input.target, input);
+				const parts = asParts(input.parts, input);
+				const result = await channel.sendForward(target, parts);
+				await this.#recordInteraction(target, "forward", parts);
+				return result;
+			}
 			case "lookupMessage":
 				return channel.lookupMessage(
 					asString(
@@ -572,7 +596,10 @@ export class OneBotActionFacade {
 						? target.platformConversationId
 						: (pickId(input, ["targetId", "target_id", "id"]) ??
 							pickId(targetRecord, ["targetId", "target_id", "id"])));
-				return channel.poke(target, asString(userId, "userId"));
+				const poked = asString(userId, "userId");
+				const result = await channel.poke(target, poked);
+				await this.#recordInteraction(target, "poke", undefined, poked);
+				return result;
 			}
 			case "react":
 				return channel.react(
@@ -677,6 +704,38 @@ export class OneBotActionFacade {
 				);
 			case "rawAction":
 				return channel.rawAction(asString(input.action, "action"), asRecord(input.params));
+		}
+	}
+
+	/**
+	 * Persist an interaction the platform already accepted. A history write must never fail the
+	 * action itself, so a recording error only warns.
+	 */
+	async #recordInteraction(
+		target: OutboundTarget,
+		kind: "forward" | "poke",
+		parts?: readonly MessagePart[],
+		targetUserId?: string,
+	): Promise<void> {
+		const outbound = this.#outbound;
+		if (outbound === undefined) return;
+		const summary =
+			kind === "poke"
+				? `[poke] ${this.#getSettings().botAccountId ?? "tsukaima"} -> ${
+						targetUserId ?? target.platformConversationId
+					}`
+				: `[forward] ${(parts ?? []).length} part(s) -> ${target.platformConversationId}`;
+		try {
+			await outbound.recordInteraction({
+				nativeType: `notice:${kind}`,
+				summary,
+				target,
+			});
+		} catch (error) {
+			this.#logger.warn("OneBot interaction history could not be recorded", {
+				kind,
+				reason: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 
