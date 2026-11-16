@@ -9,7 +9,16 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-DEPLOYER="${TSUKAIMA_DEPLOYER:-${DEPLOYER:-$(git config user.name || whoami)}}"
+if [[ -z "${DEPLOYER:-}" ]]; then
+	if [[ -n "${TSUKAIMA_DEPLOYER:-}" ]]; then
+		DEPLOYER="$TSUKAIMA_DEPLOYER"
+	elif [[ "$(git branch --show-current)" == deploy/* ]]; then
+		DEPLOYER="$(git branch --show-current)"
+		DEPLOYER="${DEPLOYER#deploy/}"
+	else
+		DEPLOYER="$(git config user.name || whoami)"
+	fi
+fi
 DEPLOYER="${DEPLOYER//[^A-Za-z0-9_.-]/-}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-deploy/$DEPLOYER}"
 PUSH=0
