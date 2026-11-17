@@ -47,6 +47,9 @@ Never put a real deployment coordinate in a test, fixture, screenshot, or commit
 new strict SemVer value with the last successfully deployed source version and refuses an equal or
 lower value. Build metadata alone is not a bump because SemVer ignores it for precedence.
 
+Release tags, GitHub releases, and `CHANGELOG.md` are produced by the
+[publish workflow](publishing.md), not by hand. Publish first, then deploy the release commit.
+
 Examples:
 
 | Change | Next version |

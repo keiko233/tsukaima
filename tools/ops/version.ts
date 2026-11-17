@@ -18,6 +18,8 @@ export interface VersionCheck {
 	readonly version: string;
 }
 
+export type BumpLevel = "major" | "minor" | "patch";
+
 export function parseSemver(value: string): RegExpMatchArray | null {
 	return SEMVER.exec(value.trim());
 }
@@ -77,6 +79,40 @@ export function assertVersionIncrease(current: string, previous?: string): void 
 			`VERSION must increase for every deployment (deployed: ${normalizedPrevious}, local: ${current})`,
 		);
 	}
+}
+
+/**
+ * Compute the next version for the publish workflow. A prerelease suffix applies to the bumped
+ * base (`minor` plus `rc.1` from `0.8.1` gives `0.9.0-rc.1`), matching how a release candidate
+ * precedes the final version.
+ */
+export function nextVersion(current: string, level: BumpLevel, prerelease?: string): string {
+	const match = parseSemver(current);
+	if (match === null) throw new Error(`VERSION is not strict SemVer: ${current}`);
+	let major = Number(match[1] ?? "0");
+	let minor = Number(match[2] ?? "0");
+	let patch = Number(match[3] ?? "0");
+	switch (level) {
+		case "major":
+			major += 1;
+			minor = 0;
+			patch = 0;
+			break;
+		case "minor":
+			minor += 1;
+			patch = 0;
+			break;
+		case "patch":
+			patch += 1;
+			break;
+	}
+	const base = `${major}.${minor}.${patch}`;
+	const suffix = prerelease?.trim() ?? "";
+	if (suffix.length === 0) return base;
+	if (!/^[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$/u.test(suffix)) {
+		throw new Error(`invalid prerelease identifier: ${suffix}`);
+	}
+	return `${base}-${suffix}`;
 }
 
 /** Existing package manifests that must carry the workspace VERSION verbatim. */
@@ -141,12 +177,15 @@ function usage(): string {
 Commands:
   show                                Print the current VERSION.
   bump <X.Y.Z>                        Update VERSION and every workspace manifest together.
+  next <major|minor|patch>            Print the next version without changing anything.
+      [--prerelease <id>]             Append a prerelease suffix, for example rc.1.
   check                               Validate VERSION and workspace manifest consistency.
   require-bump [--previous <version>] Fail unless VERSION is a strict SemVer increase.
   workspace-paths                     Print manifest paths validated by check.
 
-Policy: every deployment increases VERSION using strict SemVer. Images are built from that
-version; there is no tag-triggered release pipeline.`;
+Policy: every deployment increases VERSION using strict SemVer. Releases are published by
+.github/workflows/publish.yml, which bumps VERSION, writes CHANGELOG.md, tags, and creates the
+GitHub release.`;
 }
 
 function option(argv: readonly string[], name: string): string | undefined {
@@ -167,6 +206,13 @@ if (import.meta.main) {
 				throw new Error("bump requires a semantic version, for example 0.1.1");
 			const changed = bumpVersions(root, next);
 			console.log(changed.length === 0 ? `already at ${next}` : `bumped:\n${changed.join("\n")}`);
+		} else if (command === "next") {
+			const level = argv[1];
+			if (level !== "major" && level !== "minor" && level !== "patch") {
+				throw new Error("next requires major, minor, or patch");
+			}
+			const current = readFileSync(join(root, "VERSION"), "utf8").trim();
+			console.log(nextVersion(current, level, option(argv, "--prerelease")));
 		} else if (command === "check") {
 			const version = readFileSync(join(root, "VERSION"), "utf8").trim();
 			if (parseSemver(version) === null) throw new Error(`VERSION is not semantic: ${version}`);

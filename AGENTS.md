@@ -93,6 +93,9 @@ Never edit an already-applied migration or its snapshot. Add a new migration ins
 
 ## Operations
 
+- Releases are published only through `.github/workflows/publish.yml`. It bumps `VERSION`, writes
+  `CHANGELOG.md`, tags, and creates the GitHub release together; do not create release tags or
+  releases by hand, and do not edit an existing changelog entry for a published version.
 - `ops/deploy/*` targets a real host and may stop containers, build images, or overwrite
   deployment state. Do not run deployment or production maintenance commands without explicit
   user approval.

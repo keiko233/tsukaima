@@ -7,6 +7,7 @@ import {
 	compareSemver,
 	checkManifestVersions,
 	assertVersionIncrease,
+	nextVersion,
 	parseSemver,
 	workspaceManifestPaths,
 } from "./version.ts";
@@ -39,6 +40,14 @@ describe("version policy", () => {
 		expect(parseSemver("1.2.3-rc.1+build.4")).not.toBeNull();
 		expect(parseSemver("v0.1.0")).toBeNull();
 		expect(parseSemver("0.1")).toBeNull();
+	});
+
+	test("computes the next version for a bump level", () => {
+		expect(nextVersion("0.8.1", "patch")).toBe("0.8.2");
+		expect(nextVersion("0.8.1", "minor")).toBe("0.9.0");
+		expect(nextVersion("0.8.1", "major")).toBe("1.0.0");
+		expect(nextVersion("0.8.1", "minor", "rc.1")).toBe("0.9.0-rc.1");
+		expect(() => nextVersion("0.8.1", "patch", "rc_1")).toThrow();
 	});
 
 	test("requires every workspace manifest to match VERSION", async () => {

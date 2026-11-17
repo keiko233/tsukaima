@@ -1,0 +1,94 @@
+name: publish
+
+# Publishing is CI-only: one manual run bumps VERSION, writes CHANGELOG.md, tags the commit, and
+# creates the GitHub release, so the three can never disagree.
+#
+# Only the canonical repository may publish. Set the repository variable
+#   UPSTREAM_REPOSITORY = <owner>/<repo>
+# under Settings -> Secrets and variables -> Actions -> Variables. A fork leaves it unset and the
+# job is skipped. Pushing to a protected main branch needs PUBLISH_TOKEN (a fine-grained PAT with
+# contents: write); without it the job falls back to GITHUB_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: SemVer component to increment
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+      prerelease:
+        description: Optional prerelease identifier, for example rc.1
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == vars.UPSTREAM_REPOSITORY && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: publish
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PUBLISH_TOKEN || github.token }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run --filter '@tsukaima/web' build
+
+      - name: Compute the next version
+        id: version
+        run: |
+          if [[ -n "${{ inputs.prerelease }}" ]]; then
+            version="$(bun tools/ops/version.ts next "${{ inputs.bump }}" --prerelease "${{ inputs.prerelease }}")"
+          else
+            version="$(bun tools/ops/version.ts next "${{ inputs.bump }}")"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publishing $version"
+
+      - name: Bump VERSION and workspace manifests
+        run: bun tools/ops/version.ts bump "${{ steps.version.outputs.version }}"
+
+      - name: Update CHANGELOG.md and release notes
+        run: |
+          bun tools/ops/changelog.ts "${{ steps.version.outputs.version }}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+          bun run check:version
+
+      - name: Commit, tag, and push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(release): ${{ steps.version.outputs.version }}"
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
+          git push origin HEAD:main
+          git push origin "v${{ steps.version.outputs.version }}"
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.PUBLISH_TOKEN || github.token }}
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --verify-tag \
+            --title "v${{ steps.version.outputs.version }}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
