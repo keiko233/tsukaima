@@ -8,6 +8,7 @@ import {
 } from "@tsukaima/contracts";
 import type { PluginLogger } from "@tsukaima/sdk";
 import { createSafeLogger, segmentTypeCounts, singleLinePreview } from "../logging.ts";
+import type { OneBotMentionNameResolver } from "./mention-names.ts";
 import type { OneBotIntervalRateLimiter } from "./rate-limit.ts";
 import type {
 	OneBotAudioTranscribe,
@@ -26,6 +27,7 @@ const MAX_FORWARD_NODES = 20;
 const MAX_FORWARD_TIMEOUT_MS = 5_000;
 const MAX_STT_TIMEOUT_MS = 10_000;
 const MAX_VIDEO_FRAMES = 4;
+const MAX_MENTION_NAME_TIMEOUT_MS = 3_000;
 
 const asString = (value: unknown): string | undefined => {
 	if (typeof value === "string" && value.length > 0) return value;
@@ -422,7 +424,9 @@ type NormalizeOptions = {
 	readonly forwardMaxNodes?: number | undefined;
 	readonly forwardTimeoutMs?: number | undefined;
 	readonly logger?: PluginLogger | undefined;
+	readonly mentionNameTimeoutMs?: number | undefined;
 	readonly now?: (() => number) | undefined;
+	readonly resolveMentionName?: OneBotMentionNameResolver | undefined;
 };
 
 const segmentText = (segments: readonly OneBotSegment[]): string =>
@@ -711,6 +715,63 @@ const senderName = (event: OneBotEvent): string => {
 	);
 };
 
+/**
+ * Fill a nameless `at` segment from the optional channel hook. Failure is deliberately quiet:
+ * the segment keeps its id so ingestion and trigger classification proceed unchanged.
+ */
+const resolvedAtSegment = async (
+	segment: OneBotSegment,
+	event: OneBotEvent,
+	options: NormalizeOptions,
+): Promise<OneBotSegment> => {
+	if (segment.type !== "at") return segment;
+	if (nonEmpty(asString(segment.data?.name)) !== undefined) return segment;
+	const userId = asString(segment.data?.qq)?.trim();
+	if (userId === undefined || userId.length === 0 || userId === "all") return segment;
+	const resolveMentionName = options.resolveMentionName;
+	if (resolveMentionName === undefined) return segment;
+	const logger = createSafeLogger(options.logger);
+	const groupId = event.message_type === "group" ? asString(event.group_id) : undefined;
+	const startedAtMs = Date.now();
+	try {
+		const timeoutMs = Math.min(
+			MAX_MENTION_NAME_TIMEOUT_MS,
+			Math.max(100, options.mentionNameTimeoutMs ?? MAX_MENTION_NAME_TIMEOUT_MS),
+		);
+		const name = nonEmpty(
+			await withTimeout(
+				Promise.resolve(
+					resolveMentionName({ ...(groupId === undefined ? {} : { groupId }), userId }),
+				),
+				timeoutMs,
+				"mention name resolution",
+			),
+		);
+		if (name === undefined) {
+			logger.debug("OneBot mention name resolution unavailable", {
+				durationMs: Date.now() - startedAtMs,
+				groupId,
+				userId,
+			});
+			return segment;
+		}
+		logger.debug("OneBot mention name resolved", {
+			durationMs: Date.now() - startedAtMs,
+			groupId,
+			userId,
+		});
+		return { ...segment, data: { ...segment.data, name } };
+	} catch (error) {
+		logger.warn("OneBot mention name resolution failed", {
+			durationMs: Date.now() - startedAtMs,
+			error: error instanceof Error ? error.message : String(error),
+			groupId,
+			userId,
+		});
+		return segment;
+	}
+};
+
 const buildEnvelope = (
 	event: OneBotEvent,
 	config: { botAccountId: string; channelId: string },
@@ -815,7 +876,9 @@ export const normalizeOneBotEventAsync = async (
 	}
 	const chatKey = chatKeyFor(event);
 	const parts: MessagePart[] = [];
-	for (const segment of event.message) {
+	for (const rawSegment of event.message) {
+		const segment =
+			rawSegment.type === "at" ? await resolvedAtSegment(rawSegment, event, options) : rawSegment;
 		let part = syncPart(segment, logger);
 		if (part === undefined) continue;
 		if (segment.type === "forward") {

@@ -1,5 +1,6 @@
 import type { ChannelNotice, MessageEnvelope, MessagePart } from "@tsukaima/contracts";
 import type { PluginLogger } from "@tsukaima/sdk";
+import type { OneBotMentionNameResolver, OneBotMentionNameStore } from "./mention-names.ts";
 
 export type OneBotEvent = {
 	time: number;
@@ -129,6 +130,14 @@ export type OneBotConfig = {
 	audioTranscribeTimeoutMs?: number;
 	audioTranscribeMinIntervalMs?: number;
 	extractVideoFrames?: OneBotVideoFrameExtractor;
+	/** TTL for a NapCat mention-name lookup; also used for negative results (capped lower). */
+	mentionNameCacheTtlMs?: number;
+	/** Upper bound on one mention-name lookup before the id is kept. */
+	mentionNameTimeoutMs?: number;
+	/** Persist names resolved for mention ids that have no identity row yet. */
+	mentionNameStore?: OneBotMentionNameStore;
+	/** Optional direct resolver for embedders and tests; overrides the store-backed resolver. */
+	resolveMentionName?: OneBotMentionNameResolver;
 	/** Resolve canonical media bytes into a NapCat-consumable file reference. */
 	resolveMedia?: (part: MessagePart) => Promise<string | undefined>;
 };

@@ -13,6 +13,7 @@ import { oneBotNapCatManifest } from "./manifest.ts";
 import type {
 	OneBotAudioTranscribe,
 	OneBotConfig,
+	OneBotMentionNameStore,
 	OneBotReverseServerFactory,
 	OneBotTransportFactory,
 	OneBotVideoFrameExtractor,
@@ -33,6 +34,10 @@ export type {
 	OneBotChannelDiagnostics,
 	OneBotConfig,
 	OneBotEvent,
+	OneBotMentionNameInput,
+	OneBotMentionNameResolver,
+	OneBotMentionNameStore,
+	OneBotMentionNameStoreInput,
 	OneBotRequestEvent,
 	OneBotReverseServerFactory,
 	OneBotTransport,
@@ -45,6 +50,7 @@ export const ONEBOT_TRANSPORT_FACTORY_BINDING = "onebot.transportFactory";
 export const ONEBOT_REVERSE_SERVER_FACTORY_BINDING = "onebot.reverseServerFactory";
 export const ONEBOT_AUDIO_TRANSCRIBE_BINDING = "onebot.audioTranscribe";
 export const ONEBOT_VIDEO_FRAME_EXTRACTOR_BINDING = "onebot.videoFrameExtractor";
+export const ONEBOT_MENTION_NAME_BINDING = "onebot.mentionName";
 
 interface OneBotRuntime {
 	adapter?: OneBotChannelAdapter | undefined;
@@ -437,17 +443,22 @@ function configWithHooks(context: PluginContext, config: OneBotConfig): OneBotCo
 	const extractVideoFrames = context.dependencies?.get<OneBotVideoFrameExtractor>(
 		ONEBOT_VIDEO_FRAME_EXTRACTOR_BINDING,
 	);
+	const mentionNameStore = context.dependencies?.get<OneBotMentionNameStore>(
+		ONEBOT_MENTION_NAME_BINDING,
+	);
 	const media = context.media;
 	const pttEnabled = config.pttToText !== false;
 	context.logger.debug("OneBot host hooks resolved", {
 		audioTranscribe: audioTranscribe !== undefined && pttEnabled,
 		extractVideoFrames: extractVideoFrames !== undefined,
 		mediaBridge: media !== undefined,
+		mentionNames: mentionNameStore !== undefined,
 	});
 	return {
 		...config,
 		...(audioTranscribe === undefined || !pttEnabled ? {} : { audioTranscribe }),
 		...(extractVideoFrames === undefined ? {} : { extractVideoFrames }),
+		...(mentionNameStore === undefined ? {} : { mentionNameStore }),
 		...(media === undefined
 			? {}
 			: {

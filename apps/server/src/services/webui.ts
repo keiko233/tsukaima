@@ -23,7 +23,13 @@ import {
 	users,
 } from "@tsukaima/db";
 import type { TsukaimaLifecycle } from "../lifecycle.ts";
-import { collectMentionIds, loadMentionLabels, replaceMentionIds } from "./mention-labels.ts";
+import {
+	collectMentionIds,
+	loadMentionLabels,
+	mentionLabelsForConversation,
+	replaceMentionIds,
+	type MentionLabelScope,
+} from "./mention-labels.ts";
 import { collectRunSteps } from "./run-steps.ts";
 import { WORKSPACE_TOOL_NAMES } from "./workspace-tools.ts";
 import { CODING_AGENT_TOOL_NAMES } from "./coding-agent-tools.ts";
@@ -110,28 +116,33 @@ function messageMentionIds(rows: readonly MessageRow[]): string[] {
 }
 
 /**
- * Channel accounts that scope a page's mention labels. Multiple accounts on one page share a
- * single lookup; the same numeric id under two accounts is not expected in practice.
+ * Conversation scopes that bind a page's mention labels to the right channel account. Multiple
+ * conversations on one page share one lookup; the same numeric id under two accounts is not
+ * expected in practice.
  */
-function messageAccountIds(
+function messageScopes(
 	rows: readonly MessageRow[],
 	sessions: readonly { channelId?: string | null | undefined; id: string }[],
-): string[] {
+): MentionLabelScope[] {
 	const channelBySession = new Map(sessions.map((session) => [session.id, session.channelId]));
-	const accounts = new Set<string>();
+	const scopes = new Map<string, MentionLabelScope>();
 	for (const row of rows) {
-		const channelId = channelBySession.get(row.conversationId);
-		if (channelId !== null && channelId !== undefined) accounts.add(channelId);
+		const platformAccountId = channelBySession.get(row.conversationId);
+		if (platformAccountId === null || platformAccountId === undefined) continue;
+		scopes.set(row.conversationId, {
+			conversationId: row.conversationId,
+			platformAccountId,
+		});
 	}
-	return [...accounts];
+	return [...scopes.values()];
 }
 
 async function mentionLabelsFor(
 	database: TsukaimaDatabase,
 	rows: readonly MessageRow[],
-	accountIds: readonly string[],
-): Promise<Map<string, string>> {
-	return loadMentionLabels(database, accountIds, messageMentionIds(rows));
+	sessions: readonly { channelId?: string | null | undefined; id: string }[],
+) {
+	return loadMentionLabels(database, messageScopes(rows, sessions), messageMentionIds(rows));
 }
 
 function toMessageSummary(
@@ -276,13 +287,12 @@ export async function listChats(
 					latestIds.map((row) => row.id),
 				),
 			);
-		const labels = await mentionLabelsFor(
-			database,
-			messageRows,
-			messageAccountIds(messageRows, sessionRows),
-		);
+		const labels = await mentionLabelsFor(database, messageRows, sessionRows);
 		for (const row of messageRows) {
-			latestBySession.set(row.conversationId, toMessageSummary(row, labels));
+			latestBySession.set(
+				row.conversationId,
+				toMessageSummary(row, mentionLabelsForConversation(labels, row.conversationId)),
+			);
 		}
 	}
 	return objectRows.map((object) => ({
@@ -671,8 +681,10 @@ export async function listMessages(
 		.from(messages)
 		.where(eq(messages.conversationId, sessionId))
 		.orderBy(asc(messages.occurredAt), asc(messages.id));
-	const labels = await mentionLabelsFor(database, rows, messageAccountIds(rows, [session]));
-	return rows.map((row) => toMessageSummary(row, labels));
+	const labels = await mentionLabelsFor(database, rows, [session]);
+	return rows.map((row) =>
+		toMessageSummary(row, mentionLabelsForConversation(labels, row.conversationId)),
+	);
 }
 
 /**
@@ -720,9 +732,13 @@ export async function listMessagePage(
 		.limit(limit + 1);
 	const pageRows = rows.slice(0, limit);
 	const oldest = pageRows.at(-1);
-	const labels = await mentionLabelsFor(database, pageRows, messageAccountIds(pageRows, [session]));
+	const labels = await mentionLabelsFor(database, pageRows, [session]);
 	return {
-		messages: pageRows.toReversed().map((row) => toMessageSummary(row, labels)),
+		messages: pageRows
+			.toReversed()
+			.map((row) =>
+				toMessageSummary(row, mentionLabelsForConversation(labels, row.conversationId)),
+			),
 		nextCursor:
 			rows.length > limit && oldest !== undefined
 				? encodeMessageCursor({ id: oldest.id, occurredAt: oldest.occurredAt })
@@ -760,9 +776,9 @@ export async function getSessionMessage(
 	const labels = await mentionLabelsFor(
 		database,
 		[row],
-		messageAccountIds([row], [{ channelId: session?.channelId ?? null, id: input.sessionId }]),
+		[{ channelId: session?.channelId ?? null, id: input.sessionId }],
 	);
-	return toMessageSummary(row, labels);
+	return toMessageSummary(row, mentionLabelsForConversation(labels, row.conversationId));
 }
 
 /**
@@ -909,8 +925,12 @@ export async function sendMessage(
 		}
 		const [saved] = await database.select().from(messages).where(eq(messages.id, id)).limit(1);
 		if (saved === undefined) throw new Error("Failed to persist outbound message");
-		const labels = await loadMentionLabels(database, [channelId], collectMentionIds(text));
-		return toMessageSummary(saved, labels);
+		const labels = await loadMentionLabels(
+			database,
+			[{ conversationId: session.session.id, platformAccountId: channelId }],
+			collectMentionIds(text),
+		);
+		return toMessageSummary(saved, mentionLabelsForConversation(labels, saved.conversationId));
 	}
 
 	const sent = await lifecycle.sessionMessaging.sendAgentMessage({
@@ -928,10 +948,17 @@ export async function sendMessage(
 	if (saved === undefined) throw new Error("Failed to persist message");
 	const labels = await loadMentionLabels(
 		database,
-		session.session.channelId === null ? [] : [session.session.channelId],
+		session.session.channelId === null
+			? []
+			: [
+					{
+						conversationId: session.session.id,
+						platformAccountId: session.session.channelId,
+					},
+				],
 		collectMentionIds(text),
 	);
-	return toMessageSummary(saved, labels);
+	return toMessageSummary(saved, mentionLabelsForConversation(labels, saved.conversationId));
 }
 
 export async function listUsers(lifecycle: TsukaimaLifecycle): Promise<

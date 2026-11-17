@@ -41,6 +41,7 @@ import {
 	type AuditEntry,
 	type TsukaimaPlugin,
 } from "@tsukaima/sdk";
+import { ONEBOT_MENTION_NAME_BINDING } from "@tsukaima-plugin/onebot-napcat";
 import {
 	MigrationRegistry,
 	PluginDatabaseStore,
@@ -84,6 +85,7 @@ import {
 } from "./services/memory-service.ts";
 import { MediaService } from "./services/media-service.ts";
 import { HookBus } from "./services/hook-bus.ts";
+import { createMentionIdentityStore } from "./services/mention-identity-store.ts";
 import { PluginConversationService } from "./services/plugin-conversation-service.ts";
 import { PluginHost } from "./services/plugin-host.ts";
 import { PluginSettingsStore } from "./services/plugin-settings.ts";
@@ -571,6 +573,10 @@ export class TsukaimaLifecycle {
 		});
 		const pluginBindings = new Map(options?.pluginBindings ?? []);
 		pluginBindings.set(MEMORY_SERVICE_BINDING, this.memory);
+		pluginBindings.set(
+			ONEBOT_MENTION_NAME_BINDING,
+			createMentionIdentityStore(() => this.conversationRouter),
+		);
 		if (!pluginBindings.has(SELF_ITERATION_HOST_BINDING)) {
 			pluginBindings.set(SELF_ITERATION_HOST_BINDING, {
 				// The runtime never applies a diff and cannot derive the artifact a deployer built.

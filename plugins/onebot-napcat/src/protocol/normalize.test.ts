@@ -228,6 +228,44 @@ describe("OneBot inbound segment fidelity", () => {
 		).toEqual([{ text: "hi", type: "text" }]);
 	});
 
+	test("resolves a nameless at through the optional channel hook", async () => {
+		const inputs: Array<{ groupId?: string | undefined; userId: string }> = [];
+		const envelope = await normalizeOneBotEventAsync(
+			groupMessage([
+				{ data: { qq: 10_002 }, type: "at" },
+				{ data: { text: " ping" }, type: "text" },
+			]),
+			config,
+			{
+				resolveMentionName: async (input) => {
+					inputs.push(input);
+					return "Target Person";
+				},
+			},
+		);
+		expect(inputs).toEqual([{ groupId: "555", userId: "10002" }]);
+		expect(envelope?.parts).toEqual([{ text: "@Target Person ping", type: "text" }]);
+		// Trigger classification still reads ids from the mention list.
+		expect(envelope?.mentions).toEqual([{ id: "10002" }]);
+	});
+
+	test("keeps the id when mention name resolution fails", async () => {
+		const envelope = await normalizeOneBotEventAsync(
+			message([
+				{ data: { qq: 10_002 }, type: "at" },
+				{ data: { text: " ping" }, type: "text" },
+			]),
+			config,
+			{
+				resolveMentionName: async () => {
+					throw new Error("platform offline");
+				},
+			},
+		);
+		expect(envelope?.parts).toEqual([{ text: "@10002 ping", type: "text" }]);
+		expect(envelope?.mentions).toEqual([{ id: "10002" }]);
+	});
+
 	test("expands forward bundles with bounds and falls back on timeout", async () => {
 		const inline = normalizeOneBotEvent(
 			message([

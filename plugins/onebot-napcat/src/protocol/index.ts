@@ -1,5 +1,12 @@
 export { OneBotChannel, toSegments } from "./channel.ts";
 export {
+	createOneBotMentionNameResolver,
+	type OneBotMentionNameInput,
+	type OneBotMentionNameResolver,
+	type OneBotMentionNameStore,
+	type OneBotMentionNameStoreInput,
+} from "./mention-names.ts";
+export {
 	normalizeOneBotEvent,
 	normalizeOneBotEventAsync,
 	normalizeOneBotNotice,

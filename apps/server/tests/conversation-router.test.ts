@@ -156,6 +156,35 @@ describe("ConversationRouter ingestion boundary", () => {
 		}
 	});
 
+	test("keeps the identity display name in sync when a sender renames", async () => {
+		const lifecycle = await createLifecycle();
+		try {
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("Domain database is not ready");
+
+			const renamed = (id: string, displayName: string): MessageEnvelope => ({
+				...envelope(id, "name change"),
+				sender: { displayName, id: "user-1", platformId: "user-1" },
+			});
+
+			await lifecycle.processEnvelope(renamed("rename-1", "Old Display Name"));
+			const [before] = await database
+				.select({ displayName: identities.displayName })
+				.from(identities);
+			expect(before?.displayName).toBe("Old Display Name");
+
+			await lifecycle.processEnvelope(renamed("rename-2", "New Display Name"));
+			const [identity] = await database
+				.select({ displayName: identities.displayName })
+				.from(identities);
+			const [user] = await database.select({ displayName: users.displayName }).from(users);
+			expect(identity?.displayName).toBe("New Display Name");
+			expect(user?.displayName).toBe("New Display Name");
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
 	test("persists a valid envelope as a single inbound message", async () => {
 		const lifecycle = await createLifecycle();
 		try {

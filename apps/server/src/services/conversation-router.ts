@@ -624,12 +624,28 @@ export class ConversationRouter {
 	async resolveIdentity(
 		envelope: MessageEnvelope,
 	): Promise<{ displayName: string; userId: string }> {
+		return this.rememberIdentity({
+			displayName: envelope.sender.displayName,
+			externalId: envelope.sender.platformId,
+			kind: envelope.sender.isBot === true ? "bot" : "human",
+			platform: envelope.channelKind,
+			platformAccountId: envelope.channelId,
+		});
+	}
+
+	/**
+	 * Upsert a known platform identity without requiring a full message envelope. Used by the
+	 * channel-side mention-name hook to persist a name it resolved before the next read.
+	 */
+	async rememberIdentity(input: {
+		readonly displayName: string;
+		readonly externalId: string;
+		readonly kind: "human" | "bot";
+		readonly platform: string;
+		readonly platformAccountId: string;
+	}): Promise<{ displayName: string; userId: string }> {
 		const database = this.#requireDatabase();
-		const displayName = envelope.sender.displayName;
-		const platform = envelope.channelKind;
-		const platformAccountId = envelope.channelId;
-		const externalId = envelope.sender.platformId;
-		const kind = envelope.sender.isBot === true ? "bot" : "human";
+		const { displayName, externalId, kind, platform, platformAccountId } = input;
 		const now = new Date().toISOString();
 
 		// A single synchronous transaction over the serialized Bun SQLite connection: no
@@ -640,6 +656,8 @@ export class ConversationRouter {
 				tx
 					.select({
 						displayName: users.displayName,
+						identityDisplayName: identities.displayName,
+						identityId: identities.id,
 						userId: users.id,
 					})
 					.from(identities)
@@ -660,6 +678,14 @@ export class ConversationRouter {
 					tx.update(users)
 						.set({ displayName, updatedAt: now })
 						.where(eq(users.id, existing.userId))
+						.run();
+				}
+				// Keep the identity copy in the same transaction. It bypassed this refresh before,
+				// so the WebUI could show a permanently stale name even though `users` was current.
+				if (existing.identityDisplayName !== displayName) {
+					tx.update(identities)
+						.set({ displayName, updatedAt: now })
+						.where(eq(identities.id, existing.identityId))
 						.run();
 				}
 				return { displayName, userId: existing.userId };

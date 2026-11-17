@@ -24,6 +24,10 @@ import {
 	normalizeOneBotNotice,
 	normalizeOneBotRequest,
 } from "./normalize.ts";
+import {
+	createOneBotMentionNameResolver,
+	type OneBotMentionNameResolver,
+} from "./mention-names.ts";
 import { OneBotIntervalRateLimiter } from "./rate-limit.ts";
 import { bunReverseServerFactory } from "./reverse.ts";
 import type {
@@ -57,6 +61,8 @@ type NormalizeHookOptions = {
 	readonly forwardMaxNodes?: number | undefined;
 	readonly forwardTimeoutMs?: number | undefined;
 	readonly logger?: PluginLogger | undefined;
+	readonly mentionNameTimeoutMs?: number | undefined;
+	readonly resolveMentionName?: OneBotMentionNameResolver | undefined;
 };
 
 const DEFAULT_ACTION_TIMEOUT_MS = 5_000;
@@ -304,6 +310,7 @@ export class OneBotChannel {
 	private transportFactory: OneBotTransportFactory;
 	private readonly audioRateLimiter: OneBotIntervalRateLimiter | undefined;
 	private readonly logger: PluginLogger;
+	private readonly mentionNameResolver: OneBotMentionNameResolver | undefined;
 
 	constructor(
 		config: OneBotConfig,
@@ -315,6 +322,20 @@ export class OneBotChannel {
 		this.logger = createSafeLogger(logger);
 		this.transportFactory = transportFactory ?? defaultTransportFactory;
 		this.reverseServerFactory = reverseServerFactory ?? bunReverseServerFactory;
+		this.mentionNameResolver =
+			config.resolveMentionName ??
+			(config.mentionNameStore === undefined
+				? undefined
+				: createOneBotMentionNameResolver({
+						botAccountId: config.botAccountId,
+						...(config.mentionNameCacheTtlMs === undefined
+							? {}
+							: { cacheTtlMs: config.mentionNameCacheTtlMs }),
+						channelId: config.channelId,
+						logger: this.logger,
+						readAction: (action, params) => this.readAction(action, params),
+						store: config.mentionNameStore,
+					}));
 		const interval =
 			config.audioTranscribeMinIntervalMs ??
 			(typeof config.pttToText === "object" ? config.pttToText.minIntervalMs : undefined) ??
@@ -863,7 +884,15 @@ export class OneBotChannel {
 			return;
 		}
 		const segments = event.message ?? [];
+		const needsMentionNameResolution =
+			this.mentionNameResolver !== undefined &&
+			segments.some((segment) => {
+				if (segment.type !== "at") return false;
+				const name = segment.data?.name;
+				return typeof name !== "string" || name.trim().length === 0;
+			});
 		const wantsAsync =
+			needsMentionNameResolution ||
 			segments.some(
 				(segment) =>
 					segment.type === "forward" ||
@@ -922,6 +951,12 @@ export class OneBotChannel {
 			forwardMaxNodes: forward?.maxNodes,
 			forwardTimeoutMs: forward?.timeoutMs,
 			logger: this.logger,
+			...(this.mentionNameResolver === undefined
+				? {}
+				: { resolveMentionName: this.mentionNameResolver }),
+			...(this.config.mentionNameTimeoutMs === undefined
+				? {}
+				: { mentionNameTimeoutMs: this.config.mentionNameTimeoutMs }),
 		};
 	}
 
