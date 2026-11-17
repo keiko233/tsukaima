@@ -74,7 +74,13 @@ export const proactiveSchedulerPlugin: TsukaimaPlugin = {
 		const database = context.database;
 		const tasks = context.tasks;
 		const conversations = context.conversations;
-		if (database === undefined || tasks === undefined || conversations === undefined) {
+		const followUps = context.followUps;
+		if (
+			database === undefined ||
+			tasks === undefined ||
+			conversations === undefined ||
+			followUps === undefined
+		) {
 			context.logger.error(
 				"proactive-scheduler requires host database, tasks, and conversation bridges",
 			);
@@ -98,6 +104,7 @@ export const proactiveSchedulerPlugin: TsukaimaPlugin = {
 			...(context.audit === undefined ? {} : { audit: context.audit }),
 			conversations,
 			database,
+			followUps,
 			logger: context.logger,
 			...(maxPromptChars === undefined ? {} : { promptMaxChars: maxPromptChars }),
 			...(tickIntervalMs === undefined ? {} : { tickIntervalMs }),
@@ -110,6 +117,13 @@ export const proactiveSchedulerPlugin: TsukaimaPlugin = {
 			tickIntervalMs: tickIntervalMs ?? null,
 		});
 		runtime.disposers.push(
+			followUps.onChanged(() => {
+				void service.reconcileFollowUps().catch((error: unknown) => {
+					context.logger.warn("follow-up reconciliation failed", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				});
+			}),
 			tasks.registerHandler(PROACTIVE_SCHEDULER_RUN_KIND, (task) => service.runHostTask(task)),
 			tasks.registerHandler(PROACTIVE_SCHEDULER_TICK_KIND, (task) => service.runHostTask(task)),
 			context.events.on("message.received", async (payload) => {

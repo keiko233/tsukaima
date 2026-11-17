@@ -63,6 +63,14 @@ describe("CodingTools", () => {
 		expect(result.files[0]?.status).toBe("modified");
 		expect(result.totalInsertions).toBeGreaterThan(0);
 	});
+
+	test("diff reports untracked files without writing to the index", async () => {
+		await writeFile(join(repoPath, "src", "brand-new.ts"), "export const added = 1;\n");
+		const result = await tools.diff();
+		const added = result.files.find((file) => file.path === "src/brand-new.ts");
+		expect(added).toMatchObject({ status: "added", insertions: 1 });
+		expect(result.raw).toContain("brand-new.ts");
+	});
 });
 
 describe("parseDiffOutput", () => {

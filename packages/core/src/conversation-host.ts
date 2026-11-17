@@ -216,6 +216,8 @@ export interface AppendConversationInput {
 	readonly conversationId: string;
 	readonly envelope: MessageEnvelope;
 	readonly forceSubmit?: boolean;
+	/** Stable submission request id; retries with the same id reuse the durable submission. */
+	readonly requestId?: string;
 	readonly submittedAtMs: number;
 	readonly whenBusy?: "steer" | "follow-up";
 }
@@ -225,15 +227,35 @@ export interface AppendConversationInput {
  * assistant entry, so the server can deliver it to the origin channel.
  */
 export interface ConversationAnswer {
-	/** Durable activity (submission request id) the answer belongs to. */
-	readonly activityId: string;
+	/** Durable activity (submission request id) the answer belongs to; absent when recovered. */
+	readonly activityId?: string;
 	/** Durable conversation the answer was produced in. */
 	readonly conversationId: string;
 	/** Entry id of the assistant entry holding the answer text. */
 	readonly entryId: string;
+	/** True when the answer was replayed from durable storage after a restart. */
+	readonly recovered?: boolean;
+	/**
+	 * Conversation-scoped durable submission request id that produced this answer. The server
+	 * uses it to settle the reply expectation written before the turn was admitted.
+	 */
+	readonly submissionRequestId?: string;
 	/** Concatenated text blocks of the assistant answer. */
 	readonly text: string;
 }
+
+/**
+ * Terminal state of one admitted submission, resolved by its durable request id.
+ *
+ * Recovery uses this instead of scanning the transcript: only the exact answer of a submission
+ * the server expected to reply to is ever dispatched, so old, suppressed, and intermediate
+ * assistant entries are never replayed.
+ */
+export type SubmissionAnswerResolution =
+	| { readonly status: "missing" }
+	| { readonly status: "pending" }
+	| { readonly status: "unanswered"; readonly reason: string }
+	| { readonly status: "answered"; readonly entryId: string; readonly text: string };
 
 /**
  * Activity-window transition for host consumers (the server forwards these to plugin
@@ -262,12 +284,25 @@ export interface BackgroundTurnInput {
 	readonly context?: string;
 	/** Stable request id for idempotent retries. */
 	readonly requestId?: string;
+	/**
+	 * Caller-owned origin metadata carried through admission so reply recovery can hand a
+	 * deferred background follow-up back to the plugin that requested it.
+	 */
+	readonly origin?: BackgroundTurnOrigin;
+}
+
+export interface BackgroundTurnOrigin {
+	readonly pluginId: string;
+	readonly sourceTaskId?: string;
+	readonly followUpKind?: string;
 }
 
 export interface BackgroundTurnResult {
 	readonly activityId: string;
 	readonly entryId: string;
 	readonly requestId: string;
+	/** Durable submission request id; settles the reply expectation the turn recorded. */
+	readonly submissionRequestId: string;
 	readonly text: string;
 }
 
@@ -303,6 +338,20 @@ export interface DurableConversationHostOptions {
 	 * slow consumer never blocks ingestion; rejections are caught and logged, never surfaced.
 	 */
 	readonly onAnswer?: (answer: ConversationAnswer) => Promise<void> | void;
+	/**
+	 * Called immediately before a reply-producing submission is committed.
+	 *
+	 * The server persists a reply expectation here, so a crash after the answer commits but
+	 * before any observer runs is still recoverable. A rejection aborts the submission: a turn
+	 * must never start without a durable expectation of its reply.
+	 */
+	readonly onTurnAdmitted?: (turn: AdmittedTurn) => Promise<void> | void;
+	/**
+	 * Called before a background turn is committed, so its reply can be recovered if the process
+	 * dies before the caller receives the result. Background answers need marker handling on
+	 * replay, so the expectation records `kind: "background"`.
+	 */
+	readonly onBackgroundTurnAdmitted?: (turn: AdmittedTurn) => Promise<void> | void;
 	readonly policy?: ActivityAggregationPolicy;
 	/** Shared execution lock; defaults to the host-wide lock. */
 	readonly executionLock?: ConversationExecutionLock;
@@ -323,6 +372,17 @@ export interface DurableConversationHostOptions {
 	/** How long a busy run may still be steered before a follow-up is queued. */
 	readonly steerGraceMs?: number;
 	readonly storage: SqliteStorage;
+}
+
+/** One reply-producing submission about to be committed. */
+export interface AdmittedTurn {
+	/** Durable activity id (`<conversationId>:activity`). */
+	readonly activityId: string;
+	readonly conversationId: string;
+	/** Conversation-scoped durable submission request id. */
+	readonly submissionRequestId: string;
+	/** Background-turn origin metadata; absent for ordinary chat turns. */
+	readonly origin?: BackgroundTurnOrigin;
 }
 
 /**
@@ -868,6 +928,18 @@ export class PiDurableConversationHost {
 					envelopes: nextEnvelopes,
 				},
 			};
+			const requestId =
+				input.requestId ?? activitySubmissionRequestId(activityId, input.envelope.id);
+			if (shouldSubmit) {
+				// Persist the reply expectation before the durable submission exists. A crash after
+				// the answer commits but before any observer runs is then still recoverable, and a
+				// turn can never start without a durable record that its reply is owed.
+				await this.options.onTurnAdmitted?.({
+					activityId,
+					conversationId: input.conversationId,
+					submissionRequestId: requestId,
+				});
+			}
 			return conversation.submit(
 				tx,
 				shouldSubmit
@@ -875,7 +947,7 @@ export class PiDurableConversationHost {
 							type: "input",
 							content: await this.envelopesToInput(nextEnvelopes),
 							entry,
-							requestId: activitySubmissionRequestId(activityId, input.envelope.id),
+							requestId,
 							whenBusy: whenBusy === "follow-up" ? "followUp" : whenBusy,
 						}
 					: {
@@ -950,6 +1022,7 @@ export class PiDurableConversationHost {
 				const text = assistantEntryText(entry);
 				if (text === undefined) return;
 				const activityId = activityIdFromSubmissionRequestId(settled.requestId ?? "");
+				const submissionRequestId = settled.requestId;
 				const entryId = String(answerId);
 				this.logger.debug("Conversation answer observed", {
 					activityId,
@@ -967,6 +1040,7 @@ export class PiDurableConversationHost {
 					activityId,
 					conversationId,
 					entryId,
+					...(submissionRequestId === undefined ? {} : { submissionRequestId }),
 					text,
 				});
 			} catch (error) {
@@ -1282,10 +1356,16 @@ export class PiDurableConversationHost {
 						envelopes,
 					},
 				};
+				const requestId = activitySubmissionRequestId(activityId, envelopes[0]?.id ?? "window");
+				await this.options.onTurnAdmitted?.({
+					activityId,
+					conversationId,
+					submissionRequestId: requestId,
+				});
 				return conversation.submit(tx, {
 					content: await this.envelopesToInput(envelopes),
 					entry,
-					requestId: activitySubmissionRequestId(activityId, envelopes[0]?.id ?? "window"),
+					requestId,
 					type: "input",
 					whenBusy: whenBusy === "steer" ? "steer" : "followUp",
 				});
@@ -1612,23 +1692,30 @@ export class PiDurableConversationHost {
 			});
 			throw new Error("Background turn prompt must not be empty");
 		}
-		const submissionId = await conversation.commit(
-			(tx) =>
-				conversation.submit(tx, {
-					content,
-					entry: {
-						kind: durableDocumentKinds.activityWindow,
-						data: {
-							activityId,
-							backgroundKind: input.kind,
-							requestId,
-						},
+		const submissionId = await conversation.commit(async (tx) => {
+			// Record the reply expectation before admitting the turn, so a crash after the answer
+			// commits but before this caller sees it is recoverable. A rejected expectation aborts
+			// the turn: a reply must never be produced without a durable record that it is owed.
+			await this.options.onBackgroundTurnAdmitted?.({
+				activityId,
+				conversationId: input.conversationId,
+				...(input.origin === undefined ? {} : { origin: input.origin }),
+				submissionRequestId: requestId,
+			});
+			return conversation.submit(tx, {
+				content,
+				entry: {
+					kind: durableDocumentKinds.activityWindow,
+					data: {
+						activityId,
+						backgroundKind: input.kind,
+						requestId,
 					},
-					requestId,
-					type: "input",
-				}),
-			BACKGROUND_CONTEXT,
-		);
+				},
+				requestId,
+				type: "input",
+			});
+		}, BACKGROUND_CONTEXT);
 		const submission = await harness.submission(submissionId, BACKGROUND_CONTEXT);
 		const settled = await submission?.wait(BACKGROUND_CONTEXT);
 		if (settled === undefined || settled.type !== "input" || settled.status !== "done") {
@@ -1659,6 +1746,7 @@ export class PiDurableConversationHost {
 			activityId,
 			entryId,
 			requestId,
+			submissionRequestId: requestId,
 			text,
 		};
 	}
@@ -1677,6 +1765,44 @@ export class PiDurableConversationHost {
 			BACKGROUND_CONTEXT,
 		);
 		return [...page.items].toReversed();
+	}
+
+	/**
+	 * Resolve the terminal state of one admitted submission by its durable request id.
+	 *
+	 * Recovery must never infer "this assistant entry needs a reply" from the transcript: an
+	 * entry may be an intermediate step, a suppressed marker, or an answer whose turn was already
+	 * handled. A reply is only owed for a submission the server explicitly expected, and only
+	 * that submission's own `answer` entry is dispatchable.
+	 */
+	async resolveSubmissionAnswer(
+		conversationId: string,
+		submissionRequestId: string,
+	): Promise<SubmissionAnswerResolution> {
+		const numericId = Number(conversationId) as ConversationId;
+		if (!Number.isSafeInteger(numericId)) return { status: "missing" };
+		const record = await this.options.storage.submissionByRequest(
+			numericId,
+			submissionRequestId,
+			BACKGROUND_CONTEXT,
+		);
+		if (record === undefined) return { status: "missing" };
+		if (record.type !== "input") return { status: "missing" };
+		if (record.status === "queued" || record.status === "placed") {
+			return { status: "pending" };
+		}
+		if (record.status === "unanswered") {
+			return { reason: record.reason, status: "unanswered" };
+		}
+		const answer = await this.options.storage.entry(record.answer, BACKGROUND_CONTEXT);
+		if (answer === undefined) {
+			// The submission settled but its answer entry is not visible yet. Treat it as pending
+			// so a later sweep retries instead of dropping the reply.
+			return { status: "pending" };
+		}
+		const text = assistantEntryText(answer.entry);
+		if (text === undefined) return { reason: "answer_has_no_text", status: "unanswered" };
+		return { entryId: String(record.answer), status: "answered", text };
 	}
 
 	async compactConversation(
@@ -2191,22 +2317,24 @@ export class PiDurableConversationHost {
 				// must keep them, or every turn would unload what the model already discovered.
 				const state = await harness.snapshot(AgentDoc, numericId, BACKGROUND_CONTEXT);
 				const storedModelTools = state?.modelTools;
-				const modelTools = Array.isArray(storedModelTools)
-					? storedModelTools.flatMap((name) => {
-							const tool = removeNames.has(name) ? undefined : byName.get(name);
-							return tool === undefined ? [] : [tool];
-						})
-					: {
-							remove: registrations,
-							...(storedModelTools?.add === undefined || storedModelTools.add.length === 0
-								? {}
-								: {
-										add: storedModelTools.add.flatMap((name) => {
-											const tool = byName.get(name);
-											return tool === undefined ? [] : [tool];
+				const storedFilter = Array.isArray(storedModelTools) ? undefined : storedModelTools;
+				const modelTools =
+					Array.isArray(storedModelTools) && storedModelTools.length > 0
+						? storedModelTools.flatMap((name) => {
+								const tool = removeNames.has(name) ? undefined : byName.get(name);
+								return tool === undefined ? [] : [tool];
+							})
+						: {
+								remove: registrations,
+								...(storedFilter?.add === undefined || storedFilter.add.length === 0
+									? {}
+									: {
+											add: storedFilter.add.flatMap((name) => {
+												const tool = byName.get(name);
+												return tool === undefined ? [] : [tool];
+											}),
 										}),
-									}),
-						};
+							};
 				await conversation.configure(
 					{
 						modelTools,
@@ -2230,6 +2358,42 @@ export class PiDurableConversationHost {
 				return declared !== undefined && declared !== "both" && declared !== surface;
 			})
 			.map(({ tool }) => tool.name);
+	}
+
+	/**
+	 * Replace a conversation's model-tool filter with an explicit allowlist. An empty list offers
+	 * the model no tools at all, which is the fail-closed fallback when the domain policy cannot
+	 * be read: a turn may still answer, but it cannot reach a privileged tool.
+	 */
+	async setModelToolAllowlist(
+		conversationId: string,
+		allowedNames: readonly string[],
+	): Promise<void> {
+		const signature = `allow:${[...allowedNames].toSorted().join("\0")}`;
+		if (this.modelToolsSignatures.get(conversationId) === signature) return;
+		await withConversationLock(
+			conversationId,
+			async () => {
+				const harness = await this.openHarness();
+				const numericId = Number(conversationId) as ConversationId;
+				const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
+				if (conversation === undefined) {
+					throw new Error(`Conversation not found: ${conversationId}`);
+				}
+				const allow = new Set(allowedNames);
+				const registrations = this.registry
+					.snapshot()
+					.tools()
+					.filter(({ tool }) => allow.has(tool.name))
+					.map(({ tool }) => tool);
+				await conversation.configure(
+					{ modelTools: registrations, tools: registrations },
+					BACKGROUND_CONTEXT,
+				);
+				this.modelToolsSignatures.set(conversationId, signature);
+			},
+			this.executionLock,
+		);
 	}
 
 	private async readPolicy(conversationId: ConversationId): Promise<ConversationPolicy> {

@@ -288,6 +288,109 @@ export const messages = sqliteTable(
 	],
 );
 
+/**
+ * Durable reply-dispatch ledger: one row per assistant answer that must reach a channel.
+ *
+ * The row is claimed before the send and keyed by `(conversationId, durableEntryId)`, so a
+ * restart can find exactly the answers it has not dispatched without guessing how far back to
+ * look or assuming entry ids are ordered.
+ */
+export const replyDispatchIntents = sqliteTable(
+	"reply_dispatch_intents",
+	{
+		claimedAtMs: integer("claimed_at_ms").notNull(),
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		durableEntryId: text("durable_entry_id").notNull(),
+		/** Set when the claimed outbound message row exists. */
+		messageId: text("message_id"),
+		state: text("state", { enum: ["claimed", "settled"] }).notNull(),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.conversationId, table.durableEntryId] }),
+		index("reply_dispatch_intents_state_idx").on(table.state, table.claimedAtMs),
+	],
+);
+
+/**
+ * Durable turn expectation: one row per user turn admitted for a reply, written *before* the
+ * durable submission exists.
+ *
+ * `reply_dispatch_intents` can only be written once the terminal answer entry id is known, which
+ * leaves a crash window between the answer commit and the first claim. This row closes that
+ * window: recovery resolves the durable submission by `submission_request_id` and dispatches only
+ * its exact terminal answer. A conversation with no expectation is never replayed from history,
+ * so old, suppressed, and intermediate assistant entries are never resent.
+ */
+export const replyDispatchExpectations = sqliteTable(
+	"reply_dispatch_expectations",
+	{
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		createdAtMs: integer("created_at_ms").notNull(),
+		/** Terminal answer entry once the submission settled; null while it is still running. */
+		durableEntryId: text("durable_entry_id"),
+		/**
+		 * `chat` turns are dispatched as-is. `background` turns go through proactive marker
+		 * handling, so recovery must consume those markers before sending anything.
+		 */
+		kind: text("kind", { enum: ["background", "chat"] }).notNull(),
+		lastDetail: text("last_detail"),
+		state: text("state", { enum: ["pending", "settled", "suppressed", "abandoned"] }).notNull(),
+		/** Conversation-scoped durable submission request id (`activityId#envelopeId`). */
+		submissionRequestId: text("submission_request_id").notNull(),
+		/** Owning plugin for a background turn; null for ordinary chat turns. */
+		sourcePluginId: text("source_plugin_id"),
+		/** Scheduler task that initiated a background turn, when known. */
+		sourceTaskId: text("source_task_id"),
+		/** Scheduler kind to use if the answer defers itself with `schedule-later`. */
+		sourceFollowUpKind: text("source_follow_up_kind"),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.conversationId, table.submissionRequestId] }),
+		index("reply_dispatch_expectations_state_idx").on(table.state, table.createdAtMs),
+	],
+);
+
+/**
+ * Durable handoff for a background answer that asked to continue later.
+ *
+ * The row is written before the reply expectation settles, so a crash after the answer commits
+ * cannot lose the follow-up. The owning plugin materializes its own task and then completes the
+ * row. The host never writes plugin task tables, preserving plugin ownership.
+ */
+export const pluginFollowUpIntents = sqliteTable(
+	"plugin_follow_up_intents",
+	{
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		createdAtMs: integer("created_at_ms").notNull(),
+		delayMs: integer("delay_ms").notNull(),
+		/** Scheduler kind the plugin should materialize (`proactive`, `remind`, ...). */
+		followUpKind: text("follow_up_kind").notNull(),
+		id: text("id").primaryKey(),
+		pluginId: text("plugin_id").notNull(),
+		scheduledForMs: integer("scheduled_for_ms").notNull(),
+		sourceTaskId: text("source_task_id"),
+		status: text("status", { enum: ["pending", "completed"] }).notNull(),
+		submissionRequestId: text("submission_request_id").notNull(),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+	},
+	(table) => [
+		index("plugin_follow_up_intents_status_idx").on(table.status, table.scheduledForMs),
+		index("plugin_follow_up_intents_plugin_idx").on(table.pluginId, table.status),
+		uniqueIndex("plugin_follow_up_intents_submission_unique").on(
+			table.pluginId,
+			table.submissionRequestId,
+		),
+	],
+);
+
 export const requests = sqliteTable(
 	"requests",
 	{
@@ -650,18 +753,35 @@ export const codingProposals = sqliteTable(
 export const codingDeployments = sqliteTable(
 	"coding_deployments",
 	{
+		/**
+		 * Exact identity of the bytes this deployment claims to have applied. `null` means the
+		 * deployment cannot be verified; reconciliation must settle it `manual_apply_required`.
+		 */
+		appliedIdentityJson: text("applied_identity_json"),
 		artifactMetadataJson: text("artifact_metadata_json"),
 		createdAtMs: integer("created_at_ms").notNull(),
 		createdBy: text("created_by").notNull(),
 		id: text("id").primaryKey(),
 		postCheckJson: text("post_check_json"),
 		preCheckJson: text("pre_check_json"),
+		/** Exact identity that was live before this deployment, and what a rollback restores. */
+		previousIdentityJson: text("previous_identity_json"),
 		proposalId: text("proposal_id").notNull(),
 		reloadedAtMs: integer("reloaded_at_ms"),
 		rollbackOfId: text("rollback_of_id"),
 		rollbackPlan: text("rollback_plan").notNull(),
 		sourceRevision: text("source_revision").notNull(),
-		status: text("status", { enum: ["pending", "deployed", "failed", "rolled_back"] }).notNull(),
+		status: text("status", {
+			enum: [
+				"pending",
+				"scheduled",
+				"deployed",
+				"failed",
+				"rolled_back",
+				"cancelled",
+				"manual_apply_required",
+			],
+		}).notNull(),
 		taskId: text("task_id").notNull(),
 		updatedAtMs: integer("updated_at_ms").notNull(),
 	},

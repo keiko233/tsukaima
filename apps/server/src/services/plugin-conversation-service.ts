@@ -287,44 +287,50 @@ export class PluginConversationService {
 				const context = [input.context, hookContext]
 					.filter((entry): entry is string => entry !== undefined && entry.trim().length > 0)
 					.join("\n\n");
+				const requestId =
+					input.taskId === undefined ? undefined : `plugin:${pluginId}:task:${input.taskId}`;
+				// A scheduler retry after the durable answer landed must not run the model again.
+				// Reuse the exact answer so marker handling and the follow-up handoff stay idempotent.
+				if (requestId !== undefined && host.resolveSubmissionAnswer !== undefined) {
+					const resolved = await host.resolveSubmissionAnswer(
+						conversation.durableConversationId,
+						requestId,
+					);
+					if (resolved.status === "answered") {
+						return await this.#handleBackgroundAnswer({
+							activityId: `${conversation.durableConversationId}:background`,
+							conversation,
+							entryId: resolved.entryId,
+							input,
+							pluginId,
+							submissionRequestId: requestId,
+							text: resolved.text,
+						});
+					}
+				}
 				const turn = await host.submitBackgroundTurn({
 					conversationId: conversation.durableConversationId,
 					...(context.length === 0 ? {} : { context }),
 					kind: input.kind,
+					origin: {
+						followUpKind: input.followUpKind ?? "proactive",
+						pluginId,
+						...(input.taskId === undefined ? {} : { sourceTaskId: input.taskId }),
+					},
 					prompt: input.prompt,
+					// A scheduler task retry must reuse the same durable submission. Otherwise a crash
+					// after the answer but before the follow-up handoff could create a second turn.
+					...(requestId === undefined ? {} : { requestId }),
 				});
-				const consumed = consumeProactiveMarkers(turn.text);
-				if (consumed.marker !== undefined) {
-					await this.#record(pluginId, input, conversation.id, "suppressed", consumed.marker);
-					return {
-						delivered: false,
-						deliveryStatus: "suppressed",
-						marker: consumed.marker,
-						...(consumed.scheduleLaterMs === undefined
-							? {}
-							: { scheduleLaterMs: consumed.scheduleLaterMs }),
-						skippedReason: `marker_${consumed.marker}`,
-						text: consumed.text,
-					};
-				}
-				if (consumed.text.length === 0) {
-					await this.#record(pluginId, input, conversation.id, "skipped", "empty_output");
-					return { delivered: false, deliveryStatus: "skipped", skippedReason: "empty_output" };
-				}
-				const outcome = await this.#replyDispatcher.handleAnswer({
+				return await this.#handleBackgroundAnswer({
 					activityId: turn.activityId,
-					conversationId: conversation.durableConversationId,
+					conversation,
 					entryId: turn.entryId,
-					text: consumed.text,
+					input,
+					pluginId,
+					submissionRequestId: turn.submissionRequestId,
+					text: turn.text,
 				});
-				const deliveryStatus = outcome?.deliveryStatus ?? "skipped";
-				await this.#record(pluginId, input, conversation.id, deliveryStatus, outcome?.reason);
-				return {
-					delivered: deliveryStatus === "sent",
-					deliveryStatus,
-					...(outcome?.reason === undefined ? {} : { skippedReason: outcome.reason }),
-					text: consumed.text,
-				};
 			},
 			this.#lock,
 		);
@@ -338,6 +344,106 @@ export class PluginConversationService {
 			...(result.skippedReason === undefined ? {} : { skippedReason: result.skippedReason }),
 		});
 		return result;
+	}
+
+	async #handleBackgroundAnswer(turn: {
+		readonly activityId: string;
+		readonly conversation: ResolvedConversation;
+		readonly entryId: string;
+		readonly input: PluginBackgroundTurnInput;
+		readonly pluginId: string;
+		readonly submissionRequestId: string;
+		readonly text: string;
+	}): Promise<PluginBackgroundTurnResult> {
+		const { activityId, conversation, entryId, pluginId, submissionRequestId, text } = turn;
+		const input = turn.input;
+		const consumed = consumeProactiveMarkers(text);
+		if (consumed.marker !== undefined) {
+			const followUpRecorded =
+				consumed.marker === "schedule-later"
+					? await this.#replyDispatcher.deferExpectation({
+							delayMs: consumed.scheduleLaterMs ?? 30 * 60_000,
+							durableConversationId: conversation.durableConversationId,
+							durableEntryId: entryId,
+							followUpKind: input.followUpKind ?? "proactive",
+							pluginId,
+							...(input.taskId === undefined ? {} : { sourceTaskId: input.taskId }),
+							submissionRequestId,
+						})
+					: await this.#replyDispatcher.suppressExpectation({
+							durableConversationId: conversation.durableConversationId,
+							durableEntryId: entryId,
+							reason: `marker_${consumed.marker}`,
+							submissionRequestId,
+						});
+			const followUpPending =
+				consumed.marker === "schedule-later" &&
+				(await this.#replyDispatcher.expectationPending(
+					conversation.durableConversationId,
+					submissionRequestId,
+				));
+			if (followUpPending) {
+				this.#logger.warn("background follow-up remains pending", {
+					conversationId: conversation.id,
+					kind: input.kind,
+					pluginId,
+				});
+				await this.#record(pluginId, input, conversation.id, "pending", "follow_up_pending");
+			}
+			if (!followUpPending) {
+				await this.#record(pluginId, input, conversation.id, "suppressed", consumed.marker);
+			}
+			return {
+				activityId,
+				delivered: false,
+				deliveryStatus: "suppressed",
+				entryId,
+				followUpRecorded: followUpRecorded && !followUpPending,
+				...(followUpPending ? { followUpPending: true } : {}),
+				marker: consumed.marker,
+				...(consumed.scheduleLaterMs === undefined
+					? {}
+					: { scheduleLaterMs: consumed.scheduleLaterMs }),
+				skippedReason: `marker_${consumed.marker}`,
+				submissionRequestId,
+				text: consumed.text,
+			};
+		}
+		if (consumed.text.length === 0) {
+			await this.#replyDispatcher.suppressExpectation({
+				durableConversationId: conversation.durableConversationId,
+				durableEntryId: entryId,
+				reason: "empty_output",
+				submissionRequestId,
+			});
+			await this.#record(pluginId, input, conversation.id, "skipped", "empty_output");
+			return {
+				activityId,
+				delivered: false,
+				deliveryStatus: "skipped",
+				entryId,
+				skippedReason: "empty_output",
+				submissionRequestId,
+			};
+		}
+		const outcome = await this.#replyDispatcher.handleAnswer({
+			activityId,
+			conversationId: conversation.durableConversationId,
+			entryId,
+			submissionRequestId,
+			text: consumed.text,
+		});
+		const deliveryStatus = outcome?.deliveryStatus ?? "skipped";
+		await this.#record(pluginId, input, conversation.id, deliveryStatus, outcome?.reason);
+		return {
+			activityId,
+			delivered: deliveryStatus === "sent",
+			deliveryStatus,
+			entryId,
+			...(outcome?.reason === undefined ? {} : { skippedReason: outcome.reason }),
+			submissionRequestId,
+			text: consumed.text,
+		};
 	}
 
 	#channelProblem(conversation: ResolvedConversation): string | undefined {

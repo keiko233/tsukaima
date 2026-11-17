@@ -30,6 +30,8 @@ export type ScheduledTaskRepeat = z.infer<typeof repeatSchema>;
 export interface ScheduledTask {
 	readonly id: string;
 	readonly taskId: string;
+	/** Stable origin key for a task materialized from a durable follow-up intent. */
+	readonly dedupeKey: string | null;
 	readonly conversationId: string;
 	readonly chatObjectId: string | null;
 	readonly kind: ScheduledTaskKind;

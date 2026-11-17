@@ -40,6 +40,7 @@ import type { Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 import type { HookBus } from "./hook-bus.ts";
 import type { PluginConversationService } from "./plugin-conversation-service.ts";
+import type { FollowUpIntentStore } from "./follow-up-intents.ts";
 import type { PluginSettingsStore } from "./plugin-settings.ts";
 import type { PluginStatusStore } from "./plugin-status.ts";
 import type { PluginStorageStore } from "./plugin-storage.ts";
@@ -66,8 +67,14 @@ export interface PluginHostOptions {
 	readonly bindings?: ReadonlyMap<string, unknown>;
 	readonly channels: ChannelRegistry;
 	readonly conversations?: PluginConversationService;
+	readonly followUps?: FollowUpIntentStore;
 	/** Resolve explicitly granted capabilities for the durable conversation id. */
 	readonly conversationCapabilities?: (conversationId: string) => Promise<readonly string[]>;
+	/**
+	 * Execution role (`webui`, `workspace`, `private`, `group`, ...) of the durable conversation.
+	 * `undefined` or an unknown role is treated as non-workspace: coding tools stay withheld.
+	 */
+	readonly conversationRole?: (conversationId: string) => Promise<string | undefined>;
 	readonly hooks: HookBus;
 	readonly logger: Logger;
 	readonly onModelMessage?: (message: unknown, pluginId: string) => void;
@@ -156,9 +163,11 @@ export class PluginHost {
 	readonly #logger: Logger;
 	readonly #options: PluginHostOptions;
 	readonly #conversations: PluginConversationService | undefined;
+	readonly #followUps: FollowUpIntentStore | undefined;
 	readonly #conversationCapabilities:
 		| ((conversationId: string) => Promise<readonly string[]>)
 		| undefined;
+	readonly #conversationRole: ((conversationId: string) => Promise<string | undefined>) | undefined;
 	readonly #plugins = new Map<string, TsukaimaPlugin>();
 	readonly #modelProviders = new Map<string, PluginModelProvider>();
 	readonly #modelProviderOwners = new Map<string, string>();
@@ -185,7 +194,9 @@ export class PluginHost {
 		this.#audit = options.audit;
 		this.#bindings = options.bindings ?? new Map();
 		this.#conversations = options.conversations;
+		this.#followUps = options.followUps;
 		this.#conversationCapabilities = options.conversationCapabilities;
+		this.#conversationRole = options.conversationRole;
 		this.#hooks = options.hooks;
 		this.#logger = options.logger.child("tsukaima::server::plugins");
 		this.#requests = options.requests;
@@ -576,6 +587,24 @@ export class PluginHost {
 				conversationCapabilities = await this.#conversationCapabilities(conversation);
 			} catch {
 				conversationCapabilities = [];
+			}
+		}
+		// The execution role is authoritative for coding: a stale capability grant or a durable
+		// tool filter written before a policy change must not expose coding tools to chat or to a
+		// background/proactive turn. An unknown role fails closed.
+		if (conversationCapabilities?.includes("coding") === true) {
+			let role: string | undefined;
+			if (this.#conversationRole !== undefined && conversation !== undefined) {
+				try {
+					role = await this.#conversationRole(conversation);
+				} catch {
+					role = undefined;
+				}
+			}
+			if (role !== "workspace") {
+				conversationCapabilities = conversationCapabilities.filter(
+					(capability) => capability !== "coding",
+				);
 			}
 		}
 		const resolvedTaskKind =
@@ -1170,6 +1199,10 @@ export class PluginHost {
 				: undefined;
 		const tasks = this.#tasks?.apiFor(pluginId, manifest.permissions);
 		const conversations = this.#conversations?.forPlugin(pluginId, manifest.permissions);
+		const followUps =
+			this.#followUps !== undefined && hasPermission(manifest.permissions, "followups.read")
+				? this.#followUps.forPlugin(pluginId)
+				: undefined;
 		const outbound = this.#outbound?.forPlugin(pluginId, manifest.permissions);
 		return createPluginContext({
 			channels: this.channels,
@@ -1178,6 +1211,7 @@ export class PluginHost {
 			...(cache === undefined ? {} : { cache }),
 			...(tasks === undefined ? {} : { tasks }),
 			...(conversations === undefined ? {} : { conversations }),
+			...(followUps === undefined ? {} : { followUps }),
 			...(migrations === undefined ? {} : { migrations }),
 			...(scopedDatabase === undefined ? {} : { database: scopedDatabase }),
 			...(media === undefined ? {} : { media }),

@@ -73,15 +73,46 @@ export interface IterationTaskPatch {
 	readonly worktreePath?: string | null;
 }
 
-export type DeploymentStatus = "deployed" | "failed" | "pending" | "rolled_back";
+/**
+ * `scheduled` is the truthful state of a governed restart/update: the intent is durable and the
+ * supervisor has not replaced the process yet. `cancelled` records that a scheduled deployment
+ * (or rollback) never ran, so the previous process is still serving.
+ *
+ * `manual_apply_required` records that the process restarted but the runtime could not prove the
+ * proposal's change is actually live. The runtime has no host access and never applies a diff
+ * itself, so an unverified restart must not be reported as `deployed` or `rolled_back`.
+ */
+export type DeploymentStatus =
+	| "cancelled"
+	| "deployed"
+	| "failed"
+	| "manual_apply_required"
+	| "pending"
+	| "rolled_back"
+	| "scheduled";
+
+/**
+ * Exact identity of an applied artifact. `revision` is the VCS revision the artifact was built
+ * from; `diffChecksum` is the sha256 of the approved patch it contains, or an empty string when
+ * the artifact carries no patch. A revision alone is not enough: a worktree HEAD can equal the
+ * proposal's base revision while the proposal's diff is still unapplied.
+ */
+export interface DeploymentIdentity {
+	readonly diffChecksum: string;
+	readonly revision: string;
+}
 
 export interface DeploymentRecord {
+	/** What this deployment claims to have applied; `null` means it cannot be verified. */
+	readonly appliedIdentity: DeploymentIdentity | null;
 	readonly artifactMetadata: Readonly<Record<string, unknown>> | null;
 	readonly createdAtMs: number;
 	readonly createdBy: string;
 	readonly id: string;
 	readonly postCheck: HealthCheckResult | null;
 	readonly preCheck: HealthCheckResult | null;
+	/** Exact artifact that was live before this deployment; what a rollback restores. */
+	readonly previousIdentity: DeploymentIdentity | null;
 	readonly proposalId: string;
 	readonly reloadedAtMs: number | null;
 	readonly rollbackOfId: string | null;
@@ -93,10 +124,12 @@ export interface DeploymentRecord {
 }
 
 export interface CreateDeploymentInput {
+	readonly appliedIdentity?: DeploymentIdentity | null;
 	readonly artifactMetadata?: Readonly<Record<string, unknown>> | null;
 	readonly createdBy: string;
 	readonly postCheck?: HealthCheckResult | null;
 	readonly preCheck?: HealthCheckResult | null;
+	readonly previousIdentity?: DeploymentIdentity | null;
 	readonly proposalId: string;
 	readonly reloadedAtMs?: number | null;
 	readonly rollbackOfId?: string | null;

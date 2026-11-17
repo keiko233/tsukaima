@@ -5,6 +5,13 @@ import { eq } from "drizzle-orm";
 import type { MessagePart } from "@tsukaima/contracts";
 import { media, type TsukaimaDatabase } from "@tsukaima/db";
 import type { Logger } from "../logging.ts";
+import {
+	DEFAULT_MEDIA_FETCH_POLICY,
+	fetchGuardedMedia,
+	type MediaDnsResolver,
+	type MediaFetchPolicy,
+	type MediaFetchTransport,
+} from "./media-fetch-guard.ts";
 
 export type MediaKind = "image" | "sticker" | "audio" | "video" | "file";
 export type MediaSource = "channel" | "webui" | "migration" | "generated";
@@ -48,15 +55,6 @@ const DEFAULT_MIME: Record<MediaKind, string> = {
 
 const normalizeBytes = (value: Uint8Array): Buffer =>
 	value instanceof Buffer ? value : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
-
-function normalizeMime(header: string | null | undefined): string | undefined {
-	if (typeof header !== "string") return undefined;
-	const base = header.split(";")[0]?.trim().toLowerCase();
-	if (base === undefined || base.length === 0 || base === "application/octet-stream") {
-		return undefined;
-	}
-	return base;
-}
 
 function sniffImageMime(bytes: Uint8Array): string | undefined {
 	if (bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
@@ -110,15 +108,34 @@ function sniffImageMime(bytes: Uint8Array): string | undefined {
 export class MediaService {
 	readonly #blobsDir: string;
 	readonly #database: () => TsukaimaDatabase | undefined;
+	readonly #fetchPolicy: Partial<MediaFetchPolicy>;
+	readonly #resolve: MediaDnsResolver | undefined;
+	readonly #transport: MediaFetchTransport | undefined;
 	readonly #logger: Logger | undefined;
 
 	constructor(options: {
 		readonly blobsDir: string;
 		readonly database: () => TsukaimaDatabase | undefined;
+		/** Overrides the default public-destination/size/content-type guard. */
+		readonly fetchPolicy?: Partial<MediaFetchPolicy>;
+		/** Hosts explicitly trusted to resolve privately (a local channel sidecar). */
+		readonly allowedPrivateHosts?: readonly string[];
+		/** Test/embedding seams; production uses the pinned socket transport and system DNS. */
+		readonly resolve?: MediaDnsResolver;
+		readonly transport?: MediaFetchTransport;
 		readonly logger?: Logger;
 	}) {
 		this.#blobsDir = options.blobsDir;
 		this.#database = options.database;
+		this.#fetchPolicy = options.fetchPolicy ?? DEFAULT_MEDIA_FETCH_POLICY;
+		this.#fetchPolicy = {
+			...this.#fetchPolicy,
+			...(options.allowedPrivateHosts === undefined
+				? {}
+				: { allowedPrivateHosts: options.allowedPrivateHosts }),
+		};
+		this.#resolve = options.resolve;
+		this.#transport = options.transport;
 		this.#logger = options.logger?.child("tsukaima::server::media");
 	}
 
@@ -169,18 +186,22 @@ export class MediaService {
 		url: string,
 		input: Omit<MediaStoreInput, "bytes" | "sourceUrl">,
 	): Promise<StoredMedia> {
-		const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-		if (!response.ok) throw new Error(`Media fetch failed: ${response.status}`);
-		const bytes = new Uint8Array(await response.arrayBuffer());
-		const mimeType =
-			normalizeMime(input.mimeType) ??
-			normalizeMime(response.headers.get("content-type")) ??
-			sniffImageMime(bytes);
+		// Inbound URLs are attacker-controlled. Public-destination, redirect, size, and content
+		// type checks live in the guard; a failure means the part stays a placeholder.
+		const fetched = await fetchGuardedMedia(url, {
+			policy: this.#fetchPolicy,
+			...(this.#resolve === undefined ? {} : { resolve: this.#resolve }),
+			...(this.#transport === undefined ? {} : { transport: this.#transport }),
+		});
+		const bytes = fetched.bytes;
+		const sniffed = sniffImageMime(bytes);
+		// Trust content sniffing over a declared type; fall back to the validated response type.
+		const mimeType = sniffed ?? fetched.mimeType;
 		return this.store({
 			...input,
 			bytes,
 			...(mimeType === undefined ? {} : { mimeType }),
-			sourceUrl: url,
+			sourceUrl: fetched.finalUrl,
 		});
 	}
 

@@ -13,7 +13,15 @@ import {
 	type ModelPort,
 	type ModelPolicy,
 } from "@tsukaima/core";
-import { DomainCodingStore, SELF_ITERATION_HOST_BINDING } from "@tsukaima/coding";
+import {
+	DomainCodingStore,
+	reconcileRestartDeployment,
+	SELF_ITERATION_HOST_BINDING,
+	type DeploymentApplicationVerification,
+	type DeploymentIdentity,
+	type DeploymentProposal,
+	type DeploymentRecord,
+} from "@tsukaima/coding";
 import {
 	auditLog,
 	chatObjects,
@@ -83,6 +91,8 @@ import { PluginStatusStore } from "./services/plugin-status.ts";
 import { PluginStorageStore } from "./services/plugin-storage.ts";
 import { PluginTaskService } from "./services/plugin-task-service.ts";
 import { ReplyDispatcher } from "./services/reply-dispatcher.ts";
+import { FollowUpIntentStore } from "./services/follow-up-intents.ts";
+import { ReplyExpectationStore } from "./services/reply-expectations.ts";
 import { SidechatService } from "./services/sidechat.ts";
 import { LiveRunCache } from "./services/live-run-cache.ts";
 import { PromptHookService } from "./services/prompt-hooks.ts";
@@ -90,6 +100,7 @@ import {
 	RestartCoordinator,
 	RestartReloadController,
 	type RestartIntent,
+	type RestartSettlementOutcome,
 } from "./services/restart-coordinator.ts";
 import { OutboundService } from "./services/outbound.ts";
 import { RequestService } from "./services/request-service.ts";
@@ -130,7 +141,7 @@ export interface LifecycleOptions {
 	readonly pluginBindings?: ReadonlyMap<string, unknown>;
 	/** Overrides the built-in plugin set (tests and future plugin sources). */
 	readonly plugins?: readonly TsukaimaPlugin[];
-	/** Reply chunking, quote behavior, and pending-delivery reconciliation timing. */
+	/** Reply chunking, quote behavior, delivery reconciliation, and answer recovery timing. */
 	readonly reply?: {
 		readonly pendingGraceMs?: number;
 		readonly reconcileIntervalMs?: number;
@@ -173,6 +184,8 @@ export class TsukaimaLifecycle {
 	private readonly plugins: readonly TsukaimaPlugin[];
 	readonly media: MediaService;
 	readonly promptHooks: PromptHookService;
+	readonly replyExpectations: ReplyExpectationStore;
+	readonly followUpIntents: FollowUpIntentStore;
 	readonly replyDispatcher: ReplyDispatcher;
 	readonly outbound: OutboundService;
 	readonly requestService: RequestService;
@@ -201,6 +214,7 @@ export class TsukaimaLifecycle {
 	modelRouter: ModelPolicyRouter | undefined;
 	private memoryModel: ModelPort | undefined;
 	private sidechatService: SidechatService | undefined;
+	private readonly codingStore = new DomainCodingStore(() => this.domainDatabase);
 	processedMessageCount = 0;
 	providerRestartRequired = false;
 	routingPolicies: readonly ModelPolicy[] = [];
@@ -269,6 +283,7 @@ export class TsukaimaLifecycle {
 			database: () => this.domainDatabase,
 			hooks: this.promptHooks,
 			logger: this.runtimeLog,
+			onSettled: (intent, outcome) => this.reconcileRestartSettlement(intent, outcome),
 		});
 		this.channels = new ChannelRegistry({
 			onEnvelope: (channelId, envelope) => {
@@ -288,6 +303,7 @@ export class TsukaimaLifecycle {
 			},
 		});
 		this.media = new MediaService({
+			allowedPrivateHosts: config.mediaFetchAllowedHosts,
 			blobsDir: join(config.dataDir, "blobs"),
 			database: () => this.domainDatabase,
 			logger: this.runtimeLog,
@@ -360,6 +376,12 @@ export class TsukaimaLifecycle {
 			tasks: this.pluginTasks,
 		});
 		this.memory.registerTaskHandlers(this.pluginTasks);
+		this.replyExpectations = new ReplyExpectationStore({
+			database: () => this.domainDatabase,
+		});
+		this.followUpIntents = new FollowUpIntentStore({
+			database: () => this.domainDatabase,
+		});
 		this.hooks.on("after.reply", (payload) => {
 			if (typeof payload !== "object" || payload === null) return;
 			const sessionId = (payload as { sessionId?: unknown }).sessionId;
@@ -371,7 +393,14 @@ export class TsukaimaLifecycle {
 			audit: (entry) => this.writeAudit(entry),
 			channels: this.channels,
 			database: () => this.domainDatabase,
+			expectations: this.replyExpectations,
+			followUps: this.followUpIntents,
 			hooks: this.hooks,
+			resolveAnswer: async (durableConversationId, submissionRequestId) =>
+				(await this.conversationHost?.resolveSubmissionAnswer(
+					durableConversationId,
+					submissionRequestId,
+				)) ?? { status: "missing" },
 			lock: this.executionLock,
 			logger: this.runtimeLog,
 			pacing: this.conversationPacing,
@@ -507,10 +536,14 @@ export class TsukaimaLifecycle {
 		pluginBindings.set(MEMORY_SERVICE_BINDING, this.memory);
 		if (!pluginBindings.has(SELF_ITERATION_HOST_BINDING)) {
 			pluginBindings.set(SELF_ITERATION_HOST_BINDING, {
+				// The runtime never applies a diff and cannot derive the artifact a deployer built.
+				// Reporting the running identity still lets an operator's verified reload settle;
+				// without a recorded approved identity the deployment fails closed instead.
 				healthCheck: async () => ({ checkedAtMs: Date.now(), ok: this.ready }),
 				reload: new RestartReloadController(this.restartCoordinator),
 				repositoryRoot: process.cwd(),
-				store: new DomainCodingStore(() => this.domainDatabase),
+				runningIdentity: () => this.runningDeploymentIdentity(),
+				store: this.codingStore,
 				worktreeRoot: join(config.dataDir, "worktrees"),
 			});
 		}
@@ -521,7 +554,10 @@ export class TsukaimaLifecycle {
 			channels: this.channels,
 			conversationCapabilities: (conversationId) =>
 				this.conversationPolicy.capabilitiesForDurableConversation(conversationId),
+			conversationRole: (conversationId) =>
+				this.conversationPolicy.roleForDurableConversation(conversationId),
 			conversations: this.pluginConversations,
+			followUps: this.followUpIntents,
 			database: () => this.domainDatabase,
 			hooks: this.hooks,
 			logger: this.logger,
@@ -611,6 +647,93 @@ export class TsukaimaLifecycle {
 	}
 
 	/**
+	 * Settle the deployment that owned a restart intent once the intent reaches a terminal
+	 * state. A deployment stays `scheduled` until this runs, so history never reports an
+	 * unfinished restart as deployed.
+	 *
+	 * A completed restart is only accepted as `deployed`/`rolled_back` when the running process
+	 * reports the exact revision the proposal deployed. The runtime never applies a diff itself,
+	 * so a supervisor that restarted the old image (or applied nothing) must not be recorded as
+	 * success; those rows become `manual_apply_required`.
+	 */
+	private async reconcileRestartSettlement(
+		intent: RestartIntent,
+		outcome: RestartSettlementOutcome,
+	): Promise<void> {
+		const deploymentId = intent.metadata.deploymentId;
+		if (typeof deploymentId !== "string" || deploymentId.length === 0) return;
+		const result = await reconcileRestartDeployment(this.codingStore, {
+			atMs: Date.now(),
+			deploymentId,
+			outcome,
+			verify: (input) => this.verifyDeploymentApplication(input),
+		});
+		this.runtimeLog.info("restart settlement reconciled", {
+			deploymentId,
+			outcome,
+			proposalId: result?.proposal?.id,
+			restartId: intent.id,
+			status: result?.deployment.status ?? "missing",
+			updated: result?.updated ?? false,
+		});
+	}
+
+	/**
+	 * Report the exact artifact this process runs.
+	 *
+	 * The image build records `TSUKAIMA_COMMIT` and, when the deployer supplies it, the checksum
+	 * of the approved patch baked into the image (`TSUKAIMA_PATCH_SHA256`). A revision alone is
+	 * not evidence: a proposal's `sourceRevision` can be the base commit while its diff is still
+	 * uncommitted, so an image built from that commit has none of the approved change.
+	 *
+	 * Without both labels this returns `undefined` and reconciliation fails closed. A source
+	 * checkout has no such evidence either, so it never reports success.
+	 */
+	private runningDeploymentIdentity(): DeploymentIdentity | undefined {
+		// Empty means "not recorded" (the deployer writes an empty value), not an unknown commit.
+		const revision = (process.env.TSUKAIMA_COMMIT ?? "").trim();
+		const diffChecksum = (process.env.TSUKAIMA_PATCH_SHA256 ?? "").trim().toLowerCase();
+		if (revision.length === 0 || diffChecksum.length === 0) return undefined;
+		return { diffChecksum, revision };
+	}
+
+	/**
+	 * Confirm that this process runs exactly the artifact a deployment claimed to apply.
+	 *
+	 * The verifier reports the observed identity; `reconcileRestartDeployment` compares it with
+	 * the deployment's recorded identity (revision **and** approved patch checksum) and only then
+	 * settles `deployed`/`rolled_back`. Anything less becomes `manual_apply_required`.
+	 */
+	private verifyDeploymentApplication(input: {
+		readonly deployment: DeploymentRecord;
+		readonly proposal: DeploymentProposal | null;
+		readonly rollback: boolean;
+	}): DeploymentApplicationVerification {
+		const identity = this.runningDeploymentIdentity();
+		if (identity === undefined) {
+			return {
+				detail:
+					"running process reports no image revision and approved-patch checksum; the applied artifact cannot be verified",
+				verified: false,
+			};
+		}
+		const expected = input.deployment.appliedIdentity;
+		if (expected === null) {
+			return {
+				detail:
+					"deployment has no recorded artifact identity; the approved patch cannot be verified",
+				identity,
+				verified: false,
+			};
+		}
+		return {
+			detail: `running artifact ${identity.revision} (patch ${identity.diffChecksum})`,
+			identity,
+			verified: true,
+		};
+	}
+
+	/**
 	 * Keep each conversation's model-tool surface aligned with its execution role. Chat can
 	 * control workspaces and hooks but never receives coding tools; workspace requires an
 	 * explicit `coding` capability and receives the repo tools only then.
@@ -622,23 +745,33 @@ export class TsukaimaLifecycle {
 		const database = this.domainDatabase;
 		const host = this.conversationHost;
 		if (database === undefined || host === undefined) return;
-		const [row] = await database
-			.select({ chatKind: chatObjects.kind, sessionKind: conversations.kind })
-			.from(conversations)
-			.leftJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
-			.where(eq(conversations.durableConversationId, durableConversationId))
-			.limit(1);
-		const kind = row?.chatKind ?? row?.sessionKind;
-		const surface = kind === "workspace" ? "coding" : "chat";
 		const codingTools = this.pluginHost.modelToolNames("self-iteration");
 		const sessionTools = [...WORKSPACE_TOOL_NAMES];
 		const codingAgentTools = [...CODING_AGENT_TOOL_NAMES];
 		const removed = new Set<string>();
+		let kind: string | undefined;
+		try {
+			const [row] = await database
+				.select({ chatKind: chatObjects.kind, sessionKind: conversations.kind })
+				.from(conversations)
+				.leftJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
+				.where(eq(conversations.durableConversationId, durableConversationId))
+				.limit(1);
+			kind = row?.chatKind ?? row?.sessionKind;
+		} catch (error) {
+			// Fail closed: without the domain row the execution role is unknown, so the turn runs
+			// with no model tools instead of inheriting whatever the conversation had.
+			this.runtimeLog.warn("conversation tool policy read failed; disabling model tools", {
+				durableConversationId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			await host.setModelToolAllowlist(durableConversationId, []);
+			return;
+		}
+		const surface = kind === "workspace" ? "coding" : "chat";
 		for (const name of host.modelToolNamesNotForSurface(surface)) removed.add(name);
-		if (kind !== "workspace") {
-			for (const name of codingTools) removed.add(name);
-			for (const name of codingAgentTools) removed.add(name);
-		} else if (!policy.capabilities.includes("coding")) {
+		const codingAllowed = kind === "workspace" && policy.capabilities.includes("coding");
+		if (!codingAllowed) {
 			for (const name of codingTools) removed.add(name);
 			for (const name of codingAgentTools) removed.add(name);
 		}
@@ -648,9 +781,20 @@ export class TsukaimaLifecycle {
 		} else if (kind === "workspace") {
 			removed.add("workspace_spawn");
 		} else {
+			// IM and every unknown/background conversation kind: no host session tools.
 			for (const name of sessionTools) removed.add(name);
 		}
-		await host.updateToolAccess(durableConversationId, { remove: [...removed] });
+		try {
+			await host.updateToolAccess(durableConversationId, { remove: [...removed] });
+		} catch (error) {
+			// Narrowing the filter failed, so drop to an empty allowlist. This is best effort: the
+			// caller still proceeds, but the turn cannot reach a privileged tool.
+			this.runtimeLog.warn("conversation tool policy sync failed; disabling model tools", {
+				durableConversationId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			await host.setModelToolAllowlist(durableConversationId, []);
+		}
 	}
 
 	private transition(stage: string, state: LifecycleState["state"] = "starting"): void {
@@ -743,6 +887,13 @@ export class TsukaimaLifecycle {
 		migrateDomainDatabase(this.domainDatabase);
 		await this.restartCoordinator.recover();
 		await this.upgrades.recover();
+		await this.restartCoordinator
+			.resumeIntentFile(join(this.config.dataDir, "restart-intent.json"))
+			.catch((error: unknown) => {
+				this.runtimeLog.warn("restart intent file check failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			});
 		this.transition("plugin-migrations");
 		const domainSource = wrapPluginSqlConnection(
 			this.domainDatabase.$client as unknown as Parameters<typeof wrapPluginSqlConnection>[0],
@@ -858,6 +1009,34 @@ export class TsukaimaLifecycle {
 				}
 				await this.replyDispatcher.handleAnswer(answer);
 			},
+			// The expectation is durable before the turn is admitted, so recovery covers a crash
+			// between the answer commit and this observer. A failure here aborts the turn: no reply
+			// may be produced without a durable record that it is owed.
+			onBackgroundTurnAdmitted: async (turn) => {
+				const sessionId = this.sessionIdForDurableConversation(turn.conversationId);
+				if (sessionId === undefined) return;
+				await this.replyExpectations.expect({
+					conversationId: sessionId,
+					kind: "background",
+					...(turn.origin?.followUpKind === undefined
+						? {}
+						: { sourceFollowUpKind: turn.origin.followUpKind }),
+					...(turn.origin?.pluginId === undefined ? {} : { sourcePluginId: turn.origin.pluginId }),
+					...(turn.origin?.sourceTaskId === undefined
+						? {}
+						: { sourceTaskId: turn.origin.sourceTaskId }),
+					submissionRequestId: turn.submissionRequestId,
+				});
+			},
+			onTurnAdmitted: async (turn) => {
+				const sessionId = this.sessionIdForDurableConversation(turn.conversationId);
+				if (sessionId === undefined) return;
+				await this.replyExpectations.expect({
+					conversationId: sessionId,
+					kind: "chat",
+					submissionRequestId: turn.submissionRequestId,
+				});
+			},
 			onLiveRun: (state) => this.forwardLiveRun(state),
 			resolveImage: async (part) => {
 				if (part.type !== "image") return undefined;
@@ -955,6 +1134,15 @@ export class TsukaimaLifecycle {
 			await this.replyDispatcher.reconcilePendingDeliveries();
 		} catch (error) {
 			this.runtimeLog.warn("startup pending-delivery reconciliation failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+		try {
+			// An interrupted turn commits its answer after the durable scheduler retries it, but
+			// the in-memory run observer is gone. Replay answers that never reached a transcript.
+			await this.replyDispatcher.recoverUndispatchedAnswers();
+		} catch (error) {
+			this.runtimeLog.warn("startup answer recovery failed", {
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}

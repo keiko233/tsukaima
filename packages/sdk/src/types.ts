@@ -425,6 +425,8 @@ export interface PluginBackgroundTurnInput {
 	readonly context?: string;
 	/** Optional plugin task reference for audit correlation. */
 	readonly taskId?: string;
+	/** Scheduler kind to materialize if the answer defers itself with `schedule-later`. */
+	readonly followUpKind?: string;
 }
 
 export type PluginBackgroundDeliveryStatus =
@@ -437,6 +439,10 @@ export type PluginBackgroundDeliveryStatus =
 export interface PluginBackgroundTurnResult {
 	readonly delivered: boolean;
 	readonly deliveryStatus: PluginBackgroundDeliveryStatus;
+	/** Durable activity id of the turn, also available when a retry reuses an existing answer. */
+	readonly activityId?: string;
+	/** Durable assistant entry id of the turn. */
+	readonly entryId?: string;
 	/** Output marker that was consumed and never delivered (`skip`, `lurk`, `schedule-later`). */
 	readonly marker?: "skip" | "lurk" | "schedule-later";
 	readonly skippedReason?: string;
@@ -444,6 +450,12 @@ export interface PluginBackgroundTurnResult {
 	readonly text?: string;
 	/** Delay requested by `TSUKAIMA_SCHEDULE_LATER` when present. */
 	readonly scheduleLaterMs?: number;
+	/** Durable submission that produced this turn, used to correlate a deferred follow-up. */
+	readonly submissionRequestId?: string;
+	/** False when a schedule-later marker could not be persisted; recovery remains pending. */
+	readonly followUpRecorded?: boolean;
+	/** True when the turn still owes a durable follow-up handoff and must be retried. */
+	readonly followUpPending?: boolean;
 }
 
 /** Permission-checked conversation surface exposed to plugins. */
@@ -456,6 +468,47 @@ export interface PluginConversationsApi {
 		limit?: number,
 	): Promise<readonly PluginConversationMessage[]>;
 	submitBackgroundTurn(input: PluginBackgroundTurnInput): Promise<PluginBackgroundTurnResult>;
+}
+
+/**
+ * Durable host-owned handoff for a plugin background turn that asked to continue later.
+ *
+ * The host records the request before it settles the reply expectation, so a crash between the
+ * assistant answer and the plugin's own task insert cannot lose the follow-up. The owning plugin
+ * materializes its task from this row and then marks the row completed; the host never writes
+ * plugin task tables directly.
+ */
+export interface PluginFollowUpIntent {
+	readonly conversationId: string;
+	readonly createdAtMs: number;
+	readonly delayMs: number;
+	readonly followUpKind: string;
+	readonly id: string;
+	readonly pluginId: string;
+	readonly scheduledForMs: number;
+	readonly sourceTaskId: string | null;
+	readonly status: "pending" | "completed";
+	readonly submissionRequestId: string;
+	readonly updatedAtMs: number;
+}
+
+export interface PluginFollowUpListQuery {
+	readonly conversationId?: string;
+	readonly limit?: number;
+	readonly status?: PluginFollowUpIntent["status"];
+	readonly submissionRequestId?: string;
+}
+
+/** Permission-checked access to the host's durable follow-up outbox. */
+export interface PluginFollowUpsApi {
+	list(query?: PluginFollowUpListQuery): Promise<readonly PluginFollowUpIntent[]>;
+	/** Mark a materialized follow-up completed. Idempotent; only this plugin's rows qualify. */
+	complete(followUpId: string): Promise<boolean>;
+	/**
+	 * Observe newly recorded intents for this plugin. This is only a wake-up hint; the durable
+	 * list/startup/tick reconciliation remains authoritative.
+	 */
+	onChanged(handler: () => void): () => void;
 }
 
 export interface PluginMigrationDescriptor {
@@ -668,6 +721,8 @@ export interface PluginContext {
 	tasks?: PluginTasksApi;
 	/** Permission-checked conversation metadata and durable background turns. */
 	conversations?: PluginConversationsApi;
+	/** Durable follow-up handoff from background turns. Present with `followups.*` permission. */
+	followUps?: PluginFollowUpsApi;
 	/** Host-owned plugin migration records and rollback for `host`-mode plugins. */
 	migrations?: PluginMigrationsApi;
 	/** Namespaced database handle for `host`-mode plugins that own tables. */

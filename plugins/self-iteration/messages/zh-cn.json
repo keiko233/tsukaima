@@ -61,6 +61,7 @@
 	"rollback_action": "回滚",
 	"rollback_done": "回滚已记录",
 	"deployment_status": "部署状态",
+	"deployment_manual_apply": "需要手动应用：重启已完成，但无法验证正在运行的版本。",
 	"pre_check": "预检查",
 	"post_check": "后检查",
 	"rollback_of": "回滚自",

@@ -64,6 +64,7 @@ Recommended:
 | `TSUKAIMA_HOST`, `TSUKAIMA_PORT` | Bind address and port. |
 | `TSUKAIMA_WEB_ORIGIN`, `TSUKAIMA_TRUSTED_ORIGINS` | Browser origins accepted by Better Auth. |
 | `TSUKAIMA_TRUSTED_PROXIES` | Reverse proxies whose forwarded client IP headers may be trusted. |
+| `TSUKAIMA_MEDIA_FETCH_ALLOWED_HOSTS` | Comma-separated hosts allowed to resolve privately for inbound channel media (for example `127.0.0.1` when NapCat runs beside the server). Empty by default: every inbound media URL must be public. |
 | `TSUKAIMA_AUTH_SECURE_COOKIES` | Defaults to `true` when `TSUKAIMA_PUBLIC_URL` is HTTPS. |
 | `TSUKAIMA_LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, or `error` (overrides persisted DB runtime setting on startup when explicitly set). |
 | `TSUKAIMA_LOG_BUFFER_CAPACITY` | In-memory log ring buffer size (default `5000`). |

@@ -32,6 +32,7 @@ export const proactiveSchedulerManifest: PluginManifest = pluginManifestSchema.p
 		"tasks.watch",
 		"conversation.read",
 		"channel.send",
+		"followups.read",
 	],
 	version: "0.1.0",
 });

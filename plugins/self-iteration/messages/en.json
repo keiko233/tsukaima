@@ -61,6 +61,7 @@
 	"rollback_action": "Roll back",
 	"rollback_done": "Rollback recorded",
 	"deployment_status": "Deployment status",
+	"deployment_manual_apply": "Manual apply required: the restart completed, but the running revision could not be verified.",
 	"pre_check": "Pre-check",
 	"post_check": "Post-check",
 	"rollback_of": "Rollback of",

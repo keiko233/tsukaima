@@ -51,6 +51,46 @@ It does not expose:
 - production databases
 - other project directories on the deployment host
 
+### Execution isolation
+
+A fixed argv list and a scrubbed environment are not a security boundary: `bun -e`, `rg --pre`, or
+any interpreter that reads a repository file turns one allow-listed command into arbitrary code.
+Every model-influenced command therefore runs inside an operating-system sandbox, or does not run
+at all:
+
+- `packages/coding/src/sandbox.ts` drives `bubblewrap` with `--unshare-all` (user, mount, PID, IPC,
+  UTS, network), `--die-with-parent`, a cleared environment, and a tmpfs `/tmp`.
+- Only `/usr`, `/bin`, the runtime libraries, and a short allowlist of `/etc` files are mounted
+  read-only. The repository root is **not** bound: it appears as an empty directory. A command
+  gets only explicit mounts — the worktree's `node_modules` target, the linked worktree's git
+  directory, and the shared object store and refs. `.git/config`, hooks, dotenv files, `data/`,
+  `secrets/`, nested credential files, and SQLite databases are therefore absent, not masked one
+  by one, so a nested secret cannot leak by not matching a mask pattern.
+- The working directory must be a task worktree. Naming the repository (or a path above the
+  worktree root) as `cwd` fails closed instead of binding it.
+- `analyze` read/search runs against a private read-only copy mounted at `/analysis`: a committed
+  `git archive` snapshot for a read-only task, or the task worktree (including its edits) for a
+  patch task. The live repository is never the analysis surface, and gitignored files are not
+  visible to a read-only task.
+- The network namespace has loopback only; outbound egress is unavailable.
+- Commands are resolved from fixed directories, never from a model-supplied path.
+- The test/build argv comes entirely from the policy (`testCommand`/`buildCommand`); the model
+  cannot pass `command` or `args`. A test-name filter is positional and may not start with `-`.
+- Search passes `--` before the pattern, bounds the pattern length, and resolves the optional path
+  through the worktree allowlist, so it cannot become an `rg` flag or read outside the repository.
+- Test and build never run in the live tree. A task without a worktree is rejected.
+
+When `bubblewrap` is missing, cannot create namespaces, or the probe fails, the sandbox provider
+throws `SandboxUnavailableError` and the tool fails closed. There is no plain-`spawn` fallback.
+
+Docker's default seccomp profile blocks the namespace syscalls bubblewrap needs. The shipped
+Compose service does **not** disable seccomp for the whole container to work around that: doing so
+would weaken the boundary around the entire runtime (plugins, channel adapters, model SDKs) just
+to enable governed commands. In the standard container deployment the probe therefore fails and
+self-iteration test/build/search commands are unavailable until an operator supplies a runtime
+that permits bubblewrap (for example a sandbox-capable runner or a reviewed custom seccomp
+profile). Editing, diffing, and proposal review still work.
+
 ## Deployment path
 
 Current phase: development.
@@ -73,15 +113,38 @@ Approved reloads become a durable one-minute restart/update intent. The process 
 writes `restart-intent.json`, and exits with code 75 so a supervisor can replace the image or
 container before starting again. Reserved chat/workspace tasks resume after readiness.
 
+A deferred reload leaves the deployment row `scheduled`, because the process is still running the
+old revision. Boot recovery never treats a restart alone as success, and a matching commit is not
+enough either: `proposal.sourceRevision` is the worktree HEAD the proposal was generated from, so
+when the approved diff is uncommitted it equals the *base* commit and an image built from it
+contains none of the approved change.
+
+- Each deployment records an exact `appliedIdentity` (`revision` + the sha256 of the approved
+  patch) and, for rollbacks, the `previousIdentity` it restores. A deployment created without that
+  identity can never be verified and settles `manual_apply_required`.
+- `executing` means the supervisor started the process again. The deployment becomes
+  `deployed`/`rolled_back` only when the running process reports exactly that revision **and** the
+  approved patch checksum (`TSUKAIMA_COMMIT` and `TSUKAIMA_PATCH_SHA256`). A revision-only match, a
+  different third revision, or a missing label fails closed to `manual_apply_required`, with a
+  failed post-check that says why, and the proposal stays `deploying` so a later verified boot can
+  settle it. The runtime never applies a diff itself.
+- A `scheduled` intent found on boot is resumed, not failed: an overdue deadline executes now, a
+  future one is re-armed, and its countdown hook is re-created through its dedupe key. Recovery is
+  idempotent, so repeated boots do not duplicate the hook or lose the intent.
+- An explicit cancel settles the deployment `cancelled` and its proposal `failed`.
+
+The supervisor's `restart-intent.json` is consumed only once its intent is terminal, so a stale
+file cannot describe the next boot.
+
 ## Policy
 
 Default policy:
 
 | Action | Default |
 | --- | --- |
-| Read repository | Allowed |
+| Read repository | Allowed (read-only sandbox) |
 | Edit worktree | Allowed for approved tasks |
-| Run tests/build | Allowed |
+| Run tests/build | Allowed in the worktree sandbox |
 | Commit locally | Allowed after task approval |
 | Reload first-party plugin | Requires admin approval by default |
 | Restart server | Requires admin approval |
@@ -89,3 +152,8 @@ Default policy:
 | Deploy | Requires explicit admin approval |
 
 Policies are stored per conversation/task and audited. A runaway loop must be abortable and have a turn/time budget.
+
+The execution role is authoritative: coding tools are offered only in a `workspace` conversation
+with an explicit `coding` capability. Chat, IM, and background/proactive turns never receive them,
+even if the durable policy document is stale. If the role or policy cannot be read, the turn runs
+with no model tools.

@@ -1,6 +1,6 @@
 {
 	"name": "@tsukaima/ops",
-	"version": "0.4.0",
+	"version": "0.5.0",
 	"private": true,
 	"bin": {
 		"tsukaima-backup-drill": "./backup-drill.ts",

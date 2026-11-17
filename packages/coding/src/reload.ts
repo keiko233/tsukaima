@@ -1,11 +1,18 @@
 import type { HealthCheckResult } from "./types.ts";
 
 export interface ReloadContext {
+	/** Deployment row that owns this reload, carried into the durable restart intent. */
+	readonly deploymentId?: string;
 	readonly proposalId?: string;
 	readonly reason: string;
 }
 
 export interface ReloadResult {
+	/**
+	 * The reload was accepted and persisted but the process has not switched yet (a supervised
+	 * restart/update). Callers must not report the deployment as completed in this case.
+	 */
+	readonly deferred?: boolean;
 	readonly message: string;
 	readonly reloadedAtMs: number;
 	readonly success: boolean;
@@ -34,6 +41,8 @@ export interface SupervisedReloadOptions {
 }
 
 export interface SupervisedReloadOutcome {
+	/** The reload was persisted for a supervisor instead of switching this process in place. */
+	readonly deferred: boolean;
 	readonly message: string;
 	readonly postCheck: HealthCheckResult;
 	readonly preCheck: HealthCheckResult;
@@ -72,6 +81,7 @@ export class SupervisedReloadController implements ReloadController {
 		const preCheck = await this.#check(now);
 		if (!preCheck.ok) {
 			return {
+				deferred: false,
 				message: `Pre-reload health check failed: ${preCheck.message ?? "unhealthy"}`,
 				postCheck: preCheck,
 				preCheck,
@@ -89,6 +99,7 @@ export class SupervisedReloadController implements ReloadController {
 			const message = error instanceof Error ? error.message : String(error);
 			const postCheck: HealthCheckResult = { checkedAtMs: now(), message, ok: false };
 			const rollbackAttempted = await this.#attemptRollback({
+				deferred: false,
 				message,
 				postCheck,
 				preCheck,
@@ -98,6 +109,7 @@ export class SupervisedReloadController implements ReloadController {
 				success: false,
 			});
 			return {
+				deferred: false,
 				message: `Reload failed: ${message}`,
 				postCheck,
 				preCheck,
@@ -112,6 +124,7 @@ export class SupervisedReloadController implements ReloadController {
 		const success = reload.success && postCheck.ok;
 		if (success) {
 			return {
+				deferred: reload.deferred === true,
 				message: reload.message,
 				postCheck,
 				preCheck,
@@ -122,6 +135,7 @@ export class SupervisedReloadController implements ReloadController {
 			};
 		}
 		const outcome: SupervisedReloadOutcome = {
+			deferred: reload?.deferred === true,
 			message: `Post-reload health check failed: ${postCheck.message ?? "unhealthy"}`,
 			postCheck,
 			preCheck,

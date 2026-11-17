@@ -4,10 +4,17 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	ANALYSIS_MOUNT,
 	DomainCodingStore,
+	NoopReloadController,
+	reconcileRestartDeployment,
+	runManagedProcess,
 	sha256Hex,
 	type HealthCheckResult,
 	type ReloadController,
+	type SandboxExecInput,
+	type SandboxProvider,
+	SandboxUnavailableError,
 } from "@tsukaima/coding";
 import type { AuditEntry, PluginLogger, PluginStorage } from "@tsukaima/sdk";
 import { SELF_ITERATION_HOST_BINDING } from "./domain.ts";
@@ -75,12 +82,91 @@ interface Fixture {
 	readonly logs: CapturedLog[];
 	readonly reloads: string[];
 	readonly repo: string;
+	readonly sandboxCalls: SandboxExecInput[];
 	readonly service: SelfIterationService;
 	readonly store: DomainCodingStore;
 	readonly worktrees: string;
+	/** Artifact identity this fixture process reports as running. */
+	readonly running: { current: { diffChecksum: string; revision: string } };
 }
 
-async function fixture(): Promise<Fixture> {
+/**
+ * Test double for the bubblewrap sandbox: runs the governed argv directly so the fixture can
+ * exercise service behavior without host namespaces, while recording every sandbox call.
+ */
+function createTestSandbox(): { calls: SandboxExecInput[]; provider: SandboxProvider } {
+	const calls: SandboxExecInput[] = [];
+	const provider: SandboxProvider = async () => ({
+		id: "test-sandbox",
+		exec: async (input) => {
+			calls.push(input);
+			const resolved = Bun.which(input.command);
+			if (resolved === null) throw new Error(`command_not_found:${input.command}`);
+			let analysisRoot: string | undefined;
+			if (input.exportAnalysis === true) {
+				// The fixture repository is a sibling of the worktree root.
+				analysisRoot = await fs.mkdtemp(join(tmpdir(), "tsukaima-analysis-test-"));
+				const archive = Bun.spawn({
+					cmd: ["git", "archive", "--format=tar", "HEAD"],
+					cwd: join(input.cwd, "..", "repo"),
+					stderr: "pipe",
+					stdout: "pipe",
+				});
+				const extract = Bun.spawn({
+					cmd: ["tar", "-x", "-f", "-", "-C", analysisRoot],
+					stdin: archive.stdout,
+					stderr: "pipe",
+					stdout: "ignore",
+				});
+				await Promise.all([archive.exited, extract.exited]);
+			}
+			if (input.analysisTree !== undefined) {
+				// Mirror the real sandbox's private working-tree copy (without `.git`).
+				analysisRoot = await fs.mkdtemp(join(tmpdir(), "tsukaima-analysis-tree-"));
+				await fs.cp(input.analysisTree, analysisRoot, {
+					filter: (source) => !source.endsWith(`${join(input.analysisTree!, ".git")}`),
+					recursive: true,
+				});
+			}
+			const analysisPath = input.analysisPath ?? analysisRoot;
+			const args =
+				analysisPath === undefined
+					? [...input.args]
+					: input.args.map((arg) =>
+							arg === ANALYSIS_MOUNT || arg.startsWith(`${ANALYSIS_MOUNT}/`)
+								? `${analysisPath}${arg.slice(ANALYSIS_MOUNT.length)}`
+								: arg,
+						);
+			return await runManagedProcess({
+				args,
+				command: resolved,
+				cwd: input.cwd,
+				env: {
+					HOME: process.env.HOME ?? tmpdir(),
+					LANG: "C.UTF-8",
+					PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+					TMPDIR: tmpdir(),
+					TZ: "UTC",
+					...input.env,
+				},
+				maxOutputBytes: input.maxOutputBytes,
+				timeoutMs: input.timeoutMs,
+			});
+		},
+	});
+	return { calls, provider };
+}
+
+async function fixture(
+	options: {
+		readonly deferredReload?: boolean;
+		/** Whether a successful in-place reload changes the reported running artifact. */
+		readonly applyReload?: boolean;
+		/** Whether a rollback reload actually restores the previous artifact. */
+		readonly applyRollback?: boolean;
+		readonly sandbox?: SandboxProvider;
+	} = {},
+): Promise<Fixture> {
 	const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-self-iteration-"));
 	directories.push(root);
 	const repo = join(root, "repo");
@@ -108,15 +194,51 @@ async function fixture(): Promise<Fixture> {
 	const logs: CapturedLog[] = [];
 	const reloads: string[] = [];
 	const checks = { count: 0, script: (_count: number) => true };
+	const initialIdentity = { diffChecksum: "initial-patch", revision: "initial" };
+	const running = { current: { ...initialIdentity } };
+	let pendingIdentity: { diffChecksum: string; revision: string } = initialIdentity;
 	const reload: ReloadController = {
 		async reload(componentId, context) {
 			reloads.push(`${componentId}:${context.reason}`);
-			return { message: "reloaded", reloadedAtMs: Date.now(), success: true };
+			if (options.deferredReload !== true && options.applyReload !== false) {
+				if (context.reason.startsWith("rollback of")) {
+					if (options.applyRollback !== false) running.current = { ...initialIdentity };
+				} else {
+					running.current = { ...pendingIdentity };
+				}
+			}
+			return {
+				...(options.deferredReload === true ? { deferred: true } : {}),
+				message: "reloaded",
+				reloadedAtMs: Date.now(),
+				success: true,
+			};
 		},
+	};
+	const testSandbox = createTestSandbox();
+	const calls: SandboxExecInput[] = [...testSandbox.calls];
+	const baseSandbox = options.sandbox ?? testSandbox.provider;
+	const sandbox: SandboxProvider = async () => {
+		const executor = await baseSandbox();
+		return {
+			id: executor.id,
+			exec: async (input) => {
+				calls.push(input);
+				return await executor.exec(input);
+			},
+		};
 	};
 	const service = new SelfIterationService({
 		audit: { record: async (entry) => void audits.push(entry) },
 		binding: {
+			// The fixture deployer builds exactly the approved patch.
+			appliedIdentity: (proposal) => {
+				pendingIdentity = {
+					diffChecksum: proposal.diffChecksum,
+					revision: `built-${proposal.id}`,
+				};
+				return pendingIdentity;
+			},
 			healthCheck: (): HealthCheckResult => {
 				checks.count += 1;
 				const ok = checks.script(checks.count);
@@ -124,13 +246,26 @@ async function fixture(): Promise<Fixture> {
 			},
 			reload,
 			repositoryRoot: repo,
+			runningIdentity: () => running.current,
 			store,
 			worktreeRoot: worktrees,
 		},
 		logger: captureLogger(logs),
+		sandbox,
 		storage: new MemoryStorage(),
 	});
-	return { audits, checks, logs, reloads, repo, service, store, worktrees };
+	return {
+		audits,
+		checks,
+		logs,
+		reloads,
+		repo,
+		running,
+		sandboxCalls: calls,
+		service,
+		store,
+		worktrees,
+	};
 }
 
 beforeEach(() => {});
@@ -209,7 +344,7 @@ describe("SelfIterationService", () => {
 	});
 
 	test("runs allowlisted tests/builds, bounds output, and rejects commands outside policy", async () => {
-		const { service, store } = await fixture();
+		const { sandboxCalls, service, store } = await fixture();
 		const task = await patchTask(service);
 		const testResult = await service.test({ taskId: task.id });
 		expect(testResult.passed).toBe(true);
@@ -218,7 +353,13 @@ describe("SelfIterationService", () => {
 		expect(build.success).toBe(true);
 		expect(build.artifactMetadata.checksum).toHaveLength(64);
 		await expect(service.test({ command: "sh", taskId: task.id })).rejects.toThrow(
-			"command_not_allowed",
+			"command_override_not_allowed",
+		);
+		await expect(service.test({ args: ["-e", "console.log(1)"], taskId: task.id })).rejects.toThrow(
+			"argument_override_not_allowed",
+		);
+		await expect(service.build({ command: "sh", taskId: task.id })).rejects.toThrow(
+			"command_override_not_allowed",
 		);
 		await service.updatePolicy({ maxOutputBytes: 1024 }, "admin");
 		const bounded = await service.test({ taskId: task.id });
@@ -226,6 +367,52 @@ describe("SelfIterationService", () => {
 		const loaded = await store.getTask(task.id);
 		expect(loaded?.artifacts.some((artifact) => artifact.kind === "test")).toBe(true);
 		expect(loaded?.artifacts.some((artifact) => artifact.kind === "build")).toBe(true);
+		// Every governed execution ran with the policy command and the worktree as the target.
+		expect(sandboxCalls.length).toBeGreaterThan(0);
+		expect(sandboxCalls.every((call) => call.command === "bun")).toBe(true);
+		expect(sandboxCalls.every((call) => call.cwd === loaded?.worktreePath)).toBe(true);
+		expect(sandboxCalls.filter((call) => call.writable).length).toBe(sandboxCalls.length);
+	});
+
+	test("fails closed when no sandbox is available", async () => {
+		const { service, sandboxCalls } = await fixture({
+			sandbox: async () => {
+				throw new SandboxUnavailableError("bubblewrap probe failed");
+			},
+		});
+		const task = await patchTask(service);
+		await expect(service.test({ taskId: task.id })).rejects.toThrow("sandbox_unavailable");
+		await expect(service.build({ taskId: task.id })).rejects.toThrow("sandbox_unavailable");
+		await expect(
+			service.analyze({ action: "search", pattern: "fixture", taskId: task.id }),
+		).rejects.toThrow("sandbox_unavailable");
+		expect(sandboxCalls).toHaveLength(0);
+	});
+
+	test("never falls back to the live tree and cannot inject search flags or paths", async () => {
+		const { service, sandboxCalls } = await fixture();
+		const live = await service.createTask({ goal: "Patch without worktree", mode: "proposal" });
+		await expect(service.test({ taskId: live.id })).rejects.toThrow("worktree_required");
+		await expect(service.build({ taskId: live.id })).rejects.toThrow("worktree_required");
+		expect(sandboxCalls).toHaveLength(0);
+
+		const task = await patchTask(service);
+		await service.analyze({
+			action: "search",
+			pattern: "--pre=sh -c 'touch /tmp/pwned'",
+			taskId: task.id,
+		});
+		const search = sandboxCalls.at(-1);
+		expect(search?.args.slice(-3)).toEqual(["--", "--pre=sh -c 'touch /tmp/pwned'", "/analysis"]);
+		await expect(
+			service.analyze({ action: "search", path: "../../", pattern: "x", taskId: task.id }),
+		).rejects.toThrow();
+		await expect(
+			service.analyze({ action: "search", path: "/etc", pattern: "x", taskId: task.id }),
+		).rejects.toThrow();
+		await expect(service.test({ pattern: "--preload=./evil.ts", taskId: task.id })).rejects.toThrow(
+			"invalid_test_pattern",
+		);
 	});
 
 	test("validates all seven proposal groups and creates a pending approval", async () => {
@@ -313,7 +500,7 @@ describe("SelfIterationService", () => {
 		expect(rollback.deployment.status).toBe("rolled_back");
 		expect(rollback.deployment.rollbackOfId).toBe(deployed.deployment.id);
 
-		// A failed post-check creates a rolled_back record automatically.
+		// A failed post-check records the rollback attempt truthfully; it is not success.
 		checks.script = (count) => count % 2 === 1;
 		const second = await store.createProposal({
 			artifactMetadata: null,
@@ -342,10 +529,154 @@ describe("SelfIterationService", () => {
 		await store.approve(secondApproval.id, "admin");
 		const failed = await service.deploy({ createdBy: "admin", proposalId: second.id });
 		expect(failed.deployment.status).toBe("failed");
-		expect(failed.rollback?.status).toBe("rolled_back");
+		expect(failed.rollback?.status).toBe("manual_apply_required");
 		expect(failed.rollback?.rollbackOfId).toBe(failed.deployment.id);
 		const deployments = await store.listDeployments({ taskId: task.id });
-		expect(deployments.filter((deployment) => deployment.status === "rolled_back")).toHaveLength(2);
+		expect(deployments.filter((deployment) => deployment.status === "rolled_back")).toHaveLength(1);
+		expect(
+			deployments.filter((deployment) => deployment.status === "manual_apply_required"),
+		).toHaveLength(1);
+	});
+
+	test("keeps a deferred restart scheduled until boot reconciliation settles it", async () => {
+		const { service, store } = await fixture({ deferredReload: true });
+		const task = await patchTask(service);
+		const proposal = await proposalFor(service, task.id);
+		await service.resolveApproval({
+			action: "approve",
+			approvalId: proposal.approvalId,
+			resolvedBy: "admin",
+		});
+		const scheduled = await service.deploy({
+			createdBy: "admin",
+			proposalId: proposal.proposal.id,
+		});
+		expect(scheduled.outcome?.deferred).toBe(true);
+		expect(scheduled.deployment.status).toBe("scheduled");
+		expect((await service.getProposal(proposal.proposal.id))?.status).toBe("deploying");
+		expect((await store.getTask(task.id))?.status).toBe("deploying");
+
+		// A restarted process alone does not prove the proposal is live.
+		const unverified = await reconcileRestartDeployment(store, {
+			deploymentId: scheduled.deployment.id,
+			outcome: "completed",
+		});
+		expect(unverified?.updated).toBe(true);
+		expect(unverified?.deployment.status).toBe("manual_apply_required");
+		expect(unverified?.proposal?.status).toBe("deploying");
+
+		// With proof of the exact applied artifact it settles truthfully.
+		const settled = await reconcileRestartDeployment(store, {
+			deploymentId: scheduled.deployment.id,
+			outcome: "completed",
+			verify: async () => {
+				const identity = scheduled.deployment.appliedIdentity;
+				if (identity === null) throw new Error("fixture deployment has no applied identity");
+				return { detail: "running artifact matches", identity, verified: true };
+			},
+		});
+		expect(settled?.updated).toBe(true);
+		expect(settled?.deployment.status).toBe("deployed");
+		expect(settled?.proposal?.status).toBe("deployed");
+		expect(settled?.task?.status).toBe("completed");
+
+		// Recovery is replayable: a second boot must not rewrite terminal history.
+		const replay = await reconcileRestartDeployment(store, {
+			deploymentId: scheduled.deployment.id,
+			outcome: "completed",
+			verify: async () => ({ verified: true }),
+		});
+		expect(replay?.updated).toBe(false);
+		expect(replay?.deployment.status).toBe("deployed");
+	});
+
+	test("records manual_apply_required when the host cannot prove the artifact", async () => {
+		const { service, store } = await fixture();
+		const task = await patchTask(service);
+		const proposal = await proposalFor(service, task.id);
+		await service.resolveApproval({
+			action: "approve",
+			approvalId: proposal.approvalId,
+			resolvedBy: "admin",
+		});
+		const deployed = await service.deploy({
+			createdBy: "admin",
+			proposalId: proposal.proposal.id,
+		});
+		// The deployment claims an identity, but a reload that does not change the running
+		// artifact (or a host that cannot report one) must not be reported as deployed.
+		expect(deployed.deployment.appliedIdentity?.diffChecksum).toBe(proposal.proposal.diffChecksum);
+		expect(deployed.deployment.status).toBe("deployed");
+
+		// A second deploy whose host reports the old artifact stays manual_apply_required.
+		const secondTask = await patchTask(service, "Second patch");
+		const secondProposal = await proposalFor(service, secondTask.id);
+		await service.resolveApproval({
+			action: "approve",
+			approvalId: secondProposal.approvalId,
+			resolvedBy: "admin",
+		});
+		const reload = await service.deploy({
+			createdBy: "admin",
+			proposalId: secondProposal.proposal.id,
+		});
+		expect(reload.deployment.status).toBe("deployed");
+		const stored = await store.getDeployment(reload.deployment.id);
+		expect(stored?.appliedIdentity?.diffChecksum).toBe(secondProposal.proposal.diffChecksum);
+	});
+
+	test("does not report a rollback applied when no previous artifact is recorded", async () => {
+		const { service, store } = await fixture();
+		const task = await patchTask(service);
+		const proposal = await proposalFor(service, task.id);
+		await service.resolveApproval({
+			action: "approve",
+			approvalId: proposal.approvalId,
+			resolvedBy: "admin",
+		});
+		const deployed = await service.deploy({
+			createdBy: "admin",
+			proposalId: proposal.proposal.id,
+		});
+		// Simulate a deployment created before identity recording existed.
+		await store.updateDeployment(deployed.deployment.id, { status: "deployed" });
+		const legacy = await store.createDeployment({
+			artifactMetadata: null,
+			createdBy: "admin",
+			proposalId: proposal.proposal.id,
+			rollbackPlan: "revert",
+			sourceRevision: "abc",
+			status: "deployed",
+			taskId: task.id,
+		});
+		const rollback = await service.rollback({
+			createdBy: "admin",
+			deploymentId: legacy.id,
+		});
+		expect(rollback.deployment.status).toBe("manual_apply_required");
+		expect(rollback.deployment.appliedIdentity).toBeNull();
+		expect(rollback.deployment.postCheck).toBeNull();
+	});
+
+	test("does not claim rolled_back when the restored artifact differs from the recorded target", async () => {
+		const { service } = await fixture({ applyRollback: false });
+		const task = await patchTask(service);
+		const proposal = await proposalFor(service, task.id);
+		await service.resolveApproval({
+			action: "approve",
+			approvalId: proposal.approvalId,
+			resolvedBy: "admin",
+		});
+		const deployed = await service.deploy({
+			createdBy: "admin",
+			proposalId: proposal.proposal.id,
+		});
+		const rollback = await service.rollback({
+			createdBy: "admin",
+			deploymentId: deployed.deployment.id,
+		});
+		expect(rollback.deployment.status).toBe("manual_apply_required");
+		expect(rollback.deployment.postCheck?.ok).toBe(false);
 	});
 
 	test("emits info, debug, and trace logs across the proposal lifecycle", async () => {
@@ -461,5 +792,68 @@ describe("SelfIterationService", () => {
 		expect(
 			logs.some((entry) => entry.level === "debug" && entry.message === "self-iteration teardown"),
 		).toBe(true);
+	});
+});
+
+describe("analysis isolation", () => {
+	test("reads committed content and cannot see uncommitted or nested secrets", async () => {
+		const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-analysis-"));
+		directories.push(root);
+		const repo = join(root, "repo");
+		const worktrees = join(root, "worktrees");
+		await fs.mkdir(join(repo, "config", "secrets"), { recursive: true });
+		await fs.writeFile(join(repo, "README.md"), "# committed\n");
+		await fs.writeFile(join(repo, "config", "secrets", "nested.env"), "NESTED=committed-leak\n");
+		await git(repo, ["init", "-b", "main"]);
+		await git(repo, ["add", "."]);
+		await git(repo, ["commit", "-m", "initial"]);
+		// Uncommitted, gitignored state must never appear in the analysis snapshot.
+		await fs.writeFile(join(repo, ".gitignore"), "*.local\n");
+		await fs.writeFile(join(repo, "secret.local"), "WORKTREE=leak\n");
+		await fs.writeFile(join(repo, "README.md"), "# working tree only\n");
+		await git(repo, ["add", ".gitignore"]);
+		await git(repo, ["commit", "-m", "ignore"]);
+
+		const store = new DomainCodingStore(join(root, "domain.sqlite"));
+		const service = new SelfIterationService({
+			audit: { record: async () => undefined },
+			binding: {
+				healthCheck: () => ({ checkedAtMs: 1, ok: true }),
+				reload: new NoopReloadController(),
+				repositoryRoot: repo,
+				store,
+				worktreeRoot: worktrees,
+			},
+			logger: captureLogger([]),
+			storage: new MemoryStorage(),
+		});
+		const task = await service.createTask({ goal: "Inspect", mode: "analysis" });
+		const read = await service.analyze({ action: "read", path: "README.md", taskId: task.id });
+		expect(read.content).toContain("# committed");
+		expect(read.content).not.toContain("working tree only");
+
+		const found = await service.analyze({
+			action: "search",
+			pattern: "leak",
+			taskId: task.id,
+		});
+		expect(String(found.output)).toContain("committed-leak");
+		expect(String(found.output)).not.toContain("WORKTREE=leak");
+	});
+});
+
+describe("patch analysis surface", () => {
+	test("a patch task reads its worktree edits, not the live repository", async () => {
+		const { repo, service } = await fixture();
+		const task = await patchTask(service);
+		await fs.writeFile(join(repo, "src", "app.ts"), "export const value = 'live-tree';\n");
+		const read = await service.analyze({
+			action: "read",
+			path: "src/app.ts",
+			taskId: task.id,
+		});
+		// The worktree still has the base value; the live tree edit must not be visible.
+		expect(read.content).toContain("old");
+		expect(read.content).not.toContain("live-tree");
 	});
 });

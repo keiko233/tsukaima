@@ -201,8 +201,6 @@ export function registerSelfIterationTools(
 				properties: {
 					...TASK_FIELDS,
 					action: { enum: ["read", "search", "test"], type: "string" },
-					args: { items: { type: "string" }, type: "array" },
-					command: { type: "string" },
 					maxBytes: { minimum: 1, type: "integer" },
 					path: { type: "string" },
 					pattern: { type: "string" },
@@ -216,10 +214,6 @@ export function registerSelfIterationTools(
 					service.analyze({
 						...taskInput(input, invocation),
 						action: input.action === "search" || input.action === "test" ? input.action : "read",
-						args: stringArray(input, "args") ?? [],
-						...(stringValue(input, "command") === undefined
-							? {}
-							: { command: stringValue(input, "command")! }),
 						...(numberValue(input, "maxBytes") === undefined
 							? {}
 							: { maxBytes: numberValue(input, "maxBytes")! }),
@@ -327,8 +321,6 @@ export function registerSelfIterationTools(
 			{
 				properties: {
 					...TASK_FIELDS,
-					args: { items: { type: "string" }, type: "array" },
-					command: { type: "string" },
 					pattern: { type: "string" },
 				},
 				type: "object",
@@ -339,10 +331,6 @@ export function registerSelfIterationTools(
 				invoke(context, log, "self-iteration.test", input, invocation, async () =>
 					service.test({
 						...taskInput(input, invocation),
-						args: stringArray(input, "args") ?? [],
-						...(stringValue(input, "command") === undefined
-							? {}
-							: { command: stringValue(input, "command")! }),
 						...(stringValue(input, "pattern") === undefined
 							? {}
 							: { pattern: stringValue(input, "pattern")! }),
@@ -358,8 +346,6 @@ export function registerSelfIterationTools(
 			{
 				properties: {
 					...TASK_FIELDS,
-					args: { items: { type: "string" }, type: "array" },
-					command: { type: "string" },
 				},
 				type: "object",
 			},
@@ -369,10 +355,6 @@ export function registerSelfIterationTools(
 				invoke(context, log, "self-iteration.build", input, invocation, async () =>
 					service.build({
 						...taskInput(input, invocation),
-						args: stringArray(input, "args") ?? [],
-						...(stringValue(input, "command") === undefined
-							? {}
-							: { command: stringValue(input, "command")! }),
 					}),
 				),
 		),

@@ -37,11 +37,20 @@ export class WorktreeManager {
 	}
 
 	async create(taskId: string, baseRef: string): Promise<WorktreeInfo> {
-		await this.validateBaseRef(baseRef);
+		const safeRef = assertSafeBaseRef(baseRef);
+		await this.validateBaseRef(safeRef);
 		const branchName = `tsukaima-iteration/${taskId}`;
 		const worktreePath = join(this.#config.worktreeRoot, taskId);
 		await mkdir(this.#config.worktreeRoot, { recursive: true });
-		const result = await this.#git(["worktree", "add", "-b", branchName, worktreePath, baseRef]);
+		const result = await this.#git([
+			"worktree",
+			"add",
+			"-b",
+			branchName,
+			"--",
+			worktreePath,
+			safeRef,
+		]);
 		if (result.exitCode !== 0) {
 			throw new WorktreeError(`Failed to create worktree: ${result.stderr.trim()}`);
 		}
@@ -86,7 +95,8 @@ export class WorktreeManager {
 	}
 
 	async validateBaseRef(baseRef: string): Promise<void> {
-		const result = await this.#git(["rev-parse", "--verify", `${baseRef}^{commit}`]);
+		const safeRef = assertSafeBaseRef(baseRef);
+		const result = await this.#git(["rev-parse", "--verify", `${safeRef}^{commit}`]);
 		if (result.exitCode !== 0) {
 			throw new WorktreeError(`Base ref "${baseRef}" does not resolve to a commit`);
 		}
@@ -127,6 +137,24 @@ export class WorktreeManager {
 			});
 		});
 	}
+}
+
+/**
+ * A base ref is model-supplied. Reject anything that could be parsed as a git option or smuggle
+ * shell/whitespace structure before it reaches `git`; the ref stays one argv element.
+ */
+export function assertSafeBaseRef(baseRef: string): string {
+	const trimmed = baseRef.trim();
+	if (trimmed.length === 0 || trimmed.length > 256) {
+		throw new WorktreeError(`Base ref "${baseRef}" has an invalid length`);
+	}
+	if (trimmed.startsWith("-")) {
+		throw new WorktreeError(`Base ref "${baseRef}" must not start with "-"`);
+	}
+	if (/[\s\0~^:?*[\\]/u.test(trimmed) || trimmed.includes("..")) {
+		throw new WorktreeError(`Base ref "${baseRef}" contains unsupported characters`);
+	}
+	return trimmed;
 }
 
 /** Reject traversal, symlink escapes, and paths outside the allowlist before any write. */

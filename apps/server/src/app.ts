@@ -17,6 +17,19 @@ import {
 } from "./services/event-stream.ts";
 
 /**
+ * Media rows are written from channel uploads, so the served type must be inert. Only image and
+ * media types are passed through; anything else (HTML, SVG, scripts) is served as an opaque
+ * download so the admin origin can never execute it.
+ */
+const SAFE_MEDIA_MIME =
+	/^(?:image\/(?:avif|gif|jpeg|png|webp)|audio\/[a-z0-9.+-]+|video\/[a-z0-9.+-]+)$/u;
+
+function safeMediaMime(mimeType: string): string {
+	const base = mimeType.split(";")[0]?.trim().toLowerCase() ?? "";
+	return SAFE_MEDIA_MIME.test(base) ? base : "application/octet-stream";
+}
+
+/**
  * Bind exclusively so a duplicate or hung process holding the port fails fast
  * with `EADDRINUSE` instead of sharing `SO_REUSEPORT` traffic on Linux.
  */
@@ -157,11 +170,15 @@ export function createApp(
 				mediaId: params.mediaId,
 				mimeType: row.mimeType,
 			});
+			// `nosniff` stops a crafted upload from being interpreted as HTML/JS in the admin
+			// origin, and the sandbox CSP keeps a directly opened blob inert.
 			return new Response(bytes, {
 				headers: {
 					"cache-control": "private, max-age=31536000, immutable",
+					"content-security-policy": "default-src 'none'; sandbox",
 					"content-length": String(bytes.byteLength),
-					"content-type": row.mimeType,
+					"content-type": safeMediaMime(row.mimeType),
+					"x-content-type-options": "nosniff",
 				},
 			});
 		})

@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS plugin_proactive_scheduler_tasks (
 	last_error TEXT,
 	created_by_kind TEXT NOT NULL,
 	created_by_id TEXT NOT NULL,
+	dedupe_key TEXT,
 	created_at_ms INTEGER NOT NULL,
 	updated_at_ms INTEGER NOT NULL
 );
@@ -81,6 +82,9 @@ CREATE INDEX IF NOT EXISTS plugin_proactive_scheduler_tasks_status_idx
 	ON plugin_proactive_scheduler_tasks(status, scheduled_for_ms);
 CREATE INDEX IF NOT EXISTS plugin_proactive_scheduler_tasks_conversation_idx
 	ON plugin_proactive_scheduler_tasks(conversation_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS plugin_proactive_scheduler_tasks_dedupe_idx
+	ON plugin_proactive_scheduler_tasks(dedupe_key)
+	WHERE dedupe_key IS NOT NULL;
 CREATE TABLE IF NOT EXISTS plugin_proactive_scheduler_state (
 	conversation_id TEXT PRIMARY KEY,
 	last_message_at_ms INTEGER,

@@ -23,6 +23,8 @@ import type {
 	PluginTaskUpdateInput,
 	PluginTaskWatchEvent,
 	PluginTasksApi,
+	PluginFollowUpIntent,
+	PluginFollowUpsApi,
 } from "@tsukaima/sdk";
 import {
 	CONVERSATION_POLICY_SCOPE,
@@ -198,6 +200,69 @@ class FakeTasks implements PluginTasksApi {
 	}
 }
 
+class FakeFollowUps implements PluginFollowUpsApi {
+	readonly intents: PluginFollowUpIntent[] = [];
+	failList = false;
+
+	async list(
+		query: {
+			readonly conversationId?: string;
+			readonly limit?: number;
+			readonly status?: PluginFollowUpIntent["status"];
+			readonly submissionRequestId?: string;
+		} = {},
+	): Promise<readonly PluginFollowUpIntent[]> {
+		if (this.failList) throw new Error("outbox unavailable");
+		return this.intents
+			.filter(
+				(intent) =>
+					(query.status === undefined || intent.status === query.status) &&
+					(query.conversationId === undefined || intent.conversationId === query.conversationId) &&
+					(query.submissionRequestId === undefined ||
+						intent.submissionRequestId === query.submissionRequestId),
+			)
+			.slice(0, query.limit ?? 100);
+	}
+
+	async complete(followUpId: string): Promise<boolean> {
+		const intent = this.intents.find((entry) => entry.id === followUpId);
+		if (intent === undefined) return false;
+		const index = this.intents.indexOf(intent);
+		this.intents[index] = { ...intent, status: "completed" };
+		return true;
+	}
+
+	onChanged(_handler: () => void): () => void {
+		return () => {};
+	}
+
+	seed(input: {
+		readonly conversationId: string;
+		readonly delayMs: number;
+		readonly followUpKind?: string;
+		readonly id?: string;
+		readonly scheduledForMs?: number;
+		readonly submissionRequestId: string;
+	}): PluginFollowUpIntent {
+		const now = Date.now();
+		const intent: PluginFollowUpIntent = {
+			conversationId: input.conversationId,
+			createdAtMs: now,
+			delayMs: input.delayMs,
+			followUpKind: input.followUpKind ?? "proactive",
+			id: input.id ?? randomUUID(),
+			pluginId: "proactive-scheduler",
+			scheduledForMs: input.scheduledForMs ?? now + input.delayMs,
+			sourceTaskId: null,
+			status: "pending",
+			submissionRequestId: input.submissionRequestId,
+			updatedAtMs: now,
+		};
+		this.intents.push(intent);
+		return intent;
+	}
+}
+
 interface LogRecord {
 	readonly details: unknown;
 	readonly level: "debug" | "error" | "info" | "trace" | "warn";
@@ -234,12 +299,14 @@ async function setup(now = 1_000_000, globalEnabled = false) {
 	const clock = { now };
 	const database = new TestDatabase();
 	const conversations = new FakeConversations();
+	const followUps = new FakeFollowUps();
 	const tasks = new FakeTasks();
 	const logs: LogRecord[] = [];
 	const logger = createRecordingLogger(logs);
 	const service = new ProactiveSchedulerService({
 		conversations,
 		database,
+		followUps,
 		logger,
 		now: () => clock.now,
 		random: () => 0,
@@ -261,7 +328,7 @@ async function setup(now = 1_000_000, globalEnabled = false) {
 		...DEFAULT_PROACTIVE_POLICY,
 		enabled: true,
 	});
-	return { clock, conversations, database, logger, logs, service, tasks };
+	return { clock, conversations, database, followUps, logger, logs, service, tasks };
 }
 
 function candidate(input: {
@@ -634,6 +701,97 @@ describe("proactive delivery and markers", () => {
 
 	test("schedules later when the model emits TSUKAIMA_SCHEDULE_LATER", async () => {
 		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const { conversations, followUps, service } = await setup(now, true);
+		await service.repository.saveState({
+			...emptyState("c1", now),
+			inboundCount: 10,
+			lastMessageAtMs: now - 30 * 60_000,
+			warmness: 0.9,
+		});
+		const intent = followUps.seed({
+			conversationId: "c1",
+			delayMs: 15 * 60_000,
+			scheduledForMs: now + 15 * 60_000,
+			submissionRequestId: "durable-c1:background#turn-1",
+		});
+		conversations.results.push({
+			delivered: false,
+			deliveryStatus: "suppressed",
+			marker: "schedule-later",
+			scheduleLaterMs: 15 * 60_000,
+			followUpRecorded: true,
+			submissionRequestId: intent.submissionRequestId,
+			text: "",
+		});
+		await service.runTick();
+		const tasks = await service.repository.listTasks({ conversationId: "c1" });
+		expect(tasks).toHaveLength(1);
+		expect(tasks[0]).toEqual(
+			expect.objectContaining({
+				dedupeKey: `follow-up:proactive-scheduler:${intent.submissionRequestId}`,
+				kind: "proactive",
+				status: "scheduled",
+				scheduledForMs: now + 15 * 60_000,
+			}),
+		);
+		expect(followUps.intents[0]?.status).toBe("completed");
+
+		// A restart replays the outbox without creating a second task.
+		const replay = await service.reconcileFollowUps();
+		expect(replay).toBe(0);
+		expect(await service.repository.listTasks({ conversationId: "c1" })).toHaveLength(1);
+	});
+
+	test("materializes a pending follow-up after a crash before the plugin task exists", async () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const { followUps, service } = await setup(now, true);
+		const intent = followUps.seed({
+			conversationId: "c1",
+			delayMs: 20 * 60_000,
+			scheduledForMs: now + 20 * 60_000,
+			submissionRequestId: "durable-c1:background#crashed",
+		});
+
+		expect(await service.reconcileFollowUps()).toBe(1);
+		const tasks = await service.repository.listTasks({ conversationId: "c1" });
+		expect(tasks).toHaveLength(1);
+		expect(tasks[0]).toEqual(
+			expect.objectContaining({
+				dedupeKey: `follow-up:proactive-scheduler:${intent.submissionRequestId}`,
+				status: "scheduled",
+			}),
+		);
+		expect(followUps.intents[0]?.status).toBe("completed");
+	});
+
+	test("does not complete a follow-up when its host timer cannot be created", async () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const { followUps, service, tasks } = await setup(now, true);
+		const intent = followUps.seed({
+			conversationId: "c1",
+			delayMs: 5 * 60_000,
+			submissionRequestId: "durable-c1:background#timer-failure",
+		});
+		const original = tasks.create.bind(tasks);
+		tasks.create = async () => {
+			throw new Error("scheduler unavailable");
+		};
+		tasks.tasks.clear();
+
+		expect(await service.reconcileFollowUps()).toBe(1);
+		expect(followUps.intents[0]?.status).toBe("pending");
+		const [created] = await service.repository.listTasks({ conversationId: "c1" });
+		expect(created?.taskId).toBe("");
+		tasks.create = original;
+		expect(await service.reconcileFollowUps()).toBe(0);
+		expect(followUps.intents[0]?.status).toBe("completed");
+		expect(await service.repository.listTasks({ conversationId: "c1" })).toHaveLength(1);
+		expect((await service.repository.listTasks({ conversationId: "c1" }))[0]?.taskId).not.toBe("");
+		expect(intent.id.length).toBeGreaterThan(0);
+	});
+
+	test("does not record suppression when the follow-up handoff is still pending", async () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
 		const { conversations, service } = await setup(now, true);
 		await service.repository.saveState({
 			...emptyState("c1", now),
@@ -644,19 +802,18 @@ describe("proactive delivery and markers", () => {
 		conversations.results.push({
 			delivered: false,
 			deliveryStatus: "suppressed",
+			followUpPending: true,
+			followUpRecorded: false,
 			marker: "schedule-later",
 			scheduleLaterMs: 15 * 60_000,
 			text: "",
 		});
+
 		await service.runTick();
-		const tasks = await service.repository.listTasks({ conversationId: "c1" });
-		expect(tasks).toHaveLength(1);
-		expect(tasks[0]).toEqual(
-			expect.objectContaining({
-				kind: "proactive",
-				status: "scheduled",
-				scheduledForMs: now + 900_000,
-			}),
+		const decisions = await service.repository.listDecisions({ conversationId: "c1" });
+		expect(decisions.some((entry) => entry.gateResult === "suppressed")).toBe(false);
+		expect(decisions[0]).toEqual(
+			expect.objectContaining({ gateResult: "failed", skippedReason: "follow_up_pending" }),
 		);
 	});
 

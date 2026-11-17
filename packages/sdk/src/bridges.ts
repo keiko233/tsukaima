@@ -30,6 +30,7 @@ import type {
 	PluginDatabaseApi,
 	PluginEmbeddingRequest,
 	PluginEmbeddingResult,
+	PluginFollowUpsApi,
 	PluginMigrationsApi,
 	PluginModelCompleteMessage,
 	PluginModelCompleteRequest,
@@ -1257,6 +1258,7 @@ export interface PluginContextOptions {
 		read(): Promise<readonly MessageEnvelope[]>;
 	};
 	conversations?: PluginConversationsApi;
+	followUps?: PluginFollowUpsApi;
 	channel?: PluginChannelApi;
 	channels?: PluginChannelRegistry;
 	outbound?: PluginOutboundApi;
@@ -1326,6 +1328,7 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 		...(cache === undefined ? {} : { cache }),
 		conversation: options.conversation ?? { read: async () => [] },
 		...(options.conversations ? { conversations: options.conversations } : {}),
+		...(options.followUps ? { followUps: options.followUps } : {}),
 		events,
 		...(options.media ? { media: options.media } : {}),
 		tools,

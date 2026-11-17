@@ -38,10 +38,32 @@ This file is the cross-session handoff record. Update it whenever implementation
   The durable host observes the settled submission (`onAnswer`), the dispatcher claims the outbound
   row through the `(conversationId, durableEntryId)` unique index before sending, so delivery is
   at-most-once across restarts, and it emits `after.reply`. Local `webui` chats persist the same
-  outbound rows without a channel send.
+  outbound rows without a channel send. Because the observer is in-memory, the dispatcher also
+  replays committed answers that have no outbound row (`recoverUndispatchedAnswers`), so a restart
+  mid-turn does not lose the reply. A durable `reply_dispatch_expectations` row is written *before*
+  the turn is admitted, and recovery resolves that exact submission by request id, so a crash
+  between the answer commit and the first dispatch claim is covered without ever inferring a reply
+  from transcript history. Old, intermediate, and deliberately suppressed assistant entries are
+  therefore never resent. A `reply_dispatch_intents` ledger still records each claimed send and the
+  outbound unique index keeps delivery at-most-once. Claimed ledger rows written before the
+  expectation table existed carry no submission request id; they are never replayed from history
+  and are reported once per process (`message.answer-recovery-unavailable`) so an operator knows
+  that a pre-upgrade reply may be missing.
+- Background `TSUKAIMA_SCHEDULE_LATER` is a durable obligation, not silence. The originating
+  plugin is recorded on the background expectation; before suppression settles, the host writes a
+  `plugin_follow_up_intents` row. The plugin materializes its own scheduled task from that outbox
+  with a stable dedupe key, and startup plus each tick replay pending rows. A failed handoff leaves
+  the reply expectation and outbox pending instead of reporting suppression success, and a retried
+  scheduler task reuses its exact durable background answer rather than running the model again.
 - Inbound envelopes are validated with `messageEnvelopeSchema` before anything is persisted, and
   identity resolution runs in a single synchronous transaction, so concurrent messages from a new
   user cannot create a duplicate user or a racing canonical identity.
+- Inbound channel media is fetched through `apps/server/src/services/media-fetch-guard.ts`: only
+  public HTTP(S) destinations, every redirect re-validated, a hard byte cap, and an image-only
+  content-type allowlist. Private hosts are denied unless listed in
+  `TSUKAIMA_MEDIA_FETCH_ALLOWED_HOSTS` (for a same-host channel sidecar). `/media/:id` serves only
+  image/audio/video types, everything else as `application/octet-stream`, with `nosniff` and a
+  sandbox CSP.
 - Persona and memory are injected into every model request as pi-durable prompt sections
   (`tsukaima-persona`, `tsukaima-memory`) rendered per conversation from the domain database by
   `apps/server/src/services/context-provider.ts`. Retrieval ranks by keyword overlap, then
@@ -287,8 +309,20 @@ The full built-in plugin inventory and migration order are tracked in
   working, pending messages stay in the window and a configurable fast sidechat model decides
   whether to interrupt, steer, or wait. Without a configured sidechat model the classifier uses
   the active model; a slow or unavailable classifier always falls back to waiting.
-- Reply delivery is at-most-once: a crash between claiming the outbound row and a successful send
-  leaves a permanent `pending` row with no reconciliation job yet.
+- Reply delivery is at-most-once, and committed answers are recoverable: startup and the periodic
+  sweep replay only turns with a pending `reply_dispatch_expectations` row, resolving each durable
+  submission's terminal answer by request id. Recovery never scans history, so suppressed or
+  intermediate entries cannot be re-sent; every pending expectation is visited regardless of
+  conversation age or count, so a backlog cannot starve. The outbound claim still prevents a double
+  send; a crash between claiming the row and the send stays `pending` and is left for
+  `reconcilePendingDeliveries`. External answers are skipped while their channel is disconnected
+  so a later sweep can still deliver them.
+- Deferred proactive follow-ups survive every boundary: the plugin owns the task, the host owns the
+  durable handoff, and neither a crash after the answer nor one after the task insert can duplicate
+  the follow-up. The only acknowledged limitation is an upgrade from a background expectation
+  written before `source_plugin_id` existed: a recovered `schedule-later` marker with no plugin
+  origin is abandoned with `marker_schedule-later_missing_plugin_origin` and audited, because the
+  host cannot safely infer which plugin should own it.
 - Answers with no text blocks (tool-only) produce no reply. Output is newline- and
   media-aware: each text unit and each sticker/image is delivered as its own message batch in
   source order, with platform-length splitting inside a batch.

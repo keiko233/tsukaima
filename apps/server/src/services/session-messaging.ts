@@ -198,7 +198,16 @@ export class SessionMessagingService {
 			...(input.references === undefined ? {} : { references: input.references }),
 			text,
 		});
-		await this.#applyToolPolicy?.(session.id, session.durableConversationId);
+		try {
+			await this.#applyToolPolicy?.(session.id, session.durableConversationId);
+		} catch (error) {
+			// Fail closed: a turn whose tool policy could not be applied runs with no model tools.
+			await host.setModelToolAllowlist(session.durableConversationId, []);
+			this.#logger.warn("session tool policy failed; disabling model tools", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionId: session.id,
+			});
+		}
 		await this.#policy.ensureHostPolicy(session.id, session.durableConversationId);
 		const hookContext = await this.#hooks.renderContext(session.id);
 		const triggerContext = [input.context, preparedContext, hookContext]

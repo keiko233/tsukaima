@@ -4,6 +4,7 @@ import type {
 	PluginConversationSummary,
 	PluginConversationsApi,
 	PluginDatabaseApi,
+	PluginFollowUpsApi,
 	PluginLogger,
 	PluginTask,
 	PluginTaskExecutionResult,
@@ -39,7 +40,6 @@ import {
 } from "./manifest.ts";
 import { ProactiveSchedulerRepository } from "./repository.ts";
 
-const MINUTE_MS = 60_000;
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
 const DEFAULT_PROMPT_MAX_CHARS = 4_000;
 
@@ -47,6 +47,7 @@ export interface ProactiveSchedulerServiceOptions {
 	readonly audit?: PluginAuditApi;
 	readonly conversations: PluginConversationsApi;
 	readonly database: PluginDatabaseApi;
+	readonly followUps?: PluginFollowUpsApi;
 	readonly logger: PluginLogger;
 	readonly now?: () => number;
 	readonly promptMaxChars?: number;
@@ -124,6 +125,7 @@ function gateSummary(gates: readonly GateResult[]): string {
 export class ProactiveSchedulerService {
 	readonly #audit: PluginAuditApi | undefined;
 	readonly #conversations: PluginConversationsApi;
+	readonly #followUps: PluginFollowUpsApi | undefined;
 	readonly #logger: PluginLogger;
 	readonly #now: () => number;
 	readonly #promptMaxChars: number;
@@ -132,10 +134,12 @@ export class ProactiveSchedulerService {
 	readonly #tasks: PluginTasksApi;
 	readonly #tickIntervalMs: number;
 	#tickTaskId: string | null = null;
+	#reconcilingFollowUps: Promise<number> | undefined;
 
 	constructor(options: ProactiveSchedulerServiceOptions) {
 		this.#audit = options.audit;
 		this.#conversations = options.conversations;
+		this.#followUps = options.followUps;
 		this.#logger = options.logger.child?.("service") ?? options.logger;
 		this.#now = options.now ?? Date.now;
 		this.#promptMaxChars = options.promptMaxChars ?? DEFAULT_PROMPT_MAX_CHARS;
@@ -152,6 +156,7 @@ export class ProactiveSchedulerService {
 	/** Register the repeat tick and any pending durable tasks from a previous process. */
 	async start(): Promise<void> {
 		const startedAtMs = this.#now();
+		const materialized = await this.reconcileFollowUps();
 		const tick = await this.#tasks.create({
 			dedupeKey: PROACTIVE_SCHEDULER_TICK_DEDUPE_KEY,
 			intervalMs: this.#tickIntervalMs,
@@ -189,6 +194,7 @@ export class ProactiveSchedulerService {
 		this.#logger.debug("scheduler started", {
 			durationMs: this.#now() - startedAtMs,
 			intervalMs: this.#tickIntervalMs,
+			materializedFollowUps: materialized,
 			pendingTasks: pending.length,
 			restoredTasks: restored,
 			tickTaskId: tick.id,
@@ -348,6 +354,7 @@ export class ProactiveSchedulerService {
 			createdAtMs: now,
 			createdById: createdBy.id,
 			createdByKind: createdBy.kind,
+			dedupeKey: null,
 			dueWindowMs: parsed.dueWindowMs ?? null,
 			kind: parsed.kind,
 			lastError: null,
@@ -612,6 +619,7 @@ export class ProactiveSchedulerService {
 	}
 
 	async runTick(): Promise<{ candidates: number; delivered: number; skipped: number }> {
+		await this.reconcileFollowUps();
 		const startedAtMs = this.#now();
 		const conversations = await this.#conversations.list();
 		let candidates = 0;
@@ -784,6 +792,85 @@ export class ProactiveSchedulerService {
 		return (await this.#repository.updateTask(task.id, { taskId: host.id })) ?? task;
 	}
 
+	/**
+	 * Materialize every durable follow-up handoff owned by this plugin.
+	 *
+	 * The host writes the intent before it settles the suppressed reply. Creating the plugin task
+	 * from that row is idempotent through `dedupe_key`, so a crash before or after the insert
+	 * replays cleanly. The row is only completed after the task and its host timer exist.
+	 */
+	async reconcileFollowUps(): Promise<number> {
+		if (this.#reconcilingFollowUps !== undefined) return await this.#reconcilingFollowUps;
+		this.#reconcilingFollowUps = this.#reconcileFollowUps().finally(() => {
+			this.#reconcilingFollowUps = undefined;
+		});
+		return await this.#reconcilingFollowUps;
+	}
+
+	async #reconcileFollowUps(): Promise<number> {
+		const followUps = this.#followUps;
+		if (followUps === undefined) return 0;
+		const pending = await followUps.list({ limit: 500, status: "pending" });
+		let materialized = 0;
+		for (const intent of pending) {
+			try {
+				const conversation = await this.#conversations.get(intent.conversationId);
+				if (conversation === undefined) {
+					this.#logger.warn("follow-up intent has no conversation", {
+						conversationId: intent.conversationId,
+						followUpId: intent.id,
+					});
+					continue;
+				}
+				const dedupeKey = `follow-up:${intent.pluginId}:${intent.submissionRequestId}`;
+				let task = await this.#repository.findTaskByDedupeKey(dedupeKey);
+				if (task === undefined) {
+					const policy = await this.#repository.effectivePolicy(conversation.id);
+					task = await this.#repository.insertTask({
+						attempts: 0,
+						cancelIfReplied: true,
+						chatObjectId: conversation.chatObjectId,
+						conversationId: conversation.id,
+						createdAtMs: this.#now(),
+						createdById: "proactive-engine",
+						createdByKind: "agent",
+						dedupeKey,
+						dueWindowMs: null,
+						kind:
+							intent.followUpKind === "remind" ||
+							intent.followUpKind === "workflow" ||
+							intent.followUpKind === "nudge"
+								? intent.followUpKind
+								: "proactive",
+						lastError: null,
+						maxAttempts: policy.maxAttempts,
+						occurrences: 0,
+						prompt: "Continue the pending proactive follow-up when it feels natural.",
+						repeat: null,
+						scheduledForMs: intent.scheduledForMs,
+						status: "scheduled",
+						taskId: "",
+					});
+					materialized += 1;
+				}
+				await this.ensureHostTask(task);
+				await followUps.complete(intent.id);
+				this.#logger.debug("follow-up intent materialized", {
+					conversationId: intent.conversationId,
+					followUpId: intent.id,
+					taskId: task.id,
+				});
+			} catch (error) {
+				this.#logger.warn("follow-up intent materialization failed", {
+					conversationId: intent.conversationId,
+					error: errorMessage(error),
+					followUpId: intent.id,
+				});
+			}
+		}
+		return materialized;
+	}
+
 	async #runScheduled(
 		task: ScheduledTask,
 		hostTask: PluginTask,
@@ -862,6 +949,7 @@ export class ProactiveSchedulerService {
 					state,
 				}),
 				conversationId: claimed.conversationId,
+				followUpKind: claimed.kind,
 				kind: kindToTurnKind(claimed.kind),
 				prompt: promptWithGuardrails(claimed.prompt),
 				taskId: claimed.id,
@@ -1013,13 +1101,31 @@ export class ProactiveSchedulerService {
 		now: number,
 	): Promise<{ readonly status: ScheduledTaskStatus; readonly stop: boolean }> {
 		if (result.marker === "schedule-later") {
-			const delay = result.scheduleLaterMs ?? DEFAULT_SCHEDULE_LATER_MS;
+			// The conversation service already wrote the durable follow-up intent before settling
+			// the reply. If that handoff failed, do not record a successful suppression.
+			if (
+				result.followUpPending === true ||
+				(result.followUpRecorded !== undefined && !result.followUpRecorded)
+			) {
+				await this.#recordDecision({
+					conversationId: task.conversationId,
+					deliveryStatus: result.deliveryStatus,
+					gateResult: "failed",
+					gates: [{ gate: "follow_up", reason: "follow_up_pending", status: "blocked" }],
+					kind: task.kind,
+					marker: result.marker,
+					skippedReason: "follow_up_pending",
+					taskId: task.id,
+				});
+				return {
+					status: task.repeat === null ? "skipped" : "scheduled",
+					stop: task.repeat === null,
+				};
+			}
 			this.#logger.debug("scheduled task requested schedule-later", {
 				conversationId: task.conversationId,
-				delayMs: delay,
 				taskId: task.id,
 			});
-			await this.#scheduleLater(task, delay, now);
 			await this.#recordDecision({
 				conversationId: task.conversationId,
 				deliveryStatus: result.deliveryStatus,
@@ -1123,6 +1229,7 @@ export class ProactiveSchedulerService {
 				state: candidate.state,
 			}),
 			conversationId: candidate.conversation.id,
+			followUpKind: "proactive",
 			kind: "proactive",
 			prompt: promptWithGuardrails(prompt),
 		});
@@ -1136,28 +1243,33 @@ export class ProactiveSchedulerService {
 			textChars: (result.text ?? "").length,
 		});
 		if (result.marker === "schedule-later") {
-			const delay = result.scheduleLaterMs ?? DEFAULT_SCHEDULE_LATER_MS;
-			await this.#repository
-				.insertTask({
-					attempts: 0,
-					cancelIfReplied: true,
-					chatObjectId: candidate.conversation.chatObjectId,
+			if (
+				result.followUpPending === true ||
+				(result.followUpRecorded !== undefined && !result.followUpRecorded)
+			) {
+				await this.#recordDecision({
 					conversationId: candidate.conversation.id,
-					createdAtMs: now,
-					createdById: "proactive-engine",
-					createdByKind: "agent",
-					dueWindowMs: null,
-					kind: "proactive",
-					lastError: null,
-					maxAttempts: candidate.policy.maxAttempts,
-					occurrences: 0,
-					prompt: "Continue the pending proactive follow-up when it feels natural.",
-					repeat: null,
-					scheduledForMs: now + delay,
-					status: "scheduled",
-					taskId: "",
-				})
-				.then((task) => this.ensureHostTask(task));
+					deliveryStatus: result.deliveryStatus,
+					gateResult: "failed",
+					gates: [
+						...(candidate.gatesForRecord ?? []),
+						{ gate: "follow_up", reason: "follow_up_pending", status: "blocked" },
+					],
+					kind: "tick",
+					marker: result.marker,
+					skippedReason: "follow_up_pending",
+					taskId: null,
+				});
+				await this.#repository.saveState(
+					backoffState({
+						hard: true,
+						nowMs: now,
+						policy: candidate.policy,
+						state: candidate.state,
+					}),
+				);
+				return result;
+			}
 			await this.#recordDecision({
 				conversationId: candidate.conversation.id,
 				deliveryStatus: result.deliveryStatus,
@@ -1257,35 +1369,6 @@ export class ProactiveSchedulerService {
 		};
 	}
 
-	async #scheduleLater(task: ScheduledTask, delayMs: number, now: number): Promise<void> {
-		const created = await this.#repository.insertTask({
-			attempts: 0,
-			cancelIfReplied: true,
-			chatObjectId: task.chatObjectId,
-			conversationId: task.conversationId,
-			createdAtMs: now,
-			createdById: "proactive-engine",
-			createdByKind: "agent",
-			dueWindowMs: null,
-			kind: task.kind === "remind" || task.kind === "workflow" ? task.kind : "proactive",
-			lastError: null,
-			maxAttempts: task.maxAttempts,
-			occurrences: 0,
-			prompt: task.prompt,
-			repeat: null,
-			scheduledForMs: now + delayMs,
-			status: "scheduled",
-			taskId: "",
-		});
-		this.#logger.trace("task rescheduled later", {
-			conversationId: task.conversationId,
-			delayMs,
-			newTaskId: created.id,
-			sourceTaskId: task.id,
-		});
-		await this.ensureHostTask(created);
-	}
-
 	async #recordDecision(input: {
 		readonly conversationId: string;
 		readonly deliveryStatus?: string | null;
@@ -1347,5 +1430,3 @@ export class ProactiveSchedulerService {
 		} catch {}
 	}
 }
-
-const DEFAULT_SCHEDULE_LATER_MS = 30 * MINUTE_MS;

@@ -99,6 +99,7 @@ type TaskRow = {
 	readonly created_at_ms: number;
 	readonly created_by_id: string;
 	readonly created_by_kind: string;
+	readonly dedupe_key: string | null;
 	readonly due_window_ms: number | null;
 	readonly id: string;
 	readonly kind: string;
@@ -214,6 +215,7 @@ function taskFromRow(row: TaskRow): ScheduledTask {
 		createdAtMs: row.created_at_ms,
 		createdById: row.created_by_id,
 		createdByKind,
+		dedupeKey: row.dedupe_key,
 		dueWindowMs: row.due_window_ms,
 		id: row.id,
 		kind: kind.success ? kind.data : "remind",
@@ -366,8 +368,8 @@ export class ProactiveSchedulerRepository {
 		const now = this.#now();
 		await this.#database.query(
 			`INSERT INTO plugin_proactive_scheduler_tasks
-			 (id, task_id, conversation_id, chat_object_id, kind, prompt, scheduled_for_ms, due_window_ms, repeat_json, cancel_if_replied, max_attempts, attempts, occurrences, status, last_error, created_by_kind, created_by_id, created_at_ms, updated_at_ms)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 (id, task_id, conversation_id, chat_object_id, kind, prompt, scheduled_for_ms, due_window_ms, repeat_json, cancel_if_replied, max_attempts, attempts, occurrences, status, last_error, created_by_kind, created_by_id, dedupe_key, created_at_ms, updated_at_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			[
 				id,
 				task.taskId,
@@ -386,6 +388,7 @@ export class ProactiveSchedulerRepository {
 				task.lastError,
 				task.createdByKind,
 				task.createdById,
+				task.dedupeKey,
 				task.createdAtMs,
 				now,
 			],
@@ -397,6 +400,14 @@ export class ProactiveSchedulerRepository {
 		const [row] = await this.#database.query<TaskRow>(
 			"SELECT * FROM plugin_proactive_scheduler_tasks WHERE id = ? LIMIT 1",
 			[taskId],
+		);
+		return row === undefined ? undefined : taskFromRow(row);
+	}
+
+	async findTaskByDedupeKey(dedupeKey: string): Promise<ScheduledTask | undefined> {
+		const [row] = await this.#database.query<TaskRow>(
+			"SELECT * FROM plugin_proactive_scheduler_tasks WHERE dedupe_key = ? LIMIT 1",
+			[dedupeKey],
 		);
 		return row === undefined ? undefined : taskFromRow(row);
 	}

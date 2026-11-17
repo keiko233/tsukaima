@@ -9,6 +9,7 @@ export type {
 	CodingTaskMode,
 	CreateDeploymentInput,
 	CreateIterationTaskInput,
+	DeploymentIdentity,
 	DeploymentRecord,
 	DeploymentRecordPatch,
 	DeploymentStatus,
@@ -27,9 +28,29 @@ export type {
 } from "./types.ts";
 
 export { CodingRunner, CommandRejectedError } from "./runner.ts";
-export type { CommandResult, RunnerConfig } from "./runner.ts";
+export { runManagedProcess, SCRUBBED_COMMAND_ENV } from "./runner.ts";
+export type { CommandResult, ManagedProcessOptions, RunnerConfig } from "./runner.ts";
 
 export {
+	ANALYSIS_MOUNT,
+	buildBubblewrapArgv,
+	createBubblewrapSandbox,
+	probeBubblewrapSandbox,
+	resolveExecutable,
+	SANDBOX_PATH_DIRS,
+	SandboxUnavailableError,
+} from "./sandbox.ts";
+export type {
+	BubblewrapArgvInput,
+	BubblewrapSandboxOptions,
+	SandboxMount,
+	SandboxExecInput,
+	SandboxExecutor,
+	SandboxProvider,
+} from "./sandbox.ts";
+
+export {
+	assertSafeBaseRef,
 	assertSafeWorktreePath,
 	isPathWithinAllowlist,
 	WorktreeError,
@@ -46,6 +67,15 @@ export {
 export type { EditOptions, EditResult, StructuredEdit } from "./edit.ts";
 
 export { sha256Hex } from "./hash.ts";
+
+export { reconcileRestartDeployment } from "./deployment-reconcile.ts";
+export type {
+	DeploymentApplicationVerification,
+	DeploymentVerifier,
+	ReconcileRestartDeploymentInput,
+	ReconcileRestartDeploymentResult,
+	RestartDeploymentOutcome,
+} from "./deployment-reconcile.ts";
 
 export { CodingTools, parseDiffOutput, parseTestOutput } from "./tools.ts";
 export type { BuildResult, DiffFileEntry, DiffResult, TestRunResult } from "./tools.ts";

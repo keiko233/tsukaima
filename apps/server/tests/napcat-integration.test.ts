@@ -110,6 +110,7 @@ describe("fake NapCat integration", () => {
 				TSUKAIMA_DATA_DIR: directory,
 				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001",
 				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_MEDIA_FETCH_ALLOWED_HOSTS: "127.0.0.1",
 			},
 			{
 				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, factory]]),
@@ -200,6 +201,7 @@ describe("fake NapCat integration", () => {
 				TSUKAIMA_DATA_DIR: directory,
 				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001",
 				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_MEDIA_FETCH_ALLOWED_HOSTS: "127.0.0.1",
 			},
 			{
 				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, factory]]),
@@ -254,6 +256,7 @@ describe("fake NapCat integration", () => {
 				TSUKAIMA_DATA_DIR: directory,
 				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001",
 				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_MEDIA_FETCH_ALLOWED_HOSTS: "127.0.0.1",
 			},
 			{
 				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, factory]]),
@@ -338,6 +341,7 @@ describe("fake NapCat integration", () => {
 				TSUKAIMA_DATA_DIR: directory,
 				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001",
 				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_MEDIA_FETCH_ALLOWED_HOSTS: "127.0.0.1",
 			},
 			{
 				model: createSlowStreamingModel(["nice pic"], {
@@ -433,6 +437,7 @@ describe("fake NapCat integration", () => {
 				TSUKAIMA_DATA_DIR: directory,
 				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001",
 				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_MEDIA_FETCH_ALLOWED_HOSTS: "127.0.0.1",
 			},
 			{
 				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, factory]]),

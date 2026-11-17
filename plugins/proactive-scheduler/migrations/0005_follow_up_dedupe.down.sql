@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS plugin_proactive_scheduler_tasks_dedupe_idx;

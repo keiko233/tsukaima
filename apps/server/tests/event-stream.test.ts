@@ -291,9 +291,36 @@ describe("authenticated media bytes", () => {
 			expect(response.status).toBe(200);
 			expect(response.headers.get("content-type")).toBe("image/png");
 			expect(response.headers.get("cache-control")).toContain("immutable");
+			expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+			expect(response.headers.get("content-security-policy")).toContain("sandbox");
 			expect(new Uint8Array(await response.arrayBuffer())).toEqual(
 				Uint8Array.from([0x89, 0x50, 0x4e, 0x47]),
 			);
+		} finally {
+			auth.stop();
+			await lifecycle.stop();
+		}
+	});
+
+	test("serves a non-media upload as an inert opaque download", async () => {
+		const directory = await createDirectory();
+		const { app, auth, lifecycle } = createApp(adminEnv(directory));
+		await lifecycle.start();
+		try {
+			const stored = await lifecycle.media.store({
+				bytes: new TextEncoder().encode("<script>alert(1)</script>"),
+				kind: "file",
+				mimeType: "text/html",
+				source: "channel",
+			});
+			const cookie = await signIn(app);
+			const response = await app.handle(
+				new Request(`http://localhost/media/${stored.id}`, { headers: { cookie } }),
+			);
+			expect(response.status).toBe(200);
+			expect(response.headers.get("content-type")).toBe("application/octet-stream");
+			expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+			expect(response.headers.get("content-security-policy")).toContain("sandbox");
 		} finally {
 			auth.stop();
 			await lifecycle.stop();

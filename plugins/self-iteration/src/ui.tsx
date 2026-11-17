@@ -295,6 +295,9 @@ function DeploymentCard({
 					{t.t("created_by")}: {deployment.createdBy}
 				</span>
 			</div>
+			{deployment.status === "manual_apply_required" ? (
+				<p className="text-warning">{t.t("deployment_manual_apply")}</p>
+			) : null}
 			<div className="flex flex-wrap justify-end gap-2">
 				<Button
 					disabled={busy}

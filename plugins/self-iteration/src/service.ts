@@ -1,10 +1,13 @@
+import { relative, sep } from "node:path";
 import {
+	ANALYSIS_MOUNT,
 	applyStructuredEdit,
+	assertSafeWorktreePath,
 	CodingRunner,
 	CodingTools,
+	createBubblewrapSandbox,
 	DomainCodingStore,
 	missingProposalFields,
-	readAllowedTextFile,
 	sha256Hex,
 	SupervisedReloadController,
 	validateStructuredEdit,
@@ -13,8 +16,10 @@ import {
 	type DeploymentProposal,
 	type DeploymentProposalInput,
 	type DeploymentRecord,
+	type DeploymentIdentity,
 	type EditResult,
 	type IterationTask,
+	type SandboxProvider,
 	type StructuredEdit,
 	type TaskArtifact,
 	type TaskGraph,
@@ -42,6 +47,8 @@ export interface SelfIterationServiceOptions {
 	readonly binding: SelfIterationHostBinding;
 	readonly logger?: PluginLogger;
 	readonly now?: () => number;
+	/** Isolation boundary for model-influenced commands; defaults to a bubblewrap sandbox. */
+	readonly sandbox?: SandboxProvider;
 	readonly storage?: PluginStorage;
 }
 
@@ -97,6 +104,9 @@ export interface TaskBundle {
 }
 
 const APPROVAL_TTL_MS = 30 * 60_000;
+/** Bound on a model-supplied search pattern, so one argument cannot become a payload. */
+const MAX_SEARCH_PATTERN_CHARS = 4_000;
+const MAX_SEARCH_RESULTS = 100;
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -113,6 +123,7 @@ export class SelfIterationService {
 	readonly #binding: SelfIterationHostBinding;
 	readonly #logger: ScopedLogger;
 	readonly #now: () => number;
+	readonly #sandbox: SandboxProvider;
 	readonly #storage: PluginStorage | undefined;
 	readonly #worktrees = new Map<string, WorktreeManager>();
 
@@ -121,6 +132,12 @@ export class SelfIterationService {
 		this.#binding = options.binding;
 		this.#logger = scopedLogger(options.logger);
 		this.#now = options.now ?? Date.now;
+		this.#sandbox =
+			options.sandbox ??
+			createBubblewrapSandbox({
+				repositoryPath: options.binding.repositoryRoot,
+				worktreeRoot: options.binding.worktreeRoot,
+			});
 		this.#storage = options.storage;
 		this.#logger.debug("service created", {
 			repositoryRoot: options.binding.repositoryRoot,
@@ -367,40 +384,91 @@ export class SelfIterationService {
 			taskId: task.id,
 		});
 		try {
-			if (action === "read") {
-				if (input.path === undefined) throw new Error("path is required for read");
-				const file = await readAllowedTextFile(
-					this.#binding.repositoryRoot,
-					policy.pathAllowlist,
-					input.path,
-					input.maxBytes ?? policy.maxOutputBytes,
-				);
-				await this.#recordTimeline(task, "self-iteration.analyze:read", "success", file.path);
-				this.#logger.debug("analyze read completed", {
-					bytes: Buffer.byteLength(file.content, "utf-8"),
-					durationMs: elapsedMs(startedAt),
-					path: file.path,
-					taskId: task.id,
-					truncated: file.truncated,
-				});
-				return { action, ...file };
-			}
-			if (action === "search") {
+			if (action === "read" || action === "search") {
+				// Analysis reads a committed snapshot mounted read-only in the sandbox. The live
+				// repository (dotenv files, data/, nested secrets) is never an analysis surface.
+				const sandbox = await this.#sandbox();
+				// Analysis runs from a worktree so the sandbox never binds the live repository. A
+				// patch task reads its own worktree (with edits); a read-only task reads the
+				// committed snapshot. Neither surface is the live repository.
+				const analysisCwd = task.worktreePath ?? (await this.#analysisCwd());
+				const analysisSource =
+					task.worktreePath === undefined ? {} : { analysisTree: task.worktreePath };
+				if (action === "read") {
+					if (input.path === undefined) throw new Error("path is required for read");
+					const analysisPath = await this.#analysisPath(policy, input.path);
+					const maxBytes = input.maxBytes ?? policy.maxOutputBytes;
+					const result = await sandbox.exec({
+						// `head` reads only the requested prefix; the path stays positional after `--`.
+						args: ["-c", String(maxBytes), "--", `${ANALYSIS_MOUNT}/${analysisPath}`],
+						command: "head",
+						cwd: analysisCwd,
+						...analysisSource,
+						...(task.worktreePath === undefined ? { exportAnalysis: true } : {}),
+						maxOutputBytes: maxBytes,
+						timeoutMs: policy.timeoutMs,
+						writable: false,
+					});
+					if (result.exitCode !== 0) {
+						throw new Error(`analysis_read_failed:${result.stderr.trim() || result.exitCode}`);
+					}
+					const content = result.stdout;
+					await this.#recordTimeline(task, "self-iteration.analyze:read", "success", analysisPath);
+					this.#logger.debug("analyze read completed", {
+						bytes: Buffer.byteLength(content, "utf-8"),
+						durationMs: elapsedMs(startedAt),
+						path: analysisPath,
+						sandbox: sandbox.id,
+						taskId: task.id,
+						truncated: result.stdoutTruncated,
+					});
+					return {
+						action,
+						content,
+						path: analysisPath,
+						truncated: result.stdoutTruncated,
+					};
+				}
 				if (input.pattern === undefined || input.pattern.length === 0) {
 					throw new Error("pattern is required for search");
 				}
-				const result = await this.#runner(this.#binding.repositoryRoot, policy).exec("rg", [
-					"--line-number",
-					"--max-count",
-					"100",
-					input.pattern,
-					...(input.path === undefined ? [] : [input.path]),
-				]);
+				if (input.pattern.length > MAX_SEARCH_PATTERN_CHARS) {
+					throw new Error(`pattern_too_long:${input.pattern.length}>${MAX_SEARCH_PATTERN_CHARS}`);
+				}
+				if (!policy.allowedCommands.includes("rg")) {
+					throw new Error("command_not_allowed:rg");
+				}
+				const analysisPath =
+					input.path === undefined ? undefined : await this.#analysisPath(policy, input.path);
+				// The pattern and path are positional arguments after `--`: a leading dash can
+				// never turn into an `rg` flag such as `--pre`, which executes a command.
+				const result = await sandbox.exec({
+					args: [
+						"--line-number",
+						"--max-count",
+						String(MAX_SEARCH_RESULTS),
+						"--color",
+						"never",
+						"--",
+						input.pattern,
+						...(analysisPath === undefined
+							? [ANALYSIS_MOUNT]
+							: [`${ANALYSIS_MOUNT}/${analysisPath}`]),
+					],
+					command: "rg",
+					cwd: analysisCwd,
+					...analysisSource,
+					...(task.worktreePath === undefined ? { exportAnalysis: true } : {}),
+					maxOutputBytes: policy.maxOutputBytes,
+					timeoutMs: policy.timeoutMs,
+					writable: false,
+				});
 				await this.#recordTimeline(task, "self-iteration.analyze:search", "success", input.pattern);
 				this.#logger.debug("analyze search completed", {
 					durationMs: elapsedMs(startedAt),
 					exitCode: result.exitCode,
 					pattern: preview(input.pattern),
+					sandbox: sandbox.id,
 					taskId: task.id,
 					truncated: result.stdoutTruncated || result.stderrTruncated,
 				});
@@ -696,25 +764,32 @@ export class SelfIterationService {
 		const startedAt = performance.now();
 		const task = await this.resolveTask(input, "patch", "self-iteration.test");
 		const policy = await this.policy();
-		const worktreePath = task.worktreePath ?? this.#binding.repositoryRoot;
-		const command = input.command ?? policy.testCommand[0] ?? "bun";
-		const baseArgs = input.command === undefined ? policy.testCommand.slice(1) : [];
-		const args = [
-			...baseArgs,
-			...(input.args ?? []),
-			...(input.pattern === undefined ? [] : [input.pattern]),
-		];
-		this.#logger.trace("test started", {
-			command: previewCommand(command, args),
-			worktreePath,
-		});
+		// Test and build never run against the live tree: a command that can write (or read the
+		// repository's own dotenv files) must stay inside the disposable worktree.
+		const worktreePath = task.worktreePath;
+		const command = policy.testCommand[0] ?? "bun";
+		let args: readonly string[] = [];
 		try {
+			if (worktreePath === undefined) throw new Error("worktree_required");
+			this.#rejectCommandOverride(input.command, input.args, command, "test");
+			args = [...policy.testCommand.slice(1), ...this.#testPatternArgs(input.pattern)];
+			this.#logger.trace("test started", {
+				command: previewCommand(command, args),
+				worktreePath,
+			});
 			if (!policy.allowedCommands.includes(command)) {
 				this.#logger.warn("test command not allowed", { command, taskId: task.id });
 				throw new Error(`command_not_allowed:${command}`);
 			}
-			const runner = this.#runner(worktreePath, policy);
-			const result = await runner.exec(command, args);
+			const sandbox = await this.#sandbox();
+			const result = await sandbox.exec({
+				args,
+				command,
+				cwd: worktreePath,
+				maxOutputBytes: policy.maxOutputBytes,
+				timeoutMs: policy.timeoutMs,
+				writable: true,
+			});
 			const parsed = parseTest(result);
 			this.#logger.debug("test completed", {
 				command,
@@ -723,6 +798,7 @@ export class SelfIterationService {
 				failed: parsed.failed,
 				passed: parsed.passed,
 				passedCount: parsed.total - parsed.failed,
+				sandbox: sandbox.id,
 				taskId: task.id,
 				timedOut: result.timedOut,
 				total: parsed.total,
@@ -801,23 +877,34 @@ export class SelfIterationService {
 		const task = await this.resolveTask(input, "proposal", "self-iteration.build");
 		await this.#requireMode(task, "proposal", "self-iteration.build");
 		const policy = await this.policy();
-		const worktreePath = task.worktreePath ?? this.#binding.repositoryRoot;
-		const command = input.command ?? policy.buildCommand[0] ?? "bun";
-		const args = input.command === undefined ? policy.buildCommand.slice(1) : (input.args ?? []);
+		const worktreePath = task.worktreePath;
+		const command = policy.buildCommand[0] ?? "bun";
+		const args = policy.buildCommand.slice(1);
 		this.#logger.trace("build started", {
 			command: previewCommand(command, args),
 			worktreePath,
 		});
 		try {
+			if (worktreePath === undefined) throw new Error("worktree_required");
+			this.#rejectCommandOverride(input.command, input.args, command, "build");
 			if (!policy.allowedCommands.includes(command)) {
 				this.#logger.warn("build command not allowed", { command, taskId: task.id });
 				throw new Error(`command_not_allowed:${command}`);
 			}
-			const result = await this.#runner(worktreePath, policy).exec(command, args);
+			const sandbox = await this.#sandbox();
+			const result = await sandbox.exec({
+				args,
+				command,
+				cwd: worktreePath,
+				maxOutputBytes: policy.maxOutputBytes,
+				timeoutMs: policy.timeoutMs,
+				writable: true,
+			});
 			this.#logger.debug("build command completed", {
 				command,
 				durationMs: result.durationMs,
 				exitCode: result.exitCode,
+				sandbox: sandbox.id,
 				taskId: task.id,
 				timedOut: result.timedOut,
 			});
@@ -1247,8 +1334,10 @@ export class SelfIterationService {
 			proposalId: proposal.id,
 		});
 		const deployment = await this.store.createDeployment({
+			appliedIdentity: await this.#appliedIdentity(proposal),
 			artifactMetadata: proposal.artifactMetadata as unknown as Record<string, unknown> | null,
 			createdBy: input.createdBy,
+			previousIdentity: await this.#runningIdentity(),
 			proposalId: proposal.id,
 			rollbackPlan: proposal.rollbackNotes,
 			sourceRevision: proposal.sourceRevision,
@@ -1300,7 +1389,12 @@ export class SelfIterationService {
 					preCheckOk: outcome.preCheck?.ok,
 					proposalId: proposal.id,
 				});
+				// The rollback record may only claim `rolled_back` when the exact artifact that was
+				// live before this deployment is known. Otherwise the rollback hook writes a truthful
+				// `manual_apply_required` record instead of inventing a restore target.
+				const restoreIdentity = deployment.previousIdentity;
 				rollbackRecord = await this.store.createDeployment({
+					appliedIdentity: restoreIdentity,
 					artifactMetadata: proposal.artifactMetadata as unknown as Record<string, unknown> | null,
 					createdBy: "system",
 					postCheck: outcome.postCheck,
@@ -1310,7 +1404,9 @@ export class SelfIterationService {
 					rollbackOfId: deployment.id,
 					rollbackPlan: proposal.rollbackNotes,
 					sourceRevision: proposal.sourceRevision,
-					status: "rolled_back",
+					// The post-check failed, so nothing proves the previous artifact is live again.
+					// Record the attempt truthfully; only a verified boot may settle it.
+					status: "manual_apply_required",
 					taskId: proposal.taskId,
 				});
 				await this.#auditRecord({
@@ -1335,29 +1431,76 @@ export class SelfIterationService {
 			taskId: proposal.taskId,
 		});
 		const outcome = await supervised.reload("tsukaima", {
+			deploymentId: deployment.id,
 			proposalId: proposal.id,
 			reason: "self-iteration deployment",
 		});
-		const updated = await this.store.updateDeployment(deployment.id, {
-			postCheck: outcome.postCheck,
-			preCheck: outcome.preCheck,
-			reloadedAtMs: outcome.reloadedAtMs,
-			status: outcome.success ? "deployed" : "failed",
-		});
-		await this.#transitionProposal(proposal.id, outcome.success ? "deployed" : "failed");
-		await this.store.updateTask(proposal.taskId, {
-			status: outcome.success ? "completed" : "failed",
-		});
+		// An in-place reload does not change this process's artifact by itself. Success is only
+		// recorded when the host can report that the exact approved artifact is now running;
+		// otherwise the deployment needs manual verification.
+		const inPlaceVerified =
+			outcome.success && !outcome.deferred
+				? await this.#inPlaceMatches(deployment.appliedIdentity)
+				: false;
+		// A deferred reload persisted a restart intent: the process still runs the old revision,
+		// so the deployment stays `scheduled` until boot recovery confirms the supervisor acted.
+		const updated = await this.store.updateDeployment(
+			deployment.id,
+			outcome.deferred && outcome.success
+				? {
+						preCheck: outcome.preCheck,
+						status: "scheduled",
+					}
+				: {
+						postCheck:
+							outcome.success && !inPlaceVerified
+								? {
+										checkedAtMs: outcome.postCheck.checkedAtMs,
+										message:
+											"reload completed but the running artifact could not be proven to contain the approved patch",
+										ok: false,
+									}
+								: outcome.postCheck,
+						preCheck: outcome.preCheck,
+						reloadedAtMs: outcome.reloadedAtMs,
+						status: outcome.success
+							? inPlaceVerified
+								? "deployed"
+								: "manual_apply_required"
+							: "failed",
+					},
+		);
+		if (outcome.deferred && outcome.success) {
+			await this.#markProposalDeploying(proposal.id);
+		} else if (outcome.success && inPlaceVerified) {
+			await this.#transitionProposal(proposal.id, "deployed");
+			await this.store.updateTask(proposal.taskId, { status: "completed" });
+		} else if (!outcome.success) {
+			await this.#transitionProposal(proposal.id, "failed");
+			await this.store.updateTask(proposal.taskId, { status: "failed" });
+		}
 		await this.#auditRecord({
 			action: "self-iteration.deployment.reload",
 			actorId: input.createdBy,
 			actorKind: "user",
-			payload: { deploymentId: deployment.id, success: outcome.success },
-			result: outcome.success ? "ok" : "failed",
+			payload: {
+				deferred: outcome.deferred && outcome.success,
+				deploymentId: deployment.id,
+				success: outcome.success,
+			},
+			result: updated.status === "deployed" || updated.status === "scheduled" ? "ok" : "failed",
 			targetId: deployment.id,
 			targetKind: "coding-deployment",
 		});
-		if (outcome.success) {
+		if (outcome.deferred && outcome.success) {
+			this.#logger.info("deployment scheduled for supervised restart", {
+				deploymentId: deployment.id,
+				proposalId: proposal.id,
+				status: updated.status,
+				taskId: proposal.taskId,
+			});
+		}
+		if (outcome.success && !outcome.deferred) {
 			this.#logger.info("deployment succeeded", {
 				deploymentId: deployment.id,
 				durationMs: elapsedMs(startedAt),
@@ -1428,13 +1571,16 @@ export class SelfIterationService {
 			throw new Error("proposal_not_found");
 		}
 		const record = await this.store.createDeployment({
+			appliedIdentity: target.previousIdentity,
 			artifactMetadata: target.artifactMetadata,
 			createdBy: input.createdBy,
 			proposalId: target.proposalId,
 			rollbackOfId: target.id,
 			rollbackPlan: proposal.rollbackNotes,
 			sourceRevision: target.sourceRevision,
-			status: "pending",
+			// Without a recorded previous artifact there is no exact restore target, so this
+			// rollback can never be reported as `rolled_back`.
+			status: target.previousIdentity === null ? "manual_apply_required" : "pending",
 			taskId: target.taskId,
 		});
 		await this.#auditRecord({
@@ -1454,6 +1600,24 @@ export class SelfIterationService {
 			rollbackOf: target.id,
 			taskId: target.taskId,
 		});
+		if (target.previousIdentity === null) {
+			this.#logger.warn("rollback cannot be verified; no exact previous artifact is recorded", {
+				deploymentId: record.id,
+				rollbackOf: target.id,
+				status: record.status,
+			});
+			await this.#auditRecord({
+				action: "self-iteration.deployment.rollback",
+				actorId: input.createdBy,
+				actorKind: "user",
+				payload: { deploymentId: record.id, rollbackOf: target.id },
+				reason: "missing_previous_artifact_identity",
+				result: "failed",
+				targetId: record.id,
+				targetKind: "coding-deployment",
+			});
+			return { deployment: record, dryRun: input.dryRun === true };
+		}
 		if (input.dryRun === true) {
 			this.#logger.info("rollback dry run completed", {
 				durationMs: elapsedMs(startedAt),
@@ -1469,26 +1633,58 @@ export class SelfIterationService {
 			reload: this.#binding.reload,
 		});
 		const outcome = await supervised.reload("tsukaima", {
+			deploymentId: record.id,
 			proposalId: target.proposalId,
 			reason: `rollback of ${target.id}`,
 		});
-		const updated = await this.store.updateDeployment(record.id, {
-			postCheck: outcome.postCheck,
-			preCheck: outcome.preCheck,
-			reloadedAtMs: outcome.reloadedAtMs,
-			status: outcome.success ? "rolled_back" : "failed",
-		});
-		if (outcome.success) await this.#transitionProposal(target.proposalId, "rolled_back");
+		const deferred = outcome.deferred && outcome.success;
+		// A rollback that ran in place still cannot prove the restored artifact is live without
+		// evidence, so it settles `manual_apply_required` until verification confirms it.
+		const inPlaceVerified =
+			outcome.success && !deferred ? await this.#inPlaceMatches(record.appliedIdentity) : false;
+		const updated = await this.store.updateDeployment(
+			record.id,
+			deferred
+				? { preCheck: outcome.preCheck, status: "scheduled" }
+				: {
+						postCheck:
+							outcome.success && !inPlaceVerified
+								? {
+										checkedAtMs: outcome.postCheck.checkedAtMs,
+										message:
+											"rollback reload completed but the restored artifact could not be proven live",
+										ok: false,
+									}
+								: outcome.postCheck,
+						preCheck: outcome.preCheck,
+						reloadedAtMs: outcome.reloadedAtMs,
+						status: outcome.success
+							? inPlaceVerified
+								? "rolled_back"
+								: "manual_apply_required"
+							: "failed",
+					},
+		);
+		if (outcome.success && !deferred && inPlaceVerified)
+			await this.#transitionProposal(target.proposalId, "rolled_back");
 		await this.#auditRecord({
 			action: "self-iteration.deployment.rollback",
 			actorId: input.createdBy,
 			actorKind: "user",
-			payload: { deploymentId: record.id, success: outcome.success },
-			result: outcome.success ? "ok" : "failed",
+			payload: { deferred, deploymentId: record.id, success: outcome.success },
+			// A reload that ran but was not verified is recorded as a failure, matching the row.
+			result: updated.status === "rolled_back" ? "ok" : "failed",
 			targetId: record.id,
 			targetKind: "coding-deployment",
 		});
-		if (outcome.success) {
+		if (deferred) {
+			this.#logger.info("rollback scheduled for supervised restart", {
+				deploymentId: record.id,
+				proposalId: target.proposalId,
+				rollbackOf: target.id,
+				status: updated.status,
+			});
+		} else if (outcome.success) {
 			this.#logger.info("rollback succeeded", {
 				durationMs: elapsedMs(startedAt),
 				deploymentId: record.id,
@@ -1667,6 +1863,25 @@ export class SelfIterationService {
 		}
 	}
 
+	/**
+	 * Move an approved proposal to `deploying` for a deferred (scheduled) restart. Boot recovery
+	 * performs the terminal transition once the supervisor confirms the process was replaced.
+	 */
+	async #markProposalDeploying(proposalId: string): Promise<void> {
+		try {
+			const proposal = await this.store.getProposal(proposalId);
+			if (proposal === null || proposal.status !== "approved") return;
+			await this.store.transition(proposalId, "deploying");
+			this.#logger.debug("proposal transitioned", { proposalId, status: "deploying" });
+		} catch (error) {
+			this.#logger.warn("proposal transition failed", {
+				error: errorMessage(error),
+				proposalId,
+				target: "deploying",
+			});
+		}
+	}
+
 	async #taskWithWorktree(task: IterationTask): Promise<IterationTask> {
 		const current = (await this.store.getTask(task.id)) ?? task;
 		if (current.worktreePath === undefined) {
@@ -1702,10 +1917,61 @@ export class SelfIterationService {
 	#runner(worktreePath: string, policy: CodingPolicy): CodingRunner {
 		return new CodingRunner({
 			allowedCommands: policy.allowedCommands,
+			executor: () => this.#sandbox(),
 			maxOutputBytes: policy.maxOutputBytes,
 			timeoutMs: policy.timeoutMs,
 			worktreePath,
+			writable: false,
 		});
+	}
+
+	/**
+	 * Model-supplied `command`/`args` are refused, not filtered. The governed policy owns the
+	 * exact argv, so no model input can reach an interpreter flag (`bun -e`, `rg --pre`).
+	 */
+	#rejectCommandOverride(
+		command: string | undefined,
+		args: readonly string[] | undefined,
+		expected: string,
+		tool: string,
+	): void {
+		if (command !== undefined && command !== expected) {
+			this.#logger.warn("command override denied", { expected, received: command, tool });
+			throw new Error(`command_override_not_allowed:${command}`);
+		}
+		if (args !== undefined && args.length > 0) {
+			this.#logger.warn("argument override denied", { count: args.length, tool });
+			throw new Error("argument_override_not_allowed");
+		}
+	}
+
+	/** A test-name filter stays positional and cannot smuggle a flag. */
+	#testPatternArgs(pattern: string | undefined): readonly string[] {
+		const trimmed = pattern?.trim();
+		if (trimmed === undefined || trimmed.length === 0) return [];
+		if (trimmed.startsWith("-") || trimmed.includes("\0")) {
+			throw new Error("invalid_test_pattern");
+		}
+		return [trimmed];
+	}
+
+	async #analysisCwd(): Promise<string> {
+		// A read-only task may not have a worktree yet; the sandbox still needs an existing,
+		// non-repository working directory.
+		const { mkdir } = await import("node:fs/promises");
+		await mkdir(this.#binding.worktreeRoot, { recursive: true });
+		return this.#binding.worktreeRoot;
+	}
+
+	/**
+	 * Resolve an analysis path inside the committed snapshot. The policy allowlist is enforced on
+	 * the logical path before it is translated to the read-only `/analysis` mount. The returned
+	 * value is relative to the snapshot root; the caller prefixes it with the mount.
+	 */
+	async #analysisPath(policy: CodingPolicy, candidatePath: string): Promise<string> {
+		const root = this.#binding.repositoryRoot;
+		const target = await assertSafeWorktreePath(root, policy.pathAllowlist, candidatePath);
+		return relative(root, target).split(sep).join("/");
 	}
 
 	async #worktreeSummary(
@@ -1726,9 +1992,11 @@ export class SelfIterationService {
 		try {
 			const result = await new CodingRunner({
 				allowedCommands: ["git"],
+				executor: () => this.#sandbox(),
 				maxOutputBytes: 4096,
 				timeoutMs: 10_000,
 				worktreePath: cwd,
+				writable: false,
 			}).exec("git", ["rev-parse", "HEAD"]);
 			const revision = result.stdout.trim();
 			this.#logger.trace("source revision resolved", { cwd, revision: preview(revision) });
@@ -1737,6 +2005,46 @@ export class SelfIterationService {
 			this.#logger.debug("source revision unavailable", { cwd, error: errorMessage(error) });
 			return "";
 		}
+	}
+
+	/**
+	 * Exact artifact this deployment claims to apply.
+	 *
+	 * The host may know the built image digest and the approved patch it contains. Without that
+	 * hook there is no verifiable identity, so the deployment is recorded with `null` and must
+	 * settle `manual_apply_required` rather than claiming the diff is live.
+	 */
+	async #appliedIdentity(proposal: DeploymentProposal): Promise<DeploymentIdentity | null> {
+		const identity = await this.#binding.appliedIdentity?.(proposal);
+		if (identity === undefined) return null;
+		if (identity.revision.trim().length === 0) return null;
+		// An identity whose checksum does not match the approved patch would verify some other
+		// artifact; refuse it instead of recording misleading evidence.
+		if (identity.diffChecksum !== proposal.diffChecksum) return null;
+		return identity;
+	}
+
+	/** Artifact this process is running, when the host can report it exactly. */
+	async #runningIdentity(): Promise<DeploymentIdentity | null> {
+		const identity = await this.#binding.runningIdentity?.();
+		if (identity === undefined) return null;
+		if (identity.revision.trim().length === 0 || identity.diffChecksum.trim().length === 0) {
+			return null;
+		}
+		return identity;
+	}
+
+	/**
+	 * Whether this process now runs exactly the expected artifact.
+	 *
+	 * Used for reloads that complete in place. Without a host-reported identity there is no
+	 * evidence, so the caller must record `manual_apply_required` rather than success.
+	 */
+	async #inPlaceMatches(expected: DeploymentIdentity | null): Promise<boolean> {
+		if (expected === null) return false;
+		const running = await this.#runningIdentity();
+		if (running === null) return false;
+		return running.revision === expected.revision && running.diffChecksum === expected.diffChecksum;
 	}
 
 	async #recordTimeline(

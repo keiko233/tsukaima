@@ -27,6 +27,7 @@ import type { TestRunResult } from "./tools.ts";
 import type {
 	CreateDeploymentInput,
 	CreateIterationTaskInput,
+	DeploymentIdentity,
 	DeploymentRecord,
 	DeploymentRecordPatch,
 	DeploymentStatus,
@@ -86,6 +87,16 @@ function parseJsonObject(value: string | null): Record<string, unknown> | null {
 	} catch {
 		return null;
 	}
+}
+
+/** A malformed stored identity must read as "unverifiable", never as a partial match. */
+function parseIdentity(value: string | null): DeploymentIdentity | null {
+	const parsed = parseJsonObject(value);
+	if (parsed === null) return null;
+	const { diffChecksum, revision } = parsed;
+	if (typeof revision !== "string" || revision.length === 0) return null;
+	if (typeof diffChecksum !== "string") return null;
+	return { diffChecksum, revision };
 }
 
 function approvalFromRow(row: typeof codingApprovals.$inferSelect): ApprovalRequest {
@@ -155,12 +166,14 @@ function taskFromRow(row: typeof codingTasks.$inferSelect): IterationTask {
 
 function deploymentFromRow(row: typeof codingDeployments.$inferSelect): DeploymentRecord {
 	return {
+		appliedIdentity: parseIdentity(row.appliedIdentityJson),
 		artifactMetadata: parseJsonObject(row.artifactMetadataJson),
 		createdAtMs: row.createdAtMs,
 		createdBy: row.createdBy,
 		id: row.id,
 		postCheck: parseJsonObject(row.postCheckJson) as DeploymentRecord["postCheck"],
 		preCheck: parseJsonObject(row.preCheckJson) as DeploymentRecord["preCheck"],
+		previousIdentity: parseIdentity(row.previousIdentityJson),
 		proposalId: row.proposalId,
 		reloadedAtMs: row.reloadedAtMs,
 		rollbackOfId: row.rollbackOfId,
@@ -486,12 +499,14 @@ export class DomainCodingStore {
 		const database = await this.#db();
 		const now = Date.now();
 		const record: DeploymentRecord = {
+			appliedIdentity: input.appliedIdentity ?? null,
 			artifactMetadata: input.artifactMetadata ?? null,
 			createdAtMs: now,
 			createdBy: input.createdBy,
 			id: randomUUID(),
 			postCheck: input.postCheck ?? null,
 			preCheck: input.preCheck ?? null,
+			previousIdentity: input.previousIdentity ?? null,
 			proposalId: input.proposalId,
 			reloadedAtMs: input.reloadedAtMs ?? null,
 			rollbackOfId: input.rollbackOfId ?? null,
@@ -502,12 +517,14 @@ export class DomainCodingStore {
 			updatedAtMs: now,
 		};
 		await database.insert(codingDeployments).values({
+			appliedIdentityJson: jsonOrNull(record.appliedIdentity),
 			artifactMetadataJson: jsonOrNull(record.artifactMetadata),
 			createdAtMs: record.createdAtMs,
 			createdBy: record.createdBy,
 			id: record.id,
 			postCheckJson: jsonOrNull(record.postCheck),
 			preCheckJson: jsonOrNull(record.preCheck),
+			previousIdentityJson: jsonOrNull(record.previousIdentity),
 			proposalId: record.proposalId,
 			reloadedAtMs: record.reloadedAtMs,
 			rollbackOfId: record.rollbackOfId,

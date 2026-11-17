@@ -33,6 +33,8 @@ const configurationSchema = z.object({
 	trustedOrigins: z.array(z.string().url()),
 	/** Reverse proxies whose forwarded client IP headers may be trusted. */
 	trustedProxies: z.array(z.string().min(1)),
+	/** Hosts whose inbound media URLs may resolve to a non-public address. Empty by default. */
+	mediaFetchAllowedHosts: z.array(z.string().min(1)),
 });
 
 export type TsukaimaConfig = z.infer<typeof configurationSchema>;
@@ -63,6 +65,10 @@ export function loadConfig(env: Record<string, string | undefined>): TsukaimaCon
 		.split(",")
 		.map((proxy) => proxy.trim())
 		.filter((proxy) => proxy.length > 0);
+	const mediaFetchAllowedHosts = (env.TSUKAIMA_MEDIA_FETCH_ALLOWED_HOSTS ?? "")
+		.split(",")
+		.map((host) => host.trim().toLowerCase())
+		.filter((host) => host.length > 0);
 	const rawDrillInterval = env.TSUKAIMA_BACKUP_DRILL_INTERVAL_MS?.trim() ?? "";
 	const parsedDrillInterval = rawDrillInterval === "" ? undefined : Number(rawDrillInterval);
 	if (
@@ -113,6 +119,7 @@ export function loadConfig(env: Record<string, string | undefined>): TsukaimaCon
 		logLevel: logLevelFromEnv ? rawLogLevel : "info",
 		logLevelFromEnv,
 		...(logRetentionDays === undefined ? {} : { logRetentionDays }),
+		mediaFetchAllowedHosts,
 		port,
 		publicUrl,
 		secureCookies: env.TSUKAIMA_AUTH_SECURE_COOKIES === "true" || publicUrl.startsWith("https://"),

@@ -30,6 +30,13 @@ describe("WorktreeManager", () => {
 		await expect(manager.validateBaseRef("nonexistent-ref-xyz")).rejects.toThrow(WorktreeError);
 	});
 
+	test("rejects base refs that could be parsed as git options or syntax", async () => {
+		await expect(manager.validateBaseRef("--help")).rejects.toThrow(WorktreeError);
+		await expect(manager.validateBaseRef("-c core.pager=sh")).rejects.toThrow(WorktreeError);
+		await expect(manager.validateBaseRef("HEAD^{commit}")).rejects.toThrow(WorktreeError);
+		await expect(manager.create("test-injection", "--detach")).rejects.toThrow(WorktreeError);
+	});
+
 	test("creates worktree with expected branch and path", async () => {
 		const info = await manager.create("test-create", "HEAD");
 		expect(existsSync(info.path)).toBe(true);

@@ -1,5 +1,13 @@
 import type { CodingRunner, CommandResult } from "./runner.ts";
 
+/** Bound on untracked files expanded into a diff, so one task cannot produce an unbounded read. */
+const MAX_UNTRACKED_DIFF_FILES = 200;
+
+/** Lines an `--no-index` diff adds (`+` lines except the `+++` header). */
+function countAddedLines(diff: string): number {
+	return diff.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
+}
+
 export interface TestRunResult {
 	readonly exitCode: number | null;
 	readonly failed: number;
@@ -48,13 +56,76 @@ export class CodingTools {
 	}
 
 	async diff(): Promise<DiffResult> {
-		await this.#runner.exec("git", ["add", "--intent-to-add", "."]);
+		// Tracked and untracked changes are read without touching the index: `git add` would need
+		// to write objects into the repository's object database, which stays read-only in the
+		// sandbox. `--no-index` against /dev/null yields an untracked file's content as a diff.
+		const [tracked, untracked] = await Promise.all([
+			this.#diffAgainstHead(),
+			this.#untrackedPaths(),
+		]);
+		const extra: DiffResult[] = [];
+		for (const path of untracked) {
+			const result = await this.#runner.exec("git", [
+				"diff",
+				"--no-color",
+				"--no-index",
+				"--",
+				"/dev/null",
+				path,
+			]);
+			// `--no-index` exits 1 when files differ, which is the expected case here.
+			if (result.stdout.length > 0) {
+				const files: DiffFileEntry[] = [
+					{
+						deletions: 0,
+						insertions: countAddedLines(result.stdout),
+						path,
+						status: "added",
+					},
+				];
+				extra.push({
+					files,
+					raw: result.stdout,
+					totalDeletions: 0,
+					totalInsertions: countAddedLines(result.stdout),
+				});
+			}
+		}
+		if (extra.length === 0) return tracked;
+		return {
+			files: [...tracked.files, ...extra.flatMap((entry) => entry.files)],
+			raw: [tracked.raw, ...extra.map((entry) => entry.raw)]
+				.filter((part) => part.length > 0)
+				.join("\n"),
+			totalDeletions:
+				tracked.totalDeletions + extra.reduce((sum, entry) => sum + entry.totalDeletions, 0),
+			totalInsertions:
+				tracked.totalInsertions + extra.reduce((sum, entry) => sum + entry.totalInsertions, 0),
+		};
+	}
+
+	async #diffAgainstHead(): Promise<DiffResult> {
 		const [numstatResult, nameStatusResult, rawResult] = await Promise.all([
 			this.#runner.exec("git", ["diff", "HEAD", "--numstat"]),
 			this.#runner.exec("git", ["diff", "HEAD", "--name-status"]),
 			this.#runner.exec("git", ["diff", "HEAD", "--no-color"]),
 		]);
 		return parseDiffOutput(numstatResult.stdout, nameStatusResult.stdout, rawResult.stdout);
+	}
+
+	async #untrackedPaths(): Promise<readonly string[]> {
+		const result = await this.#runner.exec("git", [
+			"ls-files",
+			"--others",
+			"--exclude-standard",
+			"-z",
+		]);
+		if (result.exitCode !== 0) return [];
+		return result.stdout
+			.split("\0")
+			.map((entry) => entry.trim())
+			.filter((entry) => entry.length > 0)
+			.slice(0, MAX_UNTRACKED_DIFF_FILES);
 	}
 
 	async runTests(pattern?: string): Promise<TestRunResult> {

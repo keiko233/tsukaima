@@ -248,6 +248,13 @@ describe("inspectConversationContext", () => {
 			expect(filtered?.tools.map((tool) => tool.name)).toEqual(["tool_search", "search_notes"]);
 			expect(filtered?.deferredToolsTokens).toBeGreaterThan(0);
 
+			await host.setModelToolAllowlist(conversationId, []);
+			const disabled = await host.inspectConversationContext(conversationId);
+			expect(disabled?.tools).toEqual([]);
+			await host.updateToolAccess(conversationId, { remove: ["edit_file"] });
+			const restored = await host.inspectConversationContext(conversationId);
+			expect(restored?.tools.map((tool) => tool.name)).toEqual(["tool_search", "search_notes"]);
+
 			await host.close();
 			await storage.close(BACKGROUND_CONTEXT);
 		} finally {

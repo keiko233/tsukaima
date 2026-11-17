@@ -14,7 +14,8 @@
 		"tasks.cancel",
 		"tasks.watch",
 		"conversation.read",
-		"channel.send"
+		"channel.send",
+		"followups.read"
 	],
 	"tools": [],
 	"hooks": [{ "name": "message.received" }, { "name": "after.reply" }],

@@ -67,7 +67,12 @@ git diff -- VERSION apps packages plugins tools
 `VERSION` must not include a leading `v`. The image is tagged with the strict version; Docker tags
 cannot contain SemVer build metadata's `+`, so an image tag replaces `+` with `_`. The commit is
 recorded in image labels and the deployment JSON. No Git tag or registry release workflow is
-required.
+required. When a deployment proposal was applied as an uncommitted diff, the build must also
+record `TSUKAIMA_PATCH_SHA256` (the approved proposal's `diffChecksum`); a commit label alone is
+the base revision and cannot prove the patch is live. Without both labels, a restarted deployment
+settles `manual_apply_required` rather than `deployed`. `ops/deploy/deploy.sh` only forwards a
+checksum the operator supplies in its environment; it never derives one from the proposal, because
+that would prove the proposal's text rather than the image's contents.
 
 The first deployment has no previous source version and may use the current value. Every
 subsequent deployment must be higher. Rollback restores a previous image; it is recovery, not a
@@ -209,6 +214,18 @@ The container runs the self-iteration plugin in proposal/worktree mode. The imag
 repository `.git` at `/app`, and worktrees live under `/data/worktrees`; each new worktree gets a
 `node_modules` symlink back to the image install. It has `git`, `bun`, and `ripgrep`, but no Docker
 socket and no host checkout, so a proposal cannot replace the running image.
+
+Governed commands run inside `bubblewrap`: all namespaces are unshared (loopback-only network), the
+environment is cleared, the repository root is an empty directory, and only the worktree plus an
+explicit `node_modules`/git-metadata mount set is readable or writable.
+
+The runtime image does not install `bubblewrap`, and the Compose service deliberately keeps Docker's
+default seccomp profile. The default profile blocks the namespace syscalls bubblewrap needs, so the
+sandbox probe fails and governed test/build/search commands fail closed in this deployment. That is
+intentional: `security_opt: seccomp=unconfined` would relax syscall filtering for the whole
+container (plugins, channel adapters, model SDKs) to enable one feature. If governed coding
+commands are required, run them on a sandbox-capable runtime or review a narrowly scoped seccomp
+profile; do not unconfine this container. Editing, diffing, and proposal review are unaffected.
 
 Promote a proposal by applying it to the deployment branch, bumping `VERSION`, committing, and
 running `bun run ops:deploy`. The host build remains the only path that replaces the running image.

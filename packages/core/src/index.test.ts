@@ -255,6 +255,122 @@ describe("PiDurableConversationHost", () => {
 		}
 	});
 
+	test("resolves the terminal answer of an admitted submission by request id", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-answers-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const host = new PiDurableConversationHost({
+				model: createFakeModel({ responses: ["first", "second"] }),
+				storage,
+			});
+			const conversationId = await host.createConversation();
+			expect(await host.resolveSubmissionAnswer(conversationId, "1:activity#nope")).toEqual({
+				status: "missing",
+			});
+			const requestIds: string[] = [];
+			for (const [index, id] of ["answer-1", "answer-2"].entries()) {
+				const now = Date.now() + index;
+				await host.append({
+					conversationId,
+					envelope: {
+						...envelope(id, "hi"),
+						source: { messageId: id, receivedAtMs: now, timestampMs: now },
+					},
+					forceSubmit: true,
+					submittedAtMs: now,
+				});
+				requestIds.push(`${conversationId}:activity#${id}`);
+			}
+			for (let step = 0; step < 120; step += 1) {
+				const [first, second] = await Promise.all(
+					requestIds.map((requestId) => host.resolveSubmissionAnswer(conversationId, requestId)),
+				);
+				if (first?.status === "answered" && second?.status === "answered") {
+					expect(first.text).toBe("first");
+					expect(second.text).toBe("second");
+					break;
+				}
+				await Bun.sleep(25);
+			}
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("persists the turn expectation before the submission is admitted", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-expectation-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const admitted: { readonly requestId: string; readonly visible: boolean }[] = [];
+			const host = new PiDurableConversationHost({
+				model: createFakeModel({ responses: ["expected"] }),
+				onTurnAdmitted: async (turn) => {
+					// Inside the admission callback the durable submission must not exist yet, which
+					// is exactly the crash window the expectation covers.
+					const resolved = await host.resolveSubmissionAnswer(
+						turn.conversationId,
+						turn.submissionRequestId,
+					);
+					admitted.push({
+						requestId: turn.submissionRequestId,
+						visible: resolved.status !== "missing",
+					});
+				},
+				storage,
+			});
+			const conversationId = await host.createConversation();
+			await host.append({
+				conversationId,
+				envelope: envelope("expectation-1", "hello"),
+				forceSubmit: true,
+				submittedAtMs: Date.now(),
+			});
+			expect(admitted).toHaveLength(1);
+			expect(admitted[0]?.requestId).toBe(`${conversationId}:activity#expectation-1`);
+			expect(admitted[0]?.visible).toBe(false);
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("aborts the turn when the reply expectation cannot be persisted", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-expectation-fail-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const host = new PiDurableConversationHost({
+				model: createFakeModel({ responses: ["should not run"] }),
+				onTurnAdmitted: () => {
+					throw new Error("expectation store unavailable");
+				},
+				storage,
+			});
+			const conversationId = await host.createConversation();
+			await expect(
+				host.append({
+					conversationId,
+					envelope: envelope("expectation-fail-1", "hello"),
+					forceSubmit: true,
+					submittedAtMs: Date.now(),
+				}),
+			).rejects.toThrow("expectation store unavailable");
+			// Nothing was admitted, so no answer can exist without a durable expectation.
+			expect(
+				await host.resolveSubmissionAnswer(
+					conversationId,
+					`${conversationId}:activity#expectation-fail-1`,
+				),
+			).toEqual({ status: "missing" });
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
 	test("passes resolved image blocks to vision models and withholds them from text-only models", async () => {
 		const visionContent = await runImageTurnWithVision(true);
 		expect(visionContent).toEqual([

@@ -279,6 +279,21 @@ export class ConversationPolicyService {
 		return this.capabilities(row.id);
 	}
 
+	/**
+	 * Execution role of a durable conversation (`workspace`, `webui`, `private`, `group`, ...).
+	 * `undefined` means the conversation is not (or not yet) in the domain database.
+	 */
+	async roleForDurableConversation(durableConversationId: string): Promise<string | undefined> {
+		const database = this.#db();
+		const [row] = await database
+			.select({ chatKind: chatObjects.kind, sessionKind: conversations.kind })
+			.from(conversations)
+			.leftJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
+			.where(eq(conversations.durableConversationId, durableConversationId))
+			.limit(1);
+		return row?.chatKind ?? row?.sessionKind;
+	}
+
 	async view(
 		input: { chatObjectId?: string; conversationId?: string } = {},
 	): Promise<ConversationPolicyView> {

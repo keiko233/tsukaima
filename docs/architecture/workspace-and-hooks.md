@@ -171,10 +171,23 @@ Injection points:
 
 Recovery rules:
 
-- `scheduled` found on boot means the prior process stopped before its deadline; it is marked
-  `failed` instead of causing a restart loop.
+- `scheduled` found on boot is durable work and is resumed, not failed: an overdue deadline runs
+  now, a future one is re-armed, and the countdown hook is re-created through its dedupe key.
+  Repeated boots are idempotent.
 - `executing` found on boot means the supervisor completed the restart; it is marked `completed`.
 - Runtime hooks for a cancelled/failed restart are cancelled with it.
+- A deployment that owned the intent stays `scheduled` while the old process serves. The terminal
+  intent settles it through `reconcileRestartDeployment`: a verified `completed` →
+  `deployed`/`rolled_back`, an unverified `completed` → `manual_apply_required`,
+  `cancelled` → `cancelled` and the proposal `failed`. A restart alone is never treated as proof
+  the proposal is live, and neither is a matching commit: the deployment's exact
+  `appliedIdentity` (revision **and** approved-patch checksum) must match what the process
+  reports. A rollback must match the artifact it recorded as the restore target, not merely differ
+  from the deployment it replaces. Settlement writes the proposal and task first and the deployment
+  row last, so a crash mid-settlement replays cleanly, and a `manual_apply_required` row can still
+  settle later with real verification.
+- `$TSUKAIMA_DATA_DIR/restart-intent.json` is consumed only when its intent is already terminal;
+  an unknown, active, or unparsable file is left in place for the operator.
 
 The model and workspace cannot invoke Docker or the host deployer. `RestartReloadController`
 maps an approved self-iteration reload into a deferred update intent; the actual version switch

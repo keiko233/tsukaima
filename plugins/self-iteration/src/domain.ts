@@ -1,4 +1,5 @@
 import type {
+	DeploymentIdentity,
 	DeploymentProposal,
 	DomainCodingStore,
 	HealthCheckResult,
@@ -108,9 +109,21 @@ export type DeploymentProposalStatus = DeploymentProposal["status"];
 export type TaskStatus = IterationTaskStatus;
 
 export interface SelfIterationHostBinding {
+	/**
+	 * Exact artifact identity the deployer will make live for this proposal. Without it the
+	 * deployment cannot be verified and must settle `manual_apply_required`.
+	 */
+	readonly appliedIdentity?: (
+		proposal: DeploymentProposal,
+	) => Promise<DeploymentIdentity | undefined> | DeploymentIdentity | undefined;
 	readonly healthCheck?: () => Promise<HealthCheckResult> | HealthCheckResult;
 	readonly reload: ReloadController;
 	readonly repositoryRoot: string;
+	/** Exact artifact identity this process is running, if the host can report it. */
+	readonly runningIdentity?: () =>
+		| Promise<DeploymentIdentity | undefined>
+		| DeploymentIdentity
+		| undefined;
 	readonly store: DomainCodingStore;
 	readonly worktreeRoot: string;
 }

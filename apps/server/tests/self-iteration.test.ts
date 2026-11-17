@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { DomainCodingStore, type ReloadController } from "@tsukaima/coding";
 import { createOpenAICompatibleModelPort } from "@tsukaima/core";
-import { conversations } from "@tsukaima/db";
+import { conversations, runtimeRestarts } from "@tsukaima/db";
 import type { MessageEnvelope } from "@tsukaima/contracts";
 import { providerSafeToolName } from "@tsukaima/sdk";
 import { SELF_ITERATION_HOST_BINDING } from "@tsukaima-plugin/self-iteration";
@@ -192,8 +192,138 @@ describe("self-iteration runtime", () => {
 			expect(codingTools).not.toContain(providerSafeToolName("self-iteration.analyze"));
 			expect(codingTools).not.toContain(providerSafeToolName("self-iteration.edit"));
 			expect(codingTools.some((name) => name.includes("self_iteration"))).toBe(false);
+
+			// Background/proactive turns reach the same conversation, so a stale capability grant
+			// must not expose coding tools outside the workspace role.
+			const analyze = lifecycle.pluginHost
+				.tools()
+				.find((tool) => tool.name === "self-iteration.analyze");
+			if (analyze === undefined) throw new Error("analyze tool not registered");
+			const chatPolicy = await lifecycle.pluginHost.toolPolicyContext(analyze, {
+				conversationId: conversation.durableConversationId,
+			});
+			expect(chatPolicy.conversationCapabilities).not.toContain("coding");
+			expect(chatPolicy.taskKind).not.toBe("coding");
 		} finally {
 			await lifecycle.stop();
 		}
 	}, 20_000);
+
+	test("settles a scheduled deployment only when a supervised restart resumes the process", async () => {
+		const { lifecycle } = await fixture();
+		await lifecycle.start();
+		try {
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("database not ready");
+			const store = new DomainCodingStore(() => database);
+			const task = await store.createTask({
+				baseRef: "HEAD",
+				constraints: {
+					allowedCommands: ["bun"],
+					maxOutputBytes: 1024,
+					pathAllowlist: ["src"],
+					timeoutMs: 1_000,
+				},
+				goal: "Scheduled deployment",
+				mode: "proposal",
+				sourceConversationId: "workspace:webui",
+			});
+			const proposal = await store.createProposal({
+				artifactMetadata: null,
+				changedFiles: ["src/app.ts"],
+				diff: "diff --git a/src/app.ts b/src/app.ts",
+				diffChecksum: "d".repeat(64),
+				envChanges: [],
+				motivation: "test",
+				requiresRestart: true,
+				riskAssessment: "low",
+				rollbackNotes: "revert",
+				sourceRevision: "abc",
+				taskId: task.id,
+				testResult: { exitCode: 0, failed: 0, passed: true, stderr: "", stdout: "", total: 1 },
+				title: "Scheduled",
+			});
+			await store.transition(proposal.id, "pending_approval");
+			await store.transition(proposal.id, "approved");
+			await store.transition(proposal.id, "deploying");
+			await store.updateTask(task.id, { status: "deploying" });
+			const deployment = await store.createDeployment({
+				appliedIdentity: { diffChecksum: "d".repeat(64), revision: "abc" },
+				artifactMetadata: null,
+				createdBy: "admin",
+				previousIdentity: { diffChecksum: "b".repeat(64), revision: "base" },
+				proposalId: proposal.id,
+				rollbackPlan: "revert",
+				sourceRevision: "abc",
+				status: "scheduled",
+				taskId: task.id,
+			});
+			const now = Date.now();
+			await database.insert(runtimeRestarts).values({
+				completedAtMs: null,
+				createdAtMs: now - 1_000,
+				executeAtMs: now - 500,
+				id: "supervised-restart",
+				metadataJson: JSON.stringify({ deploymentId: deployment.id, proposalId: proposal.id }),
+				mode: "update",
+				reason: "self-iteration deployment",
+				requestedBy: "self-iteration",
+				status: "executing",
+				updatedAtMs: now - 500,
+			});
+			// Without evidence of the live artifact, a resumed restart is not success.
+			const originalCommit = process.env.TSUKAIMA_COMMIT;
+			const originalPatch = process.env.TSUKAIMA_PATCH_SHA256;
+			delete process.env.TSUKAIMA_COMMIT;
+			delete process.env.TSUKAIMA_PATCH_SHA256;
+			try {
+				await lifecycle.restartCoordinator.recover();
+			} finally {
+				if (originalCommit !== undefined) process.env.TSUKAIMA_COMMIT = originalCommit;
+				if (originalPatch !== undefined) process.env.TSUKAIMA_PATCH_SHA256 = originalPatch;
+			}
+			expect((await store.getDeployment(deployment.id))?.status).toBe("manual_apply_required");
+			expect((await store.getProposal(proposal.id))?.status).toBe("deploying");
+
+			// A matching commit alone is not enough: the image must also carry the approved patch.
+			// This is the exact case where the proposal's sourceRevision is only the worktree base.
+			await database
+				.update(runtimeRestarts)
+				.set({ completedAtMs: null, status: "executing" })
+				.where(eq(runtimeRestarts.id, "supervised-restart"));
+			process.env.TSUKAIMA_COMMIT = "abc";
+			delete process.env.TSUKAIMA_PATCH_SHA256;
+			try {
+				await lifecycle.restartCoordinator.recover();
+			} finally {
+				if (originalCommit === undefined) delete process.env.TSUKAIMA_COMMIT;
+				else process.env.TSUKAIMA_COMMIT = originalCommit;
+				if (originalPatch === undefined) delete process.env.TSUKAIMA_PATCH_SHA256;
+				else process.env.TSUKAIMA_PATCH_SHA256 = originalPatch;
+			}
+			expect((await store.getDeployment(deployment.id))?.status).toBe("manual_apply_required");
+			expect((await store.getProposal(proposal.id))?.status).toBe("deploying");
+
+			// The same resumed intent settles as deployed once revision and patch are both proven.
+			await database
+				.update(runtimeRestarts)
+				.set({ completedAtMs: null, status: "executing" })
+				.where(eq(runtimeRestarts.id, "supervised-restart"));
+			process.env.TSUKAIMA_COMMIT = "abc";
+			process.env.TSUKAIMA_PATCH_SHA256 = "d".repeat(64);
+			try {
+				await lifecycle.restartCoordinator.recover();
+			} finally {
+				if (originalCommit === undefined) delete process.env.TSUKAIMA_COMMIT;
+				else process.env.TSUKAIMA_COMMIT = originalCommit;
+				if (originalPatch === undefined) delete process.env.TSUKAIMA_PATCH_SHA256;
+				else process.env.TSUKAIMA_PATCH_SHA256 = originalPatch;
+			}
+			expect((await store.getDeployment(deployment.id))?.status).toBe("deployed");
+			expect((await store.getProposal(proposal.id))?.status).toBe("deployed");
+			expect((await store.getTask(task.id))?.status).toBe("completed");
+		} finally {
+			await lifecycle.stop();
+		}
+	});
 });
