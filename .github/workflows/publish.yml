@@ -54,8 +54,9 @@ jobs:
       - run: bun run check:secrets
       - run: bun run --filter '@tsukaima/web' check:i18n
       - run: bun run --filter '@tsukaima/web' lint:i18n
-      - run: bun run check
+      # The WebUI build compiles plugin i18n first; typecheck needs those generated modules.
       - run: bun run --filter '@tsukaima/web' build
+      - run: bun run check
 
       - name: Compute the next version
         id: version
