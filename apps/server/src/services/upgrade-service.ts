@@ -633,6 +633,10 @@ export class UpgradeService {
 		}
 		const merge = await this.#git(
 			[
+				"-c",
+				"user.name=tsukaima-upgrade",
+				"-c",
+				"user.email=tsukaima-upgrade@localhost",
 				"merge",
 				"--no-ff",
 				"--no-edit",
