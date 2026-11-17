@@ -248,3 +248,35 @@ upstream `VERSION`, and the chosen path:
 Finalize verifies that the upstream commit is an ancestor of the live `HEAD` before scheduling the
 restart. This changes the source checkout only; the host-side image build and container replacement
 remain operator-controlled as described above.
+
+## 9. GitHub App credentials
+
+Settings → Upgrades shows the running checkout and, once a GitHub App is configured, the open pull
+requests and the workflow runs for `HEAD`. The server authenticates as an **installation**, not as a
+user: it signs a nine-minute RS256 JWT with the App private key, exchanges it for an installation
+token, and caches that token until shortly before its one-hour expiry.
+
+Create the App once, in the account or organization that owns the deployment repository:
+
+| Setting | Value |
+| --- | --- |
+| Repository permissions | `metadata: read`, `contents: write`, `pull_requests: write`, `issues: write` |
+| Organization permissions | none |
+| Workflow permissions | `actions: read` (read-only runs and check results) |
+| Repository access | only the deployment repository |
+| Webhook | disabled; the server polls on demand |
+
+Install it on the repository, then paste the **App ID**, the **installation ID**, and the PKCS#8
+private key (`.pem`) into the card. The installation ID is the numeric suffix of
+`/settings/installations/<id>` for that App. `contents: write` is what allows the server to push;
+the App is still refused by any branch protection rule that requires review.
+
+On the host the private key is written to `<data>/secrets/github-app.pem` with mode `0600` inside a
+`0700` directory. It is never written to the repository, returned by an API, or logged; the card
+shows only a SHA-256 fingerprint. Removing the App deletes both the key file and the stored
+metadata, and the next token request fails closed until it is configured again.
+
+The container needs outbound HTTPS to the Git remote and to `TSUKAIMA_GITHUB_API_URL`
+(default `https://api.github.com`; use `https://<host>/api/v3` for GitHub Enterprise Server).
+Without egress the local repository card still renders, while the GitHub cards report the
+connection failure.

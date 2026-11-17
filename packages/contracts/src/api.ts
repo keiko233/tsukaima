@@ -335,6 +335,65 @@ export const repositoryStatusSchema = z.object({
 });
 export type RepositoryStatus = z.infer<typeof repositoryStatusSchema>;
 
+/**
+ * A GitHub App installation, never its private key or an installation token. `configured` is the
+ * only field a client can rely on; the rest are display metadata refreshed when the App is saved.
+ */
+export const githubAppStatusSchema = z.object({
+	account: z.string().nullable(),
+	appId: z.number().int().positive().nullable(),
+	configured: z.boolean(),
+	installationId: z.number().int().positive().nullable(),
+	keyFingerprint: z.string().nullable(),
+	permissions: z.record(z.string(), z.string()).nullable(),
+	repositorySelection: z.enum(["all", "selected"]).nullable(),
+	tokenExpiresAt: z.string().nullable(),
+});
+export type GitHubAppStatus = z.infer<typeof githubAppStatusSchema>;
+
+export const githubAppConfigureInputSchema = z.object({
+	appId: z.number().int().positive(),
+	installationId: z.number().int().positive(),
+	/** PKCS#8 PEM. Never echoed back, logged, or persisted anywhere outside the data volume. */
+	privateKey: z.string().min(1).max(20_000),
+});
+export type GitHubAppConfigureInput = z.infer<typeof githubAppConfigureInputSchema>;
+
+export const githubPullRequestSchema = z.object({
+	base: z.string(),
+	checks: z.enum(["pending", "success", "failure", "none"]),
+	draft: z.boolean(),
+	head: z.string(),
+	mergeable: z.enum(["clean", "dirty", "unknown"]),
+	number: z.number().int().positive(),
+	state: z.enum(["open", "closed", "merged"]),
+	title: z.string(),
+	url: z.string(),
+});
+export type GitHubPullRequest = z.infer<typeof githubPullRequestSchema>;
+
+export const githubIssueSchema = z.object({
+	labels: z.array(z.string()),
+	number: z.number().int().positive(),
+	title: z.string(),
+	url: z.string(),
+});
+export type GitHubIssue = z.infer<typeof githubIssueSchema>;
+
+export const githubRunSchema = z.object({
+	conclusion: z.string().nullable(),
+	createdAt: z.string(),
+	headSha: z.string(),
+	id: z.number().int().positive(),
+	name: z.string(),
+	status: z.string(),
+	url: z.string(),
+});
+export type GitHubRun = z.infer<typeof githubRunSchema>;
+
+/** `sha` defaults to the local HEAD, resolved by the caller that already knows the checkout. */
+export const githubRunsInputSchema = z.object({ sha: z.string().min(1).optional() });
+
 export const sessionDetailSchema = z.object({
 	channelId: z.string().nullable(),
 	chat: z.object({
@@ -1624,6 +1683,17 @@ export const appContract = oc.router({
 			clearLogs: oc.output(z.object({ cleared: z.number().int() })).meta({ audit: true }),
 			logs: oc.input(diagnosticsLogsInputSchema).output(logSnapshotSchema),
 			status: oc.output(diagnosticsDataSchema),
+		},
+		github: {
+			clear: oc.output(githubAppStatusSchema).meta({ audit: true }),
+			configure: oc
+				.input(githubAppConfigureInputSchema)
+				.output(githubAppStatusSchema)
+				.meta({ audit: true }),
+			issues: oc.output(z.array(githubIssueSchema)),
+			pulls: oc.output(z.array(githubPullRequestSchema)),
+			runs: oc.input(githubRunsInputSchema).output(z.array(githubRunSchema)),
+			status: oc.output(githubAppStatusSchema),
 		},
 		groups: {
 			get: oc.input(groupsGetInputSchema).output(groupDetailSchema.nullable()),

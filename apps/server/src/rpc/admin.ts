@@ -699,6 +699,26 @@ export const adminRouter = {
 			context.lifecycle.repository.status(),
 		),
 	},
+	github: {
+		clear: adminBase.admin.github.clear.handler(async ({ context }) =>
+			context.lifecycle.githubApp.clear(),
+		),
+		configure: adminBase.admin.github.configure.handler(async ({ context, input }) =>
+			context.lifecycle.githubApp.configure(input),
+		),
+		issues: adminBase.admin.github.issues.handler(async ({ context }) =>
+			context.lifecycle.github.issues(),
+		),
+		pulls: adminBase.admin.github.pulls.handler(async ({ context }) =>
+			context.lifecycle.github.pulls(),
+		),
+		runs: adminBase.admin.github.runs.handler(async ({ context, input }) =>
+			context.lifecycle.github.runs(input.sha === undefined ? {} : { sha: input.sha }),
+		),
+		status: adminBase.admin.github.status.handler(async ({ context }) =>
+			context.lifecycle.githubApp.status(),
+		),
+	},
 	upgrade: {
 		check: adminBase.admin.upgrade.check.handler(async ({ context, input }) =>
 			context.lifecycle.upgrades.check(input?.remote === undefined ? {} : { remote: input.remote }),

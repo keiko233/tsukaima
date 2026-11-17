@@ -12,6 +12,8 @@ const configurationSchema = z.object({
 	backupDrillIntervalMs: z.number().int().positive().optional(),
 	backupDrillRoot: z.string().min(1).optional(),
 	dataDir: z.string().min(1),
+	/** GitHub REST base; override for GitHub Enterprise Server (`https://<host>/api/v3`). */
+	githubApiUrl: z.string().url(),
 	host: z.string().min(1),
 	logBufferCapacity: z.number().int().positive().max(100_000),
 	logDir: z.string().min(1).optional(),
@@ -118,6 +120,7 @@ export function loadConfig(env: Record<string, string | undefined>): TsukaimaCon
 		...(backupDrillIntervalMs === undefined ? {} : { backupDrillIntervalMs }),
 		backupDrillRoot: env.TSUKAIMA_BACKUP_DRILL_ROOT || undefined,
 		dataDir,
+		githubApiUrl: env.TSUKAIMA_GITHUB_API_URL?.trim() || "https://api.github.com",
 		host: env.TSUKAIMA_HOST ?? "127.0.0.1",
 		logBufferCapacity,
 		...(logDir === undefined ? {} : { logDir }),

@@ -212,7 +212,7 @@ limiting with 403 plus `x-ratelimit-remaining: 0`.
 
 ## 9. Phases
 
-Phase 1 is implemented; phases 2 to 4 are not.
+Phases 1 and 2 are implemented; phases 3 and 4 are not.
 
 **Phase 1 — git read model.** `GitCli` in `packages/coding`, `WorktreeManager` and `UpgradeService`
 refactored onto it, `RepositoryService`, `repositoryStatusSchema`, `TSUKAIMA_REPOSITORY_ROOT`, admin

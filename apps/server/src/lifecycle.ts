@@ -95,6 +95,8 @@ import { PluginStorageStore } from "./services/plugin-storage.ts";
 import { PluginTaskService } from "./services/plugin-task-service.ts";
 import { ReplyDispatcher } from "./services/reply-dispatcher.ts";
 import { FollowUpIntentStore } from "./services/follow-up-intents.ts";
+import { GitHubAppService } from "./services/github-app-service.ts";
+import { GitHubService } from "./services/github-service.ts";
 import { ReplyExpectationStore } from "./services/reply-expectations.ts";
 import { SidechatService } from "./services/sidechat.ts";
 import { LiveRunCache } from "./services/live-run-cache.ts";
@@ -195,6 +197,8 @@ export class TsukaimaLifecycle {
 	readonly promptHooks: PromptHookService;
 	readonly replyExpectations: ReplyExpectationStore;
 	readonly followUpIntents: FollowUpIntentStore;
+	readonly github: GitHubService;
+	readonly githubApp: GitHubAppService;
 	readonly replyDispatcher: ReplyDispatcher;
 	readonly outbound: OutboundService;
 	readonly requestService: RequestService;
@@ -539,6 +543,18 @@ export class TsukaimaLifecycle {
 			todos: this.workspaceTodos,
 		});
 		this.repository = new RepositoryService({
+			logger: this.runtimeLog,
+			repositoryPath: config.repositoryRoot,
+		});
+		this.githubApp = new GitHubAppService({
+			apiBaseUrl: config.githubApiUrl,
+			dataDir: config.dataDir,
+			database: () => this.domainDatabase,
+			logger: this.runtimeLog,
+		});
+		this.github = new GitHubService({
+			apiBaseUrl: config.githubApiUrl,
+			app: this.githubApp,
 			logger: this.runtimeLog,
 			repositoryPath: config.repositoryRoot,
 		});
