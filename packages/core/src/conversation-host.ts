@@ -24,6 +24,7 @@ import {
 	type Harness as DurableHarness,
 	type JsonObject,
 	type LiveState,
+	type ModelRef,
 	type RunFailure,
 	type Submission,
 	type ToolRegistration,
@@ -945,7 +946,7 @@ export class PiDurableConversationHost {
 				shouldSubmit
 					? {
 							type: "input",
-							content: await this.envelopesToInput(nextEnvelopes),
+							content: await this.envelopesToInput(nextEnvelopes, conversation),
 							entry,
 							requestId,
 							whenBusy: whenBusy === "follow-up" ? "followUp" : whenBusy,
@@ -1363,7 +1364,7 @@ export class PiDurableConversationHost {
 					submissionRequestId: requestId,
 				});
 				return conversation.submit(tx, {
-					content: await this.envelopesToInput(envelopes),
+					content: await this.envelopesToInput(envelopes, conversation),
 					entry,
 					requestId,
 					type: "input",
@@ -1945,14 +1946,7 @@ export class PiDurableConversationHost {
 			conversation.context(BACKGROUND_CONTEXT),
 		]);
 
-		const agentModelRef = agent.model;
-		const useHostModel =
-			agentModelRef === undefined ||
-			agentModelRef.provider !== this.model.providerId ||
-			this.model.models.getModel(agentModelRef.provider, agentModelRef.modelId) === undefined;
-		const modelRef = useHostModel
-			? { modelId: this.model.modelId, provider: this.model.providerId }
-			: agentModelRef;
+		const modelRef = this.effectiveModelRef(agent.model);
 		const resolvedModel = this.model.models.getModel(modelRef.provider, modelRef.modelId);
 		const contextWindow = resolvedModel?.contextWindow ?? 0;
 
@@ -2571,62 +2565,120 @@ export class PiDurableConversationHost {
 	}
 
 	/**
+	 * Resolve a stored agent model reference against the host catalog. The same fallback the
+	 * inspector uses applies here: an unset, foreign-provider, or unknown model means the host
+	 * model is what actually runs the turn.
+	 */
+	private effectiveModelRef(agentModelRef: ModelRef | undefined): ModelRef {
+		const useHostModel =
+			agentModelRef === undefined ||
+			agentModelRef.provider !== this.model.providerId ||
+			this.model.models.getModel(agentModelRef.provider, agentModelRef.modelId) === undefined;
+		return useHostModel
+			? { modelId: this.model.modelId, provider: this.model.providerId }
+			: agentModelRef;
+	}
+
+	/**
 	 * Model input for a batch of envelopes.
 	 *
-	 * Text-only input is the common case and stays a plain string. When the batch carries images
-	 * the caller can resolve, they become image blocks the model actually sees; an image it
-	 * cannot resolve degrades to its `[image]` placeholder rather than an empty message.
+	 * Text-only input is the common case and stays a plain string. For a vision model each
+	 * envelope keeps its own text/image order: a caption stays beside its picture, and a burst
+	 * cannot reorder one speaker's image after another speaker's text. Media the host cannot
+	 * resolve stays an explicit placeholder instead of disappearing from the text.
 	 */
-	private async envelopesToInput(envelopes: readonly StoredEnvelope[]): Promise<UserInput> {
+	private async envelopesToInput(
+		envelopes: readonly StoredEnvelope[],
+		conversation: Conversation,
+	): Promise<UserInput> {
 		const resolve = this.options.resolveImage;
+		if (resolve === undefined) return this.envelopesToText(envelopes);
 		// A text-only model must not receive image blocks: the provider either rejects the
 		// request or silently drops them, and the placeholder text is the honest description of
 		// what that model can actually use.
-		if (resolve === undefined || !this.modelAcceptsImages()) return this.envelopesToText(envelopes);
-		const images: { data: string; mimeType: string }[] = [];
+		const agent = await conversation.agent(BACKGROUND_CONTEXT);
+		if (!this.modelAcceptsImages(this.effectiveModelRef(agent.model))) {
+			return this.envelopesToText(envelopes);
+		}
+
+		const blocks: Exclude<UserInput, string> = [];
+		const triggerContexts = this.triggerContexts(envelopes);
+		if (triggerContexts.length > 0) {
+			blocks.push({ text: triggerContexts.join("\n\n"), type: "text" });
+		}
+		let sawMedia = false;
+		const withSender = envelopes.length > 1;
 		for (const envelope of envelopes) {
+			let textParts: string[] = withSender ? [`${this.envelopeSender(envelope)}:`] : [];
+			const flushText = () => {
+				const text = textParts.join(" ").trim();
+				if (text.length > 0) blocks.push({ text, type: "text" });
+				textParts = [];
+			};
 			const parts = Array.isArray(envelope.parts) ? envelope.parts : [];
 			for (const part of parts) {
 				const parsed = messagePartSchema.safeParse(part);
-				if (!parsed.success || parsed.data.type !== "image") continue;
-				try {
-					const resolved = await resolve(parsed.data);
-					if (resolved !== undefined) images.push(resolved);
-				} catch {
-					// An unreadable blob leaves the placeholder in the text; it must not fail the turn.
+				if (!parsed.success) {
+					if (typeof part === "object" && part !== null && "type" in part) {
+						textParts.push(`[${String(part.type)}]`);
+					}
+					continue;
 				}
+				const messagePart = parsed.data;
+				if (messagePart.type !== "image" && messagePart.type !== "sticker") {
+					textParts.push(messagePartText(messagePart));
+					continue;
+				}
+				sawMedia = true;
+				let resolved: { data: string; mimeType: string } | undefined;
+				try {
+					resolved = await resolve(messagePart);
+				} catch {
+					// An unreadable blob stays a placeholder; it must not fail the turn.
+				}
+				if (resolved === undefined) {
+					textParts.push(`[${messagePart.type} unavailable]`);
+					continue;
+				}
+				flushText();
+				blocks.push({
+					data: resolved.data,
+					mimeType: resolved.mimeType,
+					type: "image",
+				});
 			}
+			flushText();
 		}
-		const text = this.envelopesToText(envelopes);
-		if (images.length === 0) return text;
+		return sawMedia ? blocks : this.envelopesToText(envelopes);
+	}
+
+	/** Whether the model that runs the turn declares image input. */
+	private modelAcceptsImages(modelRef: ModelRef): boolean {
+		const model = this.model.models.getModel(modelRef.provider, modelRef.modelId);
+		return model?.input.includes("image") === true;
+	}
+
+	private triggerContexts(envelopes: readonly StoredEnvelope[]): string[] {
 		return [
-			{ text, type: "text" },
-			...images.map((image) => ({
-				data: image.data,
-				mimeType: image.mimeType,
-				type: "image" as const,
-			})),
-		];
-	}
-
-	/** Whether the conversation's model declares image input. */
-	private modelAcceptsImages(): boolean {
-		const models = this.model.models.getModels(this.model.providerId) as readonly {
-			id: string;
-			input?: readonly string[];
-		}[];
-		const model = models.find((candidate) => candidate.id === this.model.modelId);
-		return model?.input?.includes("image") === true;
-	}
-
-	private envelopesToText(envelopes: readonly StoredEnvelope[]): string {
-		const triggerContexts = [
 			...new Set(
 				envelopes
 					.map((envelope) => envelope.triggerContext)
 					.filter((value): value is string => typeof value === "string" && value.length > 0),
 			),
 		];
+	}
+
+	private envelopeSender(envelope: StoredEnvelope): string {
+		return typeof envelope.sender === "object" &&
+			envelope.sender !== null &&
+			"displayName" in envelope.sender &&
+			typeof envelope.sender.displayName === "string"
+			? envelope.sender.displayName
+			: "Unknown";
+	}
+
+	private envelopesToText(envelopes: readonly StoredEnvelope[]): string {
+		const triggerContexts = this.triggerContexts(envelopes);
 		const text = envelopes
 			.map((envelope) => {
 				const parts = Array.isArray(envelope.parts) ? envelope.parts : [];
@@ -2640,14 +2692,7 @@ export class PiDurableConversationHost {
 					})
 					.filter(Boolean)
 					.join(" ");
-				const sender =
-					typeof envelope.sender === "object" &&
-					envelope.sender !== null &&
-					"displayName" in envelope.sender &&
-					typeof envelope.sender.displayName === "string"
-						? envelope.sender.displayName
-						: "Unknown";
-				return `${sender}: ${content}`;
+				return `${this.envelopeSender(envelope)}: ${content}`;
 			})
 			.join("\n");
 		const conversationText = envelopes.length === 1 ? text.replace(/^[^:]+:\s/, "") : text;

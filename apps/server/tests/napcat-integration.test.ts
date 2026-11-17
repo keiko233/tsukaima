@@ -400,7 +400,8 @@ describe("fake NapCat integration", () => {
 				return observedContext?.messages?.find((message) => message.role === "user")?.content;
 			});
 			expect(userContent).toEqual([
-				{ text: expect.stringContaining("look [image]"), type: "text" },
+				{ text: expect.any(String), type: "text" },
+				{ text: "look", type: "text" },
 				{
 					data: Buffer.from(jpeg).toString("base64"),
 					mimeType: "image/jpeg",

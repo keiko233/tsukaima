@@ -128,6 +128,8 @@ export function createSlowStreamingModel(
 		onContext?: (context: unknown) => void;
 		/** Declare image input, so a test can exercise the vision path. Defaults to text-only. */
 		supportsImage?: boolean;
+		/** Extra models on the same provider, for tests that select a conversation model. */
+		additionalModels?: readonly { id: string; supportsImage?: boolean }[];
 	} = {},
 ): ModelPort {
 	const delayMs = options.delayMs ?? 40;
@@ -190,23 +192,28 @@ export function createSlowStreamingModel(
 		return output;
 	};
 
+	const modelEntry = (id: string, supportsImage: boolean | undefined) => {
+		const input: ("text" | "image")[] = supportsImage === true ? ["text", "image"] : ["text"];
+		return {
+			api: "slow-test",
+			baseUrl: "slow-test://local",
+			contextWindow: 128_000,
+			cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+			id,
+			input,
+			maxTokens: 8_000,
+			name: "Slow streaming test model",
+			provider: providerId,
+			reasoning: false,
+		};
+	};
 	const provider = createProvider({
 		api: { stream, streamSimple: stream } as never,
 		auth: { apiKey: { name: "test", resolve: async () => ({ auth: {} }) } },
 		id: providerId,
 		models: [
-			{
-				api: "slow-test",
-				baseUrl: "slow-test://local",
-				contextWindow: 128_000,
-				cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
-				id: modelId,
-				input: options.supportsImage ? ["text", "image"] : ["text"],
-				maxTokens: 8_000,
-				name: "Slow streaming test model",
-				provider: providerId,
-				reasoning: false,
-			},
+			modelEntry(modelId, options.supportsImage),
+			...(options.additionalModels ?? []).map((model) => modelEntry(model.id, model.supportsImage)),
 		],
 	});
 	const models = createModels();

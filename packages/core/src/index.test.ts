@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { normalizeContext } from "@earendil-works/pi-ai";
+import type { Harness } from "@earendil-works/pi-durable";
+import type { MessagePart } from "@tsukaima/contracts";
 import { openDurableStorage } from "@tsukaima/durable";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -374,12 +376,78 @@ describe("PiDurableConversationHost", () => {
 	test("passes resolved image blocks to vision models and withholds them from text-only models", async () => {
 		const visionContent = await runImageTurnWithVision(true);
 		expect(visionContent).toEqual([
-			{ text: "look at this [image]", type: "text" },
+			{ text: "look at this", type: "text" },
 			{ data: "AQID", mimeType: "image/png", type: "image" },
 		]);
 
 		const textOnlyContent = await runImageTurnWithVision(false);
 		expect(textOnlyContent).toBe("look at this [image]");
+	});
+
+	test("gates images on the conversation agent model instead of the host model", async () => {
+		const content = await runImageTurnWithVision(false, {
+			additionalModels: [{ id: "vision-model", supportsImage: true }],
+			agentModelId: "vision-model",
+			hostModelId: "text-model",
+		});
+		expect(content).toEqual([
+			{ text: "look at this", type: "text" },
+			{ data: "AQID", mimeType: "image/png", type: "image" },
+		]);
+	});
+
+	test("passes sticker parts to the model as image blocks", async () => {
+		const content = await runImageTurnWithVision(true, {
+			messages: [
+				{
+					id: "sticker-turn",
+					parts: [
+						{ text: "react to this", type: "text" },
+						{ channelRef: "face:1", type: "sticker" },
+					],
+				},
+			],
+		});
+		expect(content).toEqual([
+			{ text: "react to this", type: "text" },
+			{ data: "AQID", mimeType: "image/webp", type: "image" },
+		]);
+	});
+
+	test("keeps each envelope's text next to its own image in a burst", async () => {
+		const content = await runImageTurnWithVision(true, {
+			messages: [
+				{
+					id: "burst-1",
+					parts: [
+						{ text: "first caption", type: "text" },
+						{ mediaId: "media-1", mimeType: "image/png", type: "image" },
+					],
+					senderName: "Alpha",
+				},
+				{
+					id: "burst-2",
+					parts: [
+						{ text: "second caption", type: "text" },
+						{ mediaId: "media-2", mimeType: "image/png", type: "image" },
+					],
+					senderName: "Beta",
+				},
+			],
+		});
+		expect(content).toEqual([
+			{ text: "Alpha: first caption", type: "text" },
+			{ data: "AQID", mimeType: "image/png", type: "image" },
+			{ text: "Beta: second caption", type: "text" },
+			{ data: "AQID", mimeType: "image/png", type: "image" },
+		]);
+	});
+
+	test("keeps an image the host cannot resolve as an explicit placeholder", async () => {
+		const content = await runImageTurnWithVision(true, {
+			resolveImage: async () => undefined,
+		});
+		expect(content).toEqual([{ text: "look at this [image unavailable]", type: "text" }]);
 	});
 
 	test("updates existing conversations when setModel switches provider or after reopening storage", async () => {
@@ -460,7 +528,23 @@ describe("PiDurableConversationHost", () => {
 	});
 });
 
-async function runImageTurnWithVision(supportsImage: boolean) {
+interface MultimodalTurnMessage {
+	readonly id: string;
+	readonly parts: readonly MessagePart[];
+	readonly senderName?: string;
+}
+
+interface MultimodalTurnOptions {
+	readonly additionalModels?: readonly { id: string; supportsImage?: boolean }[];
+	readonly agentModelId?: string;
+	readonly hostModelId?: string;
+	readonly messages?: readonly MultimodalTurnMessage[];
+	readonly resolveImage?: (
+		part: MessagePart,
+	) => Promise<{ data: string; mimeType: string } | undefined>;
+}
+
+async function runImageTurnWithVision(supportsImage: boolean, options: MultimodalTurnOptions = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-image-"));
 	try {
 		const storage = await openDurableStorage(join(directory, "durable.sqlite"));
@@ -473,36 +557,81 @@ async function runImageTurnWithVision(supportsImage: boolean) {
 			  }
 			| undefined;
 		const answers: string[] = [];
+		const model = createSlowStreamingModel(["seen"], {
+			delayMs: 5,
+			modelId: options.hostModelId ?? "slow-test-model",
+			...(options.additionalModels === undefined
+				? {}
+				: { additionalModels: options.additionalModels }),
+			onContext: (context) => {
+				observedContext = context as typeof observedContext;
+			},
+			supportsImage,
+		});
+		const resolveImage =
+			options.resolveImage ??
+			(async (part: MessagePart) => {
+				if (part.type === "image") {
+					return { data: "AQID", mimeType: part.mimeType ?? "image/png" };
+				}
+				if (part.type === "sticker") return { data: "AQID", mimeType: "image/webp" };
+				return undefined;
+			});
 		const host = new PiDurableConversationHost({
-			model: createSlowStreamingModel(["seen"], {
-				delayMs: 5,
-				onContext: (context) => {
-					observedContext = context as typeof observedContext;
-				},
-				supportsImage,
-			}),
+			model,
 			onAnswer: (answer) => {
 				answers.push(answer.text);
 			},
-			resolveImage: async (part) =>
-				part.type === "image" ? { data: "AQID", mimeType: "image/png" } : undefined,
+			resolveImage,
 			storage,
 		});
-		const conversationId = await host.createConversation();
-		const now = Date.now();
-		await host.append({
-			conversationId,
-			envelope: {
-				...envelope("img-turn", "look at this"),
+		let conversationId: string;
+		if (options.agentModelId === undefined) {
+			conversationId = await host.createConversation();
+		} else {
+			// Seed the durable conversation with a different agent model through the host's harness.
+			const harness = await (host as unknown as { openHarness(): Promise<Harness> }).openHarness();
+			const conversation = await harness.createConversation(
+				{
+					agent: {
+						model: { modelId: options.agentModelId, provider: model.providerId },
+					},
+					ownership: { kind: "ownerless" },
+				},
+				BACKGROUND_CONTEXT,
+			);
+			conversationId = String(conversation.id);
+		}
+		const messages: readonly MultimodalTurnMessage[] = options.messages ?? [
+			{
+				id: "img-turn",
 				parts: [
 					{ text: "look at this", type: "text" },
 					{ mediaId: "media-1", mimeType: "image/png", type: "image" },
 				],
-				source: { messageId: "img-turn", receivedAtMs: now, timestampMs: now },
 			},
-			forceSubmit: true,
-			submittedAtMs: now,
-		});
+		];
+		const now = Date.now();
+		for (const [index, message] of messages.entries()) {
+			const base = envelope(message.id, "");
+			await host.append({
+				conversationId,
+				envelope: {
+					...base,
+					parts: [...message.parts],
+					...(message.senderName === undefined
+						? {}
+						: { sender: { ...base.sender, displayName: message.senderName } }),
+					source: {
+						messageId: message.id,
+						receivedAtMs: now + index,
+						timestampMs: now + index,
+					},
+				},
+				forceSubmit: index === messages.length - 1,
+				submittedAtMs: now + index,
+			});
+		}
 		for (let step = 0; step < 40 && answers.length === 0; step += 1) {
 			await Bun.sleep(25);
 		}
