@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { GitCli } from "@tsukaima/coding";
+import { assertSafeBaseRef, GitCli } from "@tsukaima/coding";
 import type { RepositoryStatus } from "@tsukaima/contracts";
 import type { Logger } from "../logging.ts";
 
@@ -12,6 +12,8 @@ import type { Logger } from "../logging.ts";
  */
 
 export interface RepositoryServiceOptions {
+	/** Pushing is destructive on a shared remote; disabled unless the operator enables it. */
+	readonly allowPush?: boolean;
 	/** Override for tests; defaults to a `GitCli` rooted at {@link repositoryPath}. */
 	readonly git?: GitCli;
 	readonly logger?: Logger;
@@ -69,6 +71,9 @@ export class RepositoryError extends Error {
 const DEFAULT_MAX_TAGS = 20;
 const DEFAULT_MAX_WORKTREES = 20;
 const DEFAULT_VERSION_FILE = "VERSION";
+/** Network commands get more room than local reads, but still a bounded one. */
+const NETWORK_TIMEOUT_MS = 120_000;
+const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 /** Field separator for `--format` output: a subject cannot contain a newline, only the unit sep. */
 const UNIT_SEPARATOR = "\u001f";
 
@@ -226,7 +231,26 @@ export function parseTagList(output: string): RepositoryTagInfo[] {
 	return tags;
 }
 
+/**
+ * Credential for one push. An empty `credential.helper` first clears any configured helpers, so
+ * the installation token wins over an operator's personal credential. The token travels in the
+ * child environment, never in `argv` or on disk.
+ */
+export function pushEnvironment(token: string | undefined): Record<string, string> | undefined {
+	if (token === undefined || token.length === 0) return undefined;
+	return {
+		GH_TOKEN: token,
+		GIT_CONFIG_COUNT: "2",
+		GIT_CONFIG_KEY_0: "credential.helper",
+		GIT_CONFIG_KEY_1: "credential.helper",
+		GIT_CONFIG_VALUE_0: "",
+		GIT_CONFIG_VALUE_1: "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f",
+		GIT_TERMINAL_PROMPT: "0",
+	};
+}
+
 export class RepositoryService {
+	readonly #allowPush: boolean;
 	readonly #git: GitCli;
 	readonly #logger: Logger | undefined;
 	readonly #maxTags: number;
@@ -235,12 +259,70 @@ export class RepositoryService {
 	readonly #versionFile: string;
 
 	constructor(options: RepositoryServiceOptions) {
+		this.#allowPush = options.allowPush === true;
 		this.#git = options.git ?? new GitCli({ repositoryPath: options.repositoryPath });
 		this.#logger = options.logger;
 		this.#maxTags = options.maxTags ?? DEFAULT_MAX_TAGS;
 		this.#maxWorktrees = options.maxWorktrees ?? DEFAULT_MAX_WORKTREES;
 		this.#repositoryPath = options.repositoryPath;
 		this.#versionFile = options.versionFile ?? DEFAULT_VERSION_FILE;
+	}
+
+	async fetch(input: { readonly remote?: string } = {}): Promise<RepositoryStatus> {
+		await this.#git.run(["fetch", "--prune", this.#remote(input.remote)], {
+			timeoutMs: NETWORK_TIMEOUT_MS,
+		});
+		return await this.status();
+	}
+
+	/** Fast-forward only: a diverged branch fails instead of creating a merge commit. */
+	async pull(input: { readonly remote?: string } = {}): Promise<RepositoryStatus> {
+		await this.#git.run(["pull", "--ff-only", this.#remote(input.remote)], {
+			timeoutMs: NETWORK_TIMEOUT_MS,
+		});
+		return await this.status();
+	}
+
+	/**
+	 * Push the current (or named) branch. Two independent gates: the operator enabled pushing, and
+	 * the caller confirmed this specific push. A GitHub App token, when supplied, is injected
+	 * through the child environment only.
+	 */
+	async push(input: {
+		readonly branch?: string;
+		readonly confirm: boolean;
+		readonly remote?: string;
+		readonly token?: string;
+	}): Promise<RepositoryStatus> {
+		if (!this.#allowPush) {
+			throw new RepositoryError("push_disabled: TSUKAIMA_ALLOW_PUSH is not enabled");
+		}
+		if (input.confirm !== true) {
+			throw new RepositoryError("push_not_confirmed");
+		}
+		const remote = this.#remote(input.remote);
+		const branch =
+			input.branch === undefined ? await this.#currentBranch() : assertSafeBaseRef(input.branch);
+		const env = pushEnvironment(input.token);
+		await this.#git.run(["push", remote, branch], {
+			...(env === undefined ? {} : { env }),
+			timeoutMs: NETWORK_TIMEOUT_MS,
+		});
+		return await this.status();
+	}
+
+	#remote(name: string | undefined): string {
+		const remote = name ?? "origin";
+		if (!REMOTE_NAME.test(remote)) throw new RepositoryError(`invalid_remote: ${remote}`);
+		return remote;
+	}
+
+	async #currentBranch(): Promise<string> {
+		const branch = (await this.#git.tryRun(["symbolic-ref", "--short", "-q", "HEAD"]))?.trim();
+		if (branch === undefined || branch.length === 0) {
+			throw new RepositoryError("detached_head: check out a branch before pushing");
+		}
+		return assertSafeBaseRef(branch);
 	}
 
 	async status(): Promise<RepositoryStatus> {

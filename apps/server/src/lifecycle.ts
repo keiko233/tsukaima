@@ -543,6 +543,7 @@ export class TsukaimaLifecycle {
 			todos: this.workspaceTodos,
 		});
 		this.repository = new RepositoryService({
+			allowPush: config.allowPush,
 			logger: this.runtimeLog,
 			repositoryPath: config.repositoryRoot,
 		});

@@ -1,13 +1,15 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { GitBranch, RefreshCw } from "lucide-react";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowDownToLine, ArrowUpFromLine, Download, GitBranch, RefreshCw } from "lucide-react";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { orpc, type RepositoryStatus } from "@/lib/api";
 import { m } from "@/paraglide/messages";
+import { errorMessage, useToast } from "@/lib/toast";
 import { InlineError } from "../../_modules/shell/primitives";
 
 function shortCommit(commit: string): string {
@@ -131,10 +133,50 @@ function RepositorySummary({ status }: { readonly status: RepositoryStatus }) {
 }
 
 export function RepositoryStatusCard() {
+	const toast = useToast();
+	const queryClient = useQueryClient();
+	const [pushArmed, setPushArmed] = useState(false);
 	const status = useQuery({
 		...orpc.admin.repository.status.queryOptions(),
 		staleTime: 15_000,
 	});
+	const invalidate = async () => {
+		await Promise.all([
+			queryClient.invalidateQueries({ queryKey: orpc.admin.repository.key() }),
+			queryClient.invalidateQueries({ queryKey: orpc.admin.upgrade.key() }),
+		]);
+	};
+	const fetchRemote = useMutation(
+		orpc.admin.repository.fetch.mutationOptions({
+			onError: (error) =>
+				toast.error(m.repository_fetch_failed(), { description: errorMessage(error) }),
+			onSuccess: async () => {
+				toast.success(m.repository_fetched());
+				await invalidate();
+			},
+		}),
+	);
+	const pull = useMutation(
+		orpc.admin.repository.pull.mutationOptions({
+			onError: (error) =>
+				toast.error(m.repository_pull_failed(), { description: errorMessage(error) }),
+			onSuccess: async () => {
+				toast.success(m.repository_pulled());
+				await invalidate();
+			},
+		}),
+	);
+	const push = useMutation(
+		orpc.admin.repository.push.mutationOptions({
+			onError: (error) =>
+				toast.error(m.repository_push_failed(), { description: errorMessage(error) }),
+			onSuccess: async () => {
+				toast.success(m.repository_pushed());
+				setPushArmed(false);
+				await invalidate();
+			},
+		}),
+	);
 	return (
 		<Card size="compact">
 			<CardHeader>
@@ -153,7 +195,7 @@ export function RepositoryStatusCard() {
 				) : (
 					<RepositorySummary status={status.data} />
 				)}
-				<div>
+				<div className="flex flex-wrap items-center gap-1.5">
 					<Button
 						disabled={status.isFetching}
 						leadingIcon={<RefreshCw className={status.isFetching ? "animate-spin" : undefined} />}
@@ -162,6 +204,40 @@ export function RepositoryStatusCard() {
 						onClick={() => void status.refetch()}
 					>
 						{m.repository_refresh()}
+					</Button>
+					<Button
+						leadingIcon={<Download />}
+						loading={fetchRemote.isPending}
+						size="xs"
+						variant="outline"
+						onClick={() => fetchRemote.mutate({})}
+					>
+						{m.repository_fetch()}
+					</Button>
+					<Button
+						leadingIcon={<ArrowDownToLine />}
+						loading={pull.isPending}
+						size="xs"
+						variant="outline"
+						onClick={() => pull.mutate({})}
+					>
+						{m.repository_pull()}
+					</Button>
+					<Button
+						disabled={status.data?.pushed === true || status.data?.branch === null}
+						leadingIcon={<ArrowUpFromLine />}
+						loading={push.isPending}
+						size="xs"
+						variant={pushArmed ? "primary" : "outline"}
+						onClick={() => {
+							if (!pushArmed) {
+								setPushArmed(true);
+								return;
+							}
+							push.mutate({ confirm: true });
+						}}
+					>
+						{pushArmed ? m.repository_push_confirm() : m.repository_push()}
 					</Button>
 				</div>
 			</CardContent>

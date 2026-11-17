@@ -41,6 +41,8 @@ const configurationSchema = z.object({
 	trustedOrigins: z.array(z.string().url()),
 	/** Reverse proxies whose forwarded client IP headers may be trusted. */
 	trustedProxies: z.array(z.string().min(1)),
+	/** Whether the repository surface may push; destructive on a shared remote. */
+	allowPush: z.boolean(),
 	/** Hosts whose inbound media URLs may resolve to a non-public address. Empty by default. */
 	mediaFetchAllowedHosts: z.array(z.string().min(1)),
 });
@@ -116,6 +118,7 @@ export function loadConfig(env: Record<string, string | undefined>): TsukaimaCon
 		adminEmail: env.TSUKAIMA_ADMIN_EMAIL || undefined,
 		adminPassword: env.TSUKAIMA_ADMIN_PASSWORD || undefined,
 		adminUsername: env.TSUKAIMA_ADMIN_USERNAME || undefined,
+		allowPush: env.TSUKAIMA_ALLOW_PUSH === "true",
 		authSecret: env.TSUKAIMA_AUTH_SECRET || env.BETTER_AUTH_SECRET || undefined,
 		...(backupDrillIntervalMs === undefined ? {} : { backupDrillIntervalMs }),
 		backupDrillRoot: env.TSUKAIMA_BACKUP_DRILL_ROOT || undefined,

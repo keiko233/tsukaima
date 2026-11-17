@@ -249,6 +249,12 @@ Finalize verifies that the upstream commit is an ancestor of the live `HEAD` bef
 restart. This changes the source checkout only; the host-side image build and container replacement
 remain operator-controlled as described above.
 
+The same card exposes `Fetch`, `Pull`, and `Push`. `Pull` is `--ff-only`, so a diverged branch fails
+instead of creating a merge commit. `Push` is off unless `TSUKAIMA_ALLOW_PUSH=true`, and the UI asks
+for a second confirmation before sending. When a GitHub App is configured the push credential is
+that installation token, injected for the single invocation; an ssh remote or an operator credential
+helper keeps working because the token is only added, never required.
+
 ## 9. GitHub App credentials
 
 Settings → Upgrades shows the running checkout and, once a GitHub App is configured, the open pull

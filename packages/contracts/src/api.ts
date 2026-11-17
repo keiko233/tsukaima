@@ -335,6 +335,17 @@ export const repositoryStatusSchema = z.object({
 });
 export type RepositoryStatus = z.infer<typeof repositoryStatusSchema>;
 
+export const repositoryRemoteInputSchema = z.object({
+	remote: z.string().min(1).max(64).optional(),
+});
+
+export const repositoryPushInputSchema = z.object({
+	branch: z.string().min(1).max(255).optional(),
+	/** The caller must repeat the intent; the server never pushes on a bare button press. */
+	confirm: z.literal(true),
+	remote: z.string().min(1).max(64).optional(),
+});
+
 /**
  * A GitHub App installation, never its private key or an installation token. `configured` is the
  * only field a client can rely on; the rest are display metadata refreshed when the App is saved.
@@ -1849,6 +1860,18 @@ export const appContract = oc.router({
 				.meta({ audit: true }),
 		},
 		repository: {
+			fetch: oc
+				.input(repositoryRemoteInputSchema)
+				.output(repositoryStatusSchema)
+				.meta({ audit: true }),
+			pull: oc
+				.input(repositoryRemoteInputSchema)
+				.output(repositoryStatusSchema)
+				.meta({ audit: true }),
+			push: oc
+				.input(repositoryPushInputSchema)
+				.output(repositoryStatusSchema)
+				.meta({ audit: true }),
 			status: oc.output(repositoryStatusSchema),
 		},
 		upgrade: {

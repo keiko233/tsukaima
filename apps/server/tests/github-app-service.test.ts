@@ -54,7 +54,7 @@ function installationBody(appId = 7): unknown {
 function tokenBody(nowMs: number): unknown {
 	return {
 		expires_at: new Date(nowMs + 60 * 60_000).toISOString(),
-		token: "ghs_synthetic_installation_token",
+		token: "synthetic-installation-token",
 	};
 }
 
@@ -170,7 +170,7 @@ describe("GitHubAppService", () => {
 			tokenExpiresAt: new Date(nowMs + 60 * 60_000).toISOString(),
 		});
 		expect(calls.some((url) => url.endsWith("/app/installations/42/access_tokens"))).toBe(true);
-		expect(JSON.stringify(status)).not.toContain("ghs_");
+		expect(JSON.stringify(status)).not.toContain("synthetic-installation-token");
 		expect(JSON.stringify(await service.status())).not.toContain("PRIVATE KEY");
 
 		const secretPath = join(root, "secrets", "github-app.pem");
@@ -235,7 +235,10 @@ describe("GitHubAppService", () => {
 				if (url.endsWith("/app/installations/42")) return jsonResponse(installationBody());
 				if (url.endsWith("/app/installations/42/access_tokens")) {
 					minted += 1;
-					return jsonResponse({ ...(tokenBody(nowMs) as object), token: `ghs_token_${minted}` });
+					return jsonResponse({
+						...(tokenBody(nowMs) as object),
+						token: `synthetic-token-${minted}`,
+					});
 				}
 				return jsonResponse(repositoriesBody());
 			}) as typeof fetch,
@@ -244,11 +247,11 @@ describe("GitHubAppService", () => {
 		await service.configure({ appId: 7, installationId: 42, privateKey });
 		expect(minted).toBe(1);
 
-		expect(await service.installationToken()).toBe("ghs_token_1");
+		expect(await service.installationToken()).toBe("synthetic-token-1");
 		expect(minted).toBe(1);
 
 		nowMs += 55 * 60_000;
-		expect(await service.installationToken()).toBe("ghs_token_2");
+		expect(await service.installationToken()).toBe("synthetic-token-2");
 		expect(minted).toBe(2);
 	});
 });
@@ -266,7 +269,7 @@ describe("GitHubService", () => {
 		const requested: string[] = [];
 		const service = new GitHubService({
 			app: {
-				installationToken: async () => "ghs_synthetic",
+				installationToken: async () => "synthetic-installation-token",
 				repositories: async () => [
 					{
 						fullName: "example-org/sample",

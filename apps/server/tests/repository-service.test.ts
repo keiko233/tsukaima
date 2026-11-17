@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { GitCli, GitCommandResult } from "@tsukaima/coding";
 import {
 	parseRemoteList,
 	parseStatusPorcelainV2,
@@ -226,5 +227,141 @@ describe("RepositoryService", () => {
 
 		const service = new RepositoryService({ repositoryPath: root });
 		await expect(service.status()).rejects.toThrow(RepositoryError);
+	});
+});
+
+function gitResult(args: readonly string[], stdout = ""): GitCommandResult {
+	return {
+		args,
+		cwd: "/synthetic/workspace/repo",
+		durationMs: 1,
+		exitCode: 0,
+		signal: null,
+		stderr: "",
+		stderrTruncated: false,
+		stdout,
+		stdoutTruncated: false,
+		timedOut: false,
+	};
+}
+
+/** Records argv and env without touching a repository or a remote. */
+function stubGit(): {
+	readonly calls: {
+		readonly args: readonly string[];
+		readonly env?: Readonly<Record<string, string>>;
+	}[];
+	readonly git: GitCli;
+} {
+	const calls: {
+		readonly args: readonly string[];
+		readonly env?: Readonly<Record<string, string>>;
+	}[] = [];
+	const porcelain = [
+		"# branch.oid 0123456789abcdef",
+		"# branch.head main",
+		"# branch.upstream origin/main",
+		"# branch.ab +0 -0",
+	].join("\n");
+	const client = {
+		exec: async (args: readonly string[]) => {
+			calls.push({ args });
+			return gitResult(args, args[0] === "status" ? porcelain : "");
+		},
+		run: async (
+			args: readonly string[],
+			options?: { readonly env?: Readonly<Record<string, string>> },
+		) => {
+			calls.push({ args, ...(options?.env === undefined ? {} : { env: options.env }) });
+			return "";
+		},
+		tryRun: async (args: readonly string[]) => {
+			calls.push({ args });
+			if (args[0] === "symbolic-ref") return "main\n";
+			if (args[0] === "show") return "1.0.0\n";
+			return "";
+		},
+	} as unknown as GitCli;
+	return { calls, git: client };
+}
+
+describe("RepositoryService writes", () => {
+	test("fetch and pull address the allow-listed remote", async () => {
+		const { calls, git: stub } = stubGit();
+		const service = new RepositoryService({
+			git: stub,
+			repositoryPath: "/synthetic/workspace/repo",
+		});
+
+		await service.fetch();
+		await service.fetch({ remote: "upstream" });
+		await service.pull();
+		expect(
+			calls
+				.filter((call) => call.args[0] === "fetch" || call.args[0] === "pull")
+				.map((call) => call.args.join(" ")),
+		).toEqual(["fetch --prune origin", "fetch --prune upstream", "pull --ff-only origin"]);
+	});
+
+	test("rejects a remote that could be parsed as an option", async () => {
+		const { git: stub } = stubGit();
+		const service = new RepositoryService({
+			git: stub,
+			repositoryPath: "/synthetic/workspace/repo",
+		});
+		await expect(service.fetch({ remote: "--upload-pack=evil" })).rejects.toThrow(RepositoryError);
+	});
+
+	test("refuses to push unless the operator enabled it", async () => {
+		const { calls, git: stub } = stubGit();
+		const service = new RepositoryService({
+			git: stub,
+			repositoryPath: "/synthetic/workspace/repo",
+		});
+		await expect(service.push({ confirm: true })).rejects.toThrow(/push_disabled/u);
+		expect(calls.some((call) => call.args[0] === "push")).toBe(false);
+	});
+
+	test("requires an explicit confirmation even when pushing is enabled", async () => {
+		const { git: stub } = stubGit();
+		const service = new RepositoryService({
+			allowPush: true,
+			git: stub,
+			repositoryPath: "/synthetic/workspace/repo",
+		});
+		await expect(service.push({ confirm: false })).rejects.toThrow(/push_not_confirmed/u);
+	});
+
+	test("pushes the current branch with the token only in the environment", async () => {
+		const { calls, git: stub } = stubGit();
+		const service = new RepositoryService({
+			allowPush: true,
+			git: stub,
+			repositoryPath: "/synthetic/workspace/repo",
+		});
+		await service.push({ confirm: true, token: "synthetic-installation-token" });
+
+		const push = calls.find((call) => call.args[0] === "push");
+		expect(push?.args).toEqual(["push", "origin", "main"]);
+		expect(push?.args.join(" ")).not.toContain("synthetic-installation-token");
+		expect(push?.env?.GH_TOKEN).toBe("synthetic-installation-token");
+		expect(push?.env?.GIT_CONFIG_VALUE_1).toContain("$GH_TOKEN");
+		expect(calls.some((call) => call.args[0] === "symbolic-ref")).toBe(true);
+	});
+
+	test("refuses to push from a detached HEAD", async () => {
+		const client = {
+			exec: async (args: readonly string[]) => gitResult(args),
+			run: async (args: readonly string[]) => {
+				throw new Error(`unexpected ${args.join(" ")}`);
+			},
+			tryRun: async (args: readonly string[]) => (args[0] === "symbolic-ref" ? "" : ""),
+		} as unknown as GitCli;
+		const service = new RepositoryService({
+			allowPush: true,
+			git: client,
+			repositoryPath: "/synthetic/workspace/repo",
+		});
+		await expect(service.push({ confirm: true })).rejects.toThrow(/detached_head/u);
 	});
 });

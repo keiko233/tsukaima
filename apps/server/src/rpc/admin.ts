@@ -695,6 +695,24 @@ export const adminRouter = {
 		),
 	},
 	repository: {
+		fetch: adminBase.admin.repository.fetch.handler(async ({ context, input }) =>
+			context.lifecycle.repository.fetch(
+				input.remote === undefined ? {} : { remote: input.remote },
+			),
+		),
+		pull: adminBase.admin.repository.pull.handler(async ({ context, input }) =>
+			context.lifecycle.repository.pull(input.remote === undefined ? {} : { remote: input.remote }),
+		),
+		push: adminBase.admin.repository.push.handler(async ({ context, input }) => {
+			// The App token is optional: an ssh remote or an operator credential helper still works.
+			const token = await context.lifecycle.githubApp.installationToken().catch(() => undefined);
+			return await context.lifecycle.repository.push({
+				confirm: input.confirm,
+				...(input.branch === undefined ? {} : { branch: input.branch }),
+				...(input.remote === undefined ? {} : { remote: input.remote }),
+				...(token === undefined ? {} : { token }),
+			});
+		}),
 		status: adminBase.admin.repository.status.handler(async ({ context }) =>
 			context.lifecycle.repository.status(),
 		),
