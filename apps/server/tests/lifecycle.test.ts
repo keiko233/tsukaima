@@ -199,7 +199,25 @@ describe("server lifecycle with fake model", () => {
 		}
 	});
 
-	test("TSUKAIMA_LOG_LEVEL overrides persisted runtime setting on startup and writes daily log files", async () => {
+	test("TSUKAIMA_LOG_LEVEL seeds a fresh install", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-server-log-seed-"));
+		try {
+			const app = createApp({
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_LOG_FILE_ENABLED: "false",
+				TSUKAIMA_LOG_LEVEL: "trace",
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			});
+			await app.lifecycle.start();
+			expect(app.lifecycle.logger.level).toBe("trace");
+			await app.lifecycle.stop();
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("a persisted log level wins over the environment default and survives restarts", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "tsukaima-server-logging-"));
 		try {
 			const first = createApp({
@@ -227,12 +245,25 @@ describe("server lifecycle with fake model", () => {
 				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 			});
 			await second.lifecycle.start();
-			expect(second.lifecycle.logger.level).toBe("trace");
+			expect(second.lifecycle.logger.level).toBe("error");
 			expect(second.lifecycle.logs.list({ limit: 100 }).length).toBeLessThanOrEqual(25);
 
 			await second.lifecycle.applyRuntimeSettings({ logLevel: "warn" });
 			expect(second.lifecycle.logger.level).toBe("warn");
 			await second.lifecycle.stop();
+
+			// applyRuntimeSettings is a live change, not a write; the persisted value is still
+			// "error", so a restart must come back to it rather than to the env default.
+			const third = createApp({
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_LOG_BUFFER_CAPACITY: "25",
+				TSUKAIMA_LOG_LEVEL: "trace",
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			});
+			await third.lifecycle.start();
+			expect(third.lifecycle.logger.level).toBe("error");
+			await third.lifecycle.stop();
 
 			const logFiles = await readdir(join(directory, "logs"));
 			expect(logFiles.some((name) => /^tsukaima-\d{4}-\d{2}-\d{2}\.log$/.test(name))).toBe(true);

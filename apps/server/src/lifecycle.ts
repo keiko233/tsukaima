@@ -67,7 +67,11 @@ import {
 	type DailyFileLogSink,
 	type Logger,
 } from "./logging.ts";
-import { readRuntimeSettings, type RuntimeSettings } from "./runtime-settings.ts";
+import {
+	DEFAULT_LOG_LEVEL,
+	readRuntimeSettings,
+	type RuntimeSettings,
+} from "./runtime-settings.ts";
 import { builtinPlugins } from "./plugins/builtin.ts";
 import {
 	BackupDrillScheduler,
@@ -1026,11 +1030,19 @@ export class TsukaimaLifecycle {
 		this.transition("load-settings");
 		const settings = await readRuntimeSettings(this.domainDatabase);
 		if (this.config.logLevelFromEnv) {
-			this.setLogLevel(this.config.logLevel);
-			this.runtimeLog.debug("TSUKAIMA_LOG_LEVEL overrides persisted runtime setting", {
-				envLogLevel: this.config.logLevel,
-				persistedLogLevel: settings.logLevel,
-			});
+			if (settings.logLevel === DEFAULT_LOG_LEVEL) {
+				this.setLogLevel(this.config.logLevel);
+				this.runtimeLog.debug("TSUKAIMA_LOG_LEVEL seeded the log level of a fresh install", {
+					envLogLevel: this.config.logLevel,
+					persistedLogLevel: settings.logLevel,
+				});
+			} else {
+				this.setLogLevel(settings.logLevel);
+				this.runtimeLog.debug("persisted log level wins over the TSUKAIMA_LOG_LEVEL default", {
+					envLogLevel: this.config.logLevel,
+					persistedLogLevel: settings.logLevel,
+				});
+			}
 		} else {
 			this.setLogLevel(settings.logLevel);
 		}

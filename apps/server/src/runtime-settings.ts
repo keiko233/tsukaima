@@ -22,6 +22,13 @@ export interface PublicRuntimeSettings {
 
 const SETTINGS_KEY = "runtime-settings";
 
+/**
+ * `TSUKAIMA_LOG_LEVEL` is a bootstrap default for a fresh install, not a per-restart override:
+ * the operator's persisted choice (including `trace`) must survive a redeploy. Startup only
+ * applies the environment value when no runtime settings have been saved yet.
+ */
+export const DEFAULT_LOG_LEVEL = "info" as const;
+
 type SettingsValue = {
 	chatModel?: RuntimeSettings["chatModel"];
 	chatThinking?: RuntimeSettings["chatThinking"];
@@ -63,11 +70,16 @@ function parseValue(value: string | undefined): RuntimeSettings | undefined {
 export async function readRuntimeSettings(
 	database: TsukaimaDatabase | undefined,
 ): Promise<RuntimeSettings> {
-	if (database === undefined) return { logLevel: "info" };
+	if (database === undefined) return { logLevel: DEFAULT_LOG_LEVEL };
 	const rows = await database.select().from(meta).where(eq(meta.key, SETTINGS_KEY)).limit(1);
-	return parseValue(rows[0]?.value) ?? { logLevel: "info" };
+	return parseValue(rows[0]?.value) ?? { logLevel: DEFAULT_LOG_LEVEL };
 }
 
+/**
+ * `TSUKAIMA_LOG_LEVEL` is a bootstrap default for a fresh install, not a per-restart override:
+ * the operator's persisted choice (including `trace`) must survive a redeploy. Startup only
+ * applies it when no runtime settings have been saved yet.
+ */
 export async function writeRuntimeSettings(
 	database: TsukaimaDatabase,
 	input: RuntimeSettings,

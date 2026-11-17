@@ -66,7 +66,7 @@ Recommended:
 | `TSUKAIMA_TRUSTED_PROXIES` | Reverse proxies whose forwarded client IP headers may be trusted. |
 | `TSUKAIMA_MEDIA_FETCH_ALLOWED_HOSTS` | Comma-separated hosts allowed to resolve privately for inbound channel media (for example `127.0.0.1` when NapCat runs beside the server). Empty by default: every inbound media URL must be public. |
 | `TSUKAIMA_AUTH_SECURE_COOKIES` | Defaults to `true` when `TSUKAIMA_PUBLIC_URL` is HTTPS. |
-| `TSUKAIMA_LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, or `error` (overrides persisted DB runtime setting on startup when explicitly set). |
+| `TSUKAIMA_LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, or `error` (default for a fresh install; a saved DB runtime setting wins across restarts). |
 | `TSUKAIMA_LOG_BUFFER_CAPACITY` | In-memory log ring buffer size (default `5000`). |
 | `TSUKAIMA_LOG_FILE_ENABLED` | Set to `false` to disable daily date-chunked file logs (enabled by default). |
 | `TSUKAIMA_LOG_DIR` | Directory for `tsukaima-YYYY-MM-DD.log` files (default `<data>/logs`). |
