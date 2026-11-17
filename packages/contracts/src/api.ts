@@ -4,6 +4,8 @@ import { healthResponseSchema, messagePartSchema } from "./base.ts";
 import {
 	conversationPolicyPatchSchema,
 	conversationPolicySchema,
+	modelSelectionSchema,
+	thinkingLevelSchema,
 	triggerClassificationSchema,
 } from "./policy.ts";
 import {
@@ -821,10 +823,7 @@ export const modelUsageRecordSchema = z.object({
 	providerId: z.string(),
 });
 
-export const modelRefSchema = z.object({
-	modelId: z.string(),
-	providerId: z.string(),
-});
+export const modelRefSchema = modelSelectionSchema;
 
 export const modelPolicySchema = z.object({
 	capability: z.string(),
@@ -893,15 +892,28 @@ export const modelCatalogEntrySchema = z.object({
 	/** Plugin that registered the provider, when the host knows it. */
 	pluginId: z.string().optional(),
 	providerId: z.string(),
+	/** Reasoning levels the provider advertises for this model. */
+	reasoning: z
+		.object({
+			default: thinkingLevelSchema.optional(),
+			levels: z.array(thinkingLevelSchema),
+		})
+		.optional(),
 });
 export type ModelCatalogEntry = z.infer<typeof modelCatalogEntrySchema>;
 
 export const settingsViewSchema = z.object({
+	/** Models the active provider can serve, for chat and workspace selection. */
+	availableModels: z.array(modelCatalogEntrySchema).optional(),
+	chatModel: modelSelectionSchema.optional(),
+	chatThinking: thinkingLevelSchema.optional(),
 	logLevel: logLevelSchema,
 	/** Models that plugins advertise for the busy-run sidechat classifier. */
 	models: z.array(modelCatalogEntrySchema).optional(),
 	modelProviderId: z.string().optional(),
 	sidechatModelId: z.string().optional(),
+	workspaceModel: modelSelectionSchema.optional(),
+	workspaceThinking: thinkingLevelSchema.optional(),
 	plugins: z.array(
 		z.object({
 			config: z.record(z.string(), z.unknown()),
@@ -913,25 +925,41 @@ export const settingsViewSchema = z.object({
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
 export const runtimeSettingsSchema = z.object({
+	/** Default conversation model for chat, workspace, and other non-workspace sessions. */
+	chatModel: modelSelectionSchema.optional(),
+	/** Default reasoning effort for chat sessions. */
+	chatThinking: thinkingLevelSchema.optional(),
 	logLevel: logLevelSchema,
 	/** Plugin id that owns the active model provider. */
 	modelProviderId: z.string().min(1).optional(),
 	/** Default model id for the busy-conversation sidechat classifier. */
 	sidechatModelId: z.string().min(1).optional(),
+	/** Default conversation model for workspace (coding) sessions. */
+	workspaceModel: modelSelectionSchema.optional(),
+	/** Default reasoning effort for workspace sessions. */
+	workspaceThinking: thinkingLevelSchema.optional(),
 });
 export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>;
 
 export const runtimeSettingsPatchSchema = z
 	.object({
+		chatModel: modelSelectionSchema.nullish(),
+		chatThinking: thinkingLevelSchema.nullish(),
 		logLevel: logLevelSchema.optional(),
 		modelProviderId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
 		sidechatModelId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
+		workspaceModel: modelSelectionSchema.nullish(),
+		workspaceThinking: thinkingLevelSchema.nullish(),
 	})
 	.refine(
 		(input) =>
+			input.chatModel !== undefined ||
+			input.chatThinking !== undefined ||
 			input.logLevel !== undefined ||
 			input.modelProviderId !== undefined ||
-			input.sidechatModelId !== undefined,
+			input.sidechatModelId !== undefined ||
+			input.workspaceModel !== undefined ||
+			input.workspaceThinking !== undefined,
 		{
 			message: "At least one setting must be provided",
 		},
@@ -1045,9 +1073,12 @@ export const sessionsSendInputSchema = z.object({
 export const workspaceCreateInputSchema = z.object({
 	baseRef: z.string().trim().min(1).max(200).optional(),
 	goal: z.string().trim().min(1).max(8_000).optional(),
+	/** Explicit model for this workspace; unset inherits the workspace default. */
+	model: modelSelectionSchema.optional(),
 	mode: workspaceModeSchema.optional(),
 	parentSessionId: z.string().min(1).optional(),
 	tags: z.array(z.string().trim().min(1).max(32)).max(8).optional(),
+	thinking: thinkingLevelSchema.optional(),
 });
 
 export const workspaceUpdateInputSchema = z.object({

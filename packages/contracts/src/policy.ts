@@ -1,6 +1,30 @@
 import { z } from "zod";
 
 /**
+ * Reasoning effort exposed by the host. `off` disables thinking; the remaining values map to
+ * the provider's own effort scale. Keep this list in sync with pi-ai's model thinking levels.
+ */
+export const thinkingLevelSchema = z.enum([
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+]);
+export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>;
+
+/** Provider-scoped model selection. Model ids are only unique inside one provider. */
+export const modelSelectionSchema = z
+	.object({
+		modelId: z.string().min(1),
+		providerId: z.string().min(1),
+	})
+	.strict();
+export type ModelSelection = z.infer<typeof modelSelectionSchema>;
+
+/**
  * Legacy activity-window settings stay supported. `windowMs` maps to
  * `pacing.burstSettleMs` and `maxMessages` maps to `pacing.burstMaxMessages`; the former
  * 3–10 second clamp is deliberately gone so tests and deployments can use short windows.
@@ -167,6 +191,13 @@ export const conversationPolicySchema = z
 		memoryReviewRequired: z.boolean().default(false),
 		memoryCompactionEnabled: z.boolean().default(true),
 		memoryExtractModel: z.string().min(1).optional(),
+		/**
+		 * Per-conversation model override. When unset, the chat or workspace default from
+		 * runtime settings applies, then the active provider's default model.
+		 */
+		model: modelSelectionSchema.optional(),
+		/** Per-conversation reasoning effort; unset inherits the chat/workspace default. */
+		thinking: thinkingLevelSchema.optional(),
 		memoryExtractionPromptVersion: z.string().min(1).default("memory-extract-v1"),
 		memoryMinConfidence: z.number().min(0).max(1).default(0.55),
 		memoryMaxWritesPerActivity: z.number().int().min(1).max(50).default(8),
@@ -343,6 +374,8 @@ export const conversationPolicyPatchSchema = z
 		memoryReviewRequired: z.boolean().optional(),
 		memoryCompactionEnabled: z.boolean().optional(),
 		memoryExtractModel: z.string().min(1).nullish(),
+		model: modelSelectionSchema.nullish(),
+		thinking: thinkingLevelSchema.nullish(),
 		memoryExtractionPromptVersion: z.string().min(1).optional(),
 		memoryMinConfidence: z.number().min(0).max(1).optional(),
 		memoryMaxWritesPerActivity: z.number().int().min(1).max(50).optional(),

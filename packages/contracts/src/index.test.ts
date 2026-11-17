@@ -8,6 +8,8 @@ import {
 	conversationPolicySchema,
 	defaultActivityAggregationPolicy,
 	defaultConversationPolicy,
+	runtimeSettingsPatchSchema,
+	runtimeSettingsSchema,
 } from "./index.ts";
 
 describe("contracts", () => {
@@ -44,6 +46,38 @@ describe("contracts", () => {
 			conversationPolicySchema.parse({ trigger: { privateAccess: "friends" } }),
 		).toThrow();
 		expect(() => conversationPolicySchema.parse({ compaction: { reserveTokens: -1 } })).toThrow();
+	});
+
+	test("carries model and reasoning overrides without disturbing defaults", () => {
+		const model = { modelId: "strong-chat", providerId: "provider-a" };
+		const parsed = conversationPolicySchema.parse({ model, thinking: "high" });
+		expect(parsed.model).toEqual(model);
+		expect(parsed.thinking).toBe("high");
+		expect(conversationPolicySchema.parse({}).model).toBeUndefined();
+		expect(conversationPolicyPatchSchema.parse({ model: null, thinking: null })).toEqual({
+			model: null,
+			thinking: null,
+		});
+		expect(
+			runtimeSettingsSchema.parse({
+				chatModel: model,
+				chatThinking: "low",
+				logLevel: "info",
+				workspaceModel: { modelId: "strong-code", providerId: "provider-a" },
+				workspaceThinking: "max",
+			}),
+		).toMatchObject({
+			chatModel: model,
+			chatThinking: "low",
+			workspaceModel: { modelId: "strong-code", providerId: "provider-a" },
+			workspaceThinking: "max",
+		});
+		expect(
+			runtimeSettingsPatchSchema.parse({
+				chatModel: null,
+				workspaceThinking: "xhigh",
+			}),
+		).toEqual({ chatModel: null, workspaceThinking: "xhigh" });
 	});
 
 	test("compaction presets move from late to early and keep the balanced defaults", () => {
