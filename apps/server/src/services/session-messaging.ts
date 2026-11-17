@@ -35,14 +35,18 @@ export interface SendAgentMessageInput {
 	readonly context?: string;
 	readonly deliveryMode?: MessageDeliveryMode;
 	readonly direction?: "inbound" | "system";
+	/** Stable domain message id for an idempotent retry. */
+	readonly messageId?: string;
 	readonly references?: readonly {
 		readonly messageId?: string | undefined;
 		readonly sessionId: string;
 	}[];
+	/** Stable durable submission id for an idempotent retry. */
+	readonly requestId?: string;
 	readonly senderExternalId?: string;
 	readonly senderName?: string;
 	readonly sessionId: string;
-	readonly source?: "resume-hook" | "session-tool" | "webui";
+	readonly source?: "resume-hook" | "scheduler" | "session-tool" | "webui";
 	readonly text: string;
 }
 
@@ -183,7 +187,7 @@ export class SessionMessagingService {
 		const deliveryMode = input.deliveryMode ?? "queue";
 		const direction = input.direction ?? "inbound";
 		const now = new Date().toISOString();
-		const id = randomUUID();
+		const id = input.messageId ?? randomUUID();
 		const senderName =
 			input.senderName ?? (direction === "system" ? "Tsukaima scheduler" : "WebUI admin");
 		const senderExternalId =
@@ -214,21 +218,47 @@ export class SessionMessagingService {
 			.filter((entry): entry is string => entry !== undefined && entry.trim().length > 0)
 			.join("\n\n");
 
-		await database.insert(messages).values({
-			chatObjectId: chat.id,
-			contentText: text,
-			conversationId: session.id,
-			direction,
-			deliveryStatus: "pending",
-			id,
-			ingestedAt: now,
-			kind: "webui",
-			occurredAt: now,
-			partsJson: JSON.stringify(parts),
-			senderDisplayName: senderName,
-			senderExternalId,
-			updatedAt: now,
-		});
+		const [existing] = await database
+			.select({
+				deliveryStatus: messages.deliveryStatus,
+				id: messages.id,
+			})
+			.from(messages)
+			.where(eq(messages.id, id))
+			.limit(1);
+		if (
+			existing !== undefined &&
+			(existing.deliveryStatus === "accepted" || existing.deliveryStatus === "sent")
+		) {
+			return {
+				chatObjectId: chat.id,
+				durableConversationId: session.durableConversationId,
+				messageId: id,
+				mode: deliveryMode,
+			};
+		}
+		if (existing === undefined) {
+			await database.insert(messages).values({
+				chatObjectId: chat.id,
+				contentText: text,
+				conversationId: session.id,
+				direction,
+				deliveryStatus: "pending",
+				id,
+				ingestedAt: now,
+				kind: "webui",
+				occurredAt: now,
+				partsJson: JSON.stringify(parts),
+				senderDisplayName: senderName,
+				senderExternalId,
+				updatedAt: now,
+			});
+		} else {
+			await database
+				.update(messages)
+				.set({ deliveryStatus: "pending", updatedAt: now })
+				.where(eq(messages.id, id));
+		}
 		try {
 			await host.append({
 				conversationId: session.durableConversationId,
@@ -248,6 +278,7 @@ export class SessionMessagingService {
 					source: { messageId: id, receivedAtMs: Date.now(), timestampMs: Date.now() },
 				},
 				forceSubmit: true,
+				...(input.requestId === undefined ? {} : { requestId: input.requestId }),
 				submittedAtMs: Date.now(),
 				...(triggerContext.length === 0 ? {} : { triggerContext }),
 				whenBusy: whenBusy(deliveryMode),

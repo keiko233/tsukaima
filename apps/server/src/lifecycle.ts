@@ -104,6 +104,11 @@ import {
 } from "./services/restart-coordinator.ts";
 import { OutboundService } from "./services/outbound.ts";
 import { RequestService } from "./services/request-service.ts";
+import {
+	ScheduleExecutionService,
+	type ScheduleExecutionServiceOptions,
+} from "./services/schedule-executor.ts";
+import { ScheduleService } from "./services/schedule-service.ts";
 import { SessionMessagingService } from "./services/session-messaging.ts";
 import { UpgradeService } from "./services/upgrade-service.ts";
 import {
@@ -189,6 +194,7 @@ export class TsukaimaLifecycle {
 	readonly replyDispatcher: ReplyDispatcher;
 	readonly outbound: OutboundService;
 	readonly requestService: RequestService;
+	readonly schedules: ScheduleService;
 	readonly restartCoordinator: RestartCoordinator;
 	readonly sessionMessaging: SessionMessagingService;
 	readonly upgrades: UpgradeService;
@@ -474,6 +480,24 @@ export class TsukaimaLifecycle {
 			policy: {
 				ensureHostPolicy: (sessionId, durableConversationId) =>
 					this.conversationPolicy.ensureHostPolicy(sessionId, durableConversationId),
+			},
+		});
+		const scheduleExecutor: ScheduleExecutionServiceOptions["messaging"] = this.sessionMessaging;
+		const scheduleExecution = new ScheduleExecutionService({
+			audit: (entry) => this.writeAudit(entry),
+			channels: this.channels,
+			database: () => this.domainDatabase,
+			logger: this.runtimeLog,
+			messaging: scheduleExecutor,
+			policy: this.conversationPolicy,
+		});
+		this.schedules = new ScheduleService({
+			audit: (entry) => this.writeAudit(entry),
+			database: () => this.domainDatabase,
+			executor: scheduleExecution,
+			logger: this.runtimeLog,
+			onChanged: ({ scheduleId, sessionId }) => {
+				this.hooks.emitDetached("schedule.changed", { scheduleId, sessionId });
 			},
 		});
 		this.workspace = new WorkspaceService({
@@ -1155,6 +1179,14 @@ export class TsukaimaLifecycle {
 		}
 		this.transition("ready", "ready");
 		try {
+			await this.schedules.recover();
+			this.schedules.start();
+		} catch (error) {
+			this.runtimeLog.warn("schedule runner startup failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+		try {
 			const dispatch = (hook: Parameters<SessionMessagingService["dispatchResumeHook"]>[0]) =>
 				this.sessionMessaging.dispatchResumeHook(hook);
 			const resumed = await this.promptHooks.dispatchStartupResumes(dispatch);
@@ -1601,6 +1633,7 @@ export class TsukaimaLifecycle {
 		}
 		this.stopListeners.clear();
 		this.pluginTasks.stop();
+		this.schedules.stop();
 		this.replyDispatcher.stopPendingReconciliation();
 		await this.pluginHost.stop();
 		await this.conversationHost?.close();
