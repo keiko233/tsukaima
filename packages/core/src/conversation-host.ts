@@ -2607,9 +2607,8 @@ export class PiDurableConversationHost {
 			blocks.push({ text: triggerContexts.join("\n\n"), type: "text" });
 		}
 		let sawMedia = false;
-		const withSender = envelopes.length > 1;
 		for (const envelope of envelopes) {
-			let textParts: string[] = withSender ? [`${this.envelopeSender(envelope)}:`] : [];
+			let textParts: string[] = [`${this.envelopeSender(envelope)}:`];
 			const flushText = () => {
 				const text = textParts.join(" ").trim();
 				if (text.length > 0) blocks.push({ text, type: "text" });
@@ -2695,10 +2694,7 @@ export class PiDurableConversationHost {
 				return `${this.envelopeSender(envelope)}: ${content}`;
 			})
 			.join("\n");
-		const conversationText = envelopes.length === 1 ? text.replace(/^[^:]+:\s/, "") : text;
-		return triggerContexts.length === 0
-			? conversationText
-			: `${triggerContexts.join("\n\n")}\n\n${conversationText}`;
+		return triggerContexts.length === 0 ? text : `${triggerContexts.join("\n\n")}\n\n${text}`;
 	}
 
 	private toStoredEnvelope(envelope: MessageEnvelope, triggerContext?: string): StoredEnvelope {

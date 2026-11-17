@@ -376,12 +376,12 @@ describe("PiDurableConversationHost", () => {
 	test("passes resolved image blocks to vision models and withholds them from text-only models", async () => {
 		const visionContent = await runImageTurnWithVision(true);
 		expect(visionContent).toEqual([
-			{ text: "look at this", type: "text" },
+			{ text: "Tester: look at this", type: "text" },
 			{ data: "AQID", mimeType: "image/png", type: "image" },
 		]);
 
 		const textOnlyContent = await runImageTurnWithVision(false);
-		expect(textOnlyContent).toBe("look at this [image]");
+		expect(textOnlyContent).toBe("Tester: look at this [image]");
 	});
 
 	test("gates images on the conversation agent model instead of the host model", async () => {
@@ -391,7 +391,7 @@ describe("PiDurableConversationHost", () => {
 			hostModelId: "text-model",
 		});
 		expect(content).toEqual([
-			{ text: "look at this", type: "text" },
+			{ text: "Tester: look at this", type: "text" },
 			{ data: "AQID", mimeType: "image/png", type: "image" },
 		]);
 	});
@@ -409,7 +409,7 @@ describe("PiDurableConversationHost", () => {
 			],
 		});
 		expect(content).toEqual([
-			{ text: "react to this", type: "text" },
+			{ text: "Tester: react to this", type: "text" },
 			{ data: "AQID", mimeType: "image/webp", type: "image" },
 		]);
 	});
@@ -447,7 +447,7 @@ describe("PiDurableConversationHost", () => {
 		const content = await runImageTurnWithVision(true, {
 			resolveImage: async () => undefined,
 		});
-		expect(content).toEqual([{ text: "look at this [image unavailable]", type: "text" }]);
+		expect(content).toEqual([{ text: "Tester: look at this [image unavailable]", type: "text" }]);
 	});
 
 	test("updates existing conversations when setModel switches provider or after reopening storage", async () => {
@@ -522,6 +522,66 @@ describe("PiDurableConversationHost", () => {
 			expect(restartedAnswers).toEqual(["after-restart"]);
 			await restartedHost.close();
 			await restartedStorage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	// Regression: a window usually holds one message in a group chat, and the model used to
+	// receive it with the sender prefix stripped. Every turn then looked like a single anonymous
+	// speaker, so the bot answered one member about what another member had said.
+	test("labels every message with its sender, including single-message turns", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-sender-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const observed: { messages?: readonly { content?: unknown; role?: string }[] }[] = [];
+			const answers: string[] = [];
+			const model = createSlowStreamingModel([], {
+				chunksForCall: (call) => [call === 0 ? "first" : "second"],
+				delayMs: 5,
+				onContext: (context) => observed.push((context as (typeof observed)[number]) ?? {}),
+			});
+			const host = new PiDurableConversationHost({
+				model,
+				onAnswer: (answer) => {
+					answers.push(answer.text);
+				},
+				storage,
+			});
+			const conversationId = await host.createConversation();
+			const now = Date.now();
+			const turns = [
+				{ id: "sender-turn-1", name: "Alpha", text: "look at this" },
+				{ id: "sender-turn-2", name: "Beta", text: "what did it say" },
+			];
+			for (const [index, turn] of turns.entries()) {
+				const base = envelope(turn.id, turn.text);
+				await host.append({
+					conversationId,
+					envelope: {
+						...base,
+						conversationKey: { groupId: "group-1", kind: "group", peerId: `user-${index}` },
+						sender: {
+							displayName: turn.name,
+							id: `user-${index}`,
+							platformId: `user-${index}`,
+						},
+						source: { messageId: turn.id, receivedAtMs: now + index, timestampMs: now + index },
+					},
+					forceSubmit: true,
+					submittedAtMs: now + index,
+				});
+				for (let step = 0; step < 40 && answers.length < index + 1; step += 1) {
+					await Bun.sleep(25);
+				}
+			}
+			expect(answers).toEqual(["first", "second"]);
+			const userMessages = (observed.at(-1)?.messages ?? [])
+				.filter((message) => message.role === "user")
+				.map((message) => message.content);
+			expect(userMessages).toEqual(["Alpha: look at this", "Beta: what did it say"]);
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
 		} finally {
 			await rm(directory, { force: true, recursive: true });
 		}

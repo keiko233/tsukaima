@@ -201,6 +201,11 @@ Default timeout is 8 seconds. The value is policy-configurable and may be shorte
 
 When the activity closes, build a user-facing model context string from all normalized parts and participants.
 
+Every message keeps its sender label (`<display name>: <parts>`) even when the window holds a
+single message. A group window usually holds one message, and an unlabelled turn makes the model
+read every member as one anonymous speaker, so it answers whoever spoke last about what somebody
+else said.
+
 The durable submission should:
 
 1. Use an idempotency key based on activity ID.

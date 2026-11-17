@@ -85,6 +85,22 @@ const privateEvent = (id: string, text: string) => ({
 	user_id: 10_001,
 });
 
+/** A group message that mentions the bot, so the trigger classifies as `direct`. */
+const groupEvent = (id: number, userId: number, card: string, text: string) => ({
+	group_id: 55_001,
+	message: [
+		{ data: { qq: "99" }, type: "at" },
+		{ data: { text }, type: "text" },
+	],
+	message_id: id,
+	message_type: "group",
+	post_type: "message",
+	self_id: 99,
+	sender: { card, nickname: card, role: "member", user_id: userId },
+	time: Math.floor(Date.now() / 1_000),
+	user_id: userId,
+});
+
 async function waitFor<T>(read: () => Promise<T | undefined>, timeoutMs = 5_000): Promise<T> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
@@ -401,7 +417,7 @@ describe("fake NapCat integration", () => {
 			});
 			expect(userContent).toEqual([
 				{ text: expect.any(String), type: "text" },
-				{ text: "look", type: "text" },
+				{ text: "Test Nickname: look", type: "text" },
 				{
 					data: Buffer.from(jpeg).toString("base64"),
 					mimeType: "image/jpeg",
@@ -417,6 +433,73 @@ describe("fake NapCat integration", () => {
 			);
 		} finally {
 			server.stop(true);
+			await lifecycle.stop();
+		}
+	});
+
+	// Regression: a group burst usually holds one message per turn, and the model used to receive
+	// it with the sender stripped. Every member then read as one anonymous speaker, so the bot
+	// answered one member about what another member had said.
+	test("labels group messages with their sender in the model context", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-napcat-sender-"));
+		directories.push(directory);
+		const transports: FakeNapCatTransport[] = [];
+		const factory: OneBotTransportFactory = () => {
+			const transport = new FakeNapCatTransport();
+			transports.push(transport);
+			return transport;
+		};
+		const seenUserText: string[] = [];
+		const { lifecycle } = createApp(
+			{
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001",
+				TSUKAIMA_PORT: "7420",
+			},
+			{
+				model: createSlowStreamingModel([], {
+					chunksForCall: (call) => [call === 0 ? "first" : "second"],
+					delayMs: 5,
+					onContext: (context) => {
+						const contextMessages =
+							(context as { messages?: readonly { content?: unknown; role?: string }[] })
+								.messages ?? [];
+						for (const message of contextMessages) {
+							if (message.role !== "user") continue;
+							seenUserText.push(
+								typeof message.content === "string"
+									? message.content
+									: JSON.stringify(message.content),
+							);
+						}
+					},
+				}),
+				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, factory]]),
+				reply: { pendingGraceMs: 0 },
+			},
+		);
+		await lifecycle.start();
+		await lifecycle.conversationPolicy.update({
+			policy: { pacing: { burstMaxWaitMs: 60, burstSettleMs: 20 } },
+			scope: "global",
+		});
+		try {
+			transports[0]?.emitOpen();
+			transports[0]?.emitMessage(groupEvent(710_001, 10_100, "Alpha Card", "opening line"));
+			await waitFor(async () => {
+				return seenUserText.find((text) => text.includes("Alpha Card: "));
+			});
+			transports[0]?.emitMessage(groupEvent(710_002, 10_200, "Beta Card", "follow up"));
+			await waitFor(async () => {
+				return seenUserText.find((text) => text.includes("Beta Card: "));
+			});
+			expect(
+				seenUserText.some((text) => text.includes("Alpha Card: ") && text.includes("opening line")),
+			).toBe(true);
+			expect(
+				seenUserText.some((text) => text.includes("Beta Card: ") && text.includes("follow up")),
+			).toBe(true);
+		} finally {
 			await lifecycle.stop();
 		}
 	});
