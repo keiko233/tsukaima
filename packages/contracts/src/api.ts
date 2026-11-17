@@ -346,6 +346,13 @@ export const repositoryPushInputSchema = z.object({
 	remote: z.string().min(1).max(64).optional(),
 });
 
+/** Identity for commits and merge commits the server creates. */
+export const gitIdentitySchema = z.object({
+	email: z.string().email(),
+	name: z.string().min(1).max(120),
+});
+export type GitIdentity = z.infer<typeof gitIdentitySchema>;
+
 /**
  * A GitHub App installation, never its private key or an installation token. `configured` is the
  * only field a client can rely on; the rest are display metadata refreshed when the App is saved.
@@ -1902,6 +1909,7 @@ export const appContract = oc.router({
 				.input(repositoryRemoteInputSchema)
 				.output(repositoryStatusSchema)
 				.meta({ audit: true }),
+			identity: oc.output(gitIdentitySchema),
 			pull: oc
 				.input(repositoryRemoteInputSchema)
 				.output(repositoryStatusSchema)
@@ -1911,6 +1919,7 @@ export const appContract = oc.router({
 				.output(repositoryStatusSchema)
 				.meta({ audit: true }),
 			status: oc.output(repositoryStatusSchema),
+			updateIdentity: oc.input(gitIdentitySchema).output(gitIdentitySchema).meta({ audit: true }),
 		},
 		upgrade: {
 			check: oc.input(upgradeStartInputSchema).output(upgradeCheckSchema),

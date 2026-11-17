@@ -95,6 +95,7 @@ import { PluginStorageStore } from "./services/plugin-storage.ts";
 import { PluginTaskService } from "./services/plugin-task-service.ts";
 import { ReplyDispatcher } from "./services/reply-dispatcher.ts";
 import { FollowUpIntentStore } from "./services/follow-up-intents.ts";
+import { readGitIdentity } from "./services/git-identity.ts";
 import { GitHubAppService } from "./services/github-app-service.ts";
 import { GitHubOAuthService } from "./services/github-oauth-service.ts";
 import { GitHubService } from "./services/github-service.ts";
@@ -620,6 +621,7 @@ export class TsukaimaLifecycle {
 				// Reporting the running identity still lets an operator's verified reload settle;
 				// without a recorded approved identity the deployment fails closed instead.
 				healthCheck: async () => ({ checkedAtMs: Date.now(), ok: this.ready }),
+				gitIdentity: () => readGitIdentity(this.domainDatabase),
 				reload: new RestartReloadController(this.restartCoordinator),
 				repositoryRoot: config.repositoryRoot,
 				runningIdentity: () => this.runningDeploymentIdentity(),

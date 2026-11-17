@@ -670,7 +670,7 @@ export class SelfIterationService {
 		const policy = await this.policy();
 		const action = input.action === "abort" ? "abort" : "merge";
 		const worktreePath = current.worktreePath!;
-		const runner = this.#runner(worktreePath, policy);
+		const runner = await this.#runner(worktreePath, policy);
 		this.#logger.trace("upstream action requested", {
 			action,
 			ref: preview(input.ref ?? ""),
@@ -988,7 +988,9 @@ export class SelfIterationService {
 			worktreePath: current.worktreePath,
 		});
 		try {
-			const result = await new CodingTools(this.#runner(current.worktreePath!, policy)).diff();
+			const result = await new CodingTools(
+				await this.#runner(current.worktreePath!, policy),
+			).diff();
 			if (result.files.length > policy.maxDiffFiles) {
 				this.#logger.warn("diff exceeds file limit", {
 					files: result.files.length,
@@ -1914,9 +1916,20 @@ export class SelfIterationService {
 		return manager;
 	}
 
-	#runner(worktreePath: string, policy: CodingPolicy): CodingRunner {
+	async #runner(worktreePath: string, policy: CodingPolicy): Promise<CodingRunner> {
+		const identity = await this.#binding.gitIdentity?.();
 		return new CodingRunner({
 			allowedCommands: policy.allowedCommands,
+			...(identity === undefined
+				? {}
+				: {
+						env: {
+							GIT_AUTHOR_EMAIL: identity.email,
+							GIT_AUTHOR_NAME: identity.name,
+							GIT_COMMITTER_EMAIL: identity.email,
+							GIT_COMMITTER_NAME: identity.name,
+						},
+					}),
 			executor: () => this.#sandbox(),
 			maxOutputBytes: policy.maxOutputBytes,
 			timeoutMs: policy.timeoutMs,

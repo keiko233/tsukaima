@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { RestartStatus } from "@tsukaima/contracts";
 import { migrateDomainDatabase, openDomainDatabase } from "@tsukaima/db";
 import type { WorkspaceService } from "../src/services/workspace.ts";
+import { writeGitIdentity } from "../src/services/git-identity.ts";
 import { UpgradeService } from "../src/services/upgrade-service.ts";
 
 const directories: string[] = [];
@@ -154,7 +155,7 @@ describe("upstream upgrade service", () => {
 
 	test("finalizes a workspace branch only when the upstream commit is integrated", async () => {
 		let worktree = "";
-		const { local, seed, service, restarts, root } = await repository({
+		const { database, local, seed, service, restarts, root } = await repository({
 			onCreate: async () => undefined,
 			workspaceGet: async () => ({ proposals: [{ status: "pending_approval" }] }),
 			workspaceStatus: async () => ({ status: "awaiting_approval", worktreePath: worktree }),
@@ -173,11 +174,18 @@ describe("upstream upgrade service", () => {
 
 		const started = await service.start({ autoFinalize: true });
 		expect(started.upgrade.status).toBe("ready");
+		await writeGitIdentity(database, {
+			email: "synthetic-bot@example.test",
+			name: "Synthetic Bot",
+		});
 		const finalized = await service.finalize();
 		expect(finalized.restart.mode).toBe("update");
 		expect(restarts).toHaveLength(1);
 		expect(git(local, ["merge-base", "--is-ancestor", "origin/main", "HEAD"]).trim()).toBe("");
 		expect(git(local, ["show", "HEAD:VERSION"]).trim()).toBe("1.4.0");
+		expect(git(local, ["log", "-1", "--format=%an%x1f%ae"]).trim()).toBe(
+			"Synthetic Bot\u001fsynthetic-bot@example.test",
+		);
 	});
 
 	test("refuses to start while the working tree is dirty", async () => {

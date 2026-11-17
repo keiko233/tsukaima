@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownToLine, ArrowUpFromLine, Download, GitBranch, RefreshCw } from "lucide-react";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
+import { Input } from "@tsukaima/ui/components/motion/input";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { orpc, type RepositoryStatus } from "@/lib/api";
 import { m } from "@/paraglide/messages";
@@ -132,6 +133,77 @@ function RepositorySummary({ status }: { readonly status: RepositoryStatus }) {
 	);
 }
 
+/** Author identity for commits and merges the server creates. */
+function GitIdentitySection() {
+	const toast = useToast();
+	const queryClient = useQueryClient();
+	const identity = useQuery(orpc.admin.repository.identity.queryOptions());
+	const [name, setName] = useState<string | null>(null);
+	const [email, setEmail] = useState<string | null>(null);
+	const save = useMutation(
+		orpc.admin.repository.updateIdentity.mutationOptions({
+			onError: (error) =>
+				toast.error(m.repository_identity_failed(), { description: errorMessage(error) }),
+			onSuccess: async () => {
+				toast.success(m.repository_identity_saved());
+				setName(null);
+				setEmail(null);
+				await queryClient.invalidateQueries({ queryKey: orpc.admin.repository.key() });
+			},
+		}),
+	);
+	const nameValue = name ?? identity.data?.name ?? "";
+	const emailValue = email ?? identity.data?.email ?? "";
+	const valid = nameValue.trim().length > 0 && /^\S+@\S+\.\S+$/u.test(emailValue.trim());
+	return (
+		<details className="rounded-lg border border-border/60 px-3 py-2">
+			<summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+				{m.repository_identity()}
+			</summary>
+			<div className="mt-2 space-y-2">
+				<p className="text-[10.5px] leading-4 text-muted-foreground">
+					{m.repository_identity_help()}
+				</p>
+				{identity.isError ? (
+					<InlineError
+						message={`${m.repository_load_failed()}: ${identity.error.message}`}
+						onRetry={() => void identity.refetch()}
+						retryLabel={m.retry()}
+					/>
+				) : (
+					<>
+						<div className="grid gap-2 sm:grid-cols-2">
+							<Input
+								classNames={{ field: "h-8 rounded-md", input: "text-xs", root: "gap-1" }}
+								label={m.repository_identity_name()}
+								value={nameValue}
+								onChange={setName}
+							/>
+							<Input
+								classNames={{ field: "h-8 rounded-md", input: "text-xs", root: "gap-1" }}
+								label={m.repository_identity_email()}
+								type="email"
+								value={emailValue}
+								onChange={setEmail}
+							/>
+						</div>
+						<Button
+							disabled={!valid}
+							loading={save.isPending}
+							size="sm"
+							onClick={() =>
+								save.mutate({ email: emailValue.trim(), name: nameValue.trim() })
+							}
+						>
+							{m.repository_identity_save()}
+						</Button>
+					</>
+				)}
+			</div>
+		</details>
+	);
+}
+
 export function RepositoryStatusCard() {
 	const toast = useToast();
 	const queryClient = useQueryClient();
@@ -240,6 +312,7 @@ export function RepositoryStatusCard() {
 						{pushArmed ? m.repository_push_confirm() : m.repository_push()}
 					</Button>
 				</div>
+				<GitIdentitySection />
 			</CardContent>
 		</Card>
 	);

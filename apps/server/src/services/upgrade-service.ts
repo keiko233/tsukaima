@@ -5,6 +5,7 @@ import { GitCli, type GitCommandResult } from "@tsukaima/coding";
 import { runtimeUpgrades, type TsukaimaDatabase } from "@tsukaima/db";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
+import { gitIdentityArgs, readGitIdentity } from "./git-identity.ts";
 import type { WorkspaceService } from "./workspace.ts";
 
 export interface UpgradeServiceOptions {
@@ -612,15 +613,14 @@ export class UpgradeService {
 		if (!SAFE_GIT_NAME.test(branchName)) throw new Error("upgrade_workspace_branch_invalid");
 		await this.#git(["-C", worktreePath, "add", "--all"]);
 		const pending = await this.#git(["-C", worktreePath, "status", "--porcelain"]);
+		// The operator-configurable identity keeps merges working on a host with no git config.
+		const identityArgs = gitIdentityArgs(await readGitIdentity(this.#db()));
 		if (pending.stdout.trim().length > 0) {
 			const commit = await this.#git(
 				[
 					"-C",
 					worktreePath,
-					"-c",
-					"user.name=tsukaima-upgrade",
-					"-c",
-					"user.email=tsukaima-upgrade@localhost",
+					...identityArgs,
 					"commit",
 					"-m",
 					`chore(upgrade): integrate ${row.targetVersion}`,
@@ -633,10 +633,7 @@ export class UpgradeService {
 		}
 		const merge = await this.#git(
 			[
-				"-c",
-				"user.name=tsukaima-upgrade",
-				"-c",
-				"user.email=tsukaima-upgrade@localhost",
+				...identityArgs,
 				"merge",
 				"--no-ff",
 				"--no-edit",

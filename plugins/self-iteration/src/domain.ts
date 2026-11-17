@@ -117,6 +117,10 @@ export interface SelfIterationHostBinding {
 		proposal: DeploymentProposal,
 	) => Promise<DeploymentIdentity | undefined> | DeploymentIdentity | undefined;
 	readonly healthCheck?: () => Promise<HealthCheckResult> | HealthCheckResult;
+	/** Identity for git commits created by the server or inside a governed worktree. */
+	readonly gitIdentity?: () =>
+		| { readonly email: string; readonly name: string }
+		| Promise<{ readonly email: string; readonly name: string }>;
 	readonly reload: ReloadController;
 	readonly repositoryRoot: string;
 	/** Exact artifact identity this process is running, if the host can report it. */

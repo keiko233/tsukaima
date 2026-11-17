@@ -258,6 +258,12 @@ for a second confirmation before sending. When a GitHub App is configured the pu
 that installation token, injected for the single invocation; an ssh remote or an operator credential
 helper keeps working because the token is only added, never required.
 
+The repository card also sets the **Git identity** used by the server: the author name and email on
+merge commits it creates, and `GIT_AUTHOR_*`/`GIT_COMMITTER_*` for git commands inside governed
+worktrees. It is stored in the domain database (not `.git/config`) and defaults to
+`tsukaima-upgrade <tsukaima-upgrade@localhost>`, so a host without a global git identity can still
+upgrade and commit.
+
 ## 9. GitHub App credentials
 
 Settings → Upgrades shows the running checkout and, once a GitHub App is configured, the open pull

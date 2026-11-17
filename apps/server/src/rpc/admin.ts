@@ -31,6 +31,7 @@ import {
 	publicRuntimeSettings,
 	readRuntimeSettings,
 } from "../runtime-settings.ts";
+import { readGitIdentity, writeGitIdentity } from "../services/git-identity.ts";
 
 type MemoryDbRow = typeof memories.$inferSelect;
 
@@ -700,6 +701,11 @@ export const adminRouter = {
 				input.remote === undefined ? {} : { remote: input.remote },
 			),
 		),
+		identity: adminBase.admin.repository.identity.handler(async ({ context }) => {
+			const database = context.lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("Database not ready");
+			return await readGitIdentity(database);
+		}),
 		pull: adminBase.admin.repository.pull.handler(async ({ context, input }) =>
 			context.lifecycle.repository.pull(input.remote === undefined ? {} : { remote: input.remote }),
 		),
@@ -715,6 +721,13 @@ export const adminRouter = {
 		}),
 		status: adminBase.admin.repository.status.handler(async ({ context }) =>
 			context.lifecycle.repository.status(),
+		),
+		updateIdentity: adminBase.admin.repository.updateIdentity.handler(
+			async ({ context, input }) => {
+				const database = context.lifecycle.domainDatabase;
+				if (database === undefined) throw new Error("Database not ready");
+				return await writeGitIdentity(database, input);
+			},
 		),
 	},
 	github: {
