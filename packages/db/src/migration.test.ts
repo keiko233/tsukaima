@@ -1,10 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
-import { drizzle } from "drizzle-orm/bun-sqlite";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { migrateDomainDatabase } from "./index.ts";
+import { migrateDomainDatabase, openDomainDatabase } from "./index.ts";
 
 const directories: string[] = [];
 
@@ -67,8 +66,8 @@ test("backfills legacy conversations into stable chat objects and receiving sess
 test("creates durable schedules and occurrence uniqueness indexes", async () => {
 	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-migration-"));
 	directories.push(directory);
-	const raw = new Database(join(directory, "domain.sqlite"), { create: true });
-	const database = drizzle(raw);
+	const database = await openDomainDatabase(join(directory, "domain.sqlite"));
+	const raw = database.$client;
 	try {
 		migrateDomainDatabase(database);
 		const tables = raw

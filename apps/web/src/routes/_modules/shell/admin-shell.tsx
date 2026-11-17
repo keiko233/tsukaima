@@ -66,7 +66,7 @@ function sectionFor(pathname: string): ShellSection {
 
 function selectedIdFor(
 	pathname: string,
-	section: "groups" | "requests" | "users",
+	section: "groups" | "requests" | "tasks" | "users",
 ): string | undefined {
 	const prefix = `/${section}/`;
 	if (!pathname.startsWith(prefix)) return undefined;
