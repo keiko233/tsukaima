@@ -213,7 +213,8 @@ limiting with 403 plus `x-ratelimit-remaining: 0`.
 
 ## 9. Phases
 
-Phases 1 and 2 are implemented; phases 3 and 4 are not.
+Phase 1 and phase 2 are implemented (App credentials plus an optional `gh`-style user sign-in);
+the governed write and release phases are not.
 
 **Phase 1 — git read model.** `GitCli` in `packages/coding`, `WorktreeManager` and `UpgradeService`
 refactored onto it, `RepositoryService`, `repositoryStatusSchema`, `TSUKAIMA_REPOSITORY_ROOT`, admin

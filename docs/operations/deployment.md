@@ -286,3 +286,16 @@ The container needs outbound HTTPS to the Git remote and to `TSUKAIMA_GITHUB_API
 (default `https://api.github.com`; use `https://<host>/api/v3` for GitHub Enterprise Server).
 Without egress the local repository card still renders, while the GitHub cards report the
 connection failure.
+
+### User sign-in
+
+The card also offers the same exchange `gh auth login` performs. Create an OAuth App under
+Settings → Developer settings, set its callback URL to `http://127.0.0.1/`, and paste the Client ID
+into the card. The server requests a device code, shows it with the verification URL, and polls
+until GitHub issues a user token with the `repo` scope.
+
+The token is stored in the domain database, never returned by an API, and used only for that call's
+git or REST request. While a user is signed in it takes precedence over the App installation;
+signing out returns to the bot identity without touching the App configuration. The token inherits
+the user's repository permissions, so it can push anywhere that user can, which is why the App
+remains the narrower option.

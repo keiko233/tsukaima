@@ -2,6 +2,7 @@ import { GitCli } from "@tsukaima/coding";
 import type { GitHubIssue, GitHubPullRequest, GitHubRun } from "@tsukaima/contracts";
 import type { Logger } from "../logging.ts";
 import { GitHubAppError, GitHubAppService, githubRequest } from "./github-app-service.ts";
+import type { GitHubOAuthService } from "./github-oauth-service.ts";
 
 /**
  * Read-only GitHub surfaces for the upgrade center: open pull requests, open issues, and the
@@ -14,6 +15,8 @@ export interface GitHubServiceOptions {
 	readonly app: GitHubAppService;
 	readonly fetcher?: typeof fetch;
 	readonly logger?: Logger;
+	/** User login; when present it takes precedence over the App installation token. */
+	readonly oauth?: GitHubOAuthService;
 	readonly repositoryPath: string;
 }
 
@@ -76,6 +79,7 @@ export class GitHubService {
 	readonly #fetcher: typeof fetch;
 	readonly #git: GitCli;
 	readonly #logger: Logger | undefined;
+	readonly #oauth: GitHubOAuthService | undefined;
 	#resolved: { owner: string; repo: string } | undefined;
 
 	constructor(options: GitHubServiceOptions) {
@@ -84,6 +88,25 @@ export class GitHubService {
 		this.#fetcher = options.fetcher ?? fetch;
 		this.#git = new GitCli({ repositoryPath: options.repositoryPath });
 		this.#logger = options.logger?.child("tsukaima::server::github");
+		this.#oauth = options.oauth;
+	}
+
+	/** Which identity the REST reads and any push will use. */
+	async mode(): Promise<"app" | "oauth" | "none"> {
+		if (this.#oauth !== undefined && (await this.#oauth.token()) !== undefined) return "oauth";
+		const app = await this.#app.status();
+		return app.configured ? "app" : "none";
+	}
+
+	/**
+	 * Credential for a git push, or `undefined` when no identity is configured so the operator's
+	 * own ssh key or credential helper keeps working.
+	 */
+	async gitCredential(): Promise<string | undefined> {
+		const oauth = await this.#oauth?.token();
+		if (oauth !== undefined) return oauth;
+		const app = await this.#app.status();
+		return app.configured ? await this.#app.installationToken() : undefined;
 	}
 
 	async pulls(): Promise<GitHubPullRequest[]> {
@@ -144,7 +167,7 @@ export class GitHubService {
 	}
 
 	async #get<T>(path: string): Promise<T> {
-		const token = await this.#app.installationToken();
+		const token = await this.#token();
 		return await githubRequest<T>({
 			apiBaseUrl: this.#apiBaseUrl,
 			fetcher: this.#fetcher,
@@ -154,24 +177,31 @@ export class GitHubService {
 	}
 
 	/**
-	 * The installation is pinned to the checkout: the local `origin` URL decides which of the
-	 * installation's repositories is addressed. A mismatch fails closed instead of reading a
-	 * different repository that happens to be installed.
+	 * A user login wins over the App installation: it is what the operator just did, and signing
+	 * out restores the bot identity without touching the App configuration.
 	 */
+	async #token(): Promise<string> {
+		const oauth = await this.#oauth?.token();
+		if (oauth !== undefined) return oauth;
+		const app = await this.#app.status();
+		if (app.configured) return await this.#app.installationToken();
+		throw new GitHubAppError(
+			"github_app_unauthorized",
+			"No GitHub identity is configured; sign in or configure the App",
+		);
+	}
+
+	/** The checkout's own `origin` decides the repository; the credential still gates access. */
 	async #repository(): Promise<{ owner: string; repo: string }> {
 		if (this.#resolved !== undefined) return this.#resolved;
 		const remote = (await this.#git.tryRun(["remote", "get-url", "origin"]))?.trim();
 		const parsed = remote === undefined ? undefined : parseGitHubRemote(remote);
+		if (parsed !== undefined) {
+			this.#resolved = parsed;
+			return this.#resolved;
+		}
 		const repositories = await this.#app.repositories();
-		const match =
-			parsed === undefined
-				? undefined
-				: repositories.find(
-						(repository) =>
-							repository.owner.toLowerCase() === parsed.owner.toLowerCase() &&
-							repository.name.toLowerCase() === parsed.repo.toLowerCase(),
-					);
-		const chosen = match ?? (repositories.length === 1 ? repositories[0] : undefined);
+		const chosen = repositories.length === 1 ? repositories[0] : undefined;
 		if (chosen === undefined) {
 			this.#logger?.warn("github repository could not be resolved", {
 				hasRemote: remote !== undefined,
@@ -179,7 +209,7 @@ export class GitHubService {
 			});
 			throw new GitHubAppError(
 				"github_app_unavailable",
-				"The checkout remote does not match a repository in the App installation",
+				"The checkout has no GitHub remote and the installation covers no single repository",
 			);
 		}
 		this.#resolved = { owner: chosen.owner, repo: chosen.name };

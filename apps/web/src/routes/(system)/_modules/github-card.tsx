@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Trash2 } from "lucide-react";
+import { KeyRound, LogIn, LogOut, Trash2 } from "lucide-react";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
 import { Input } from "@tsukaima/ui/components/motion/input";
 import { cn } from "@tsukaima/ui/lib/utils";
-import { orpc, type GitHubAppStatus, type GitHubRun } from "@/lib/api";
+import { orpc, type GitHubAppStatus, type GitHubDeviceStart, type GitHubRun } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { InlineError } from "../../_modules/shell/primitives";
@@ -21,7 +21,7 @@ function Field({ label, children }: { readonly children: ReactNode; readonly lab
 	);
 }
 
-function ConfiguredSummary({ status }: { readonly status: GitHubAppStatus }) {
+function AppSummary({ status }: { readonly status: GitHubAppStatus }) {
 	const permissions = Object.entries(status.permissions ?? {})
 		.map(([scope, level]) => `${scope}: ${level}`)
 		.join(", ");
@@ -53,7 +53,147 @@ function ConfiguredSummary({ status }: { readonly status: GitHubAppStatus }) {
 	);
 }
 
-export function GitHubAppCard() {
+/**
+ * The `gh auth login` experience: request a code, show it with the verification URL, and poll
+ * until GitHub issues a user token. The device code itself never leaves the server.
+ */
+function LoginSection() {
+	const toast = useToast();
+	const queryClient = useQueryClient();
+	const status = useQuery({
+		...orpc.admin.github.status.queryOptions(),
+		staleTime: 15_000,
+	});
+	const [clientId, setClientId] = useState("");
+	const [device, setDevice] = useState<GitHubDeviceStart | null>(null);
+	const handled = useRef<string | undefined>(undefined);
+	const oauth = status.data?.oauth;
+
+	const start = useMutation(
+		orpc.admin.github.oauthStart.mutationOptions({
+			onError: (error) =>
+				toast.error(m.github_login_failed(), { description: errorMessage(error) }),
+			onSuccess: (result) => {
+				handled.current = undefined;
+				setDevice(result);
+			},
+		}),
+	);
+	const poll = useQuery({
+		...orpc.admin.github.oauthPoll.queryOptions(),
+		enabled: device !== null,
+		refetchOnWindowFocus: false,
+		refetchInterval: (query) => {
+			if (device === null) return false;
+			const current = query.state.data?.status;
+			return current === "authorized" || current === "expired" || current === "denied"
+				? false
+				: device.intervalSeconds * 1000;
+		},
+	});
+	const pollStatus = poll.data?.status;
+	useEffect(() => {
+		if (pollStatus === undefined || handled.current === pollStatus) return;
+		if (pollStatus === "authorized") {
+			handled.current = pollStatus;
+			toast.success(m.github_login_success());
+			setDevice(null);
+			void queryClient.invalidateQueries({ queryKey: orpc.admin.github.key() });
+			return;
+		}
+		if (pollStatus === "expired" || pollStatus === "denied") {
+			handled.current = pollStatus;
+			toast.error(
+				pollStatus === "expired" ? m.github_login_expired() : m.github_login_denied(),
+			);
+			setDevice(null);
+		}
+	}, [pollStatus, queryClient, toast]);
+
+	const signOut = useMutation(
+		orpc.admin.github.oauthClear.mutationOptions({
+			onError: (error) =>
+				toast.error(m.github_logout_failed(), { description: errorMessage(error) }),
+			onSuccess: async () => {
+				toast.success(m.github_logged_out());
+				setDevice(null);
+				await queryClient.invalidateQueries({ queryKey: orpc.admin.github.key() });
+			},
+		}),
+	);
+
+	if (oauth?.configured === true) {
+		return (
+			<div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2 text-[11px]">
+				<span className="font-medium text-foreground">
+					{m.github_login_signed_in()} {oauth.login}
+				</span>
+				{oauth.scopes.length === 0 ? null : (
+					<span className="text-muted-foreground">
+						{m.github_scopes()}: {oauth.scopes.join(", ")}
+					</span>
+				)}
+				<Button
+					className="ml-auto"
+					leadingIcon={<LogOut />}
+					loading={signOut.isPending}
+					size="xs"
+					variant="ghost"
+					onClick={() => signOut.mutate()}
+				>
+					{m.github_logout()}
+				</Button>
+			</div>
+		);
+	}
+
+	if (device !== null) {
+		return (
+			<div className="space-y-2 rounded-lg border border-border bg-muted/40 px-3 py-2.5">
+				<p className="text-[11px] leading-4 text-muted-foreground">{m.github_login_code_hint()}</p>
+				<div className="flex flex-wrap items-center gap-2">
+					<code className="rounded bg-background px-2 py-1 font-mono text-sm font-semibold tracking-widest">
+						{device.userCode}
+					</code>
+					<a
+						className="text-[11px] font-medium text-primary underline underline-offset-4"
+						href={device.verificationUri}
+						rel="noreferrer"
+						target="_blank"
+					>
+						{device.verificationUri}
+					</a>
+				</div>
+				<p className="text-[10.5px] text-muted-foreground">{m.github_login_waiting()}</p>
+			</div>
+		);
+	}
+
+	return (
+		<div className="space-y-2">
+			<div className="flex flex-wrap items-end gap-2">
+				<Input
+					classNames={{ field: "h-8 rounded-md", input: "text-xs", root: "gap-1" }}
+					label={m.github_login_client_id()}
+					value={clientId}
+					onChange={setClientId}
+				/>
+				<Button
+					disabled={clientId.trim().length === 0}
+					leadingIcon={<LogIn />}
+					loading={start.isPending}
+					size="sm"
+					onClick={() => start.mutate({ clientId: clientId.trim() })}
+				>
+					{m.github_login_start()}
+				</Button>
+			</div>
+			<p className="text-[10.5px] leading-4 text-muted-foreground">{m.github_login_help()}</p>
+		</div>
+	);
+}
+
+function AppSection() {
 	const toast = useToast();
 	const queryClient = useQueryClient();
 	const status = useQuery({
@@ -64,6 +204,7 @@ export function GitHubAppCard() {
 	const [appId, setAppId] = useState("");
 	const [installationId, setInstallationId] = useState("");
 	const [privateKey, setPrivateKey] = useState("");
+	const app = status.data?.app;
 
 	const invalidate = async () => {
 		await queryClient.invalidateQueries({ queryKey: orpc.admin.github.key() });
@@ -92,8 +233,11 @@ export function GitHubAppCard() {
 		}),
 	);
 
-	const configured = status.data?.configured === true;
-	const formVisible = status.data !== undefined && (!configured || editing);
+	if (app === undefined) {
+		return <p className="text-[11px] text-muted-foreground">{m.loading()}</p>;
+	}
+	const configured = app.configured;
+	const formVisible = !configured || editing;
 	const appIdValue = Number(appId);
 	const installationIdValue = Number(installationId);
 	const valid =
@@ -103,6 +247,97 @@ export function GitHubAppCard() {
 		installationIdValue > 0 &&
 		privateKey.trim().length > 0;
 
+	return (
+		<div className="space-y-2">
+			{configured ? <AppSummary status={app} /> : <p className="text-[11px] text-muted-foreground">{m.github_not_configured()}</p>}
+			{formVisible ? (
+				<div className="space-y-2">
+					<div className="grid gap-2 sm:grid-cols-2">
+						<Input
+							classNames={{ field: "h-8 rounded-md", input: "text-xs", root: "gap-1" }}
+							inputMode="numeric"
+							label={m.github_app_id()}
+							value={appId}
+							onChange={setAppId}
+						/>
+						<Input
+							classNames={{ field: "h-8 rounded-md", input: "text-xs", root: "gap-1" }}
+							inputMode="numeric"
+							label={m.github_installation_id()}
+							value={installationId}
+							onChange={setInstallationId}
+						/>
+					</div>
+					<label className="block text-[11px] text-muted-foreground">
+						{m.github_private_key()}
+						<textarea
+							aria-label={m.github_private_key()}
+							className={cn(
+								"mt-1 min-h-24 w-full resize-y rounded-md border border-border bg-background p-2",
+								"font-mono text-[10.5px] leading-4 text-foreground outline-none",
+								"focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30",
+							)}
+							placeholder={m.github_private_key_placeholder()}
+							spellCheck={false}
+							value={privateKey}
+							onChange={(event) => setPrivateKey(event.currentTarget.value)}
+						/>
+					</label>
+					<p className="text-[10.5px] leading-4 text-muted-foreground">
+						{m.github_required_permissions()}
+					</p>
+					<div className="flex flex-wrap gap-1.5">
+						<Button
+							disabled={!valid}
+							loading={configure.isPending}
+							size="sm"
+							onClick={() =>
+								configure.mutate({
+									appId: appIdValue,
+									installationId: installationIdValue,
+									privateKey: privateKey.trim(),
+								})
+							}
+						>
+							{m.github_configure()}
+						</Button>
+						{configured ? (
+							<Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+								{m.cancel()}
+							</Button>
+						) : null}
+					</div>
+				</div>
+			) : (
+				<div className="flex flex-wrap gap-1.5">
+					<Button
+						leadingIcon={<KeyRound />}
+						size="xs"
+						variant="outline"
+						onClick={() => setEditing(true)}
+					>
+						{m.github_configure()}
+					</Button>
+					<Button
+						leadingIcon={<Trash2 />}
+						loading={clear.isPending}
+						size="xs"
+						variant="ghost"
+						onClick={() => clear.mutate()}
+					>
+						{m.github_remove()}
+					</Button>
+				</div>
+			)}
+		</div>
+	);
+}
+
+export function GitHubAppCard() {
+	const status = useQuery({
+		...orpc.admin.github.status.queryOptions(),
+		staleTime: 15_000,
+	});
 	return (
 		<Card size="compact">
 			<CardHeader>
@@ -118,98 +353,29 @@ export function GitHubAppCard() {
 					/>
 				) : status.data === undefined ? (
 					<p className="text-[11px] text-muted-foreground">{m.loading()}</p>
-				) : configured ? (
-					<ConfiguredSummary status={status.data} />
 				) : (
-					<p className="text-[11px] text-muted-foreground">{m.github_not_configured()}</p>
+					<>
+						<div className="space-y-2">
+							<h3 className="text-[11px] font-medium text-foreground">{m.github_login()}</h3>
+							<LoginSection />
+						</div>
+						<details className="rounded-lg border border-border/60 px-3 py-2">
+							<summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+								{m.github_app_advanced()}
+							</summary>
+							<div className="mt-2">
+								<AppSection />
+							</div>
+						</details>
+					</>
 				)}
-				{formVisible ? (
-					<div className="space-y-2">
-						<div className="grid gap-2 sm:grid-cols-2">
-							<Input
-								classNames={{ field: "h-8 rounded-md", input: "text-xs", root: "gap-1" }}
-								inputMode="numeric"
-								label={m.github_app_id()}
-								value={appId}
-								onChange={setAppId}
-							/>
-							<Input
-								classNames={{ field: "h-8 rounded-md", input: "text-xs", root: "gap-1" }}
-								inputMode="numeric"
-								label={m.github_installation_id()}
-								value={installationId}
-								onChange={setInstallationId}
-							/>
-						</div>
-						<label className="block text-[11px] text-muted-foreground">
-							{m.github_private_key()}
-							<textarea
-								aria-label={m.github_private_key()}
-								className={cn(
-									"mt-1 min-h-24 w-full resize-y rounded-md border border-border bg-background p-2",
-									"font-mono text-[10.5px] leading-4 text-foreground outline-none",
-									"focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30",
-								)}
-								placeholder={m.github_private_key_placeholder()}
-								spellCheck={false}
-								value={privateKey}
-								onChange={(event) => setPrivateKey(event.currentTarget.value)}
-							/>
-						</label>
-						<p className="text-[10.5px] leading-4 text-muted-foreground">
-							{m.github_required_permissions()}
-						</p>
-						<div className="flex flex-wrap gap-1.5">
-							<Button
-								disabled={!valid}
-								loading={configure.isPending}
-								size="sm"
-								onClick={() =>
-									configure.mutate({
-										appId: appIdValue,
-										installationId: installationIdValue,
-										privateKey: privateKey.trim(),
-									})
-								}
-							>
-								{m.github_configure()}
-							</Button>
-							{configured ? (
-								<Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
-									{m.cancel()}
-								</Button>
-							) : null}
-						</div>
-					</div>
-				) : configured ? (
-					<div className="flex flex-wrap gap-1.5">
-						<Button
-							leadingIcon={<KeyRound />}
-							size="xs"
-							variant="outline"
-							onClick={() => setEditing(true)}
-						>
-							{m.github_configure()}
-						</Button>
-						<Button
-							leadingIcon={<Trash2 />}
-							loading={clear.isPending}
-							size="xs"
-							variant="ghost"
-							onClick={() => clear.mutate()}
-						>
-							{m.github_remove()}
-						</Button>
-					</div>
-				) : null}
 			</CardContent>
 		</Card>
 	);
 }
 
 function runTone(run: GitHubRun): string {
-	if (run.conclusion === "success")
-		return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+	if (run.conclusion === "success") return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
 	if (run.conclusion === null) return "bg-amber-500/10 text-amber-700 dark:text-amber-400";
 	return "bg-destructive/10 text-destructive";
 }
@@ -219,7 +385,7 @@ export function GitHubActivityCard() {
 		...orpc.admin.github.status.queryOptions(),
 		staleTime: 30_000,
 	});
-	const enabled = status.data?.configured === true;
+	const enabled = status.data !== undefined && status.data.mode !== "none";
 	const runs = useQuery({
 		...orpc.admin.github.runs.queryOptions({ input: {} }),
 		enabled,
@@ -258,7 +424,10 @@ export function GitHubActivityCard() {
 							{runs.data.map((run) => (
 								<li key={run.id} className="flex flex-wrap items-center gap-2 py-1.5 text-[11px]">
 									<span
-										className={cn("rounded px-1.5 py-0.5 text-[9.5px] font-medium", runTone(run))}
+										className={cn(
+											"rounded px-1.5 py-0.5 text-[9.5px] font-medium",
+											runTone(run),
+										)}
 									>
 										{run.conclusion ?? run.status}
 									</span>
@@ -293,10 +462,7 @@ export function GitHubActivityCard() {
 					) : (
 						<ul className="divide-y divide-border/60">
 							{pulls.data.map((pull) => (
-								<li
-									key={pull.number}
-									className="flex flex-wrap items-center gap-2 py-1.5 text-[11px]"
-								>
+								<li key={pull.number} className="flex flex-wrap items-center gap-2 py-1.5 text-[11px]">
 									<span className="font-mono text-[10px] text-muted-foreground">
 										#{pull.number}
 									</span>

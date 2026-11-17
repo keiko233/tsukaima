@@ -704,8 +704,8 @@ export const adminRouter = {
 			context.lifecycle.repository.pull(input.remote === undefined ? {} : { remote: input.remote }),
 		),
 		push: adminBase.admin.repository.push.handler(async ({ context, input }) => {
-			// The App token is optional: an ssh remote or an operator credential helper still works.
-			const token = await context.lifecycle.githubApp.installationToken().catch(() => undefined);
+			// Optional: an ssh remote or an operator credential helper still works without one.
+			const token = await context.lifecycle.github.gitCredential();
 			return await context.lifecycle.repository.push({
 				confirm: input.confirm,
 				...(input.branch === undefined ? {} : { branch: input.branch }),
@@ -718,14 +718,38 @@ export const adminRouter = {
 		),
 	},
 	github: {
-		clear: adminBase.admin.github.clear.handler(async ({ context }) =>
-			context.lifecycle.githubApp.clear(),
-		),
-		configure: adminBase.admin.github.configure.handler(async ({ context, input }) =>
-			context.lifecycle.githubApp.configure(input),
-		),
+		clear: adminBase.admin.github.clear.handler(async ({ context }) => {
+			await context.lifecycle.githubApp.clear();
+			return {
+				app: await context.lifecycle.githubApp.status(),
+				mode: await context.lifecycle.github.mode(),
+				oauth: await context.lifecycle.githubOAuth.status(),
+			};
+		}),
+		configure: adminBase.admin.github.configure.handler(async ({ context, input }) => {
+			await context.lifecycle.githubApp.configure(input);
+			return {
+				app: await context.lifecycle.githubApp.status(),
+				mode: await context.lifecycle.github.mode(),
+				oauth: await context.lifecycle.githubOAuth.status(),
+			};
+		}),
 		issues: adminBase.admin.github.issues.handler(async ({ context }) =>
 			context.lifecycle.github.issues(),
+		),
+		oauthClear: adminBase.admin.github.oauthClear.handler(async ({ context }) => {
+			await context.lifecycle.githubOAuth.clear();
+			return {
+				app: await context.lifecycle.githubApp.status(),
+				mode: await context.lifecycle.github.mode(),
+				oauth: await context.lifecycle.githubOAuth.status(),
+			};
+		}),
+		oauthPoll: adminBase.admin.github.oauthPoll.handler(async ({ context }) =>
+			context.lifecycle.githubOAuth.poll(),
+		),
+		oauthStart: adminBase.admin.github.oauthStart.handler(async ({ context, input }) =>
+			context.lifecycle.githubOAuth.start(input.clientId),
 		),
 		pulls: adminBase.admin.github.pulls.handler(async ({ context }) =>
 			context.lifecycle.github.pulls(),
@@ -733,9 +757,11 @@ export const adminRouter = {
 		runs: adminBase.admin.github.runs.handler(async ({ context, input }) =>
 			context.lifecycle.github.runs(input.sha === undefined ? {} : { sha: input.sha }),
 		),
-		status: adminBase.admin.github.status.handler(async ({ context }) =>
-			context.lifecycle.githubApp.status(),
-		),
+		status: adminBase.admin.github.status.handler(async ({ context }) => ({
+			app: await context.lifecycle.githubApp.status(),
+			mode: await context.lifecycle.github.mode(),
+			oauth: await context.lifecycle.githubOAuth.status(),
+		})),
 	},
 	upgrade: {
 		check: adminBase.admin.upgrade.check.handler(async ({ context, input }) =>

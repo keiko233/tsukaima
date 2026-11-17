@@ -20,6 +20,7 @@ export type {
 	GroupDetail,
 	GroupSummary,
 	GitHubAppStatus,
+	GitHubDeviceStart,
 	GitHubIssue,
 	GitHubPullRequest,
 	GitHubRun,

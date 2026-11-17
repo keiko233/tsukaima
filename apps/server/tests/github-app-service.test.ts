@@ -12,6 +12,7 @@ import {
 	signAppJwt,
 } from "../src/services/github-app-service.ts";
 import { GitHubService, parseGitHubRemote } from "../src/services/github-service.ts";
+import type { GitHubOAuthService } from "../src/services/github-oauth-service.ts";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", {
 	modulusLength: 2048,
@@ -278,6 +279,7 @@ describe("GitHubService", () => {
 						private: true,
 					},
 				],
+				status: async () => ({ configured: true }),
 			} as unknown as GitHubAppService,
 			fetcher: (async (input: string | URL | Request) => {
 				const url = String(input);
@@ -380,5 +382,38 @@ describe("GitHubService", () => {
 			repositoryPath: root,
 		});
 		await expect(service.runs({ sha: "main" })).rejects.toThrow(GitHubAppError);
+	});
+
+	test("prefers the signed-in user over the App installation", async () => {
+		const root = await mkdtemp(join(tmpdir(), "tsukaima-github-reads-"));
+		directories.push(root);
+		execFileSync("git", ["init", "-b", "main"], { cwd: root });
+		execFileSync(
+			"git",
+			["remote", "add", "origin", "https://example.test/example-org/sample.git"],
+			{ cwd: root },
+		);
+		const captured = { authorization: null as string | null };
+		const service = new GitHubService({
+			app: {
+				installationToken: async () => {
+					throw new Error("the App token must not be used while a user is signed in");
+				},
+				repositories: async () => [],
+				status: async () => ({ configured: true }),
+			} as unknown as GitHubAppService,
+			fetcher: (async (_input: string | URL | Request, init?: RequestInit) => {
+				captured.authorization = new Headers(init?.headers).get("authorization");
+				return jsonResponse([]);
+			}) as unknown as typeof fetch,
+			oauth: {
+				token: async () => "synthetic-user-token",
+			} as unknown as GitHubOAuthService,
+			repositoryPath: root,
+		});
+
+		expect(await service.mode()).toBe("oauth");
+		await service.pulls();
+		expect(captured.authorization).toBe(["Bearer", "synthetic-user-token"].join(" "));
 	});
 });

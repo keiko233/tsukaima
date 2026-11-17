@@ -405,6 +405,41 @@ export type GitHubRun = z.infer<typeof githubRunSchema>;
 /** `sha` defaults to the local HEAD, resolved by the caller that already knows the checkout. */
 export const githubRunsInputSchema = z.object({ sha: z.string().min(1).optional() });
 
+export const githubOAuthStatusSchema = z.object({
+	clientId: z.string().nullable(),
+	configured: z.boolean(),
+	login: z.string().nullable(),
+	scopes: z.array(z.string()),
+});
+export type GitHubOAuthStatus = z.infer<typeof githubOAuthStatusSchema>;
+
+/** Both identities coexist; `mode` says which one the server currently uses. */
+export const githubAuthStatusSchema = z.object({
+	app: githubAppStatusSchema,
+	mode: z.enum(["app", "none", "oauth"]),
+	oauth: githubOAuthStatusSchema,
+});
+export type GitHubAuthStatus = z.infer<typeof githubAuthStatusSchema>;
+
+export const githubDeviceStartInputSchema = z.object({
+	clientId: z.string().min(1).max(128),
+});
+
+export const githubDeviceStartSchema = z.object({
+	expiresAt: z.string(),
+	intervalSeconds: z.number().int().positive(),
+	userCode: z.string().min(1),
+	verificationUri: z.string().url(),
+});
+export type GitHubDeviceStart = z.infer<typeof githubDeviceStartSchema>;
+
+export const githubDevicePollSchema = z.object({
+	intervalSeconds: z.number().int().positive().optional(),
+	login: z.string().optional(),
+	status: z.enum(["authorized", "pending", "slow_down", "expired", "denied", "idle"]),
+});
+export type GitHubDevicePoll = z.infer<typeof githubDevicePollSchema>;
+
 export const sessionDetailSchema = z.object({
 	channelId: z.string().nullable(),
 	chat: z.object({
@@ -1696,15 +1731,18 @@ export const appContract = oc.router({
 			status: oc.output(diagnosticsDataSchema),
 		},
 		github: {
-			clear: oc.output(githubAppStatusSchema).meta({ audit: true }),
+			clear: oc.output(githubAuthStatusSchema).meta({ audit: true }),
 			configure: oc
 				.input(githubAppConfigureInputSchema)
-				.output(githubAppStatusSchema)
+				.output(githubAuthStatusSchema)
 				.meta({ audit: true }),
 			issues: oc.output(z.array(githubIssueSchema)),
+			oauthClear: oc.output(githubAuthStatusSchema).meta({ audit: true }),
+			oauthPoll: oc.output(githubDevicePollSchema),
+			oauthStart: oc.input(githubDeviceStartInputSchema).output(githubDeviceStartSchema),
 			pulls: oc.output(z.array(githubPullRequestSchema)),
 			runs: oc.input(githubRunsInputSchema).output(z.array(githubRunSchema)),
-			status: oc.output(githubAppStatusSchema),
+			status: oc.output(githubAuthStatusSchema),
 		},
 		groups: {
 			get: oc.input(groupsGetInputSchema).output(groupDetailSchema.nullable()),
