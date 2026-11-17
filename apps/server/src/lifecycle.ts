@@ -109,6 +109,8 @@ import {
 	type ScheduleExecutionServiceOptions,
 } from "./services/schedule-executor.ts";
 import { ScheduleService } from "./services/schedule-service.ts";
+import { SCHEDULE_TOOL_NAMES } from "./services/schedule-tools.ts";
+import { createScheduleToolsExtension } from "./services/schedule-tools.ts";
 import { SessionMessagingService } from "./services/session-messaging.ts";
 import { UpgradeService } from "./services/upgrade-service.ts";
 import {
@@ -236,6 +238,7 @@ export class TsukaimaLifecycle {
 	private activeProviderId: string | undefined;
 	private beforeReadyCallback: (() => Promise<void>) | undefined;
 	private workspaceToolsExtension: DurableExtension | undefined;
+	private scheduleToolsExtension: DurableExtension | undefined;
 	private codingAgentToolsExtension: DurableExtension | undefined;
 
 	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
@@ -500,6 +503,13 @@ export class TsukaimaLifecycle {
 				this.hooks.emitDetached("schedule.changed", { scheduleId, sessionId });
 			},
 		});
+		this.scheduleToolsExtension = createScheduleToolsExtension({
+			audit: (entry) => this.writeAudit(entry),
+			logger: this.runtimeLog,
+			messaging: this.sessionMessaging,
+			resolveSessionId,
+			schedules: this.schedules,
+		});
 		this.workspace = new WorkspaceService({
 			applyToolPolicy: async (sessionId, durableConversationId) => {
 				const policy = await this.conversationPolicy.effectivePolicy(sessionId);
@@ -534,6 +544,7 @@ export class TsukaimaLifecycle {
 			messaging: this.sessionMessaging,
 			promptHooks: this.promptHooks,
 			resolveSessionId,
+			schedules: this.schedules,
 			workspace: this.workspace,
 		});
 		this.codingAgentToolsExtension = createCodingAgentToolsExtension({
@@ -770,7 +781,7 @@ export class TsukaimaLifecycle {
 		const host = this.conversationHost;
 		if (database === undefined || host === undefined) return;
 		const codingTools = this.pluginHost.modelToolNames("self-iteration");
-		const sessionTools = [...WORKSPACE_TOOL_NAMES];
+		const sessionTools = [...WORKSPACE_TOOL_NAMES, ...SCHEDULE_TOOL_NAMES];
 		const codingAgentTools = [...CODING_AGENT_TOOL_NAMES];
 		const removed = new Set<string>();
 		let kind: string | undefined;
@@ -1137,6 +1148,7 @@ export class TsukaimaLifecycle {
 		const dynamicExtensions = [
 			...(pluginTools === undefined ? [] : [pluginTools]),
 			...(this.workspaceToolsExtension === undefined ? [] : [this.workspaceToolsExtension]),
+			...(this.scheduleToolsExtension === undefined ? [] : [this.scheduleToolsExtension]),
 			...(this.codingAgentToolsExtension === undefined ? [] : [this.codingAgentToolsExtension]),
 		];
 		if (conversationHost !== undefined && dynamicExtensions.length > 0) {

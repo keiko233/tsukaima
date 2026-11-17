@@ -512,6 +512,54 @@ export const adminRouter = {
 			}),
 		),
 	},
+	schedules: {
+		cancel: adminBase.admin.schedules.cancel.handler(async ({ context, input }) =>
+			context.lifecycle.schedules.cancel(input.scheduleId),
+		),
+		create: adminBase.admin.schedules.create.handler(async ({ context, input }) =>
+			context.lifecycle.schedules.create({
+				...input,
+				ownerId: "webui-admin",
+				ownerKind: "user",
+				source: "webui",
+			}),
+		),
+		get: adminBase.admin.schedules.get.handler(async ({ context, input }) =>
+			context.lifecycle.schedules.get(input.scheduleId),
+		),
+		list: adminBase.admin.schedules.list.handler(async ({ context, input }) => ({
+			schedules: await context.lifecycle.schedules.list({
+				limit: input.limit,
+				...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
+				...(input.status === undefined ? {} : { status: input.status }),
+			}),
+		})),
+		occurrences: adminBase.admin.schedules.occurrences.handler(async ({ context, input }) => ({
+			occurrences: await context.lifecycle.schedules.occurrences(input.scheduleId, input.limit),
+		})),
+		pause: adminBase.admin.schedules.pause.handler(async ({ context, input }) =>
+			context.lifecycle.schedules.pause(input.scheduleId),
+		),
+		preview: adminBase.admin.schedules.preview.handler(async ({ context, input }) => ({
+			nextRuns: context.lifecycle.schedules.preview({
+				count: input.count,
+				recurrence: input.recurrence,
+				timeZone: input.timeZone,
+			}),
+		})),
+		resume: adminBase.admin.schedules.resume.handler(async ({ context, input }) =>
+			context.lifecycle.schedules.resume(input.scheduleId),
+		),
+		runNow: adminBase.admin.schedules.runNow.handler(async ({ context, input }) =>
+			context.lifecycle.schedules.runNow(input.scheduleId),
+		),
+		summary: adminBase.admin.schedules.summary.handler(async ({ context, input }) =>
+			context.lifecycle.schedules.summary(input),
+		),
+		update: adminBase.admin.schedules.update.handler(async ({ context, input }) =>
+			context.lifecycle.schedules.update(input),
+		),
+	},
 	sessions: {
 		abort: adminBase.admin.sessions.abort.handler(async ({ context, input }) =>
 			abortSessionRun(context.lifecycle, input.sessionId),

@@ -3,6 +3,7 @@ import type { MessageDeliveryMode, WorkspaceMode } from "@tsukaima/contracts";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import type { PromptHookService } from "./prompt-hooks.ts";
+import type { ScheduleService } from "./schedule-service.ts";
 import type { SessionMessagingService } from "./session-messaging.ts";
 import type { WorkspaceService } from "./workspace.ts";
 
@@ -22,6 +23,7 @@ export interface WorkspaceToolsOptions {
 	readonly messaging: SessionMessagingService;
 	readonly promptHooks: PromptHookService;
 	readonly resolveSessionId: (durableConversationId: string) => Promise<string | undefined>;
+	readonly schedules?: ScheduleService;
 	readonly workspace: WorkspaceService;
 }
 
@@ -298,6 +300,20 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 					const deliverAt = stringValue(input, "deliverAt", true)!;
 					const deliverAtMs = Date.parse(deliverAt);
 					if (!Number.isFinite(deliverAtMs)) throw new Error("deliverAt must be a valid ISO time");
+					if (options.schedules !== undefined) {
+						const schedule = await options.schedules.create({
+							actionKind: "agent_turn",
+							ownerId: "chat-agent",
+							ownerKind: "agent",
+							prompt,
+							recurrence: { at: new Date(deliverAtMs).toISOString(), kind: "once" },
+							source: "hook-compat",
+							targetSessionId,
+							timeZone: "UTC",
+							title: "Scheduled follow-up",
+						});
+						return schedule;
+					}
 					const hook = await options.promptHooks.add({
 						createdBy: "chat-agent",
 						deliverAtMs,
