@@ -19,6 +19,32 @@ import { spawn } from "node:child_process";
 export const GIT_DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
 export const GIT_DEFAULT_TIMEOUT_MS = 60_000;
 
+/**
+ * Environment that makes one network git call use a GitHub token.
+ *
+ * The rewrite matters inside a container: deployments often keep an SSH remote and an
+ * operator-specific `core.sshCommand`, but the runtime image has no `ssh` binary and no deploy
+ * key. GitHub's SSH and HTTPS endpoints address the same repository, so a token-bearing call can
+ * transparently use HTTPS. The credential helper overrides any operator helper for this one
+ * invocation only, and the token never reaches `argv`, `.git/config`, or the log.
+ */
+export function gitCredentialEnvironment(
+	token: string | undefined,
+): Record<string, string> | undefined {
+	if (token === undefined || token.length === 0) return undefined;
+	return {
+		GH_TOKEN: token,
+		GIT_CONFIG_COUNT: "3",
+		GIT_CONFIG_KEY_0: "credential.helper",
+		GIT_CONFIG_VALUE_0: "",
+		GIT_CONFIG_KEY_1: "credential.helper",
+		GIT_CONFIG_VALUE_1: "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f",
+		GIT_CONFIG_KEY_2: "url.https://github.com/.insteadOf",
+		GIT_CONFIG_VALUE_2: "git@github.com:",
+		GIT_TERMINAL_PROMPT: "0",
+	};
+}
+
 export interface GitCliOptions {
 	/** Base environment; defaults to the current process environment. */
 	readonly baseEnv?: Readonly<Record<string, string>>;

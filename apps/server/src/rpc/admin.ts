@@ -725,19 +725,25 @@ export const adminRouter = {
 		),
 	},
 	repository: {
-		fetch: adminBase.admin.repository.fetch.handler(async ({ context, input }) =>
-			context.lifecycle.repository.fetch(
-				input.remote === undefined ? {} : { remote: input.remote },
-			),
-		),
+		fetch: adminBase.admin.repository.fetch.handler(async ({ context, input }) => {
+			const token = await context.lifecycle.github.gitCredential();
+			return await context.lifecycle.repository.fetch({
+				...(input.remote === undefined ? {} : { remote: input.remote }),
+				...(token === undefined ? {} : { token }),
+			});
+		}),
 		identity: adminBase.admin.repository.identity.handler(async ({ context }) => {
 			const database = context.lifecycle.domainDatabase;
 			if (database === undefined) throw new Error("Database not ready");
 			return await readGitIdentity(database);
 		}),
-		pull: adminBase.admin.repository.pull.handler(async ({ context, input }) =>
-			context.lifecycle.repository.pull(input.remote === undefined ? {} : { remote: input.remote }),
-		),
+		pull: adminBase.admin.repository.pull.handler(async ({ context, input }) => {
+			const token = await context.lifecycle.github.gitCredential();
+			return await context.lifecycle.repository.pull({
+				...(input.remote === undefined ? {} : { remote: input.remote }),
+				...(token === undefined ? {} : { token }),
+			});
+		}),
 		push: adminBase.admin.repository.push.handler(async ({ context, input }) => {
 			// Optional: an ssh remote or an operator credential helper still works without one.
 			const token = await context.lifecycle.github.gitCredential();

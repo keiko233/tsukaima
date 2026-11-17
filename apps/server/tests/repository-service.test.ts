@@ -303,6 +303,26 @@ describe("RepositoryService writes", () => {
 		).toEqual(["fetch --prune origin", "fetch --prune upstream", "pull --ff-only origin"]);
 	});
 
+	test("network writes receive the token only through the child environment", async () => {
+		const { calls, git: stub } = stubGit();
+		const service = new RepositoryService({
+			allowPush: true,
+			git: stub,
+			repositoryPath: "/synthetic/workspace/repo",
+		});
+
+		await service.fetch({ token: "synthetic-user-token" });
+		await service.pull({ token: "synthetic-user-token" });
+		await service.push({ confirm: true, token: "synthetic-user-token" });
+
+		for (const command of ["fetch", "pull", "push"]) {
+			const call = calls.find((entry) => entry.args[0] === command);
+			expect(call?.args.join(" ")).not.toContain("synthetic-user-token");
+			expect(call?.env?.GH_TOKEN).toBe("synthetic-user-token");
+			expect(call?.env?.GIT_CONFIG_VALUE_2).toBe("git@github.com:");
+		}
+	});
+
 	test("rejects a remote that could be parsed as an option", async () => {
 		const { git: stub } = stubGit();
 		const service = new RepositoryService({

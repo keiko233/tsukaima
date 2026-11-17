@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { assertSafeBaseRef, GitCli } from "@tsukaima/coding";
+import { assertSafeBaseRef, gitCredentialEnvironment, GitCli } from "@tsukaima/coding";
 import type { RepositoryStatus } from "@tsukaima/contracts";
 import type { Logger } from "../logging.ts";
 
@@ -231,24 +231,6 @@ export function parseTagList(output: string): RepositoryTagInfo[] {
 	return tags;
 }
 
-/**
- * Credential for one push. An empty `credential.helper` first clears any configured helpers, so
- * the installation token wins over an operator's personal credential. The token travels in the
- * child environment, never in `argv` or on disk.
- */
-export function pushEnvironment(token: string | undefined): Record<string, string> | undefined {
-	if (token === undefined || token.length === 0) return undefined;
-	return {
-		GH_TOKEN: token,
-		GIT_CONFIG_COUNT: "2",
-		GIT_CONFIG_KEY_0: "credential.helper",
-		GIT_CONFIG_KEY_1: "credential.helper",
-		GIT_CONFIG_VALUE_0: "",
-		GIT_CONFIG_VALUE_1: "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f",
-		GIT_TERMINAL_PROMPT: "0",
-	};
-}
-
 export class RepositoryService {
 	readonly #allowPush: boolean;
 	readonly #git: GitCli;
@@ -268,16 +250,24 @@ export class RepositoryService {
 		this.#versionFile = options.versionFile ?? DEFAULT_VERSION_FILE;
 	}
 
-	async fetch(input: { readonly remote?: string } = {}): Promise<RepositoryStatus> {
+	async fetch(
+		input: { readonly remote?: string; readonly token?: string } = {},
+	): Promise<RepositoryStatus> {
+		const env = gitCredentialEnvironment(input.token);
 		await this.#git.run(["fetch", "--prune", this.#remote(input.remote)], {
+			...(env === undefined ? {} : { env }),
 			timeoutMs: NETWORK_TIMEOUT_MS,
 		});
 		return await this.status();
 	}
 
 	/** Fast-forward only: a diverged branch fails instead of creating a merge commit. */
-	async pull(input: { readonly remote?: string } = {}): Promise<RepositoryStatus> {
+	async pull(
+		input: { readonly remote?: string; readonly token?: string } = {},
+	): Promise<RepositoryStatus> {
+		const env = gitCredentialEnvironment(input.token);
 		await this.#git.run(["pull", "--ff-only", this.#remote(input.remote)], {
+			...(env === undefined ? {} : { env }),
 			timeoutMs: NETWORK_TIMEOUT_MS,
 		});
 		return await this.status();
@@ -303,7 +293,7 @@ export class RepositoryService {
 		const remote = this.#remote(input.remote);
 		const branch =
 			input.branch === undefined ? await this.#currentBranch() : assertSafeBaseRef(input.branch);
-		const env = pushEnvironment(input.token);
+		const env = gitCredentialEnvironment(input.token);
 		await this.#git.run(["push", remote, branch], {
 			...(env === undefined ? {} : { env }),
 			timeoutMs: NETWORK_TIMEOUT_MS,

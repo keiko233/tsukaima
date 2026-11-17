@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { desc, eq, sql } from "drizzle-orm";
 import type { RestartStatus, UpgradeCheck, UpgradeRecord } from "@tsukaima/contracts";
-import { GitCli, type GitCommandResult } from "@tsukaima/coding";
+import { gitCredentialEnvironment, GitCli, type GitCommandResult } from "@tsukaima/coding";
 import { runtimeUpgrades, type TsukaimaDatabase } from "@tsukaima/db";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
@@ -23,6 +23,8 @@ export interface UpgradeServiceOptions {
 			readonly requestedBy?: string;
 		}): Promise<RestartStatus>;
 	};
+	/** GitHub credential for the network fetch; local git calls stay credential-free. */
+	readonly token?: () => Promise<string | undefined>;
 	readonly workspace: WorkspaceService;
 }
 
@@ -95,6 +97,7 @@ export class UpgradeService {
 	readonly #gitCli: GitCli;
 	readonly #logger: Logger;
 	readonly #restart: UpgradeServiceOptions["restart"];
+	readonly #token: UpgradeServiceOptions["token"];
 	readonly #workspace: WorkspaceService;
 	#starting = false;
 
@@ -105,6 +108,7 @@ export class UpgradeService {
 		this.#gitCli = new GitCli({ repositoryPath: options.repositoryRoot });
 		this.#logger = options.logger.child("tsukaima::server::upgrade");
 		this.#restart = options.restart;
+		this.#token = options.token;
 		this.#workspace = options.workspace;
 	}
 
@@ -142,7 +146,12 @@ export class UpgradeService {
 		if (remoteResult.exitCode !== 0) {
 			return { ...base, reason: "remote_not_configured" };
 		}
-		const fetch = await this.#git(["fetch", "--prune", remote], GIT_TIMEOUT_MS);
+		const token = await this.#token?.();
+		const fetch = await this.#git(
+			["fetch", "--prune", remote],
+			GIT_TIMEOUT_MS,
+			gitCredentialEnvironment(token),
+		);
 		if (fetch.exitCode !== 0) {
 			this.#logger.warn("upstream fetch failed", {
 				error: fetch.stderr.trim().slice(0, 300),
@@ -706,8 +715,15 @@ export class UpgradeService {
 		return result.exitCode === 0 ? result.stdout.trim() : "";
 	}
 
-	async #git(args: readonly string[], timeoutMs = GIT_QUICK_TIMEOUT_MS): Promise<GitCommandResult> {
-		return await this.#gitCli.exec(args, { timeoutMs });
+	async #git(
+		args: readonly string[],
+		timeoutMs = GIT_QUICK_TIMEOUT_MS,
+		env?: Record<string, string>,
+	): Promise<GitCommandResult> {
+		return await this.#gitCli.exec(args, {
+			...(env === undefined ? {} : { env }),
+			timeoutMs,
+		});
 	}
 
 	async #auditRecord(entry: AuditEntry): Promise<void> {

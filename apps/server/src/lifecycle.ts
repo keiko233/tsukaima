@@ -586,6 +586,7 @@ export class TsukaimaLifecycle {
 				cancel: (reason) => this.cancelRestart(reason),
 				schedule: (input) => this.scheduleRestart(input),
 			},
+			token: () => this.github.gitCredential(),
 			workspace: this.workspace,
 		});
 		this.workspaceToolsExtension = createWorkspaceToolsExtension({

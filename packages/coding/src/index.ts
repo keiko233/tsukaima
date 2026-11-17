@@ -61,6 +61,7 @@ export type { WorktreeInfo, WorktreeManagerConfig } from "./worktree.ts";
 export {
 	GIT_DEFAULT_MAX_OUTPUT_BYTES,
 	GIT_DEFAULT_TIMEOUT_MS,
+	gitCredentialEnvironment,
 	GitCli,
 	GitCommandError,
 } from "./git.ts";
