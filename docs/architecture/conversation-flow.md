@@ -243,6 +243,11 @@ The runner must:
 
 The chat-facing agent is not a coding agent by default. Coding tools appear only in coding or self-iteration conversations/tasks.
 
+Both chat and coding use lazy tool loading: plugin and host tools are deferred by default and
+become visible only after `tool_search` loads them. Tools also declare a `surface` (`chat`,
+`coding`, or `both`), and the host removes mismatched tools before every turn, so discovery
+cannot widen a chat into a coding surface.
+
 ## 11. Tool execution
 
 Tools are durable tasks where supported.

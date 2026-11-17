@@ -590,6 +590,7 @@ function registerTools(context: PluginContext, runtime: OneBotRuntime): void {
 			},
 			name: `onebot-napcat.${method}`,
 			parameters: TOOL_PARAMETERS_BY_METHOD[method],
+			policy: { lazy: true, surface: "chat" },
 			requiredPermissions: ONEBOT_ACTION_PERMISSIONS[method],
 		});
 	}

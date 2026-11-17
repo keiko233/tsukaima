@@ -493,6 +493,11 @@ export interface PluginDatabaseApi {
 
 export interface ToolPolicy {
 	readonly visibility: "model" | "ui" | "admin" | "hidden";
+	/** Offer the tool only after `tool_search` loads it. Defaults to `true`. */
+	readonly lazy?: boolean;
+	/** Conversation surface this tool belongs to. Defaults to `"both"`. */
+	readonly surface?: ToolSurface;
+	/** Legacy alias for `lazy`. */
 	readonly deferred?: boolean;
 	readonly timeoutMs: number;
 	readonly maxConcurrent: number;
@@ -503,6 +508,8 @@ export interface ToolPolicy {
 	/** Optional task-kind gate (`scheduled`, `proactive`, `coding`, ...). */
 	readonly allowedTaskKinds?: readonly string[];
 }
+
+export type ToolSurface = "chat" | "coding" | "both";
 
 export interface ToolInvocationContext {
 	readonly conversationId?: string;
@@ -525,6 +532,10 @@ export interface PluginTool {
 	description: string;
 	parameters: Record<string, unknown>;
 	requiredPermissions: readonly PluginPermission[];
+	/** Offer the tool only after `tool_search` loads it. Defaults to `true`. */
+	readonly lazy?: boolean;
+	/** Conversation surface this tool belongs to. Defaults to `"both"`. */
+	readonly surface?: ToolSurface;
 	/** Host-enforced execution policy. Defaults are model-visible, 30s, 4 concurrent. */
 	policy?: Partial<ToolPolicy>;
 	execute(
@@ -561,6 +572,9 @@ export interface PluginToolRegistration {
 	name: string;
 	description: string;
 	parameters: Record<string, unknown>;
+	/** Set for tools the model must load through `tool_search` first. */
+	readonly deferred?: true;
+	readonly surface?: ToolSurface;
 	execute(
 		args: unknown,
 		api: PluginToolExecutionApi,

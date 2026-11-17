@@ -12,7 +12,7 @@ bridges, settings/status, install/uninstall, audit, requests, durable tasks, and
 databases. Missing production surfaces:
 
 - durable task creation
-- per-tool allowlist/deferred/timeout
+- per-tool allowlist/lazy-loading/surface/timeout
 - named UI component registry
 - marketplace/install updates
 - policy-controlled external effects
@@ -73,6 +73,11 @@ Tool registrations add:
 ```ts
 type ToolPolicy = {
   visibility: "model" | "ui" | "admin" | "hidden";
+  /** Offer only after `tool_search` loads it. Defaults to true. */
+  lazy?: boolean;
+  /** Conversation surface this tool belongs to. Defaults to "both". */
+  surface?: "chat" | "coding" | "both";
+  /** Legacy alias for `lazy`. */
   deferred?: boolean;
   timeoutMs: number;
   maxConcurrent: number;
@@ -92,7 +97,9 @@ Policy resolution:
 5. task kind
 
 Unknown/unauthorized tools become explicit model-visible errors. UI/admin tools are not exposed
-to the model unless policy allows. Timeout/cancellation releases resources and writes audit.
+to the model unless policy allows. Lazy tools are omitted from the request and from
+`tool_search` candidates until the surface allows them and the model loads them. Timeout and
+cancellation release resources and write audit.
 
 ## UI component registry
 

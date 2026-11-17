@@ -1,5 +1,5 @@
 import { assertPermission, hasPermission } from "./permissions.ts";
-import { pluginManifestSchema } from "./manifest.ts";
+import { pluginManifestSchema, type PluginManifest } from "./manifest.ts";
 import { LocalTaskBridge } from "./tasks.ts";
 import {
 	resolveToolPolicyAccess,
@@ -215,10 +215,18 @@ export class LocalToolBridge {
 	readonly #tools = new Map<string, PluginTool>();
 	readonly #pluginId: string;
 	readonly #grantedPermissions: readonly string[];
+	readonly #declarations: ReadonlyMap<string, PluginManifest["tools"][number]>;
 
-	constructor(pluginId: string, grantedPermissions: readonly string[]) {
+	constructor(
+		pluginId: string,
+		grantedPermissions: readonly string[],
+		declarations: readonly PluginManifest["tools"][number][] = [],
+	) {
 		this.#pluginId = pluginId;
 		this.#grantedPermissions = grantedPermissions;
+		this.#declarations = new Map(
+			declarations.map((declaration) => [declaration.name, declaration]),
+		);
 	}
 
 	register(tool: PluginTool): void {
@@ -229,7 +237,14 @@ export class LocalToolBridge {
 		for (const permission of tool.requiredPermissions) {
 			assertPermission(this.#grantedPermissions, permission, this.#pluginId);
 		}
-		this.#tools.set(tool.name, tool);
+		const declaration = this.#declarations.get(tool.name);
+		const lazy = tool.lazy ?? tool.policy?.lazy ?? declaration?.lazy;
+		const surface = tool.surface ?? tool.policy?.surface ?? declaration?.surface;
+		this.#tools.set(tool.name, {
+			...tool,
+			...(lazy === undefined ? {} : { lazy }),
+			...(surface === undefined ? {} : { surface }),
+		});
 	}
 
 	list(): readonly PluginTool[] {
@@ -887,8 +902,11 @@ export function createPluginToolsExtension(
 	const registrationFor = (tool: PluginTool): PluginToolRegistration => {
 		const existing = registrations.get(tool.name);
 		if (existing?.tool === tool) return existing.registration;
+		const resolvedPolicy = resolveToolPolicy(tool);
 		const registration: PluginToolRegistration = {
 			description: tool.description,
+			...(resolvedPolicy.lazy ? { deferred: true as const } : {}),
+			surface: resolvedPolicy.surface ?? "both",
 			async execute(args, api) {
 				const input = isRecord(args) ? args : {};
 				const conversationId = String(api.conversationId);
@@ -1281,7 +1299,11 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 		)
 			? new LocalCacheBridge()
 			: undefined);
-	const tools = new LocalToolBridge(pluginId, options.grantedPermissions ?? manifest.permissions);
+	const tools = new LocalToolBridge(
+		pluginId,
+		options.grantedPermissions ?? manifest.permissions,
+		manifest.tools,
+	);
 	const ui = new LocalUiBridge({
 		grantedPermissions: options.grantedPermissions ?? manifest.permissions,
 		pluginId,

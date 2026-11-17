@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { LocalToolBridge, createPluginToolsExtension } from "./bridges.ts";
+import { LocalToolBridge, createPluginToolsExtension, providerSafeToolName } from "./bridges.ts";
 import { DEFAULT_TOOL_POLICY, resolveToolPolicy, resolveToolPolicyAccess } from "./policy.ts";
+import { pluginManifestSchema } from "./manifest.ts";
 import type { AuditEntry } from "./host.ts";
 import type { PluginTool } from "./types.ts";
 
@@ -171,5 +172,97 @@ describe("tool policy", () => {
 				toolAllowlist: [],
 			}),
 		).toEqual(expect.objectContaining({ allowed: false, reason: "tool_not_allowlisted" }));
+	});
+
+	test("defers tools by default and lets a plugin opt out", () => {
+		expect(resolveToolPolicy(tool()).lazy).toBe(true);
+		expect(resolveToolPolicy(tool({ policy: { lazy: false } })).lazy).toBe(false);
+		expect(resolveToolPolicy(tool({ lazy: false, policy: { lazy: true } })).lazy).toBe(false);
+		expect(resolveToolPolicy(tool({ policy: { deferred: false } })).lazy).toBe(false);
+	});
+
+	test("keeps chat and coding tools on their declared surfaces", () => {
+		expect(resolveToolPolicy(tool()).surface).toBe("both");
+		expect(
+			resolveToolPolicyAccess(tool({ policy: { surface: "coding" } }), {
+				grantedPermissions: ["conversation.read"],
+				surface: "chat",
+			}),
+		).toEqual(expect.objectContaining({ allowed: false, reason: "surface_mismatch" }));
+		expect(
+			resolveToolPolicyAccess(tool({ policy: { surface: "chat" } }), {
+				grantedPermissions: ["conversation.read"],
+				surface: "coding",
+			}).reason,
+		).toBe("surface_mismatch");
+		expect(
+			resolveToolPolicyAccess(tool({ policy: { surface: "coding" } }), {
+				grantedPermissions: ["conversation.read"],
+				surface: "coding",
+			}),
+		).toEqual(expect.objectContaining({ allowed: true }));
+	});
+
+	test("adapts lazy and surface declarations onto durable registrations", () => {
+		const lazyTool = tool({ name: "demo.lazy", policy: { surface: "coding" } });
+		const eagerTool = tool({ name: "demo.eager", policy: { lazy: false, surface: "chat" } });
+		const extension = createPluginToolsExtension(
+			() => [lazyTool, eagerTool],
+			async () => ({ ok: true, result: { content: [] } }),
+		);
+		expect(extension.tools).toEqual([
+			expect.objectContaining({
+				deferred: true,
+				name: providerSafeToolName("demo.lazy"),
+				surface: "coding",
+			}),
+			expect.objectContaining({
+				name: providerSafeToolName("demo.eager"),
+				surface: "chat",
+			}),
+		]);
+		expect(extension.tools[1]?.deferred).toBeUndefined();
+	});
+
+	test("uses manifest declarations as registration defaults", () => {
+		const manifest = pluginManifestSchema.parse({
+			apiVersion: "1",
+			kind: "third-party",
+			name: "demo",
+			permissions: ["conversation.read"],
+			tools: [
+				{
+					description: "Lazy coding tool",
+					lazy: true,
+					name: "demo.coding",
+					parameters: {},
+					requiredPermissions: ["conversation.read"],
+					surface: "coding",
+				},
+				{
+					description: "Eager chat tool",
+					lazy: false,
+					name: "demo.chat",
+					parameters: {},
+					requiredPermissions: ["conversation.read"],
+					surface: "chat",
+				},
+			],
+			version: "0.1.0",
+		});
+		const bridge = new LocalToolBridge("demo", ["conversation.read"], manifest.tools);
+		bridge.register(tool({ name: "demo.coding", requiredPermissions: ["conversation.read"] }));
+		bridge.register(tool({ name: "demo.chat", requiredPermissions: ["conversation.read"] }));
+		expect(bridge.list()).toEqual([
+			expect.objectContaining({ lazy: true, name: "demo.coding", surface: "coding" }),
+			expect.objectContaining({ lazy: false, name: "demo.chat", surface: "chat" }),
+		]);
+
+		bridge.register(
+			tool({ lazy: true, name: "demo.chat", requiredPermissions: ["conversation.read"] }),
+		);
+		expect(bridge.list()[1]).toEqual(
+			expect.objectContaining({ lazy: true, name: "demo.chat", surface: "chat" }),
+		);
 	});
 });

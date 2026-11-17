@@ -1,8 +1,10 @@
 import { hasPermission, type PluginPermission } from "./permissions.ts";
-import type { PluginTool, ToolInvocationContext, ToolPolicy } from "./types.ts";
+import type { PluginTool, ToolInvocationContext, ToolPolicy, ToolSurface } from "./types.ts";
 
 export const DEFAULT_TOOL_POLICY: ToolPolicy = Object.freeze({
+	lazy: true,
 	maxConcurrent: 4,
+	surface: "both",
 	timeoutMs: 30_000,
 	visibility: "model",
 });
@@ -13,10 +15,12 @@ export function resolveToolPolicy(tool: PluginTool): ToolPolicy {
 	return {
 		...DEFAULT_TOOL_POLICY,
 		...policy,
+		lazy: tool.lazy ?? policy.lazy ?? policy.deferred ?? true,
 		maxConcurrent: Math.max(
 			1,
 			Math.floor(policy.maxConcurrent ?? DEFAULT_TOOL_POLICY.maxConcurrent),
 		),
+		surface: tool.surface ?? policy.surface ?? "both",
 		timeoutMs: Math.max(1, Math.floor(policy.timeoutMs ?? DEFAULT_TOOL_POLICY.timeoutMs)),
 	};
 }
@@ -30,6 +34,8 @@ export interface ToolPolicyAccessContext extends ToolInvocationContext {
 	readonly conversationAllowedTools?: readonly string[];
 	/** Channel capabilities for the current conversation. */
 	readonly channelCapabilities?: readonly string[];
+	/** Current execution surface; absent means no surface restriction. */
+	readonly surface?: ToolSurface;
 }
 
 export interface ToolPolicyDecision {
@@ -68,6 +74,15 @@ export function resolveToolPolicyAccess(
 	});
 
 	if (policy.visibility === "hidden") return deny("hidden_tool");
+
+	// 0. Surface: a chat turn never reaches coding tools, even through discovery.
+	if (
+		context.surface !== undefined &&
+		policy.surface !== "both" &&
+		policy.surface !== context.surface
+	) {
+		return deny("surface_mismatch");
+	}
 
 	// 1. Plugin manifest permissions.
 	if (context.grantedPermissions !== undefined) {

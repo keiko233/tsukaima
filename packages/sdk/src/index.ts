@@ -87,6 +87,7 @@ export type {
 	PluginDatabaseApi,
 	PluginTool,
 	ToolPolicy,
+	ToolSurface,
 	PluginToolExecutionApi,
 	PluginToolInvocationResult,
 	PluginToolRegistration,

@@ -96,7 +96,13 @@ export function registerStickerTools(
 			},
 			type: "object",
 		},
-		policy: { maxConcurrent: 4, maxPayloadBytes: 4_096, timeoutMs: 10_000 },
+		policy: {
+			lazy: true,
+			maxConcurrent: 4,
+			maxPayloadBytes: 4_096,
+			surface: "chat",
+			timeoutMs: 10_000,
+		},
 		requiredPermissions: ["media.read"],
 	});
 	context.tools.register({
@@ -151,8 +157,10 @@ export function registerStickerTools(
 		},
 		policy: {
 			conversationAllowlist: true,
+			lazy: true,
 			maxConcurrent: 4,
 			maxPayloadBytes: 4_096,
+			surface: "chat",
 			timeoutMs: 15_000,
 		},
 		requiredPermissions: ["media.read", "conversation.read"],

@@ -131,6 +131,10 @@ context.tools.register({
   parameters: z.object({
     query: z.string(),
   }),
+  // Optional. Tools are lazy by default; set `false` to always offer this one.
+  lazy: true,
+  // Optional. "chat", "coding", or "both" (default).
+  surface: "both",
   async execute(input, toolContext) {
     return {
       content: [{ type: "text", text: "..." }],
@@ -154,8 +158,13 @@ The model never sees the dotted name. OpenAI-compatible providers only accept
 deterministic hash. The extension still invokes the original name, so routing, permission checks,
 and audit records use the author-facing name.
 
-All registered plugin tools are offered to the model by default; there is no per-tool allowlist,
-`deferred` flag, or per-tool timeout yet.
+Tools are **lazy by default**. A lazy tool stays out of the request until the model calls the
+host `tool_search` tool, which loads matches into `modelTools` for the rest of the conversation
+branch. Set `lazy: false` on the registration or in `policy` for a tool that should always be
+offered. `surface` declares whether the tool belongs to chat turns, coding/workspace turns, or
+both; the lifecycle removes tools whose surface does not match before each turn, so a chat turn
+cannot discover coding tools through `tool_search`. `deferred` remains accepted as a policy alias
+for `lazy`.
 
 ## Storage
 

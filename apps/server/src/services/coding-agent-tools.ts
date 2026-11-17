@@ -87,10 +87,12 @@ function tool(input: {
 	readonly parameters: Record<string, unknown>;
 }): DurableToolRegistration {
 	return {
+		deferred: true,
 		description: input.description,
 		execute: input.execute,
 		name: input.name,
 		parameters: input.parameters,
+		surface: "coding",
 	};
 }
 

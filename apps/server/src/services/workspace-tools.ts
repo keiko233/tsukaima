@@ -88,12 +88,15 @@ function tool(input: {
 	readonly execute: DurableToolRegistration["execute"];
 	readonly name: string;
 	readonly parameters: Record<string, unknown>;
+	readonly surface: "chat" | "coding" | "both";
 }): DurableToolRegistration {
 	return {
+		deferred: true,
 		description: input.description,
 		execute: input.execute,
 		name: input.name,
 		parameters: input.parameters,
+		surface: input.surface,
 	};
 }
 
@@ -171,6 +174,7 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 			required: ["goal"],
 			type: "object",
 		},
+		surface: "chat",
 		async execute(args, api) {
 			const input = record(args);
 			return run("workspace_spawn", String(api.conversationId), async () => {
@@ -203,6 +207,7 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 			},
 			type: "object",
 		},
+		surface: "both",
 		async execute(args, api) {
 			const input = record(args);
 			return run("workspace_status", String(api.conversationId), async () => {
@@ -233,6 +238,7 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 			required: ["sessionId", "text"],
 			type: "object",
 		},
+		surface: "both",
 		async execute(args, api) {
 			const input = record(args);
 			return run("workspace_send", String(api.conversationId), async () =>
@@ -259,6 +265,7 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 			required: ["prompt", "timing"],
 			type: "object",
 		},
+		surface: "both",
 		async execute(args, api) {
 			const input = record(args);
 			return run("hook_schedule", String(api.conversationId), async () => {
@@ -322,6 +329,7 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 			required: ["query"],
 			type: "object",
 		},
+		surface: "chat",
 		async execute(args, api) {
 			const input = record(args);
 			return run("session_lookup", String(api.conversationId), async () => ({
@@ -340,6 +348,7 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 			properties: { includeFinished: { type: "boolean" } },
 			type: "object",
 		},
+		surface: "both",
 		async execute(args, api) {
 			const input = record(args);
 			return run("hook_list", String(api.conversationId), async () => {

@@ -41,6 +41,10 @@ export const pluginManifestSchema = z.object({
 				description: z.string().min(1),
 				parameters: jsonObjectSchema.default({}),
 				requiredPermissions: z.array(pluginPermissionSchema).max(16).default([]),
+				/** Offer the tool only after `tool_search` loads it. Defaults to `true`. */
+				lazy: z.boolean().optional(),
+				/** Conversation surface this tool belongs to. Defaults to `both`. */
+				surface: z.enum(["chat", "coding", "both"]).optional(),
 			}),
 		)
 		.max(128)

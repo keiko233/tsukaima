@@ -55,38 +55,63 @@ function createCapturingModel() {
 			baseUrl: "http://capture.invalid/v1",
 			fetch: (async (_input, init) => {
 				const request = JSON.parse(String(init?.body ?? "{}")) as CapturedRequest;
-				const first = requests.length === 0;
+				const call = requests.length;
 				requests.push(request);
-				const payload = first
-					? {
-							choices: [
-								{
-									finish_reason: "tool_calls",
-									message: {
-										content: null,
-										tool_calls: [
-											{
-												function: {
-													arguments: '{"text":"ping"}',
-													name: SAFE_ECHO_TOOL_NAME,
+				const payload =
+					call === 0
+						? {
+								choices: [
+									{
+										finish_reason: "tool_calls",
+										message: {
+											content: null,
+											tool_calls: [
+												{
+													function: {
+														arguments: '{"query":"echo"}',
+														name: "tool_search",
+													},
+													id: "search-1",
+													type: "function",
 												},
-												id: "call-1",
-												type: "function",
-											},
-										],
+											],
+										},
 									},
-								},
-							],
-							id: "resp-1",
-							model: "capture-model",
-							usage: { completion_tokens: 1, prompt_tokens: 1, total_tokens: 2 },
-						}
-					: {
-							choices: [{ finish_reason: "stop", message: { content: "done" } }],
-							id: "resp-2",
-							model: "capture-model",
-							usage: { completion_tokens: 1, prompt_tokens: 1, total_tokens: 2 },
-						};
+								],
+								id: "resp-0",
+								model: "capture-model",
+								usage: { completion_tokens: 1, prompt_tokens: 1, total_tokens: 2 },
+							}
+						: call === 1
+							? {
+									choices: [
+										{
+											finish_reason: "tool_calls",
+											message: {
+												content: null,
+												tool_calls: [
+													{
+														function: {
+															arguments: '{"text":"ping"}',
+															name: SAFE_ECHO_TOOL_NAME,
+														},
+														id: "call-1",
+														type: "function",
+													},
+												],
+											},
+										},
+									],
+									id: "resp-1",
+									model: "capture-model",
+									usage: { completion_tokens: 1, prompt_tokens: 1, total_tokens: 2 },
+								}
+							: {
+									choices: [{ finish_reason: "stop", message: { content: "done" } }],
+									id: "resp-2",
+									model: "capture-model",
+									usage: { completion_tokens: 1, prompt_tokens: 1, total_tokens: 2 },
+								};
 				return new Response(JSON.stringify(payload), {
 					headers: { "content-type": "application/json" },
 					status: 200,
@@ -178,9 +203,13 @@ describe("plugin tools", () => {
 				forceSubmit: true,
 				submittedAtMs: Date.now(),
 			});
-			await waitFor(() => (requests.length >= 2 ? true : undefined));
+			await waitFor(() => (requests.length >= 3 ? true : undefined));
 
-			expect(requests[0]?.tools?.map((tool) => tool.function?.name)).toContain(SAFE_ECHO_TOOL_NAME);
+			expect(requests[0]?.tools?.map((tool) => tool.function?.name)).not.toContain(
+				SAFE_ECHO_TOOL_NAME,
+			);
+			expect(requests[0]?.tools?.map((tool) => tool.function?.name)).toContain("tool_search");
+			expect(requests[1]?.tools?.map((tool) => tool.function?.name)).toContain(SAFE_ECHO_TOOL_NAME);
 			expect(seen).toEqual([{ text: "ping" }]);
 			const database = lifecycle.domainDatabase;
 			if (database === undefined) throw new Error("Domain database is not initialized");
@@ -229,8 +258,11 @@ describe("plugin tools", () => {
 				forceSubmit: true,
 				submittedAtMs: Date.now(),
 			});
-			await waitFor(() => (requests.length >= 2 ? true : undefined));
-			expect(requests[0]?.tools?.map((tool) => tool.function?.name)).toContain(SAFE_ECHO_TOOL_NAME);
+			await waitFor(() => (requests.length >= 3 ? true : undefined));
+			expect(requests[0]?.tools?.map((tool) => tool.function?.name)).not.toContain(
+				SAFE_ECHO_TOOL_NAME,
+			);
+			expect(requests[1]?.tools?.map((tool) => tool.function?.name)).toContain(SAFE_ECHO_TOOL_NAME);
 		} finally {
 			await host.close();
 			await storage.close(BACKGROUND_CONTEXT);

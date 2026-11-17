@@ -166,7 +166,13 @@ function tool(
 		execute,
 		name: `${SELF_ITERATION_PLUGIN_ID}.${name}`,
 		parameters,
-		policy: { ...BASE_POLICY, maxPayloadBytes: 64 * 1024, timeoutMs },
+		policy: {
+			...BASE_POLICY,
+			lazy: true,
+			maxPayloadBytes: 64 * 1024,
+			surface: "coding",
+			timeoutMs,
+		},
 		requiredPermissions,
 	};
 }

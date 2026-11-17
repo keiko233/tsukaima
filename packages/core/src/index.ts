@@ -55,10 +55,12 @@ export {
 	type InspectConversationContextOptions,
 	type LiveRunSnapshot,
 } from "./conversation-host.ts";
-export type {
-	Extension as DurableExtension,
-	ToolRegistration as DurableToolRegistration,
-} from "@earendil-works/pi-durable";
+import type { ToolRegistration } from "@earendil-works/pi-durable";
+export type { Extension as DurableExtension } from "@earendil-works/pi-durable";
+/** Tool registration plus the Tsukaima surface that may offer it. */
+export type DurableToolRegistration = ToolRegistration & {
+	readonly surface?: "chat" | "coding" | "both";
+};
 export {
 	type BusyArbiter,
 	type BusyArbitrationDecision,

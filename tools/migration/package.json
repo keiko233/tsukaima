@@ -1,6 +1,6 @@
 {
 	"name": "@tsukaima/migration-cli",
-	"version": "0.3.0",
+	"version": "0.4.0",
 	"private": true,
 	"bin": {
 		"tsukaima-migration": "./src/cli.ts"

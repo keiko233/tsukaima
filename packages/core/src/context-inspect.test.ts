@@ -178,7 +178,11 @@ describe("inspectConversationContext", () => {
 			expect(stats.categories.toolsTokens).toBeGreaterThan(0);
 			expect(stats.deferredToolsTokens).toBeGreaterThan(0);
 
-			expect(stats.tools.map((tool) => tool.name)).toEqual(["search_notes", "heavy_tool"]);
+			expect(stats.tools.map((tool) => tool.name)).toEqual([
+				"tool_search",
+				"search_notes",
+				"heavy_tool",
+			]);
 			expect(stats.tools.find((tool) => tool.name === "heavy_tool")?.deferred).toBe(true);
 			expect(stats.tools.find((tool) => tool.name === "search_notes")?.deferred).toBe(false);
 
@@ -193,6 +197,56 @@ describe("inspectConversationContext", () => {
 			expect(stats.usedTokens + stats.autocompact.bufferTokens + stats.freeSpaceTokens).toBe(
 				stats.contextWindow,
 			);
+
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("loads deferred tools through tool_search and keeps removed tools undiscoverable", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-tool-search-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const extension: Extension = {
+				name: "test-deferred",
+				tools: [
+					{
+						callers: ["model"],
+						deferred: true,
+						description: "Search notes by keyword",
+						execute: async () => ({ output: [{ text: "ok", type: "text" }] }),
+						name: "search_notes",
+						parameters: { properties: { query: { type: "string" } }, type: "object" },
+					},
+					{
+						callers: ["model"],
+						deferred: true,
+						description: "Edit a repository file",
+						execute: async () => ({ output: [{ text: "ok", type: "text" }] }),
+						name: "edit_file",
+						parameters: { properties: { path: { type: "string" } }, type: "object" },
+					},
+				],
+			};
+			const host = new PiDurableConversationHost({ extensions: [extension], storage });
+			const conversationId = await host.createConversation();
+			const initial = await host.inspectConversationContext(conversationId);
+			expect(initial?.tools.map((tool) => tool.name)).toEqual([
+				"tool_search",
+				"search_notes",
+				"edit_file",
+			]);
+			expect(initial?.tools.filter((tool) => tool.deferred).map((tool) => tool.name)).toEqual([
+				"search_notes",
+				"edit_file",
+			]);
+
+			await host.updateToolAccess(conversationId, { remove: ["edit_file"] });
+			const filtered = await host.inspectConversationContext(conversationId);
+			expect(filtered?.tools.map((tool) => tool.name)).toEqual(["tool_search", "search_notes"]);
+			expect(filtered?.deferredToolsTokens).toBeGreaterThan(0);
 
 			await host.close();
 			await storage.close(BACKGROUND_CONTEXT);

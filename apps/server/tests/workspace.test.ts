@@ -12,6 +12,7 @@ import {
 	workspaceSessions,
 	workspaceTodos,
 } from "@tsukaima/db";
+import { providerSafeToolName } from "@tsukaima/sdk";
 import { createApp } from "../src/app.ts";
 import { createLocalChat, listChats } from "../src/services/webui.ts";
 
@@ -245,14 +246,19 @@ describe("workspace sessions", () => {
 		);
 		expect(parentTools).toContain("workspace_spawn");
 		expect(parentTools).toContain("session_lookup");
+		expect(parentTools).toContain("tool_search");
 		expect(parentTools?.some((name) => name.startsWith("self-iteration_"))).toBe(false);
 		expect(workspaceTools).toContain("workspace_status");
 		expect(workspaceTools).not.toContain("workspace_spawn");
+		expect(workspaceTools).not.toContain("session_lookup");
 		expect(workspaceTools?.some((name) => name.startsWith("self-iteration_"))).toBe(true);
 		expect(workspaceTools).toContain("todo_write");
 		expect(workspaceTools).toContain("db_query");
 		expect(parentTools).not.toContain("todo_write");
 		expect(parentTools).not.toContain("db_query");
+		expect(parentTools?.some((name) => name.startsWith("self-iteration_"))).toBe(false);
+		expect(workspaceTools).not.toContain(providerSafeToolName("sticker-meme.search"));
+		expect(workspaceTools).not.toContain(providerSafeToolName("onebot-napcat.send_private_msg"));
 
 		const found = await lifecycle.sessionMessaging.searchSessions("Admin chat");
 		expect(found[0]?.id).toBe(parent.sessionId);

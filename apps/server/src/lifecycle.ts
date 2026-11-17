@@ -629,10 +629,12 @@ export class TsukaimaLifecycle {
 			.where(eq(conversations.durableConversationId, durableConversationId))
 			.limit(1);
 		const kind = row?.chatKind ?? row?.sessionKind;
+		const surface = kind === "workspace" ? "coding" : "chat";
 		const codingTools = this.pluginHost.modelToolNames("self-iteration");
 		const sessionTools = [...WORKSPACE_TOOL_NAMES];
 		const codingAgentTools = [...CODING_AGENT_TOOL_NAMES];
 		const removed = new Set<string>();
+		for (const name of host.modelToolNamesNotForSurface(surface)) removed.add(name);
 		if (kind !== "workspace") {
 			for (const name of codingTools) removed.add(name);
 			for (const name of codingAgentTools) removed.add(name);
@@ -648,7 +650,7 @@ export class TsukaimaLifecycle {
 		} else {
 			for (const name of sessionTools) removed.add(name);
 		}
-		await host.updateModelTools(durableConversationId, { remove: [...removed] });
+		await host.updateToolAccess(durableConversationId, { remove: [...removed] });
 	}
 
 	private transition(stage: string, state: LifecycleState["state"] = "starting"): void {

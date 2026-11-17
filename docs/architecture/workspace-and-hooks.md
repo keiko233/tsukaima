@@ -72,6 +72,16 @@ Workspace-only coding-agent tools:
 The coding-agent extension is installed process-wide but filtered out for chat, IM, task, and
 plugin sessions in `applySessionToolPolicy`.
 
+## Lazy tool loading
+
+Chat and coding share one discovery path. Every conversation gets the host `tool_search` tool;
+tools marked lazy are omitted from the request until the model searches for them and the host
+loads the match into that conversation's `modelTools`. Plugin tools are lazy by default, and
+`lazy: false` opts a frequently used tool back into the upfront request. Each tool declares a
+`surface` of `chat`, `coding`, or `both`; the lifecycle removes mismatched tools before the turn,
+which also keeps them out of `tool_search` candidates. The context inspector reports loaded and
+deferred tools separately, and removal from `tools` is what makes a filtered tool undiscoverable.
+
 ## Upstream upgrades
 
 Settings → Upgrades compares the running checkout with `TSUKAIMA_UPGRADE_REMOTE`

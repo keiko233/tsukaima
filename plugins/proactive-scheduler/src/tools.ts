@@ -215,8 +215,10 @@ export function registerProactiveSchedulerTools(
 		},
 		policy: {
 			conversationAllowlist: true,
+			lazy: true,
 			maxConcurrent: 2,
 			maxPayloadBytes: 16_384,
+			surface: "both",
 			timeoutMs: 15_000,
 		},
 		requiredPermissions: ["tasks.create", "conversation.read"],
@@ -266,8 +268,10 @@ export function registerProactiveSchedulerTools(
 		},
 		policy: {
 			conversationAllowlist: true,
+			lazy: true,
 			maxConcurrent: 4,
 			maxPayloadBytes: 4_096,
+			surface: "both",
 			timeoutMs: 10_000,
 		},
 		requiredPermissions: ["tasks.list", "conversation.read"],
@@ -327,8 +331,10 @@ export function registerProactiveSchedulerTools(
 		policy: {
 			conversationAllowlist: true,
 			destructive: true,
+			lazy: true,
 			maxConcurrent: 2,
 			maxPayloadBytes: 4_096,
+			surface: "both",
 			timeoutMs: 10_000,
 		},
 		requiredPermissions: ["tasks.cancel", "conversation.read"],
@@ -368,7 +374,13 @@ export function registerProactiveSchedulerTools(
 			required: ["taskId"],
 			type: "object",
 		},
-		policy: { maxConcurrent: 4, maxPayloadBytes: 4_096, timeoutMs: 10_000 },
+		policy: {
+			lazy: true,
+			maxConcurrent: 4,
+			maxPayloadBytes: 4_096,
+			surface: "both",
+			timeoutMs: 10_000,
+		},
 		requiredPermissions: ["tasks.get", "conversation.read"],
 	});
 }

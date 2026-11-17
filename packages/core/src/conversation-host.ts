@@ -29,6 +29,7 @@ import {
 	type ToolRegistration,
 	type UserInput,
 } from "@earendil-works/pi-durable";
+import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import {
 	type ActivityAggregationPolicy,
 	type ConversationPolicy,
@@ -656,6 +657,7 @@ export class PiDurableConversationHost {
 	/** Recent interrupt timestamps for the per-minute ceiling. */
 	private readonly interruptTimes = new Map<string, number[]>();
 	private readonly contextExtension: Extension | undefined;
+	private readonly toolSearchExtension: Extension;
 	private readonly extensions = new Map<string, Extension>();
 	private readonly dynamicExtensions = new Set<string>();
 	private readonly extensionsEnsured = new Set<string>();
@@ -692,6 +694,12 @@ export class PiDurableConversationHost {
 			this.extensions.set(this.contextExtension.name, this.contextExtension);
 			this.registry.install(this.contextExtension);
 		}
+		// Deferred tools are invisible until the model loads them. Install the search tool for
+		// every conversation so chat and coding share one discovery path.
+		const toolSearchExtension = createToolSearchExtension();
+		this.toolSearchExtension = toolSearchExtension;
+		this.extensions.set(toolSearchExtension.name, toolSearchExtension);
+		this.registry.install(toolSearchExtension);
 		if (options.extensions !== undefined) this.installExtensions(options.extensions);
 	}
 
@@ -2150,6 +2158,18 @@ export class PiDurableConversationHost {
 		conversationId: string,
 		options: { readonly remove: readonly string[] },
 	): Promise<void> {
+		await this.updateToolAccess(conversationId, options);
+	}
+
+	/**
+	 * Per-conversation tool access. Removing from `tools` keeps a tool out of the request and
+	 * out of `tool_search` candidates; removing from `modelTools` also unloads a deferred tool
+	 * that an earlier turn had loaded.
+	 */
+	async updateToolAccess(
+		conversationId: string,
+		options: { readonly remove: readonly string[] },
+	): Promise<void> {
 		const signature = [...options.remove].toSorted().join("\0");
 		if (this.modelToolsSignatures.get(conversationId) === signature) return;
 		await withConversationLock(
@@ -2162,16 +2182,54 @@ export class PiDurableConversationHost {
 					throw new Error(`Conversation not found: ${conversationId}`);
 				}
 				const removeNames = new Set(options.remove);
-				const registrations = this.registry
-					.snapshot()
-					.tools()
+				const snapshotTools = this.registry.snapshot().tools();
+				const byName = new Map(snapshotTools.map(({ tool }) => [tool.name, tool]));
+				const registrations = snapshotTools
 					.filter(({ tool }) => removeNames.has(tool.name))
 					.map(({ tool }) => tool);
-				await conversation.configure({ modelTools: { remove: registrations } }, BACKGROUND_CONTEXT);
+				// `tool_search` records loaded tools in `modelTools.add`; rewriting the filter
+				// must keep them, or every turn would unload what the model already discovered.
+				const state = await harness.snapshot(AgentDoc, numericId, BACKGROUND_CONTEXT);
+				const storedModelTools = state?.modelTools;
+				const modelTools = Array.isArray(storedModelTools)
+					? storedModelTools.flatMap((name) => {
+							const tool = removeNames.has(name) ? undefined : byName.get(name);
+							return tool === undefined ? [] : [tool];
+						})
+					: {
+							remove: registrations,
+							...(storedModelTools?.add === undefined || storedModelTools.add.length === 0
+								? {}
+								: {
+										add: storedModelTools.add.flatMap((name) => {
+											const tool = byName.get(name);
+											return tool === undefined ? [] : [tool];
+										}),
+									}),
+						};
+				await conversation.configure(
+					{
+						modelTools,
+						tools: { remove: registrations },
+					},
+					BACKGROUND_CONTEXT,
+				);
 				this.modelToolsSignatures.set(conversationId, signature);
 			},
 			this.executionLock,
 		);
+	}
+
+	/** Registered tools whose declared surface excludes the given one. */
+	modelToolNamesNotForSurface(surface: "chat" | "coding"): readonly string[] {
+		return this.registry
+			.snapshot()
+			.tools()
+			.filter(({ tool }) => {
+				const declared = (tool as ToolRegistration & { readonly surface?: string }).surface;
+				return declared !== undefined && declared !== "both" && declared !== surface;
+			})
+			.map(({ tool }) => tool.name);
 	}
 
 	private async readPolicy(conversationId: ConversationId): Promise<ConversationPolicy> {
@@ -2203,6 +2261,7 @@ export class PiDurableConversationHost {
 		const incoming = new Map(next.map((extension) => [extension.name, extension]));
 		for (const name of this.dynamicExtensions) {
 			if (incoming.has(name)) continue;
+			if (name === this.toolSearchExtension.name) continue;
 			const installed = this.extensions.get(name);
 			if (installed !== undefined) {
 				this.registry.uninstall(installed);
@@ -2213,6 +2272,9 @@ export class PiDurableConversationHost {
 		for (const [name, extension] of incoming) {
 			if (name === this.contextExtension?.name) {
 				throw new Error(`Extension ${name} is reserved by the conversation context`);
+			}
+			if (name === this.toolSearchExtension.name) {
+				throw new Error(`Extension ${name} is reserved by the tool search surface`);
 			}
 			this.extensions.set(name, extension);
 			this.registry.install(extension);
