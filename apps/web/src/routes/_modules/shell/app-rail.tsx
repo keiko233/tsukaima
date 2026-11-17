@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
 	Brain,
+	CalendarClock,
 	Inbox,
 	LogOut,
 	MessageSquare,
@@ -39,6 +40,7 @@ type RailDestination =
 	| "/plugins"
 	| "/requests"
 	| "/settings"
+	| "/tasks"
 	| "/users"
 	| "/workspace";
 
@@ -201,6 +203,12 @@ export function AppRail() {
 						icon={SquareTerminal}
 						label={m.tab_workspace()}
 						to="/workspace"
+					/>
+					<RailLink
+						active={destinationActive("/tasks", pathname)}
+						icon={CalendarClock}
+						label={m.tab_tasks()}
+						to="/tasks"
 					/>
 					<RailLink
 						active={destinationActive("/users", pathname)}
