@@ -1,5 +1,5 @@
 import type { DurableExtension, DurableToolRegistration } from "@tsukaima/core";
-import type { MessageDeliveryMode, WorkspaceMode } from "@tsukaima/contracts";
+import type { MessageDeliveryMode, ThinkingLevel, WorkspaceMode } from "@tsukaima/contracts";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import type { PromptHookService } from "./prompt-hooks.ts";
@@ -77,6 +77,18 @@ function workspaceMode(value: unknown): WorkspaceMode | undefined {
 		value === "patch" ||
 		value === "proposal" ||
 		value === "maintenance"
+		? value
+		: undefined;
+}
+
+function thinkingLevel(value: unknown): ThinkingLevel | undefined {
+	return value === "off" ||
+		value === "minimal" ||
+		value === "low" ||
+		value === "medium" ||
+		value === "high" ||
+		value === "xhigh" ||
+		value === "max"
 		? value
 		: undefined;
 }
@@ -170,7 +182,16 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 		parameters: {
 			properties: {
 				baseRef: { type: "string" },
+				effort: {
+					enum: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+					type: "string",
+				},
 				goal: { description: "Concrete engineering goal and acceptance criteria.", type: "string" },
+				model: { description: "Model id from the active provider's catalog.", type: "string" },
+				modelProvider: {
+					description: "Provider id; must be the active provider. Defaults to it.",
+					type: "string",
+				},
 				mode: { enum: ["analysis", "patch", "proposal"], type: "string" },
 			},
 			required: ["goal"],
@@ -186,7 +207,20 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 						? {}
 						: { baseRef: stringValue(input, "baseRef")! }),
 					goal: stringValue(input, "goal", true)!,
+					...(stringValue(input, "model") === undefined
+						? {}
+						: {
+								model: {
+									modelId: stringValue(input, "model")!,
+									...(stringValue(input, "modelProvider") === undefined
+										? {}
+										: { providerId: stringValue(input, "modelProvider")! }),
+								},
+							}),
 					...(workspaceMode(input.mode) === undefined ? {} : { mode: workspaceMode(input.mode)! }),
+					...(thinkingLevel(input.effort) === undefined
+						? {}
+						: { thinking: thinkingLevel(input.effort)! }),
 				});
 				return {
 					...result,

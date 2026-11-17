@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { MODEL_CAPABILITIES } from "@tsukaima/sdk";
+import { MODEL_CAPABILITIES, type PluginModelInfo } from "@tsukaima/sdk";
 import { conversations, modelPolicies, type memories } from "@tsukaima/db";
 import { adminBase, type TsukaimaApiContext } from "./base.ts";
 import {
@@ -74,6 +74,26 @@ function toContractPolicies(policies: readonly LifecycleModelPolicy[]) {
 	}));
 }
 
+function toCatalogEntry(model: PluginModelInfo) {
+	return {
+		capabilities: [...model.capabilities],
+		...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+		id: model.id,
+		...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
+		...(model.name === undefined ? {} : { name: model.name }),
+		...(model.pluginId === undefined ? {} : { pluginId: model.pluginId }),
+		providerId: model.providerId,
+		...(model.reasoning === undefined
+			? {}
+			: {
+					reasoning: {
+						...(model.reasoning.default === undefined ? {} : { default: model.reasoning.default }),
+						levels: [...model.reasoning.levels],
+					},
+				}),
+	};
+}
+
 /**
  * Settings plus the models plugins advertise for the sidechat classifier. The catalog is omitted
  * when no provider declares one, which keeps the contract small and lets the WebUI explain that
@@ -93,17 +113,16 @@ async function settingsView(context: TsukaimaApiContext) {
 		const existing = byId.get(model.id);
 		if (existing === undefined || model.providerId === activeProviderId) byId.set(model.id, model);
 	}
-	const models = [...byId.values()].map((model) => ({
-		capabilities: [...model.capabilities],
-		...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
-		id: model.id,
-		...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
-		...(model.name === undefined ? {} : { name: model.name }),
-		...(model.pluginId === undefined ? {} : { pluginId: model.pluginId }),
-		providerId: model.providerId,
-	}));
+	const models = [...byId.values()].map(toCatalogEntry);
+	const availableModels =
+		activeProviderId === undefined
+			? []
+			: (await context.lifecycle.pluginHost.listModels({ providerId: activeProviderId })).map(
+					toCatalogEntry,
+				);
 	return {
 		...publicRuntimeSettings(settings),
+		...(availableModels.length === 0 ? {} : { availableModels }),
 		...(models.length === 0 ? {} : { models }),
 		plugins: await context.lifecycle.pluginHost.configViews(),
 	};
@@ -648,9 +667,11 @@ export const adminRouter = {
 			const result = await context.lifecycle.workspace.create({
 				...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
 				...(input.goal === undefined ? {} : { goal: input.goal }),
+				...(input.model === undefined ? {} : { model: input.model }),
 				...(input.mode === undefined ? {} : { mode: input.mode }),
 				...(input.parentSessionId === undefined ? {} : { parentSessionId: input.parentSessionId }),
 				...(input.tags === undefined ? {} : { tags: input.tags }),
+				...(input.thinking === undefined ? {} : { thinking: input.thinking }),
 				requestedBy: "webui-admin",
 			});
 			return result;

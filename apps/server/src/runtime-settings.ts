@@ -11,24 +11,38 @@ export { runtimeSettingsPatchSchema, runtimeSettingsSchema };
 export type { RuntimeSettings, RuntimeSettingsPatch };
 
 export interface PublicRuntimeSettings {
+	readonly chatModel?: RuntimeSettings["chatModel"];
+	readonly chatThinking?: RuntimeSettings["chatThinking"];
 	readonly logLevel: RuntimeSettings["logLevel"];
 	readonly modelProviderId?: string;
 	readonly sidechatModelId?: string;
+	readonly workspaceModel?: RuntimeSettings["workspaceModel"];
+	readonly workspaceThinking?: RuntimeSettings["workspaceThinking"];
 }
 
 const SETTINGS_KEY = "runtime-settings";
 
 type SettingsValue = {
+	chatModel?: RuntimeSettings["chatModel"];
+	chatThinking?: RuntimeSettings["chatThinking"];
 	logLevel: RuntimeSettings["logLevel"];
 	modelProviderId?: string;
 	sidechatModelId?: string;
+	workspaceModel?: RuntimeSettings["workspaceModel"];
+	workspaceThinking?: RuntimeSettings["workspaceThinking"];
 };
 
 function normalize(input: RuntimeSettings): SettingsValue {
 	return {
+		...(input.chatModel === undefined ? {} : { chatModel: input.chatModel }),
+		...(input.chatThinking === undefined ? {} : { chatThinking: input.chatThinking }),
 		logLevel: input.logLevel,
 		...(input.modelProviderId === undefined ? {} : { modelProviderId: input.modelProviderId }),
 		...(input.sidechatModelId === undefined ? {} : { sidechatModelId: input.sidechatModelId }),
+		...(input.workspaceModel === undefined ? {} : { workspaceModel: input.workspaceModel }),
+		...(input.workspaceThinking === undefined
+			? {}
+			: { workspaceThinking: input.workspaceThinking }),
 	};
 }
 
@@ -68,6 +82,8 @@ export async function writeRuntimeSettings(
 
 export function publicRuntimeSettings(settings: RuntimeSettings): PublicRuntimeSettings {
 	return {
+		...(settings.chatModel === undefined ? {} : { chatModel: settings.chatModel }),
+		...(settings.chatThinking === undefined ? {} : { chatThinking: settings.chatThinking }),
 		logLevel: settings.logLevel,
 		...(settings.modelProviderId === undefined
 			? {}
@@ -75,6 +91,10 @@ export function publicRuntimeSettings(settings: RuntimeSettings): PublicRuntimeS
 		...(settings.sidechatModelId === undefined
 			? {}
 			: { sidechatModelId: settings.sidechatModelId }),
+		...(settings.workspaceModel === undefined ? {} : { workspaceModel: settings.workspaceModel }),
+		...(settings.workspaceThinking === undefined
+			? {}
+			: { workspaceThinking: settings.workspaceThinking }),
 	};
 }
 
@@ -94,5 +114,18 @@ export async function patchRuntimeSettings(
 			? undefined
 			: (patch.sidechatModelId ?? current.sidechatModelId);
 	if (sidechatModelId !== undefined) next.sidechatModelId = sidechatModelId;
+	const chatModel = patch.chatModel === null ? undefined : (patch.chatModel ?? current.chatModel);
+	if (chatModel !== undefined) next.chatModel = chatModel;
+	const workspaceModel =
+		patch.workspaceModel === null ? undefined : (patch.workspaceModel ?? current.workspaceModel);
+	if (workspaceModel !== undefined) next.workspaceModel = workspaceModel;
+	const chatThinking =
+		patch.chatThinking === null ? undefined : (patch.chatThinking ?? current.chatThinking);
+	if (chatThinking !== undefined) next.chatThinking = chatThinking;
+	const workspaceThinking =
+		patch.workspaceThinking === null
+			? undefined
+			: (patch.workspaceThinking ?? current.workspaceThinking);
+	if (workspaceThinking !== undefined) next.workspaceThinking = workspaceThinking;
 	return writeRuntimeSettings(database, next);
 }

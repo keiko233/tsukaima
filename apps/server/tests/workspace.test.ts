@@ -151,6 +151,32 @@ describe("workspace sessions", () => {
 		await lifecycle.stop();
 	});
 
+	test("stores an explicit workspace model and reasoning override", async () => {
+		const lifecycle = await startApp();
+		const workspace = await lifecycle.workspace.create({
+			model: { modelId: "fake-deterministic", providerId: "fake" },
+			thinking: "high",
+		});
+		const policy = await lifecycle.conversationPolicy.effectivePolicy(workspace.sessionId);
+		expect(policy.model).toEqual({
+			modelId: "fake-deterministic",
+			providerId: "fake",
+		});
+		expect(policy.thinking).toBe("high");
+		expect(
+			lifecycle.conversationHost?.resolveModelRef({
+				modelId: "missing-model",
+				providerId: "fake",
+			}),
+		).toBeUndefined();
+		await expect(
+			lifecycle.workspace.create({
+				model: { modelId: "missing-model", providerId: "fake" },
+			}),
+		).rejects.toThrow("is not available");
+		await lifecycle.stop();
+	});
+
 	test("stores workspace todos and referenced conversation context", async () => {
 		const lifecycle = await startApp();
 		const parent = await createLocalChat(lifecycle, {

@@ -19,6 +19,7 @@ import {
 } from "@tsukaima/db";
 import { createApp } from "../src/app.ts";
 import { createLogger } from "../src/logging.ts";
+import { writeRuntimeSettings } from "../src/runtime-settings.ts";
 import { ConversationPolicyService } from "../src/services/conversation-policy.ts";
 import { DrizzleContextProvider } from "../src/services/context-provider.ts";
 
@@ -144,6 +145,72 @@ describe("conversation policy service", () => {
 			expect(history.find((revision) => revision.isActive)?.policy.version).toBe(2);
 			const rows = await database.select().from(policies);
 			expect(rows.filter((row) => row.scope === "conversation")).toHaveLength(2);
+		} finally {
+			database.$client.close();
+		}
+	});
+
+	test("resolves conversation overrides, surface defaults, and workspace defaults", async () => {
+		const database = await openFixture();
+		try {
+			await seedSession(database);
+			const now = new Date().toISOString();
+			await database.insert(chatObjects).values({
+				createdAt: now,
+				id: "chat-workspace",
+				kind: "workspace",
+				title: "Workspace",
+				updatedAt: now,
+			});
+			await database.insert(conversations).values({
+				chatObjectId: "chat-workspace",
+				createdAt: now,
+				durableConversationId: "43",
+				id: "workspace-1",
+				isReceiving: 1,
+				kind: "workspace",
+				title: "Workspace",
+				updatedAt: now,
+			});
+			await writeRuntimeSettings(database, {
+				chatModel: { modelId: "chat-default", providerId: "provider-a" },
+				chatThinking: "low",
+				logLevel: "info",
+				workspaceModel: { modelId: "workspace-default", providerId: "provider-a" },
+				workspaceThinking: "high",
+			});
+			const policyService = service(database);
+			expect(await policyService.agentSettingsForConversation("session-1")).toEqual({
+				model: { modelId: "chat-default", providerId: "provider-a" },
+				thinkingLevel: "low",
+			});
+			expect(await policyService.agentSettingsForConversation("workspace-1")).toEqual({
+				model: { modelId: "workspace-default", providerId: "provider-a" },
+				thinkingLevel: "high",
+			});
+
+			await policyService.update({
+				conversationId: "workspace-1",
+				policy: {
+					model: { modelId: "session-model", providerId: "provider-b" },
+					thinking: "max",
+				},
+				scope: "conversation",
+			});
+			expect(await policyService.agentSettingsForConversation("workspace-1")).toEqual({
+				model: { modelId: "session-model", providerId: "provider-b" },
+				thinkingLevel: "max",
+			});
+
+			await policyService.update({
+				conversationId: "workspace-1",
+				policy: { model: null, thinking: null },
+				scope: "conversation",
+			});
+			expect(await policyService.agentSettingsForConversation("workspace-1")).toEqual({
+				model: { modelId: "workspace-default", providerId: "provider-a" },
+				thinkingLevel: "high",
+			});
 		} finally {
 			database.$client.close();
 		}

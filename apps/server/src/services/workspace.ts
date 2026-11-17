@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type {
 	MessageDeliveryMode,
+	ThinkingLevel,
 	WorkspaceDetail,
 	WorkspaceMode,
 	WorkspaceProposalSummary,
@@ -46,10 +47,18 @@ export interface WorkspaceServiceOptions {
 export interface CreateWorkspaceInput {
 	readonly baseRef?: string;
 	readonly goal?: string;
+	readonly model?: WorkspaceModelSelection;
 	readonly mode?: WorkspaceMode;
 	readonly parentSessionId?: string;
 	readonly requestedBy?: string;
 	readonly tags?: readonly string[];
+	readonly thinking?: ThinkingLevel;
+}
+
+/** A workspace model may omit the provider; the active conversation provider is the default. */
+export interface WorkspaceModelSelection {
+	readonly modelId: string;
+	readonly providerId?: string;
 }
 
 export interface CreateWorkspaceResult {
@@ -184,6 +193,14 @@ export class WorkspaceService {
 		const baseRef = input.baseRef?.trim() || "HEAD";
 		const requestedBy = input.requestedBy ?? "webui-admin";
 		const tags = normalizeTags([mode, ...(input.tags ?? [])]);
+		const model = input.model === undefined ? undefined : host.resolveModelRef(input.model);
+		if (input.model !== undefined && model === undefined) {
+			throw new Error(
+				`Model ${input.model.modelId} is not available${
+					input.model.providerId === undefined ? "" : ` on provider ${input.model.providerId}`
+				}`,
+			);
+		}
 		let parentSessionId = input.parentSessionId;
 		if (parentSessionId !== undefined) {
 			const [parent] = await database
@@ -242,7 +259,11 @@ export class WorkspaceService {
 		});
 		await this.#policy.update({
 			conversationId: sessionId,
-			policy: { capabilities: WORKSPACE_CAPABILITIES },
+			policy: {
+				capabilities: WORKSPACE_CAPABILITIES,
+				...(model === undefined ? {} : { model }),
+				...(input.thinking === undefined ? {} : { thinking: input.thinking }),
+			},
 			scope: "conversation",
 		});
 		await this.#applyToolPolicy?.(sessionId, durableConversationId);
@@ -253,6 +274,7 @@ export class WorkspaceService {
 			payload: {
 				baseRef,
 				goal: goal ?? null,
+				model: model ?? null,
 				mode,
 				parentSessionId: parentSessionId ?? null,
 				sessionId,
@@ -412,8 +434,10 @@ export class WorkspaceService {
 		input: {
 			readonly baseRef?: string;
 			readonly goal?: string;
+			readonly model?: WorkspaceModelSelection;
 			readonly mode?: WorkspaceMode;
 			readonly tags?: readonly string[];
+			readonly thinking?: ThinkingLevel;
 		},
 	): Promise<CreateWorkspaceResult> {
 		const source = await this.#messaging.session(sourceSessionId);
@@ -423,10 +447,12 @@ export class WorkspaceService {
 		return this.create({
 			...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
 			...(input.goal === undefined ? {} : { goal: input.goal }),
+			...(input.model === undefined ? {} : { model: input.model }),
 			...(input.mode === undefined ? {} : { mode: input.mode }),
 			parentSessionId: sourceSessionId,
 			requestedBy: "chat-agent",
 			...(input.tags === undefined ? {} : { tags: input.tags }),
+			...(input.thinking === undefined ? {} : { thinking: input.thinking }),
 		});
 	}
 

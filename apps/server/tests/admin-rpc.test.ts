@@ -158,6 +158,27 @@ describe("admin RPC", () => {
 		});
 		expect(lifecycle.logLevel).toBe("debug");
 		expect(lifecycle.providerRestartRequired).toBe(false);
+		const withModelDefaults = (await request("admin/settings/update", {
+			chatModel: { modelId: "fake-deterministic", providerId: "fake" },
+			chatThinking: "low",
+			workspaceModel: { modelId: "fake-deterministic", providerId: "fake" },
+			workspaceThinking: "high",
+		})) as {
+			chatModel?: { modelId: string; providerId: string };
+			chatThinking?: string;
+			workspaceModel?: { modelId: string; providerId: string };
+			workspaceThinking?: string;
+		};
+		expect(withModelDefaults.chatModel).toEqual({
+			modelId: "fake-deterministic",
+			providerId: "fake",
+		});
+		expect(withModelDefaults.chatThinking).toBe("low");
+		expect(withModelDefaults.workspaceModel).toEqual({
+			modelId: "fake-deterministic",
+			providerId: "fake",
+		});
+		expect(withModelDefaults.workspaceThinking).toBe("high");
 		const upgradeStatus = await request("admin/upgrade/status");
 		expect(upgradeStatus).toBeNull();
 		const upgradeHistory = await request("admin/upgrade/history");

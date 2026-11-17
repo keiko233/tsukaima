@@ -246,6 +246,10 @@ export class TsukaimaLifecycle {
 	 */
 	private readonly inboundFailureLoggedAt = new Map<string, number>();
 	private activeProviderId: string | undefined;
+	/** Provider/model catalog signature; a change invalidates per-conversation model refs. */
+	private modelPortSignature: string | undefined;
+	/** Last chat/workspace model defaults pushed to durable conversations. */
+	private agentDefaultsSignature: string | undefined;
 	private beforeReadyCallback: (() => Promise<void>) | undefined;
 	private workspaceToolsExtension: DurableExtension | undefined;
 	private scheduleToolsExtension: DurableExtension | undefined;
@@ -1296,6 +1300,21 @@ export class TsukaimaLifecycle {
 			},
 		];
 		this.conversationHost?.setModel(model);
+		// A provider swap can invalidate a stored model id, so re-resolve every conversation
+		// against the new port instead of waiting for each one's next turn.
+		const portSignature = JSON.stringify({
+			modelId: model.modelId,
+			models: model.models
+				.getModels(model.providerId)
+				.map((entry) => entry.id)
+				.toSorted(),
+			providerId: model.providerId,
+		});
+		if (portSignature !== this.modelPortSignature) {
+			this.modelPortSignature = portSignature;
+			this.agentDefaultsSignature = this.agentDefaultsKey(effectiveSettings);
+			await this.conversationPolicy.refreshAgentSettings();
+		}
 		const requestedProviderId = effectiveSettings.modelProviderId;
 		this.providerRestartRequired =
 			requestedProviderId !== undefined && requestedProviderId !== this.activeProviderId;
@@ -1315,9 +1334,26 @@ export class TsukaimaLifecycle {
 			this.providerRestartRequired =
 				requestedProviderId !== undefined && requestedProviderId !== this.activeProviderId;
 		}
+		if (this.domainDatabase !== undefined && this.conversationHost !== undefined) {
+			const signature = this.agentDefaultsKey(settings);
+			if (signature !== this.agentDefaultsSignature) {
+				this.agentDefaultsSignature = signature;
+				await this.conversationPolicy.refreshAgentSettings();
+			}
+		}
 		this.runtimeLog.info("runtime settings applied", {
 			logLevel: settings.logLevel,
 			providerRestartRequired: this.providerRestartRequired,
+		});
+	}
+
+	/** Serialized chat/workspace model defaults, used to skip no-op durable re-syncs. */
+	private agentDefaultsKey(settings: RuntimeSettings): string {
+		return JSON.stringify({
+			chatModel: settings.chatModel ?? null,
+			chatThinking: settings.chatThinking ?? null,
+			workspaceModel: settings.workspaceModel ?? null,
+			workspaceThinking: settings.workspaceThinking ?? null,
 		});
 	}
 

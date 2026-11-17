@@ -12,7 +12,7 @@ import {
 	type PersonaSummary,
 	type PolicyRevision,
 } from "@tsukaima/contracts";
-import type { PiDurableConversationHost } from "@tsukaima/core";
+import type { ConversationAgentSettings, PiDurableConversationHost } from "@tsukaima/core";
 import {
 	chatObjects,
 	conversations,
@@ -22,6 +22,7 @@ import {
 	type TsukaimaDatabase,
 } from "@tsukaima/db";
 import type { Logger } from "../logging.ts";
+import { readRuntimeSettings } from "../runtime-settings.ts";
 
 const nowIso = (): string => new Date().toISOString();
 
@@ -122,8 +123,14 @@ export function mergeConversationPolicy(
 		patch.memoryExtractModel === null
 			? undefined
 			: (patch.memoryExtractModel ?? base.memoryExtractModel);
+	const model = patch.model === null ? undefined : (patch.model ?? base.model);
+	const thinking = patch.thinking === null ? undefined : (patch.thinking ?? base.thinking);
+	const baseRest: ConversationPolicy = { ...base };
+	delete baseRest.memoryExtractModel;
+	delete baseRest.model;
+	delete baseRest.thinking;
 	return conversationPolicySchema.parse({
-		...base,
+		...baseRest,
 		...(patch.enabled === undefined ? {} : { enabled: patch.enabled }),
 		...(patch.followUpWhenBusy === undefined ? {} : { followUpWhenBusy: patch.followUpWhenBusy }),
 		...(patch.steerWhenBusy === undefined ? {} : { steerWhenBusy: patch.steerWhenBusy }),
@@ -141,6 +148,8 @@ export function mergeConversationPolicy(
 			? {}
 			: { memoryCompactionEnabled: patch.memoryCompactionEnabled }),
 		...(memoryExtractModel === undefined ? {} : { memoryExtractModel }),
+		...(model === undefined ? {} : { model }),
+		...(thinking === undefined ? {} : { thinking }),
 		...(patch.memoryExtractionPromptVersion === undefined
 			? {}
 			: { memoryExtractionPromptVersion: patch.memoryExtractionPromptVersion }),
@@ -247,6 +256,39 @@ export class ConversationPolicyService {
 		if (conversationId === undefined) return base;
 		const conversation = await this.conversationRevision(conversationId);
 		return conversation?.policy ?? base;
+	}
+
+	/**
+	 * Agent model and effort for one conversation. A conversation override wins, then the
+	 * matching runtime default (workspace vs. chat), then the active provider's default.
+	 * `null` deliberately resets the durable agent setting to that final fallback.
+	 */
+	async agentSettingsForConversation(
+		conversationId: string,
+		policy?: ConversationPolicy,
+	): Promise<ConversationAgentSettings> {
+		const database = this.#db();
+		const [row] = await database
+			.select({ chatKind: chatObjects.kind, sessionKind: conversations.kind })
+			.from(conversations)
+			.leftJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
+			.where(eq(conversations.id, conversationId))
+			.limit(1);
+		const surface =
+			(row?.chatKind ?? row?.sessionKind) === "workspace"
+				? ("workspace" as const)
+				: ("chat" as const);
+		const settings = await readRuntimeSettings(database);
+		const effective = policy ?? (await this.effectivePolicy(conversationId));
+		const model =
+			effective.model ?? (surface === "workspace" ? settings.workspaceModel : settings.chatModel);
+		const thinking =
+			effective.thinking ??
+			(surface === "workspace" ? settings.workspaceThinking : settings.chatThinking);
+		return {
+			model: model ?? null,
+			thinkingLevel: thinking ?? null,
+		};
 	}
 
 	/** Explicit capability grants for a domain conversation id. */
@@ -503,13 +545,14 @@ export class ConversationPolicyService {
 		durableConversationId = conversationId,
 	): Promise<ConversationPolicy> {
 		const policy = await this.effectivePolicy(conversationId);
-		const signature = JSON.stringify(policy);
+		const agentSettings = await this.agentSettingsForConversation(conversationId, policy);
+		const signature = JSON.stringify({ agentSettings, policy });
 		const key = `${conversationId}\0${durableConversationId}`;
 		if (this.#synced.get(key) === signature) return policy;
 		try {
 			const host = this.#host();
 			if (host !== undefined) {
-				await host.updatePolicy(durableConversationId, policy);
+				await host.updatePolicy(durableConversationId, policy, agentSettings);
 				this.#synced.set(key, signature);
 			}
 		} catch (error) {
@@ -530,10 +573,11 @@ export class ConversationPolicyService {
 				.where(eq(conversations.id, conversationId))
 				.limit(1);
 			if (session === undefined) return;
-			await this.#host()?.updatePolicy(session.durableConversationId, policy);
+			const agentSettings = await this.agentSettingsForConversation(conversationId, policy);
+			await this.#host()?.updatePolicy(session.durableConversationId, policy, agentSettings);
 			this.#synced.set(
 				`${conversationId}\0${session.durableConversationId}`,
-				JSON.stringify(policy),
+				JSON.stringify({ agentSettings, policy }),
 			);
 		} catch (error) {
 			this.#logger.warn("durable policy revision sync failed", {
@@ -553,6 +597,12 @@ export class ConversationPolicyService {
 		for (const row of rows) {
 			await this.ensureHostPolicy(row.id, row.durableConversationId);
 		}
+	}
+
+	/** Re-apply effective agent settings after a runtime default or provider change. */
+	async refreshAgentSettings(): Promise<void> {
+		this.#synced.clear();
+		await this.syncAllHosts();
 	}
 
 	/** Merge policy aliases with the active bound persona aliases for trigger classification. */
