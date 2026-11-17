@@ -6,6 +6,24 @@ import {
 	conversationPolicySchema,
 	triggerClassificationSchema,
 } from "./policy.ts";
+import {
+	scheduleCancelInputSchema,
+	scheduleCreateInputSchema,
+	scheduleDetailSchema,
+	scheduleGetInputSchema,
+	scheduleIdInputSchema,
+	scheduleListInputSchema,
+	scheduleListOutputSchema,
+	scheduleOccurrenceSchema,
+	scheduleOccurrencesInputSchema,
+	scheduleOccurrencesOutputSchema,
+	schedulePreviewInputSchema,
+	schedulePreviewOutputSchema,
+	scheduleSummaryInputSchema,
+	scheduleSummaryOutputSchema,
+	scheduleSummarySchema,
+	scheduleUpdateInputSchema,
+} from "./schedules.ts";
 
 /**
  * The oRPC contract is the single source of truth for the admin/health API. Every consumer
@@ -1624,6 +1642,31 @@ export const appContract = oc.router({
 			get: oc.input(requestsGetInputSchema).output(requestRowSchema.nullable()),
 			list: oc.input(requestsListInputSchema).output(z.array(requestRowSchema)),
 			respond: oc.input(requestsRespondInputSchema).output(requestRowSchema).meta({ audit: true }),
+		},
+		schedules: {
+			cancel: oc
+				.input(scheduleCancelInputSchema)
+				.output(scheduleSummarySchema)
+				.meta({ audit: true }),
+			create: oc
+				.input(scheduleCreateInputSchema)
+				.output(scheduleDetailSchema)
+				.meta({ audit: true }),
+			get: oc.input(scheduleGetInputSchema).output(scheduleDetailSchema.nullable()),
+			list: oc.input(scheduleListInputSchema).output(scheduleListOutputSchema),
+			occurrences: oc.input(scheduleOccurrencesInputSchema).output(scheduleOccurrencesOutputSchema),
+			pause: oc.input(scheduleIdInputSchema).output(scheduleSummarySchema).meta({ audit: true }),
+			preview: oc.input(schedulePreviewInputSchema).output(schedulePreviewOutputSchema),
+			resume: oc.input(scheduleIdInputSchema).output(scheduleSummarySchema).meta({ audit: true }),
+			runNow: oc
+				.input(scheduleIdInputSchema)
+				.output(scheduleOccurrenceSchema)
+				.meta({ audit: true }),
+			summary: oc.input(scheduleSummaryInputSchema).output(scheduleSummaryOutputSchema),
+			update: oc
+				.input(scheduleUpdateInputSchema)
+				.output(scheduleDetailSchema)
+				.meta({ audit: true }),
 		},
 		sessions: {
 			abort: oc.input(sessionIdInputSchema).output(sessionsAbortOutputSchema).meta({ audit: true }),

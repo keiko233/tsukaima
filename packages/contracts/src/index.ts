@@ -122,6 +122,7 @@ export type ChannelMessage = z.infer<typeof channelMessageSchema>;
 
 export * from "./policy.ts";
 export * from "./proactive.ts";
+export * from "./schedules.ts";
 
 export const activityWindowSchema = z.object({
 	activityId: z.string().min(1),
