@@ -11,19 +11,26 @@ import { orpc } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { ContextPanel } from "./context-panel";
+import { SessionModelView } from "./session-model-view";
 import type { InspectorTab } from "./session-inspector-sidebar";
 import { SessionSchedulesView } from "./session-schedules-view";
 
-const WORKSPACE_TABS = ["context", "todos", "sessions", "data", "schedules"] as const;
+const WORKSPACE_TABS = ["context", "model", "todos", "sessions", "data", "schedules"] as const;
 type WorkspaceTab = (typeof WORKSPACE_TABS)[number];
 
 function workspaceTab(tab: InspectorTab): WorkspaceTab {
-	return tab === "todos" || tab === "sessions" || tab === "data" || tab === "schedules"
+	return tab === "model" ||
+		tab === "todos" ||
+		tab === "sessions" ||
+		tab === "data" ||
+		tab === "schedules"
 		? tab
 		: "context";
 }
 
-function todoStatus(status: WorkspaceTodo["status"]): "pending" | "in-progress" | "completed" | "cancelled" {
+function todoStatus(
+	status: WorkspaceTodo["status"],
+): "pending" | "in-progress" | "completed" | "cancelled" {
 	return status === "in_progress" ? "in-progress" : status;
 }
 
@@ -33,8 +40,7 @@ function TagsEditor({ sessionId, tags }: { sessionId: string; tags: string[] }) 
 	const [value, setValue] = useState(tags.join(", "));
 	const update = useMutation(
 		orpc.admin.workspace.update.mutationOptions({
-			onError: (error) =>
-				toast.error(m.error_generic(), { description: errorMessage(error) }),
+			onError: (error) => toast.error(m.error_generic(), { description: errorMessage(error) }),
 			onSuccess: async () => {
 				await queryClient.invalidateQueries({ queryKey: orpc.admin.workspace.key() });
 			},
@@ -114,6 +120,7 @@ export function WorkspaceInspectorTabs({
 				onValueChange={(value) => {
 					if (
 						value === "context" ||
+						value === "model" ||
 						value === "todos" ||
 						value === "sessions" ||
 						value === "data" ||
@@ -131,6 +138,12 @@ export function WorkspaceInspectorTabs({
 							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
 						>
 							{m.workspace_inspector_context()}
+						</TabsTrigger>
+						<TabsTrigger
+							value="model"
+							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
+						>
+							{m.inspector_tab_model()}
 						</TabsTrigger>
 						<TabsTrigger
 							value="todos"
@@ -185,16 +198,16 @@ export function WorkspaceInspectorTabs({
 							</span>
 						</div>
 						<div className="mt-1.5">
-							<TagsEditor
-								sessionId={session.id}
-								tags={workspace?.workspace.tags ?? []}
-							/>
+							<TagsEditor sessionId={session.id} tags={workspace?.workspace.tags ?? []} />
 						</div>
 						<div className="mt-1.5 text-[10px] text-muted-foreground">
 							{m.workspace_rename_hint()}
 						</div>
 					</div>
 					<ContextPanel embedded enabled={selected === "context"} sessionId={session.id} />
+				</TabsContent>
+				<TabsContent value="model" className="mt-0 flex min-h-0 flex-1 flex-col">
+					<SessionModelView sessionId={session.id} surface="workspace" />
 				</TabsContent>
 				<TabsContent value="todos" className="mt-0 min-h-0 flex-1 overflow-y-auto p-3">
 					{todoItems.length === 0 ? (

@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import type { ModelCatalogEntry, ModelSelection, ThinkingLevel } from "@tsukaima/contracts";
 import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
 import {
 	Select,
@@ -15,7 +16,13 @@ import { applyLocale } from "@/lib/locale";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { getLocale, locales, toLocale, type Locale } from "@/paraglide/runtime";
-import { modelOptionLabel } from "../../_modules/policy/conversation-policy-fields";
+import {
+	modelOptionLabel,
+	modelSelectionKey,
+	parseModelSelectionKey,
+	THINKING_LEVELS,
+	thinkingLevelLabel,
+} from "../../_modules/policy/conversation-policy-fields";
 import { SystemPage } from "./page-header";
 
 const LOCALE_LABELS: Record<Locale, string> = {
@@ -24,6 +31,105 @@ const LOCALE_LABELS: Record<Locale, string> = {
 };
 
 const ACTIVE_SIDECHAT_MODEL = "__active__";
+const ACTIVE_MODEL = "__active_model__";
+const DEFAULT_THINKING = "__default_thinking__";
+
+function ModelDefaultSelect({
+	disabled,
+	label,
+	models,
+	onChange,
+	value,
+}: {
+	disabled: boolean;
+	label: string;
+	models: readonly ModelCatalogEntry[];
+	onChange: (value: ModelSelection | null) => void;
+	value: ModelSelection | undefined;
+}) {
+	const selected = value === undefined ? ACTIVE_MODEL : modelSelectionKey(value);
+	const missing =
+		value !== undefined &&
+		!models.some((model) => model.id === value.modelId && model.providerId === value.providerId);
+	return (
+		<div className="space-y-1.5">
+			<div className="px-1 text-[11.5px] font-medium text-foreground">{label}</div>
+			<Select
+				value={selected}
+				disabled={disabled}
+				onValueChange={(next) => {
+					if (next === ACTIVE_MODEL) {
+						onChange(null);
+						return;
+					}
+					const parsed = parseModelSelectionKey(next);
+					if (parsed !== undefined) onChange(parsed);
+				}}
+			>
+				<SelectTrigger className="w-full">
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent>
+					<SelectItem value={ACTIVE_MODEL}>{m.settings_model_active()}</SelectItem>
+					{models.map((model) => (
+						<SelectItem
+							key={`${model.providerId}:${model.id}`}
+							value={modelSelectionKey({ modelId: model.id, providerId: model.providerId })}
+						>
+							{modelOptionLabel(model)}
+						</SelectItem>
+					))}
+					{missing && value !== undefined ? (
+						<SelectItem value={modelSelectionKey(value)}>
+							{value.modelId} · {m.settings_model_unavailable()}
+						</SelectItem>
+					) : null}
+				</SelectContent>
+			</Select>
+		</div>
+	);
+}
+
+function ThinkingDefaultSelect({
+	disabled,
+	label,
+	onChange,
+	value,
+}: {
+	disabled: boolean;
+	label: string;
+	onChange: (value: ThinkingLevel | null) => void;
+	value: ThinkingLevel | undefined;
+}) {
+	return (
+		<div className="space-y-1.5">
+			<div className="px-1 text-[11.5px] font-medium text-foreground">{label}</div>
+			<Select
+				value={value ?? DEFAULT_THINKING}
+				disabled={disabled}
+				onValueChange={(next) => {
+					if (next === DEFAULT_THINKING) {
+						onChange(null);
+						return;
+					}
+					onChange(next as ThinkingLevel);
+				}}
+			>
+				<SelectTrigger className="w-full">
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent>
+					<SelectItem value={DEFAULT_THINKING}>{m.effort_default()}</SelectItem>
+					{THINKING_LEVELS.map((level) => (
+						<SelectItem key={level} value={level}>
+							{thinkingLevelLabel(level)}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
+		</div>
+	);
+}
 
 export function SettingsPage() {
 	const toast = useToast();
@@ -47,6 +153,7 @@ export function SettingsPage() {
 
 	const settings = settingsQuery.data;
 	const models = settings?.models ?? [];
+	const availableModels = settings?.availableModels ?? [];
 	const configuredSidechatModel = settings?.sidechatModelId;
 	const sidechatModelValue = configuredSidechatModel ?? ACTIVE_SIDECHAT_MODEL;
 	const configuredModelMissing =
@@ -93,6 +200,47 @@ export function SettingsPage() {
 						<CardTitle as="h2">{m.settings_title()}</CardTitle>
 					</CardHeader>
 					<CardContent className="space-y-3">
+						<div className="space-y-1.5">
+							<div className="px-1 text-[11.5px] font-medium text-foreground">
+								{m.settings_model_defaults_title()}
+							</div>
+							<p className="text-[11px] leading-4 text-muted-foreground">
+								{m.settings_model_defaults_description()}
+							</p>
+						</div>
+						<div className="grid gap-3 sm:grid-cols-2">
+							<ModelDefaultSelect
+								disabled={updateSettings.isPending}
+								label={m.settings_chat_model_label()}
+								models={availableModels}
+								onChange={(value) => updateSettings.mutate({ chatModel: value })}
+								value={settings?.chatModel}
+							/>
+							<ThinkingDefaultSelect
+								disabled={updateSettings.isPending}
+								label={m.settings_chat_effort_label()}
+								onChange={(value) => updateSettings.mutate({ chatThinking: value })}
+								value={settings?.chatThinking}
+							/>
+							<ModelDefaultSelect
+								disabled={updateSettings.isPending}
+								label={m.settings_workspace_model_label()}
+								models={availableModels}
+								onChange={(value) => updateSettings.mutate({ workspaceModel: value })}
+								value={settings?.workspaceModel}
+							/>
+							<ThinkingDefaultSelect
+								disabled={updateSettings.isPending}
+								label={m.settings_workspace_effort_label()}
+								onChange={(value) => updateSettings.mutate({ workspaceThinking: value })}
+								value={settings?.workspaceThinking}
+							/>
+						</div>
+						{availableModels.length === 0 ? (
+							<p className="text-[11px] text-muted-foreground">
+								{m.settings_model_defaults_empty()}
+							</p>
+						) : null}
 						<div className="px-1 text-[11.5px] font-medium text-foreground">
 							{m.settings_log_level_label()}
 						</div>

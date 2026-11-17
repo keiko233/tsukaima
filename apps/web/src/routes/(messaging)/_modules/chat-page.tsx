@@ -74,7 +74,11 @@ export function ChatPage({
 	const [inspectorTab, setInspectorTab] = useState<InspectorTab>(() => storedInspectorTab(surface));
 	const setSurfaceInspectorTab = (tab: InspectorTab) => {
 		if (surface === "workspace") {
-			setInspectorTab(tab === "todos" || tab === "sessions" || tab === "data" ? tab : "context");
+			setInspectorTab(
+				tab === "model" || tab === "todos" || tab === "sessions" || tab === "data"
+					? tab
+					: "context",
+			);
 			return;
 		}
 		setInspectorTab(tab === "todos" || tab === "sessions" || tab === "data" ? "context" : tab);

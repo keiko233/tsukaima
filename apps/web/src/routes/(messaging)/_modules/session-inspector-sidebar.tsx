@@ -18,6 +18,7 @@ import { m } from "@/paraglide/messages";
 import { ContextPanel } from "./context-panel";
 import { WorkspaceInspectorTabs } from "./workspace-inspector";
 import { SessionCommandsView, type CommandFeedback } from "./session-commands-view";
+import { SessionModelView } from "./session-model-view";
 import { SessionSchedulesView } from "./session-schedules-view";
 import {
 	PolicyPacingTabView,
@@ -30,6 +31,7 @@ import {
 export type InspectorTab =
 	| "context"
 	| "commands"
+	| "model"
 	| "trigger"
 	| "pacing"
 	| "persona"
@@ -44,6 +46,7 @@ function isInspectorTab(value: string | null): value is InspectorTab {
 	return (
 		value === "context" ||
 		value === "commands" ||
+		value === "model" ||
 		value === "trigger" ||
 		value === "pacing" ||
 		value === "persona" ||
@@ -59,7 +62,11 @@ export function storedInspectorTab(surface: "chat" | "workspace" = "chat"): Insp
 		const raw = localStorage.getItem(`${INSPECTOR_TAB_KEY}.${surface}`);
 		if (isInspectorTab(raw)) {
 			if (surface === "workspace") {
-				return raw === "todos" || raw === "sessions" || raw === "data" || raw === "schedules"
+				return raw === "todos" ||
+					raw === "sessions" ||
+					raw === "data" ||
+					raw === "schedules" ||
+					raw === "model"
 					? raw
 					: "context";
 			}
@@ -411,6 +418,13 @@ export function SessionInspectorSidebar({
 							{m.inspector_tab_trigger()}
 						</TabsTrigger>
 						<TabsTrigger
+							value="model"
+							indicatorClassName="h-px"
+							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
+						>
+							{m.inspector_tab_model()}
+						</TabsTrigger>
+						<TabsTrigger
 							value="pacing"
 							indicatorClassName="h-px"
 							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
@@ -494,6 +508,10 @@ export function SessionInspectorSidebar({
 						onSave={handleSavePolicy}
 						saving={savePolicy.isPending}
 					/>
+				</TabsContent>
+
+				<TabsContent value="model" className="mt-0 flex min-h-0 flex-1 flex-col">
+					<SessionModelView sessionId={sessionId} surface="chat" />
 				</TabsContent>
 
 				<TabsContent value="pacing" className="mt-0 flex min-h-0 flex-1 flex-col">

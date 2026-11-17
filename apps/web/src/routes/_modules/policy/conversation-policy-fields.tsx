@@ -5,6 +5,8 @@ import {
 	type ConversationPolicy,
 	conversationCompactionPresets,
 	type ModelCatalogEntry,
+	type ModelSelection,
+	type ThinkingLevel,
 } from "@tsukaima/contracts";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import {
@@ -74,6 +76,55 @@ export function modelOptionLabel(model: ModelCatalogEntry): string {
 	const name =
 		model.name === undefined || model.name === model.id ? model.id : `${model.name} · ${model.id}`;
 	return `${name} · ${model.providerId}`;
+}
+
+export const THINKING_LEVELS: readonly ThinkingLevel[] = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+];
+
+export function thinkingLevelLabel(level: ThinkingLevel): string {
+	switch (level) {
+		case "off":
+			return m.effort_off();
+		case "minimal":
+			return m.effort_minimal();
+		case "low":
+			return m.effort_low();
+		case "medium":
+			return m.effort_medium();
+		case "high":
+			return m.effort_high();
+		case "xhigh":
+			return m.effort_xhigh();
+		case "max":
+			return m.effort_max();
+	}
+}
+
+/** Stable select value for a provider-scoped model. */
+export function modelSelectionKey(model: ModelSelection): string {
+	return JSON.stringify([model.providerId, model.modelId]);
+}
+
+export function parseModelSelectionKey(value: string): ModelSelection | undefined {
+	try {
+		const parsed: unknown = JSON.parse(value);
+		if (
+			Array.isArray(parsed) &&
+			parsed.length === 2 &&
+			typeof parsed[0] === "string" &&
+			typeof parsed[1] === "string"
+		) {
+			return { modelId: parsed[1], providerId: parsed[0] };
+		}
+	} catch {}
+	return undefined;
 }
 
 interface PolicyFieldsProps {
