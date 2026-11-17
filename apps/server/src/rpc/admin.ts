@@ -32,8 +32,16 @@ import {
 	readRuntimeSettings,
 } from "../runtime-settings.ts";
 import { readGitIdentity, writeGitIdentity } from "../services/git-identity.ts";
+import { GitHubOAuthError } from "../services/github-oauth-service.ts";
 
 type MemoryDbRow = typeof memories.$inferSelect;
+
+/** Device-flow failures are actionable operator input problems, not opaque 500s. */
+function asOAuthRpcError(error: unknown): unknown {
+	return error instanceof GitHubOAuthError
+		? new ORPCError("BAD_REQUEST", { message: error.message })
+		: error;
+}
 
 /** Contract view: SQLite stores `pinned` as 0/1, the wire surface uses a boolean. */
 function toMemoryRow(row: MemoryDbRow) {
@@ -779,12 +787,20 @@ export const adminRouter = {
 				oauth: await context.lifecycle.githubOAuth.status(),
 			};
 		}),
-		oauthPoll: adminBase.admin.github.oauthPoll.handler(async ({ context }) =>
-			context.lifecycle.githubOAuth.poll(),
-		),
-		oauthStart: adminBase.admin.github.oauthStart.handler(async ({ context, input }) =>
-			context.lifecycle.githubOAuth.start(input.clientId),
-		),
+		oauthPoll: adminBase.admin.github.oauthPoll.handler(async ({ context }) => {
+			try {
+				return await context.lifecycle.githubOAuth.poll();
+			} catch (error) {
+				throw asOAuthRpcError(error);
+			}
+		}),
+		oauthStart: adminBase.admin.github.oauthStart.handler(async ({ context, input }) => {
+			try {
+				return await context.lifecycle.githubOAuth.start(input.clientId);
+			} catch (error) {
+				throw asOAuthRpcError(error);
+			}
+		}),
 		pulls: adminBase.admin.github.pulls.handler(async ({ context }) =>
 			context.lifecycle.github.pulls(),
 		),

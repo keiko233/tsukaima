@@ -34,6 +34,7 @@ async function testDatabase(): Promise<ReturnType<typeof openDomainDatabase>> {
 }
 
 interface HarnessOptions {
+	readonly device?: () => unknown;
 	readonly poll?: () => unknown;
 	readonly now?: () => number;
 }
@@ -47,13 +48,15 @@ async function harness(options: HarnessOptions = {}) {
 			const url = String(input);
 			calls.push(url);
 			if (url.endsWith("/login/device/code")) {
-				return jsonResponse({
-					device_code: "device-synthetic",
-					expires_in: 900,
-					interval: 5,
-					user_code: "ABCD-1234",
-					verification_uri: "https://github.com/login/device",
-				});
+				return jsonResponse(
+					options.device?.() ?? {
+						device_code: "device-synthetic",
+						expires_in: 900,
+						interval: 5,
+						user_code: "ABCD-1234",
+						verification_uri: "https://github.com/login/device",
+					},
+				);
 			}
 			if (url.endsWith("/login/oauth/access_token")) {
 				return jsonResponse(options.poll?.() ?? { error: "authorization_pending" });
@@ -76,6 +79,21 @@ describe("deviceBaseUrl", () => {
 });
 
 describe("GitHubOAuthService", () => {
+	test("rejects a client id that is not an OAuth App instead of returning an invalid code", async () => {
+		const { service } = await harness({
+			device: () => ({ error: "Not Found", error_description: "Not Found" }),
+		});
+		await expect(service.start("synthetic-client-id")).rejects.toThrow(
+			/GitHub rejected the device-code request|OAuth App/u,
+		);
+		expect(await service.status()).toEqual({
+			clientId: null,
+			configured: false,
+			login: null,
+			scopes: [],
+		});
+	});
+
 	test("shows a code, polls, and stores the authorized user", async () => {
 		let polls = 0;
 		const { service } = await harness({

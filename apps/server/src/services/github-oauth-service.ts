@@ -80,6 +80,8 @@ export function deviceBaseUrl(apiBaseUrl: string): string {
 
 interface DeviceCodeResponse {
 	readonly device_code: string;
+	readonly error?: string;
+	readonly error_description?: string;
 	readonly expires_in: number;
 	readonly interval?: number;
 	readonly user_code: string;
@@ -139,6 +141,24 @@ export class GitHubOAuthService {
 			client_id: clientId,
 			scope: DEFAULT_SCOPE,
 		});
+		if (
+			typeof payload.device_code !== "string" ||
+			payload.device_code.length === 0 ||
+			typeof payload.user_code !== "string" ||
+			payload.user_code.length === 0 ||
+			typeof payload.verification_uri !== "string" ||
+			typeof payload.expires_in !== "number" ||
+			!Number.isFinite(payload.expires_in) ||
+			payload.expires_in <= 0
+		) {
+			const detail = payload.error_description ?? payload.error;
+			throw new GitHubOAuthError(
+				"github_oauth_unavailable",
+				detail === undefined
+					? "GitHub did not return a device code; check the OAuth Client ID (it must belong to an OAuth App, not a GitHub App)"
+					: `GitHub rejected the device-code request: ${detail}`,
+			);
+		}
 		const expiresAtMs = this.#now() + payload.expires_in * 1000;
 		const intervalMs = Math.max(5, payload.interval ?? 5) * 1000;
 		this.#session = {
@@ -238,11 +258,30 @@ export class GitHubOAuthService {
 			},
 			method: "POST",
 			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-		});
-		if (!response.ok) {
+		}).catch((error: unknown) => {
 			throw new GitHubOAuthError(
 				"github_oauth_unavailable",
-				`GitHub responded ${response.status} for ${path}`,
+				`GitHub device flow is unreachable: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		});
+		if (!response.ok) {
+			const detail = await response
+				.json()
+				.then((body: unknown) => {
+					if (typeof body !== "object" || body === null) return undefined;
+					const value = body as { error_description?: unknown; error?: unknown };
+					if (typeof value.error_description === "string" && value.error_description.length > 0) {
+						return value.error_description;
+					}
+					if (typeof value.error === "string" && value.error.length > 0) return value.error;
+					return undefined;
+				})
+				.catch(() => undefined);
+			throw new GitHubOAuthError(
+				"github_oauth_unavailable",
+				detail === undefined
+					? `GitHub responded ${response.status} for ${path}; check the OAuth Client ID (it must belong to an OAuth App, not a GitHub App)`
+					: `GitHub rejected the request (${response.status}): ${detail}`,
 			);
 		}
 		return (await response.json()) as T;

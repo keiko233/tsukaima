@@ -303,6 +303,11 @@ Settings → Developer settings, set its callback URL to `http://127.0.0.1/`, an
 into the card. The server requests a device code, shows it with the verification URL, and polls
 until GitHub issues a user token with the `repo` scope.
 
+Paste the OAuth App **Client ID**, not the GitHub App ID or installation ID. The device-flow
+endpoint rejects a GitHub App ID with a bare `404`, which the card reports as an OAuth Client ID
+error. A signed-in user token also makes `fetch`, `pull`, and `push` work over HTTPS even when the
+checkout keeps an SSH remote and the container has no `ssh` binary or deploy key.
+
 The token is stored in the domain database, never returned by an API, and used only for that call's
 git or REST request. While a user is signed in it takes precedence over the App installation;
 signing out returns to the bot identity without touching the App configuration. The token inherits
