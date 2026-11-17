@@ -184,7 +184,7 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 						...(numberValue(input, "maxRuns") === undefined
 							? {}
 							: { maxRuns: numberValue(input, "maxRuns")! }),
-						ownerId: api.userId ?? "agent",
+						ownerId: "agent",
 						ownerKind: "agent",
 						prompt: stringValue(input, "prompt", true)!,
 						recurrence: input.recurrence as never,
@@ -207,7 +207,7 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 					...(numberValue(input, "maxRuns") === undefined
 						? {}
 						: { maxRuns: numberValue(input, "maxRuns")! }),
-					ownerId: api.userId ?? "agent",
+					ownerId: "agent",
 					ownerKind: "agent",
 					prompt: stringValue(input, "prompt", true)!,
 					recurrence: input.recurrence as never,

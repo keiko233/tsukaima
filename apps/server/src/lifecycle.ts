@@ -104,10 +104,7 @@ import {
 } from "./services/restart-coordinator.ts";
 import { OutboundService } from "./services/outbound.ts";
 import { RequestService } from "./services/request-service.ts";
-import {
-	ScheduleExecutionService,
-	type ScheduleExecutionServiceOptions,
-} from "./services/schedule-executor.ts";
+import { ScheduleExecutionService } from "./services/schedule-executor.ts";
 import { ScheduleService } from "./services/schedule-service.ts";
 import { SCHEDULE_TOOL_NAMES } from "./services/schedule-tools.ts";
 import { createScheduleToolsExtension } from "./services/schedule-tools.ts";
@@ -404,7 +401,6 @@ export class TsukaimaLifecycle {
 			database: () => this.domainDatabase,
 			expectations: this.replyExpectations,
 			followUps: this.followUpIntents,
-			schedules: this.schedules,
 			hooks: this.hooks,
 			resolveAnswer: async (durableConversationId, submissionRequestId) =>
 				(await this.conversationHost?.resolveSubmissionAnswer(
@@ -486,13 +482,12 @@ export class TsukaimaLifecycle {
 					this.conversationPolicy.ensureHostPolicy(sessionId, durableConversationId),
 			},
 		});
-		const scheduleExecutor: ScheduleExecutionServiceOptions["messaging"] = this.sessionMessaging;
 		const scheduleExecution = new ScheduleExecutionService({
 			audit: (entry) => this.writeAudit(entry),
 			channels: this.channels,
 			database: () => this.domainDatabase,
 			logger: this.runtimeLog,
-			messaging: scheduleExecutor,
+			messaging: this.sessionMessaging,
 			policy: this.conversationPolicy,
 		});
 		this.schedules = new ScheduleService({

@@ -78,7 +78,7 @@ export function createPluginSchedulesApi(
 		},
 		list: async (query = {}) => {
 			const rows = await schedules.list({
-				limit: query.limit,
+				...(query.limit === undefined ? {} : { limit: query.limit }),
 				...(query.targetSessionId === undefined ? {} : { sessionId: query.targetSessionId }),
 			});
 			return rows

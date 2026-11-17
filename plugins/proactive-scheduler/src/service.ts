@@ -97,6 +97,51 @@ function kindToTurnKind(kind: ScheduledTaskKind): "scheduled" | "proactive" {
 	return kind === "proactive" || kind === "nudge" ? "proactive" : "scheduled";
 }
 
+/** Contract schedule status to the proactive task vocabulary used by the plugin panel/tools. */
+function hostStatus(
+	status: "active" | "paused" | "completed" | "cancelled" | "failed",
+): ScheduledTaskStatus {
+	switch (status) {
+		case "active":
+			return "scheduled";
+		case "paused":
+			return "skipped";
+		default:
+			return status;
+	}
+}
+
+/** Minimal ScheduledTask view of a host schedule; prompt text stays in the host definition. */
+function scheduleToTask(row: {
+	readonly id: string;
+	readonly nextRunAt: string | null;
+	readonly status: "active" | "paused" | "completed" | "cancelled" | "failed";
+	readonly targetSessionId: string;
+}): ScheduledTask {
+	return {
+		attempts: 0,
+		cancelIfReplied: false,
+		chatObjectId: null,
+		conversationId: row.targetSessionId,
+		createdAtMs: 0,
+		createdById: "proactive-scheduler",
+		createdByKind: "agent",
+		dedupeKey: row.id,
+		dueWindowMs: null,
+		id: row.id,
+		kind: "remind",
+		lastError: null,
+		maxAttempts: 3,
+		occurrences: 0,
+		prompt: "",
+		repeat: null,
+		scheduledForMs: row.nextRunAt === null ? 0 : Date.parse(row.nextRunAt),
+		status: hostStatus(row.status),
+		taskId: "",
+		updatedAtMs: 0,
+	};
+}
+
 const LOG_PREVIEW_MAX_CHARS = 120;
 
 function errorMessage(error: unknown): string {
@@ -285,13 +330,33 @@ export class ProactiveSchedulerService {
 			readonly limit?: number;
 		} = {},
 	): Promise<readonly ScheduledTask[]> {
-		return await this.#repository.listTasks(query);
+		const local = await this.#repository.listTasks(query);
+		if (this.#schedules === undefined) return local;
+		const hosted = await this.#schedules.list({
+			...(query.conversationId === undefined ? {} : { targetSessionId: query.conversationId }),
+			...(query.limit === undefined ? {} : { limit: query.limit }),
+		});
+		const statuses =
+			query.status === undefined
+				? undefined
+				: new Set(Array.isArray(query.status) ? query.status : [query.status]);
+		const mapped = hosted
+			.filter((task) => statuses === undefined || statuses.has(task.status))
+			.map(scheduleToTask);
+		return [...mapped, ...local];
 	}
 
 	async getTask(
 		taskId: string,
 	): Promise<{ task: ScheduledTask; decisions: readonly DecisionRecord[] } | undefined> {
-		const task = await this.#repository.getTask(taskId);
+		const task =
+			(await this.#repository.getTask(taskId)) ??
+			(this.#schedules === undefined
+				? undefined
+				: await this.#schedules
+						.list()
+						.then((rows) => rows.find((row) => row.id === taskId))
+						.then((row) => (row === undefined ? undefined : scheduleToTask(row))));
 		if (task === undefined) return undefined;
 		return { decisions: await this.#repository.listDecisions({ taskId, limit: 50 }), task };
 	}
@@ -463,6 +528,19 @@ export class ProactiveSchedulerService {
 
 	async cancelTask(taskId: string, actorId = "webui-admin"): Promise<ScheduledTask | undefined> {
 		const task = await this.#repository.getTask(taskId);
+		if (task === undefined && this.#schedules !== undefined) {
+			const cancelled = await this.#schedules.cancel(taskId);
+			if (!cancelled) return undefined;
+			await this.#recordAudit({
+				action: "proactive.task.cancelled",
+				actorId,
+				payload: {},
+				result: "ok",
+				targetId: taskId,
+				targetKind: "schedule",
+			});
+			return undefined;
+		}
 		if (task === undefined) {
 			this.#logger.debug("task cancel skipped", { reason: "unknown_task", taskId });
 			return undefined;
@@ -531,6 +609,11 @@ export class ProactiveSchedulerService {
 			throw new Error(`prompt must be between 1 and ${this.#promptMaxChars} characters`);
 		}
 		const task = await this.#repository.updateTask(taskId, { prompt: trimmed });
+		if (task === undefined && this.#schedules !== undefined) {
+			// Host schedules are edited through the core WebUI; the plugin cannot rewrite a
+			// schedule it did not materialize in its own repository.
+			throw new Error("Host schedule prompts are managed through the scheduled task UI");
+		}
 		if (task === undefined) {
 			this.#logger.debug("task prompt update skipped", { reason: "unknown_task", taskId });
 			return undefined;

@@ -94,6 +94,8 @@ export const scheduleOccurrenceSchema = z.object({
 export type ScheduleOccurrence = z.infer<typeof scheduleOccurrenceSchema>;
 
 export const scheduleDetailSchema = scheduleSummarySchema.extend({
+	ownerId: z.string(),
+	ownerPluginId: z.string().nullable(),
 	graceMs: z.number().int().nonnegative(),
 	maxAttempts: z.number().int().positive(),
 	prompt: z.string(),

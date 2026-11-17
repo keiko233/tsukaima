@@ -529,7 +529,7 @@ export const adminRouter = {
 		),
 		list: adminBase.admin.schedules.list.handler(async ({ context, input }) => ({
 			schedules: await context.lifecycle.schedules.list({
-				limit: input.limit,
+				...(input.limit === undefined ? {} : { limit: input.limit }),
 				...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
 				...(input.status === undefined ? {} : { status: input.status }),
 			}),
@@ -542,7 +542,7 @@ export const adminRouter = {
 		),
 		preview: adminBase.admin.schedules.preview.handler(async ({ context, input }) => ({
 			nextRuns: context.lifecycle.schedules.preview({
-				count: input.count,
+				...(input.count === undefined ? {} : { count: input.count }),
 				recurrence: input.recurrence,
 				timeZone: input.timeZone,
 			}),
@@ -554,7 +554,9 @@ export const adminRouter = {
 			context.lifecycle.schedules.runNow(input.scheduleId),
 		),
 		summary: adminBase.admin.schedules.summary.handler(async ({ context, input }) =>
-			context.lifecycle.schedules.summary(input),
+			context.lifecycle.schedules.summary(
+				input.sessionIds === undefined ? {} : { sessionIds: input.sessionIds },
+			),
 		),
 		update: adminBase.admin.schedules.update.handler(async ({ context, input }) =>
 			context.lifecycle.schedules.update(input),

@@ -1213,7 +1213,9 @@ export class PluginHost {
 			hasPermission(manifest.permissions, "schedules.create") &&
 			hasPermission(manifest.permissions, "conversation.read")
 				? createPluginSchedulesApi(this.#schedules, pluginId, async (conversationId) => {
-						const conversation = await this.#conversations?.get?.(conversationId);
+						const conversation = await this.#conversations
+							?.forPlugin(pluginId, manifest.permissions)
+							.get(conversationId);
 						return conversation !== undefined;
 					})
 				: undefined;

@@ -273,10 +273,11 @@ interface LogRecord {
 
 class FakeSchedules implements PluginSchedulesApi {
 	readonly created: Array<Parameters<PluginSchedulesApi["create"]>[0]> = [];
+	readonly rows: PluginScheduleSummary[] = [];
 
 	async create(input: Parameters<PluginSchedulesApi["create"]>[0]): Promise<PluginScheduleSummary> {
 		this.created.push(input);
-		return {
+		const row: PluginScheduleSummary = {
 			actionKind: input.actionKind,
 			id: `schedule-${this.created.length}`,
 			nextRunAt: input.recurrence.kind === "once" ? input.recurrence.at : null,
@@ -285,10 +286,12 @@ class FakeSchedules implements PluginSchedulesApi {
 			targetSessionId: input.targetSessionId,
 			title: input.title,
 		};
+		this.rows.push(row);
+		return row;
 	}
 
 	async list(): Promise<readonly PluginScheduleSummary[]> {
-		return [];
+		return this.rows;
 	}
 
 	async cancel(): Promise<boolean> {
@@ -696,6 +699,8 @@ describe("durable tasks", () => {
 		expect(schedules.created[0]?.respectQuietHours).toBe(true);
 		expect(task.taskId).toBe("schedule-1");
 		expect(task.kind).toBe("remind");
+		const listed = await hosted.listTasks({ conversationId: "c1" });
+		expect(listed.some((entry) => entry.id === "schedule-1")).toBe(true);
 	});
 });
 

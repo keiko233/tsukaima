@@ -544,7 +544,7 @@ export interface PluginSchedulesApi {
 					readonly until?: string;
 			  }
 			| {
-					readonly daysOfWeek?: readonly number[];
+					readonly daysOfWeek?: number[];
 					readonly kind: "calendar";
 					readonly startDate: string;
 					readonly time: string;
@@ -731,7 +731,8 @@ export type PluginHookName =
 	| "task.created"
 	| "task.completed"
 	| "channel.connected"
-	| "channel.disconnected";
+	| "channel.disconnected"
+	| "schedule.changed";
 
 export interface PluginHook {
 	name: PluginHookName;
