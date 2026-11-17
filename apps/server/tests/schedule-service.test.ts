@@ -51,10 +51,14 @@ async function seed(directory: string) {
 class RecordingExecutor implements ScheduleExecutor {
 	readonly calls: ScheduleSnapshot[] = [];
 	error: Error | undefined;
+	resultStatus: ScheduleExecutionResult["status"] | undefined;
 	async execute(input: { readonly snapshot: ScheduleSnapshot }): Promise<ScheduleExecutionResult> {
 		this.calls.push(input.snapshot);
 		if (this.error !== undefined) throw this.error;
-		return { result: { ok: true } };
+		return {
+			...(this.resultStatus === undefined ? {} : { status: this.resultStatus }),
+			result: { ok: true },
+		};
 	}
 }
 
@@ -291,6 +295,60 @@ describe("durable schedules", () => {
 				.where(eq(scheduleOccurrences.scheduleId, created.id));
 			expect(occurrence?.status).toBe("failed");
 			expect(occurrence?.error).toBe("synthetic failure");
+		} finally {
+			service.stop();
+			database.$client.close();
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("records skipped and uncertain results without counting a successful run", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-schedules-"));
+		const database = await seed(directory);
+		let now = Date.parse("2026-11-17T00:00:00.000Z");
+		const executor = new RecordingExecutor();
+		executor.resultStatus = "skipped";
+		const service = new ScheduleService({
+			database: () => database,
+			executor,
+			logger,
+			now: () => now,
+		});
+		try {
+			const created = await service.create({
+				actionKind: "agent_turn",
+				ownerId: "test-admin",
+				ownerKind: "user",
+				prompt: "Synthetic reminder",
+				recurrence: {
+					anchorAt: "2026-11-17T00:00:00.000Z",
+					everyMs: 3_600_000,
+					kind: "interval",
+				},
+				source: "test",
+				targetSessionId: "session-1",
+				timeZone: "UTC",
+				title: "Synthetic schedule",
+			});
+			now += 3_600_001;
+			await service.tick();
+			const [occurrence] = await database
+				.select()
+				.from(scheduleOccurrences)
+				.where(eq(scheduleOccurrences.scheduleId, created.id));
+			expect(occurrence?.status).toBe("skipped");
+			const afterSkip = await service.get(created.id);
+			expect(afterSkip?.runCount).toBe(0);
+			executor.resultStatus = "uncertain";
+			now += 3_600_001;
+			await service.tick();
+			const occurrences = await database
+				.select()
+				.from(scheduleOccurrences)
+				.where(eq(scheduleOccurrences.scheduleId, created.id));
+			expect(occurrences.some((entry) => entry.status === "uncertain")).toBe(true);
+			const afterUncertain = await service.get(created.id);
+			expect(afterUncertain?.runCount).toBe(0);
 		} finally {
 			service.stop();
 			database.$client.close();

@@ -44,6 +44,7 @@ export interface ScheduleSnapshot {
 export interface ScheduleExecutionResult {
 	readonly messageId?: string;
 	readonly result?: unknown;
+	readonly status?: "skipped" | "succeeded" | "uncertain";
 }
 
 export interface ScheduleChange {
@@ -125,6 +126,24 @@ function summaryFrom(row: ScheduleRow, targetSessionTitle: string): ScheduleSumm
 	};
 }
 
+function detailFrom(
+	row: ScheduleRow,
+	targetSessionTitle: string,
+	occurrences: ScheduleOccurrence[],
+): ScheduleDetail {
+	return {
+		...summaryFrom(row, targetSessionTitle),
+		graceMs: row.graceMs,
+		maxAttempts: row.maxAttempts,
+		occurrences,
+		ownerId: row.ownerId,
+		ownerPluginId: row.ownerPluginId,
+		prompt: row.prompt,
+		respectQuietHours: row.respectQuietHours,
+		revision: row.revision,
+	};
+}
+
 function changeFrom(row: ScheduleRow): ScheduleChange {
 	return {
 		actionKind: row.actionKind,
@@ -182,6 +201,7 @@ export class ScheduleService {
 	readonly #listeners = new Set<(change: ScheduleChange) => void>();
 	#timer: ReturnType<typeof setInterval> | undefined;
 	#ticking = false;
+	#closed = false;
 
 	constructor(options: ScheduleServiceOptions) {
 		this.#audit = options.audit;
@@ -201,6 +221,7 @@ export class ScheduleService {
 	}
 
 	start(): void {
+		this.#closed = false;
 		if (this.#timer !== undefined) return;
 		this.#timer = setInterval(() => {
 			void this.tick().catch((error: unknown) => {
@@ -212,6 +233,7 @@ export class ScheduleService {
 	}
 
 	stop(): void {
+		this.#closed = true;
 		if (this.#timer === undefined) return;
 		clearInterval(this.#timer);
 		this.#timer = undefined;
@@ -219,6 +241,7 @@ export class ScheduleService {
 	}
 
 	kick(): void {
+		if (this.#closed) return;
 		void this.tick().catch((error: unknown) => {
 			this.#logger.warn("schedule kick failed", { error: errorMessage(error) });
 		});
@@ -397,13 +420,11 @@ export class ScheduleService {
 		if (row === undefined) return null;
 		const occurrences = await this.occurrences(id, 50);
 		return {
-			...summaryFrom(row.schedule, row.session.title ?? row.chat?.title ?? row.session.id),
-			graceMs: row.schedule.graceMs,
-			maxAttempts: row.schedule.maxAttempts,
-			occurrences,
-			prompt: row.schedule.prompt,
-			respectQuietHours: row.schedule.respectQuietHours,
-			revision: row.schedule.revision,
+			...detailFrom(
+				row.schedule,
+				row.session.title ?? row.chat?.title ?? row.session.id,
+				occurrences,
+			),
 		};
 	}
 
@@ -457,7 +478,7 @@ export class ScheduleService {
 			row.status === "active"
 				? nextOccurrence({ afterMs: now - 1, recurrence, timeZone })
 				: row.nextRunAtMs;
-		await database
+		const [updated] = await database
 			.update(schedules)
 			.set({
 				...(input.catchUp === undefined ? {} : { catchUp: input.catchUp }),
@@ -481,7 +502,8 @@ export class ScheduleService {
 				timeZone,
 				updatedAtMs: now,
 			})
-			.where(eq(schedules.id, row.id));
+			.where(eq(schedules.id, row.id))
+			.returning();
 		await this.#recordAudit({
 			action: "schedule.update",
 			actorKind: "user",
@@ -490,7 +512,7 @@ export class ScheduleService {
 			targetId: row.id,
 			targetKind: "schedule",
 		});
-		this.#changed(changeFrom(row));
+		this.#changed(changeFrom(updated ?? row));
 		const detail = await this.get(row.id);
 		if (detail === null) throw new Error("Schedule disappeared");
 		return detail;
@@ -646,7 +668,7 @@ export class ScheduleService {
 
 	/** Materialize due definitions and execute claimed occurrences. Safe to call repeatedly. */
 	async tick(): Promise<{ executed: number; materialized: number }> {
-		if (this.#ticking) return { executed: 0, materialized: 0 };
+		if (this.#closed || this.#ticking) return { executed: 0, materialized: 0 };
 		this.#ticking = true;
 		try {
 			const materialized = await this.#materializeDue();
@@ -736,7 +758,7 @@ export class ScheduleService {
 		}
 		const exhausted = row.maxRuns !== null && row.runCount >= row.maxRuns;
 		const next = exhausted ? null : cursor;
-		await database
+		const [updated] = await database
 			.update(schedules)
 			.set({
 				nextRunAtMs: next,
@@ -744,8 +766,9 @@ export class ScheduleService {
 				updatedAtMs: now,
 				...(next === null ? { completedAtMs: now } : {}),
 			})
-			.where(eq(schedules.id, row.id));
-		if (inserted > 0) this.#changed(changeFrom(row));
+			.where(eq(schedules.id, row.id))
+			.returning();
+		if (inserted > 0) this.#changed(changeFrom(updated ?? row));
 		return inserted;
 	}
 
@@ -795,7 +818,7 @@ export class ScheduleService {
 					occurrence: occurrenceFrom({ ...claimed, status: "running", startedAtMs: now }),
 					snapshot,
 				});
-				await this.#settleSuccess(claimed, result);
+				await this.#settleResult(claimed, result);
 				executed += 1;
 			} catch (error) {
 				await this.#settleFailure(claimed, error);
@@ -805,9 +828,10 @@ export class ScheduleService {
 		return executed;
 	}
 
-	async #settleSuccess(occurrence: OccurrenceRow, result: ScheduleExecutionResult): Promise<void> {
+	async #settleResult(occurrence: OccurrenceRow, result: ScheduleExecutionResult): Promise<void> {
 		const database = this.#db();
 		const now = this.#now();
+		const status = result.status ?? "succeeded";
 		await database
 			.update(scheduleOccurrences)
 			.set({
@@ -816,7 +840,7 @@ export class ScheduleService {
 				leaseOwner: null,
 				messageId: result.messageId ?? occurrence.messageId,
 				resultJson: JSON.stringify(result.result ?? { ok: true }),
-				status: "succeeded",
+				status,
 				updatedAtMs: now,
 			})
 			.where(eq(scheduleOccurrences.id, occurrence.id));
@@ -827,27 +851,28 @@ export class ScheduleService {
 			.limit(1);
 		if (row === undefined) return;
 		const runCount = row.runCount + 1;
-		const completed =
-			row.maxRuns !== null && runCount >= row.maxRuns
-				? true
-				: parseJson<ScheduleRecurrence | null>(row.recurrenceJson, null)?.kind === "once";
-		await database
+		const once = parseJson<ScheduleRecurrence | null>(row.recurrenceJson, null)?.kind === "once";
+		const exhausted = row.maxRuns !== null && runCount >= row.maxRuns;
+		const completed = status === "succeeded" ? once || exhausted : once;
+		const failedUncertain = status === "uncertain" && once;
+		const [updated] = await database
 			.update(schedules)
 			.set({
-				lastRunAtMs: now,
-				runCount,
-				status: completed ? "completed" : row.status,
+				...(status === "succeeded" ? { lastRunAtMs: now, runCount } : {}),
+				status: failedUncertain ? "failed" : completed ? "completed" : row.status,
 				updatedAtMs: now,
-				...(completed ? { completedAtMs: now, nextRunAtMs: null } : {}),
+				...(completed || failedUncertain ? { completedAtMs: now, nextRunAtMs: null } : {}),
 			})
-			.where(eq(schedules.id, row.id));
+			.where(eq(schedules.id, row.id))
+			.returning();
 		this.#logger.info("schedule occurrence succeeded", {
 			actionKind: row.actionKind,
 			attempt: occurrence.attempt,
 			occurrenceId: occurrence.id,
 			scheduleId: row.id,
+			status,
 		});
-		this.#changed(changeFrom(row));
+		if (updated !== undefined) this.#changed(changeFrom(updated));
 	}
 
 	async #settleFailure(occurrence: OccurrenceRow, error: unknown): Promise<void> {

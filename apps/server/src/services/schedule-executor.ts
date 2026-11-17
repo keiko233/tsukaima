@@ -83,7 +83,7 @@ export class ScheduleExecutionService implements ScheduleExecutor {
 					pausedAtMs: this.#now(),
 				})
 				.where(eq(schedules.id, snapshot.scheduleId));
-			return { result: { skipped: "session_archived" } };
+			return { result: { skipped: "session_archived" }, status: "skipped" };
 		}
 		if (target.chat.status !== "active") {
 			await database
@@ -94,7 +94,7 @@ export class ScheduleExecutionService implements ScheduleExecutor {
 					pausedAtMs: this.#now(),
 				})
 				.where(eq(schedules.id, snapshot.scheduleId));
-			return { result: { skipped: "chat_archived" } };
+			return { result: { skipped: "chat_archived" }, status: "skipped" };
 		}
 		if (snapshot.respectQuietHours) {
 			const policy = await this.#policy.effectivePolicy(snapshot.sessionId);
@@ -107,7 +107,7 @@ export class ScheduleExecutionService implements ScheduleExecutor {
 						: quiet.startHour < quiet.endHour
 							? hour >= quiet.startHour && hour < quiet.endHour
 							: hour >= quiet.startHour || hour < quiet.endHour;
-				if (inQuiet) return { result: { skipped: "quiet_hours" } };
+				if (inQuiet) return { result: { skipped: "quiet_hours" }, status: "skipped" };
 			}
 		}
 		const messageId = `schedule:${occurrence.id}`;
@@ -228,7 +228,7 @@ export class ScheduleExecutionService implements ScheduleExecutor {
 					updatedAt: new Date(this.#now()).toISOString(),
 				})
 				.where(eq(messages.id, messageId));
-			if (uncertain) return { messageId, result: { uncertain: true } };
+			if (uncertain) return { messageId, result: { uncertain: true }, status: "uncertain" };
 			throw error;
 		}
 	}
