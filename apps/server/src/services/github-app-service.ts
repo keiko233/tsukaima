@@ -129,7 +129,7 @@ export function assertPrivateKey(privateKey: string): void {
 	} catch {
 		throw new GitHubAppError(
 			"github_app_invalid_private_key",
-			"Private key could not be parsed; paste the PKCS#8 PEM generated for the App",
+			"Private key could not be parsed; paste the whole .pem file downloaded from the App settings",
 		);
 	}
 }

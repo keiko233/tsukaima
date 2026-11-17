@@ -90,7 +90,7 @@ Layering rules:
 | --- | --- | --- | --- |
 | D1 | Where git plumbing lives | New `packages/coding/src/git.ts`; refactor both existing call sites | Keeps the existing package boundary; the repo expects one shared primitive, not a third copy. A separate `packages/git` matters only if a consumer outside `coding` appears. |
 | D2 | GitHub access in the server | REST over `fetch`, base `TSUKAIMA_GITHUB_API_URL` default `https://api.github.com` | `gh` cannot sign App JWTs, is not in the image, and its keyring store is unreliable headless. `fetch` is testable with a fake and needs no new dependency. |
-| D3 | Credential model | GitHub App: App ID, installation ID, PKCS#8 private key | Chosen by the operator. Gives short-lived per-installation tokens and independent revocation. |
+| D3 | Credential model | GitHub App: App ID, installation ID, PEM private key (PKCS#1 or PKCS#8) | Chosen by the operator. Gives short-lived per-installation tokens and independent revocation. |
 | D4 | Where the credential lives | Private key file `<dataDir>/secrets/github-app.pem` mode 0600; App ID and metadata in the `meta` row `github-app` | `<dataDir>` is the persistent volume and stays out of git. The PEM is never returned by an RPC, only a SHA-256 fingerprint. |
 | D5 | Token lifetime | Mint installation tokens on demand, cache until five minutes before expiry | Installation tokens expire after one hour; a stale cached token must never be reused. |
 | D6 | How `git` authenticates | Per-invocation env only: `GIT_CONFIG_COUNT/KEY/VALUE` inline credential helper returning `x-access-token` plus the token, and `GH_TOKEN` | No token in argv, `.git/config`, a credentials file, or a log line. |
@@ -146,7 +146,8 @@ RPC (admin-only, behind the existing admin auth), added to `apps/server/src/rpc/
 
 ## 6. Credentials
 
-**Configure** (upgrade center card): paste the App ID, installation ID, and the PKCS#8 private key.
+**Configure** (upgrade center card): paste the App ID, installation ID, and the private key. GitHub
+downloads it as PKCS#1 (`BEGIN RSA PRIVATE KEY`) and the signer accepts PKCS#8 as well.
 The host validates by signing a JWT, calling `GET /app/installations/{id}`, and listing
 `GET /installation/repositories`, then records the account login, permissions, and repository
 selection for display.

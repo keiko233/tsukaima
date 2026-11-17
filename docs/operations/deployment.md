@@ -272,8 +272,8 @@ Create the App once, in the account or organization that owns the deployment rep
 | Repository access | only the deployment repository |
 | Webhook | disabled; the server polls on demand |
 
-Install it on the repository, then paste the **App ID**, the **installation ID**, and the PKCS#8
-private key (`.pem`) into the card. The installation ID is the numeric suffix of
+Install it on the repository, then paste the **App ID**, the **installation ID**, and the private
+key (`.pem`, PKCS#1 or PKCS#8) into the card. The installation ID is the numeric suffix of
 `/settings/installations/<id>` for that App. `contents: write` is what allows the server to push;
 the App is still refused by any branch protection rule that requires review.
 

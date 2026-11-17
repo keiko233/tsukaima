@@ -172,7 +172,7 @@
 	"github_load_failed": "读取 GitHub 失败",
 	"github_not_configured": "尚未配置 GitHub App。",
 	"github_permissions": "权限",
-	"github_private_key": "私钥（PKCS#8 PEM）",
+	"github_private_key": "私钥（.pem 文件）",
 	"github_private_key_placeholder": "粘贴 .pem 文件内容",
 	"github_pulls": "未关闭的拉取请求",
 	"github_pulls_empty": "没有未关闭的拉取请求。",
