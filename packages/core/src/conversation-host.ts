@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Tool } from "@earendil-works/pi-ai";
+import type { ModelThinkingLevel, Tool } from "@earendil-works/pi-ai";
 import {
 	calculateContextTokens,
 	estimateMessageTokens,
@@ -72,6 +72,15 @@ type StoredEnvelope = JsonObject & {
 	};
 	triggerContext?: string;
 };
+
+/**
+ * Agent settings applied alongside a policy sync. `undefined` leaves the current value in
+ * place, `null` resets it to the host default, and a concrete value overrides it.
+ */
+export interface ConversationAgentSettings {
+	readonly model?: { readonly modelId: string; readonly providerId: string } | null;
+	readonly thinkingLevel?: ModelThinkingLevel | null;
+}
 
 /**
  * Local observation time for a stored envelope, falling back to the platform timestamp for
@@ -768,6 +777,21 @@ export class PiDurableConversationHost {
 	setModel(model: ModelPort): void {
 		this.model = model;
 		this.modelsEnsured.clear();
+	}
+
+	/** Model that runs a conversation when no per-conversation or surface default is set. */
+	get defaultModelRef(): { readonly modelId: string; readonly providerId: string } {
+		return { modelId: this.model.modelId, providerId: this.model.providerId };
+	}
+
+	/** Resolve a provider-scoped model against the active port, or `undefined` when unavailable. */
+	resolveModelRef(ref: {
+		readonly modelId: string;
+		readonly providerId?: string;
+	}): { readonly modelId: string; readonly providerId: string } | undefined {
+		const providerId = ref.providerId ?? this.model.providerId;
+		const model = this.model.models.getModel(providerId, ref.modelId);
+		return model === undefined ? undefined : { modelId: model.id, providerId: model.provider };
 	}
 
 	async createConversation(): Promise<string> {
@@ -2230,7 +2254,11 @@ export class PiDurableConversationHost {
 	 * policy service owns resolution and revision history; this method only syncs the active
 	 * document so activity aggregation and pacing read from one durable source.
 	 */
-	async updatePolicy(conversationId: string, policy: ConversationPolicy): Promise<void> {
+	async updatePolicy(
+		conversationId: string,
+		policy: ConversationPolicy,
+		agentSettings?: ConversationAgentSettings,
+	): Promise<void> {
 		const parsed = conversationPolicySchema.parse(policy);
 		await withConversationLock(
 			conversationId,
@@ -2245,24 +2273,63 @@ export class PiDurableConversationHost {
 					const document = await tx.doc(conversationPolicyDoc, numericId, "policy", seed);
 					document.policyJson = JSON.stringify(parsed);
 				}, BACKGROUND_CONTEXT);
-				// Compaction thresholds live in the conversation's agent document, not in the
-				// policy document the host reads for ping/pacing. Keep them aligned here so a
-				// default saved in Settings also covers sessions that never open their inspector.
+				// Compaction thresholds and the selected model/effort live in the conversation's
+				// agent document, not in the policy document the host reads for ping/pacing. Keep
+				// them aligned here so a default saved in Settings also covers sessions that never
+				// open their inspector.
 				const agent = await conversation.agent(BACKGROUND_CONTEXT);
 				const hostModelRef = {
 					modelId: this.model.modelId,
-					provider: this.model.providerId,
+					providerId: this.model.providerId,
 				};
-				const agentModel =
+				const currentModel =
 					agent.model === undefined
 						? undefined
-						: this.model.models.getModel(agent.model.provider, agent.model.modelId);
+						: this.resolveModelRef({
+								modelId: agent.model.modelId,
+								providerId: agent.model.provider,
+							});
+				const requestedModel =
+					agentSettings?.model === undefined
+						? undefined
+						: agentSettings.model === null
+							? null
+							: this.resolveModelRef({
+									modelId: agentSettings.model.modelId,
+									providerId: agentSettings.model.providerId,
+								});
+				if (
+					agentSettings?.model !== undefined &&
+					agentSettings.model !== null &&
+					requestedModel === undefined
+				) {
+					this.logger.warn("Conversation model is unavailable; using host default", {
+						conversationId,
+						modelId: agentSettings.model.modelId,
+						providerId: agentSettings.model.providerId,
+					});
+				}
+				const targetModel =
+					agentSettings?.model === undefined
+						? (currentModel ?? hostModelRef)
+						: (requestedModel ?? hostModelRef);
+				const agentModel = this.model.models.getModel(targetModel.providerId, targetModel.modelId);
 				const contextWindow =
 					agentModel?.contextWindow ??
-					this.model.models.getModel(hostModelRef.provider, hostModelRef.modelId)?.contextWindow ??
+					this.model.models.getModel(hostModelRef.providerId, hostModelRef.modelId)
+						?.contextWindow ??
 					0;
 				await conversation.configure(
-					{ compaction: this.compactionSettings(parsed.compaction, contextWindow) },
+					{
+						compaction: this.compactionSettings(parsed.compaction, contextWindow),
+						model: {
+							modelId: targetModel.modelId,
+							provider: targetModel.providerId,
+						},
+						...(agentSettings?.thinkingLevel === undefined
+							? {}
+							: { thinkingLevel: agentSettings.thinkingLevel }),
+					},
 					BACKGROUND_CONTEXT,
 				);
 			},

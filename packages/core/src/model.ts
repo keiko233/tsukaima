@@ -126,6 +126,11 @@ export function createSlowStreamingModel(
 		chunksForCall?: (callIndex: number) => readonly string[];
 		/** Observe the context the host sends, so a test can assert on image blocks. */
 		onContext?: (context: unknown) => void;
+		/** Observe the provider request options and selected model for each call. */
+		onStreamOptions?: (
+			options: { reasoning?: string; signal?: AbortSignal } | undefined,
+			model: { id: string },
+		) => void;
 		/** Declare image input, so a test can exercise the vision path. Defaults to text-only. */
 		supportsImage?: boolean;
 		/** Extra models on the same provider, for tests that select a conversation model. */
@@ -140,11 +145,12 @@ export function createSlowStreamingModel(
 	const stream = (
 		model: { api: string; id: string; provider: string },
 		context?: unknown,
-		streamOptions?: { signal?: AbortSignal },
+		streamOptions?: { reasoning?: string; signal?: AbortSignal },
 	) => {
 		const callChunks = options.chunksForCall?.(callIndex) ?? chunks;
 		callIndex += 1;
 		options.onContext?.(context);
+		options.onStreamOptions?.(streamOptions, model);
 		const output = createAssistantMessageEventStream();
 		void (async () => {
 			output.push({

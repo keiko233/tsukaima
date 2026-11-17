@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import type { Harness } from "@earendil-works/pi-durable";
-import type { MessagePart } from "@tsukaima/contracts";
+import { defaultConversationPolicy, type MessagePart } from "@tsukaima/contracts";
 import { openDurableStorage } from "@tsukaima/durable";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -522,6 +522,66 @@ describe("PiDurableConversationHost", () => {
 			expect(restartedAnswers).toEqual(["after-restart"]);
 			await restartedHost.close();
 			await restartedStorage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("applies per-conversation model and reasoning from policy sync", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-agent-settings-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const calls: { modelId: string; reasoning?: string }[] = [];
+			const answers: string[] = [];
+			const model = createSlowStreamingModel(["selected-model"], {
+				additionalModels: [{ id: "advanced-model" }],
+				delayMs: 5,
+				onStreamOptions: (options, selected) => {
+					calls.push({
+						modelId: selected.id,
+						...(options?.reasoning === undefined ? {} : { reasoning: options.reasoning }),
+					});
+				},
+			});
+			const host = new PiDurableConversationHost({
+				model,
+				onAnswer: (answer) => {
+					answers.push(answer.text);
+				},
+				storage,
+			});
+			const conversationId = await host.createConversation();
+			await host.updatePolicy(conversationId, defaultConversationPolicy, {
+				model: { modelId: "advanced-model", providerId: "slow-test" },
+				thinkingLevel: "high",
+			});
+			await host.append({
+				conversationId,
+				envelope: envelope("override-turn", "use the advanced model"),
+				forceSubmit: true,
+				submittedAtMs: 1_000,
+			});
+			for (let step = 0; step < 40 && answers.length < 1; step += 1) {
+				await Bun.sleep(25);
+			}
+			expect(calls).toEqual([{ modelId: "advanced-model", reasoning: "high" }]);
+
+			await host.updatePolicy(conversationId, defaultConversationPolicy, {
+				model: null,
+				thinkingLevel: null,
+			});
+			await host.append({
+				conversationId,
+				envelope: envelope("default-turn", "go back to the default"),
+				forceSubmit: true,
+				submittedAtMs: 2_000,
+			});
+			for (let step = 0; step < 40 && answers.length < 2; step += 1) {
+				await Bun.sleep(25);
+			}
+			expect(calls[1]).toEqual({ modelId: "slow-test-model" });
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
 		} finally {
 			await rm(directory, { force: true, recursive: true });
 		}

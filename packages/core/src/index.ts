@@ -51,6 +51,7 @@ export {
 	type BackgroundTurnOrigin,
 	type BackgroundTurnResult,
 	type CompactConversationResult,
+	type ConversationAgentSettings,
 	type ConversationAnswer,
 	type SubmissionAnswerResolution,
 	type ConversationContextInspection,
