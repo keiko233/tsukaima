@@ -18,6 +18,7 @@ import { m } from "@/paraglide/messages";
 import { ContextPanel } from "./context-panel";
 import { WorkspaceInspectorTabs } from "./workspace-inspector";
 import { SessionCommandsView, type CommandFeedback } from "./session-commands-view";
+import { SessionSchedulesView } from "./session-schedules-view";
 import {
 	PolicyPacingTabView,
 	PolicyPersonaTabView,
@@ -32,6 +33,7 @@ export type InspectorTab =
 	| "trigger"
 	| "pacing"
 	| "persona"
+	| "schedules"
 	| "todos"
 	| "sessions"
 	| "data";
@@ -45,6 +47,7 @@ function isInspectorTab(value: string | null): value is InspectorTab {
 		value === "trigger" ||
 		value === "pacing" ||
 		value === "persona" ||
+		value === "schedules" ||
 		value === "todos" ||
 		value === "sessions" ||
 		value === "data"
@@ -56,7 +59,9 @@ export function storedInspectorTab(surface: "chat" | "workspace" = "chat"): Insp
 		const raw = localStorage.getItem(`${INSPECTOR_TAB_KEY}.${surface}`);
 		if (isInspectorTab(raw)) {
 			if (surface === "workspace") {
-				return raw === "todos" || raw === "sessions" || raw === "data" ? raw : "context";
+				return raw === "todos" || raw === "sessions" || raw === "data" || raw === "schedules"
+					? raw
+					: "context";
 			}
 			return raw === "todos" || raw === "sessions" || raw === "data" ? "context" : raw;
 		}
@@ -419,6 +424,13 @@ export function SessionInspectorSidebar({
 						>
 							{m.inspector_tab_persona()}
 						</TabsTrigger>
+						<TabsTrigger
+							value="schedules"
+							indicatorClassName="h-px"
+							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
+						>
+							{m.tasks_inspector_tab()}
+						</TabsTrigger>
 					</TabsList>
 				</div>
 
@@ -535,6 +547,9 @@ export function SessionInspectorSidebar({
 						personas={personas.data ?? []}
 						savingPersona={savePersona.isPending}
 					/>
+				</TabsContent>
+				<TabsContent value="schedules" className="mt-0 flex min-h-0 flex-1 flex-col">
+					<SessionSchedulesView sessionId={sessionId} />
 				</TabsContent>
 			</Tabs>
 		</div>

@@ -726,5 +726,9 @@
 	"tasks_edit": "Edit task",
 	"tasks_save": "Save task",
 	"tasks_create": "Create task",
-	"tasks_revision": "Revision {revision}"
+	"tasks_revision": "Revision {revision}",
+	"tasks_linked_badge": "{count} scheduled",
+	"tasks_linked_empty": "No schedules for this conversation.",
+	"tasks_inspector_tab": "Schedules",
+	"tasks_view_all": "View all"
 }

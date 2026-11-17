@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import {
 	CalendarClock,
 	Clock3,
@@ -545,9 +545,18 @@ function CreateTaskForm({ onCreated }: { onCreated: (schedule: ScheduleDetail) =
 
 export function TasksIndexPage() {
 	const navigate = useNavigate();
+	const search = useSearch({ from: "/(tasks)/tasks/" });
 	const [createOpen, setCreateOpen] = useState(false);
-	const schedules = useQuery(orpc.admin.schedules.list.queryOptions({ input: { limit: 200 } }));
-	const active = schedules.data?.schedules.filter((schedule) => schedule.status === "active") ?? [];
+	const schedules = useQuery(
+		orpc.admin.schedules.list.queryOptions({
+			input: {
+				limit: 200,
+				...(search.sessionId === undefined ? {} : { sessionId: search.sessionId }),
+			},
+		}),
+	);
+	const visibleSchedules = schedules.data?.schedules ?? [];
+	const active = visibleSchedules.filter((schedule) => schedule.status === "active");
 	const overdue = active.filter(
 		(schedule) => schedule.nextRunAt !== null && Date.parse(schedule.nextRunAt) < Date.now(),
 	);
@@ -568,7 +577,7 @@ export function TasksIndexPage() {
 					<p className="text-xs text-muted-foreground">{m.loading()}</p>
 				) : schedules.isError ? (
 					<p className="text-xs text-destructive">{m.tasks_load_failed()}</p>
-				) : schedules.data?.schedules.length === 0 ? (
+				) : visibleSchedules.length === 0 ? (
 					<div className="rounded-lg border border-dashed border-border px-4 py-10 text-center">
 						<CalendarClock className="mx-auto size-5 text-muted-foreground" />
 						<p className="mt-2 text-sm font-medium">{m.tasks_empty_title()}</p>
@@ -576,7 +585,7 @@ export function TasksIndexPage() {
 					</div>
 				) : (
 					<div className="divide-y divide-border rounded-lg border border-border">
-						{schedules.data?.schedules.map((schedule) => (
+						{visibleSchedules.map((schedule) => (
 							<Link
 								key={schedule.id}
 								to="/tasks/$scheduleId"

@@ -12,12 +12,15 @@ import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { ContextPanel } from "./context-panel";
 import type { InspectorTab } from "./session-inspector-sidebar";
+import { SessionSchedulesView } from "./session-schedules-view";
 
-const WORKSPACE_TABS = ["context", "todos", "sessions", "data"] as const;
+const WORKSPACE_TABS = ["context", "todos", "sessions", "data", "schedules"] as const;
 type WorkspaceTab = (typeof WORKSPACE_TABS)[number];
 
 function workspaceTab(tab: InspectorTab): WorkspaceTab {
-	return tab === "todos" || tab === "sessions" || tab === "data" ? tab : "context";
+	return tab === "todos" || tab === "sessions" || tab === "data" || tab === "schedules"
+		? tab
+		: "context";
 }
 
 function todoStatus(status: WorkspaceTodo["status"]): "pending" | "in-progress" | "completed" | "cancelled" {
@@ -109,7 +112,13 @@ export function WorkspaceInspectorTabs({
 				variant="underline"
 				value={selected}
 				onValueChange={(value) => {
-					if (value === "context" || value === "todos" || value === "sessions" || value === "data") {
+					if (
+						value === "context" ||
+						value === "todos" ||
+						value === "sessions" ||
+						value === "data" ||
+						value === "schedules"
+					) {
 						onTabChange(value);
 					}
 				}}
@@ -148,6 +157,12 @@ export function WorkspaceInspectorTabs({
 							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
 						>
 							{m.workspace_inspector_data()}
+						</TabsTrigger>
+						<TabsTrigger
+							value="schedules"
+							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
+						>
+							{m.tasks_inspector_tab()}
 						</TabsTrigger>
 					</TabsList>
 				</div>
@@ -241,6 +256,9 @@ export function WorkspaceInspectorTabs({
 							<div key={table}>{table}</div>
 						))}
 					</div>
+				</TabsContent>
+				<TabsContent value="schedules" className="mt-0 flex min-h-0 flex-1 flex-col">
+					<SessionSchedulesView sessionId={session.id} />
 				</TabsContent>
 			</Tabs>
 		</div>

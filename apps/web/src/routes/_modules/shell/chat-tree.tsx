@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
 	Archive,
+	CalendarClock,
 	ChevronRight,
 	CircleDot,
 	ExternalLink,
@@ -140,6 +141,15 @@ export function ChatTree({
 	const [renameTitle, setRenameTitle] = useState("");
 
 	const chats = useQuery(orpc.admin.chats.list.queryOptions({ input: { status: "all" } }));
+	const sessionIds = (chats.data ?? []).flatMap((chat) => chat.sessions.map((session) => session.id));
+	const scheduleSummary = useQuery(
+		orpc.admin.schedules.summary.queryOptions({
+			input: sessionIds.length === 0 ? {} : { sessionIds: sessionIds.slice(0, 100) },
+		}),
+	);
+	const scheduleBySession = new Map(
+		(scheduleSummary.data?.sessions ?? []).map((entry) => [entry.sessionId, entry]),
+	);
 
 	const invalidate = async () => {
 		await Promise.all([
@@ -415,6 +425,7 @@ export function ChatTree({
 										{chat.sessions.map((session) => {
 											const active = activeSessionId === session.id;
 											const message = session.latestMessage;
+											const linked = scheduleBySession.get(session.id);
 											return (
 												<div
 													key={session.id}
@@ -458,6 +469,19 @@ export function ChatTree({
 																		{m.archived()}
 																	</span>
 																) : null}
+																	{linked !== undefined && linked.active > 0 ? (
+																		<Link
+																			aria-label={m.tasks_linked_badge({ count: linked.active })}
+																			className="inline-flex shrink-0 items-center gap-0.5 rounded bg-primary/10 px-1 text-[8.5px] leading-3.5 font-medium text-primary hover:bg-primary/20"
+																			onClick={(event) => event.stopPropagation()}
+																			params={{ sessionId: session.id }}
+																			search={{ sessionId: session.id }}
+																			to="/tasks"
+																		>
+																			<CalendarClock className="size-2.5" />
+																			{linked.active}
+																		</Link>
+																	) : null}
 															</span>
 															<span className="mt-px flex min-w-0 items-center gap-1 text-[10px] leading-3.5 text-muted-foreground/70">
 																<span className="truncate">

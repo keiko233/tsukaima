@@ -726,5 +726,9 @@
 	"tasks_edit": "编辑任务",
 	"tasks_save": "保存任务",
 	"tasks_create": "创建任务",
-	"tasks_revision": "修订 {revision}"
+	"tasks_revision": "修订 {revision}",
+	"tasks_linked_badge": "{count} 个计划",
+	"tasks_linked_empty": "此对话暂无计划任务。",
+	"tasks_inspector_tab": "计划",
+	"tasks_view_all": "查看全部"
 }
