@@ -529,6 +529,7 @@ export class ProactiveSchedulerService {
 	async cancelTask(taskId: string, actorId = "webui-admin"): Promise<ScheduledTask | undefined> {
 		const task = await this.#repository.getTask(taskId);
 		if (task === undefined && this.#schedules !== undefined) {
+			const hosted = (await this.#schedules.list()).find((row) => row.id === taskId);
 			const cancelled = await this.#schedules.cancel(taskId);
 			if (!cancelled) return undefined;
 			await this.#recordAudit({
@@ -539,7 +540,7 @@ export class ProactiveSchedulerService {
 				targetId: taskId,
 				targetKind: "schedule",
 			});
-			return undefined;
+			return hosted === undefined ? undefined : scheduleToTask({ ...hosted, status: "cancelled" });
 		}
 		if (task === undefined) {
 			this.#logger.debug("task cancel skipped", { reason: "unknown_task", taskId });

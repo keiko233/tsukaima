@@ -139,7 +139,10 @@ export function AppRail() {
 	const pendingRequests = useQuery(
 		orpc.admin.requests.list.queryOptions({ input: { status: "pending" } }),
 	);
+	const scheduleSummary = useQuery(orpc.admin.schedules.summary.queryOptions({ input: {} }));
 	const pendingCount = pendingRequests.data?.length ?? 0;
+	const scheduledCount =
+		(scheduleSummary.data?.overdue ?? 0) + (scheduleSummary.data?.dueSoon ?? 0);
 	const signOut = useMutation({
 		mutationFn: async () => {
 			const { error } = await authClient.signOut();
@@ -206,6 +209,7 @@ export function AppRail() {
 					/>
 					<RailLink
 						active={destinationActive("/tasks", pathname)}
+						badge={scheduledCount}
 						icon={CalendarClock}
 						label={m.tab_tasks()}
 						to="/tasks"

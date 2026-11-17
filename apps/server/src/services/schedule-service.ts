@@ -718,27 +718,32 @@ export class ScheduleService {
 		let inserted = 0;
 		const stale = times.filter((time) => time + row.graceMs < now);
 		const current = times.filter((time) => time + row.graceMs >= now);
-		if (stale.length > 0) {
-			const selected =
-				row.catchUp === "all" ? stale.slice(-10) : row.catchUp === "latest" ? stale.slice(-1) : [];
-			for (const time of selected) {
+		const staleHistory = stale.slice(-10);
+		const selected =
+			row.catchUp === "all" ? staleHistory : row.catchUp === "latest" ? staleHistory.slice(-1) : [];
+		if (staleHistory.length > 0) {
+			for (const time of staleHistory) {
 				const existing = await this.#occurrenceByKey(row.id, `scheduled:${time}`);
 				if (existing === null) {
 					await this.#insertOccurrence({
 						row,
 						scheduledForMs: time,
-						status: "pending",
+						status: selected.includes(time) ? "pending" : "skipped",
 						triggerKind: "catch_up",
 					});
 					inserted += 1;
 				}
 			}
 		}
-		if (row.catchUp === "skip" && stale.length > 0) {
+		if (stale.length > 0) {
 			await this.#recordAudit({
 				action: "schedule.catch-up-skipped",
 				actorKind: "system",
-				payload: { count: stale.length, sessionId: row.targetSessionId },
+				payload: {
+					count: stale.length,
+					replayed: selected.length,
+					sessionId: row.targetSessionId,
+				},
 				result: "ok",
 				targetId: row.id,
 				targetKind: "schedule",

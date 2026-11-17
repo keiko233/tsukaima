@@ -356,6 +356,49 @@ describe("durable schedules", () => {
 		}
 	});
 
+	test("retains skipped catch-up occurrences instead of losing missed runs", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-schedules-"));
+		const database = await seed(directory);
+		let now = Date.parse("2026-11-17T00:00:00.000Z");
+		const executor = new RecordingExecutor();
+		const service = new ScheduleService({
+			database: () => database,
+			executor,
+			logger,
+			now: () => now,
+		});
+		try {
+			const created = await service.create({
+				actionKind: "agent_turn",
+				catchUp: "skip",
+				graceMs: 60_000,
+				ownerId: "test-admin",
+				ownerKind: "user",
+				prompt: "Synthetic reminder",
+				recurrence: {
+					anchorAt: "2026-11-17T00:00:00.000Z",
+					everyMs: 3_600_000,
+					kind: "interval",
+				},
+				source: "test",
+				targetSessionId: "session-1",
+				timeZone: "UTC",
+				title: "Synthetic schedule",
+			});
+			now = Date.parse("2026-11-17T03:00:01.000Z");
+			await service.tick();
+			const occurrences = await database
+				.select()
+				.from(scheduleOccurrences)
+				.where(eq(scheduleOccurrences.scheduleId, created.id));
+			expect(occurrences.filter((row) => row.status === "skipped").length).toBeGreaterThan(0);
+		} finally {
+			service.stop();
+			database.$client.close();
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
 	test("rejects invalid targets and time zones", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "tsukaima-schedules-"));
 		const database = await seed(directory);

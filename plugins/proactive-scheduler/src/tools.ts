@@ -289,9 +289,9 @@ export function registerProactiveSchedulerTools(
 				return await deny(context, "admin_required", input, invocation);
 			}
 			if (taskId !== undefined) {
-				const task = await service.repository.getTask(taskId);
-				if (task === undefined) return text({ error: "unknown_task" });
-				if (!scope.aliases.has(task.conversationId) && !isAdmin(invocation)) {
+				const found = await service.getTask(taskId);
+				if (found === undefined) return text({ error: "unknown_task" });
+				if (!scope.aliases.has(found.task.conversationId) && !isAdmin(invocation)) {
 					return await deny(context, "cross_conversation_denied", input, invocation);
 				}
 				return text({ cancelled: await service.cancelTask(taskId, invocation.userId ?? "agent") });
