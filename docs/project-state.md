@@ -33,6 +33,13 @@ This file is the cross-session handoff record. Update it whenever implementation
   - `tools/ops`: offline secret scanner (`check:secrets`), and the reusable SQLite + blob backup/restore drill (`ops:backup-drill`). The drill logic itself lives in `packages/migration/src/backup-drill.ts` and is reused by `@tsukaima/server` scheduling.
 - Runtime target is Bun.
 - Runtime settings are limited to interface/log level concerns. Provider and channel configuration are owned by their plugins; secret values are never returned by the API.
+- Repository state is a first-class read model. `packages/coding/src/git.ts` holds the only `git`
+  spawn (argv arrays, per-call environment, timeout and output cap), `RepositoryService` turns it
+  into branch, upstream, ahead/behind, dirty counts, remotes, worktrees, tags, and HEAD version,
+  `admin.repository.status` publishes it, and Settings -> Upgrades renders it above the existing
+  upgrade flow. `TSUKAIMA_REPOSITORY_ROOT` now names the checkout instead of relying on
+  `process.cwd()` implicitly. GitHub App credentials, PR/issue/CI reads, and governed writes are
+  specified in [git-github-integration.md](specs/git-github-integration.md) and not built yet.
 - Built-in plugins are loaded from `apps/server/src/plugins/builtin.ts`; the OneBot channel is now a plugin, not lifecycle code. `TsukaimaLifecycle` no longer holds channel, request, or identity-resolution logic.
 - Assistant answers are delivered back to their origin channel by `apps/server/src/services/reply-dispatcher.ts`.
   The durable host observes the settled submission (`onAnswer`), the dispatcher claims the outbound

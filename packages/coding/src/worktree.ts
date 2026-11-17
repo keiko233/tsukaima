@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
 import { lstat, mkdir, realpath, rm, symlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { GitCli, type GitCommandResult } from "./git.ts";
 
 export interface WorktreeManagerConfig {
 	readonly pathAllowlist: readonly string[];
@@ -15,12 +15,6 @@ export interface WorktreeInfo {
 	readonly taskId: string;
 }
 
-export interface GitExecResult {
-	readonly exitCode: number | null;
-	readonly stderr: string;
-	readonly stdout: string;
-}
-
 export class WorktreeError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -30,10 +24,12 @@ export class WorktreeError extends Error {
 
 export class WorktreeManager {
 	readonly #config: WorktreeManagerConfig;
+	readonly #gitCli: GitCli;
 	readonly #active = new Map<string, WorktreeInfo>();
 
 	constructor(config: WorktreeManagerConfig) {
 		this.#config = config;
+		this.#gitCli = new GitCli({ repositoryPath: config.repositoryPath });
 	}
 
 	async create(taskId: string, baseRef: string): Promise<WorktreeInfo> {
@@ -115,27 +111,8 @@ export class WorktreeManager {
 		await symlink(source, target, "dir").catch(() => undefined);
 	}
 
-	async #git(args: readonly string[]): Promise<GitExecResult> {
-		return new Promise((resolvePromise, rejectPromise) => {
-			const child = spawn("git", [...args], {
-				cwd: this.#config.repositoryPath,
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-			let stdout = "";
-			let stderr = "";
-			child.stdout?.on("data", (chunk: Buffer) => {
-				stdout += chunk.toString("utf-8");
-			});
-			child.stderr?.on("data", (chunk: Buffer) => {
-				stderr += chunk.toString("utf-8");
-			});
-			child.on("error", (error: Error) => {
-				rejectPromise(error);
-			});
-			child.on("close", (code: number | null) => {
-				resolvePromise({ exitCode: code, stderr, stdout });
-			});
-		});
+	async #git(args: readonly string[]): Promise<GitCommandResult> {
+		return await this.#gitCli.exec(args);
 	}
 }
 

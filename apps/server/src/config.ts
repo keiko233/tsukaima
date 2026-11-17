@@ -21,6 +21,12 @@ const configurationSchema = z.object({
 	logRetentionDays: z.number().int().positive().optional(),
 	port: z.number().int().min(1).max(65_535),
 	publicUrl: z.string().url(),
+	/**
+	 * Checkout the repository surfaces read and write. Defaults to the process working directory,
+	 * which is the repository root in the container; an explicit value keeps the answer correct
+	 * when the server is started from elsewhere.
+	 */
+	repositoryRoot: z.string().min(1),
 	secureCookies: z.boolean(),
 	/**
 	 * Git remote treated as upstream by the WebUI upgrade center. `origin` is the conventional
@@ -122,6 +128,7 @@ export function loadConfig(env: Record<string, string | undefined>): TsukaimaCon
 		mediaFetchAllowedHosts,
 		port,
 		publicUrl,
+		repositoryRoot: env.TSUKAIMA_REPOSITORY_ROOT?.trim() || process.cwd(),
 		secureCookies: env.TSUKAIMA_AUTH_SECURE_COOKIES === "true" || publicUrl.startsWith("https://"),
 		upgradeRemote: env.TSUKAIMA_UPGRADE_REMOTE?.trim() || "origin",
 		webDistDir,

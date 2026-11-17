@@ -66,3 +66,15 @@
 - [ ] Secret scanning.
 - [ ] Backup/restore drills.
 - [ ] Operational runbook.
+
+## Git and GitHub operations
+
+Spec: [git-github-integration.md](specs/git-github-integration.md). Not part of the numbered
+implementation phases above; this is the post-stabilization track for managing the repository from
+the running system.
+
+- [x] 1. Shared `GitCli` plus `RepositoryService` read model; refactor the upgrade and worktree paths.
+- [x] 2. Repository status in the upgrade center: branch, upstream, ahead/behind, dirty state, remotes, tags.
+- [ ] 3. GitHub App credentials (signed JWT, cached installation token, no secret in any response) and PR/issue/CI reads.
+- [ ] 4. Approval-gated writes (push, branch, PR) and coding-scoped `plugins/github` tools.
+- [ ] 5. Deploy preflight, `bun run ops:status`, and optional `vX.Y.Z` release on deploy.

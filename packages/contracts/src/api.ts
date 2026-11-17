@@ -288,6 +288,53 @@ export const upgradeFinalizeOutputSchema = z.object({
 });
 export type UpgradeFinalizeOutput = z.infer<typeof upgradeFinalizeOutputSchema>;
 
+/**
+ * The running checkout as git sees it. Everything here is read-only and local: `pushed` reflects
+ * whether the branch's remote-tracking ref already contains HEAD, so a stale fetch can report
+ * `pushed: true` for a commit the remote has not received yet.
+ */
+export const repositoryStatusSchema = z.object({
+	branch: z.string().nullable(),
+	dirty: z.object({
+		conflicted: z.number().int().nonnegative(),
+		modified: z.number().int().nonnegative(),
+		staged: z.number().int().nonnegative(),
+		untracked: z.number().int().nonnegative(),
+	}),
+	head: z.object({
+		authoredAt: z.string(),
+		commit: z.string(),
+		subject: z.string(),
+	}),
+	pushed: z.boolean(),
+	remotes: z.array(
+		z.object({
+			fetchUrl: z.string(),
+			name: z.string(),
+			pushUrl: z.string(),
+		}),
+	),
+	tags: z.array(z.object({ commit: z.string(), name: z.string() })),
+	upstream: z
+		.object({
+			ahead: z.number().int().nonnegative(),
+			behind: z.number().int().nonnegative(),
+			ref: z.string(),
+			remote: z.string(),
+		})
+		.nullable(),
+	version: z.string(),
+	worktrees: z.array(
+		z.object({
+			branch: z.string().nullable(),
+			head: z.string(),
+			locked: z.boolean(),
+			path: z.string(),
+		}),
+	),
+});
+export type RepositoryStatus = z.infer<typeof repositoryStatusSchema>;
+
 export const sessionDetailSchema = z.object({
 	channelId: z.string().nullable(),
 	chat: z.object({
@@ -1730,6 +1777,9 @@ export const appContract = oc.router({
 				.input(runtimeScheduleRestartInputSchema)
 				.output(restartStatusSchema)
 				.meta({ audit: true }),
+		},
+		repository: {
+			status: oc.output(repositoryStatusSchema),
 		},
 		upgrade: {
 			check: oc.input(upgradeStartInputSchema).output(upgradeCheckSchema),

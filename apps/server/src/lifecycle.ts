@@ -107,6 +107,7 @@ import {
 } from "./services/restart-coordinator.ts";
 import { OutboundService } from "./services/outbound.ts";
 import { RequestService } from "./services/request-service.ts";
+import { RepositoryService } from "./services/repository-service.ts";
 import { ScheduleExecutionService } from "./services/schedule-executor.ts";
 import { ScheduleService } from "./services/schedule-service.ts";
 import { SCHEDULE_TOOL_NAMES } from "./services/schedule-tools.ts";
@@ -197,6 +198,7 @@ export class TsukaimaLifecycle {
 	readonly replyDispatcher: ReplyDispatcher;
 	readonly outbound: OutboundService;
 	readonly requestService: RequestService;
+	readonly repository: RepositoryService;
 	readonly schedules: ScheduleService;
 	readonly restartCoordinator: RestartCoordinator;
 	readonly sessionMessaging: SessionMessagingService;
@@ -533,15 +535,19 @@ export class TsukaimaLifecycle {
 			messaging: this.sessionMessaging,
 			policy: this.conversationPolicy,
 			references: workspaceReferences,
-			repositoryRoot: process.cwd(),
+			repositoryRoot: config.repositoryRoot,
 			todos: this.workspaceTodos,
+		});
+		this.repository = new RepositoryService({
+			logger: this.runtimeLog,
+			repositoryPath: config.repositoryRoot,
 		});
 		this.upgrades = new UpgradeService({
 			audit: (entry) => this.writeAudit(entry),
 			database: () => this.domainDatabase,
 			defaultRemote: config.upgradeRemote,
 			logger: this.runtimeLog,
-			repositoryRoot: process.cwd(),
+			repositoryRoot: config.repositoryRoot,
 			restart: {
 				cancel: (reason) => this.cancelRestart(reason),
 				schedule: (input) => this.scheduleRestart(input),
@@ -590,7 +596,7 @@ export class TsukaimaLifecycle {
 				// without a recorded approved identity the deployment fails closed instead.
 				healthCheck: async () => ({ checkedAtMs: Date.now(), ok: this.ready }),
 				reload: new RestartReloadController(this.restartCoordinator),
-				repositoryRoot: process.cwd(),
+				repositoryRoot: config.repositoryRoot,
 				runningIdentity: () => this.runningDeploymentIdentity(),
 				store: this.codingStore,
 				worktreeRoot: join(config.dataDir, "worktrees"),

@@ -34,6 +34,7 @@ export type {
 	SessionSummary,
 	SettingsView,
 	RestartStatus,
+	RepositoryStatus,
 	UpgradeCheck,
 	UpgradeRecord,
 	UserDetail,

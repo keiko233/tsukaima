@@ -694,6 +694,11 @@ export const adminRouter = {
 			}),
 		),
 	},
+	repository: {
+		status: adminBase.admin.repository.status.handler(async ({ context }) =>
+			context.lifecycle.repository.status(),
+		),
+	},
 	upgrade: {
 		check: adminBase.admin.upgrade.check.handler(async ({ context, input }) =>
 			context.lifecycle.upgrades.check(input?.remote === undefined ? {} : { remote: input.remote }),

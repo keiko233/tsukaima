@@ -56,7 +56,15 @@ export {
 	WorktreeError,
 	WorktreeManager,
 } from "./worktree.ts";
-export type { GitExecResult, WorktreeInfo, WorktreeManagerConfig } from "./worktree.ts";
+export type { WorktreeInfo, WorktreeManagerConfig } from "./worktree.ts";
+
+export {
+	GIT_DEFAULT_MAX_OUTPUT_BYTES,
+	GIT_DEFAULT_TIMEOUT_MS,
+	GitCli,
+	GitCommandError,
+} from "./git.ts";
+export type { GitCliOptions, GitCommandResult, GitExecOptions } from "./git.ts";
 
 export {
 	applyStructuredEdit,

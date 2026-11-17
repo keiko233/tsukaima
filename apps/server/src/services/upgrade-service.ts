@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { desc, eq, sql } from "drizzle-orm";
 import type { RestartStatus, UpgradeCheck, UpgradeRecord } from "@tsukaima/contracts";
+import { GitCli, type GitCommandResult } from "@tsukaima/coding";
 import { runtimeUpgrades, type TsukaimaDatabase } from "@tsukaima/db";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
@@ -41,14 +41,9 @@ type UpgradeRow = typeof runtimeUpgrades.$inferSelect;
 const VERSION_FILE = "VERSION";
 const DEFAULT_UPGRADE_DELAY_SECONDS = 60;
 const GIT_TIMEOUT_MS = 60_000;
-const GIT_MAX_OUTPUT_BYTES = 256 * 1024;
+/** Local revision reads are fast; a hung `git status` must not hold an admin request open. */
+const GIT_QUICK_TIMEOUT_MS = 15_000;
 const SAFE_GIT_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/u;
-
-interface GitResult {
-	readonly exitCode: number | null;
-	readonly stderr: string;
-	readonly stdout: string;
-}
 
 function toRecord(row: UpgradeRow): UpgradeRecord {
 	return {
@@ -96,8 +91,8 @@ export class UpgradeService {
 	readonly #audit: UpgradeServiceOptions["audit"];
 	readonly #database: UpgradeServiceOptions["database"];
 	readonly #defaultRemote: string;
+	readonly #gitCli: GitCli;
 	readonly #logger: Logger;
-	readonly #repositoryRoot: string;
 	readonly #restart: UpgradeServiceOptions["restart"];
 	readonly #workspace: WorkspaceService;
 	#starting = false;
@@ -106,8 +101,8 @@ export class UpgradeService {
 		this.#audit = options.audit;
 		this.#database = options.database;
 		this.#defaultRemote = options.defaultRemote;
+		this.#gitCli = new GitCli({ repositoryPath: options.repositoryRoot });
 		this.#logger = options.logger.child("tsukaima::server::upgrade");
-		this.#repositoryRoot = options.repositoryRoot;
 		this.#restart = options.restart;
 		this.#workspace = options.workspace;
 	}
@@ -710,34 +705,8 @@ export class UpgradeService {
 		return result.exitCode === 0 ? result.stdout.trim() : "";
 	}
 
-	#git(args: readonly string[], timeoutMs = 15_000): Promise<GitResult> {
-		return new Promise((resolvePromise, rejectPromise) => {
-			const child = spawn("git", [...args], {
-				cwd: this.#repositoryRoot,
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-			let stdout = "";
-			let stderr = "";
-			const timer = setTimeout(() => {
-				child.kill("SIGKILL");
-			}, timeoutMs);
-			child.stdout?.on("data", (chunk: Buffer) => {
-				if (stdout.length >= GIT_MAX_OUTPUT_BYTES) return;
-				stdout += chunk.toString("utf-8").slice(0, GIT_MAX_OUTPUT_BYTES - stdout.length);
-			});
-			child.stderr?.on("data", (chunk: Buffer) => {
-				if (stderr.length >= GIT_MAX_OUTPUT_BYTES) return;
-				stderr += chunk.toString("utf-8").slice(0, GIT_MAX_OUTPUT_BYTES - stderr.length);
-			});
-			child.on("error", (error) => {
-				clearTimeout(timer);
-				rejectPromise(error);
-			});
-			child.on("close", (exitCode) => {
-				clearTimeout(timer);
-				resolvePromise({ exitCode, stderr, stdout });
-			});
-		});
+	async #git(args: readonly string[], timeoutMs = GIT_QUICK_TIMEOUT_MS): Promise<GitCommandResult> {
+		return await this.#gitCli.exec(args, { timeoutMs });
 	}
 
 	async #auditRecord(entry: AuditEntry): Promise<void> {
