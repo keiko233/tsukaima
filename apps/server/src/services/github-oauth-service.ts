@@ -277,11 +277,15 @@ export class GitHubOAuthService {
 					return undefined;
 				})
 				.catch(() => undefined);
+			const hint =
+				path === "/login/device/code"
+					? "; the Client ID must belong to an OAuth App, not a GitHub App"
+					: "";
 			throw new GitHubOAuthError(
 				"github_oauth_unavailable",
 				detail === undefined
-					? `GitHub responded ${response.status} for ${path}; check the OAuth Client ID (it must belong to an OAuth App, not a GitHub App)`
-					: `GitHub rejected the request (${response.status}): ${detail}`,
+					? `GitHub responded ${response.status} for ${path}${hint}`
+					: `GitHub rejected the request (${response.status}): ${detail}${hint}`,
 			);
 		}
 		return (await response.json()) as T;
