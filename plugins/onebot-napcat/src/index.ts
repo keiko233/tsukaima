@@ -13,6 +13,7 @@ import { oneBotNapCatManifest } from "./manifest.ts";
 import type {
 	OneBotAudioTranscribe,
 	OneBotConfig,
+	OneBotInboundMedia,
 	OneBotMentionNameStore,
 	OneBotReverseServerFactory,
 	OneBotTransportFactory,
@@ -34,6 +35,7 @@ export type {
 	OneBotChannelDiagnostics,
 	OneBotConfig,
 	OneBotEvent,
+	OneBotInboundMedia,
 	OneBotMentionNameInput,
 	OneBotMentionNameResolver,
 	OneBotMentionNameStore,
@@ -51,6 +53,7 @@ export const ONEBOT_REVERSE_SERVER_FACTORY_BINDING = "onebot.reverseServerFactor
 export const ONEBOT_AUDIO_TRANSCRIBE_BINDING = "onebot.audioTranscribe";
 export const ONEBOT_VIDEO_FRAME_EXTRACTOR_BINDING = "onebot.videoFrameExtractor";
 export const ONEBOT_MENTION_NAME_BINDING = "onebot.mentionName";
+export const ONEBOT_INBOUND_MEDIA_BINDING = "onebot.inboundMedia";
 
 interface OneBotRuntime {
 	adapter?: OneBotChannelAdapter | undefined;
@@ -446,11 +449,15 @@ function configWithHooks(context: PluginContext, config: OneBotConfig): OneBotCo
 	const mentionNameStore = context.dependencies?.get<OneBotMentionNameStore>(
 		ONEBOT_MENTION_NAME_BINDING,
 	);
+	const fetchInboundMedia = context.dependencies?.get<OneBotInboundMedia>(
+		ONEBOT_INBOUND_MEDIA_BINDING,
+	);
 	const media = context.media;
 	const pttEnabled = config.pttToText !== false;
 	context.logger.debug("OneBot host hooks resolved", {
 		audioTranscribe: audioTranscribe !== undefined && pttEnabled,
 		extractVideoFrames: extractVideoFrames !== undefined,
+		inboundMediaHook: fetchInboundMedia !== undefined,
 		mediaBridge: media !== undefined,
 		mentionNames: mentionNameStore !== undefined,
 	});
@@ -459,6 +466,7 @@ function configWithHooks(context: PluginContext, config: OneBotConfig): OneBotCo
 		...(audioTranscribe === undefined || !pttEnabled ? {} : { audioTranscribe }),
 		...(extractVideoFrames === undefined ? {} : { extractVideoFrames }),
 		...(mentionNameStore === undefined ? {} : { mentionNameStore }),
+		...(fetchInboundMedia === undefined ? {} : { fetchInboundMedia }),
 		...(media === undefined
 			? {}
 			: {

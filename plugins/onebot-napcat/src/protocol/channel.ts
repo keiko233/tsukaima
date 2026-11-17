@@ -79,10 +79,57 @@ const closeError = (): Error => new Error("OneBot connection closed");
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+const DEFAULT_INBOUND_MEDIA_TIMEOUT_MS = 10_000;
+const DEFAULT_INBOUND_MEDIA_MAX_BYTES = 8 * 1024 * 1024;
+
 const mediaFile = (part: MessagePart): string | undefined => {
 	if (part.type === "text" || part.type === "channel-native") return undefined;
 	return part.channelRef ?? part.sourceUrl ?? part.sha256 ?? part.mediaId;
 };
+
+const recordOf = (value: unknown): Record<string, unknown> | undefined =>
+	typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+
+const stringOf = (value: unknown): string | undefined =>
+	typeof value === "string" && value.length > 0 ? value : undefined;
+
+const decodeBase64 = (value: string, bare: boolean): Uint8Array | undefined => {
+	let text = value.trim();
+	if (text.startsWith("base64://")) text = text.slice("base64://".length);
+	else if (text.startsWith("data:")) {
+		const separator = text.indexOf(",");
+		if (separator < 0 || !text.slice(5, separator).includes(";base64")) return undefined;
+		text = text.slice(separator + 1);
+	} else if (!bare) {
+		return undefined;
+	}
+	text = text.replace(/\s+/gu, "");
+	if (text.length === 0) return undefined;
+	const bytes = Buffer.from(text, "base64");
+	return bytes.byteLength === 0 ? undefined : new Uint8Array(bytes);
+};
+
+/**
+ * Decode the bytes NapCat returns for `get_image`/`get_file`. Both actions answer with media
+ * metadata; only an inline `base64` (or an inline `base64://`/data URL) is usable here. A plain
+ * CDN URL is deliberately ignored so the host's guarded HTTP path, not the plugin, handles it.
+ */
+export function inboundMediaBytes(raw: unknown): Uint8Array | undefined {
+	const response = recordOf(raw);
+	if (response === undefined) return undefined;
+	const data = recordOf(response.data) ?? response;
+	const inline = stringOf(data.base64);
+	if (inline !== undefined) return decodeBase64(inline, true);
+	for (const key of ["data", "file", "path"] as const) {
+		const value = stringOf(data[key]);
+		if (value === undefined) continue;
+		const bytes = decodeBase64(value, false);
+		if (bytes !== undefined) return bytes;
+	}
+	return undefined;
+}
 
 /** QQ renders an `image` segment as a native animated sticker when these fields are set. */
 const NATIVE_STICKER_SUMMARY = "[动画表情]";
@@ -446,6 +493,41 @@ export class OneBotChannel {
 	async lookupMessage(platformMessageId: string): Promise<ChannelHistoryItem | undefined> {
 		const data = await this.readAction("get_msg", { message_id: platformMessageId });
 		return historyItem(data);
+	}
+
+	/**
+	 * Read inbound image/sticker bytes through NapCat. The platform already has the short-lived
+	 * CDN URL resolved, so this avoids a second host-side egress and works when the host's DNS
+	 * points the CDN at a proxy fake-IP range.
+	 */
+	async fetchMedia(part: MessagePart): Promise<Uint8Array | undefined> {
+		if (this.config.fetchInboundMedia !== undefined) {
+			return await this.config.fetchInboundMedia(part);
+		}
+		const timeoutMs = this.config.fetchInboundMediaTimeoutMs ?? DEFAULT_INBOUND_MEDIA_TIMEOUT_MS;
+		const maxBytes = this.config.fetchInboundMediaMaxBytes ?? DEFAULT_INBOUND_MEDIA_MAX_BYTES;
+		let data: unknown;
+		if (part.type === "image" || part.type === "sticker") {
+			const reference = part.channelRef ?? part.sourceUrl;
+			if (reference === undefined) return undefined;
+			data = await this.readAction("get_image", { file: reference }, timeoutMs);
+		} else if (part.type === "file") {
+			const reference = part.channelRef ?? part.sourceUrl;
+			if (reference === undefined) return undefined;
+			data = await this.readAction(
+				"get_file",
+				part.channelRef === undefined ? { file: reference } : { file_id: reference },
+				timeoutMs,
+			);
+		} else {
+			return undefined;
+		}
+		const bytes = inboundMediaBytes(data);
+		if (bytes === undefined) return undefined;
+		if (bytes.byteLength > maxBytes) {
+			throw new Error("Inbound media exceeds the channel media size cap");
+		}
+		return bytes;
 	}
 
 	async readHistory(
@@ -1031,11 +1113,15 @@ export class OneBotChannel {
 	}
 
 	/** Retries only idempotent read actions; sends and destructive actions are at-most-once. */
-	private async readAction(action: string, params: Record<string, unknown>): Promise<unknown> {
+	private async readAction(
+		action: string,
+		params: Record<string, unknown>,
+		timeoutOverrideMs?: number,
+	): Promise<unknown> {
 		let lastError: unknown;
 		for (let attempt = 0; attempt < READ_RETRY_ATTEMPTS; attempt += 1) {
 			try {
-				return await this.action(action, params);
+				return await this.action(action, params, timeoutOverrideMs);
 			} catch (error) {
 				lastError = error;
 				const message = error instanceof Error ? error.message : String(error);

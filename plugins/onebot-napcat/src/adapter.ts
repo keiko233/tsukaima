@@ -263,6 +263,26 @@ export class OneBotChannelAdapter implements ChannelAdapter {
 		}
 	}
 
+	async fetchMedia(part: MessagePart): Promise<Uint8Array | undefined> {
+		const startedAtMs = Date.now();
+		try {
+			const bytes = await this.#channel?.fetchMedia(part);
+			this.#logger.debug("OneBot adapter inbound media fetch completed", {
+				bytes: bytes?.byteLength ?? 0,
+				durationMs: Date.now() - startedAtMs,
+				partType: part.type,
+			});
+			return bytes;
+		} catch (error) {
+			this.#logger.debug("OneBot adapter inbound media fetch failed", {
+				durationMs: Date.now() - startedAtMs,
+				error: error instanceof Error ? error.message : String(error),
+				partType: part.type,
+			});
+			throw error;
+		}
+	}
+
 	async lookupMessage(platformMessageId: string): Promise<ChannelHistoryItem | undefined> {
 		const startedAtMs = Date.now();
 		const item = await this.#channel?.lookupMessage(platformMessageId);

@@ -83,6 +83,7 @@ import {
 	MemoryService,
 	type MemoryEmbeddingOutput,
 } from "./services/memory-service.ts";
+import { InboundMediaResolver } from "./services/inbound-media.ts";
 import { MediaService } from "./services/media-service.ts";
 import { HookBus } from "./services/hook-bus.ts";
 import { createMentionIdentityStore } from "./services/mention-identity-store.ts";
@@ -189,6 +190,7 @@ export class TsukaimaLifecycle {
 	readonly memory: MemoryService;
 	private readonly plugins: readonly TsukaimaPlugin[];
 	readonly media: MediaService;
+	private readonly inboundMedia: InboundMediaResolver;
 	readonly promptHooks: PromptHookService;
 	readonly replyExpectations: ReplyExpectationStore;
 	readonly followUpIntents: FollowUpIntentStore;
@@ -316,6 +318,10 @@ export class TsukaimaLifecycle {
 			database: () => this.domainDatabase,
 			logger: this.runtimeLog,
 		});
+		this.inboundMedia = new InboundMediaResolver({
+			logger: this.runtimeLog,
+			media: this.media,
+		});
 		this.conversationPacing = new ConversationPacingTracker();
 		this.conversationPolicy = new ConversationPolicyService({
 			database: () => this.domainDatabase,
@@ -328,7 +334,7 @@ export class TsukaimaLifecycle {
 			audit: (entry) => this.writeAudit(entry),
 			database: () => this.domainDatabase,
 			host: () => this.conversationHost,
-			ingestMedia: (part) => this.ingestInboundMedia(part),
+			ingestMedia: (part, channelId) => this.ingestInboundMedia(part, channelId),
 			logger: this.runtimeLog,
 			onInboundTrigger: (conversationId) =>
 				this.replyDispatcher.cancelPendingOutput(conversationId),
@@ -1465,8 +1471,10 @@ export class TsukaimaLifecycle {
 	 * the bytes land in the media store, the transcript has nothing to render and the model only
 	 * sees a placeholder.
 	 */
-	private async ingestInboundMedia(part: MessagePart): Promise<MessagePart> {
+	private async ingestInboundMedia(part: MessagePart, channelId: string): Promise<MessagePart> {
 		if (part.type !== "image" && part.type !== "sticker") return part;
+		// QQ native faces have no downloadable bytes; they stay a sticker summary, not a fetch failure.
+		if (part.channelRef?.startsWith("face:") === true) return part;
 		// Already content-addressed: the bytes are here.
 		if (part.sha256 !== undefined && /^[0-9a-f]{64}$/iu.test(part.sha256)) {
 			const existing = await this.media.findBySha(part.sha256);
@@ -1476,8 +1484,9 @@ export class TsukaimaLifecycle {
 					sha256: existing.sha256,
 					type: part.type,
 				});
+				const { mediaUnavailableReason: _previousReason, ...base } = part;
 				return {
-					...part,
+					...base,
 					mediaId: existing.id,
 					mimeType: part.mimeType ?? existing.mimeType,
 					sha256: existing.sha256,
@@ -1485,20 +1494,28 @@ export class TsukaimaLifecycle {
 				};
 			}
 		}
-		if (part.sourceUrl === undefined) return part;
-		const stored = await this.media.storeFromUrl(part.sourceUrl, {
-			kind: part.type === "sticker" ? "sticker" : "image",
-			...(part.mimeType === undefined ? {} : { mimeType: part.mimeType }),
-			source: "channel",
-		});
-		this.runtimeLog.debug("inbound media stored from channel url", {
+		const channel = this.channels.get(channelId);
+		const resolved = await this.inboundMedia.resolve(part, channel);
+		if (resolved.kind === "unavailable") {
+			this.runtimeLog.debug("inbound media is unavailable", {
+				channelId,
+				reason: resolved.reason,
+				type: part.type,
+			});
+			return { ...part, mediaUnavailableReason: resolved.reason };
+		}
+		const { stored } = resolved;
+		this.runtimeLog.debug("inbound media stored", {
+			channelId,
 			mediaId: stored.id,
 			mimeType: stored.mimeType,
 			sizeBytes: stored.sizeBytes,
 			type: part.type,
+			via: resolved.via,
 		});
+		const { mediaUnavailableReason: _previousReason, ...base } = part;
 		return {
-			...part,
+			...base,
 			mediaId: stored.id,
 			mimeType: stored.mimeType,
 			sha256: stored.sha256,

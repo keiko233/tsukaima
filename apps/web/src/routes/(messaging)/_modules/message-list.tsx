@@ -7,6 +7,7 @@ import {
 	FileAudio,
 	FileText,
 	Image as ImageIcon,
+	ImageOff,
 	Smile,
 	StickyNote,
 	Video,
@@ -108,17 +109,31 @@ function isInlineImage(part: MessageSummary["parts"][number]): part is MediaPart
 	return (part.type === "image" || part.type === "sticker") && part.mediaId !== undefined;
 }
 
+/** An image/sticker with no local bytes after ingestion: honest unavailable state, not a bare label. */
+function isUnavailableMedia(part: MessageSummary["parts"][number]): part is MediaPart {
+	return (
+		(part.type === "image" || part.type === "sticker") &&
+		part.mediaId === undefined &&
+		part.mediaUnavailableReason !== undefined
+	);
+}
+
+function MediaUnavailable({ part }: { part: MediaPart }) {
+	return (
+		<span
+			title={m.message_media_unavailable_hint()}
+			className="inline-flex items-center gap-1 rounded-lg border border-dashed border-border/70 bg-background/40 px-2 py-1 text-[11px] text-muted-foreground"
+		>
+			<ImageOff className="size-3.5" />
+			{part.type === "sticker" ? m.message_sticker_unavailable() : m.message_image_unavailable()}
+		</span>
+	);
+}
+
 function InlineMedia({ part }: { part: MediaPart }) {
 	const [failed, setFailed] = useState(false);
 	if (part.mediaId === undefined) return null;
-	if (failed) {
-		return (
-			<span className="inline-flex items-center gap-1 rounded-lg bg-background/60 px-2 py-1 text-[11px] text-muted-foreground">
-				<PartIcon type={part.type} />
-				{partLabel(part)}
-			</span>
-		);
-	}
+	if (failed) return <MediaUnavailable part={part} />;
 	const alt = partLabel(part);
 	return (
 		// Not `next/image`: the bytes are served by the host with an immutable cache header, and
@@ -140,7 +155,8 @@ function MessageBody({ message }: { message: MessageSummary }) {
 	const textParts = message.parts.filter((part) => part.type === "text" && part.text);
 	const mediaParts = message.parts.filter((part) => part.type !== "text");
 	const inlineParts = mediaParts.filter((part) => isInlineImage(part));
-	const chipParts = mediaParts.filter((part) => !isInlineImage(part));
+	const unavailableParts = mediaParts.filter((part) => isUnavailableMedia(part));
+	const chipParts = mediaParts.filter((part) => !isInlineImage(part) && !isUnavailableMedia(part));
 	return (
 		<div className="space-y-1.5">
 			{textParts.length > 0 ? (
@@ -152,6 +168,13 @@ function MessageBody({ message }: { message: MessageSummary }) {
 				<div className="flex flex-wrap gap-1.5">
 					{inlineParts.map((part, index) => (
 						<InlineMedia key={`${part.type}-${index}`} part={part} />
+					))}
+				</div>
+			) : null}
+			{unavailableParts.length > 0 ? (
+				<div className="flex flex-wrap gap-1.5">
+					{unavailableParts.map((part, index) => (
+						<MediaUnavailable key={`${part.type}-unavailable-${index}`} part={part} />
 					))}
 				</div>
 			) : null}

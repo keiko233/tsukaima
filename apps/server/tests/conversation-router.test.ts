@@ -2,8 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import type { MessageEnvelope } from "@tsukaima/contracts";
-import { identities, messages, users } from "@tsukaima/db";
+import { identities, media, messages, users } from "@tsukaima/db";
 import type { ChannelAdapter, ChannelDiagnostics } from "@tsukaima/sdk";
 import { createApp } from "../src/app.ts";
 import type { ChannelRegistry } from "../src/services/channel-registry.ts";
@@ -45,11 +46,13 @@ async function createLifecycle() {
 function registerFakeChannel(
 	registry: ChannelRegistry,
 	channelId: string,
+	fetchMedia?: ChannelAdapter["fetchMedia"],
 ): (envelope: MessageEnvelope) => void {
 	const handlers: Array<(envelope: MessageEnvelope) => void> = [];
 	const adapter: ChannelAdapter = {
 		capabilities: () => [],
 		diagnostics: (): ChannelDiagnostics => ({ configured: true, connected: true, state: "open" }),
+		...(fetchMedia === undefined ? {} : { fetchMedia }),
 		id: channelId,
 		kind: "fake",
 		onEnvelope: (handler) => handlers.push(handler),
@@ -62,6 +65,9 @@ function registerFakeChannel(
 		for (const handler of handlers) handler(next);
 	};
 }
+
+const eqMessagePlatformId = (platformMessageId: string) =>
+	eq(messages.platformMessageId, platformMessageId);
 
 describe("ConversationRouter ingestion boundary", () => {
 	test("rejects an invalid envelope without persisting anything", async () => {
@@ -180,6 +186,54 @@ describe("ConversationRouter ingestion boundary", () => {
 			const [user] = await database.select({ displayName: users.displayName }).from(users);
 			expect(identity?.displayName).toBe("New Display Name");
 			expect(user?.displayName).toBe("New Display Name");
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("stores inbound media through the channel hook and marks an unfetchable part", async () => {
+		const lifecycle = await createLifecycle();
+		const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+		registerFakeChannel(lifecycle.channels, "onebot-test", async (part) =>
+			part.type === "image" && part.channelRef === "image-hook" ? png : undefined,
+		);
+		try {
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("Domain database is not ready");
+
+			await lifecycle.processEnvelope({
+				...envelope("media-1", "look"),
+				parts: [
+					{ text: "look", type: "text" },
+					{ channelRef: "image-hook", type: "image" },
+				],
+			});
+			const [stored] = await database.select().from(media);
+			expect(stored).toMatchObject({ mimeType: "image/png", sizeBytes: png.byteLength });
+			const first = await database
+				.select({ partsJson: messages.partsJson })
+				.from(messages)
+				.where(eqMessagePlatformId("media-1"));
+			const image = JSON.parse(first[0]?.partsJson ?? "[]").find(
+				(part: { type: string }) => part.type === "image",
+			);
+			expect(image.mediaId).toBe(stored?.id);
+
+			await lifecycle.processEnvelope({
+				...envelope("media-2", "broken"),
+				parts: [{ sourceUrl: "http://127.0.0.1:9/a.png", type: "image" }],
+			});
+			const second = await database
+				.select({ partsJson: messages.partsJson })
+				.from(messages)
+				.where(eqMessagePlatformId("media-2"));
+			const failed = JSON.parse(second[0]?.partsJson ?? "[]")[0];
+			expect(failed).toMatchObject({
+				mediaUnavailableReason: "blocked_address",
+				sourceUrl: "http://127.0.0.1:9/a.png",
+				type: "image",
+			});
+			expect(failed.mediaId).toBeUndefined();
 		} finally {
 			await lifecycle.stop();
 		}

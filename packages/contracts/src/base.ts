@@ -20,7 +20,35 @@ const mediaReferenceShape = {
 	channelRef: z.string().min(1).optional(),
 } as const;
 
+/**
+ * Bounded reason an inbound media part has no local bytes. It is deliberately an enum, never a
+ * raw upstream error: the WebUI can render an honest unavailable state and a backfill can decide
+ * whether a retry is worthwhile without trusting attacker-controlled text.
+ */
+export const mediaUnavailableReasonSchema = z.enum([
+	"blocked_address",
+	"blocked_content_type",
+	"blocked_host",
+	"blocked_scheme",
+	"channel_fetch_failed",
+	"channel_unavailable",
+	"dns_failure",
+	"expired",
+	"http_error",
+	"invalid_redirect",
+	"invalid_url",
+	"network_error",
+	"not_found",
+	"redirect_limit",
+	"response_too_large",
+	"timeout",
+	"unknown",
+]);
+export type MediaUnavailableReason = z.infer<typeof mediaUnavailableReasonSchema>;
+
 const mediaMetadataShape = {
+	/** Set only when no bytes could be stored; `mediaId` stays absent in that case. */
+	mediaUnavailableReason: mediaUnavailableReasonSchema.optional(),
 	mimeType: z.string().min(1).optional(),
 	sizeBytes: z.number().int().nonnegative().optional(),
 	previewText: z.string().optional(),

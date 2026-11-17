@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { ChannelRequest, MessageEnvelope } from "@tsukaima/contracts";
-import { OneBotChannel } from "./channel.ts";
+import { inboundMediaBytes, OneBotChannel } from "./channel.ts";
 import { normalizeOneBotEvent, normalizeOneBotRequest } from "./normalize.ts";
 import type { OneBotConfig, OneBotTransport, OneBotTransportFactory } from "./types.ts";
 
@@ -184,6 +184,31 @@ test("normalizes group messages", () => {
 	const envelope = normalizeOneBotEvent(groupEvent, { botAccountId: "99", channelId: "onebot" });
 	expect(envelope?.conversationKey).toEqual({ groupId: "555", kind: "group", peerId: "10001" });
 	expect(envelope?.sender.groupRole).toBe("admin");
+});
+
+test("reads inbound image bytes through get_image and decodes inline base64", async () => {
+	const { channel, sent, sockets } = await createChannel();
+	const bytesPng = Uint8Array.from([0x89, 0x50, 0x4e, 0x47]);
+	const pending = channel.fetchMedia({ channelRef: "image-1", type: "image" });
+	const request = sent[0] as {
+		action: string;
+		echo: string;
+		params: Record<string, unknown>;
+	};
+	expect(request).toMatchObject({
+		action: "get_image",
+		params: { file: "image-1" },
+	});
+	sockets[0]?.respond({
+		data: { base64: Buffer.from(bytesPng).toString("base64") },
+		echo: request.echo,
+		retcode: 0,
+	});
+	expect(await pending).toEqual(bytesPng);
+	expect(inboundMediaBytes({ data: { file: "https://cdn.example/a.png" } })).toBeUndefined();
+	expect(inboundMediaBytes({ data: { file: "data:image/png;base64,iVBORw0K" } })).toEqual(
+		Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]),
+	);
 });
 
 test("passes private and group send payloads through the transport", async () => {

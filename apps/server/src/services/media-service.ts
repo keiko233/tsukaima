@@ -182,6 +182,22 @@ export class MediaService {
 		return this.store({ ...input, bytes: Buffer.from(value, "base64") });
 	}
 
+	/**
+	 * Store bytes supplied by a channel. Content sniffing wins over the declared type for the same
+	 * reason as `storeFromUrl`: NapCat often labels images as `application/octet-stream`.
+	 */
+	async storeFetchedBytes(
+		bytes: Uint8Array,
+		input: Omit<MediaStoreInput, "bytes">,
+	): Promise<StoredMedia> {
+		const sniffed = sniffImageMime(bytes);
+		return this.store({
+			...input,
+			bytes,
+			...(sniffed === undefined ? {} : { mimeType: sniffed }),
+		});
+	}
+
 	async storeFromUrl(
 		url: string,
 		input: Omit<MediaStoreInput, "bytes" | "sourceUrl">,

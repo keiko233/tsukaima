@@ -94,6 +94,11 @@ export type OneBotVideoFrameExtractor = (
 	input: OneBotVideoFrameInput,
 ) => readonly OneBotVideoFrame[] | Promise<readonly OneBotVideoFrame[]>;
 
+/** Override the channel-side inbound media read (tests and embedders). */
+export type OneBotInboundMedia = (
+	part: MessagePart,
+) => Uint8Array | undefined | Promise<Uint8Array | undefined>;
+
 export type OneBotReconnectConfig = {
 	initialDelayMs: number;
 	maxDelayMs: number;
@@ -138,6 +143,10 @@ export type OneBotConfig = {
 	mentionNameStore?: OneBotMentionNameStore;
 	/** Optional direct resolver for embedders and tests; overrides the store-backed resolver. */
 	resolveMentionName?: OneBotMentionNameResolver;
+	/** Resolve an inbound media part through the platform instead of host-side HTTP egress. */
+	fetchInboundMedia?: OneBotInboundMedia;
+	fetchInboundMediaMaxBytes?: number;
+	fetchInboundMediaTimeoutMs?: number;
 	/** Resolve canonical media bytes into a NapCat-consumable file reference. */
 	resolveMedia?: (part: MessagePart) => Promise<string | undefined>;
 };

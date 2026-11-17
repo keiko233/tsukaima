@@ -58,7 +58,7 @@ export interface ConversationRouterOptions {
 	 * Without this an inbound image keeps only its remote URL, so nothing renders and the model
 	 * sees a placeholder.
 	 */
-	readonly ingestMedia?: (part: MessagePart) => Promise<MessagePart>;
+	readonly ingestMedia?: (part: MessagePart, channelId: string) => Promise<MessagePart>;
 	readonly onInboundTrigger?: (durableConversationId: string) => void;
 	readonly pacing?: ConversationPacingTracker;
 	readonly policy?: ConversationPolicyService;
@@ -123,7 +123,9 @@ export class ConversationRouter {
 	readonly #promptContext: ConversationRouterOptions["promptContext"];
 	readonly #ingesting = new Set<string>();
 	readonly #ignoredAuditAt = new Map<string, number>();
-	readonly #ingestMedia: ((part: MessagePart) => Promise<MessagePart>) | undefined;
+	readonly #ingestMedia:
+		| ((part: MessagePart, channelId: string) => Promise<MessagePart>)
+		| undefined;
 	readonly #stats = {
 		ambient: 0,
 		direct: 0,
@@ -357,7 +359,7 @@ export class ConversationRouter {
 		const parts = await Promise.all(
 			envelope.parts.map(async (part) => {
 				try {
-					return await ingestMedia(part);
+					return await ingestMedia(part, envelope.channelId);
 				} catch (error) {
 					this.#logger.warn("inbound media could not be stored", {
 						error: error instanceof Error ? error.message : String(error),

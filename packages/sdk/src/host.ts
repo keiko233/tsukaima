@@ -151,6 +151,12 @@ export interface ChannelAdapter {
 		options?: SendOptions,
 	): Promise<SendResult>;
 	onEnvelope(handler: (envelope: MessageEnvelope) => void): void;
+	/**
+	 * Optional channel-side read of inbound media bytes. The host prefers this over its own
+	 * HTTP egress, because a channel sidecar can already reach the platform CDN. The host still
+	 * bounds the call with a timeout and a hard size cap.
+	 */
+	fetchMedia?(part: MessagePart): Promise<Uint8Array | undefined>;
 	/** Optional typing/input indicator. Transport-only: callers decide pacing/trigger policy. */
 	sendTyping?(target: OutboundTarget, typing: boolean): Promise<void>;
 	/** Dedicated notice channel; notices never masquerade as message envelopes. */

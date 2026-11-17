@@ -8,6 +8,7 @@ import {
 } from "../src/services/media-fetch-guard.ts";
 
 const publicResolver: MediaDnsResolver = async () => ["93.184.216.34"];
+const fakeIpResolver: MediaDnsResolver = async () => ["198.18.0.7"];
 const failing: MediaFetchTransport = async () => {
 	throw new DOMException("timed out", "TimeoutError");
 };
@@ -100,6 +101,34 @@ describe("fetchGuardedMedia", () => {
 			}),
 		).rejects.toMatchObject({ code: "blocked_address" });
 		expect(remote.calls).toHaveLength(0);
+	});
+
+	// A proxy/TUN client answers the QQ CDN with a fake-IP in 198.18.0.0/15. The address policy
+	// must still block that by default, and the documented hostname allowlist must be the one
+	// deliberate opt-in that lets a trusted CDN hostname through.
+	test("allows an explicitly trusted hostname that resolves into the fake-IP range", async () => {
+		const remote = transport(
+			() =>
+				new Response(png, {
+					headers: { "content-type": "image/png", "content-length": String(png.length) },
+					status: 200,
+				}),
+		);
+		const result = await fetchGuardedMedia("https://qq-cdn.example/a.png", {
+			policy: { allowedPrivateHosts: ["qq-cdn.example"] },
+			resolve: fakeIpResolver,
+			transport: remote.transport,
+		});
+		expect(result.bytes).toEqual(png);
+		expect(remote.pins).toEqual(["198.18.0.7"]);
+
+		await expect(
+			fetchGuardedMedia("https://other-cdn.example/a.png", {
+				resolve: fakeIpResolver,
+				transport: remote.transport,
+			}),
+		).rejects.toMatchObject({ code: "blocked_address" });
+		expect(remote.calls).toEqual(["https://qq-cdn.example/a.png"]);
 	});
 
 	test("rejects non-http schemes, credentials, and non-image content", async () => {

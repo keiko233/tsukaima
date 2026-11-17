@@ -1,4 +1,4 @@
-export { OneBotChannel, toSegments } from "./channel.ts";
+export { inboundMediaBytes, OneBotChannel, toSegments } from "./channel.ts";
 export {
 	createOneBotMentionNameResolver,
 	type OneBotMentionNameInput,
@@ -27,6 +27,7 @@ export type {
 	OneBotConfig,
 	OneBotEvent,
 	OneBotForwardNode,
+	OneBotInboundMedia,
 	OneBotRequestEvent,
 	OneBotReverseConnectionInfo,
 	OneBotReverseServer,
