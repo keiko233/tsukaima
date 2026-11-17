@@ -1,8 +1,10 @@
 import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
+import { drizzle } from "drizzle-orm/bun-sqlite";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { migrateDomainDatabase } from "./index.ts";
 
 const directories: string[] = [];
 
@@ -60,4 +62,35 @@ test("backfills legacy conversations into stable chat objects and receiving sess
 		.get("legacy-message") as { chat_object_id: string };
 	expect(message.chat_object_id).toBe("chat_legacy-session");
 	database.close();
+});
+
+test("creates durable schedules and occurrence uniqueness indexes", async () => {
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-migration-"));
+	directories.push(directory);
+	const raw = new Database(join(directory, "domain.sqlite"), { create: true });
+	const database = drizzle(raw);
+	try {
+		migrateDomainDatabase(database);
+		const tables = raw
+			.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+			.all() as { name: string }[];
+		expect(tables.map((table) => table.name)).toEqual(
+			expect.arrayContaining(["schedule_occurrences", "schedules"]),
+		);
+		const indexes = raw
+			.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'schedule%'")
+			.all() as { name: string }[];
+		expect(indexes.map((index) => index.name)).toEqual(
+			expect.arrayContaining([
+				"schedule_occurrences_key_unique",
+				"schedule_occurrences_scheduled_unique",
+				"schedules_dedupe_unique",
+			]),
+		);
+		expect(raw.query("SELECT COUNT(*) AS count FROM schedules").get() as { count: number }).toEqual(
+			{ count: 0 },
+		);
+	} finally {
+		raw.close();
+	}
 });

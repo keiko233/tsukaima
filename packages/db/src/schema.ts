@@ -1052,6 +1052,124 @@ export const pluginTasks = sqliteTable(
 	],
 );
 
+/**
+ * User-visible durable schedule definitions. This is a host-owned domain table, not a plugin
+ * task: the WebUI and chat tools share it, and occurrences carry their own execution history.
+ */
+export const schedules = sqliteTable(
+	"schedules",
+	{
+		actionKind: text("action_kind", {
+			enum: ["agent_turn", "workspace_turn", "notify"],
+		}).notNull(),
+		cancelledAtMs: integer("cancelled_at_ms"),
+		catchUp: text("catch_up", { enum: ["skip", "latest", "all"] }).notNull(),
+		completedAtMs: integer("completed_at_ms"),
+		createdAtMs: integer("created_at_ms").notNull(),
+		dedupeKey: text("dedupe_key"),
+		graceMs: integer("grace_ms").notNull(),
+		id: text("id").primaryKey(),
+		lastRunAtMs: integer("last_run_at_ms"),
+		maxAttempts: integer("max_attempts").notNull(),
+		maxRuns: integer("max_runs"),
+		nextRunAtMs: integer("next_run_at_ms"),
+		ownerId: text("owner_id").notNull(),
+		ownerKind: text("owner_kind", {
+			enum: ["user", "agent", "plugin", "system"],
+		}).notNull(),
+		ownerPluginId: text("owner_plugin_id"),
+		pausedAtMs: integer("paused_at_ms"),
+		prompt: text("prompt").notNull(),
+		recurrenceJson: text("recurrence_json").notNull(),
+		recurrenceKind: text("recurrence_kind", {
+			enum: ["once", "interval", "calendar"],
+		}).notNull(),
+		respectQuietHours: integer("respect_quiet_hours", { mode: "boolean" }).notNull().default(false),
+		revision: integer("revision").notNull().default(1),
+		runCount: integer("run_count").notNull().default(0),
+		source: text("source").notNull(),
+		status: text("status", {
+			enum: ["active", "paused", "completed", "cancelled", "failed"],
+		})
+			.notNull()
+			.default("active"),
+		targetChatObjectId: text("target_chat_object_id").references(() => chatObjects.id, {
+			onDelete: "set null",
+		}),
+		targetSessionId: text("target_session_id")
+			.notNull()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		timeZone: text("time_zone").notNull(),
+		title: text("title").notNull(),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+	},
+	(table) => [
+		index("schedules_due_idx").on(table.status, table.nextRunAtMs),
+		index("schedules_target_idx").on(table.targetSessionId, table.status, table.nextRunAtMs),
+		uniqueIndex("schedules_dedupe_unique")
+			.on(table.dedupeKey)
+			.where(sql`${table.dedupeKey} IS NOT NULL`),
+	],
+);
+
+/**
+ * One materialized due time. The occurrence key makes materialization idempotent; the snapshot
+ * freezes what the schedule meant when it was queued. Manual runs use a separate key so they can
+ * coexist with a regular occurrence at the same instant.
+ */
+export const scheduleOccurrences = sqliteTable(
+	"schedule_occurrences",
+	{
+		attempt: integer("attempt").notNull().default(0),
+		availableAtMs: integer("available_at_ms").notNull(),
+		createdAtMs: integer("created_at_ms").notNull(),
+		error: text("error"),
+		finishedAtMs: integer("finished_at_ms"),
+		id: text("id").primaryKey(),
+		leaseExpiresAtMs: integer("lease_expires_at_ms"),
+		leaseOwner: text("lease_owner"),
+		maxAttempts: integer("max_attempts").notNull().default(3),
+		messageId: text("message_id").references(() => messages.id, { onDelete: "set null" }),
+		occurrenceKey: text("occurrence_key").notNull(),
+		resultJson: text("result_json"),
+		scheduleId: text("schedule_id")
+			.notNull()
+			.references(() => schedules.id, { onDelete: "cascade" }),
+		scheduleRevision: integer("schedule_revision").notNull(),
+		scheduledForMs: integer("scheduled_for_ms").notNull(),
+		snapshotJson: text("snapshot_json").notNull(),
+		startedAtMs: integer("started_at_ms"),
+		status: text("status", {
+			enum: [
+				"pending",
+				"claimed",
+				"running",
+				"succeeded",
+				"failed",
+				"skipped",
+				"uncertain",
+				"cancelled",
+			],
+		})
+			.notNull()
+			.default("pending"),
+		submissionRequestId: text("submission_request_id"),
+		triggerKind: text("trigger_kind", {
+			enum: ["scheduled", "manual", "catch_up"],
+		}).notNull(),
+		updatedAtMs: integer("updated_at_ms").notNull(),
+	},
+	(table) => [
+		uniqueIndex("schedule_occurrences_key_unique").on(table.scheduleId, table.occurrenceKey),
+		uniqueIndex("schedule_occurrences_scheduled_unique")
+			.on(table.scheduleId, table.scheduledForMs)
+			.where(sql`${table.triggerKind} = 'scheduled'`),
+		index("schedule_occurrences_claim_idx").on(table.status, table.availableAtMs),
+		index("schedule_occurrences_lease_idx").on(table.status, table.leaseExpiresAtMs),
+		index("schedule_occurrences_schedule_idx").on(table.scheduleId, table.scheduledForMs),
+	],
+);
+
 export const pluginInstallStates = sqliteTable("plugin_install_states", {
 	backupJson: text("backup_json"),
 	failureCount: integer("failure_count").notNull().default(0),
