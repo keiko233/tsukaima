@@ -8,6 +8,7 @@ import {
 } from "./policy.ts";
 import {
 	scheduleCancelInputSchema,
+	scheduleActionKindSchema,
 	scheduleCreateInputSchema,
 	scheduleDetailSchema,
 	scheduleGetInputSchema,
@@ -22,6 +23,7 @@ import {
 	scheduleSummaryInputSchema,
 	scheduleSummaryOutputSchema,
 	scheduleSummarySchema,
+	scheduleStatusSchema,
 	scheduleUpdateInputSchema,
 } from "./schedules.ts";
 
@@ -1065,6 +1067,16 @@ export const livePluginStatusEventSchema = liveEventTimestampSchema.extend({
 });
 export type LivePluginStatusEvent = z.infer<typeof livePluginStatusEventSchema>;
 
+export const liveScheduleChangedEventSchema = liveEventTimestampSchema.extend({
+	actionKind: scheduleActionKindSchema,
+	nextRunAt: z.string().nullable(),
+	scheduleId: z.string().min(1),
+	sessionId: z.string().min(1),
+	status: scheduleStatusSchema,
+	type: z.literal("schedule.changed"),
+});
+export type LiveScheduleChangedEvent = z.infer<typeof liveScheduleChangedEventSchema>;
+
 // ─── Live agent run ─────────────────────────────────────────────────────────
 
 /**
@@ -1283,6 +1295,7 @@ export const liveEventSchema = z.discriminatedUnion("type", [
 	liveBeforeReplyEventSchema,
 	liveAfterReplyEventSchema,
 	livePluginStatusEventSchema,
+	liveScheduleChangedEventSchema,
 	liveRunEventSchema,
 	liveRunDeltaEventSchema,
 ]);

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
 	PluginAuditApi,
 	PluginBackgroundTurnResult,
@@ -9,6 +10,7 @@ import type {
 	PluginTask,
 	PluginTaskExecutionResult,
 	PluginTasksApi,
+	PluginSchedulesApi,
 } from "@tsukaima/sdk";
 import {
 	activeHourBucket,
@@ -48,6 +50,7 @@ export interface ProactiveSchedulerServiceOptions {
 	readonly conversations: PluginConversationsApi;
 	readonly database: PluginDatabaseApi;
 	readonly followUps?: PluginFollowUpsApi;
+	readonly schedules?: PluginSchedulesApi;
 	readonly logger: PluginLogger;
 	readonly now?: () => number;
 	readonly promptMaxChars?: number;
@@ -126,6 +129,7 @@ export class ProactiveSchedulerService {
 	readonly #audit: PluginAuditApi | undefined;
 	readonly #conversations: PluginConversationsApi;
 	readonly #followUps: PluginFollowUpsApi | undefined;
+	readonly #schedules: PluginSchedulesApi | undefined;
 	readonly #logger: PluginLogger;
 	readonly #now: () => number;
 	readonly #promptMaxChars: number;
@@ -140,6 +144,7 @@ export class ProactiveSchedulerService {
 		this.#audit = options.audit;
 		this.#conversations = options.conversations;
 		this.#followUps = options.followUps;
+		this.#schedules = options.schedules;
 		this.#logger = options.logger.child?.("service") ?? options.logger;
 		this.#now = options.now ?? Date.now;
 		this.#promptMaxChars = options.promptMaxChars ?? DEFAULT_PROMPT_MAX_CHARS;
@@ -346,6 +351,69 @@ export class ProactiveSchedulerService {
 			promptPreview: logPreview(parsed.prompt),
 			repeat: parsed.repeat !== undefined,
 		});
+		if (
+			this.#schedules !== undefined &&
+			parsed.kind !== "proactive" &&
+			parsed.repeat === undefined &&
+			parsed.dueWindowMs === undefined &&
+			parsed.cancelIfReplied !== true &&
+			pending.length === 0
+		) {
+			const schedule = await this.#schedules.create({
+				actionKind: "agent_turn",
+				...(parsed.maxAttempts === undefined ? {} : { maxAttempts: parsed.maxAttempts }),
+				dedupeKey: `proactive-explicit:${canonicalConversationId}:${now}:${parsed.kind}:${parsed.delayMs}`,
+				prompt: parsed.prompt,
+				recurrence: {
+					at: new Date(now + parsed.delayMs).toISOString(),
+					kind: "once",
+				},
+				respectQuietHours: true,
+				targetSessionId: canonicalConversationId,
+				timeZone: "UTC",
+				title: `${parsed.kind} · ${conversation.title}`.slice(0, 200),
+			});
+			this.#logger.info("proactive explicit task created as host schedule", {
+				conversationId: canonicalConversationId,
+				kind: parsed.kind,
+				scheduleId: schedule.id,
+			});
+			await this.#recordAudit({
+				action: "proactive.task.created",
+				actorId: createdBy.id,
+				actorKind: createdBy.kind === "admin" ? "user" : createdBy.kind,
+				payload: {
+					conversationId: canonicalConversationId,
+					kind: parsed.kind,
+					scheduleId: schedule.id,
+				},
+				result: "ok",
+				targetId: schedule.id,
+				targetKind: "schedule",
+			});
+			return {
+				attempts: 0,
+				cancelIfReplied: false,
+				chatObjectId: conversation.chatObjectId,
+				conversationId: canonicalConversationId,
+				createdAtMs: now,
+				createdById: createdBy.id,
+				createdByKind: createdBy.kind,
+				dedupeKey: schedule.id,
+				dueWindowMs: null,
+				id: randomUUID(),
+				kind: parsed.kind,
+				lastError: null,
+				maxAttempts,
+				occurrences: 0,
+				prompt: parsed.prompt,
+				repeat: null,
+				scheduledForMs: now + parsed.delayMs,
+				status: "scheduled",
+				taskId: schedule.id,
+				updatedAtMs: now,
+			};
+		}
 		const created = await this.#repository.insertTask({
 			attempts: 0,
 			cancelIfReplied: parsed.cancelIfReplied ?? false,

@@ -25,6 +25,8 @@ import type {
 	PluginTasksApi,
 	PluginFollowUpIntent,
 	PluginFollowUpsApi,
+	PluginSchedulesApi,
+	PluginScheduleSummary,
 } from "@tsukaima/sdk";
 import {
 	CONVERSATION_POLICY_SCOPE,
@@ -269,6 +271,35 @@ interface LogRecord {
 	readonly message: string;
 }
 
+class FakeSchedules implements PluginSchedulesApi {
+	readonly created: Array<Parameters<PluginSchedulesApi["create"]>[0]> = [];
+
+	async create(input: Parameters<PluginSchedulesApi["create"]>[0]): Promise<PluginScheduleSummary> {
+		this.created.push(input);
+		return {
+			actionKind: input.actionKind,
+			id: `schedule-${this.created.length}`,
+			nextRunAt: input.recurrence.kind === "once" ? input.recurrence.at : null,
+			ownerKind: "plugin",
+			status: "active",
+			targetSessionId: input.targetSessionId,
+			title: input.title,
+		};
+	}
+
+	async list(): Promise<readonly PluginScheduleSummary[]> {
+		return [];
+	}
+
+	async cancel(): Promise<boolean> {
+		return true;
+	}
+
+	onChanged(): () => void {
+		return () => {};
+	}
+}
+
 /** Recording `PluginLogger` double; child loggers share the buffer and prefix their target. */
 function createRecordingLogger(records: LogRecord[], prefix = ""): PluginLogger {
 	const write =
@@ -300,6 +331,7 @@ async function setup(now = 1_000_000, globalEnabled = false) {
 	const database = new TestDatabase();
 	const conversations = new FakeConversations();
 	const followUps = new FakeFollowUps();
+	const schedules = new FakeSchedules();
 	const tasks = new FakeTasks();
 	const logs: LogRecord[] = [];
 	const logger = createRecordingLogger(logs);
@@ -328,7 +360,17 @@ async function setup(now = 1_000_000, globalEnabled = false) {
 		...DEFAULT_PROACTIVE_POLICY,
 		enabled: true,
 	});
-	return { clock, conversations, database, followUps, logger, logs, service, tasks };
+	return {
+		clock,
+		conversations,
+		database,
+		followUps,
+		logger,
+		logs,
+		schedules,
+		service,
+		tasks,
+	};
 }
 
 function candidate(input: {
@@ -629,6 +671,31 @@ describe("durable tasks", () => {
 		await expect(
 			service.createTask({ conversationId: "c1", delayMs: 1000, prompt: "second" }),
 		).rejects.toThrow("pending tasks");
+	});
+
+	test("routes explicit one-shot reminders through host schedules", async () => {
+		const { clock, schedules } = await setup();
+		const conversations = new FakeConversations();
+		conversations.add("c1");
+		const hosted = new ProactiveSchedulerService({
+			conversations,
+			database: new TestDatabase(),
+			logger: createRecordingLogger([]),
+			now: () => clock.now,
+			schedules,
+			tasks: new FakeTasks(),
+		});
+		const task = await hosted.createTask({
+			conversationId: "c1",
+			delayMs: 60_000,
+			kind: "remind",
+			prompt: "Synthetic reminder",
+		});
+		expect(schedules.created).toHaveLength(1);
+		expect(schedules.created[0]?.targetSessionId).toBe("c1");
+		expect(schedules.created[0]?.respectQuietHours).toBe(true);
+		expect(task.taskId).toBe("schedule-1");
+		expect(task.kind).toBe("remind");
 	});
 });
 

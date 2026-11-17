@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { liveEventSchema, type LiveEvent } from "@tsukaima/contracts";
+import {
+	liveEventSchema,
+	liveScheduleChangedEventSchema,
+	type LiveEvent,
+} from "@tsukaima/contracts";
 import type { TsukaimaLifecycle } from "../lifecycle.ts";
 import { encodeSseEvent, type LogBuffer, type Logger } from "../logging.ts";
 import type { AuthService } from "./auth.ts";
@@ -221,6 +225,20 @@ export function createLiveEventStream(
 					...parsed.data,
 					timestamp: timestamp(),
 					type: "activity.closed",
+				});
+			}),
+			hooks.on("schedule.changed", (payload) => {
+				const parsed = liveScheduleChangedEventSchema
+					.omit({ timestamp: true, type: true })
+					.safeParse(payload);
+				if (!parsed.success) {
+					logger?.warn("dropped invalid schedule.changed hook payload");
+					return;
+				}
+				publish(send, logger, {
+					...parsed.data,
+					timestamp: timestamp(),
+					type: "schedule.changed",
 				});
 			}),
 			hooks.on("before.reply", (payload) => {

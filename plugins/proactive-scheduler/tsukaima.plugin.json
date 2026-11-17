@@ -15,7 +15,8 @@
 		"tasks.watch",
 		"conversation.read",
 		"channel.send",
-		"followups.read"
+		"followups.read",
+		"schedules.create"
 	],
 	"tools": [],
 	"hooks": [{ "name": "message.received" }, { "name": "after.reply" }],

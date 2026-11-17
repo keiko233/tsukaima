@@ -404,6 +404,7 @@ export class TsukaimaLifecycle {
 			database: () => this.domainDatabase,
 			expectations: this.replyExpectations,
 			followUps: this.followUpIntents,
+			schedules: this.schedules,
 			hooks: this.hooks,
 			resolveAnswer: async (durableConversationId, submissionRequestId) =>
 				(await this.conversationHost?.resolveSubmissionAnswer(
@@ -499,8 +500,14 @@ export class TsukaimaLifecycle {
 			database: () => this.domainDatabase,
 			executor: scheduleExecution,
 			logger: this.runtimeLog,
-			onChanged: ({ scheduleId, sessionId }) => {
-				this.hooks.emitDetached("schedule.changed", { scheduleId, sessionId });
+			onChanged: (change) => {
+				this.hooks.emitDetached("schedule.changed", {
+					actionKind: change.actionKind,
+					nextRunAt: change.nextRunAt,
+					scheduleId: change.id,
+					sessionId: change.targetSessionId,
+					status: change.status,
+				});
 			},
 		});
 		this.scheduleToolsExtension = createScheduleToolsExtension({

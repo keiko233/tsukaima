@@ -46,6 +46,18 @@ export interface ScheduleExecutionResult {
 	readonly result?: unknown;
 }
 
+export interface ScheduleChange {
+	readonly actionKind: ScheduleRow["actionKind"];
+	readonly id: string;
+	readonly nextRunAt: string | null;
+	readonly ownerId: string;
+	readonly ownerKind: ScheduleRow["ownerKind"];
+	readonly ownerPluginId: string | null;
+	readonly status: ScheduleRow["status"];
+	readonly targetSessionId: string;
+	readonly title: string;
+}
+
 export interface ScheduleExecutor {
 	execute(input: {
 		readonly occurrence: ScheduleOccurrence;
@@ -66,7 +78,7 @@ export interface ScheduleServiceOptions {
 	readonly executor: ScheduleExecutor;
 	readonly logger: Logger;
 	readonly now?: () => number;
-	readonly onChanged?: (input: { readonly scheduleId: string; readonly sessionId: string }) => void;
+	readonly onChanged?: (change: ScheduleChange) => void;
 	readonly tickIntervalMs?: number;
 	readonly tickLimit?: number;
 }
@@ -113,6 +125,20 @@ function summaryFrom(row: ScheduleRow, targetSessionTitle: string): ScheduleSumm
 	};
 }
 
+function changeFrom(row: ScheduleRow): ScheduleChange {
+	return {
+		actionKind: row.actionKind,
+		id: row.id,
+		nextRunAt: iso(row.nextRunAtMs),
+		ownerId: row.ownerId,
+		ownerKind: row.ownerKind,
+		ownerPluginId: row.ownerPluginId,
+		status: row.status,
+		targetSessionId: row.targetSessionId,
+		title: row.title,
+	};
+}
+
 function occurrenceFrom(row: OccurrenceRow): ScheduleOccurrence {
 	return {
 		attempt: row.attempt,
@@ -153,6 +179,7 @@ export class ScheduleService {
 	readonly #onChanged: ScheduleServiceOptions["onChanged"];
 	readonly #tickIntervalMs: number;
 	readonly #tickLimit: number;
+	readonly #listeners = new Set<(change: ScheduleChange) => void>();
 	#timer: ReturnType<typeof setInterval> | undefined;
 	#ticking = false;
 
@@ -195,6 +222,13 @@ export class ScheduleService {
 		void this.tick().catch((error: unknown) => {
 			this.#logger.warn("schedule kick failed", { error: errorMessage(error) });
 		});
+	}
+
+	onChanged(listener: (change: ScheduleChange) => void): () => void {
+		this.#listeners.add(listener);
+		return () => {
+			this.#listeners.delete(listener);
+		};
 	}
 
 	async recover(): Promise<{ expired: number; repaired: number }> {
@@ -345,7 +379,7 @@ export class ScheduleService {
 			targetId: id,
 			targetKind: "schedule",
 		});
-		this.#changed(id, target.session.id);
+		this.#changed(changeFrom((await this.#scheduleRow(id))!));
 		const detail = await this.get(id);
 		if (detail === null) throw new Error("Schedule was not persisted");
 		return detail;
@@ -456,7 +490,7 @@ export class ScheduleService {
 			targetId: row.id,
 			targetKind: "schedule",
 		});
-		this.#changed(row.id, row.targetSessionId);
+		this.#changed(changeFrom(row));
 		const detail = await this.get(row.id);
 		if (detail === null) throw new Error("Schedule disappeared");
 		return detail;
@@ -472,7 +506,7 @@ export class ScheduleService {
 			.returning();
 		if (row === undefined) throw new Error("Active schedule not found");
 		await this.#auditMutation("schedule.pause", row);
-		this.#changed(row.id, row.targetSessionId);
+		this.#changed(changeFrom(row));
 		return (await this.#summary(id))!;
 	}
 
@@ -494,7 +528,7 @@ export class ScheduleService {
 			.returning();
 		if (updated === undefined) throw new Error("Schedule resume failed");
 		await this.#auditMutation("schedule.resume", updated);
-		this.#changed(updated.id, updated.targetSessionId);
+		this.#changed(changeFrom(updated));
 		return (await this.#summary(id))!;
 	}
 
@@ -517,7 +551,7 @@ export class ScheduleService {
 				),
 			);
 		await this.#auditMutation("schedule.cancel", row);
-		this.#changed(row.id, row.targetSessionId);
+		this.#changed(changeFrom(row));
 		return (await this.#summary(id))!;
 	}
 
@@ -541,7 +575,7 @@ export class ScheduleService {
 			targetId: row.id,
 			targetKind: "schedule",
 		});
-		this.#changed(row.id, row.targetSessionId);
+		this.#changed(changeFrom(row));
 		this.kick();
 		return occurrenceFrom(occurrence);
 	}
@@ -711,7 +745,7 @@ export class ScheduleService {
 				...(next === null ? { completedAtMs: now } : {}),
 			})
 			.where(eq(schedules.id, row.id));
-		if (inserted > 0) this.#changed(row.id, row.targetSessionId);
+		if (inserted > 0) this.#changed(changeFrom(row));
 		return inserted;
 	}
 
@@ -813,7 +847,7 @@ export class ScheduleService {
 			occurrenceId: occurrence.id,
 			scheduleId: row.id,
 		});
-		this.#changed(row.id, row.targetSessionId);
+		this.#changed(changeFrom(row));
 	}
 
 	async #settleFailure(occurrence: OccurrenceRow, error: unknown): Promise<void> {
@@ -840,7 +874,12 @@ export class ScheduleService {
 			scheduleId: occurrence.scheduleId,
 			terminal,
 		});
-		this.#changed(occurrence.scheduleId, "");
+		const [row] = await database
+			.select()
+			.from(schedules)
+			.where(eq(schedules.id, occurrence.scheduleId))
+			.limit(1);
+		if (row !== undefined) this.#changed(changeFrom(row));
 	}
 
 	async #insertOccurrence(input: {
@@ -929,13 +968,29 @@ export class ScheduleService {
 		}
 	}
 
-	#changed(scheduleId: string, sessionId: string): void {
+	async #scheduleRow(id: string): Promise<ScheduleRow | null> {
+		const database = this.#db();
+		const [row] = await database.select().from(schedules).where(eq(schedules.id, id)).limit(1);
+		return row ?? null;
+	}
+
+	#changed(change: ScheduleChange): void {
+		for (const listener of this.#listeners) {
+			try {
+				listener(change);
+			} catch (error) {
+				this.#logger.warn("schedule change listener failed", {
+					error: errorMessage(error),
+					scheduleId: change.id,
+				});
+			}
+		}
 		try {
-			this.#onChanged?.({ scheduleId, sessionId });
+			this.#onChanged?.(change);
 		} catch (error) {
 			this.#logger.warn("schedule change notification failed", {
 				error: errorMessage(error),
-				scheduleId,
+				scheduleId: change.id,
 			});
 		}
 	}

@@ -31,6 +31,7 @@ import type {
 	PluginEmbeddingRequest,
 	PluginEmbeddingResult,
 	PluginFollowUpsApi,
+	PluginSchedulesApi,
 	PluginMigrationsApi,
 	PluginModelCompleteMessage,
 	PluginModelCompleteRequest,
@@ -1259,6 +1260,7 @@ export interface PluginContextOptions {
 	};
 	conversations?: PluginConversationsApi;
 	followUps?: PluginFollowUpsApi;
+	schedules?: PluginSchedulesApi;
 	channel?: PluginChannelApi;
 	channels?: PluginChannelRegistry;
 	outbound?: PluginOutboundApi;
@@ -1329,6 +1331,7 @@ export function createPluginContext(options: PluginContextOptions = {}): PluginC
 		conversation: options.conversation ?? { read: async () => [] },
 		...(options.conversations ? { conversations: options.conversations } : {}),
 		...(options.followUps ? { followUps: options.followUps } : {}),
+		...(options.schedules ? { schedules: options.schedules } : {}),
 		events,
 		...(options.media ? { media: options.media } : {}),
 		tools,

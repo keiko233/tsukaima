@@ -75,6 +75,7 @@ export const proactiveSchedulerPlugin: TsukaimaPlugin = {
 		const tasks = context.tasks;
 		const conversations = context.conversations;
 		const followUps = context.followUps;
+		const schedules = context.schedules;
 		if (
 			database === undefined ||
 			tasks === undefined ||
@@ -108,6 +109,7 @@ export const proactiveSchedulerPlugin: TsukaimaPlugin = {
 			logger: context.logger,
 			...(maxPromptChars === undefined ? {} : { promptMaxChars: maxPromptChars }),
 			...(tickIntervalMs === undefined ? {} : { tickIntervalMs }),
+			...(schedules === undefined ? {} : { schedules }),
 			tasks,
 		});
 		const runtime: SchedulerRuntime = { disposers: [], service };

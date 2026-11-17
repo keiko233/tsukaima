@@ -20,6 +20,7 @@ const EVENT_TYPES = [
 	"before.reply",
 	"after.reply",
 	"plugin.status",
+	"schedule.changed",
 	"run.state",
 	"run.delta",
 ] as const;
@@ -99,6 +100,9 @@ function applyLiveEvent(queryClient: QueryClient, event: LiveEvent): void {
 			);
 			return;
 		}
+		case "schedule.changed":
+			void queryClient.invalidateQueries({ queryKey: orpc.admin.schedules.key() });
+			return;
 		case "run.state": {
 			// Snapshot from the KV cache on connect, or the terminal `run: null`. Written to its
 			// own store so a 100ms partial does not invalidate the transcript and diagnostics.

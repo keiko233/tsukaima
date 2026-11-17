@@ -184,6 +184,40 @@ describe("authenticated live event stream", () => {
 	// Regression: a run used to be invisible until it settled, so a slow model looked like a hung
 	// bot. The stream now carries the agent's live state: streamed partial text while it works,
 	// then a null run once the answer is durable.
+	test("publishes schedule changes through the live event stream", async () => {
+		const directory = await createDirectory();
+		const { app, auth, lifecycle } = createApp(adminEnv(directory), {
+			eventHeartbeatMs: 1_000,
+		});
+		await lifecycle.start();
+		const cookie = await signIn(app);
+		const stream = await openEventStream(app, "/events/stream", cookie);
+		await stream.next("snapshot");
+		const { createLocalChat } = await import("../src/services/webui.ts");
+		const chat = await createLocalChat(lifecycle, {
+			sessionTitle: "Synthetic schedule",
+			title: "Synthetic schedule",
+		});
+		await lifecycle.schedules.create({
+			actionKind: "notify",
+			ownerId: "test-admin",
+			ownerKind: "user",
+			prompt: "Synthetic scheduled message",
+			recurrence: { at: new Date(Date.now() + 3_600_000).toISOString(), kind: "once" },
+			source: "test",
+			targetSessionId: chat.sessionId,
+			timeZone: "UTC",
+			title: "Synthetic schedule",
+		});
+		const next = await stream.next("schedule.changed");
+		const event = next.data as LiveEvent & { type: "schedule.changed" };
+		expect(event.sessionId).toBe(chat.sessionId);
+		expect(event.status).toBe("active");
+		await stream.close();
+		auth.stop();
+		await lifecycle.stop();
+	});
+
 	test("publishes live run state while the agent streams", async () => {
 		const directory = await createDirectory();
 		const { app, auth, lifecycle } = createApp(adminEnv(directory), {

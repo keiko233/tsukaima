@@ -41,6 +41,7 @@ import type { ChannelRegistry } from "./channel-registry.ts";
 import type { HookBus } from "./hook-bus.ts";
 import type { PluginConversationService } from "./plugin-conversation-service.ts";
 import type { FollowUpIntentStore } from "./follow-up-intents.ts";
+import type { ScheduleService } from "./schedule-service.ts";
 import type { PluginSettingsStore } from "./plugin-settings.ts";
 import type { PluginStatusStore } from "./plugin-status.ts";
 import type { PluginStorageStore } from "./plugin-storage.ts";
@@ -50,6 +51,7 @@ import type { MigrationRegistry } from "@tsukaima/plugin-registry";
 import { createPluginDatabase } from "./plugin-scoped-database.ts";
 import { createPluginCacheBridge } from "./plugin-cache.ts";
 import { createPluginMediaBridge } from "./plugin-media.ts";
+import { createPluginSchedulesApi } from "./plugin-schedules.ts";
 import type { MediaService } from "./media-service.ts";
 import type { OutboundService } from "./outbound.ts";
 import {
@@ -68,6 +70,7 @@ export interface PluginHostOptions {
 	readonly channels: ChannelRegistry;
 	readonly conversations?: PluginConversationService;
 	readonly followUps?: FollowUpIntentStore;
+	readonly schedules?: ScheduleService;
 	/** Resolve explicitly granted capabilities for the durable conversation id. */
 	readonly conversationCapabilities?: (conversationId: string) => Promise<readonly string[]>;
 	/**
@@ -164,6 +167,7 @@ export class PluginHost {
 	readonly #options: PluginHostOptions;
 	readonly #conversations: PluginConversationService | undefined;
 	readonly #followUps: FollowUpIntentStore | undefined;
+	readonly #schedules: ScheduleService | undefined;
 	readonly #conversationCapabilities:
 		| ((conversationId: string) => Promise<readonly string[]>)
 		| undefined;
@@ -195,6 +199,7 @@ export class PluginHost {
 		this.#bindings = options.bindings ?? new Map();
 		this.#conversations = options.conversations;
 		this.#followUps = options.followUps;
+		this.#schedules = options.schedules;
 		this.#conversationCapabilities = options.conversationCapabilities;
 		this.#conversationRole = options.conversationRole;
 		this.#hooks = options.hooks;
@@ -1203,6 +1208,15 @@ export class PluginHost {
 			this.#followUps !== undefined && hasPermission(manifest.permissions, "followups.read")
 				? this.#followUps.forPlugin(pluginId)
 				: undefined;
+		const schedules =
+			this.#schedules !== undefined &&
+			hasPermission(manifest.permissions, "schedules.create") &&
+			hasPermission(manifest.permissions, "conversation.read")
+				? createPluginSchedulesApi(this.#schedules, pluginId, async (conversationId) => {
+						const conversation = await this.#conversations?.get?.(conversationId);
+						return conversation !== undefined;
+					})
+				: undefined;
 		const outbound = this.#outbound?.forPlugin(pluginId, manifest.permissions);
 		return createPluginContext({
 			channels: this.channels,
@@ -1212,6 +1226,7 @@ export class PluginHost {
 			...(tasks === undefined ? {} : { tasks }),
 			...(conversations === undefined ? {} : { conversations }),
 			...(followUps === undefined ? {} : { followUps }),
+			...(schedules === undefined ? {} : { schedules }),
 			...(migrations === undefined ? {} : { migrations }),
 			...(scopedDatabase === undefined ? {} : { database: scopedDatabase }),
 			...(media === undefined ? {} : { media }),

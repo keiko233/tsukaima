@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { ChannelRequest, MessageEnvelope } from "@tsukaima/contracts";
-import { chatObjects, requests } from "@tsukaima/db";
+import { chatObjects, conversations, requests } from "@tsukaima/db";
 import {
 	pluginManifestSchema,
 	type ChannelAdapter,
@@ -14,6 +14,8 @@ import {
 } from "@tsukaima/sdk";
 import { createApp } from "../src/app.ts";
 import { builtinPlugins } from "../src/plugins/builtin.ts";
+import { ScheduleService } from "../src/services/schedule-service.ts";
+import { createPluginSchedulesApi } from "../src/services/plugin-schedules.ts";
 
 class FakeChannelAdapter implements ChannelAdapter {
 	readonly id = "fake";
@@ -123,6 +125,93 @@ async function waitFor<T>(read: () => Promise<T | undefined>, timeoutMs = 3_000)
 }
 
 describe("plugin host", () => {
+	test("scopes host schedules to the owning plugin and readable conversations", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-plugin-schedules-"));
+		try {
+			const { lifecycle } = createApp({
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			});
+			await lifecycle.start();
+			const chat = await lifecycle.sessionMessaging.session("missing").catch(() => undefined);
+			expect(chat).toBeUndefined();
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("database missing");
+			const created = await database
+				.insert(chatObjects)
+				.values({
+					createdAt: "2026-11-17T00:00:00.000Z",
+					id: "plugin-chat",
+					kind: "webui",
+					status: "active",
+					title: "Plugin chat",
+					updatedAt: "2026-11-17T00:00:00.000Z",
+				})
+				.returning();
+			expect(created).toHaveLength(1);
+			const session = await database
+				.insert(conversations)
+				.values({
+					chatObjectId: "plugin-chat",
+					createdAt: "2026-11-17T00:00:00.000Z",
+					durableConversationId: "999",
+					id: "plugin-session",
+					isReceiving: 1,
+					kind: "webui",
+					status: "active",
+					title: "Plugin session",
+					updatedAt: "2026-11-17T00:00:00.000Z",
+				})
+				.returning();
+			expect(session).toHaveLength(1);
+			const executor = {
+				async execute() {
+					return { result: { ok: true } };
+				},
+			};
+			const schedules = new ScheduleService({
+				database: () => database,
+				executor,
+				logger: lifecycle.logger,
+			});
+			const owner = createPluginSchedulesApi(
+				schedules,
+				"plugin-a",
+				async (conversationId) => conversationId === "plugin-session",
+			);
+			const other = createPluginSchedulesApi(
+				schedules,
+				"plugin-b",
+				async (conversationId) => conversationId === "plugin-session",
+			);
+			const schedule = await owner.create({
+				actionKind: "notify",
+				prompt: "Synthetic plugin notice",
+				recurrence: { at: "2026-11-18T00:00:00.000Z", kind: "once" },
+				targetSessionId: "plugin-session",
+				timeZone: "UTC",
+				title: "Plugin schedule",
+			});
+			expect(await owner.list()).toHaveLength(1);
+			expect(await other.list()).toHaveLength(0);
+			expect(await other.cancel(schedule.id)).toBe(false);
+			await expect(
+				owner.create({
+					actionKind: "notify",
+					prompt: "Synthetic plugin notice",
+					recurrence: { at: "2026-11-18T00:00:00.000Z", kind: "once" },
+					targetSessionId: "not-readable",
+					timeZone: "UTC",
+					title: "Rejected schedule",
+				}),
+			).rejects.toThrow("cannot read");
+			await lifecycle.stop();
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
 	test("loads built-in plugins into the registry", async () =>
 		withApp({}, async (lifecycle) => {
 			const plugins = await lifecycle.pluginHost.list();

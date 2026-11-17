@@ -83,6 +83,8 @@ export type {
 	PluginFollowUpIntent,
 	PluginFollowUpListQuery,
 	PluginFollowUpsApi,
+	PluginScheduleSummary,
+	PluginSchedulesApi,
 	PluginMigrationDescriptor,
 	PluginMigrationRecord,
 	PluginMigrationStatus,

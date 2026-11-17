@@ -511,6 +511,58 @@ export interface PluginFollowUpsApi {
 	onChanged(handler: () => void): () => void;
 }
 
+/**
+ * Narrow, permission-checked access to host-owned user schedules. Plugins own policy and
+ * decision state; explicit reminders and follow-ups use the same durable definition/occurrence
+ * model as the WebUI. The host resolves target sessions and never exposes another plugin's rows.
+ */
+export interface PluginScheduleSummary {
+	readonly actionKind: "agent_turn" | "workspace_turn" | "notify";
+	readonly id: string;
+	readonly nextRunAt: string | null;
+	readonly ownerKind: "user" | "agent" | "plugin" | "system";
+	readonly status: "active" | "paused" | "completed" | "cancelled" | "failed";
+	readonly targetSessionId: string;
+	readonly title: string;
+}
+
+export interface PluginSchedulesApi {
+	create(input: {
+		readonly actionKind: "agent_turn" | "notify";
+		readonly catchUp?: "skip" | "latest" | "all";
+		readonly dedupeKey?: string;
+		readonly graceMs?: number;
+		readonly maxAttempts?: number;
+		readonly maxRuns?: number;
+		readonly prompt: string;
+		readonly recurrence:
+			| { readonly at: string; readonly kind: "once" }
+			| {
+					readonly anchorAt: string;
+					readonly everyMs: number;
+					readonly kind: "interval";
+					readonly until?: string;
+			  }
+			| {
+					readonly daysOfWeek?: readonly number[];
+					readonly kind: "calendar";
+					readonly startDate: string;
+					readonly time: string;
+					readonly until?: string;
+			  };
+		readonly respectQuietHours?: boolean;
+		readonly targetSessionId: string;
+		readonly timeZone: string;
+		readonly title: string;
+	}): Promise<PluginScheduleSummary>;
+	list(query?: {
+		readonly limit?: number;
+		readonly targetSessionId?: string;
+	}): Promise<readonly PluginScheduleSummary[]>;
+	cancel(scheduleId: string): Promise<boolean>;
+	onChanged(handler: (schedule: PluginScheduleSummary) => void): () => void;
+}
+
 export interface PluginMigrationDescriptor {
 	readonly version: string;
 	readonly sql: string;
@@ -723,6 +775,8 @@ export interface PluginContext {
 	conversations?: PluginConversationsApi;
 	/** Durable follow-up handoff from background turns. Present with `followups.*` permission. */
 	followUps?: PluginFollowUpsApi;
+	/** Host-owned explicit schedules. Present with `schedules.*` permission. */
+	schedules?: PluginSchedulesApi;
 	/** Host-owned plugin migration records and rollback for `host`-mode plugins. */
 	migrations?: PluginMigrationsApi;
 	/** Namespaced database handle for `host`-mode plugins that own tables. */
