@@ -42,10 +42,6 @@ RUN test -d /app/node_modules || { \
 	}
 
 COPY . .
-# The build context omits a few tracked files on purpose (ignore files, workflows, and a fixture
-# below node_modules). Restoring them from the copied .git keeps the deployed checkout identical to
-# HEAD for tracked paths, so the repository and upgrade surfaces do not report packaging as edits.
-RUN git checkout -- .
 RUN bun run check:version
 RUN bun run --filter '@tsukaima/web' build
 # Runtime needs source + workspace links, not Vite/Playwright/TypeScript dev dependencies.
