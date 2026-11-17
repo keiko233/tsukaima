@@ -350,7 +350,11 @@ export const repositoryPushInputSchema = z.object({
 
 /** Identity for commits and merge commits the server creates. */
 export const gitIdentitySchema = z.object({
-	email: z.string().email(),
+	/** A general email pattern: internal identities such as `bot@localhost` must round-trip. */
+	email: z
+		.string()
+		.regex(/^[\w.+-]+@[\w.-]+$/u)
+		.max(254),
 	name: z.string().min(1).max(120),
 });
 export type GitIdentity = z.infer<typeof gitIdentitySchema>;

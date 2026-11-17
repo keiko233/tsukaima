@@ -154,7 +154,7 @@ function GitIdentitySection() {
 	);
 	const nameValue = name ?? identity.data?.name ?? "";
 	const emailValue = email ?? identity.data?.email ?? "";
-	const valid = nameValue.trim().length > 0 && /^\S+@\S+\.\S+$/u.test(emailValue.trim());
+	const valid = nameValue.trim().length > 0 && /^[\w.+-]+@[\w.-]+$/u.test(emailValue.trim());
 	return (
 		<details className="rounded-lg border border-border/60 px-3 py-2">
 			<summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">

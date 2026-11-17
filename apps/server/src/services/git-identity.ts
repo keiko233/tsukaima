@@ -23,7 +23,10 @@ export const DEFAULT_GIT_IDENTITY: GitIdentity = {
 const IDENTITY_KEY = "git-identity";
 
 const identitySchema = z.object({
-	email: z.string().email(),
+	email: z
+		.string()
+		.regex(/^[\w.+-]+@[\w.-]+$/u)
+		.max(254),
 	name: z.string().min(1).max(120),
 });
 
