@@ -62,6 +62,30 @@ Examples:
 
 Selection is recorded per generation. Plugin A can request `plugin:a`; feature B can request `plugin:b`; neither needs to know the provider implementation.
 
+## Conversation model and effort
+
+Conversation policies may store an explicit `model` and `thinking` override. Runtime settings
+store separate defaults:
+
+- `chatModel` / `chatThinking` for WebUI chats and ordinary IM conversations.
+- `workspaceModel` / `workspaceThinking` for workspace (coding) sessions.
+
+Resolution order for one turn is:
+
+1. The conversation policy's `model` / `thinking`, when set.
+2. The matching chat or workspace runtime default.
+3. The active provider port's default model and the provider's default reasoning effort.
+
+The server syncs the resolved model and pi thinking level into the durable agent document
+before each turn. A provider or runtime-default change re-syncs every conversation, while a
+per-conversation override survives that change until it is cleared. Clearing an override
+(`model: null`, `thinking: null`) deliberately returns the conversation to its surface default.
+
+`workspace_spawn` accepts optional `model`, `modelProvider`, and `effort` arguments. Selection
+is scoped to the active provider port (the provider defaults to it), and an unknown model is
+rejected rather than silently starting a workspace on a different model. A workspace created
+directly through the admin API accepts the same fields.
+
 ### Sidechat classifier
 
 The sidechat classifier is not a routing policy; plugins advertise which of their models may run
