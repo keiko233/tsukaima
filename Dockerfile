@@ -56,6 +56,8 @@ RUN mkdir -p /runtime \
 	done
 
 FROM oven/bun:latest AS runtime
+# Pin the CLI because the runtime needs the same device-flow and token-refresh behavior locally.
+ARG GH_VERSION=2.104.0
 # Canvas ships bundled shared libraries when it uses a prebuilt binary; a source build links
 # these system libraries instead, so both paths work at runtime.
 RUN apt-get update \
@@ -70,7 +72,11 @@ RUN apt-get update \
 		libjpeg62-turbo \
 		libgif7 \
 		librsvg2-2 \
-	&& rm -rf /var/lib/apt/lists/*
+	&& gh_arch="$(dpkg --print-architecture)" \
+	&& curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${gh_arch}.tar.gz" -o /tmp/gh.tar.gz \
+	&& tar -xzf /tmp/gh.tar.gz -C /tmp \
+	&& install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${gh_arch}/bin/gh" /usr/local/bin/gh \
+	&& rm -rf /var/lib/apt/lists/* /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${gh_arch}"
 
 WORKDIR /app
 ENV NODE_ENV=production \

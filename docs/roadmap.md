@@ -75,6 +75,6 @@ the running system.
 
 - [x] 1. Shared `GitCli` plus `RepositoryService` read model; refactor the upgrade and worktree paths.
 - [x] 2. Repository status in the upgrade center: branch, upstream, ahead/behind, dirty state, remotes, tags.
-- [x] 3. GitHub App credentials plus `gh`-style user sign-in, PR/issue/CI reads, no secret in any response.
+- [x] 3. GitHub CLI sign-in, PR/issue/CI reads, no token in any response.
 - [ ] 4. Approval-gated writes (push, branch, PR) and coding-scoped `plugins/github` tools.
 - [ ] 5. Deploy preflight, `bun run ops:status`, and optional `vX.Y.Z` release on deploy.

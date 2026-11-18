@@ -32,13 +32,13 @@ import {
 	readRuntimeSettings,
 } from "../runtime-settings.ts";
 import { readGitIdentity, writeGitIdentity } from "../services/git-identity.ts";
-import { GitHubOAuthError } from "../services/github-oauth-service.ts";
+import { GitHubCliError } from "../services/github-cli-service.ts";
 
 type MemoryDbRow = typeof memories.$inferSelect;
 
-/** Device-flow failures are actionable operator input problems, not opaque 500s. */
-function asOAuthRpcError(error: unknown): unknown {
-	return error instanceof GitHubOAuthError
+/** GitHub CLI failures are actionable operator problems, not opaque 500s. */
+function asGitHubRpcError(error: unknown): unknown {
+	return error instanceof GitHubCliError
 		? new ORPCError("BAD_REQUEST", { message: error.message })
 		: error;
 }
@@ -766,45 +766,28 @@ export const adminRouter = {
 		),
 	},
 	github: {
-		clear: adminBase.admin.github.clear.handler(async ({ context }) => {
-			await context.lifecycle.githubApp.clear();
-			return {
-				app: await context.lifecycle.githubApp.status(),
-				mode: await context.lifecycle.github.mode(),
-				oauth: await context.lifecycle.githubOAuth.status(),
-			};
-		}),
-		configure: adminBase.admin.github.configure.handler(async ({ context, input }) => {
-			await context.lifecycle.githubApp.configure(input);
-			return {
-				app: await context.lifecycle.githubApp.status(),
-				mode: await context.lifecycle.github.mode(),
-				oauth: await context.lifecycle.githubOAuth.status(),
-			};
-		}),
 		issues: adminBase.admin.github.issues.handler(async ({ context }) =>
 			context.lifecycle.github.issues(),
 		),
-		oauthClear: adminBase.admin.github.oauthClear.handler(async ({ context }) => {
-			await context.lifecycle.githubOAuth.clear();
-			return {
-				app: await context.lifecycle.githubApp.status(),
-				mode: await context.lifecycle.github.mode(),
-				oauth: await context.lifecycle.githubOAuth.status(),
-			};
-		}),
-		oauthPoll: adminBase.admin.github.oauthPoll.handler(async ({ context }) => {
+		loginPoll: adminBase.admin.github.loginPoll.handler(async ({ context }) => {
 			try {
-				return await context.lifecycle.githubOAuth.poll();
+				return await context.lifecycle.githubAuth.pollLogin();
 			} catch (error) {
-				throw asOAuthRpcError(error);
+				throw asGitHubRpcError(error);
 			}
 		}),
-		oauthStart: adminBase.admin.github.oauthStart.handler(async ({ context, input }) => {
+		loginStart: adminBase.admin.github.loginStart.handler(async ({ context }) => {
 			try {
-				return await context.lifecycle.githubOAuth.start(input.clientId);
+				return await context.lifecycle.githubAuth.startLogin();
 			} catch (error) {
-				throw asOAuthRpcError(error);
+				throw asGitHubRpcError(error);
+			}
+		}),
+		logout: adminBase.admin.github.logout.handler(async ({ context }) => {
+			try {
+				return await context.lifecycle.githubAuth.logout();
+			} catch (error) {
+				throw asGitHubRpcError(error);
 			}
 		}),
 		pulls: adminBase.admin.github.pulls.handler(async ({ context }) =>
@@ -813,11 +796,9 @@ export const adminRouter = {
 		runs: adminBase.admin.github.runs.handler(async ({ context, input }) =>
 			context.lifecycle.github.runs(input.sha === undefined ? {} : { sha: input.sha }),
 		),
-		status: adminBase.admin.github.status.handler(async ({ context }) => ({
-			app: await context.lifecycle.githubApp.status(),
-			mode: await context.lifecycle.github.mode(),
-			oauth: await context.lifecycle.githubOAuth.status(),
-		})),
+		status: adminBase.admin.github.status.handler(async ({ context }) =>
+			context.lifecycle.githubAuth.status(),
+		),
 	},
 	upgrade: {
 		check: adminBase.admin.upgrade.check.handler(async ({ context, input }) =>

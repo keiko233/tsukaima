@@ -100,8 +100,7 @@ import { PluginTaskService } from "./services/plugin-task-service.ts";
 import { ReplyDispatcher } from "./services/reply-dispatcher.ts";
 import { FollowUpIntentStore } from "./services/follow-up-intents.ts";
 import { readGitIdentity } from "./services/git-identity.ts";
-import { GitHubAppService } from "./services/github-app-service.ts";
-import { GitHubOAuthService } from "./services/github-oauth-service.ts";
+import { GitHubCliService, githubHostFromApiUrl } from "./services/github-cli-service.ts";
 import { GitHubService } from "./services/github-service.ts";
 import { ReplyExpectationStore } from "./services/reply-expectations.ts";
 import { SidechatService } from "./services/sidechat.ts";
@@ -204,8 +203,7 @@ export class TsukaimaLifecycle {
 	readonly replyExpectations: ReplyExpectationStore;
 	readonly followUpIntents: FollowUpIntentStore;
 	readonly github: GitHubService;
-	readonly githubApp: GitHubAppService;
-	readonly githubOAuth: GitHubOAuthService;
+	readonly githubAuth: GitHubCliService;
 	readonly replyDispatcher: ReplyDispatcher;
 	readonly outbound: OutboundService;
 	readonly requestService: RequestService;
@@ -558,22 +556,15 @@ export class TsukaimaLifecycle {
 			logger: this.runtimeLog,
 			repositoryPath: config.repositoryRoot,
 		});
-		this.githubApp = new GitHubAppService({
-			apiBaseUrl: config.githubApiUrl,
+		this.githubAuth = new GitHubCliService({
 			dataDir: config.dataDir,
-			database: () => this.domainDatabase,
-			logger: this.runtimeLog,
-		});
-		this.githubOAuth = new GitHubOAuthService({
-			apiBaseUrl: config.githubApiUrl,
-			database: () => this.domainDatabase,
+			host: githubHostFromApiUrl(config.githubApiUrl),
 			logger: this.runtimeLog,
 		});
 		this.github = new GitHubService({
 			apiBaseUrl: config.githubApiUrl,
-			app: this.githubApp,
+			auth: this.githubAuth,
 			logger: this.runtimeLog,
-			oauth: this.githubOAuth,
 			repositoryPath: config.repositoryRoot,
 		});
 		this.upgrades = new UpgradeService({
@@ -1738,6 +1729,7 @@ export class TsukaimaLifecycle {
 
 	async stop(): Promise<void> {
 		this.transition("stopping", "maintenance");
+		this.githubAuth.close();
 		this.backupDrills.stop();
 		this.restartCoordinator.close();
 		this.promptHooks.close();

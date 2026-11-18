@@ -1,76 +1,28 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, LogIn, LogOut, Trash2 } from "lucide-react";
+import { LogIn, LogOut } from "lucide-react";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
-import { Input } from "@tsukaima/ui/components/motion/input";
 import { cn } from "@tsukaima/ui/lib/utils";
-import { orpc, type GitHubAppStatus, type GitHubDeviceStart, type GitHubRun } from "@/lib/api";
+import { orpc, type GitHubLoginStart, type GitHubRun, type GitHubStatus } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { InlineError } from "../../_modules/shell/primitives";
 
-function Field({ label, children }: { readonly children: ReactNode; readonly label: string }) {
-	return (
-		<div className="contents">
-			<dt className="text-muted-foreground">{label}</dt>
-			<dd className="truncate text-foreground">{children}</dd>
-		</div>
-	);
-}
-
-function AppSummary({ status }: { readonly status: GitHubAppStatus }) {
-	const permissions = Object.entries(status.permissions ?? {})
-		.map(([scope, level]) => `${scope}: ${level}`)
-		.join(", ");
-	return (
-		<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
-			<Field label={m.github_account()}>{status.account ?? "—"}</Field>
-			<Field label={m.github_app_id()}>
-				<span className="font-mono text-[10.5px]">{status.appId ?? "—"}</span>
-			</Field>
-			<Field label={m.github_installation_id()}>
-				<span className="font-mono text-[10.5px]">{status.installationId ?? "—"}</span>
-			</Field>
-			<Field label={m.github_permissions()}>
-				<span className="text-[10.5px] text-muted-foreground">{permissions || "—"}</span>
-			</Field>
-			<Field label={m.github_key_fingerprint()}>
-				<span className="font-mono text-[10.5px] text-muted-foreground">
-					{status.keyFingerprint ?? "—"}
-				</span>
-			</Field>
-			<Field label={m.github_token_expires()}>
-				<span className="text-[10.5px] text-muted-foreground">
-					{status.tokenExpiresAt === null
-						? "—"
-						: new Date(status.tokenExpiresAt).toLocaleTimeString()}
-				</span>
-			</Field>
-		</dl>
-	);
-}
-
 /**
- * The `gh auth login` experience: request a code, show it with the verification URL, and poll
- * until GitHub issues a user token. The device code itself never leaves the server.
+ * The runtime `gh auth login` device flow. The server starts the CLI and exposes only the
+ * one-time code; the token stays in `gh`'s config directory on the data volume.
  */
-function LoginSection() {
+function LoginSection({ status }: { readonly status: GitHubStatus }) {
 	const toast = useToast();
 	const queryClient = useQueryClient();
-	const status = useQuery({
-		...orpc.admin.github.status.queryOptions(),
-		staleTime: 15_000,
-	});
-	const [clientId, setClientId] = useState("");
-	const [device, setDevice] = useState<GitHubDeviceStart | null>(null);
+	const [device, setDevice] = useState<GitHubLoginStart | null>(null);
 	const handled = useRef<string | undefined>(undefined);
-	const oauth = status.data?.oauth;
 
 	const start = useMutation(
-		orpc.admin.github.oauthStart.mutationOptions({
+		orpc.admin.github.loginStart.mutationOptions({
 			onError: (error) =>
 				toast.error(m.github_login_failed(), { description: errorMessage(error) }),
 			onSuccess: (result) => {
@@ -80,20 +32,23 @@ function LoginSection() {
 		}),
 	);
 	const poll = useQuery({
-		...orpc.admin.github.oauthPoll.queryOptions(),
+		...orpc.admin.github.loginPoll.queryOptions(),
 		enabled: device !== null,
 		refetchOnWindowFocus: false,
 		refetchInterval: (query) => {
 			if (device === null) return false;
 			const current = query.state.data?.status;
-			return current === "authorized" || current === "expired" || current === "denied"
+			return current === "authorized" ||
+				current === "expired" ||
+				current === "failed" ||
+				current === "idle"
 				? false
-				: device.intervalSeconds * 1000;
+				: 3_000;
 		},
 	});
 	const pollStatus = poll.data?.status;
 	useEffect(() => {
-		if (pollStatus === undefined || handled.current === pollStatus) return;
+		if (pollStatus === undefined || handled.current === poll.data?.status) return;
 		if (pollStatus === "authorized") {
 			handled.current = pollStatus;
 			toast.success(m.github_login_success());
@@ -101,17 +56,19 @@ function LoginSection() {
 			void queryClient.invalidateQueries({ queryKey: orpc.admin.github.key() });
 			return;
 		}
-		if (pollStatus === "expired" || pollStatus === "denied") {
+		if (pollStatus === "expired" || pollStatus === "failed" || pollStatus === "idle") {
 			handled.current = pollStatus;
 			toast.error(
-				pollStatus === "expired" ? m.github_login_expired() : m.github_login_denied(),
+				pollStatus === "expired"
+					? m.github_login_expired()
+					: (poll.data?.message ?? m.github_login_failed()),
 			);
 			setDevice(null);
 		}
-	}, [pollStatus, queryClient, toast]);
+	}, [poll.data?.message, pollStatus, queryClient, toast]);
 
-	const signOut = useMutation(
-		orpc.admin.github.oauthClear.mutationOptions({
+	const logout = useMutation(
+		orpc.admin.github.logout.mutationOptions({
 			onError: (error) =>
 				toast.error(m.github_logout_failed(), { description: errorMessage(error) }),
 			onSuccess: async () => {
@@ -122,27 +79,40 @@ function LoginSection() {
 		}),
 	);
 
-	if (oauth?.configured === true) {
+	if (!status.available) {
+		return <p className="text-[11px] leading-4 text-muted-foreground">{m.github_cli_missing()}</p>;
+	}
+
+	if (status.configured && status.login !== null) {
 		return (
-			<div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2 text-[11px]">
-				<span className="font-medium text-foreground">
-					{m.github_login_signed_in()} {oauth.login}
-				</span>
-				{oauth.scopes.length === 0 ? null : (
-					<span className="text-muted-foreground">
-						{m.github_scopes()}: {oauth.scopes.join(", ")}
+			<div className="space-y-2">
+				<div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2 text-[11px]">
+					<span className="font-medium text-foreground">
+						{m.github_login_signed_in()} {status.login}
 					</span>
+					<span className="text-muted-foreground">
+						{status.host}
+						{status.gitProtocol === null ? "" : ` · ${status.gitProtocol}`}
+					</span>
+					{status.scopes.length === 0 ? null : (
+						<span className="text-muted-foreground">
+							{m.github_scopes()}: {status.scopes.join(", ")}
+						</span>
+					)}
+					<Button
+						className="ml-auto"
+						leadingIcon={<LogOut />}
+						loading={logout.isPending}
+						size="xs"
+						variant="ghost"
+						onClick={() => logout.mutate()}
+					>
+						{m.github_logout()}
+					</Button>
+				</div>
+				{status.error === null ? null : (
+					<p className="text-[10.5px] leading-4 text-destructive">{status.error}</p>
 				)}
-				<Button
-					className="ml-auto"
-					leadingIcon={<LogOut />}
-					loading={signOut.isPending}
-					size="xs"
-					variant="ghost"
-					onClick={() => signOut.mutate()}
-				>
-					{m.github_logout()}
-				</Button>
 			</div>
 		);
 	}
@@ -171,169 +141,20 @@ function LoginSection() {
 
 	return (
 		<div className="space-y-2">
-			<div className="flex flex-wrap items-end gap-2">
-				<Input
-					classNames={{ field: "h-8 rounded-md", input: "text-xs", root: "gap-1" }}
-					label={m.github_login_client_id()}
-					value={clientId}
-					onChange={setClientId}
-				/>
-				<Button
-					disabled={clientId.trim().length === 0}
-					leadingIcon={<LogIn />}
-					loading={start.isPending}
-					size="sm"
-					onClick={() => start.mutate({ clientId: clientId.trim() })}
-				>
-					{m.github_login_start()}
-				</Button>
-			</div>
+			<Button
+				leadingIcon={<LogIn />}
+				loading={start.isPending}
+				size="sm"
+				onClick={() => start.mutate()}
+			>
+				{m.github_login_start()}
+			</Button>
 			<p className="text-[10.5px] leading-4 text-muted-foreground">{m.github_login_help()}</p>
 		</div>
 	);
 }
 
-function AppSection() {
-	const toast = useToast();
-	const queryClient = useQueryClient();
-	const status = useQuery({
-		...orpc.admin.github.status.queryOptions(),
-		staleTime: 30_000,
-	});
-	const [editing, setEditing] = useState(false);
-	const [appId, setAppId] = useState("");
-	const [installationId, setInstallationId] = useState("");
-	const [privateKey, setPrivateKey] = useState("");
-	const app = status.data?.app;
-
-	const invalidate = async () => {
-		await queryClient.invalidateQueries({ queryKey: orpc.admin.github.key() });
-	};
-	const configure = useMutation(
-		orpc.admin.github.configure.mutationOptions({
-			onError: (error) =>
-				toast.error(m.github_configure_failed(), { description: errorMessage(error) }),
-			onSuccess: async () => {
-				toast.success(m.github_saved());
-				setEditing(false);
-				setPrivateKey("");
-				await invalidate();
-			},
-		}),
-	);
-	const clear = useMutation(
-		orpc.admin.github.clear.mutationOptions({
-			onError: (error) =>
-				toast.error(m.github_remove_failed(), { description: errorMessage(error) }),
-			onSuccess: async () => {
-				toast.success(m.github_removed());
-				setEditing(false);
-				await invalidate();
-			},
-		}),
-	);
-
-	if (app === undefined) {
-		return <p className="text-[11px] text-muted-foreground">{m.loading()}</p>;
-	}
-	const configured = app.configured;
-	const formVisible = !configured || editing;
-	const appIdValue = Number(appId);
-	const installationIdValue = Number(installationId);
-	const valid =
-		Number.isInteger(appIdValue) &&
-		appIdValue > 0 &&
-		Number.isInteger(installationIdValue) &&
-		installationIdValue > 0 &&
-		privateKey.trim().length > 0;
-
-	return (
-		<div className="space-y-2">
-			{configured ? <AppSummary status={app} /> : <p className="text-[11px] text-muted-foreground">{m.github_not_configured()}</p>}
-			{formVisible ? (
-				<div className="space-y-2">
-					<div className="grid gap-2 sm:grid-cols-2">
-						<Input
-							classNames={{ field: "h-8 rounded-md", input: "text-xs", root: "gap-1" }}
-							inputMode="numeric"
-							label={m.github_app_id()}
-							value={appId}
-							onChange={setAppId}
-						/>
-						<Input
-							classNames={{ field: "h-8 rounded-md", input: "text-xs", root: "gap-1" }}
-							inputMode="numeric"
-							label={m.github_installation_id()}
-							value={installationId}
-							onChange={setInstallationId}
-						/>
-					</div>
-					<label className="block text-[11px] text-muted-foreground">
-						{m.github_private_key()}
-						<textarea
-							aria-label={m.github_private_key()}
-							className={cn(
-								"mt-1 min-h-24 w-full resize-y rounded-md border border-border bg-background p-2",
-								"font-mono text-[10.5px] leading-4 text-foreground outline-none",
-								"focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30",
-							)}
-							placeholder={m.github_private_key_placeholder()}
-							spellCheck={false}
-							value={privateKey}
-							onChange={(event) => setPrivateKey(event.currentTarget.value)}
-						/>
-					</label>
-					<p className="text-[10.5px] leading-4 text-muted-foreground">
-						{m.github_required_permissions()}
-					</p>
-					<div className="flex flex-wrap gap-1.5">
-						<Button
-							disabled={!valid}
-							loading={configure.isPending}
-							size="sm"
-							onClick={() =>
-								configure.mutate({
-									appId: appIdValue,
-									installationId: installationIdValue,
-									privateKey: privateKey.trim(),
-								})
-							}
-						>
-							{m.github_configure()}
-						</Button>
-						{configured ? (
-							<Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
-								{m.cancel()}
-							</Button>
-						) : null}
-					</div>
-				</div>
-			) : (
-				<div className="flex flex-wrap gap-1.5">
-					<Button
-						leadingIcon={<KeyRound />}
-						size="xs"
-						variant="outline"
-						onClick={() => setEditing(true)}
-					>
-						{m.github_configure()}
-					</Button>
-					<Button
-						leadingIcon={<Trash2 />}
-						loading={clear.isPending}
-						size="xs"
-						variant="ghost"
-						onClick={() => clear.mutate()}
-					>
-						{m.github_remove()}
-					</Button>
-				</div>
-			)}
-		</div>
-	);
-}
-
-export function GitHubAppCard() {
+export function GitHubCard() {
 	const status = useQuery({
 		...orpc.admin.github.status.queryOptions(),
 		staleTime: 15_000,
@@ -354,20 +175,7 @@ export function GitHubAppCard() {
 				) : status.data === undefined ? (
 					<p className="text-[11px] text-muted-foreground">{m.loading()}</p>
 				) : (
-					<>
-						<div className="space-y-2">
-							<h3 className="text-[11px] font-medium text-foreground">{m.github_login()}</h3>
-							<LoginSection />
-						</div>
-						<details className="rounded-lg border border-border/60 px-3 py-2">
-							<summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
-								{m.github_app_advanced()}
-							</summary>
-							<div className="mt-2">
-								<AppSection />
-							</div>
-						</details>
-					</>
+					<LoginSection status={status.data} />
 				)}
 			</CardContent>
 		</Card>
@@ -385,7 +193,7 @@ export function GitHubActivityCard() {
 		...orpc.admin.github.status.queryOptions(),
 		staleTime: 30_000,
 	});
-	const enabled = status.data !== undefined && status.data.mode !== "none";
+	const enabled = status.data?.configured === true;
 	const runs = useQuery({
 		...orpc.admin.github.runs.queryOptions({ input: {} }),
 		enabled,

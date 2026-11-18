@@ -4,7 +4,7 @@ Status: decided, ready to implement. Owner surface: `apps/server` services, `pac
 the upgrade center in the admin WebUI.
 
 This spec makes the repository itself a first-class object of the running system: branch, upstream,
-working-tree state, remotes, and the GitHub App installation plus pull requests, issues, and CI are
+working-tree state, remotes, and the GitHub CLI session plus pull requests, issues, and CI are
 readable and (where policy allows) operable from the WebUI and from governed workspace sessions.
 
 The deploy path already requires a clean committed branch and a pushable remote
@@ -15,9 +15,9 @@ am I on, is it pushed, is it green?". This closes that loop.
 
 | Question | Decision |
 | --- | --- |
-| Does the server need push rights? | Yes. The installation token carries `contents: write` and the server may push. |
-| Credential type | GitHub App with installation tokens, not a PAT. No user login, no `gh auth login`. |
-| Device flow | No. `TSUKAIMA_GITHUB_OAUTH_CLIENT_ID` is not used; the operator configures the App instead. |
+| Does the server need push rights? | Yes. The signed-in `gh` user token carries `repo` scope and the server may push. |
+| Credential type | GitHub CLI user login. The runtime runs `gh auth login`; no GitHub App and no token in Tsukaima. |
+| Device flow | Yes, delegated entirely to `gh`. No OAuth Client ID or App ID is configured in Tsukaima. |
 | Where repository and CI status live | The existing upgrade center at `settings.upgrades`. No new page. |
 
 ## 1. Current boundary
@@ -42,14 +42,13 @@ What already exists and must be reused, not duplicated:
    changed-file detail, or "is this commit pushed?" query.
 2. **Two independent git exec paths** (`upgrade-service.ts`, `worktree.ts`) with different
    timeouts, env handling, and validation. A third would be a governance bug.
-3. **No GitHub integration at all.** No installation, no PR, issue, CI, or release reads, no writes.
+3. **No GitHub integration at all.** No authenticated login, no PR, issue, CI, or release reads,
+   no writes.
 4. **No credential surface.** Runtime settings are explicitly non-secret and plugin secrets are
    per-plugin. Nothing owns the host-level credential that `git push` and the GitHub API both need.
-5. **`gh` is not usable as-is in the runtime.** It is absent from the image (the `Dockerfile`
-   installs `git`, `curl`, and `ripgrep`, not `gh`), its keyring-backed token store is unreliable
-   headless, and observed directly here: `gh auth status` failed with `Timeout trying to log in to
-   github.com ... (keyring)` before succeeding on retry. It also has no first-class way to sign
-   GitHub App JWTs. It stays a workstation and deploy tool.
+5. **`gh` owns authentication.** The runtime image installs `gh`; its config directory lives on the
+   data volume (`GH_CONFIG_DIR=<dataDir>/gh`) and login uses `--insecure-storage` because a
+   headless container has no keyring. No custom App JWT or device-code client lives in the server.
 6. **Deploy has no GitHub preflight.** `ops/deploy/deploy.sh` never checks that the pushed commit
    exists on the remote or that CI is green; a failure is discovered on the host.
 
@@ -61,9 +60,9 @@ WebUI: settings.upgrades (repository status, App account, CI, existing upgrade f
         v
 apps/server
   RepositoryService    --> GitCli                     (packages/coding/src/git.ts)
-  GitHubAppService     --> App config + private key   (meta row + <dataDir>/secrets 0600)
-        `--> InstallationTokenProvider --> JWT RS256 --> installation token (cached 1 h)
-  GitHubService        --> REST over fetch            (api.github.com or TSUKAIMA_GITHUB_API_URL)
+  GitHubCliService    --> gh auth login/status/token/logout (GH_CONFIG_DIR=<dataDir>/gh)
+  GitHubService       --> REST over fetch with `gh auth token`
+        |                  (api.github.com or TSUKAIMA_GITHUB_API_URL)
         |
         +--> governed writes --> ApprovalGate (packages/coding/src/approval.ts) + audit
         `--> plugin binding  --> plugins/github (coding-scoped tools)
@@ -89,16 +88,16 @@ Layering rules:
 | # | Decision | Choice | Rationale |
 | --- | --- | --- | --- |
 | D1 | Where git plumbing lives | New `packages/coding/src/git.ts`; refactor both existing call sites | Keeps the existing package boundary; the repo expects one shared primitive, not a third copy. A separate `packages/git` matters only if a consumer outside `coding` appears. |
-| D2 | GitHub access in the server | REST over `fetch`, base `TSUKAIMA_GITHUB_API_URL` default `https://api.github.com` | `gh` cannot sign App JWTs, is not in the image, and its keyring store is unreliable headless. `fetch` is testable with a fake and needs no new dependency. |
-| D3 | Credential model | GitHub App: App ID, installation ID, PEM private key (PKCS#1 or PKCS#8) | Chosen by the operator. Gives short-lived per-installation tokens and independent revocation. |
-| D4 | Where the credential lives | Private key file `<dataDir>/secrets/github-app.pem` mode 0600; App ID and metadata in the `meta` row `github-app` | `<dataDir>` is the persistent volume and stays out of git. The PEM is never returned by an RPC, only a SHA-256 fingerprint. |
-| D5 | Token lifetime | Mint installation tokens on demand, cache until five minutes before expiry | Installation tokens expire after one hour; a stale cached token must never be reused. |
-| D6 | How `git` authenticates | Per-invocation env only: `GIT_CONFIG_COUNT/KEY/VALUE` inline credential helper returning `x-access-token` plus the token, and `GH_TOKEN` | No token in argv, `.git/config`, a credentials file, or a log line. |
+| D2 | GitHub access in the server | REST over `fetch`, base `TSUKAIMA_GITHUB_API_URL` default `https://api.github.com`; the bearer token comes from `gh auth token` | `gh` owns the login/refresh lifecycle, while REST stays typed and testable with a fake. |
+| D3 | Credential model | GitHub CLI user login with `repo` scope | No GitHub App registration, no App ID, no installation ID, and no private key to paste. |
+| D4 | Where the credential lives | `GH_CONFIG_DIR=<dataDir>/gh`, created `0700`; login uses `gh --insecure-storage` so a headless container writes `hosts.yml` instead of relying on a keyring | `<dataDir>` is the persistent volume and stays out of git. The token is never returned by an RPC. |
+| D5 | Token lifetime | `gh` refreshes its own token; the server calls `gh auth token` per use and never caches the value | Avoids a second expiry model and keeps the token out of server memory between calls. |
+| D6 | How `git` authenticates | Per-invocation env only: `GIT_CONFIG_COUNT/KEY/VALUE` inline credential helper returning `x-access-token` plus the token from `gh auth token`, and `GH_TOKEN` | No token in argv, `.git/config`, a credentials file, or a log line. |
 | D7 | Status placement | Existing upgrade center | Chosen by the operator; no new nav entry. |
 | D8 | Server push rights | Granted via `contents: write`, still gated by the policy flag `allowPush`, default false, enabled once in the UI | Chosen by the operator. The App permission is necessary but not sufficient: a protected branch or a disabled policy still denies. |
-| D9 | Repository scope | One repository: the checkout the server runs in, with the App installation that reaches it | Multi-installation management is a follow-up, not this spec. |
+| D9 | Repository scope | One repository: the checkout the server runs in, resolved from its `origin` remote | Multi-repository management is a follow-up, not this spec. |
 | D10 | Repo root | Add `TSUKAIMA_REPOSITORY_ROOT`, defaulting to `process.cwd()` | Needed once tools run in worktrees and the API reports a path. |
-| D11 | `gh` CLI | Workstation and deploy scripts only: `ops:status`, preflight, optional release | Keeps the runtime dependency-free and avoids the headless keyring problem. |
+| D11 | `gh` CLI | Runtime credential owner and workstation/deploy tool: login, status, token, logout, `ops:status`, preflight, optional release | The CLI already ships GitHub's OAuth client and token refresh, which removes the custom App setup. |
 
 ## 5. Contracts
 
@@ -118,15 +117,26 @@ repositoryStatusSchema: {
 	pushed: boolean;                             // HEAD is reachable from the upstream ref
 }
 
-githubAppStatusSchema: {
+githubStatusSchema: {
+	available: boolean;                          // false when the image lacks gh
 	configured: boolean;
-	appId?: number;
-	installationId?: number;
-	account?: string;                            // installation account login
-	permissions?: Record<string, string>;        // contents write, pull_requests write, ...
-	keyFingerprint?: string;                     // SHA-256 of the PEM, never the PEM
-	tokenExpiresAt?: string;
-	repositorySelection?: "all" | "selected";
+	host: string;
+	login: string | null;
+	scopes: string[];
+	gitProtocol: string | null;
+	error: string | null;
+}
+
+githubLoginStartSchema: {
+	expiresAt: string;
+	userCode: string;
+	verificationUri: string;
+}
+
+githubLoginPollSchema: {
+	status: "idle" | "pending" | "authorized" | "expired" | "failed";
+	login?: string;
+	message?: string;
 }
 
 githubPullRequestSchema: { number: number; title: string; state: "open" | "closed" | "merged";
@@ -142,38 +152,33 @@ RPC (admin-only, behind the existing admin auth), added to `apps/server/src/rpc/
 - `admin.repository.status`, `.branches`, `.log`, `.diff` — read-only.
 - `admin.repository.fetch`, `.checkout`, `.pull` — refuse a dirty tree where relevant.
 - `admin.repository.push` — requires the branch policy to allow it.
-- `admin.github.status`, `.configure`, `.clear`, `.pulls`, `.issues`, `.runs`.
+- `admin.github.status`, `.loginStart`, `.loginPoll`, `.logout`, `.pulls`, `.issues`, `.runs`.
 
 ## 6. Credentials
 
-**Configure** (upgrade center card): paste the App ID, installation ID, and the private key. GitHub
-downloads it as PKCS#1 (`BEGIN RSA PRIVATE KEY`) and the signer accepts PKCS#8 as well.
-The host validates by signing a JWT, calling `GET /app/installations/{id}`, and listing
-`GET /installation/repositories`, then records the account login, permissions, and repository
-selection for display.
+**Login** (upgrade center card): click "Sign in with GitHub CLI". The server spawns
+`gh auth login --hostname <host> --git-protocol https --web --clipboard=false --insecure-storage`
+and parses the one-time code from the CLI output. The UI shows the code and verification URL and
+polls `admin.github.loginPoll`; `gh` performs the actual device flow. No OAuth App, Client ID, App
+ID, installation ID, or private key is involved.
 
-**Store**: the `meta` row `github-app` holds `{ appId, installationId, account, permissions,
-keyFingerprint, addedAtMs }`. The PEM is written to `<dataDir>/secrets/github-app.pem` with mode
-0600 inside a 0700 directory. `data/` is already gitignored, so the key never enters the working
-tree and `bun run check:secrets` never sees it.
+**Store**: `GH_CONFIG_DIR=<dataDir>/gh`, created with mode 0700. `gh` writes `hosts.yml` there with
+mode 0600. `data/` is already gitignored, so neither the session nor the token enters the working
+tree.
 
-**Use**: `InstallationTokenProvider` signs an RS256 JWT with `node:crypto` (`iss` is the App ID,
-`iat` is now minus 60 s, `exp` is now plus 9 min), exchanges it at
-`POST /app/installations/{id}/access_tokens`, caches `{ token, expiresAtMs }`, and refreshes when
-less than five minutes remain. `git` and the REST client receive the token through that call's
-environment only.
+**Use**: `GitHubCliService.status()` runs `gh auth status --json hosts --hostname <host>` and
+returns only login, scopes, protocol, host, and an error string. `token()` runs
+`gh auth token --hostname <host>` for the single git or REST call that needs it; `gh` refreshes an
+expiring token itself. Logout runs `gh auth logout --hostname <host> --user <login>`.
 
-**Never**: return the PEM or a token from any RPC, or write either into `.git/config`, a
-credentials file, an argv array, a log line, a prompt, or a database row other than the
-fingerprint.
+**Never**: return a token from any RPC, or write one into `.git/config`, a credentials file, an
+argv array, a log line, or a prompt.
 
-**Failure modes** surfaced verbatim: missing key, malformed PEM, JWT rejected with 401 (usually
-clock skew), installation not found with 404, installation lacking `contents: write`, and rate
-limiting with 403 plus `x-ratelimit-remaining: 0`.
+**Failure modes** surfaced verbatim: `gh` is absent from the image, no host is signed in, login
+exits before printing a code, the device code expires, and `gh auth status` cannot reach GitHub.
 
-**Recommended App permissions**, documented in the card and in
-`docs/operations/deployment.md`: `metadata: read`, `contents: write`, `pull_requests: write`,
-`issues: write`, `actions: read`, with repository selection limited to the deployment repository.
+**Scopes**: `gh auth login` requests its standard `repo`, `read:org`, and `gist` scopes. The
+deployment repository's branch protection still applies to the user's token.
 
 ## 7. Governance
 
@@ -193,9 +198,9 @@ limiting with 403 plus `x-ratelimit-remaining: 0`.
 - **Sandbox**: GitHub and git calls run host-side, outside bubblewrap, with the scrubbed env, the
   same trust position as `UpgradeService` today. Model-influenced arbitrary command execution stays
   confined to the existing governed runner.
-- **Identity consequence**: an App commits and opens PRs as `<app-name>[bot]`, not as the operator.
-  Commit trailers and PR bodies must say so; the audit trail is the authority, not the GitHub
-  author field.
+- **Identity consequence**: pushes and API writes act as the signed-in GitHub user. Commit trailers
+  and PR bodies must say the runtime performed the action; the audit trail is the authority, not
+  the GitHub author field.
 
 ## 8. Deployment integration
 
@@ -213,8 +218,8 @@ limiting with 403 plus `x-ratelimit-remaining: 0`.
 
 ## 9. Phases
 
-Phase 1 and phase 2 are implemented (App credentials plus an optional `gh`-style user sign-in);
-the governed write and release phases are not.
+Phase 1 and phase 2 are implemented with `gh` as the credential owner; the governed write and
+release phases are not.
 
 **Phase 1 — git read model.** `GitCli` in `packages/coding`, `WorktreeManager` and `UpgradeService`
 refactored onto it, `RepositoryService`, `repositoryStatusSchema`, `TSUKAIMA_REPOSITORY_ROOT`, admin
@@ -222,12 +227,11 @@ RPC reads, and a repository status card in the upgrade center. Acceptance: statu
 `git status --porcelain=v2 --branch` on a fixture repository, and a detached HEAD, a repository with
 no remote, and a dirty tree all render without throwing.
 
-**Phase 2 — GitHub App and CI.** `GitHubAppService` (configure, validate, store, clear),
-`InstallationTokenProvider`, `GitHubService` reads (installation, PRs, issues, runs), the account
-card and the CI card in the upgrade center, `ops:status`, and the deploy preflight. Acceptance: an
-invalid App ID, a malformed PEM, and an installation without `contents: write` each produce a
-distinct actionable error; no RPC response contains the PEM or a token; token refresh at the expiry
-boundary is covered by a test with a generated key.
+**Phase 2 — GitHub CLI and CI.** `GitHubCliService` (login, poll, status, token, logout),
+`GitHubService` reads (PRs, issues, runs), the login/status card and the CI card in the upgrade
+center, `ops:status`, and the deploy preflight. Acceptance: a missing `gh`, a signed-out host, an
+expired device code, and an exit before the code each produce a distinct actionable error; no RPC
+response contains a token; login and status are covered by injected exec/process tests.
 
 **Phase 3 — governed writes.** Approval-gated push, branch create and switch, PR create and merge,
 and `plugins/github` with coding-scoped tools, plus the policy entries. Acceptance: `allowPush`
@@ -244,28 +248,28 @@ deploying from GitHub Actions.
 - Git fixtures are temporary repositories created with `git init` under `os.tmpdir()`, cleaned up in
   `finally` blocks, following `packages/coding/tests/helpers.ts`. Remotes use placeholders such as
   `<repo-url>` and `example.test`.
-- App tests generate an RSA key pair in-process and serve a fake
-  `POST /app/installations/{id}/access_tokens`, asserting the JWT payload (`iss`, `iat`, `exp`) and
-  the cache refresh boundary without touching the real API.
+- CLI tests inject the `gh` exec function and the login child process, asserting argv and
+  environment rather than shelling out.
 - Synthetic identities only, per [privacy.md](../operations/privacy.md): no real owner, repository,
-  installation ID, hostname, or PR text in fixtures.
-- Cover: invalid App credentials, a missing permission, token caching and refresh, redaction of the
-  PEM and token from every response and log line, `allowPush` denial, protected-branch denial,
+  login, hostname, token, or PR text in fixtures.
+- Cover: missing `gh`, signed-out status, login code parsing across chunks, login expiry, logout of
+  one account, token redaction from every response, `allowPush` denial, protected-branch denial,
   detached HEAD, a missing upstream, a non-fast-forward pull, and restart-safe reads.
 
 ## 11. Risks and non-goals
 
-- The PEM sits on the data volume as plaintext with mode 0600. Acceptable for a single-host
-  deployment; OS keyring or encryption at rest is a separate decision.
-- An installation token cannot bypass branch protection or required reviews. If the deployment
-  branch requires review, the server must open a PR instead of pushing, and the policy should
-  encode that rather than rely on a runtime error.
-- Non-goals: hosting a GitHub App for other users, Gitea or Forgejo adapters, browser OAuth login,
+- The `gh` token sits on the data volume in `hosts.yml`; `gh` writes it 0600 inside a 0700
+  directory. Acceptable for a single-host deployment; OS keyring or encryption at rest is a
+  separate decision.
+- A user token cannot bypass branch protection or required reviews. If the deployment branch
+  requires review, the server must open a PR instead of pushing, and the policy should encode that
+  rather than rely on a runtime error.
+- Non-goals: hosting a GitHub App for other users, Gitea or Forgejo adapters, a custom OAuth login,
   merge-conflict resolution in the UI, and reading `.env` or deployment credentials from the
   repository.
 
 ## 12. Remaining follow-ups
 
-1. Multi-installation or multi-repository management (D9 keeps one for now).
-2. Whether `github-app` moves from the `meta` row to a typed table once it grows beyond App ID,
-   installation ID, and metadata.
+1. Multi-account or multi-repository management (D9 keeps one for now).
+2. Whether commits made through the signed-in user need a distinct audit marker beyond the
+   existing audit entry.

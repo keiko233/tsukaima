@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { GitHubActivityCard, GitHubAppCard } from "./_modules/github-card";
+import { GitHubActivityCard, GitHubCard } from "./_modules/github-card";
 import { SystemPage } from "./_modules/page-header";
 import { RepositoryStatusCard } from "./_modules/repository-status-card";
 import { UpgradeCenter } from "./_modules/upgrade-center";
@@ -10,7 +10,7 @@ function SettingsUpgradesPage() {
 		<SystemPage description={m.settings_upgrades_description()} title={m.settings_tab_upgrades()}>
 			<div className="space-y-3">
 				<RepositoryStatusCard />
-				<GitHubAppCard />
+				<GitHubCard />
 				<GitHubActivityCard />
 				<UpgradeCenter />
 			</div>

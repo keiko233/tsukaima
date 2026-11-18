@@ -38,8 +38,9 @@ This file is the cross-session handoff record. Update it whenever implementation
   into branch, upstream, ahead/behind, dirty counts, remotes, worktrees, tags, and HEAD version,
   `admin.repository.status` publishes it, and Settings -> Upgrades renders it above the existing
   upgrade flow. `TSUKAIMA_REPOSITORY_ROOT` now names the checkout instead of relying on
-  `process.cwd()` implicitly. GitHub App credentials, PR/issue/CI reads, and governed writes are
-  specified in [git-github-integration.md](specs/git-github-integration.md) and not built yet.
+  `process.cwd()` implicitly. GitHub CLI login, PR/issue/CI reads, and governed writes are
+  specified in [git-github-integration.md](specs/git-github-integration.md); login and reads are
+  built, governed writes are not.
 - Built-in plugins are loaded from `apps/server/src/plugins/builtin.ts`; the OneBot channel is now a plugin, not lifecycle code. `TsukaimaLifecycle` no longer holds channel, request, or identity-resolution logic.
 - Assistant answers are delivered back to their origin channel by `apps/server/src/services/reply-dispatcher.ts`.
   The durable host observes the settled submission (`onAnswer`), the dispatcher claims the outbound

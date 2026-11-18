@@ -1,23 +1,25 @@
 import { GitCli } from "@tsukaima/coding";
 import type { GitHubIssue, GitHubPullRequest, GitHubRun } from "@tsukaima/contracts";
 import type { Logger } from "../logging.ts";
-import { GitHubAppError, GitHubAppService, githubRequest } from "./github-app-service.ts";
-import type { GitHubOAuthService } from "./github-oauth-service.ts";
+import { GitHubCliError } from "./github-cli-service.ts";
 
 /**
  * Read-only GitHub surfaces for the upgrade center: open pull requests, open issues, and the
- * workflow runs for one commit. Every call reuses the App installation token and the repository
+ * workflow runs for one commit. Every call uses the token owned by `gh` and the repository
  * resolved from the checkout's own remote, so no caller can name an arbitrary repository.
  */
 
 export interface GitHubServiceOptions {
 	readonly apiBaseUrl?: string;
-	readonly app: GitHubAppService;
+	readonly auth: GitHubCredentialSource;
 	readonly fetcher?: typeof fetch;
 	readonly logger?: Logger;
-	/** User login; when present it takes precedence over the App installation token. */
-	readonly oauth?: GitHubOAuthService;
 	readonly repositoryPath: string;
+}
+
+export interface GitHubCredentialSource {
+	gitCredential(): Promise<string | undefined>;
+	token(): Promise<string>;
 }
 
 interface PullRow {
@@ -75,38 +77,26 @@ export function parseGitHubRemote(url: string): { owner: string; repo: string } 
 
 export class GitHubService {
 	readonly #apiBaseUrl: string;
-	readonly #app: GitHubAppService;
+	readonly #auth: GitHubCredentialSource;
 	readonly #fetcher: typeof fetch;
 	readonly #git: GitCli;
 	readonly #logger: Logger | undefined;
-	readonly #oauth: GitHubOAuthService | undefined;
 	#resolved: { owner: string; repo: string } | undefined;
 
 	constructor(options: GitHubServiceOptions) {
 		this.#apiBaseUrl = (options.apiBaseUrl ?? "https://api.github.com").replace(/\/+$/u, "");
-		this.#app = options.app;
+		this.#auth = options.auth;
 		this.#fetcher = options.fetcher ?? fetch;
 		this.#git = new GitCli({ repositoryPath: options.repositoryPath });
 		this.#logger = options.logger?.child("tsukaima::server::github");
-		this.#oauth = options.oauth;
-	}
-
-	/** Which identity the REST reads and any push will use. */
-	async mode(): Promise<"app" | "oauth" | "none"> {
-		if (this.#oauth !== undefined && (await this.#oauth.token()) !== undefined) return "oauth";
-		const app = await this.#app.status();
-		return app.configured ? "app" : "none";
 	}
 
 	/**
-	 * Credential for a git push, or `undefined` when no identity is configured so the operator's
-	 * own ssh key or credential helper keeps working.
+	 * Credential for a git push, or `undefined` when `gh` has no session so the operator's own ssh
+	 * key or credential helper keeps working.
 	 */
 	async gitCredential(): Promise<string | undefined> {
-		const oauth = await this.#oauth?.token();
-		if (oauth !== undefined) return oauth;
-		const app = await this.#app.status();
-		return app.configured ? await this.#app.installationToken() : undefined;
+		return await this.#auth.gitCredential();
 	}
 
 	async pulls(): Promise<GitHubPullRequest[]> {
@@ -146,8 +136,8 @@ export class GitHubService {
 	async runs(input: { readonly sha?: string } = {}): Promise<GitHubRun[]> {
 		const sha = input.sha ?? (await this.#git.tryRun(["rev-parse", "HEAD"]))?.trim();
 		if (sha === undefined || !SHA_PATTERN.test(sha)) {
-			throw new GitHubAppError(
-				"github_app_unavailable",
+			throw new GitHubCliError(
+				"github_cli_failed",
 				"A 7 to 40 character lowercase commit id is required",
 			);
 		}
@@ -168,51 +158,56 @@ export class GitHubService {
 
 	async #get<T>(path: string): Promise<T> {
 		const token = await this.#token();
-		return await githubRequest<T>({
-			apiBaseUrl: this.#apiBaseUrl,
-			fetcher: this.#fetcher,
-			path,
-			token,
+		const response = await this.#fetcher(`${this.#apiBaseUrl}${path}`, {
+			headers: {
+				Accept: "application/vnd.github+json",
+				Authorization: `Bearer ${token}`,
+				"X-GitHub-Api-Version": "2022-11-28",
+			},
+			signal: AbortSignal.timeout(15_000),
 		});
+		if (!response.ok) {
+			const detail = await response.text().catch(() => "");
+			const message = `GitHub responded ${response.status}${detail.length === 0 ? "" : `: ${detail.slice(0, 300)}`}`;
+			if (response.status === 401) {
+				throw new GitHubCliError(
+					"github_not_authenticated",
+					`GitHub rejected the signed-in token: ${message}`,
+				);
+			}
+			if (response.status === 403 || response.status === 429) {
+				throw new GitHubCliError(
+					"github_cli_failed",
+					`GitHub denied the request (permissions or rate limit): ${message}`,
+				);
+			}
+			throw new GitHubCliError(
+				"github_cli_failed",
+				response.status === 404 ? `GitHub resource not found: ${message}` : message,
+			);
+		}
+		return (await response.json()) as T;
 	}
 
-	/**
-	 * A user login wins over the App installation: it is what the operator just did, and signing
-	 * out restores the bot identity without touching the App configuration.
-	 */
 	async #token(): Promise<string> {
-		const oauth = await this.#oauth?.token();
-		if (oauth !== undefined) return oauth;
-		const app = await this.#app.status();
-		if (app.configured) return await this.#app.installationToken();
-		throw new GitHubAppError(
-			"github_app_unauthorized",
-			"No GitHub identity is configured; sign in or configure the App",
-		);
+		return await this.#auth.token();
 	}
 
-	/** The checkout's own `origin` decides the repository; the credential still gates access. */
+	/** The checkout's own `origin` decides the repository; `gh` still gates access. */
 	async #repository(): Promise<{ owner: string; repo: string }> {
 		if (this.#resolved !== undefined) return this.#resolved;
 		const remote = (await this.#git.tryRun(["remote", "get-url", "origin"]))?.trim();
 		const parsed = remote === undefined ? undefined : parseGitHubRemote(remote);
 		if (parsed !== undefined) {
 			this.#resolved = parsed;
-			return this.#resolved;
+			return parsed;
 		}
-		const repositories = await this.#app.repositories();
-		const chosen = repositories.length === 1 ? repositories[0] : undefined;
-		if (chosen === undefined) {
-			this.#logger?.warn("github repository could not be resolved", {
-				hasRemote: remote !== undefined,
-				installations: repositories.length,
-			});
-			throw new GitHubAppError(
-				"github_app_unavailable",
-				"The checkout has no GitHub remote and the installation covers no single repository",
-			);
-		}
-		this.#resolved = { owner: chosen.owner, repo: chosen.name };
-		return this.#resolved;
+		this.#logger?.warn("github repository could not be resolved", {
+			hasRemote: remote !== undefined,
+		});
+		throw new GitHubCliError(
+			"github_cli_failed",
+			"The checkout has no GitHub remote; add one before reading GitHub activity",
+		);
 	}
 }

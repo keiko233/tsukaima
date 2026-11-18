@@ -360,28 +360,20 @@ export const gitIdentitySchema = z.object({
 export type GitIdentity = z.infer<typeof gitIdentitySchema>;
 
 /**
- * A GitHub App installation, never its private key or an installation token. `configured` is the
- * only field a client can rely on; the rest are display metadata refreshed when the App is saved.
+ * Authentication state owned by the runtime `gh` CLI. The token itself is never returned; the
+ * server asks `gh auth token` only when one call needs it.
  */
-export const githubAppStatusSchema = z.object({
-	account: z.string().nullable(),
-	appId: z.number().int().positive().nullable(),
+export const githubStatusSchema = z.object({
+	/** False when the runtime image does not contain `gh`. */
+	available: z.boolean(),
 	configured: z.boolean(),
-	installationId: z.number().int().positive().nullable(),
-	keyFingerprint: z.string().nullable(),
-	permissions: z.record(z.string(), z.string()).nullable(),
-	repositorySelection: z.enum(["all", "selected"]).nullable(),
-	tokenExpiresAt: z.string().nullable(),
+	error: z.string().nullable(),
+	gitProtocol: z.string().nullable(),
+	host: z.string(),
+	login: z.string().nullable(),
+	scopes: z.array(z.string()),
 });
-export type GitHubAppStatus = z.infer<typeof githubAppStatusSchema>;
-
-export const githubAppConfigureInputSchema = z.object({
-	appId: z.number().int().positive(),
-	installationId: z.number().int().positive(),
-	/** PKCS#8 PEM. Never echoed back, logged, or persisted anywhere outside the data volume. */
-	privateKey: z.string().min(1).max(20_000),
-});
-export type GitHubAppConfigureInput = z.infer<typeof githubAppConfigureInputSchema>;
+export type GitHubStatus = z.infer<typeof githubStatusSchema>;
 
 export const githubPullRequestSchema = z.object({
 	base: z.string(),
@@ -418,40 +410,19 @@ export type GitHubRun = z.infer<typeof githubRunSchema>;
 /** `sha` defaults to the local HEAD, resolved by the caller that already knows the checkout. */
 export const githubRunsInputSchema = z.object({ sha: z.string().min(1).optional() });
 
-export const githubOAuthStatusSchema = z.object({
-	clientId: z.string().nullable(),
-	configured: z.boolean(),
-	login: z.string().nullable(),
-	scopes: z.array(z.string()),
-});
-export type GitHubOAuthStatus = z.infer<typeof githubOAuthStatusSchema>;
-
-/** Both identities coexist; `mode` says which one the server currently uses. */
-export const githubAuthStatusSchema = z.object({
-	app: githubAppStatusSchema,
-	mode: z.enum(["app", "none", "oauth"]),
-	oauth: githubOAuthStatusSchema,
-});
-export type GitHubAuthStatus = z.infer<typeof githubAuthStatusSchema>;
-
-export const githubDeviceStartInputSchema = z.object({
-	clientId: z.string().min(1).max(128),
-});
-
-export const githubDeviceStartSchema = z.object({
+export const githubLoginStartSchema = z.object({
 	expiresAt: z.string(),
-	intervalSeconds: z.number().int().positive(),
 	userCode: z.string().min(1),
 	verificationUri: z.string().url(),
 });
-export type GitHubDeviceStart = z.infer<typeof githubDeviceStartSchema>;
+export type GitHubLoginStart = z.infer<typeof githubLoginStartSchema>;
 
-export const githubDevicePollSchema = z.object({
-	intervalSeconds: z.number().int().positive().optional(),
+export const githubLoginPollSchema = z.object({
 	login: z.string().optional(),
-	status: z.enum(["authorized", "pending", "slow_down", "expired", "denied", "idle"]),
+	message: z.string().optional(),
+	status: z.enum(["authorized", "expired", "failed", "idle", "pending"]),
 });
-export type GitHubDevicePoll = z.infer<typeof githubDevicePollSchema>;
+export type GitHubLoginPoll = z.infer<typeof githubLoginPollSchema>;
 
 export const sessionDetailSchema = z.object({
 	channelId: z.string().nullable(),
@@ -1773,18 +1744,13 @@ export const appContract = oc.router({
 			status: oc.output(diagnosticsDataSchema),
 		},
 		github: {
-			clear: oc.output(githubAuthStatusSchema).meta({ audit: true }),
-			configure: oc
-				.input(githubAppConfigureInputSchema)
-				.output(githubAuthStatusSchema)
-				.meta({ audit: true }),
 			issues: oc.output(z.array(githubIssueSchema)),
-			oauthClear: oc.output(githubAuthStatusSchema).meta({ audit: true }),
-			oauthPoll: oc.output(githubDevicePollSchema),
-			oauthStart: oc.input(githubDeviceStartInputSchema).output(githubDeviceStartSchema),
+			loginPoll: oc.output(githubLoginPollSchema),
+			loginStart: oc.output(githubLoginStartSchema),
+			logout: oc.output(githubStatusSchema).meta({ audit: true }),
 			pulls: oc.output(z.array(githubPullRequestSchema)),
 			runs: oc.input(githubRunsInputSchema).output(z.array(githubRunSchema)),
-			status: oc.output(githubAuthStatusSchema),
+			status: oc.output(githubStatusSchema),
 		},
 		groups: {
 			get: oc.input(groupsGetInputSchema).output(groupDetailSchema.nullable()),

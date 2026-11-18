@@ -254,9 +254,9 @@ remain operator-controlled as described above.
 
 The same card exposes `Fetch`, `Pull`, and `Push`. `Pull` is `--ff-only`, so a diverged branch fails
 instead of creating a merge commit. `Push` is off unless `TSUKAIMA_ALLOW_PUSH=true`, and the UI asks
-for a second confirmation before sending. When a GitHub App is configured the push credential is
-that installation token, injected for the single invocation; an ssh remote or an operator credential
-helper keeps working because the token is only added, never required.
+for a second confirmation before sending. When a GitHub CLI session exists the push credential is
+the token returned by `gh auth token`, injected for the single invocation; an ssh remote or an
+operator credential helper keeps working because the token is only added, never required.
 
 The repository card also sets the **Git identity** used by the server: the author name and email on
 merge commits it creates, and `GIT_AUTHOR_*`/`GIT_COMMITTER_*` for git commands inside governed
@@ -264,52 +264,42 @@ worktrees. It is stored in the domain database (not `.git/config`) and defaults 
 `tsukaima-upgrade <tsukaima-upgrade@localhost>`, so a host without a global git identity can still
 upgrade and commit.
 
-## 9. GitHub App credentials
+## 9. GitHub CLI login
 
-Settings → Upgrades shows the running checkout and, once a GitHub App is configured, the open pull
-requests and the workflow runs for `HEAD`. The server authenticates as an **installation**, not as a
-user: it signs a nine-minute RS256 JWT with the App private key, exchanges it for an installation
-token, and caches that token until shortly before its one-hour expiry.
+Settings → Upgrades shows the running checkout and, once a GitHub CLI session exists, the open pull
+requests and the workflow runs for `HEAD`. The runtime image ships a pinned `gh` release
+(`Dockerfile`, `GH_VERSION`), and the server delegates login, token lookup, refresh, status, and
+logout to it.
 
-Create the App once, in the account or organization that owns the deployment repository:
+Click **Sign in with GitHub CLI**. The server starts `gh auth login` with
+`--hostname <host> --git-protocol https --web --clipboard=false --insecure-storage`, shows the
+one-time code and verification URL, and polls until the CLI exits. No GitHub App, OAuth App, App ID,
+installation ID, Client ID, or private key is needed.
 
-| Setting | Value |
-| --- | --- |
-| Repository permissions | `metadata: read`, `contents: write`, `pull_requests: write`, `issues: write` |
-| Organization permissions | none |
-| Workflow permissions | `actions: read` (read-only runs and check results) |
-| Repository access | only the deployment repository |
-| Webhook | disabled; the server polls on demand |
+The session lives in `<data>/gh` (`GH_CONFIG_DIR`), created `0700`; `gh` writes `hosts.yml` with
+mode `0600`. The token is never written to the repository, returned by an API, or logged. The card
+shows only the login, host, scopes, and protocol. **Sign out** removes the active account with
+`gh auth logout --hostname <host> --user <login>`.
 
-Install it on the repository, then paste the **App ID**, the **installation ID**, and the private
-key (`.pem`, PKCS#1 or PKCS#8) into the card. The installation ID is the numeric suffix of
-`/settings/installations/<id>` for that App. `contents: write` is what allows the server to push;
-the App is still refused by any branch protection rule that requires review.
+For a manual login from a shell, use the same config directory:
 
-On the host the private key is written to `<data>/secrets/github-app.pem` with mode `0600` inside a
-`0700` directory. It is never written to the repository, returned by an API, or logged; the card
-shows only a SHA-256 fingerprint. Removing the App deletes both the key file and the stored
-metadata, and the next token request fails closed until it is configured again.
+```sh
+docker exec -it <container> env GH_CONFIG_DIR=/data/gh gh auth login --hostname github.com
+```
 
-The container needs outbound HTTPS to the Git remote and to `TSUKAIMA_GITHUB_API_URL`
-(default `https://api.github.com`; use `https://<host>/api/v3` for GitHub Enterprise Server).
-Without egress the local repository card still renders, while the GitHub cards report the
-connection failure.
+For CI or a host without an interactive terminal, `gh auth login --with-token` reads a personal
+access token from stdin. Treat that token like any other secret and do not add it to the
+repository, `.env` files, or chats.
 
-### User sign-in
+The container needs outbound HTTPS to the Git remote, to `github.com` for the device flow, and to
+`TSUKAIMA_GITHUB_API_URL` (default `https://api.github.com`; use `https://<host>/api/v3` for
+GitHub Enterprise Server). Without egress the local repository card still renders, while the
+GitHub cards report the connection failure.
 
-The card also offers the same exchange `gh auth login` performs. Create an OAuth App under
-Settings → Developer settings, set its callback URL to `http://127.0.0.1/`, and paste the Client ID
-into the card. The server requests a device code, shows it with the verification URL, and polls
-until GitHub issues a user token with the `repo` scope.
+The token inherits the signed-in user's repository permissions, so it can push anywhere that user
+can. Branch protection and required reviews still apply. Prefer a dedicated machine account or a
+fine-grained token when the deployment repository is shared.
 
-Paste the OAuth App **Client ID**, not the GitHub App ID or installation ID. The device-flow
-endpoint rejects a GitHub App ID with a bare `404`, which the card reports as an OAuth Client ID
-error. A signed-in user token also makes `fetch`, `pull`, and `push` work over HTTPS even when the
-checkout keeps an SSH remote and the container has no `ssh` binary or deploy key.
-
-The token is stored in the domain database, never returned by an API, and used only for that call's
-git or REST request. While a user is signed in it takes precedence over the App installation;
-signing out returns to the bot identity without touching the App configuration. The token inherits
-the user's repository permissions, so it can push anywhere that user can, which is why the App
-remains the narrower option.
+Older builds stored a GitHub App private key at `<data>/secrets/github-app.pem`. The current code
+never reads it; remove that file after switching. The legacy `github-app` row in the domain
+database is ignored and may remain.
