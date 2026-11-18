@@ -11,6 +11,12 @@ const configurationSchema = z.object({
 	authSecret: z.string().min(32).optional(),
 	backupDrillIntervalMs: z.number().int().positive().optional(),
 	backupDrillRoot: z.string().min(1).optional(),
+	/**
+	 * Execution boundary for model-influenced coding commands. `host` runs allowlisted commands
+	 * directly inside the deployment with a scrubbed environment and worktree-only cwd;
+	 * `bubblewrap` adds OS-level namespace isolation when the host supports it.
+	 */
+	codingSandbox: z.enum(["bubblewrap", "host"]),
 	dataDir: z.string().min(1),
 	/** GitHub REST base; override for GitHub Enterprise Server (`https://<host>/api/v3`). */
 	githubApiUrl: z.string().url(),
@@ -122,6 +128,7 @@ export function loadConfig(env: Record<string, string | undefined>): TsukaimaCon
 		authSecret: env.TSUKAIMA_AUTH_SECRET || env.BETTER_AUTH_SECRET || undefined,
 		...(backupDrillIntervalMs === undefined ? {} : { backupDrillIntervalMs }),
 		backupDrillRoot: env.TSUKAIMA_BACKUP_DRILL_ROOT || undefined,
+		codingSandbox: env.TSUKAIMA_CODING_SANDBOX?.trim() === "bubblewrap" ? "bubblewrap" : "host",
 		dataDir,
 		githubApiUrl: env.TSUKAIMA_GITHUB_API_URL?.trim() || "https://api.github.com",
 		host: env.TSUKAIMA_HOST ?? "127.0.0.1",

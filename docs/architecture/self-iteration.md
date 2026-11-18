@@ -53,10 +53,23 @@ It does not expose:
 
 ### Execution isolation
 
-A fixed argv list and a scrubbed environment are not a security boundary: `bun -e`, `rg --pre`, or
-any interpreter that reads a repository file turns one allow-listed command into arbitrary code.
-Every model-influenced command therefore runs inside an operating-system sandbox, or does not run
-at all:
+A fixed argv list and a scrubbed environment are not a complete security boundary: `bun -e`,
+`rg --pre`, or any interpreter that reads a repository file turns one allow-listed command into
+arbitrary code. The host chooses one of two governed executors with
+`TSUKAIMA_CODING_SANDBOX`:
+
+`host` (default) keeps the governance rails without OS-level isolation:
+
+- Commands are resolved from fixed directories and checked against the policy allowlist; the
+  environment is explicitly constructed instead of inherited.
+- The working directory must be a task worktree. Naming the repository as `cwd` fails.
+- Test/build never run in the live tree, and a task without a worktree is rejected.
+- `analyze` read/search copies the committed or task-worktree source into a private temporary
+  directory and reads it there; the live repository is never the analysis surface.
+- A repository script can still read unrelated host files and reach the network, because the
+  process shares the container's namespaces.
+
+`bubblewrap` adds OS-level isolation:
 
 - `packages/coding/src/sandbox.ts` drives `bubblewrap` with `--unshare-all` (user, mount, PID, IPC,
   UTS, network), `--die-with-parent`, a cleared environment, and a tmpfs `/tmp`.
@@ -80,16 +93,15 @@ at all:
   through the worktree allowlist, so it cannot become an `rg` flag or read outside the repository.
 - Test and build never run in the live tree. A task without a worktree is rejected.
 
-When `bubblewrap` is missing, cannot create namespaces, or the probe fails, the sandbox provider
-throws `SandboxUnavailableError` and the tool fails closed. There is no plain-`spawn` fallback.
+When `bubblewrap` is selected but missing, cannot create namespaces, or the probe fails, the
+provider throws `SandboxUnavailableError` and the tool fails closed; there is no automatic
+fallback to `host`.
 
 Docker's default seccomp profile blocks the namespace syscalls bubblewrap needs. The shipped
-Compose service does **not** disable seccomp for the whole container to work around that: doing so
-would weaken the boundary around the entire runtime (plugins, channel adapters, model SDKs) just
-to enable governed commands. In the standard container deployment the probe therefore fails and
-self-iteration test/build/search commands are unavailable until an operator supplies a runtime
-that permits bubblewrap (for example a sandbox-capable runner or a reviewed custom seccomp
-profile). Editing, diffing, and proposal review still work.
+Compose service therefore defaults to `host` rather than disabling seccomp for the whole
+container (which would weaken the boundary around plugins, channel adapters, and model SDKs).
+Operators who want namespace isolation must supply a runtime that permits bubblewrap and set
+`TSUKAIMA_CODING_SANDBOX=bubblewrap`.
 
 ## Deployment path
 

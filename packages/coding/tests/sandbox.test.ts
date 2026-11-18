@@ -4,8 +4,10 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	ANALYSIS_MOUNT,
 	buildBubblewrapArgv,
 	createBubblewrapSandbox,
+	createHostSandbox,
 	probeBubblewrapSandbox,
 	resolveExecutable,
 	SANDBOX_PATH_DIRS,
@@ -271,6 +273,77 @@ describe("bubblewrap sandbox", () => {
 			});
 			expect(gitConfigProbe.stdout).not.toContain("config-leak");
 			expect(gitConfigProbe.stdout).not.toContain("credential");
+		},
+	);
+});
+
+describe("host sandbox", () => {
+	test("runs in a worktree with a scrubbed environment and bounded output", async () => {
+		process.env.TSUKAIMA_HOST_SECRET = "must-not-leak";
+		try {
+			const provider = createHostSandbox({ repositoryPath, worktreeRoot: root });
+			const sandbox = await provider();
+			const result = await sandbox.exec({
+				args: [],
+				command: "env",
+				cwd: worktreePath,
+				env: { ALLOWED_FLAG: "1" },
+				maxOutputBytes: 64 * 1024,
+				timeoutMs: 10_000,
+				writable: false,
+			});
+			expect(result.exitCode).toBe(0);
+			expect(result.stdout).toContain("ALLOWED_FLAG=1");
+			expect(result.stdout).not.toContain("must-not-leak");
+			expect(result.stdout).not.toContain("TSUKAIMA_HOST_SECRET");
+		} finally {
+			delete process.env.TSUKAIMA_HOST_SECRET;
+		}
+	});
+
+	test("refuses the live repository and paths outside the worktree root", async () => {
+		const sandbox = await createHostSandbox({ repositoryPath, worktreeRoot: root })();
+		await expect(
+			sandbox.exec({
+				args: ["-c", "true"],
+				command: "sh",
+				cwd: repositoryPath,
+				maxOutputBytes: 1024,
+				timeoutMs: 10_000,
+				writable: false,
+			}),
+		).rejects.toThrow(SandboxUnavailableError);
+		await expect(
+			sandbox.exec({
+				args: ["-c", "true"],
+				command: "sh",
+				cwd: tmpdir(),
+				maxOutputBytes: 1024,
+				timeoutMs: 10_000,
+				writable: false,
+			}),
+		).rejects.toThrow(SandboxUnavailableError);
+	});
+
+	test.skipIf(!existsSync("/bin/tar"))(
+		"redirects analysis reads into a private copy of the task tree",
+		async () => {
+			const analysisTree = join(root, "analysis-tree");
+			await mkdir(join(analysisTree, ".git"), { recursive: true });
+			await writeFile(join(analysisTree, "README.md"), "# analysis marker\n");
+			await writeFile(join(analysisTree, ".git", "config"), "SECRET=analysis-leak\n");
+			const sandbox = await createHostSandbox({ repositoryPath, worktreeRoot: root })();
+			const result = await sandbox.exec({
+				args: ["-c", "128", "--", `${ANALYSIS_MOUNT}/README.md`],
+				analysisTree,
+				command: "head",
+				cwd: worktreePath,
+				maxOutputBytes: 4096,
+				timeoutMs: 10_000,
+				writable: false,
+			});
+			expect(result.exitCode).toBe(0);
+			expect(result.stdout).toContain("# analysis marker");
 		},
 	);
 });

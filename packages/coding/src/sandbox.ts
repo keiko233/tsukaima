@@ -68,6 +68,26 @@ export interface BubblewrapSandboxOptions {
 	readonly pathDirs?: readonly string[];
 }
 
+/**
+ * A governed direct executor. It keeps the same allowlist, worktree boundary, scrubbed
+ * environment, timeout, and output caps as the bubblewrap executor, but runs the process on the
+ * host inside the deployment container. It does not create mount namespaces, so it cannot hide
+ * unrelated host files or the network from a command that reads them.
+ *
+ * This exists for deployments where bubblewrap cannot be installed or cannot create user
+ * namespaces (for example Docker's default seccomp profile). It still never runs an unlisted
+ * command, never runs from the live repository root, and never inherits server secrets through
+ * the environment. Operators who need OS-level isolation must use bubblewrap instead.
+ */
+export interface HostSandboxOptions {
+	readonly repositoryPath: string;
+	readonly worktreeRoot?: string;
+	/** Host environment used to locate commands; defaults to the process environment. */
+	readonly env?: Readonly<Record<string, string | undefined>>;
+	/** Directories searched for executed commands, in order; defaults to PATH dirs. */
+	readonly pathDirs?: readonly string[];
+}
+
 /** Commands are resolved from fixed directories, never from a model-supplied path. */
 export const SANDBOX_PATH_DIRS: readonly string[] = Object.freeze([
 	"/usr/local/bin",
@@ -327,6 +347,109 @@ export function createBubblewrapSandbox(options: BubblewrapSandboxOptions): Sand
 			throw error instanceof SandboxUnavailableError ? error : new SandboxUnavailableError(reason);
 		});
 		return cached;
+	};
+}
+
+const HOST_ENV_DEFAULTS: Readonly<Record<string, string>> = Object.freeze({
+	LANG: "C.UTF-8",
+	TMPDIR: tmpdir(),
+	TZ: "UTC",
+});
+
+/**
+ * Direct executor for sandbox-incapable deployments. The provider resolves its path once; a
+ * repository root that does not exist throws like the bubblewrap provider instead of silently
+ * running an ungoverned command.
+ */
+export function createHostSandbox(options: HostSandboxOptions): SandboxProvider {
+	let cached: Promise<SandboxExecutor> | undefined;
+	return () => {
+		cached ??= createHostExecutor(options).catch((error: unknown) => {
+			const reason = error instanceof Error ? error.message : String(error);
+			throw error instanceof SandboxUnavailableError ? error : new SandboxUnavailableError(reason);
+		});
+		return cached;
+	};
+}
+
+async function createHostExecutor(options: HostSandboxOptions): Promise<SandboxExecutor> {
+	const pathDirs = options.pathDirs ?? runtimePathDirs();
+	const repositoryPath = await realpath(options.repositoryPath).catch(() => {
+		throw new SandboxUnavailableError(`repository root does not exist: ${options.repositoryPath}`);
+	});
+	return {
+		id: "host",
+		async exec(input) {
+			if (!isAbsolute(input.cwd)) {
+				throw new SandboxUnavailableError(
+					`sandbox working directory must be absolute: ${input.cwd}`,
+				);
+			}
+			const commandPath = await resolveExecutable(input.command, pathDirs);
+			if (commandPath === undefined) {
+				throw new Error(`command_not_found:${input.command}`);
+			}
+			for (const arg of input.args) {
+				if (arg.includes("\0")) throw new Error("command arguments must not contain null bytes");
+			}
+			const cwd = await assertSandboxPathArg(input.cwd);
+			if (cwd === repositoryPath || isInside(repositoryPath, cwd)) {
+				throw new SandboxUnavailableError(
+					"sandbox working directory must be a worktree, not the repository",
+				);
+			}
+			const worktreeRoot =
+				options.worktreeRoot === undefined
+					? undefined
+					: await realpath(options.worktreeRoot).catch(() => {
+							throw new SandboxUnavailableError(
+								`sandbox worktree root does not exist: ${options.worktreeRoot}`,
+							);
+						});
+			if (worktreeRoot !== undefined && !isInside(worktreeRoot, cwd)) {
+				throw new SandboxUnavailableError("sandbox working directory is outside the worktree root");
+			}
+			let analysisDir: string | undefined;
+			let args = [...input.args];
+			try {
+				if (input.analysisTree !== undefined) {
+					analysisDir = await mkdtemp(join(tmpdir(), "tsukaima-analysis-"));
+					await copyWorkingTree(input.analysisTree, analysisDir);
+				} else if (input.exportAnalysis === true) {
+					analysisDir = await mkdtemp(join(tmpdir(), "tsukaima-analysis-"));
+					await exportCommittedTree(repositoryPath, analysisDir);
+				} else if (input.analysisPath !== undefined) {
+					analysisDir = await realpath(input.analysisPath).catch(() => {
+						throw new SandboxUnavailableError(
+							`analysis path does not exist: ${input.analysisPath}`,
+						);
+					});
+				}
+				if (analysisDir !== undefined) {
+					const source = analysisDir;
+					args = args.map((arg) =>
+						arg === ANALYSIS_MOUNT || arg.startsWith(`${ANALYSIS_MOUNT}/`)
+							? `${source}${arg.slice(ANALYSIS_MOUNT.length)}`
+							: arg,
+					);
+				}
+				return await runManagedProcess({
+					args,
+					command: commandPath,
+					cwd,
+					env: { ...HOST_ENV_DEFAULTS, ...input.env, PATH: pathDirs.join(delimiter) },
+					maxOutputBytes: input.maxOutputBytes,
+					timeoutMs: input.timeoutMs,
+				});
+			} finally {
+				if (
+					analysisDir !== undefined &&
+					(input.analysisTree !== undefined || input.exportAnalysis === true)
+				) {
+					await rm(analysisDir, { force: true, recursive: true });
+				}
+			}
+		},
 	};
 }
 

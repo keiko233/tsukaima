@@ -218,17 +218,19 @@ repository `.git` at `/app`, and worktrees live under `/data/worktrees`; each ne
 `node_modules` symlink back to the image install. It has `git`, `bun`, and `ripgrep`, but no Docker
 socket and no host checkout, so a proposal cannot replace the running image.
 
-Governed commands run inside `bubblewrap`: all namespaces are unshared (loopback-only network), the
-environment is cleared, the repository root is an empty directory, and only the worktree plus an
-explicit `node_modules`/git-metadata mount set is readable or writable.
+`TSUKAIMA_CODING_SANDBOX` chooses the execution boundary for model-influenced commands:
 
-The runtime image does not install `bubblewrap`, and the Compose service deliberately keeps Docker's
-default seccomp profile. The default profile blocks the namespace syscalls bubblewrap needs, so the
-sandbox probe fails and governed test/build/search commands fail closed in this deployment. That is
-intentional: `security_opt: seccomp=unconfined` would relax syscall filtering for the whole
-container (plugins, channel adapters, model SDKs) to enable one feature. If governed coding
-commands are required, run them on a sandbox-capable runtime or review a narrowly scoped seccomp
-profile; do not unconfine this container. Editing, diffing, and proposal review are unaffected.
+- `host` (default) runs allowlisted commands (`bun`, `git`, `rg`) directly in the container with a
+  scrubbed environment, a worktree-only working directory, timeouts, and bounded output. This is
+  the governed executor used by the Compose deployment: Docker's default seccomp profile blocks
+  the namespace syscalls bubblewrap needs, and `security_opt: seccomp=unconfined` would relax
+  syscall filtering for the whole container (plugins, channel adapters, model SDKs). `host` keeps
+  the command, path, and environment governance but cannot hide unrelated files or the network
+  from a malicious repository script.
+- `bubblewrap` adds OS-level isolation: all namespaces are unshared (loopback-only network), the
+  environment is cleared, the repository root is an empty directory, and only the worktree plus an
+  explicit `node_modules`/git-metadata mount set is readable or writable. Use it on a
+  namespace-capable runtime when the additional isolation matters.
 
 Promote a proposal by applying it to the deployment branch, bumping `VERSION`, committing, and
 running `bun run ops:deploy`. The host build remains the only path that replaces the running image.

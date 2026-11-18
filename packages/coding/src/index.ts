@@ -35,6 +35,7 @@ export {
 	ANALYSIS_MOUNT,
 	buildBubblewrapArgv,
 	createBubblewrapSandbox,
+	createHostSandbox,
 	probeBubblewrapSandbox,
 	resolveExecutable,
 	SANDBOX_PATH_DIRS,
@@ -43,6 +44,7 @@ export {
 export type {
 	BubblewrapArgvInput,
 	BubblewrapSandboxOptions,
+	HostSandboxOptions,
 	SandboxMount,
 	SandboxExecInput,
 	SandboxExecutor,

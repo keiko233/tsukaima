@@ -14,6 +14,8 @@ import {
 	type ModelPolicy,
 } from "@tsukaima/core";
 import {
+	createBubblewrapSandbox,
+	createHostSandbox,
 	DomainCodingStore,
 	reconcileRestartDeployment,
 	SELF_ITERATION_HOST_BINDING,
@@ -616,6 +618,11 @@ export class TsukaimaLifecycle {
 			createMentionIdentityStore(() => this.conversationRouter),
 		);
 		if (!pluginBindings.has(SELF_ITERATION_HOST_BINDING)) {
+			const worktreeRoot = join(config.dataDir, "worktrees");
+			const sandboxOptions = {
+				repositoryPath: config.repositoryRoot,
+				worktreeRoot,
+			};
 			pluginBindings.set(SELF_ITERATION_HOST_BINDING, {
 				// The runtime never applies a diff and cannot derive the artifact a deployer built.
 				// Reporting the running identity still lets an operator's verified reload settle;
@@ -625,8 +632,12 @@ export class TsukaimaLifecycle {
 				reload: new RestartReloadController(this.restartCoordinator),
 				repositoryRoot: config.repositoryRoot,
 				runningIdentity: () => this.runningDeploymentIdentity(),
+				sandbox:
+					config.codingSandbox === "bubblewrap"
+						? createBubblewrapSandbox(sandboxOptions)
+						: createHostSandbox(sandboxOptions),
 				store: this.codingStore,
-				worktreeRoot: join(config.dataDir, "worktrees"),
+				worktreeRoot,
 			});
 		}
 		this.pluginHost = new PluginHost({
