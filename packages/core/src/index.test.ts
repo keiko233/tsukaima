@@ -257,6 +257,56 @@ describe("PiDurableConversationHost", () => {
 		}
 	});
 
+	// A second input while the first run is still streaming replaces the live watcher. The old
+	// watcher must stop, or both keep polling and publish alternating start times for one run.
+	test("replaces the live watcher when another input arrives during a run", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const starts: number[] = [];
+			const host = new PiDurableConversationHost({
+				model: createSlowStreamingModel(["one ", "two ", "three ", "four ", "five"], {
+					delayMs: 200,
+				}),
+				onLiveRun: (state) => {
+					if (state.partialText !== undefined) starts.push(state.startedAtMs);
+				},
+				storage,
+			});
+			const conversationId = await host.createConversation();
+			const now = Date.now();
+			await host.append({
+				conversationId,
+				envelope: {
+					...envelope("live-3", "first"),
+					source: { messageId: "live-3", receivedAtMs: now, timestampMs: now },
+				},
+				forceSubmit: true,
+				submittedAtMs: now,
+			});
+			await Bun.sleep(250);
+			await host.append({
+				conversationId,
+				envelope: {
+					...envelope("live-4", "second"),
+					source: { messageId: "live-4", receivedAtMs: now + 1, timestampMs: now + 1 },
+				},
+				forceSubmit: true,
+				submittedAtMs: now + 1,
+			});
+			await Bun.sleep(1_600);
+
+			expect(starts.length).toBeGreaterThan(2);
+			for (let index = 1; index < starts.length; index += 1) {
+				expect(starts[index]!).toBeGreaterThanOrEqual(starts[index - 1]!);
+			}
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
 	test("resolves the terminal answer of an admitted submission by request id", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-answers-"));
 		try {

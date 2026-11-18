@@ -819,12 +819,18 @@ export async function listRunSteps(
 	const durationSeconds = durable.durationSeconds ?? cached.durationSeconds;
 	const withDuration = durationSeconds === undefined ? {} : { durationSeconds };
 	const cachedThinking = cached.steps.filter((step) => step.kind === "thinking");
-	const durableHasThinking = durable.steps.some((step) => step.kind === "thinking");
+	const durableThinking = durable.steps.filter((step) => step.kind === "thinking");
 	if (durable.steps.length === 0) {
 		return { ...withDuration, steps: [...cached.steps] };
 	}
-	if (!durableHasThinking && cachedThinking.length > 0) {
-		return { ...withDuration, steps: [...cachedThinking, ...durable.steps] };
+	// Durable is authoritative for tools and text, but some providers keep reasoning only in
+	// the live generation. If the cached chain has reasoning the transcript lost, keep all of
+	// it instead of dropping the earlier rounds because the final entry happens to carry one.
+	if (cachedThinking.length > durableThinking.length) {
+		return {
+			...withDuration,
+			steps: [...cachedThinking, ...durable.steps.filter((step) => step.kind !== "thinking")],
+		};
 	}
 	return durable;
 }

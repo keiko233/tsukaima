@@ -37,6 +37,7 @@ export class LiveRunTimeline {
 	#callCount = 0;
 	#modelIndex: number | undefined;
 	#currentAttempt: number | undefined;
+	#turns = 0;
 	#thinking = "";
 	#text = "";
 	#drafts = new Map<string, DraftTool>();
@@ -51,10 +52,34 @@ export class LiveRunTimeline {
 		return [...this.#steps];
 	}
 
+	/** Reasoning of the current round that has not been committed to `steps` yet. */
+	get currentThinking(): string {
+		return this.#thinking;
+	}
+
+	/** Answer text of the current round that has not been committed to `steps` yet. */
+	get currentText(): string {
+		return this.#text;
+	}
+
 	/** Fold one observation of the run and return the completed steps, in run order. */
 	observe(snapshot: LiveRunSnapshot, now = Date.now()): RunStep[] {
 		const runningTools = snapshot.tools.length > 0;
 		const hasGeneration = snapshot.attempt !== undefined;
+		const newRound = snapshot.turns > this.#turns;
+
+		// A fast tool round can start and finish between two polls. `turns` is the durable
+		// signal that a round completed even when the poll never saw its tools, so commit the
+		// previous round here instead of letting the next partial overwrite its thinking.
+		if (newRound) {
+			this.#finishModel("done", undefined, now);
+			// While the tool round is visible, its call rows stay in `tools` until they finish.
+			// Only a missed round has to fall back to the streamed draft arguments.
+			this.#commitRoundContent({ keepDrafts: runningTools || this.#tools.length > 0 });
+			if (this.#tools.length > 0) this.#commitTools();
+			this.#modelIndex = undefined;
+			this.#currentAttempt = undefined;
+		}
 
 		// A tool round ended: either the next model request started, or the run is over.
 		if (this.#tools.length > 0 && !runningTools && (hasGeneration || snapshot.settled)) {
@@ -62,19 +87,25 @@ export class LiveRunTimeline {
 		}
 
 		if (runningTools) {
+			// At a round boundary the snapshot's partial still describes the round just
+			// committed; merging it again would duplicate that reasoning.
+			if (!newRound) this.#mergeCurrent(snapshot);
 			if (this.#modelIndex !== undefined) {
 				this.#finishModel("done", undefined, now);
 				this.#commitRoundContent({ keepDrafts: true });
 				this.#modelIndex = undefined;
 				this.#currentAttempt = undefined;
+			} else if (this.#thinking.length > 0 || this.#text.length > 0) {
+				// Joining a run after its tool round started still keeps the reasoning that
+				// produced those calls, even though no model row was opened for this round.
+				this.#commitRoundContent({ keepDrafts: true });
 			}
 			this.#tools = snapshot.tools;
 			this.#rememberDrafts(snapshot.draftTools);
 		} else {
 			this.#observeGeneration(snapshot, now);
 			if (snapshot.attempt !== undefined || !snapshot.settled) {
-				this.#thinking = snapshot.partialThinking ?? "";
-				this.#text = snapshot.partialText ?? "";
+				this.#mergeCurrent(snapshot);
 			}
 			this.#rememberDrafts(snapshot.draftTools);
 			if (snapshot.retry !== undefined && this.#modelIndex !== undefined) {
@@ -97,7 +128,20 @@ export class LiveRunTimeline {
 			if (this.#tools.length > 0) this.#commitTools();
 		}
 
+		this.#turns = snapshot.turns;
 		return this.steps;
+	}
+
+	/**
+	 * Keep the longer partial for the current round. Partials are cumulative, but a poll can
+	 * land while the provider has committed none of the current block yet; replacing the stored
+	 * value with that empty snapshot would erase reasoning the round already emitted.
+	 */
+	#mergeCurrent(snapshot: LiveRunSnapshot): void {
+		const thinking = snapshot.partialThinking ?? "";
+		if (thinking.length >= this.#thinking.length) this.#thinking = thinking;
+		const text = snapshot.partialText ?? "";
+		if (text.length >= this.#text.length) this.#text = text;
 	}
 
 	#observeGeneration(snapshot: LiveRunSnapshot, now: number): void {

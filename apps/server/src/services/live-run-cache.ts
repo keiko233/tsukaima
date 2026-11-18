@@ -27,12 +27,17 @@ export interface LiveRunFinal {
 	readonly steps: readonly RunStep[];
 }
 
-function phaseOf(state: LiveRunSnapshot, settled: boolean): LiveRunPhase {
+function phaseOf(
+	state: LiveRunSnapshot,
+	settled: boolean,
+	thinking: string,
+	text: string,
+): LiveRunPhase {
 	if (settled) return "settled";
 	if (state.tools.some((tool) => tool.status !== "done")) return "tools";
 	if (state.retry !== undefined) return "retry";
-	if (state.partialText !== undefined && state.partialText.length > 0) return "writing";
-	if (state.partialThinking !== undefined && state.partialThinking.length > 0) return "thinking";
+	if (text.length > 0) return "writing";
+	if (thinking.length > 0) return "thinking";
 	if (state.draftTools.length > 0) return "tool_calls";
 	return "queued";
 }
@@ -151,6 +156,26 @@ function hasProcess(state: LiveRunState): boolean {
 	);
 }
 
+/**
+ * Whether an observation begins a new run rather than continuing the one already cached.
+ *
+ * The watcher start time belongs to the observer, not the run: a steered input or a follow-up
+ * window replaces the watcher while the run continues with the same `runId`. Use that identity
+ * when either side reports it, and fall back to the start time only while neither does.
+ */
+function startsNewRun(
+	previous: LiveRunState | undefined,
+	previousRunId: string | undefined,
+	snapshot: LiveRunSnapshot,
+): boolean {
+	if (previous === undefined) return true;
+	if (previous.settled && !snapshot.settled) return true;
+	if (snapshot.runId !== undefined) {
+		return previousRunId !== undefined && previousRunId !== snapshot.runId;
+	}
+	return previousRunId === undefined && previous.startedAtMs !== snapshot.startedAtMs;
+}
+
 const MAX_STEP_TEXT_CHARS = 2_000;
 
 function clip(value: string, max = MAX_STEP_TEXT_CHARS): string {
@@ -222,6 +247,8 @@ export class LiveRunCache {
 	 */
 	readonly #process = new Map<string, LiveRunState>();
 	readonly #timelines = new Map<string, LiveRunTimeline>();
+	/** Stable run identity per session, so a replaced watcher does not restart the timeline. */
+	readonly #runIds = new Map<string, string>();
 	readonly #queues = new Map<string, Promise<void>>();
 
 	constructor(cache: KeyvCache) {
@@ -328,27 +355,36 @@ export class LiveRunCache {
 		snapshot: LiveRunSnapshot,
 	): Promise<LiveRunUpdate | undefined> {
 		const previous = await this.snapshot(sessionId);
-		const newRun =
-			previous === undefined ||
-			previous.startedAtMs !== snapshot.startedAtMs ||
-			(previous.settled && !snapshot.settled);
+		const previousRunId = this.#runIds.get(sessionId);
+		const newRun = startsNewRun(previous, previousRunId, snapshot);
 		let timeline = this.#timelines.get(sessionId);
 		if (timeline === undefined || newRun) {
 			timeline = new LiveRunTimeline(snapshot.startedAtMs);
 			this.#timelines.set(sessionId, timeline);
 		}
+		if (newRun) {
+			this.#runIds.delete(sessionId);
+			if (snapshot.runId !== undefined) this.#runIds.set(sessionId, snapshot.runId);
+		} else if (snapshot.runId !== undefined) {
+			this.#runIds.set(sessionId, snapshot.runId);
+		}
 		const steps = timeline.observe(snapshot);
+		const partialThinking = timeline.currentThinking;
+		const partialText = timeline.currentText;
+		// Keep the first observation's wall clock for a run that a newer watcher continues.
+		const startedAtMs =
+			newRun || previous === undefined ? snapshot.startedAtMs : previous.startedAtMs;
 		const base = {
 			attempt: snapshot.attempt,
 			draftTools: plainDrafts(snapshot),
 			failure: snapshot.failure,
 			model: snapshot.model,
-			partialText: snapshot.partialText,
-			partialThinking: snapshot.partialThinking,
-			phase: phaseOf(snapshot, snapshot.settled),
+			partialText: partialText.length === 0 ? undefined : partialText,
+			partialThinking: partialThinking.length === 0 ? undefined : partialThinking,
+			phase: phaseOf(snapshot, snapshot.settled, partialThinking, partialText),
 			retry: snapshot.retry,
 			settled: snapshot.settled,
-			startedAtMs: snapshot.startedAtMs,
+			startedAtMs,
 			sessionId,
 			steps,
 			tools: plainTools(snapshot),

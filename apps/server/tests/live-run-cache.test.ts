@@ -174,6 +174,92 @@ describe("LiveRunCache", () => {
 		expect((await live.snapshots()).map((state) => state.sessionId)).toEqual(["session-1"]);
 	});
 
+	test("keeps earlier reasoning when a fast tool round was never observed", async () => {
+		const { live } = setup();
+		const model = { modelId: "model-1", providerId: "provider-1" };
+		await live.record(
+			"session-1",
+			snapshot({
+				attempt: 1,
+				generationStartedAtMs: 1_100,
+				model,
+				partialThinking: "first thought",
+				runId: "run-1",
+			}),
+		);
+		// The tool round and the next request both completed between two polls: no `tools` or
+		// `draftTools` observation exists, but `turns` proves the round happened.
+		await live.record(
+			"session-1",
+			snapshot({
+				attempt: 1,
+				generationStartedAtMs: 2_000,
+				model,
+				partialThinking: "second thought",
+				runId: "run-1",
+				turns: 1,
+			}),
+		);
+
+		const state = await live.snapshot("session-1");
+		expect(state?.steps).toMatchObject([
+			{ attempt: 1, call: 1, kind: "model", status: "done" },
+			{ kind: "thinking", text: "first thought" },
+			{ attempt: 1, call: 2, kind: "model", status: "running" },
+		]);
+		expect(state?.partialThinking).toBe("second thought");
+	});
+
+	test("continues one timeline when a newer watcher observes the same run", async () => {
+		const { live } = setup();
+		const model = { modelId: "model-1", providerId: "provider-1" };
+		await live.record(
+			"session-1",
+			snapshot({
+				attempt: 1,
+				generationStartedAtMs: 1_100,
+				model,
+				partialThinking: "first thought",
+				runId: "run-1",
+			}),
+		);
+		await live.record(
+			"session-1",
+			snapshot({
+				attempt: 1,
+				generationStartedAtMs: 1_100,
+				model,
+				partialText: "an answer",
+				runId: "run-1",
+				startedAtMs: 2_000,
+			}),
+		);
+
+		const state = await live.snapshot("session-1");
+		expect(state?.startedAtMs).toBe(1_000);
+		expect(state?.steps).toMatchObject([{ attempt: 1, call: 1, kind: "model" }]);
+		// The second watcher's snapshot omitted the thinking it had not committed; the
+		// accumulated round text must survive for the live view.
+		expect(state?.partialThinking).toBe("first thought");
+		expect(state?.partialText).toBe("an answer");
+	});
+
+	test("starts a fresh timeline when the stable run identity changes", async () => {
+		const { live } = setup();
+		await live.record("session-1", snapshot({ partialThinking: "previous run", runId: "run-1" }));
+		await live.record(
+			"session-1",
+			snapshot({
+				partialThinking: "new run",
+				runId: "run-2",
+				startedAtMs: 2_000,
+			}),
+		);
+		const state = await live.snapshot("session-1");
+		expect(state?.steps).toMatchObject([{ kind: "model" }]);
+		expect(state?.partialThinking).toBe("new run");
+	});
+
 	test("keeps the final process chain keyed by durable answer id", async () => {
 		const { live } = setup();
 		await live.record(

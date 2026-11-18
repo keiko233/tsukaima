@@ -72,6 +72,38 @@ function isToolCall(block: unknown): block is ToolCallBlock {
 }
 
 /**
+ * Whether the entry is a model round that handed over to tools instead of answering. A steered
+ * input is placed after such a round, so its activity window continues the same answer rather
+ * than starting a new turn.
+ */
+function isToolRound(entry: StepEntry | undefined): boolean {
+	if (entry?.kind !== "pi.assistant") return false;
+	const message = firstMessage(entry.model);
+	if (message === undefined) return false;
+	if (typeof message.stopReason === "string") return message.stopReason === "toolUse";
+	if (!Array.isArray(message.content)) return false;
+	return (message.content as readonly unknown[]).some(isToolCall);
+}
+
+/**
+ * Whether the activity window at `index` continues the run already in progress. A steer is
+ * appended mid-run, directly after the tool-call round it steers; the run's first window sits
+ * after a completed answer (or at the start of the transcript).
+ */
+function continuesRun(entries: readonly StepEntry[], index: number): boolean {
+	for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+		const entry = entries[cursor];
+		if (entry === undefined) return false;
+		if (entry.kind === "pi.tool-result") continue;
+		if (entry.kind === "tsukaima.activityWindow") return false;
+		if (entry.kind === "pi.assistant") return isToolRound(entry);
+		// Context/system entries can land between a tool round and a steer; they neither start
+		// nor end the turn, so keep walking back to the model round that owns the window.
+	}
+	return false;
+}
+
+/**
  * Turn the durable entries of one assistant turn into displayable steps.
  *
  * The live `pi.live` document is cleared when a run settles, so it cannot back a transcript that
@@ -99,12 +131,13 @@ export function collectRunSteps(
 	if (endIndex === -1) return { steps: [] };
 	// Walk back to the entry that started this turn. A turn is one activity window: the model
 	// may answer several times within it (one entry per tool round), so the boundary is the
-	// window, not the previous assistant entry.
+	// window, not the previous assistant entry. A steer can append another window in the middle
+	// of the same run, so keep walking past windows that follow a tool round.
 	let startIndex = 0;
 	for (let index = endIndex; index >= 0; index -= 1) {
 		if (entries[index]?.kind === "tsukaima.activityWindow") {
 			startIndex = index;
-			break;
+			if (!continuesRun(entries, index)) break;
 		}
 	}
 

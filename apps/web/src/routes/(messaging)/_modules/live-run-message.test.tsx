@@ -136,6 +136,28 @@ describe("LiveRunMessage", () => {
 		expect(html.indexOf("first I search")).toBeLessThan(html.indexOf("now checking the result"));
 	});
 
+	test("renders every round's reasoning, not only the current round", () => {
+		const html = render(
+			run({
+				partialThinking: "third thought",
+				steps: [
+					{ kind: "thinking", text: "first thought" },
+					{
+						attempt: 1,
+						call: 2,
+						kind: "model",
+						startedAtMs: 1_000,
+						status: "running",
+					},
+					{ kind: "thinking", text: "second thought" },
+				],
+			}),
+		);
+		expect(html).toContain("first thought");
+		expect(html).toContain("second thought");
+		expect(html).toContain("third thought");
+	});
+
 	test("renders a tool call the model is still emitting", () => {
 		const html = render(
 			run({

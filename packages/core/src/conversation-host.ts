@@ -416,6 +416,12 @@ export type LiveRunSnapshot = {
 	readonly model: { readonly modelId: string; readonly providerId: string } | undefined;
 	/** Durable backoff while the run waits to retry a failed model attempt. */
 	readonly retry: { readonly at: number; readonly error: string } | undefined;
+	/**
+	 * Stable identity of the in-flight run. A run can be observed by a newer watcher while it
+	 * continues (for example when an input steers the current run), so consumers must not use
+	 * the watcher start time as a run identity. Absent for snapshots that carry no run.
+	 */
+	readonly runId?: string;
 	/** Streamed answer text so far. */
 	readonly partialText: string | undefined;
 	/** Streamed reasoning so far, when the provider reports it. */
@@ -684,6 +690,7 @@ function toLiveRunSnapshot(
 		toolName: slot.name,
 	}));
 	const retry = live.generation?.retry;
+	const runId = live.run?.first === undefined ? undefined : String(live.run.first);
 	return {
 		attempt: live.generation?.attempt,
 		conversationId,
@@ -694,6 +701,7 @@ function toLiveRunSnapshot(
 		partialText: partialTextOf(message),
 		partialThinking: partialThinkingOf(message),
 		retry: retry === undefined ? undefined : { at: retry.at, error: retry.error },
+		...(runId === undefined ? {} : { runId }),
 		settled: false,
 		startedAtMs,
 		tools,
@@ -1093,13 +1101,20 @@ export class PiDurableConversationHost {
 	private watchLiveRun(harness: DurableHarness, conversationId: string): void {
 		const onLiveRun = this.options.onLiveRun;
 		if (onLiveRun === undefined) return;
+		// A steered input or a follow-up window starts another observer for the same
+		// conversation. Let the newest observer own the watch; otherwise the old timer keeps
+		// publishing snapshots with an older start time and the cache resets its timeline.
+		this.stopLiveRun(conversationId);
 		// Poll `pi.live` instead of attaching a document watch. `watchDoc` mounts an observer on
 		// the Session line, whose document load can still be queued when the host closes, and
 		// then reaches storage after the caller closed the handle. A snapshot poll is a plain
 		// request/response read: it never leaves a background mount behind, and stopping it is
 		// just clearing a timer.
 		const numericId = Number(conversationId) as ConversationId;
-		const startedAtMs = Date.now();
+		// A later window can replace this watcher while the run it submitted into is still
+		// active. Start from the earliest active submission so the elapsed time and the live
+		// timeline do not jump back to the newer watcher's wall clock.
+		const startedAtMs = this.activeRunSince(conversationId) ?? Date.now();
 		// Tool-call arguments are committed while the model streams, then `live.tools` takes over
 		// and only carries the task's output. Remember the last arguments by call id so the
 		// running row still shows what the model asked for.
@@ -1111,14 +1126,16 @@ export class PiDurableConversationHost {
 		let sawRun = false;
 		let stopped = false;
 		const timer = setInterval(() => {
-			if (this.closed || stopped) {
-				this.stopLiveRun(conversationId);
+			if (this.closed || stopped || this.liveRuns.get(conversationId)?.timer !== timer) {
+				this.stopLiveRun(conversationId, timer);
 				return;
 			}
 			const polling = (async () => {
 				try {
 					const live = await harness.snapshot(LiveDoc, numericId, BACKGROUND_CONTEXT);
-					if (this.closed) return;
+					if (this.closed || stopped || this.liveRuns.get(conversationId)?.timer !== timer) {
+						return;
+					}
 					const running = live?.run !== undefined;
 					if (!running && !sawRun && Date.now() - startedAtMs < LIVE_RUN_START_GRACE_MS) {
 						return;
@@ -1138,7 +1155,7 @@ export class PiDurableConversationHost {
 								failure: runFailureText(live.runFailure),
 							});
 						}
-						this.stopLiveRun(conversationId);
+						this.stopLiveRun(conversationId, timer);
 						if (live?.runFailure === undefined) {
 							onLiveRun(emptyLiveRun(conversationId, startedAtMs));
 						}
@@ -1156,7 +1173,7 @@ export class PiDurableConversationHost {
 					// Live presentation is optional; ingestion and answers must not depend on it.
 					this.logger.trace("Live run poll failed", { conversationId, error });
 					stopped = true;
-					this.stopLiveRun(conversationId);
+					this.stopLiveRun(conversationId, timer);
 				}
 			})();
 			this.pendingPolls.add(polling);
@@ -1167,9 +1184,17 @@ export class PiDurableConversationHost {
 	}
 
 	/** Stop polling one conversation's live run. Safe to call when nothing is polling. */
-	private stopLiveRun(conversationId: string): void {
+	private stopLiveRun(conversationId: string, timer?: ReturnType<typeof setInterval>): void {
 		const poll = this.liveRuns.get(conversationId);
-		if (poll === undefined) return;
+		if (poll === undefined) {
+			if (timer !== undefined) clearInterval(timer);
+			return;
+		}
+		if (timer !== undefined && poll.timer !== timer) {
+			// A newer watcher owns the conversation. Stop only the caller's timer.
+			clearInterval(timer);
+			return;
+		}
 		this.liveRuns.delete(conversationId);
 		clearInterval(poll.timer);
 	}

@@ -1,10 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { collectRunSteps, runStepsFromEntries, type StepEntry } from "./run-steps";
 
-const assistant = (id: string, content: readonly unknown[]): StepEntry => ({
+const assistant = (
+	id: string,
+	content: readonly unknown[],
+	options: { stopReason?: string } = {},
+): StepEntry => ({
 	id,
 	kind: "pi.assistant",
-	model: [{ content, role: "assistant" }],
+	model: [
+		{
+			content,
+			role: "assistant",
+			...(options.stopReason === undefined ? {} : { stopReason: options.stopReason }),
+		},
+	],
 });
 
 const toolResult = (
@@ -125,6 +135,34 @@ describe("run steps from durable entries", () => {
 		expect(runStepsFromEntries(entries, "4")).toEqual([
 			{ kind: "thinking", text: "round one" },
 			{ kind: "thinking", text: "round two" },
+			{ kind: "text", text: "answer" },
+		]);
+	});
+
+	// A steer is appended as another activity window in the middle of the same run. The final
+	// answer must still show the rounds before the steer, not just the last window.
+	test("collects steps from before a steer within the same run", () => {
+		const entries: StepEntry[] = [
+			userTurn("1"),
+			assistant("2", [thinking("first thought"), call("c1", "web_search")], {
+				stopReason: "toolUse",
+			}),
+			toolResult("3", "c1", "search hit"),
+			userTurn("4"),
+			assistant("5", [thinking("second thought"), text("answer")], {
+				stopReason: "stop",
+			}),
+		];
+		expect(runStepsFromEntries(entries, "5")).toEqual([
+			{ kind: "thinking", text: "first thought" },
+			{
+				argumentsText: "{}",
+				isError: false,
+				kind: "tool",
+				output: "search hit",
+				toolName: "web_search",
+			},
+			{ kind: "thinking", text: "second thought" },
 			{ kind: "text", text: "answer" },
 		]);
 	});
