@@ -151,6 +151,9 @@ export class MediaService {
 		const id = randomUUID();
 		const createdAt = new Date().toISOString();
 		const mimeType = input.mimeType ?? DEFAULT_MIME[input.kind];
+		// Write the blob before publishing the row. Readers find media by row and then open its
+		// content-addressed path, so a row must never be visible while its bytes are still queued.
+		await this.#ensureBlob(sha256, bytes);
 		await database.insert(media).values({
 			createdAt,
 			...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
@@ -166,7 +169,6 @@ export class MediaService {
 			...(input.sourceUrl === undefined ? {} : { sourceUrl: input.sourceUrl }),
 			...(input.width === undefined ? {} : { width: input.width }),
 		});
-		await this.#ensureBlob(sha256, bytes);
 		const stored = await this.findById(id);
 		if (stored === undefined) throw new Error("Failed to persist media row");
 		this.#logger?.debug("media stored", {

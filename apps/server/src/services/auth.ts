@@ -335,8 +335,11 @@ export class AuthService {
 	}
 
 	async #ensureAuth(): Promise<BetterAuthInstance> {
-		if (this.#auth !== undefined) return this.#auth;
+		// `#auth` becomes visible before the single-administrator bootstrap finishes. While an
+		// initialization is in flight, callers must await it too; otherwise lifecycle readiness
+		// can turn green and a first sign-in can race the user row.
 		if (this.#initialization !== undefined) return this.#initialization;
+		if (this.#auth !== undefined) return this.#auth;
 		const initialization = this.#initialize().catch((error: unknown) => {
 			this.#initialization = undefined;
 			throw error;

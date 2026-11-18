@@ -185,10 +185,11 @@ describe("plugin host", () => {
 				"plugin-b",
 				async (conversationId) => conversationId === "plugin-session",
 			);
+			const futureAt = new Date(Date.now() + 3_600_000).toISOString();
 			const schedule = await owner.create({
 				actionKind: "notify",
 				prompt: "Synthetic plugin notice",
-				recurrence: { at: "2026-11-18T00:00:00.000Z", kind: "once" },
+				recurrence: { at: futureAt, kind: "once" },
 				targetSessionId: "plugin-session",
 				timeZone: "UTC",
 				title: "Plugin schedule",
@@ -200,7 +201,7 @@ describe("plugin host", () => {
 				owner.create({
 					actionKind: "notify",
 					prompt: "Synthetic plugin notice",
-					recurrence: { at: "2026-11-18T00:00:00.000Z", kind: "once" },
+					recurrence: { at: futureAt, kind: "once" },
 					targetSessionId: "not-readable",
 					timeZone: "UTC",
 					title: "Rejected schedule",
