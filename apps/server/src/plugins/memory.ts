@@ -101,6 +101,17 @@ async function resolveMemoryTool(
 		});
 		return "Conversation not found.";
 	}
+	// Workspace coding sessions are an isolated execution surface: chat memories (especially
+	// shared global/user rows) must not leak into a repository-mutating agent's tool context.
+	if (session.kind === "workspace") {
+		log.warn("memory tool denied", {
+			conversationId: durableConversationId,
+			reason: "workspace_surface",
+			sessionId: session.id,
+			tool: toolName,
+		});
+		return "Memory tools are not available in workspace sessions.";
+	}
 	const policy = await service.policyForConversation(session.id);
 	if (policy === undefined) {
 		log.warn("memory tool denied", {

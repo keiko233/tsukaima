@@ -393,6 +393,10 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	): Promise<SQL | undefined> {
 		const scopes: SQL[] = [eq(memories.scope, "global")];
 		if (session !== undefined) {
+			// Workspace coding sessions are isolated execution surfaces: no shared chat memories
+			// may leak into a repository-mutating agent, and coding work must not write into the
+			// chat memory graph either.
+			if (session.chatKind === "workspace") return undefined;
 			scopes.push(
 				combine([
 					eq(memories.scope, "conversation"),

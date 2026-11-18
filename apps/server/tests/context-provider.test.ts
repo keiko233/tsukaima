@@ -271,6 +271,37 @@ describe("DrizzleContextProvider", () => {
 		}
 	});
 
+	test("does not inject shared chat memories into workspace sessions", async () => {
+		const { database } = await openFixture();
+		try {
+			await seedContextFixture(database);
+			const now = new Date().toISOString();
+			await database.insert(conversations).values({
+				durableConversationId: "45",
+				id: "session-workspace",
+				kind: "workspace",
+				title: "Workspace",
+				updatedAt: now,
+			});
+			await database.insert(messages).values({
+				contentText: "I love matcha drinks",
+				conversationId: "session-workspace",
+				direction: "inbound",
+				id: "message-workspace-1",
+				kind: "onebot-v11",
+				occurredAt: now,
+			});
+			const text = await provider(database).renderMemories("45");
+			// The workspace's own recent transcript remains visible, but chat-scoped recall does not.
+			expect(text).toContain("matcha drinks");
+			expect(text ?? "").not.toContain("MARKER-GLOBAL");
+			expect(text ?? "").not.toContain("MARKER-MEMBER");
+			expect(text ?? "").not.toContain("MARKER-CONVERSATION");
+		} finally {
+			database.$client.close();
+		}
+	});
+
 	test("ranks keyword matches from recent messages above importance alone", async () => {
 		const { database } = await openFixture();
 		try {

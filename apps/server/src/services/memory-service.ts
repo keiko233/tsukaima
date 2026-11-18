@@ -994,6 +994,8 @@ export class MemoryService {
 		const database = this.#db();
 		const session = await this.#session(input.conversationId);
 		if (session === undefined) throw new Error("Conversation not found");
+		// Coding sessions are isolated from the chat memory graph in both directions.
+		if (session.kind === "workspace") return { created: false, memory: undefined };
 		const all = await database
 			.select()
 			.from(messages)
@@ -1138,6 +1140,7 @@ export class MemoryService {
 		try {
 			const session = await this.#resolveSessionInput(input);
 			if (session === undefined || this.#policyService === undefined) return;
+			if (session.kind === "workspace") return;
 			const policy = await this.#policyService.effectivePolicy(session.id);
 			if (policy.memoryEnabled === false) return;
 			const sourceKey = input.entryId ?? input.activityId ?? "latest";
@@ -1165,6 +1168,7 @@ export class MemoryService {
 		try {
 			const session = await this.#resolveSessionInput(input);
 			if (session === undefined || this.#policyService === undefined) return;
+			if (session.kind === "workspace") return;
 			const policy = await this.#policyService.effectivePolicy(session.id);
 			if (policy.memoryEnabled === false || policy.memoryCompactionEnabled === false) return;
 			await this.#createTask({
@@ -1257,6 +1261,7 @@ export class MemoryService {
 		if (session === undefined || this.#policyService === undefined) {
 			return { candidates: 0, written: 0 };
 		}
+		if (session.kind === "workspace") return { candidates: 0, written: 0 };
 		const policy = await this.#policyService.effectivePolicy(session.id);
 		if (policy.memoryEnabled === false) return { candidates: 0, written: 0 };
 		const rows = await database

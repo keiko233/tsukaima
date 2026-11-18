@@ -62,7 +62,7 @@ async function seedSession(
 	database: TsukaimaDatabase,
 	input: {
 		readonly id: string;
-		readonly kind?: "private" | "group";
+		readonly kind?: "private" | "group" | "workspace";
 		readonly messageCount?: number;
 	},
 ): Promise<void> {
@@ -185,6 +185,20 @@ describe("memory lifecycle", () => {
 });
 
 describe("background extraction", () => {
+	test("keeps workspace transcripts out of the chat memory graph", async () => {
+		const { database, memory } = await setup();
+		await seedSession(database, { id: "session-work", kind: "workspace", messageCount: 3 });
+		expect(await memory.extractForConversation("session-work")).toEqual({
+			candidates: 0,
+			written: 0,
+		});
+		expect(await memory.compactSession({ conversationId: "session-work" })).toEqual({
+			created: false,
+			memory: undefined,
+		});
+		expect(await database.select().from(memories)).toHaveLength(0);
+	});
+
 	test("runs through tasks.create with the deterministic fallback extractor", async () => {
 		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-memory-task-"));
 		directories.push(directory);
