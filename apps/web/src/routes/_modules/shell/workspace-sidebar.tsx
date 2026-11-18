@@ -28,19 +28,6 @@ function statusClass(status: WorkspaceSummary["taskStatus"]): string {
 	}
 }
 
-function modeLabel(mode: WorkspaceSummary["mode"]): string {
-	switch (mode) {
-		case "analysis":
-			return m.workspace_mode_analysis();
-		case "proposal":
-			return m.workspace_mode_proposal();
-		case "patch":
-			return m.workspace_mode_patch();
-		case "maintenance":
-			return m.workspace_mode_maintenance();
-	}
-}
-
 export function WorkspaceSidebar({ onNavigate }: { onNavigate: () => void }) {
 	const toast = useToast();
 	const queryClient = useQueryClient();
@@ -169,12 +156,12 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate: () => void }) {
 									</span>
 								</span>
 								<span className="flex min-w-0 items-center gap-1.5 pl-5 text-[10px] leading-3.5 text-muted-foreground/75">
-									<span className="shrink-0">
-										{workspace.tags.length > 0
-											? workspace.tags.slice(0, 2).join(" · ")
-											: modeLabel(workspace.mode)}
-									</span>
-									<span aria-hidden="true">·</span>
+									{workspace.tags.length > 0 ? (
+										<>
+											<span className="shrink-0">{workspace.tags.slice(0, 2).join(" · ")}</span>
+											<span aria-hidden="true">·</span>
+										</>
+									) : null}
 									<span className="min-w-0 flex-1 truncate">
 										{previewText(
 											workspace.latestMessage?.contentText,

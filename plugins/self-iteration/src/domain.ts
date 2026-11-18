@@ -7,6 +7,7 @@ import type {
 	IterationTaskConstraints,
 	IterationTaskStatus,
 	ReloadController,
+	SandboxProvider,
 } from "@tsukaima/coding";
 
 export const SELF_ITERATION_PLUGIN_ID = "self-iteration";
@@ -123,6 +124,8 @@ export interface SelfIterationHostBinding {
 		| Promise<{ readonly email: string; readonly name: string }>;
 	readonly reload: ReloadController;
 	readonly repositoryRoot: string;
+	/** Command execution boundary chosen by the host; defaults to bubblewrap. */
+	readonly sandbox?: SandboxProvider;
 	/** Exact artifact identity this process is running, if the host can report it. */
 	readonly runningIdentity?: () =>
 		| Promise<DeploymentIdentity | undefined>
@@ -130,17 +133,6 @@ export interface SelfIterationHostBinding {
 		| undefined;
 	readonly store: DomainCodingStore;
 	readonly worktreeRoot: string;
-}
-
-export const MODE_RANK: Readonly<Record<TaskMode, number>> = {
-	analysis: 0,
-	patch: 1,
-	proposal: 2,
-	maintenance: 3,
-};
-
-export function modeAllows(taskMode: TaskMode, required: TaskMode): boolean {
-	return MODE_RANK[taskMode] >= MODE_RANK[required];
 }
 
 export const RESTART_REQUIRED_KEY = "requiresRestart";

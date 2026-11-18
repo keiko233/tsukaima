@@ -4,7 +4,6 @@ import type {
 	MessageDeliveryMode,
 	ThinkingLevel,
 	WorkspaceDetail,
-	WorkspaceMode,
 	WorkspaceProposalSummary,
 	WorkspaceSummary,
 	WorkspaceTaskStatus,
@@ -48,7 +47,6 @@ export interface CreateWorkspaceInput {
 	readonly baseRef?: string;
 	readonly goal?: string;
 	readonly model?: WorkspaceModelSelection;
-	readonly mode?: WorkspaceMode;
 	readonly parentSessionId?: string;
 	readonly requestedBy?: string;
 	readonly tags?: readonly string[];
@@ -121,11 +119,13 @@ function workspacePrompt(input: {
 		input.goal,
 		"",
 		"Operating rules:",
+		"- This workspace has full coding authority; there is no analysis-only or proposal-only mode.",
 		`- Pass taskId="${input.taskId}" to every self-iteration tool.`,
 		"- Inspect with self-iteration.analyze before editing.",
 		"- Create a bounded worktree with self-iteration.worktree before any write.",
 		"- Merge upstream refs only with self-iteration.upstream; never run git merge in a shell.",
 		"- Use only self-iteration.edit and self-iteration.test for repository changes and validation.",
+		"- Commands run through the governed executor: only policy-allowlisted binaries execute, inside the task worktree.",
 		"- Use todo_write to keep a multi-step plan visible, and update it as steps complete.",
 		"- Use session_context only for conversations the user explicitly referenced.",
 		"- Use db_schema before db_query, and treat all query results as diagnostic data.",
@@ -189,10 +189,11 @@ export class WorkspaceService {
 		const database = this.#db();
 		const host = this.#hostRequired();
 		const goal = input.goal?.trim() || undefined;
-		const mode = input.mode ?? "patch";
+		// Workspaces are the full-authority coding surface: there is no graded mode to select.
+		const mode = "maintenance";
 		const baseRef = input.baseRef?.trim() || "HEAD";
 		const requestedBy = input.requestedBy ?? "webui-admin";
-		const tags = normalizeTags([mode, ...(input.tags ?? [])]);
+		const tags = normalizeTags(input.tags);
 		const model = input.model === undefined ? undefined : host.resolveModelRef(input.model);
 		if (input.model !== undefined && model === undefined) {
 			throw new Error(
@@ -327,7 +328,6 @@ export class WorkspaceService {
 		const taskResult = await this.#invokePluginRpc("self-iteration.tasks.create", {
 			baseRef: workspace.baseRef,
 			goal,
-			mode: workspace.mode,
 			sourceConversationId: workspace.parentSessionId ?? "workspace:webui",
 		});
 		const taskId =
@@ -342,7 +342,7 @@ export class WorkspaceService {
 		}
 		const title = titleFromGoal(goal);
 		const now = new Date().toISOString();
-		const tags = normalizeTags([workspace.mode, ...parseTags(workspace.tagsJson)]);
+		const tags = normalizeTags(parseTags(workspace.tagsJson));
 		const updated = await database.transaction((tx) => {
 			const result = tx
 				.update(workspaceSessions)
@@ -435,7 +435,6 @@ export class WorkspaceService {
 			readonly baseRef?: string;
 			readonly goal?: string;
 			readonly model?: WorkspaceModelSelection;
-			readonly mode?: WorkspaceMode;
 			readonly tags?: readonly string[];
 			readonly thinking?: ThinkingLevel;
 		},
@@ -448,7 +447,6 @@ export class WorkspaceService {
 			...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
 			...(input.goal === undefined ? {} : { goal: input.goal }),
 			...(input.model === undefined ? {} : { model: input.model }),
-			...(input.mode === undefined ? {} : { mode: input.mode }),
 			parentSessionId: sourceSessionId,
 			requestedBy: "chat-agent",
 			...(input.tags === undefined ? {} : { tags: input.tags }),
@@ -580,7 +578,6 @@ export class WorkspaceService {
 			return {
 				baseRef: workspace.baseRef,
 				goal: workspace.goal,
-				mode: workspace.mode,
 				parentSessionId: workspace.parentSessionId,
 				proposals: [],
 				repositoryRoot: workspace.repositoryRoot,
@@ -611,7 +608,6 @@ export class WorkspaceService {
 			)[0];
 		if (resolvedWorkspace === undefined) {
 			return {
-				mode: resolvedTask.mode,
 				status: resolvedTask.status,
 				taskId: resolvedTask.id,
 				timeline: JSON.parse(resolvedTask.timelineJson) as unknown,
@@ -620,7 +616,6 @@ export class WorkspaceService {
 		return {
 			baseRef: resolvedWorkspace.baseRef,
 			goal: resolvedWorkspace.goal,
-			mode: resolvedWorkspace.mode,
 			parentSessionId: resolvedWorkspace.parentSessionId,
 			proposals: await this.#proposals(resolvedTaskId),
 			repositoryRoot: resolvedWorkspace.repositoryRoot,
@@ -752,7 +747,6 @@ export class WorkspaceService {
 										: "human",
 							triggerClassification: latest.triggerClassification,
 						},
-			mode: input.workspace.mode,
 			parentSessionId: input.workspace.parentSessionId,
 			repositoryRoot: input.workspace.repositoryRoot,
 			tags: parseTags(input.workspace.tagsJson),

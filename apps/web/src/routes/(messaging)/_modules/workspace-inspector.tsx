@@ -192,11 +192,6 @@ export function WorkspaceInspectorTabs({
 						<div className="mt-1 line-clamp-2 text-[10.5px] text-muted-foreground">
 							{workspace?.workspace.goal ?? m.workspace_goal_missing()}
 						</div>
-						<div className="mt-1.5 flex items-center gap-1.5">
-							<span className="shrink-0 text-[10px] text-muted-foreground">
-								{m.workspace_mode()}: {workspace?.workspace.mode ?? "patch"}
-							</span>
-						</div>
 						<div className="mt-1.5">
 							<TagsEditor sessionId={session.id} tags={workspace?.workspace.tags ?? []} />
 						</div>

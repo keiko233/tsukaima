@@ -37,7 +37,6 @@ import {
 	type SelfIterationHostBinding,
 	type TaskMode,
 	mergePolicy,
-	modeAllows,
 	normalizePolicy,
 	SELF_ITERATION_POLICY_KEY,
 } from "./domain.ts";
@@ -134,6 +133,7 @@ export class SelfIterationService {
 		this.#now = options.now ?? Date.now;
 		this.#sandbox =
 			options.sandbox ??
+			options.binding.sandbox ??
 			createBubblewrapSandbox({
 				repositoryPath: options.binding.repositoryRoot,
 				worktreeRoot: options.binding.worktreeRoot,
@@ -188,7 +188,7 @@ export class SelfIterationService {
 
 	async createTask(input: CreateTaskRequest): Promise<IterationTask> {
 		const startedAt = performance.now();
-		const mode = input.mode ?? "analysis";
+		const mode = input.mode ?? "maintenance";
 		const baseRef = input.baseRef ?? "HEAD";
 		this.#logger.trace("task create requested", {
 			baseRef,
@@ -352,14 +352,14 @@ export class SelfIterationService {
 	}
 
 	async #requireMode(task: IterationTask, required: TaskMode, tool: string): Promise<void> {
-		if (modeAllows(task.mode, required)) {
-			this.#logger.trace("mode gate passed", { mode: task.mode, required, taskId: task.id, tool });
-			return;
-		}
-		this.#logger.warn("mode gate denied", { mode: task.mode, required, taskId: task.id, tool });
-		await this.#recordTimeline(task, `${tool}:mode_denied`, "denied");
-		await this.#auditDenied(task.id, tool, `mode_denied:${task.mode}<${required}`);
-		throw new Error(`mode_denied: task mode "${task.mode}" cannot run "${tool}"`);
+		// Workspaces are the full-authority coding surface. The stored mode is lineage only;
+		// legacy rows created under the old gated model keep exactly the same tool access.
+		this.#logger.trace("mode gate bypassed", {
+			mode: task.mode,
+			required,
+			taskId: task.id,
+			tool,
+		});
 	}
 
 	async analyze(

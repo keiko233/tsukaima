@@ -36,16 +36,11 @@ function taskInput(
 	invocation: ToolInvocationContext,
 ): {
 	goal?: string;
-	mode?: "analysis" | "maintenance" | "patch" | "proposal";
 	sourceConversationId?: string;
 	taskId?: string;
 } {
-	const mode = input.mode;
 	return {
 		...(stringValue(input, "goal") === undefined ? {} : { goal: stringValue(input, "goal")! }),
-		...(mode === "analysis" || mode === "maintenance" || mode === "patch" || mode === "proposal"
-			? { mode }
-			: {}),
 		...(invocation.conversationId === undefined
 			? {}
 			: { sourceConversationId: invocation.conversationId }),
@@ -122,16 +117,7 @@ async function invoke(
 
 function summarize(input: Record<string, unknown>): Record<string, unknown> {
 	const summary: Record<string, unknown> = {};
-	for (const key of [
-		"taskId",
-		"goal",
-		"mode",
-		"path",
-		"pattern",
-		"command",
-		"action",
-		"proposalId",
-	]) {
+	for (const key of ["taskId", "goal", "path", "pattern", "command", "action", "proposalId"]) {
 		if (typeof input[key] === "string") summary[key] = input[key];
 	}
 	if (Array.isArray(input.args)) summary.args = input.args.slice(0, 16);
@@ -179,10 +165,6 @@ function tool(
 
 const TASK_FIELDS = {
 	goal: { type: "string" },
-	mode: {
-		enum: ["analysis", "patch", "proposal", "maintenance"],
-		type: "string",
-	},
 	taskId: { type: "string" },
 } as const;
 
@@ -449,7 +431,6 @@ export function registerSelfIterationTools(
 				properties: {
 					taskId: { type: "string" },
 					goal: { type: "string" },
-					mode: { enum: ["analysis", "patch", "proposal", "maintenance"], type: "string" },
 				},
 				required: ["taskId"],
 				type: "object",
@@ -469,7 +450,6 @@ export function registerSelfIterationTools(
 						errors: bundle.task.logs.filter((entry) => entry.level === "error"),
 						graph: bundle.graph,
 						logs: bundle.task.logs,
-						mode: bundle.task.mode,
 						proposals: bundle.proposals.map((proposal) => ({
 							changedFiles: proposal.changedFiles,
 							diffChecksum: proposal.diffChecksum,

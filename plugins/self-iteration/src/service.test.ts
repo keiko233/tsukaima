@@ -307,7 +307,7 @@ async function proposalFor(service: SelfIterationService, taskId: string) {
 }
 
 describe("SelfIterationService", () => {
-	test("enforces mode gating, path policy, and records the tool timeline", async () => {
+	test("runs every task with full authority, enforces path policy, and records the tool timeline", async () => {
 		const { audits, service } = await fixture();
 		const analysis = await service.createTask({
 			goal: "Analyze only",
@@ -316,15 +316,15 @@ describe("SelfIterationService", () => {
 		});
 		const read = await service.analyze({ action: "read", path: "README.md", taskId: analysis.id });
 		expect(read.content).toContain("Self iteration fixture");
-		await expect(
-			service.edit({
-				content: "nope",
-				create: true,
-				path: "src/nope.ts",
-				taskId: analysis.id,
-			}),
-		).rejects.toThrow("mode_denied");
-		await expect(service.worktree({ taskId: analysis.id })).rejects.toThrow("mode_denied");
+		// The stored analysis label no longer gates writes: the coding agent is full-authority.
+		await service.worktree({ taskId: analysis.id });
+		const edit = await service.edit({
+			content: "allowed",
+			create: true,
+			path: "src/allowed.ts",
+			taskId: analysis.id,
+		});
+		expect(edit.path).toBe("src/allowed.ts");
 
 		const task = await patchTask(service);
 		await expect(

@@ -676,7 +676,6 @@ export const adminRouter = {
 				...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
 				...(input.goal === undefined ? {} : { goal: input.goal }),
 				...(input.model === undefined ? {} : { model: input.model }),
-				...(input.mode === undefined ? {} : { mode: input.mode }),
 				...(input.parentSessionId === undefined ? {} : { parentSessionId: input.parentSessionId }),
 				...(input.tags === undefined ? {} : { tags: input.tags }),
 				...(input.thinking === undefined ? {} : { thinking: input.thinking }),

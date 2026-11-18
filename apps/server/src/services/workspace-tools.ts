@@ -1,5 +1,5 @@
 import type { DurableExtension, DurableToolRegistration } from "@tsukaima/core";
-import type { MessageDeliveryMode, ThinkingLevel, WorkspaceMode } from "@tsukaima/contracts";
+import type { MessageDeliveryMode, ThinkingLevel } from "@tsukaima/contracts";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import type { PromptHookService } from "./prompt-hooks.ts";
@@ -70,15 +70,6 @@ function stringValue(
 	if (typeof value === "string" && value.trim().length > 0) return value.trim();
 	if (required) throw new Error(`${key} is required`);
 	return undefined;
-}
-
-function workspaceMode(value: unknown): WorkspaceMode | undefined {
-	return value === "analysis" ||
-		value === "patch" ||
-		value === "proposal" ||
-		value === "maintenance"
-		? value
-		: undefined;
 }
 
 function thinkingLevel(value: unknown): ThinkingLevel | undefined {
@@ -192,7 +183,6 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 					description: "Provider id; must be the active provider. Defaults to it.",
 					type: "string",
 				},
-				mode: { enum: ["analysis", "patch", "proposal"], type: "string" },
 			},
 			required: ["goal"],
 			type: "object",
@@ -217,7 +207,6 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 										: { providerId: stringValue(input, "modelProvider")! }),
 								},
 							}),
-					...(workspaceMode(input.mode) === undefined ? {} : { mode: workspaceMode(input.mode)! }),
 					...(thinkingLevel(input.effort) === undefined
 						? {}
 						: { thinking: thinkingLevel(input.effort)! }),

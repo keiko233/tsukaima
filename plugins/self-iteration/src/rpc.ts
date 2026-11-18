@@ -122,16 +122,8 @@ export function registerSelfIterationRpc(
 		"tasks.create",
 		procedure(log, "tasks.create", async (body) => {
 			const goal = requiredString(body, "goal");
-			const mode =
-				body.mode === "analysis" ||
-				body.mode === "patch" ||
-				body.mode === "proposal" ||
-				body.mode === "maintenance"
-					? body.mode
-					: undefined;
 			return service.createTask({
 				goal,
-				...(mode === undefined ? {} : { mode }),
 				...(stringValue(body, "baseRef") === undefined
 					? {}
 					: { baseRef: stringValue(body, "baseRef")! }),

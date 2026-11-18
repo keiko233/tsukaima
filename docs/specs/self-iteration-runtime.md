@@ -26,18 +26,14 @@ agent/runtime.
 
 No plugin may directly mutate the host repository without policy/approval.
 
-## Conversation and task modes
+## Workspace surfaces
 
-Add conversation/task kinds:
+A workspace is a full-authority coding surface: read/search/test, worktree creation, edit,
+upstream merge, build, diff, and proposal all use the same task. `maintenance` operations
+(deploy, backup, reload, rollback) remain admin RPC / approval-card actions and are never model
+tools. Legacy task rows may still carry a mode label for lineage, but it does not gate anything.
 
-| Kind | Capabilities |
-| --- | --- |
-| `analysis` | read/search/test only |
-| `patch` | worktree create/edit/test/build/diff |
-| `proposal` | prepare deployment proposal, require approval |
-| `maintenance` | admin-only backup/reload/rollback |
-
-A coding task has immutable goal, repository root policy, mode, status, approval state, logs,
+A coding task has an immutable goal, repository root policy, status, approval state, logs,
 artifacts, tests, diff, and proposal references.
 
 ## Schema and library extensions
@@ -57,20 +53,21 @@ All tools register under `self-iteration.*` and use Phase 3 `ToolPolicy` (`visib
 `requiredConversationCapabilities`) so they never appear in normal QQ conversations unless policy
 explicitly grants them:
 
-| Tool | Mode | Behavior |
-| --- | --- | --- |
-| `self-iteration.analyze` | analysis+ | scoped read/search/test |
-| `self-iteration.worktree` | patch | create bounded worktree |
-| `self-iteration.upstream` | patch | stage an upstream merge in the worktree, or abort it |
-| `self-iteration.edit` | patch | validated patch/edit |
-| `self-iteration.test` | patch | run declared commands with timeout |
-| `self-iteration.build` | proposal | build/build artifact |
-| `self-iteration.diff` | patch/proposal | structured diff |
-| `self-iteration.propose` | proposal | create proposal requiring approval |
-| `self-iteration.status` | all | task status/logs/artifacts |
+| Tool | Behavior |
+| --- | --- |
+| `self-iteration.analyze` | scoped read/search/test |
+| `self-iteration.worktree` | create bounded worktree |
+| `self-iteration.upstream` | stage an upstream merge in the worktree, or abort it |
+| `self-iteration.edit` | validated patch/edit |
+| `self-iteration.test` | run declared commands with timeout |
+| `self-iteration.build` | build/build artifact |
+| `self-iteration.diff` | structured diff |
+| `self-iteration.propose` | create proposal requiring deployment approval |
+| `self-iteration.status` | task status/logs/artifacts |
 
-Patches use structured input/diffs; commands allowlists; secrets/path policy; all writes occur
-only in approved worktrees. `maintenance` operations (deploy, backup, reload, rollback) are
+Every workspace task has the full toolset; the stored mode is lineage only and never gates a
+tool. Patches use structured input/diffs; commands allowlists; secrets/path policy; all writes
+occur only in approved worktrees. `maintenance` operations (deploy, backup, reload, rollback) are
 **admin RPC / `approval-card` actions only** and are never exposed as model tools.
 
 ## Approval and deployment

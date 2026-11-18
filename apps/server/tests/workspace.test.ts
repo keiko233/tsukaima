@@ -130,7 +130,7 @@ describe("workspace sessions", () => {
 			.limit(1);
 		expect(after?.taskId).not.toBeNull();
 		expect(after?.goal).toContain("draft workspace status badge");
-		expect(after?.tagsJson).toContain("patch");
+		expect(after?.tagsJson).toBe("[]");
 		const taskId = after?.taskId;
 		if (taskId === null || taskId === undefined) throw new Error("Task was not created");
 		const [task] = await database
@@ -139,6 +139,7 @@ describe("workspace sessions", () => {
 			.where(eq(codingTasks.id, taskId))
 			.limit(1);
 		expect(task?.goal).toContain("draft workspace status badge");
+		expect(task?.mode).toBe("maintenance");
 
 		await lifecycle.sessionMessaging.sendAgentMessage({
 			sessionId: draft.sessionId,
@@ -227,7 +228,6 @@ describe("workspace sessions", () => {
 		});
 		const spawned = await lifecycle.workspace.spawnFromSession(parent.sessionId, {
 			goal: "Add a workspace status card.",
-			mode: "patch",
 		});
 		const detail = await lifecycle.workspace.get(spawned.sessionId);
 		expect(detail?.workspace.parentSessionId).toBe(parent.sessionId);

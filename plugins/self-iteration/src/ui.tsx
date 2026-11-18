@@ -47,7 +47,6 @@ interface TaskRow {
 	readonly goal: string;
 	readonly id: string;
 	readonly logs: readonly TaskLogEntry[];
-	readonly mode: string;
 	readonly status: string;
 	readonly timeline: readonly TaskTimelineEntry[];
 	readonly worktreePath?: string;
@@ -346,7 +345,7 @@ function TaskDetail({
 					<strong>{t.t("task_goal")}:</strong> {detail.task.goal}
 				</span>
 				<span>
-					<strong>{t.t("task_mode")}:</strong> {detail.task.mode} · {detail.task.status}
+					<strong>{t.t("task_status")}:</strong> {detail.task.status}
 				</span>
 				<span>
 					<strong>{t.t("worktree")}:</strong> {detail.worktree.path ?? t.t("none")}
@@ -503,7 +502,6 @@ function SelfIterationPanel() {
 	const [detail, setDetail] = useState<TaskDetailResponse | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [goal, setGoal] = useState("");
-	const [mode, setMode] = useState("patch");
 	const [taskId, setTaskId] = useState("");
 	const [autoApply, setAutoApply] = useState(false);
 	const [allowedCommands, setAllowedCommands] = useState("");
@@ -577,7 +575,7 @@ function SelfIterationPanel() {
 
 	const createTask = async () => {
 		try {
-			const task = await panel.rpc.call<TaskRow>(rpcName("tasks.create"), { goal, mode });
+			const task = await panel.rpc.call<TaskRow>(rpcName("tasks.create"), { goal });
 			toast.success(t.t("task_created"));
 			setGoal("");
 			await refresh();
@@ -676,12 +674,9 @@ function SelfIterationPanel() {
 			</PluginSection>
 
 			<PluginSection title={t.t("tasks")}>
-				<div className="grid gap-2 sm:grid-cols-[1fr_8rem_auto]">
+				<div className="grid gap-2 sm:grid-cols-[1fr_auto]">
 					<Field label={t.t("task_goal")}>
 						<Input placeholder={t.t("goal_placeholder")} value={goal} onChange={setGoal} />
-					</Field>
-					<Field label={t.t("task_mode")}>
-						<Input value={mode} onChange={setMode} />
 					</Field>
 					<div className="flex items-end">
 						<Button
@@ -715,9 +710,7 @@ function SelfIterationPanel() {
 								onClick={() => void loadTask(task.id)}
 							>
 								<span>{task.goal}</span>
-								<span>
-									{task.mode} · {task.status}
-								</span>
+								<span>{task.status}</span>
 								<span>{task.id}</span>
 							</button>
 						))}

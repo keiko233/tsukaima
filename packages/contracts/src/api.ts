@@ -114,9 +114,6 @@ export const chatSummarySchema = z.object({
 });
 export type ChatSummary = z.infer<typeof chatSummarySchema>;
 
-export const workspaceModeSchema = z.enum(["analysis", "patch", "proposal", "maintenance"]);
-export type WorkspaceMode = z.infer<typeof workspaceModeSchema>;
-
 export const workspaceTaskStatusSchema = z.enum([
 	"awaiting_approval",
 	"approved",
@@ -164,7 +161,6 @@ export const workspaceSummarySchema = z.object({
 	goal: z.string().nullable(),
 	id: z.string(),
 	latestMessage: messageSummarySchema.nullable(),
-	mode: workspaceModeSchema,
 	parentSessionId: z.string().nullable(),
 	repositoryRoot: z.string(),
 	tags: z.array(z.string()),
@@ -1050,7 +1046,6 @@ export const workspaceCreateInputSchema = z.object({
 	goal: z.string().trim().min(1).max(8_000).optional(),
 	/** Explicit model for this workspace; unset inherits the workspace default. */
 	model: modelSelectionSchema.optional(),
-	mode: workspaceModeSchema.optional(),
 	parentSessionId: z.string().min(1).optional(),
 	tags: z.array(z.string().trim().min(1).max(32)).max(8).optional(),
 	thinking: thinkingLevelSchema.optional(),

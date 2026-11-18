@@ -324,9 +324,6 @@ export function ChatPage({
 									{workspaceDetail.workspace.taskStatus ?? m.workspace_status_draft()}
 								</span>
 							</span>
-							<span>
-								{m.workspace_mode()}: {workspaceDetail.workspace.mode}
-							</span>
 							<span className="min-w-0 truncate">
 								{m.workspace_repo()}:{" "}
 								<span className="font-mono text-foreground">

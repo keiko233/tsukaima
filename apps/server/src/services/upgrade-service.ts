@@ -540,7 +540,6 @@ export class UpgradeService {
 			const workspace = await this.#workspace.create({
 				baseRef: check.currentCommit,
 				goal,
-				mode: "proposal",
 				requestedBy,
 			});
 			const taskId =

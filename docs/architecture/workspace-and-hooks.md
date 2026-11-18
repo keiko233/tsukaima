@@ -24,15 +24,15 @@ A workspace is a normal chat object and durable conversation with `kind = "works
 | `parent_session_id` | Chat session that spawned it, when applicable |
 | `repository_root` | The running process repository, normally `process.cwd()` |
 | `base_ref` | Git revision supplied to the task |
-| `mode` | `analysis`, `patch`, `proposal`, or `maintenance` |
 | `goal` | Task brief, null for a draft and set from the first user message |
-| `tags` | Structured labels; the task mode is always included |
+| `tags` | Structured user labels |
 
 Creating a workspace is a two-phase operation. The New action immediately creates an empty draft
 with a durable conversation, `coding` capability, and no model turn. The first user message
-starts the coding task, derives the title from that message, records the mode and user tags, and
+starts the coding task, derives the title from that message, records the user tags, and
 injects the workspace handoff prompt into the same turn. Later messages reuse the task. It never
-edits the live repository; writes remain inside the governed worktree.
+edits the live repository; writes remain inside the governed worktree. A workspace always has the
+full coding toolset: there is no analysis-only, patch-only, or proposal-only mode.
 
 ## Tool surfaces
 
@@ -48,7 +48,7 @@ visibility is synchronized per conversation before a turn:
 
 Workspace-control tools:
 
-- `workspace_spawn({ goal, mode?, baseRef? })`
+- `workspace_spawn({ goal, baseRef? })`
 - `workspace_status({ sessionId?, taskId? })`
 - `workspace_send({ sessionId, text, mode })`
 - `session_lookup({ query, limit? })`

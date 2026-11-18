@@ -15,7 +15,6 @@
 	"tasks": "编码任务",
 	"tasks_empty": "暂无编码任务。",
 	"task_goal": "目标",
-	"task_mode": "模式",
 	"task_status": "状态",
 	"task_id_placeholder": "任务 id",
 	"goal_placeholder": "希望 Tsukaima 修改什么？",
