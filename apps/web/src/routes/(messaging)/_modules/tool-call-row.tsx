@@ -30,8 +30,8 @@ function formatArguments(text: string): { code: string; language: AgentCodeLangu
  * the full arguments and output. Long payloads stay readable on demand instead of being cut
  * off with no way to see them.
  *
- * While collapsed the output still shows as a plain wrapped row, so a settled transcript reads
- * the same at a glance as before; expanding moves it into the card next to the arguments.
+ * Collapsed rows stay compact. Full arguments and output are only visible after expanding the
+ * card, so large structured tool results cannot take over the transcript.
  */
 export function ToolCallRow({ argumentsText, badge, isError, output, toolName }: ToolCallRowProps) {
 	const [open, setOpen] = useState(false);
@@ -110,16 +110,6 @@ export function ToolCallRow({ argumentsText, badge, isError, output, toolName }:
 						) : null}
 					</div>
 				</AgentDisclosure>
-			) : null}
-			{!open && result.length > 0 ? (
-				<p
-					className={cn(
-						"max-w-full whitespace-pre-wrap break-words text-left text-[11px] leading-5",
-						isError ? "text-destructive" : "text-muted-foreground/80",
-					)}
-				>
-					{result}
-				</p>
 			) : null}
 		</div>
 	);

@@ -397,7 +397,7 @@ describe("admin conversation policy and persona RPC", () => {
 				version: bumped.version,
 			})) as { selfAliases: string[]; version: number };
 			expect(editedPersona).toMatchObject({ selfAliases: bumped.selfAliases, version: 3 });
-			expect(await request("admin/prompts/agentAccess")).toBe(false);
+			expect(await request("admin/prompts/agentAccess")).toBe(true);
 			await request("admin/prompts/update", {
 				expectedOverride: null,
 				key: "chat-system",

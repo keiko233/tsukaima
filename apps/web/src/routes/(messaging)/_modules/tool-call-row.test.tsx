@@ -35,9 +35,10 @@ describe("ToolCallRow", () => {
 		expect(html).toContain("plain words");
 	});
 
-	test("shows the output as a preview row while collapsed", () => {
+	test("does not duplicate the full output outside the collapsed card", () => {
 		const html = render({ output: "hit", toolName: "web_search" });
-		expect(html).toContain("hit");
+		expect(html.match(/>hit</g)).toHaveLength(1);
+		expect(html).toContain('aria-hidden="true"');
 	});
 
 	test("is not expandable when there is nothing to show", () => {

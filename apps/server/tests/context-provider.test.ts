@@ -499,6 +499,7 @@ describe("context injection end to end", () => {
 				host: () => undefined,
 				logger,
 			});
+			expect(prompts.agentAccess()).toBe(true);
 			const update = createPromptTools(prompts, policy).tools?.find(
 				({ name }) => name === "prompt_update",
 			);
@@ -509,6 +510,7 @@ describe("context injection end to end", () => {
 					{ conversationId } as Parameters<DurableToolRegistration["execute"]>[1],
 					{} as Parameters<DurableToolRegistration["execute"]>[2],
 				);
+			await prompts.setAgentAccess(false);
 			expect((await run(101, "Disabled write")).isError).toBe(true);
 			await prompts.setAgentAccess(true);
 			expect((await run(102, "IM write")).isError).toBe(true);
@@ -536,6 +538,7 @@ describe("context injection end to end", () => {
 			).toBeUndefined();
 			expect(await prompts.renderSystem("103")).toBe("Updated by workspace");
 			await prompts.setAgentAccess(false);
+			expect(prompts.agentAccess()).toBe(false);
 			expect((await run(101, "Revoked write")).isError).toBe(true);
 		} finally {
 			database.$client.close();

@@ -87,9 +87,8 @@ export class PromptService {
 	}
 
 	agentAccess() {
-		return (
-			this.db().select().from(meta).where(eq(meta.key, AGENT_ACCESS_KEY)).get()?.value === "true"
-		);
+		const value = this.db().select().from(meta).where(eq(meta.key, AGENT_ACCESS_KEY)).get()?.value;
+		return value === undefined ? true : value === "true";
 	}
 
 	async setAgentAccess(enabled: boolean) {
