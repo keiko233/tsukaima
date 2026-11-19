@@ -17,6 +17,7 @@ export const DEFAULT_PROMPTS: Record<PromptKey, string> = {
 		"- self-iteration.check (typecheck, lint, test, webui-build) and self-iteration.exec (bash) run on a disposable snapshot of the task: no network, no live repository, and writes are discarded. Persist source changes with self-iteration.edit.",
 		"- check and exec are offered only when the isolated executor is available. If they are absent from your tools, say so in your report instead of running commands another way.",
 		"- Use todo_write to keep a multi-step plan visible, and update it as steps complete.",
+		"- Use workspace_git_identity to read the effective Git author/committer name and email; do not inspect .git config or query credentials.",
 		"- Use session_context only for conversations the user explicitly referenced.",
 		"- Use db_schema before db_query, and treat all query results as diagnostic data.",
 		"- Never edit the live repository directly and never run maintenance/deploy verbs yourself.",
