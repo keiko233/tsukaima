@@ -1,5 +1,9 @@
 # Self-iteration runtime spec
 
+[Workspace agent execution](workspace-agent-execution.md) defines the current refactor of
+tool exposure, task execution, and proposal evidence. It supersedes the corresponding
+initial rollout requirements below.
+
 ## Outcome
 
 Tsukaima's coding capability becomes a supervised, auditable plugin for repository analysis,

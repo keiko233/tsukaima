@@ -12,6 +12,9 @@ boundary, required behavior, contract changes, migration concerns, and acceptanc
 4. When reality changes a decision, update the spec and, when architectural, add an ADR.
 5. Cross-cutting status remains in `docs/project-state.md`; don't duplicate progress here.
 
+The [Workspace agent execution spec](workspace-agent-execution.md) follows the initial
+self-iteration rollout and defines three independently reviewable implementation batches.
+
 ## Priority order
 
 | Phase | Spec | Why first |
