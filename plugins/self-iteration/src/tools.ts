@@ -31,24 +31,46 @@ function numberValue(input: Record<string, unknown>, key: string): number | unde
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function taskInput(
+/**
+ * Model calls take their task from the durable Workspace binding. A supplied `taskId` is only a
+ * legacy echo that must equal the binding, and `goal` never creates a task for a model call.
+ */
+async function boundTaskInput(
+	service: SelfIterationService,
 	input: Record<string, unknown>,
 	invocation: ToolInvocationContext,
-): {
-	goal?: string;
-	sourceConversationId?: string;
-	taskId?: string;
-} {
+	toolName: string,
+): Promise<{ readonly sourceConversationId?: string; readonly taskId: string }> {
+	const requestedTaskId = stringValue(input, "taskId");
+	const taskId = await service.boundTaskId({
+		...(invocation.conversationId === undefined
+			? {}
+			: { conversationId: invocation.conversationId }),
+		...(requestedTaskId === undefined ? {} : { requestedTaskId }),
+		tool: toolName,
+	});
 	return {
-		...(stringValue(input, "goal") === undefined ? {} : { goal: stringValue(input, "goal")! }),
+		taskId,
 		...(invocation.conversationId === undefined
 			? {}
 			: { sourceConversationId: invocation.conversationId }),
-		...(stringValue(input, "taskId") === undefined
-			? {}
-			: { taskId: stringValue(input, "taskId")! }),
 	};
 }
+
+/**
+ * Tools offered in the first request of an authorized Workspace turn. Everything else (today,
+ * `upstream`) stays deferred and is loaded through `tool_search` when the model needs it.
+ */
+const UPFRONT_TOOLS: ReadonlySet<string> = new Set([
+	"analyze",
+	"worktree",
+	"edit",
+	"test",
+	"build",
+	"diff",
+	"propose",
+	"status",
+]);
 
 const BASE_POLICY = {
 	allowedTaskKinds: ["coding"],
@@ -154,7 +176,7 @@ function tool(
 		parameters,
 		policy: {
 			...BASE_POLICY,
-			lazy: true,
+			lazy: !UPFRONT_TOOLS.has(name),
 			maxPayloadBytes: 64 * 1024,
 			surface: "coding",
 			timeoutMs,
@@ -164,8 +186,10 @@ function tool(
 }
 
 const TASK_FIELDS = {
-	goal: { type: "string" },
-	taskId: { type: "string" },
+	taskId: {
+		description: "Optional. The task is bound to this Workspace automatically; omit it.",
+		type: "string",
+	},
 } as const;
 
 /** Registers the `self-iteration.*` model tools. Maintenance verbs are intentionally absent. */
@@ -194,7 +218,7 @@ export function registerSelfIterationTools(
 			async (input, invocation) =>
 				invoke(context, log, "self-iteration.analyze", input, invocation, async () =>
 					service.analyze({
-						...taskInput(input, invocation),
+						...(await boundTaskInput(service, input, invocation, "self-iteration.analyze")),
 						action: input.action === "search" || input.action === "test" ? input.action : "read",
 						...(numberValue(input, "maxBytes") === undefined
 							? {}
@@ -226,7 +250,7 @@ export function registerSelfIterationTools(
 			async (input, invocation) =>
 				invoke(context, log, "self-iteration.worktree", input, invocation, async () =>
 					service.worktree({
-						...taskInput(input, invocation),
+						...(await boundTaskInput(service, input, invocation, "self-iteration.worktree")),
 						...(stringValue(input, "baseRef") === undefined
 							? {}
 							: { baseRef: stringValue(input, "baseRef")! }),
@@ -266,7 +290,10 @@ export function registerSelfIterationTools(
 			async (input, invocation) =>
 				invoke(context, log, "self-iteration.edit", input, invocation, async () => {
 					const edit = structuredEdit(input);
-					return await service.edit({ ...taskInput(input, invocation), edit });
+					return await service.edit({
+						...(await boundTaskInput(service, input, invocation, "self-iteration.edit")),
+						edit,
+					});
 				}),
 		),
 	);
@@ -288,7 +315,7 @@ export function registerSelfIterationTools(
 			async (input, invocation) =>
 				invoke(context, log, "self-iteration.upstream", input, invocation, async () =>
 					service.upstream({
-						...taskInput(input, invocation),
+						...(await boundTaskInput(service, input, invocation, "self-iteration.upstream")),
 						action: input.action === "abort" ? "abort" : "merge",
 						...(stringValue(input, "ref") === undefined ? {} : { ref: stringValue(input, "ref")! }),
 					}),
@@ -312,7 +339,7 @@ export function registerSelfIterationTools(
 			async (input, invocation) =>
 				invoke(context, log, "self-iteration.test", input, invocation, async () =>
 					service.test({
-						...taskInput(input, invocation),
+						...(await boundTaskInput(service, input, invocation, "self-iteration.test")),
 						...(stringValue(input, "pattern") === undefined
 							? {}
 							: { pattern: stringValue(input, "pattern")! }),
@@ -336,7 +363,7 @@ export function registerSelfIterationTools(
 			async (input, invocation) =>
 				invoke(context, log, "self-iteration.build", input, invocation, async () =>
 					service.build({
-						...taskInput(input, invocation),
+						...(await boundTaskInput(service, input, invocation, "self-iteration.build")),
 					}),
 				),
 		),
@@ -351,7 +378,7 @@ export function registerSelfIterationTools(
 			60_000,
 			async (input, invocation) =>
 				invoke(context, log, "self-iteration.diff", input, invocation, async () =>
-					service.diff(taskInput(input, invocation)),
+					service.diff(await boundTaskInput(service, input, invocation, "self-iteration.diff")),
 				),
 		),
 	);
@@ -383,7 +410,7 @@ export function registerSelfIterationTools(
 			async (input, invocation) =>
 				invoke(context, log, "self-iteration.propose", input, invocation, async () =>
 					service.propose({
-						...taskInput(input, invocation),
+						...(await boundTaskInput(service, input, invocation, "self-iteration.propose")),
 						...(stringValue(input, "title") === undefined
 							? {}
 							: { title: stringValue(input, "title")! }),
@@ -428,19 +455,19 @@ export function registerSelfIterationTools(
 			"status",
 			"Return the full task graph, worktree commit/path, timeline, tests/builds, diff, approvals, deployments, and rollback links.",
 			{
-				properties: {
-					taskId: { type: "string" },
-					goal: { type: "string" },
-				},
-				required: ["taskId"],
+				properties: { ...TASK_FIELDS },
 				type: "object",
 			},
 			["coding.read"],
 			30_000,
 			async (input, invocation) =>
 				invoke(context, log, "self-iteration.status", input, invocation, async () => {
-					const taskId = stringValue(input, "taskId");
-					if (taskId === undefined) throw new Error("taskId_required");
+					const { taskId } = await boundTaskInput(
+						service,
+						input,
+						invocation,
+						"self-iteration.status",
+					);
 					const bundle = await service.status(taskId);
 					return {
 						approvals: bundle.approvals,

@@ -36,7 +36,7 @@ export class WorktreeManager {
 		const safeRef = assertSafeBaseRef(baseRef);
 		await this.validateBaseRef(safeRef);
 		const branchName = `tsukaima-iteration/${taskId}`;
-		const worktreePath = join(this.#config.worktreeRoot, taskId);
+		const worktreePath = this.pathFor(taskId);
 		await mkdir(this.#config.worktreeRoot, { recursive: true });
 		const result = await this.#git([
 			"worktree",
@@ -67,6 +67,11 @@ export class WorktreeManager {
 			await this.#git(["worktree", "prune"]);
 		}
 		this.#active.delete(taskId);
+	}
+
+	/** Deterministic checkout location for a task; the same path is reused on retries. */
+	pathFor(taskId: string): string {
+		return join(this.#config.worktreeRoot, taskId);
 	}
 
 	get(taskId: string): WorktreeInfo | undefined {

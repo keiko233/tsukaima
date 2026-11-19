@@ -640,6 +640,20 @@ export class TsukaimaLifecycle {
 				worktreeRoot,
 			});
 		}
+		// The Workspace owns the task binding, so the coding plugin resolves model-call tasks through
+		// this domain service even when a host supplies its own self-iteration binding.
+		const selfIterationBinding = pluginBindings.get(SELF_ITERATION_HOST_BINDING);
+		if (
+			typeof selfIterationBinding === "object" &&
+			selfIterationBinding !== null &&
+			!("workspaceTaskFor" in selfIterationBinding)
+		) {
+			pluginBindings.set(SELF_ITERATION_HOST_BINDING, {
+				...selfIterationBinding,
+				workspaceTaskFor: (conversationId: string) =>
+					this.workspace.taskIdForConversation(conversationId),
+			});
+		}
 		this.pluginHost = new PluginHost({
 			audit: (entry) => this.writeAudit(entry),
 			bindings: pluginBindings,
