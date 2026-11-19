@@ -14,6 +14,7 @@ import {
 	workspaceSessions,
 	type TsukaimaDatabase,
 } from "@tsukaima/db";
+import { probeBubblewrapSandbox } from "@tsukaima/coding";
 import { providerSafeToolName } from "@tsukaima/sdk";
 import { loadConfig } from "../src/config.ts";
 import { TsukaimaLifecycle } from "../src/lifecycle.ts";
@@ -249,12 +250,14 @@ async function start(
 	root: string,
 	repo: string,
 	model: ReturnType<typeof scriptedWorkspaceModel>["port"],
+	extraEnv: Record<string, string> = {},
 ) {
 	const lifecycle = new TsukaimaLifecycle(
 		loadConfig({
 			TSUKAIMA_DATA_DIR: join(root, "data"),
 			TSUKAIMA_PORT: "7430",
 			TSUKAIMA_REPOSITORY_ROOT: repo,
+			...extraEnv,
 		}),
 		{ env: {}, model },
 	);
@@ -297,7 +300,39 @@ async function durableId(database: TsukaimaDatabase, sessionId: string): Promise
 	return row.durableConversationId;
 }
 
-describe("Workspace agent execution (batch 1)", () => {
+describe("Workspace agent execution (batch 2 isolation)", () => {
+	test("with the bubblewrap backend, the first Workspace request also offers exec and check", async () => {
+		const bwrap = await probeBubblewrapSandbox({ repositoryPath: process.cwd() });
+		if (!bwrap.ok) return;
+		const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-workspace-isolated-"));
+		directories.push(root);
+		const repo = await fixtureRepository(root);
+		const model = scriptedWorkspaceModel();
+		const lifecycle = await start(root, repo, model.port, {
+			TSUKAIMA_CODING_SANDBOX: "bubblewrap",
+		});
+		const workspace = await lifecycle.workspace.create({
+			goal: "Inspect the fixture.",
+			requestedBy: "test-admin",
+		});
+		await lifecycle.sessionMessaging.sendAgentMessage({
+			sessionId: workspace.sessionId,
+			source: "webui",
+			text: "Show the tool surface.",
+		});
+		await waitFor(() =>
+			model.observed.requests.some((request) => toolNames(request).includes(TOOL.analyze))
+				? true
+				: undefined,
+		);
+		const first = model.observed.requests.find((request) =>
+			toolNames(request).includes(TOOL.analyze),
+		);
+		if (first === undefined) throw new Error("no workspace request offered coding tools");
+		expect(toolNames(first)).toContain(providerSafeToolName("self-iteration.exec"));
+		expect(toolNames(first)).toContain(providerSafeToolName("self-iteration.check"));
+	}, 60_000);
+
 	test("a workspace turn offers core tools upfront and completes edit, test, and proposal through the bound task", async () => {
 		const { database, lifecycle, model, repo } = await fixture();
 		const workspace = await lifecycle.workspace.create({

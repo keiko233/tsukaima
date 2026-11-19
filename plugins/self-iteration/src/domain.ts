@@ -143,4 +143,24 @@ export interface SelfIterationHostBinding {
 	readonly worktreeRoot: string;
 }
 
+/**
+ * Named repository checks. The argv is owned by the server: a model names a target and, for
+ * `test` only, a path filter. It never supplies a command, flag, or environment, so no check can
+ * reach an interpreter flag or a different program than the one listed here.
+ */
+export const CHECK_TARGET_NAMES = ["lint", "test", "typecheck", "webui-build"] as const;
+export type CheckTargetName = (typeof CHECK_TARGET_NAMES)[number];
+
+export const CHECK_TARGET_ARGV: Readonly<Record<CheckTargetName, readonly string[]>> =
+	Object.freeze({
+		lint: ["bun", "run", "lint"],
+		test: ["bun", "test"],
+		typecheck: ["bun", "run", "typecheck"],
+		"webui-build": ["bun", "run", "--filter", "@tsukaima/web", "build"],
+	});
+
+export function isCheckTargetName(value: string): value is CheckTargetName {
+	return (CHECK_TARGET_NAMES as readonly string[]).includes(value);
+}
+
 export const RESTART_REQUIRED_KEY = "requiresRestart";

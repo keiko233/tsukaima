@@ -2,6 +2,7 @@ import { access, constants, lstat, mkdtemp, realpath, rm, stat } from "node:fs/p
 import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { runManagedProcess, type CommandResult } from "./runner.ts";
+import { createTaskSnapshot, type TaskSnapshotManifest } from "./snapshot.ts";
 import { assertSafeBaseRef } from "./worktree.ts";
 
 /**
@@ -16,14 +17,49 @@ import { assertSafeBaseRef } from "./worktree.ts";
  * `SandboxUnavailableError`.
  */
 
-export class SandboxUnavailableError extends Error {
-	readonly reason: string;
+/** Why an isolated executor cannot run; each code maps to one operator action. */
+export type SandboxUnavailableCode =
+	| "backend_not_isolated"
+	| "bwrap_missing"
+	| "namespace_denied"
+	| "probe_command_missing"
+	| "repository_missing"
+	| "shell_missing"
+	| "unavailable";
 
-	constructor(reason: string) {
+const DEFAULT_REMEDY =
+	"Check the coding sandbox configuration on the host, then restart the server.";
+
+/** Shown whenever the isolated Workspace tools are missing because of the configured backend. */
+export const ISOLATED_BACKEND_REMEDY =
+	"Set TSUKAIMA_CODING_SANDBOX=bubblewrap, install the bubblewrap package, then restart the server.";
+
+export class SandboxUnavailableError extends Error {
+	readonly code: SandboxUnavailableCode;
+	readonly reason: string;
+	readonly remedy: string;
+
+	constructor(
+		reason: string,
+		options: { readonly code?: SandboxUnavailableCode; readonly remedy?: string } = {},
+	) {
 		super(`sandbox_unavailable: ${reason}`);
 		this.name = "SandboxUnavailableError";
 		this.reason = reason;
+		this.code = options.code ?? "unavailable";
+		this.remedy = options.remedy ?? DEFAULT_REMEDY;
 	}
+}
+
+/** Result of asking a provider whether commands can run isolated, for status and inspector views. */
+export interface SandboxAvailability {
+	readonly available: boolean;
+	/** Backend that answered: `bubblewrap`, `host`, or `none` when no executor could be built. */
+	readonly backend: string;
+	readonly code?: SandboxUnavailableCode;
+	readonly isolated: boolean;
+	readonly reason?: string;
+	readonly remedy?: string;
 }
 
 export interface SandboxExecInput {
@@ -50,11 +86,29 @@ export interface SandboxExecInput {
 	readonly analysisTree?: string;
 	/** Writable working trees are the only host location the sandbox may modify. */
 	readonly writable: boolean;
+	/** Aborting terminates the command and every process it started. */
+	readonly signal?: AbortSignal;
+	/**
+	 * Run inside a disposable copy of the task worktree at `cwd`. The copy is writable, its
+	 * writes are discarded after the command, and the live worktree is never mounted. Only the
+	 * isolated backend supports this; the host backend refuses it.
+	 */
+	readonly snapshot?: boolean;
 }
+
+export type SandboxExecResult = CommandResult & {
+	/** Provenance of the snapshot the command ran against; present only for snapshot runs. */
+	readonly snapshot?: TaskSnapshotManifest;
+};
 
 export interface SandboxExecutor {
 	readonly id: string;
-	exec(input: SandboxExecInput): Promise<CommandResult>;
+	/**
+	 * True only when commands run in OS namespaces that expose the host solely through the
+	 * explicit mounts the executor builds. Workspace exec and check targets require it.
+	 */
+	readonly isolated: boolean;
+	exec(input: SandboxExecInput): Promise<SandboxExecResult>;
 }
 
 export type SandboxProvider = () => Promise<SandboxExecutor>;
@@ -146,6 +200,8 @@ const SANDBOX_ENV_DEFAULTS: Readonly<Record<string, string>> = Object.freeze({
 /** The probe proves `bwrap` can actually create namespaces on this host, not just that it exists. */
 const PROBE_TIMEOUT_MS = 10_000;
 const PROBE_COMMAND = "true";
+/** The Workspace shell runs under bash with a private rc-free startup. */
+const SHELL_COMMAND = "bash";
 
 /** Resolve an executable from a PATH-style list without running a shell. */
 export async function resolveExecutable(
@@ -188,6 +244,8 @@ export interface BubblewrapArgvInput {
 	readonly readOnlyPaths?: readonly SandboxMount[];
 	readonly repositoryPath: string;
 	readonly writable: boolean;
+	/** Host directory bound at `cwd` instead of `cwd` itself (a disposable snapshot copy). */
+	readonly writableSource?: string;
 }
 
 /** One explicit host path bound into the sandbox. */
@@ -246,7 +304,7 @@ export function buildBubblewrapArgv(input: BubblewrapArgvInput): string[] {
 	if (input.analysisPath !== undefined) {
 		argv.push("--ro-bind", input.analysisPath, ANALYSIS_MOUNT);
 	}
-	argv.push(input.writable ? "--bind" : "--ro-bind", input.cwd, input.cwd);
+	argv.push(input.writable ? "--bind" : "--ro-bind", input.writableSource ?? input.cwd, input.cwd);
 	argv.push("--chdir", input.cwd);
 	argv.push("--", input.commandPath, ...input.args);
 	return argv;
@@ -381,11 +439,21 @@ export function createHostSandbox(options: HostSandboxOptions): SandboxProvider 
 async function createHostExecutor(options: HostSandboxOptions): Promise<SandboxExecutor> {
 	const pathDirs = options.pathDirs ?? runtimePathDirs();
 	const repositoryPath = await realpath(options.repositoryPath).catch(() => {
-		throw new SandboxUnavailableError(`repository root does not exist: ${options.repositoryPath}`);
+		throw new SandboxUnavailableError(`repository root does not exist: ${options.repositoryPath}`, {
+			code: "repository_missing",
+			remedy: "Point the repository root at an existing checkout, then restart the server.",
+		});
 	});
 	return {
 		id: "host",
+		isolated: false,
 		async exec(input) {
+			if (input.snapshot === true) {
+				throw new SandboxUnavailableError("snapshot execution requires the bubblewrap backend", {
+					code: "backend_not_isolated",
+					remedy: ISOLATED_BACKEND_REMEDY,
+				});
+			}
 			if (!isAbsolute(input.cwd)) {
 				throw new SandboxUnavailableError(
 					`sandbox working directory must be absolute: ${input.cwd}`,
@@ -445,6 +513,7 @@ async function createHostExecutor(options: HostSandboxOptions): Promise<SandboxE
 					cwd,
 					env: { ...HOST_ENV_DEFAULTS, ...input.env, PATH: pathDirs.join(delimiter) },
 					maxOutputBytes: input.maxOutputBytes,
+					...(input.signal === undefined ? {} : { signal: input.signal }),
 					timeoutMs: input.timeoutMs,
 				});
 			} finally {
@@ -457,6 +526,49 @@ async function createHostExecutor(options: HostSandboxOptions): Promise<SandboxE
 			}
 		},
 	};
+}
+
+/**
+ * Report whether a provider can run commands isolated, with an operator-facing reason. This never
+ * runs a governed command: it only builds the executor, which performs the namespace probe.
+ */
+export async function describeSandboxAvailability(
+	provider: SandboxProvider,
+): Promise<SandboxAvailability> {
+	try {
+		const executor = await provider();
+		if (!executor.isolated) {
+			return {
+				available: false,
+				backend: executor.id,
+				code: "backend_not_isolated",
+				isolated: false,
+				reason: `the ${executor.id} backend runs commands without OS isolation`,
+				remedy: ISOLATED_BACKEND_REMEDY,
+			};
+		}
+		return { available: true, backend: executor.id, isolated: true };
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		if (error instanceof SandboxUnavailableError) {
+			return {
+				available: false,
+				backend: "none",
+				code: error.code,
+				isolated: false,
+				reason: error.reason,
+				remedy: error.remedy,
+			};
+		}
+		return {
+			available: false,
+			backend: "none",
+			code: "unavailable",
+			isolated: false,
+			reason,
+			remedy: DEFAULT_REMEDY,
+		};
+	}
 }
 
 /** One-shot capability probe; tests use it to assert the fail-closed decision. */
@@ -479,10 +591,16 @@ async function createExecutor(options: BubblewrapSandboxOptions): Promise<Sandbo
 	const pathDirs = options.pathDirs ?? runtimePathDirs();
 	const bwrapPath = await resolveExecutable("bwrap", hostPathDirs(hostEnv));
 	if (bwrapPath === undefined) {
-		throw new SandboxUnavailableError("bubblewrap (bwrap) is not installed on the host");
+		throw new SandboxUnavailableError("bubblewrap (bwrap) is not installed on the host", {
+			code: "bwrap_missing",
+			remedy: "Install the bubblewrap package in the server environment, then restart the server.",
+		});
 	}
 	const repositoryPath = await realpath(options.repositoryPath).catch(() => {
-		throw new SandboxUnavailableError(`repository root does not exist: ${options.repositoryPath}`);
+		throw new SandboxUnavailableError(`repository root does not exist: ${options.repositoryPath}`, {
+			code: "repository_missing",
+			remedy: "Point the repository root at an existing checkout, then restart the server.",
+		});
 	});
 	const worktreeRoot =
 		options.worktreeRoot === undefined
@@ -490,7 +608,16 @@ async function createExecutor(options: BubblewrapSandboxOptions): Promise<Sandbo
 			: await realpath(options.worktreeRoot).catch(() => undefined);
 	const probeCommand = await resolveExecutable(PROBE_COMMAND, pathDirs);
 	if (probeCommand === undefined) {
-		throw new SandboxUnavailableError(`sandbox probe command "${PROBE_COMMAND}" is unavailable`);
+		throw new SandboxUnavailableError(`sandbox probe command "${PROBE_COMMAND}" is unavailable`, {
+			code: "probe_command_missing",
+			remedy: "Make coreutils (true) available on the server PATH, then restart the server.",
+		});
+	}
+	if ((await resolveExecutable(SHELL_COMMAND, pathDirs)) === undefined) {
+		throw new SandboxUnavailableError(`sandbox shell "${SHELL_COMMAND}" is unavailable`, {
+			code: "shell_missing",
+			remedy: "Install bash in the server image; the Workspace shell runs under it.",
+		});
 	}
 	const probeEnv = sandboxEnv(pathDirs, {});
 	const probe = await runManagedProcess({
@@ -511,7 +638,12 @@ async function createExecutor(options: BubblewrapSandboxOptions): Promise<Sandbo
 	});
 	if (probe.exitCode !== 0) {
 		const detail = probe.stderr.trim() || probe.stdout.trim() || "unknown error";
-		throw new SandboxUnavailableError(`bubblewrap probe failed: ${detail}`);
+		throw new SandboxUnavailableError(`bubblewrap probe failed: ${detail}`, {
+			code: "namespace_denied",
+			remedy:
+				"Bubblewrap cannot create namespaces here. Allow unprivileged user namespaces for the server " +
+				"(a container seccomp or AppArmor profile that permits unshare), then restart the server.",
+		});
 	}
 
 	// Validate the sandbox paths up front so a misconfigured root fails the probe, not one run.
@@ -519,6 +651,7 @@ async function createExecutor(options: BubblewrapSandboxOptions): Promise<Sandbo
 
 	const executor: SandboxExecutor = {
 		id: "bubblewrap",
+		isolated: true,
 		async exec(input) {
 			if (!isAbsolute(input.cwd)) {
 				throw new SandboxUnavailableError(
@@ -545,6 +678,19 @@ async function createExecutor(options: BubblewrapSandboxOptions): Promise<Sandbo
 			}
 			const writable = input.writable;
 			const env = sandboxEnv(pathDirs, input.env ?? {});
+			if (input.snapshot === true) {
+				return await executeInSnapshot({
+					args: input.args,
+					bwrapPath,
+					commandPath,
+					cwd,
+					env,
+					maxOutputBytes: input.maxOutputBytes,
+					...(input.signal === undefined ? {} : { signal: input.signal }),
+					repositoryPath,
+					timeoutMs: input.timeoutMs,
+				});
+			}
 			const readOnlyPaths = await sandboxMounts(repositoryPath, cwd);
 			const exportDir =
 				input.exportAnalysis === true || input.analysisTree !== undefined
@@ -582,6 +728,7 @@ async function createExecutor(options: BubblewrapSandboxOptions): Promise<Sandbo
 					cwd,
 					env: { PATH: hostPathDirs(hostEnv).join(delimiter) },
 					maxOutputBytes: input.maxOutputBytes,
+					...(input.signal === undefined ? {} : { signal: input.signal }),
 					timeoutMs: input.timeoutMs,
 				});
 			} finally {
@@ -590,6 +737,80 @@ async function createExecutor(options: BubblewrapSandboxOptions): Promise<Sandbo
 		},
 	};
 	return executor;
+}
+
+/**
+ * Run one command against a disposable copy of the task worktree. The copy is created in a
+ * private scratch directory outside the repository, bound writable at the worktree's own path,
+ * and deleted when the command ends. Nothing the command writes outlives it.
+ */
+async function executeInSnapshot(input: {
+	readonly args: readonly string[];
+	readonly bwrapPath: string;
+	readonly commandPath: string;
+	readonly cwd: string;
+	readonly env: Readonly<Record<string, string>>;
+	readonly maxOutputBytes: number;
+	readonly repositoryPath: string;
+	readonly signal?: AbortSignal;
+	readonly timeoutMs: number;
+}): Promise<SandboxExecResult> {
+	const cancelled = (): SandboxExecResult => ({
+		args: [...input.args],
+		cancelled: true,
+		command: input.commandPath.slice(input.commandPath.lastIndexOf("/") + 1),
+		durationMs: 0,
+		exitCode: null,
+		signal: null,
+		stderr: "",
+		stderrTruncated: false,
+		stdout: "",
+		stdoutTruncated: false,
+		timedOut: false,
+	});
+	const aborted = (): boolean => input.signal?.aborted === true;
+	if (aborted()) return cancelled();
+	const scratch = await realpath(await mkdtemp(join(tmpdir(), "tsukaima-snapshot-")));
+	try {
+		if (isInside(input.repositoryPath, scratch)) {
+			throw new SandboxUnavailableError("snapshot scratch directory is inside the repository");
+		}
+		let snapshot: Awaited<ReturnType<typeof createTaskSnapshot>>;
+		try {
+			snapshot = await createTaskSnapshot({
+				repositoryPath: input.repositoryPath,
+				sourcePath: input.cwd,
+				targetPath: scratch,
+				...(input.signal === undefined ? {} : { signal: input.signal }),
+			});
+		} catch (error) {
+			// An abort during the copy is a cancellation, not a failed snapshot.
+			if (aborted()) return cancelled();
+			throw error;
+		}
+		const argv = buildBubblewrapArgv({
+			args: input.args,
+			commandPath: input.commandPath,
+			cwd: input.cwd,
+			env: input.env,
+			readOnlyPaths: snapshot.readOnlyMounts,
+			repositoryPath: input.repositoryPath,
+			writable: true,
+			writableSource: scratch,
+		});
+		const result = await runManagedProcess({
+			args: argv,
+			command: input.bwrapPath,
+			cwd: scratch,
+			env: { PATH: input.env.PATH ?? SANDBOX_PATH_DIRS.join(delimiter) },
+			maxOutputBytes: input.maxOutputBytes,
+			...(input.signal === undefined ? {} : { signal: input.signal }),
+			timeoutMs: input.timeoutMs,
+		});
+		return { ...result, snapshot: snapshot.manifest };
+	} finally {
+		await rm(scratch, { force: true, recursive: true });
+	}
 }
 
 /**

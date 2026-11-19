@@ -87,6 +87,26 @@ arbitrary code. The host chooses one of two governed executors with
   visible to a read-only task.
 - The network namespace has loopback only; outbound egress is unavailable.
 - Commands are resolved from fixed directories, never from a model-supplied path.
+- `exec` and `check` (Workspace tools, offered only when the bubblewrap probe passes) run on a
+  **disposable snapshot** of the task worktree. The snapshot is copied into a private scratch
+  directory outside the repository, bound writable at the worktree's own path, and deleted when
+  the command ends, so temporary files and generated outputs never persist. Only regular files
+  and in-tree relative symlinks are copied; absolute links and links that resolve outside the
+  task tree are dropped, and `.git` is never copied. The snapshot checksum covers every copied
+  entry's path, mode, size, and content digest, and check artifacts record it so later evidence
+  can identify the exact content that was validated.
+- Dependencies are reused, not copied. The live install is mounted read-only and the snapshot's
+  `node_modules` trees link into it; workspace packages link to the snapshot's own copies, so a
+  test imports the task's source. The live `packages/*` sources, the live checkout, and the
+  repository's `.git` are not mounted.
+- `check` targets (`typecheck`, `lint`, `test`, `webui-build`) are fixed argv owned by the server;
+  the model names a target and, for `test` only, a path filter.
+- Cancellation and timeout kill the child's whole process group and, under bubblewrap, every
+  descendant through the PID namespace. Output is bounded per stream, and audit entries record
+  exit status, timing, and the snapshot checksum, never the script text or output.
+- When the probe fails, the plugin status and `self-iteration.status` report the failure code,
+  the reason, and a remedy; the `exec` and `check` tools are not registered. `host` never
+  satisfies this requirement.
 - The test/build argv comes entirely from the policy (`testCommand`/`buildCommand`); the model
   cannot pass `command` or `args`. A test-name filter is positional and may not start with `-`.
 - Search passes `--` before the pattern, bounds the pattern length, and resolves the optional path
