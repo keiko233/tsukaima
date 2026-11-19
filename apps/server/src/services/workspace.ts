@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
 import type {
 	MessageDeliveryMode,
 	ThinkingLevel,
@@ -120,11 +120,12 @@ function workspacePrompt(input: {
 		"",
 		"Operating rules:",
 		"- This workspace has full coding authority; there is no analysis-only or proposal-only mode.",
-		`- Pass taskId="${input.taskId}" to every self-iteration tool.`,
-		"- Inspect with self-iteration.analyze before editing.",
-		"- Create a bounded worktree with self-iteration.worktree before any write.",
-		"- Merge upstream refs only with self-iteration.upstream; never run git merge in a shell.",
-		"- Use only self-iteration.edit and self-iteration.test for repository changes and validation.",
+		"- Self-iteration tools are bound to this workspace's task automatically; do not pass a task ID.",
+		"- Available upfront: self-iteration.analyze, worktree, edit, test, build, diff, propose, status.",
+		"- Inspect with self-iteration.analyze before editing; it reads the task's base revision until edits exist.",
+		"- Edits and validation provision the task worktree on first use; self-iteration.worktree is optional.",
+		"- Load self-iteration.upstream with tool_search only when a merge is needed; never run git merge in a shell.",
+		"- Use self-iteration.edit for repository changes and self-iteration.test or self-iteration.build for validation.",
 		"- Commands run through the governed executor: only policy-allowlisted binaries execute, inside the task worktree.",
 		"- Use todo_write to keep a multi-step plan visible, and update it as steps complete.",
 		"- Use session_context only for conversations the user explicitly referenced.",
@@ -687,6 +688,25 @@ export class WorkspaceService {
 			sessionId: input.sessionId,
 			ok: true,
 		};
+	}
+
+	/**
+	 * Coding task bound to a durable conversation, read by the coding plugin's model tools.
+	 * `undefined` means the conversation is not a workspace; `null` is a draft with no task yet.
+	 */
+	async taskIdForConversation(conversationId: string): Promise<string | null | undefined> {
+		const [row] = await this.#db()
+			.select({ taskId: workspaceSessions.taskId })
+			.from(conversations)
+			.innerJoin(workspaceSessions, eq(workspaceSessions.id, conversations.id))
+			.where(
+				or(
+					eq(conversations.durableConversationId, conversationId),
+					eq(conversations.id, conversationId),
+				),
+			)
+			.limit(1);
+		return row === undefined ? undefined : row.taskId;
 	}
 
 	async listTodos(sessionId: string): Promise<WorkspaceTodo[]> {

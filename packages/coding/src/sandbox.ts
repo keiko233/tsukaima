@@ -2,6 +2,7 @@ import { access, constants, lstat, mkdtemp, realpath, rm, stat } from "node:fs/p
 import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { runManagedProcess, type CommandResult } from "./runner.ts";
+import { assertSafeBaseRef } from "./worktree.ts";
 
 /**
  * Command execution for the governed coding surface.
@@ -35,8 +36,13 @@ export interface SandboxExecInput {
 	readonly timeoutMs: number;
 	/** Optional committed-source export, mounted read-only at {@link ANALYSIS_MOUNT}. */
 	readonly analysisPath?: string;
-	/** Export the committed tree at HEAD and mount it at {@link ANALYSIS_MOUNT}. */
+	/** Export the committed tree and mount it at {@link ANALYSIS_MOUNT}. */
 	readonly exportAnalysis?: boolean;
+	/**
+	 * Commit-ish exported by {@link exportAnalysis}; defaults to `HEAD`. A patch task passes its
+	 * base revision so read-only inspection sees the task's base before any checkout exists.
+	 */
+	readonly analysisRevision?: string;
 	/**
 	 * Export a working tree (a task worktree, including its uncommitted edits) read-only at
 	 * {@link ANALYSIS_MOUNT}. Unlike {@link exportAnalysis} this never reads the live repository.
@@ -417,7 +423,7 @@ async function createHostExecutor(options: HostSandboxOptions): Promise<SandboxE
 					await copyWorkingTree(input.analysisTree, analysisDir);
 				} else if (input.exportAnalysis === true) {
 					analysisDir = await mkdtemp(join(tmpdir(), "tsukaima-analysis-"));
-					await exportCommittedTree(repositoryPath, analysisDir);
+					await exportCommittedTree(repositoryPath, analysisDir, input.analysisRevision);
 				} else if (input.analysisPath !== undefined) {
 					analysisDir = await realpath(input.analysisPath).catch(() => {
 						throw new SandboxUnavailableError(
@@ -557,7 +563,7 @@ async function createExecutor(options: BubblewrapSandboxOptions): Promise<Sandbo
 				} else if (exportDir !== undefined) {
 					// The committed tree is the only analysis surface for a read-only task: working
 					// tree edits, untracked files, and anything gitignored are absent.
-					await exportCommittedTree(repositoryPath, exportDir);
+					await exportCommittedTree(repositoryPath, exportDir, input.analysisRevision);
 					analysisPath = exportDir;
 				}
 				const argv = buildBubblewrapArgv({
@@ -587,13 +593,19 @@ async function createExecutor(options: BubblewrapSandboxOptions): Promise<Sandbo
 }
 
 /**
- * Export the committed HEAD tree into `target` without touching the working tree.
+ * Export a committed tree (HEAD unless `revision` is given) into `target` without touching the
+ * working tree.
  *
  * `git archive` writes a tarball to a private host directory; it is extracted into `target`,
  * which is then mounted read-only. The archive never enters the sandbox, and uncommitted,
  * untracked, or gitignored files are absent because only one commit is archived.
  */
-async function exportCommittedTree(repositoryPath: string, target: string): Promise<void> {
+async function exportCommittedTree(
+	repositoryPath: string,
+	target: string,
+	revision?: string,
+): Promise<void> {
+	const commit = revision === undefined ? "HEAD" : assertSafeBaseRef(revision);
 	const gitPath = await resolveExecutable("git", SANDBOX_PATH_DIRS);
 	const tarPath = await resolveExecutable("tar", SANDBOX_PATH_DIRS);
 	if (gitPath === undefined || tarPath === undefined) {
@@ -603,7 +615,7 @@ async function exportCommittedTree(repositoryPath: string, target: string): Prom
 	const archivePath = join(staging, "tree.tar");
 	try {
 		const archive = Bun.spawn({
-			cmd: [gitPath, "archive", "--format=tar", "--output", archivePath, "HEAD"],
+			cmd: [gitPath, "archive", "--format=tar", "--output", archivePath, commit],
 			cwd: repositoryPath,
 			env: { PATH: SANDBOX_PATH_DIRS.join(delimiter) },
 			stderr: "pipe",

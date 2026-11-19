@@ -1,4 +1,5 @@
-import { relative, sep } from "node:path";
+import { stat } from "node:fs/promises";
+import { join, relative, sep } from "node:path";
 import {
 	ANALYSIS_MOUNT,
 	applyStructuredEdit,
@@ -111,6 +112,15 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+/** A linked worktree has a `.git` file (not a directory) pointing back at the repository. */
+async function isWorktreeCheckout(path: string): Promise<boolean> {
+	try {
+		return (await stat(join(path, ".git"))).isFile();
+	} catch {
+		return false;
+	}
+}
+
 function recordValue(value: unknown): Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 		? (value as Record<string, unknown>)
@@ -125,6 +135,8 @@ export class SelfIterationService {
 	readonly #sandbox: SandboxProvider;
 	readonly #storage: PluginStorage | undefined;
 	readonly #worktrees = new Map<string, WorktreeManager>();
+	/** In-flight provisioning per task, so concurrent first calls share one `git worktree add`. */
+	readonly #provisioning = new Map<string, Promise<IterationTask>>();
 
 	constructor(options: SelfIterationServiceOptions) {
 		this.#audit = options.audit;
@@ -351,6 +363,136 @@ export class SelfIterationService {
 		return task;
 	}
 
+	/**
+	 * Task a model tool call operates on. The durable Workspace binding is authoritative; a
+	 * supplied `taskId` is only a legacy echo and must equal it. Model calls never create tasks,
+	 * so a conversation without a bound task cannot reach coding state by accident.
+	 */
+	async boundTaskId(input: {
+		readonly conversationId?: string;
+		readonly requestedTaskId?: string;
+		readonly tool: string;
+	}): Promise<string> {
+		const conversationId = input.conversationId;
+		const lookup = this.#binding.workspaceTaskFor;
+		const bound =
+			conversationId === undefined || lookup === undefined
+				? undefined
+				: await lookup(conversationId);
+		if (bound === null || bound === undefined) {
+			this.#logger.warn("task binding missing", { tool: input.tool });
+			await this.#auditRecord({
+				action: "self-iteration.task.binding_missing",
+				actorId: conversationId ?? "agent",
+				actorKind: "agent",
+				payload: { tool: input.tool },
+				reason: "task_binding_missing",
+				result: "denied",
+				targetKind: "workspace",
+			});
+			throw new Error("task_binding_missing");
+		}
+		if (input.requestedTaskId !== undefined && input.requestedTaskId !== bound) {
+			this.#logger.warn("task binding mismatch", {
+				requested: input.requestedTaskId,
+				tool: input.tool,
+			});
+			await this.#auditRecord({
+				action: "self-iteration.task.binding_mismatch",
+				actorId: conversationId ?? "agent",
+				actorKind: "agent",
+				payload: { requestedTaskId: input.requestedTaskId, tool: input.tool },
+				reason: "task_binding_mismatch",
+				result: "denied",
+				targetId: bound,
+				targetKind: "coding-task",
+			});
+			throw new Error("task_binding_mismatch");
+		}
+		return bound;
+	}
+
+	/**
+	 * Provision the task worktree exactly once. First edit, validation, and the explicit worktree
+	 * tool all converge here. Concurrent callers share one in-flight creation, and a retry after a
+	 * partial failure adopts the checkout already at the task's deterministic path.
+	 */
+	async #ensureWorktree(
+		task: IterationTask,
+		options: { readonly actor: string; readonly baseRef?: string; readonly tool: string },
+	): Promise<IterationTask> {
+		const current = (await this.store.getTask(task.id)) ?? task;
+		if (current.worktreePath !== undefined) return current;
+		const pending = this.#provisioning.get(task.id);
+		if (pending !== undefined) return pending;
+		const provisioning = this.#provisionWorktree(current, options).finally(() => {
+			this.#provisioning.delete(task.id);
+		});
+		this.#provisioning.set(task.id, provisioning);
+		return provisioning;
+	}
+
+	async #provisionWorktree(
+		task: IterationTask,
+		options: { readonly actor: string; readonly baseRef?: string; readonly tool: string },
+	): Promise<IterationTask> {
+		const startedAt = performance.now();
+		const policy = await this.policy();
+		const manager = this.#managerFor(task.id, policy);
+		const path = manager.pathFor(task.id);
+		const baseRef = options.baseRef ?? task.baseRef;
+		try {
+			const adopted = await isWorktreeCheckout(path);
+			if (adopted) {
+				this.#logger.debug("worktree adopted from earlier attempt", { path, taskId: task.id });
+			} else {
+				this.#logger.debug("worktree create started", { baseRef, taskId: task.id });
+				const info = await manager.create(task.id, baseRef);
+				this.#logger.debug("worktree created", {
+					baseRef: info.baseRef,
+					branchName: info.branchName,
+					durationMs: elapsedMs(startedAt),
+					path: info.path,
+					taskId: task.id,
+				});
+				await this.#auditRecord({
+					action: "self-iteration.worktree.create",
+					actorId: options.actor,
+					actorKind: "agent",
+					payload: { baseRef: info.baseRef, branch: info.branchName, path: info.path },
+					result: "ok",
+					targetId: task.id,
+					targetKind: "coding-task",
+				});
+			}
+			const latest = (await this.store.getTask(task.id)) ?? task;
+			await this.store.updateTask(task.id, {
+				status: "in_progress",
+				timeline: [
+					...latest.timeline,
+					{
+						atMs: this.#now(),
+						detail: path,
+						outcome: "success" as const,
+						tool: options.tool,
+					},
+				],
+				worktreePath: path,
+			});
+			await this.#log(task, "info", `worktree ready at ${path}`);
+			return (await this.store.getTask(task.id)) ?? task;
+		} catch (error) {
+			this.#logger.error("worktree provisioning failed", {
+				baseRef,
+				durationMs: elapsedMs(startedAt),
+				error: errorMessage(error),
+				taskId: task.id,
+			});
+			await this.#auditFailure(task.id, options.tool, error);
+			throw error;
+		}
+	}
+
 	async #requireMode(task: IterationTask, required: TaskMode, tool: string): Promise<void> {
 		// Workspaces are the full-authority coding surface. The stored mode is lineage only;
 		// legacy rows created under the old gated model keep exactly the same tool access.
@@ -404,7 +546,9 @@ export class SelfIterationService {
 						command: "head",
 						cwd: analysisCwd,
 						...analysisSource,
-						...(task.worktreePath === undefined ? { exportAnalysis: true } : {}),
+						...(task.worktreePath === undefined
+							? { analysisRevision: task.baseRef, exportAnalysis: true }
+							: {}),
 						maxOutputBytes: maxBytes,
 						timeoutMs: policy.timeoutMs,
 						writable: false,
@@ -458,7 +602,9 @@ export class SelfIterationService {
 					command: "rg",
 					cwd: analysisCwd,
 					...analysisSource,
-					...(task.worktreePath === undefined ? { exportAnalysis: true } : {}),
+					...(task.worktreePath === undefined
+						? { analysisRevision: task.baseRef, exportAnalysis: true }
+						: {}),
 					maxOutputBytes: policy.maxOutputBytes,
 					timeoutMs: policy.timeoutMs,
 					writable: false,
@@ -502,72 +648,14 @@ export class SelfIterationService {
 	async worktree(
 		input: ToolTaskInput & { readonly baseRef?: string },
 	): Promise<Record<string, unknown>> {
-		const startedAt = performance.now();
 		const task = await this.resolveTask(input, "patch", "self-iteration.worktree");
 		await this.#requireMode(task, "patch", "self-iteration.worktree");
-		const existing = this.#binding.store.getTask(task.id);
-		if ((await existing)?.worktreePath !== undefined) {
-			this.#logger.debug("worktree already present", {
-				path: task.worktreePath,
-				taskId: task.id,
-			});
-			return { baseRef: task.baseRef, path: task.worktreePath, taskId: task.id };
-		}
-		try {
-			const policy = await this.policy();
-			const manager = this.#managerFor(task.id, policy);
-			this.#logger.debug("worktree create started", {
-				baseRef: input.baseRef ?? task.baseRef,
-				taskId: task.id,
-			});
-			const info = await manager.create(task.id, input.baseRef ?? task.baseRef);
-			await this.store.updateTask(task.id, {
-				status: "in_progress",
-				timeline: [
-					...task.timeline,
-					{
-						atMs: this.#now(),
-						detail: info.path,
-						outcome: "success" as const,
-						tool: "self-iteration.worktree",
-					},
-				],
-				worktreePath: info.path,
-			});
-			await this.#log(task, "info", `worktree created at ${info.path}`);
-			this.#logger.debug("worktree created", {
-				baseRef: info.baseRef,
-				branchName: info.branchName,
-				durationMs: elapsedMs(startedAt),
-				path: info.path,
-				status: "in_progress",
-				taskId: task.id,
-			});
-			await this.#auditRecord({
-				action: "self-iteration.worktree.create",
-				actorId: input.sourceConversationId ?? "agent",
-				actorKind: "agent",
-				payload: { baseRef: info.baseRef, branch: info.branchName, path: info.path },
-				result: "ok",
-				targetId: task.id,
-				targetKind: "coding-task",
-			});
-			return {
-				baseRef: info.baseRef,
-				branchName: info.branchName,
-				path: info.path,
-				taskId: task.id,
-			};
-		} catch (error) {
-			this.#logger.error("worktree creation failed", {
-				baseRef: input.baseRef ?? task.baseRef,
-				durationMs: elapsedMs(startedAt),
-				error: errorMessage(error),
-				taskId: task.id,
-			});
-			await this.#auditFailure(task.id, "self-iteration.worktree", error);
-			throw error;
-		}
+		const provisioned = await this.#ensureWorktree(task, {
+			actor: input.sourceConversationId ?? "agent",
+			...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
+			tool: "self-iteration.worktree",
+		});
+		return { baseRef: provisioned.baseRef, path: provisioned.worktreePath, taskId: task.id };
 	}
 
 	async edit(
@@ -576,7 +664,10 @@ export class SelfIterationService {
 		const startedAt = performance.now();
 		const task = await this.resolveTask(input, "patch", "self-iteration.edit");
 		await this.#requireMode(task, "patch", "self-iteration.edit");
-		const current = await this.#taskWithWorktree(task);
+		const current = await this.#ensureWorktree(task, {
+			actor: input.sourceConversationId ?? "agent",
+			tool: "self-iteration.edit",
+		});
 		const policy = await this.policy();
 		const edit: StructuredEdit = input.edit ?? {
 			...(input.content === undefined ? {} : { content: input.content }),
@@ -666,7 +757,10 @@ export class SelfIterationService {
 		const startedAt = performance.now();
 		const task = await this.resolveTask(input, "patch", "self-iteration.upstream");
 		await this.#requireMode(task, "patch", "self-iteration.upstream");
-		const current = await this.#taskWithWorktree(task);
+		const current = await this.#ensureWorktree(task, {
+			actor: input.sourceConversationId ?? "agent",
+			tool: "self-iteration.upstream",
+		});
 		const policy = await this.policy();
 		const action = input.action === "abort" ? "abort" : "merge";
 		const worktreePath = current.worktreePath!;
@@ -762,10 +856,14 @@ export class SelfIterationService {
 		},
 	): Promise<TestRunResult & { readonly taskId: string }> {
 		const startedAt = performance.now();
-		const task = await this.resolveTask(input, "patch", "self-iteration.test");
+		const resolved = await this.resolveTask(input, "patch", "self-iteration.test");
 		const policy = await this.policy();
 		// Test and build never run against the live tree: a command that can write (or read the
 		// repository's own dotenv files) must stay inside the disposable worktree.
+		const task = await this.#ensureWorktree(resolved, {
+			actor: input.sourceConversationId ?? "agent",
+			tool: "self-iteration.test",
+		});
 		const worktreePath = task.worktreePath;
 		const command = policy.testCommand[0] ?? "bun";
 		let args: readonly string[] = [];
@@ -874,9 +972,13 @@ export class SelfIterationService {
 		readonly taskId: string;
 	}> {
 		const startedAt = performance.now();
-		const task = await this.resolveTask(input, "proposal", "self-iteration.build");
-		await this.#requireMode(task, "proposal", "self-iteration.build");
+		const resolved = await this.resolveTask(input, "proposal", "self-iteration.build");
+		await this.#requireMode(resolved, "proposal", "self-iteration.build");
 		const policy = await this.policy();
+		const task = await this.#ensureWorktree(resolved, {
+			actor: input.sourceConversationId ?? "agent",
+			tool: "self-iteration.build",
+		});
 		const worktreePath = task.worktreePath;
 		const command = policy.buildCommand[0] ?? "bun";
 		const args = policy.buildCommand.slice(1);

@@ -70,7 +70,10 @@ explicitly grants them:
 | `self-iteration.status` | task status/logs/artifacts |
 
 Every workspace task has the full toolset; the stored mode is lineage only and never gates a
-tool. Patches use structured input/diffs; commands allowlists; secrets/path policy; all writes
+tool. `analyze`, `worktree`, `edit`, `test`, `build`, `diff`, `propose`, and `status` are offered
+in the first request of a Workspace turn; `upstream` is deferred behind `tool_search`. Model calls
+resolve their task from the durable Workspace binding and cannot pass a different one (see
+[workspace-and-hooks](../architecture/workspace-and-hooks.md)). Patches use structured input/diffs; commands allowlists; secrets/path policy; all writes
 occur only in approved worktrees. `maintenance` operations (deploy, backup, reload, rollback) are
 **admin RPC / `approval-card` actions only** and are never exposed as model tools.
 

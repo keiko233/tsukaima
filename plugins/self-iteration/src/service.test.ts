@@ -107,7 +107,7 @@ function createTestSandbox(): { calls: SandboxExecInput[]; provider: SandboxProv
 				// The fixture repository is a sibling of the worktree root.
 				analysisRoot = await fs.mkdtemp(join(tmpdir(), "tsukaima-analysis-test-"));
 				const archive = Bun.spawn({
-					cmd: ["git", "archive", "--format=tar", "HEAD"],
+					cmd: ["git", "archive", "--format=tar", input.analysisRevision ?? "HEAD"],
 					cwd: join(input.cwd, "..", "repo"),
 					stderr: "pipe",
 					stdout: "pipe",
@@ -160,6 +160,8 @@ function createTestSandbox(): { calls: SandboxExecInput[]; provider: SandboxProv
 async function fixture(
 	options: {
 		readonly deferredReload?: boolean;
+		/** Host-owned Workspace binding lookup for model calls. */
+		readonly workspaceTaskFor?: (conversationId: string) => string | null | undefined;
 		/** Whether a successful in-place reload changes the reported running artifact. */
 		readonly applyReload?: boolean;
 		/** Whether a rollback reload actually restores the previous artifact. */
@@ -248,6 +250,9 @@ async function fixture(
 			repositoryRoot: repo,
 			runningIdentity: () => running.current,
 			store,
+			...(options.workspaceTaskFor === undefined
+				? {}
+				: { workspaceTaskFor: options.workspaceTaskFor }),
 			worktreeRoot: worktrees,
 		},
 		logger: captureLogger(logs),
@@ -390,11 +395,16 @@ describe("SelfIterationService", () => {
 	});
 
 	test("never falls back to the live tree and cannot inject search flags or paths", async () => {
-		const { service, sandboxCalls } = await fixture();
+		const { repo: fixtureRepo, service, sandboxCalls } = await fixture();
 		const live = await service.createTask({ goal: "Patch without worktree", mode: "proposal" });
-		await expect(service.test({ taskId: live.id })).rejects.toThrow("worktree_required");
-		await expect(service.build({ taskId: live.id })).rejects.toThrow("worktree_required");
-		expect(sandboxCalls).toHaveLength(0);
+		// Validation provisions the task's own worktree first; the live tree is never the cwd.
+		await service.test({ taskId: live.id });
+		const liveWorktree = (await service.getTask(live.id))?.worktreePath;
+		expect(liveWorktree).toBeDefined();
+		expect(sandboxCalls.at(-1)?.cwd).toBe(liveWorktree);
+		expect(sandboxCalls.at(-1)?.cwd).not.toBe(fixtureRepo);
+		await service.build({ taskId: live.id });
+		expect(sandboxCalls.at(-1)?.cwd).toBe(liveWorktree);
 
 		const task = await patchTask(service);
 		await service.analyze({
@@ -855,5 +865,125 @@ describe("patch analysis surface", () => {
 		// The worktree still has the base value; the live tree edit must not be visible.
 		expect(read.content).toContain("old");
 		expect(read.content).not.toContain("live-tree");
+	});
+});
+
+describe("workspace task binding and worktree provisioning", () => {
+	test("provisions one worktree for concurrent first calls and reuses it on retry", async () => {
+		const { repo, service, worktrees } = await fixture();
+		const task = await service.createTask({
+			goal: "Concurrent first use",
+			mode: "proposal",
+			sourceConversationId: "coding-conversation",
+		});
+		const [edited] = await Promise.all([
+			service.edit({ content: "a\n", create: true, path: "src/a.ts", taskId: task.id }),
+			service.worktree({ taskId: task.id }),
+		]);
+		expect(edited.path).toBe("src/a.ts");
+		const again = await service.worktree({ taskId: task.id });
+		const path = join(worktrees, task.id);
+		expect(again.path).toBe(path);
+		expect((await service.getTask(task.id))?.worktreePath).toBe(path);
+		const listed = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo })
+			.toString()
+			.split("\n")
+			.filter((line) => line.startsWith("worktree ") && line.includes(task.id));
+		expect(listed).toHaveLength(1);
+	});
+
+	test("adopts a checkout left at the task path by an interrupted provisioning attempt", async () => {
+		const { repo, service, worktrees } = await fixture();
+		const task = await service.createTask({
+			goal: "Retry after partial failure",
+			mode: "proposal",
+			sourceConversationId: "coding-conversation",
+		});
+		const path = join(worktrees, task.id);
+		await git(repo, ["worktree", "add", "-b", `tsukaima-iteration/${task.id}`, path, "HEAD"]);
+		const result = await service.worktree({ taskId: task.id });
+		expect(result.path).toBe(path);
+		expect((await service.getTask(task.id))?.worktreePath).toBe(path);
+		await service.edit({
+			content: "retried\n",
+			create: true,
+			path: "src/retry.ts",
+			taskId: task.id,
+		});
+		expect(await fs.readFile(join(path, "src", "retry.ts"), "utf-8")).toBe("retried\n");
+	});
+
+	test("reads the task base revision before any checkout exists", async () => {
+		const { repo, service } = await fixture();
+		const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo }).toString().trim();
+		const task = await service.createTask({
+			baseRef: base,
+			goal: "Inspect the base",
+			mode: "analysis",
+			sourceConversationId: "coding-conversation",
+		});
+		await fs.writeFile(join(repo, "README.md"), "# Changed after the base\n");
+		await git(repo, ["commit", "-am", "after base"]);
+		const read = await service.analyze({ action: "read", path: "README.md", taskId: task.id });
+		expect(read.content).toContain("Self iteration fixture");
+		expect(read.content).not.toContain("Changed after the base");
+		expect((await service.getTask(task.id))?.worktreePath).toBeUndefined();
+	});
+
+	test("binds model calls to the Workspace task, audits mismatches, and fails without a binding", async () => {
+		const bindings = new Map<string, string | null>([["conv-draft", null]]);
+		const { audits, service } = await fixture({
+			workspaceTaskFor: (conversationId) => bindings.get(conversationId),
+		});
+		const task = await service.createTask({
+			goal: "Bound task",
+			mode: "proposal",
+			sourceConversationId: "coding-conversation",
+		});
+		bindings.set("conv-bound", task.id);
+		const other = await service.createTask({
+			goal: "Other task",
+			mode: "proposal",
+			sourceConversationId: "coding-conversation",
+		});
+
+		await expect(
+			service.boundTaskId({ conversationId: "conv-draft", tool: "self-iteration.edit" }),
+		).rejects.toThrow("task_binding_missing");
+		await expect(service.boundTaskId({ tool: "self-iteration.edit" })).rejects.toThrow(
+			"task_binding_missing",
+		);
+		await expect(
+			service.boundTaskId({ conversationId: "conv-unknown", tool: "self-iteration.edit" }),
+		).rejects.toThrow("task_binding_missing");
+
+		expect(
+			await service.boundTaskId({
+				conversationId: "conv-bound",
+				requestedTaskId: task.id,
+				tool: "self-iteration.edit",
+			}),
+		).toBe(task.id);
+		expect(
+			await service.boundTaskId({ conversationId: "conv-bound", tool: "self-iteration.edit" }),
+		).toBe(task.id);
+		await expect(
+			service.boundTaskId({
+				conversationId: "conv-bound",
+				requestedTaskId: other.id,
+				tool: "self-iteration.edit",
+			}),
+		).rejects.toThrow("task_binding_mismatch");
+		expect(
+			audits.some(
+				(entry) =>
+					entry.action === "self-iteration.task.binding_mismatch" &&
+					entry.result === "denied" &&
+					entry.targetId === task.id,
+			),
+		).toBe(true);
+		expect(
+			audits.filter((entry) => entry.action === "self-iteration.task.binding_missing"),
+		).toHaveLength(3);
 	});
 });

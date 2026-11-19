@@ -55,6 +55,21 @@ Workspace-control tools:
 - `hook_schedule({ prompt, timing, sessionId?, deliverAt? })`
 - `hook_list({ includeFinished? })`
 
+Coding tools (`self-iteration.*`) are offered to a Workspace turn in two tiers. `analyze`,
+`worktree`, `edit`, `test`, `build`, `diff`, `propose`, and `status` are offered in the first
+request. `upstream` stays deferred and loads through `tool_search`. Every call is bound to the
+Workspace's durable task before it runs:
+
+- The task comes from the durable conversation's workspace row, never from the model. A supplied
+  `taskId` is accepted only when it equals that binding; a mismatch is denied and audited, and a
+  missing binding (a draft with no task) fails the call with `task_binding_missing`.
+- Model calls never create tasks. Admin RPC callers keep their existing `taskId`/`goal` behavior.
+- Read-only inspection before any edit reads the task's base revision from the committed tree.
+- The first edit, a validation command, or `self-iteration.worktree` provisions the task worktree.
+  Concurrent first calls share one creation, and a retry adopts the checkout at the task path.
+- Capability and role are checked on every invocation, so a coding call from a turn whose
+  `coding` capability was withdrawn is rejected even if the tool was discovered earlier.
+
 The chat model is instructed to spawn a workspace for a concrete bug, feature, optimization, or
 self-discovered improvement. It does not claim the code is changed until the workspace reports a
 proposal or completion.

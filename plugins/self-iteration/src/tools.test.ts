@@ -104,6 +104,7 @@ describe("self-iteration model tools", () => {
 			} as unknown as PluginContext,
 			{
 				analyze: async () => ({ content: "readme", path: "README.md", truncated: false }),
+				boundTaskId: async () => "task-bound",
 			} as unknown as SelfIterationService,
 		);
 		const analyze = tools.find((entry) => entry.name === "self-iteration.analyze");
@@ -143,6 +144,7 @@ describe("self-iteration model tools", () => {
 				analyze: async () => {
 					throw new Error("boom");
 				},
+				boundTaskId: async () => "task-bound",
 			} as unknown as SelfIterationService,
 		);
 		const analyze = tools.find((entry) => entry.name === "self-iteration.analyze");
@@ -166,5 +168,64 @@ describe("self-iteration model tools", () => {
 			expect.objectContaining({ error: "boom", tool: "self-iteration.analyze" }),
 		);
 		expect(typeof detailsOf(failed).durationMs).toBe("number");
+	});
+
+	test("offers the core Workspace tools upfront and defers upstream", () => {
+		const eager = new Set(
+			registeredTools()
+				.filter((tool) => tool.policy?.lazy === false)
+				.map((tool) => tool.name),
+		);
+		expect([...eager].toSorted()).toEqual([
+			"self-iteration.analyze",
+			"self-iteration.build",
+			"self-iteration.diff",
+			"self-iteration.edit",
+			"self-iteration.propose",
+			"self-iteration.status",
+			"self-iteration.test",
+			"self-iteration.worktree",
+		]);
+		expect(
+			registeredTools().find((tool) => tool.name === "self-iteration.upstream")?.policy?.lazy,
+		).toBe(true);
+	});
+
+	test("model calls take the bound task and ignore goal-driven task creation", async () => {
+		const seen: unknown[] = [];
+		const tools: PluginTool[] = [];
+		registerSelfIterationTools(
+			{
+				...contextFor([]),
+				tools: { register: (tool: PluginTool) => void tools.push(tool) },
+			} as unknown as PluginContext,
+			{
+				boundTaskId: async (input: { conversationId?: string; requestedTaskId?: string }) => {
+					seen.push(input);
+					return "task-bound";
+				},
+				edit: async (input: unknown) => {
+					seen.push(input);
+					return { path: "src/a.ts" };
+				},
+			} as unknown as SelfIterationService,
+		);
+		const edit = tools.find((entry) => entry.name === "self-iteration.edit");
+		if (edit === undefined) throw new Error("edit tool missing");
+		await edit.execute(
+			{ content: "x", create: true, goal: "Create a task", path: "src/a.ts" },
+			{ conversationId: "durable-conversation" },
+		);
+		expect(seen[0]).toEqual({
+			conversationId: "durable-conversation",
+			tool: "self-iteration.edit",
+		});
+		expect(seen[1]).toEqual(
+			expect.objectContaining({
+				sourceConversationId: "durable-conversation",
+				taskId: "task-bound",
+			}),
+		);
+		expect(seen[1]).not.toHaveProperty("goal");
 	});
 });

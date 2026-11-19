@@ -132,6 +132,14 @@ export interface SelfIterationHostBinding {
 		| DeploymentIdentity
 		| undefined;
 	readonly store: DomainCodingStore;
+	/**
+	 * Coding task bound to a durable Workspace conversation. `null` means the workspace has no task
+	 * yet; `undefined` means the conversation is not a Workspace. Model tool calls resolve their
+	 * task only through this binding, so a missing function fails closed.
+	 */
+	readonly workspaceTaskFor?: (
+		conversationId: string,
+	) => Promise<string | null | undefined> | string | null | undefined;
 	readonly worktreeRoot: string;
 }
 
