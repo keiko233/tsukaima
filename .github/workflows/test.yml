@@ -28,10 +28,20 @@ jobs:
       - run: bun run check
 
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: bunx playwright install --with-deps chromium
+      - name: Install Chromium and system dependencies
+        run: |
+          for attempt in 1 2 3; do
+            if bunx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep "$((attempt * 10))"
+            fi
+          done
+          exit 1
       - run: bun run test:e2e
