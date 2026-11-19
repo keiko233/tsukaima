@@ -179,6 +179,11 @@ The host-side deployer repeats the version check, fetches the branch, fast-forwa
 The branch is whatever the operator chooses. There is no repository-owner, fork, or mainline
 special case in the deploy scripts.
 
+For host-local Compose settings, the deploy script also reads `<deployment-root>/compose.override.yaml`
+when present. To enable isolated Workspace commands, set `TSUKAIMA_CODING_SANDBOX=bubblewrap`
+and verify that the container's security policy allows Bubblewrap to create its namespaces.
+Validate the profile on a disposable container before applying it to the service.
+
 Dependency preparation can run ahead of time:
 
 ```sh

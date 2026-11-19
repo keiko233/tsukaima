@@ -28,6 +28,15 @@ DEPLOYER="${DEPLOYER:-${TSUKAIMA_DEPLOYER:-$(git config user.name || echo deploy
 DEPLOYER="${DEPLOYER//[^A-Za-z0-9_.-]/-}"
 ROOT="${ROOT:-/opt/tsukaima}"
 COMPOSE_FILE="$ROOT/compose.yaml"
+compose_files=(-f "$COMPOSE_FILE")
+if [[ -f "$ROOT/compose.override.yaml" ]]; then
+	compose_files+=(-f "$ROOT/compose.override.yaml")
+fi
+
+deploy_compose() {
+	docker compose "${compose_files[@]}" --project-directory "$ROOT" "$@"
+}
+
 DATA_DIR="$ROOT/data"
 ENV_FILE="$ROOT/.env"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -178,14 +187,14 @@ backup_started=$SECONDS
 downtime_started=0
 if [[ -f "$DATA_DIR/domain.sqlite" ]]; then
 	echo "Stopping the current container for a consistent data backup..."
-	docker compose -f "$COMPOSE_FILE" --project-directory "$ROOT" stop tsukaima >/dev/null 2>&1 || true
+	deploy_compose stop tsukaima >/dev/null 2>&1 || true
 	downtime_started=$SECONDS
 	mkdir -p "$ROOT/backups"
 	echo "Backing up data (excluding logs)..."
 	if ! tar -C "$ROOT" "${compress_args[@]}" -cf "$ROOT/backups/data-$TIMESTAMP.tgz" --exclude='data/logs' data; then
 		echo "Data backup failed; restarting the current image." >&2
 		rm -f "$ROOT/backups/data-$TIMESTAMP.tgz"
-		docker compose -f "$COMPOSE_FILE" --project-directory "$ROOT" up -d --remove-orphans >/dev/null 2>&1 || true
+		deploy_compose up -d --remove-orphans >/dev/null 2>&1 || true
 		fail "could not archive $DATA_DIR; deployment aborted"
 	fi
 fi
@@ -210,7 +219,7 @@ set_env TSUKAIMA_PATCH_SHA256 "${TSUKAIMA_PATCH_SHA256:-}"
 set_env TSUKAIMA_DEPLOYER "$DEPLOYER"
 
 echo "Starting $image..."
-docker compose -f "$COMPOSE_FILE" --project-directory "$ROOT" up -d --remove-orphans
+deploy_compose up -d --remove-orphans
 
 ready=0
 for _ in $(seq 1 90); do
@@ -224,12 +233,12 @@ done
 actual_image="$(docker inspect --format '{{.Config.Image}}' tsukaima 2>/dev/null || true)"
 if [[ "$ready" != "1" || "$actual_image" != "$image" ]]; then
 	echo "New revision did not become ready or the running image does not match; collecting logs and rolling back." >&2
-	docker compose -f "$COMPOSE_FILE" --project-directory "$ROOT" logs --tail=120 tsukaima >&2 || true
+	deploy_compose logs --tail=120 tsukaima >&2 || true
 	if [[ -n "$previous_image" ]]; then
 		echo "Rolling back to $previous_image" >&2
 		set_env TSUKAIMA_IMAGE "$previous_image"
 		set_env TSUKAIMA_VERSION "$previous_version"
-		docker compose -f "$COMPOSE_FILE" --project-directory "$ROOT" up -d --remove-orphans || true
+		deploy_compose up -d --remove-orphans || true
 	fi
 	exit 1
 fi
