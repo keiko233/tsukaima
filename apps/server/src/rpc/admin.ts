@@ -33,6 +33,18 @@ import {
 } from "../runtime-settings.ts";
 import { readGitIdentity, writeGitIdentity } from "../services/git-identity.ts";
 import { GitHubCliError } from "../services/github-cli-service.ts";
+import { PromptConflictError } from "../services/prompts.ts";
+
+async function updatePrompt<T>(operation: () => Promise<T>): Promise<T> {
+	try {
+		return await operation();
+	} catch (error) {
+		if (error instanceof PromptConflictError) {
+			throw new ORPCError("CONFLICT", { message: error.message });
+		}
+		throw error;
+	}
+}
 
 type MemoryDbRow = typeof memories.$inferSelect;
 
@@ -380,6 +392,13 @@ export const adminRouter = {
 		}),
 	},
 	personas: {
+		updatePrompt: adminBase.admin.personas.updatePrompt.handler(({ context, input }) =>
+			updatePrompt(async () => {
+				const persona = context.lifecycle.conversationPolicy.updatePersonaPrompt(input, "user");
+				await context.lifecycle.prompts.auditPersona(persona, "user");
+				return persona;
+			}),
+		),
 		bindPersona: adminBase.admin.personas.bindPersona.handler(async ({ context, input }) => {
 			const binding = await context.lifecycle.conversationPolicy.bindPersona({
 				personaId: input.personaId,
@@ -422,6 +441,18 @@ export const adminRouter = {
 			});
 			return persona;
 		}),
+	},
+	prompts: {
+		list: adminBase.admin.prompts.list.handler(({ context }) => context.lifecycle.prompts.list()),
+		update: adminBase.admin.prompts.update.handler(({ context, input }) =>
+			updatePrompt(() => context.lifecycle.prompts.update(input, "user")),
+		),
+		agentAccess: adminBase.admin.prompts.agentAccess.handler(({ context }) =>
+			context.lifecycle.prompts.agentAccess(),
+		),
+		setAgentAccess: adminBase.admin.prompts.setAgentAccess.handler(({ context, input }) =>
+			context.lifecycle.prompts.setAgentAccess(input),
+		),
 	},
 	plugins: {
 		downgrade: adminBase.admin.plugins.downgrade.handler(async ({ context, input }) =>

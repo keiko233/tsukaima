@@ -1,19 +1,31 @@
 "use client";
 
 import { Link, useRouterState } from "@tanstack/react-router";
-import { GitBranch, ServerCog, SlidersHorizontal, Wrench, type LucideIcon } from "lucide-react";
+import {
+	FileText,
+	GitBranch,
+	ServerCog,
+	SlidersHorizontal,
+	Wrench,
+	type LucideIcon,
+} from "lucide-react";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { useMediaQuery } from "../../_modules/hooks/use-media-query";
 
-type SettingsSection = "general" | "policies" | "maintenance" | "upgrades";
+type SettingsSection = "general" | "policies" | "prompts" | "maintenance" | "upgrades";
 
 const SECTIONS: ReadonlyArray<{
 	readonly description: () => string;
 	readonly icon: LucideIcon;
 	readonly id: SettingsSection;
 	readonly label: () => string;
-	readonly to: "/settings" | "/settings/policies" | "/settings/maintenance" | "/settings/upgrades";
+	readonly to:
+		| "/settings"
+		| "/settings/policies"
+		| "/settings/prompts"
+		| "/settings/maintenance"
+		| "/settings/upgrades";
 }> = [
 	{
 		description: () => m.settings_general_description(),
@@ -28,6 +40,13 @@ const SECTIONS: ReadonlyArray<{
 		id: "policies",
 		label: () => m.settings_tab_policies(),
 		to: "/settings/policies",
+	},
+	{
+		description: m.prompts_description,
+		icon: FileText,
+		id: "prompts",
+		label: m.prompts_title,
+		to: "/settings/prompts",
 	},
 	{
 		description: () => m.settings_maintenance_description(),
@@ -47,6 +66,7 @@ const SECTIONS: ReadonlyArray<{
 
 function sectionFor(pathname: string): SettingsSection {
 	if (pathname === "/settings/policies") return "policies";
+	if (pathname === "/settings/prompts") return "prompts";
 	if (pathname === "/settings/maintenance") return "maintenance";
 	if (pathname === "/settings/upgrades") return "upgrades";
 	return "general";

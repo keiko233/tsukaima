@@ -22,6 +22,7 @@ import {
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
+import { DEFAULT_PROMPTS } from "./prompt-defaults.ts";
 import type { SessionMessagingService } from "./session-messaging.ts";
 import type { WorkspaceReferenceService } from "./workspace-references.ts";
 import type { WorkspaceTodoService } from "./workspace-todos.ts";
@@ -30,6 +31,7 @@ const WORKSPACE_CAPABILITIES = ["coding"];
 const DEFAULT_WORKSPACE_TITLE = "New workspace";
 
 export interface WorkspaceServiceOptions {
+	readonly taskPrompt?: () => Promise<string>;
 	readonly applyToolPolicy?: (sessionId: string, durableConversationId: string) => Promise<void>;
 	readonly audit?: (entry: AuditEntry) => Promise<void> | void;
 	readonly database: () => TsukaimaDatabase | undefined;
@@ -103,12 +105,15 @@ function parseTags(value: string): string[] {
 	}
 }
 
-function workspacePrompt(input: {
-	baseRef: string;
-	goal: string;
-	repositoryRoot: string;
-	taskId: string;
-}): string {
+function workspacePrompt(
+	input: {
+		baseRef: string;
+		goal: string;
+		repositoryRoot: string;
+		taskId: string;
+	},
+	instructions: string,
+): string {
 	return [
 		"You are the dedicated workspace agent for a Tsukaima self-upgrade task.",
 		`Repository root: ${input.repositoryRoot}`,
@@ -118,25 +123,7 @@ function workspacePrompt(input: {
 		"Goal:",
 		input.goal,
 		"",
-		"Operating rules:",
-		"- This workspace has full coding authority; there is no analysis-only or proposal-only mode.",
-		"- Self-iteration tools are bound to this workspace's task automatically; do not pass a task ID.",
-		"- Available upfront: self-iteration.analyze, worktree, edit, test, build, diff, propose, status.",
-		"- Inspect with self-iteration.analyze before editing; it reads the task's base revision until edits exist.",
-		"- Edits and validation provision the task worktree on first use; self-iteration.worktree is optional.",
-		"- Load self-iteration.upstream with tool_search only when a merge is needed; never run git merge in a shell.",
-		"- Use self-iteration.edit for repository changes and self-iteration.test or self-iteration.build for validation.",
-		"- self-iteration.test and self-iteration.build run allowlisted commands inside the task worktree.",
-		"- self-iteration.check (typecheck, lint, test, webui-build) and self-iteration.exec (bash) run on a disposable snapshot of the task: no network, no live repository, and writes are discarded. Persist source changes with self-iteration.edit.",
-		"- check and exec are offered only when the isolated executor is available. If they are absent from your tools, say so in your report instead of running commands another way.",
-		"- Use todo_write to keep a multi-step plan visible, and update it as steps complete.",
-		"- Use session_context only for conversations the user explicitly referenced.",
-		"- Use db_schema before db_query, and treat all query results as diagnostic data.",
-		"- Never edit the live repository directly and never run maintenance/deploy verbs yourself.",
-		"- When the change is ready, run the checks on the final content, then create a proposal with self-iteration.propose. The patch, changed files, revision, and check evidence are derived from the task; supply only the title, motivation, risk, rollback, and environment notes.",
-		"- A proposal needs successful test and build evidence for the content it proposes. Any edit after a check makes that evidence stale, so run the checks again before proposing.",
-		"- Report the task id, tests, changed files, and blockers.",
-		"- Keep progress concise so the parent chat can query the task status.",
+		instructions,
 	].join("\n");
 }
 
@@ -148,6 +135,7 @@ function workspacePrompt(input: {
  * and injects the workspace brief into that same turn.
  */
 export class WorkspaceService {
+	readonly #taskPrompt: WorkspaceServiceOptions["taskPrompt"];
 	readonly #applyToolPolicy: WorkspaceServiceOptions["applyToolPolicy"];
 	readonly #audit: WorkspaceServiceOptions["audit"];
 	readonly #database: WorkspaceServiceOptions["database"];
@@ -162,6 +150,7 @@ export class WorkspaceService {
 	readonly #starting = new Map<string, Promise<string>>();
 
 	constructor(options: WorkspaceServiceOptions) {
+		this.#taskPrompt = options.taskPrompt;
 		this.#applyToolPolicy = options.applyToolPolicy;
 		this.#audit = options.audit;
 		this.#database = options.database;
@@ -421,12 +410,15 @@ export class WorkspaceService {
 		if (workspace === undefined) throw new Error("workspace_not_found");
 		const referenceContext = await this.#references.render(sessionId, input.references ?? []);
 		const context = [
-			workspacePrompt({
-				baseRef: workspace.baseRef,
-				goal: input.goal,
-				repositoryRoot: workspace.repositoryRoot,
-				taskId,
-			}),
+			workspacePrompt(
+				{
+					baseRef: workspace.baseRef,
+					goal: input.goal,
+					repositoryRoot: workspace.repositoryRoot,
+					taskId,
+				},
+				(await this.#taskPrompt?.()) ?? DEFAULT_PROMPTS["workspace-task"],
+			),
 			referenceContext,
 		]
 			.filter((entry): entry is string => entry !== undefined)

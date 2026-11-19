@@ -42,6 +42,7 @@ const LONG_TERM_HEADER = "Known memories, most relevant first:";
  * gates long-term recall and prevents private/group scope leakage.
  */
 export interface DrizzleContextProviderOptions {
+	readonly renderSystem?: (conversationId: string) => Promise<string | undefined>;
 	readonly database: () => TsukaimaDatabase | undefined;
 	readonly logger: Logger;
 	/** Combined persona + memory budget override; mainly for tests. */
@@ -118,8 +119,10 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	readonly #memoryTopK: number;
 	readonly #personaBudget: number;
 	readonly #policyService: ConversationPolicyService;
+	readonly renderSystem?: NonNullable<DrizzleContextProviderOptions["renderSystem"]>;
 
 	constructor(options: DrizzleContextProviderOptions) {
+		if (options.renderSystem !== undefined) this.renderSystem = options.renderSystem;
 		this.#database = options.database;
 		this.#logger = options.logger.child("tsukaima::server::context");
 		this.#budgetChars = options.budgetChars ?? PROMPT_BUDGET_CHARS;

@@ -10,6 +10,8 @@ import type { PluginTaskService } from "./plugin-task-service.ts";
 export const MEMORY_PLUGIN_ID = "memory";
 export const MEMORY_SERVICE_BINDING = "tsukaima.memory.service";
 export const MEMORY_EXTRACTION_PROMPT_VERSION = "memory-extract-v1";
+import { DEFAULT_PROMPTS } from "./prompt-defaults.ts";
+
 export const MEMORY_COMPACTION_PROMPT_VERSION = "memory-compact-v1";
 
 const RECENT_LIVE_WINDOW = 20;
@@ -116,6 +118,7 @@ export interface MemoryEmbeddingOutput {
 export interface MemoryServiceOptions {
 	readonly audit?: (entry: AuditEntry) => Promise<void>;
 	readonly complete?: (prompt: string, modelId?: string) => Promise<string | undefined>;
+	readonly extractionPrompt?: () => Promise<string>;
 	readonly database: () => TsukaimaDatabase | undefined;
 	readonly embed?: (texts: readonly string[]) => Promise<MemoryEmbeddingOutput | undefined>;
 	readonly id?: () => string;
@@ -552,6 +555,7 @@ export class MemoryService {
 		| ((prompt: string, modelId?: string) => Promise<string | undefined>)
 		| undefined;
 	readonly #database: () => TsukaimaDatabase | undefined;
+	readonly #extractionPrompt: MemoryServiceOptions["extractionPrompt"];
 	readonly #embed:
 		| ((texts: readonly string[]) => Promise<MemoryEmbeddingOutput | undefined>)
 		| undefined;
@@ -567,6 +571,7 @@ export class MemoryService {
 		this.#audit = options.audit;
 		this.#complete = options.complete;
 		this.#database = options.database;
+		this.#extractionPrompt = options.extractionPrompt;
 		this.#embed = options.embed;
 		this.#id = options.id ?? randomUUID;
 		this.#llmEnabled = options.llmEnabled ?? (() => false);
@@ -1361,7 +1366,7 @@ export class MemoryService {
 			.map((row) => `${row.direction}: ${snippet(row.contentText ?? "", 500)}`)
 			.join("\n");
 		const prompt = [
-			"Extract durable memories from this conversation excerpt.",
+			(await this.#extractionPrompt?.()) ?? DEFAULT_PROMPTS["memory-extraction"],
 			"Return ONLY a JSON array. Each item has: kind (fact|summary|setting|person|preference|style|glossary|todo|event|relationship|observation), summary (short), content, confidence (0..1), importance (0..1), optional expiresAt ISO date, optional scope.",
 			`Prompt version: ${policy.memoryExtractionPromptVersion}.`,
 			"Conversation:",

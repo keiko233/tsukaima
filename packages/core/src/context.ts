@@ -12,6 +12,7 @@ import {
  * `undefined` on any failure so prompt rendering can never break a model run.
  */
 export interface ContextPromptProvider {
+	renderSystem?(conversationId: string): Promise<string | undefined>;
 	/** Persona text for one durable conversation, or `undefined` when none is bound. */
 	renderPersona(conversationId: string): Promise<string | undefined>;
 	/** Retrieved memory text for one durable conversation, or `undefined` when there is none. */
@@ -25,6 +26,7 @@ export interface ContextPromptProvider {
  * `/^[a-z][a-z0-9_-]*$/`, so the dotted `tsukaima.persona` form is not available.
  */
 export const CONTEXT_EXTENSION_NAME = "tsukaima-context";
+export const SYSTEM_SECTION_KEY = "tsukaima-system";
 /** Section key for the conversation's persona (rendered before policy and memories). */
 export const PERSONA_SECTION_KEY = "tsukaima-persona";
 /** Section key for the compact conversation policy/trigger contract. */
@@ -44,8 +46,7 @@ export interface ContextExtensionOptions {
 /**
  * Turns a {@link ContextPromptProvider} into a pi-durable extension with one section per
  * render call. Sections render before every request, so persona and memory changes are
- * reflected on the next turn without touching stored conversation state. Provider or render
- * failures omit the section (the harness keeps the previously shown text, if any).
+ * reflected on the next request. Provider failures omit the section.
  */
 export function createContextExtension<Tool extends ToolRegistration = ToolRegistration>(
 	provider: ContextPromptProvider,
@@ -65,6 +66,14 @@ export function createContextExtension<Tool extends ToolRegistration = ToolRegis
 			}
 		});
 	const sections = [
+		...(provider.renderSystem === undefined
+			? []
+			: [
+					buildSection(
+						SYSTEM_SECTION_KEY,
+						(id) => provider.renderSystem?.(id) ?? Promise.resolve(undefined),
+					),
+				]),
 		buildSection(options.keys?.persona ?? PERSONA_SECTION_KEY, (conversationId) =>
 			provider.renderPersona(conversationId),
 		),

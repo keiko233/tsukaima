@@ -390,6 +390,59 @@ describe("admin conversation policy and persona RPC", () => {
 			const personas = (await request("admin/personas/list")) as Array<{ id: string }>;
 			expect(personas.filter((entry) => entry.id === persona.id)).toHaveLength(2);
 
+			const systemPrompt = "Use short replies.";
+			const editedPersona = (await request("admin/personas/updatePrompt", {
+				id: persona.id,
+				prompt: "Use a friendly voice.",
+				version: bumped.version,
+			})) as { selfAliases: string[]; version: number };
+			expect(editedPersona).toMatchObject({ selfAliases: bumped.selfAliases, version: 3 });
+			expect(await request("admin/prompts/agentAccess")).toBe(false);
+			await request("admin/prompts/update", {
+				expectedOverride: null,
+				key: "chat-system",
+				override: systemPrompt,
+			});
+			const preview = sessionContextStatsSchema.parse(
+				await request("admin/sessions/contextStats", { sessionId: chat.sessionId }),
+			);
+			expect(preview.sections).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						key: "tsukaima-system",
+						text: expect.stringContaining(systemPrompt),
+					}),
+					expect.objectContaining({
+						key: "tsukaima-persona",
+						text: expect.stringContaining("Use a friendly voice."),
+					}),
+				]),
+			);
+			await expect(
+				request("admin/prompts/update", {
+					expectedOverride: null,
+					key: "chat-system",
+					override: "A stale edit.",
+				}),
+			).rejects.toThrow("409");
+			await expect(
+				request("admin/personas/updatePrompt", {
+					id: persona.id,
+					prompt: "A stale persona edit.",
+					version: bumped.version,
+				}),
+			).rejects.toThrow("409");
+			await request("admin/prompts/update", {
+				expectedOverride: systemPrompt,
+				key: "chat-system",
+				override: null,
+			});
+			expect(await request("admin/prompts/list")).toContainEqual({
+				key: "chat-system",
+				defaultText: "",
+				override: null,
+			});
+
 			const database = lifecycle.domainDatabase;
 			if (database === undefined) throw new Error("database missing");
 			const audits = await database.select().from(auditLog);
@@ -398,6 +451,8 @@ describe("admin conversation policy and persona RPC", () => {
 				"policy.override-all",
 				"persona.upsert",
 				"persona.bind",
+				"persona.update-prompt",
+				"prompt.update",
 			]) {
 				expect(audits.some((row) => row.action === action && row.result === "ok")).toBe(true);
 			}
