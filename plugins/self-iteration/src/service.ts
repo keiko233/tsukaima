@@ -7,13 +7,19 @@ import {
 	CodingRunner,
 	CodingTools,
 	createBubblewrapSandbox,
+	describeSandboxAvailability,
 	DomainCodingStore,
+	ISOLATED_BACKEND_REMEDY,
 	missingProposalFields,
 	sha256Hex,
+	SandboxUnavailableError,
 	SupervisedReloadController,
 	validateStructuredEdit,
 	WorktreeManager,
 	type ArtifactMetadata,
+	type SandboxAvailability,
+	type SandboxExecutor,
+	type TaskSnapshotManifest,
 	type DeploymentProposal,
 	type DeploymentProposalInput,
 	type DeploymentRecord,
@@ -32,8 +38,11 @@ import {
 import type { PluginAuditApi, PluginLogger, PluginStorage } from "@tsukaima/sdk";
 import { elapsedMs, preview, previewCommand, scopedLogger, type ScopedLogger } from "./log.ts";
 import {
+	CHECK_TARGET_ARGV,
 	constraintsFromPolicy,
 	DEFAULT_CODING_POLICY,
+	isCheckTargetName,
+	type CheckTargetName,
 	type CodingPolicy,
 	type SelfIterationHostBinding,
 	type TaskMode,
@@ -94,9 +103,33 @@ export interface RollbackRequest {
 	readonly dryRun?: boolean;
 }
 
+/** Outcome of one Workspace shell run. Source writes are discarded; only the outcome is kept. */
+export interface ExecResult {
+	readonly cancelled: boolean;
+	readonly durationMs: number;
+	readonly exitCode: number | null;
+	readonly passed: boolean;
+	readonly signal: string | null;
+	readonly snapshot: TaskSnapshotManifest;
+	readonly stderr: string;
+	readonly stderrTruncated: boolean;
+	readonly stdout: string;
+	readonly stdoutTruncated: boolean;
+	readonly taskId: string;
+	readonly timedOut: boolean;
+}
+
+/** Outcome of one named check target, bound to the snapshot checksum it validated. */
+export interface CheckResult extends ExecResult {
+	readonly argv: readonly string[];
+	readonly summary?: { readonly failed: number; readonly total: number };
+	readonly target: CheckTargetName;
+}
+
 export interface TaskBundle {
 	readonly approvals: readonly Awaited<ReturnType<DomainCodingStore["listApprovals"]>>[number][];
 	readonly deployments: readonly DeploymentRecord[];
+	readonly executor: SandboxAvailability;
 	readonly graph: TaskGraph;
 	readonly proposals: readonly DeploymentProposal[];
 	readonly task: IterationTask;
@@ -104,12 +137,35 @@ export interface TaskBundle {
 }
 
 const APPROVAL_TTL_MS = 30 * 60_000;
+/** Bound on a model-written shell script; the script is one argument, never a file. */
+const MAX_SCRIPT_CHARS = 16 * 1024;
+/** Shell used for the Workspace exec tool. It runs with no rc files and no profile. */
+const SHELL_COMMAND = "bash";
+const SHELL_FLAGS: readonly string[] = ["--noprofile", "--norc"];
+/** Artifact kind a check target records, so the proposal evidence can tell checks apart. */
+const CHECK_ARTIFACT_KIND: Readonly<Record<CheckTargetName, "build" | "log" | "test">> = {
+	lint: "log",
+	test: "test",
+	typecheck: "log",
+	"webui-build": "build",
+};
 /** Bound on a model-supplied search pattern, so one argument cannot become a payload. */
 const MAX_SEARCH_PATTERN_CHARS = 4_000;
 const MAX_SEARCH_RESULTS = 100;
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/** Short, stable label for a finished command; cancellation and timeout are never "failed" alone. */
+function commandOutcomeLabel(result: {
+	readonly cancelled?: boolean;
+	readonly exitCode: number | null;
+	readonly timedOut: boolean;
+}): "cancelled" | "failed" | "passed" | "timed_out" {
+	if (result.cancelled === true) return "cancelled";
+	if (result.timedOut) return "timed_out";
+	return result.exitCode === 0 ? "passed" : "failed";
 }
 
 /** A linked worktree has a `.git` file (not a directory) pointing back at the repository. */
@@ -292,6 +348,7 @@ export class SelfIterationService {
 	}
 
 	async overview(): Promise<{
+		readonly executor: SandboxAvailability;
 		readonly policy: CodingPolicy;
 		readonly stats: {
 			readonly approvals: number;
@@ -302,12 +359,13 @@ export class SelfIterationService {
 		readonly tasks: readonly IterationTask[];
 	}> {
 		const startedAt = performance.now();
-		const [policy, tasks, proposals, approvals, deployments] = await Promise.all([
+		const [policy, tasks, proposals, approvals, deployments, executor] = await Promise.all([
 			this.policy(),
 			this.store.listTasks({ limit: 20 }),
 			this.store.listProposals(),
 			this.store.listApprovals(),
 			this.store.listDeployments({ limit: 20 }),
+			this.isolatedExecutorStatus(),
 		]);
 		const stats = {
 			approvals: approvals.length,
@@ -315,8 +373,13 @@ export class SelfIterationService {
 			proposals: proposals.length,
 			tasks: tasks.length,
 		};
-		this.#logger.debug("overview built", { durationMs: elapsedMs(startedAt), ...stats });
-		return { policy, stats, tasks };
+		this.#logger.debug("overview built", {
+			durationMs: elapsedMs(startedAt),
+			executor: executor.backend,
+			isolated: executor.isolated,
+			...stats,
+		});
+		return { executor, policy, stats, tasks };
 	}
 
 	async resolveTask(
@@ -853,6 +916,7 @@ export class SelfIterationService {
 			readonly args?: readonly string[];
 			readonly command?: string;
 			readonly pattern?: string;
+			readonly signal?: AbortSignal;
 		},
 	): Promise<TestRunResult & { readonly taskId: string }> {
 		const startedAt = performance.now();
@@ -885,6 +949,7 @@ export class SelfIterationService {
 				command,
 				cwd: worktreePath,
 				maxOutputBytes: policy.maxOutputBytes,
+				...(input.signal === undefined ? {} : { signal: input.signal }),
 				timeoutMs: policy.timeoutMs,
 				writable: true,
 			});
@@ -962,6 +1027,7 @@ export class SelfIterationService {
 		input: ToolTaskInput & {
 			readonly args?: readonly string[];
 			readonly command?: string;
+			readonly signal?: AbortSignal;
 		},
 	): Promise<{
 		readonly artifactMetadata: ArtifactMetadata;
@@ -999,6 +1065,7 @@ export class SelfIterationService {
 				command,
 				cwd: worktreePath,
 				maxOutputBytes: policy.maxOutputBytes,
+				...(input.signal === undefined ? {} : { signal: input.signal }),
 				timeoutMs: policy.timeoutMs,
 				writable: true,
 			});
@@ -1068,6 +1135,275 @@ export class SelfIterationService {
 				taskId: task.id,
 			});
 			await this.#auditDenied(task.id, "self-iteration.build", errorMessage(error));
+			throw error;
+		}
+	}
+
+	/** Whether commands can run isolated right now, and the operator action when they cannot. */
+	async isolatedExecutorStatus(): Promise<SandboxAvailability> {
+		return await describeSandboxAvailability(this.#sandbox);
+	}
+
+	/**
+	 * The only executor a Workspace shell or check may use. The host backend and any provider
+	 * failure stop here, before a worktree command is prepared, so no ungoverned process starts.
+	 */
+	async #isolatedExecutor(): Promise<SandboxExecutor> {
+		const executor = await this.#sandbox();
+		if (!executor.isolated) {
+			throw new SandboxUnavailableError(
+				`the ${executor.id} backend runs commands without OS isolation`,
+				{ code: "backend_not_isolated", remedy: ISOLATED_BACKEND_REMEDY },
+			);
+		}
+		return executor;
+	}
+
+	/** Gate before any worktree is provisioned, so a refused request leaves no checkout behind. */
+	async #requireIsolatedExecutor(taskId: string, tool: string): Promise<SandboxExecutor> {
+		try {
+			return await this.#isolatedExecutor();
+		} catch (error) {
+			await this.#auditDenied(taskId, tool, errorMessage(error));
+			throw error;
+		}
+	}
+
+	/**
+	 * Run a shell script against a disposable snapshot of the task worktree. The script is one
+	 * `bash -c` argument; its writes, temporary files, and generated outputs are discarded when
+	 * it ends, and persistent changes must go through the path-checked edit tool.
+	 */
+	async exec(
+		input: ToolTaskInput & { readonly script: string; readonly signal?: AbortSignal },
+	): Promise<ExecResult> {
+		const startedAt = performance.now();
+		const resolved = await this.resolveTask(input, "patch", "self-iteration.exec");
+		const scriptBytes = Buffer.byteLength(input.script, "utf-8");
+		const scriptSha256 = sha256Hex(input.script);
+		if (input.script.trim().length === 0) throw new Error("script is required");
+		if (input.script.length > MAX_SCRIPT_CHARS) {
+			throw new Error(`script_too_long:${input.script.length}>${MAX_SCRIPT_CHARS}`);
+		}
+		if (input.script.includes("\0")) throw new Error("invalid_script");
+		const executor = await this.#requireIsolatedExecutor(resolved.id, "self-iteration.exec");
+		const policy = await this.policy();
+		const task = await this.#ensureWorktree(resolved, {
+			actor: input.sourceConversationId ?? "agent",
+			tool: "self-iteration.exec",
+		});
+		try {
+			if (task.worktreePath === undefined) throw new Error("worktree_required");
+			const result = await executor.exec({
+				args: [...SHELL_FLAGS, "-c", input.script],
+				command: SHELL_COMMAND,
+				cwd: task.worktreePath,
+				maxOutputBytes: policy.maxOutputBytes,
+				snapshot: true,
+				...(input.signal === undefined ? {} : { signal: input.signal }),
+				timeoutMs: policy.timeoutMs,
+				writable: true,
+			});
+			if (result.snapshot === undefined) throw new Error("snapshot_provenance_missing");
+			const passed = result.exitCode === 0 && !result.timedOut && result.cancelled !== true;
+			const outcome = commandOutcomeLabel(result);
+			await this.#recordTimeline(
+				task,
+				"self-iteration.exec",
+				passed ? "success" : "failure",
+				outcome,
+			);
+			this.#logger.debug("exec completed", {
+				cancelled: result.cancelled === true,
+				durationMs: elapsedMs(startedAt),
+				exitCode: result.exitCode,
+				scriptBytes,
+				snapshotChecksum: result.snapshot.checksum,
+				taskId: task.id,
+				timedOut: result.timedOut,
+			});
+			await this.#auditRecord({
+				action: "self-iteration.exec",
+				actorId: input.sourceConversationId ?? "agent",
+				actorKind: "agent",
+				payload: {
+					cancelled: result.cancelled === true,
+					exitCode: result.exitCode,
+					scriptBytes,
+					scriptSha256,
+					snapshotChecksum: result.snapshot.checksum,
+					timedOut: result.timedOut,
+				},
+				...(passed ? { result: "ok" as const } : { reason: outcome, result: "failed" as const }),
+				targetId: task.id,
+				targetKind: "coding-task",
+			});
+			return {
+				cancelled: result.cancelled === true,
+				durationMs: result.durationMs,
+				exitCode: result.exitCode,
+				passed,
+				signal: result.signal,
+				snapshot: result.snapshot,
+				stderr: result.stderr,
+				stderrTruncated: result.stderrTruncated,
+				stdout: result.stdout,
+				stdoutTruncated: result.stdoutTruncated,
+				taskId: task.id,
+				timedOut: result.timedOut,
+			};
+		} catch (error) {
+			this.#logger.error("exec failed", {
+				durationMs: elapsedMs(startedAt),
+				error: errorMessage(error),
+				taskId: task.id,
+			});
+			await this.#auditDenied(task.id, "self-iteration.exec", errorMessage(error));
+			throw error;
+		}
+	}
+
+	/**
+	 * Run one named check on a disposable snapshot of the task worktree. The recorded artifact
+	 * carries the snapshot checksum, so later proposal evidence can tell which content was checked.
+	 */
+	async check(
+		input: ToolTaskInput & {
+			readonly pattern?: string;
+			readonly signal?: AbortSignal;
+			readonly target: string;
+		},
+	): Promise<CheckResult> {
+		const startedAt = performance.now();
+		const resolved = await this.resolveTask(input, "patch", "self-iteration.check");
+		if (!isCheckTargetName(input.target)) {
+			this.#logger.warn("check target rejected", {
+				target: preview(input.target),
+				taskId: resolved.id,
+			});
+			await this.#auditDenied(
+				resolved.id,
+				"self-iteration.check",
+				`unknown_check_target:${input.target}`,
+			);
+			throw new Error(`unknown_check_target:${input.target}`);
+		}
+		const target = input.target;
+		const argv: readonly string[] =
+			target === "test"
+				? [...CHECK_TARGET_ARGV.test, ...this.#testPatternArgs(input.pattern)]
+				: input.pattern === undefined
+					? CHECK_TARGET_ARGV[target]
+					: (() => {
+							throw new Error(`pattern_not_supported:${target}`);
+						})();
+		const policy = await this.policy();
+		if (!policy.allowedCommands.includes(argv[0] ?? "")) {
+			throw new Error(`command_not_allowed:${argv[0] ?? ""}`);
+		}
+		const executor = await this.#requireIsolatedExecutor(resolved.id, "self-iteration.check");
+		const task = await this.#ensureWorktree(resolved, {
+			actor: input.sourceConversationId ?? "agent",
+			tool: "self-iteration.check",
+		});
+		try {
+			if (task.worktreePath === undefined) throw new Error("worktree_required");
+			const result = await executor.exec({
+				args: argv.slice(1),
+				command: argv[0] ?? "bun",
+				cwd: task.worktreePath,
+				maxOutputBytes: policy.maxOutputBytes,
+				snapshot: true,
+				...(input.signal === undefined ? {} : { signal: input.signal }),
+				timeoutMs: policy.timeoutMs,
+				writable: true,
+			});
+			if (result.snapshot === undefined) throw new Error("snapshot_provenance_missing");
+			const passed = result.exitCode === 0 && !result.timedOut && result.cancelled !== true;
+			const parsed = target === "test" ? parseTest(result) : undefined;
+			const summary =
+				parsed === undefined ? undefined : { failed: parsed.failed, total: parsed.total };
+			const checksum = sha256Hex(
+				`${target}\0${result.snapshot.checksum}\0${result.exitCode ?? "null"}\0${result.stdout}\0${result.stderr}`,
+			);
+			const outcome = commandOutcomeLabel(result);
+			const latest = (await this.store.getTask(task.id)) ?? task;
+			await this.store.updateTask(task.id, {
+				artifacts: [
+					...latest.artifacts,
+					{
+						checksum,
+						kind: CHECK_ARTIFACT_KIND[target],
+						metadata: {
+							argv: [...argv],
+							cancelled: result.cancelled === true,
+							durationMs: result.durationMs,
+							exitCode: result.exitCode,
+							passed,
+							snapshot: { ...result.snapshot },
+							target,
+							timedOut: result.timedOut,
+							...(summary === undefined ? {} : { failed: summary.failed, total: summary.total }),
+						},
+						name: `check:${target}`,
+					},
+				],
+			});
+			await this.#recordTimeline(
+				task,
+				"self-iteration.check",
+				passed ? "success" : "failure",
+				`${target}:${outcome}`,
+			);
+			await this.#log(task, passed ? "info" : "error", `check ${target} ${outcome}`);
+			this.#logger.debug("check completed", {
+				durationMs: elapsedMs(startedAt),
+				exitCode: result.exitCode,
+				snapshotChecksum: result.snapshot.checksum,
+				target,
+				taskId: task.id,
+			});
+			await this.#auditRecord({
+				action: "self-iteration.check",
+				actorId: input.sourceConversationId ?? "agent",
+				actorKind: "agent",
+				payload: {
+					argv: [...argv],
+					cancelled: result.cancelled === true,
+					exitCode: result.exitCode,
+					snapshotChecksum: result.snapshot.checksum,
+					target,
+					timedOut: result.timedOut,
+				},
+				...(passed ? { result: "ok" as const } : { reason: outcome, result: "failed" as const }),
+				targetId: task.id,
+				targetKind: "coding-task",
+			});
+			return {
+				argv: [...argv],
+				cancelled: result.cancelled === true,
+				durationMs: result.durationMs,
+				exitCode: result.exitCode,
+				passed,
+				signal: result.signal,
+				snapshot: result.snapshot,
+				stderr: result.stderr,
+				stderrTruncated: result.stderrTruncated,
+				stdout: result.stdout,
+				stdoutTruncated: result.stdoutTruncated,
+				taskId: task.id,
+				target,
+				timedOut: result.timedOut,
+				...(summary === undefined ? {} : { summary }),
+			};
+		} catch (error) {
+			this.#logger.error("check failed to run", {
+				durationMs: elapsedMs(startedAt),
+				error: errorMessage(error),
+				target,
+				taskId: task.id,
+			});
+			await this.#auditDenied(task.id, "self-iteration.check", errorMessage(error));
 			throw error;
 		}
 	}
@@ -1824,7 +2160,10 @@ export class SelfIterationService {
 			this.store.listApprovals({ taskId }),
 			this.store.listDeployments({ taskId }),
 		]);
-		const worktree = await this.#worktreeSummary(task);
+		const [worktree, executor] = await Promise.all([
+			this.#worktreeSummary(task),
+			this.isolatedExecutorStatus(),
+		]);
 		this.#logger.debug("status assembled", {
 			approvals: approvals.length,
 			deployments: deployments.length,
@@ -1837,6 +2176,7 @@ export class SelfIterationService {
 		return {
 			approvals,
 			deployments,
+			executor,
 			graph: buildTaskGraph(task, proposals, deployments),
 			proposals,
 			task,

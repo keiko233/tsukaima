@@ -4,6 +4,9 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	createBubblewrapSandbox,
+	createTaskSnapshot,
+	probeBubblewrapSandbox,
 	ANALYSIS_MOUNT,
 	DomainCodingStore,
 	NoopReloadController,
@@ -16,10 +19,11 @@ import {
 	type SandboxProvider,
 	SandboxUnavailableError,
 } from "@tsukaima/coding";
-import type { AuditEntry, PluginLogger, PluginStorage } from "@tsukaima/sdk";
+import type { AuditEntry, PluginContext, PluginLogger, PluginStorage } from "@tsukaima/sdk";
 import { SELF_ITERATION_HOST_BINDING } from "./domain.ts";
 import { selfIterationPlugin } from "./index.ts";
 import { SelfIterationService } from "./service.ts";
+import { registerSelfIterationTools } from "./tools.ts";
 
 const directories: string[] = [];
 
@@ -94,14 +98,48 @@ interface Fixture {
  * Test double for the bubblewrap sandbox: runs the governed argv directly so the fixture can
  * exercise service behavior without host namespaces, while recording every sandbox call.
  */
-function createTestSandbox(): { calls: SandboxExecInput[]; provider: SandboxProvider } {
+function createTestSandbox(repositoryPath: string): {
+	calls: SandboxExecInput[];
+	provider: SandboxProvider;
+} {
 	const calls: SandboxExecInput[] = [];
 	const provider: SandboxProvider = async () => ({
+		// A deterministic stand-in for bubblewrap: it claims isolation so the isolated tools are
+		// exercised, and it mirrors the snapshot semantics without namespaces.
 		id: "test-sandbox",
+		isolated: true,
 		exec: async (input) => {
 			calls.push(input);
 			const resolved = Bun.which(input.command);
 			if (resolved === null) throw new Error(`command_not_found:${input.command}`);
+			if (input.snapshot === true) {
+				const snapshotDir = await fs.mkdtemp(join(tmpdir(), "tsukaima-test-snapshot-"));
+				try {
+					const snapshot = await createTaskSnapshot({
+						repositoryPath,
+						sourcePath: input.cwd,
+						targetPath: snapshotDir,
+					});
+					const result = await runManagedProcess({
+						args: [...input.args],
+						command: resolved,
+						cwd: snapshotDir,
+						env: {
+							HOME: snapshotDir,
+							LANG: "C.UTF-8",
+							PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+							TMPDIR: snapshotDir,
+							TZ: "UTC",
+						},
+						maxOutputBytes: input.maxOutputBytes,
+						...(input.signal === undefined ? {} : { signal: input.signal }),
+						timeoutMs: input.timeoutMs,
+					});
+					return { ...result, snapshot: snapshot.manifest };
+				} finally {
+					await fs.rm(snapshotDir, { force: true, recursive: true });
+				}
+			}
 			let analysisRoot: string | undefined;
 			if (input.exportAnalysis === true) {
 				// The fixture repository is a sibling of the worktree root.
@@ -167,6 +205,8 @@ async function fixture(
 		/** Whether a rollback reload actually restores the previous artifact. */
 		readonly applyRollback?: boolean;
 		readonly sandbox?: SandboxProvider;
+		/** Use the real bubblewrap provider for this repository instead of the test double. */
+		readonly realBubblewrap?: boolean;
 	} = {},
 ): Promise<Fixture> {
 	const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-self-iteration-"));
@@ -217,13 +257,18 @@ async function fixture(
 			};
 		},
 	};
-	const testSandbox = createTestSandbox();
+	const testSandbox = createTestSandbox(repo);
 	const calls: SandboxExecInput[] = [...testSandbox.calls];
-	const baseSandbox = options.sandbox ?? testSandbox.provider;
+	const baseSandbox =
+		options.sandbox ??
+		(options.realBubblewrap === true
+			? createBubblewrapSandbox({ repositoryPath: repo, worktreeRoot: worktrees })
+			: testSandbox.provider);
 	const sandbox: SandboxProvider = async () => {
 		const executor = await baseSandbox();
 		return {
 			id: executor.id,
+			isolated: executor.isolated,
 			exec: async (input) => {
 				calls.push(input);
 				return await executor.exec(input);
@@ -753,13 +798,21 @@ describe("SelfIterationService", () => {
 		const tools: string[] = [];
 		const rpc: string[] = [];
 		const logs: CapturedLog[] = [];
+		const statuses: { level?: string; code?: string; summary?: string }[] = [];
 		const context = {
 			audit: { record: async () => undefined },
 			dependencies: {
 				get: () => ({
 					healthCheck: async () => ({ checkedAtMs: 0, ok: true }),
 					reload: { reload: async () => ({ message: "ok", reloadedAtMs: 0, success: true }) },
+					// Without bubblewrap the isolated tools are withheld, not offered and failing.
 					repositoryRoot: repo,
+					sandbox: async () => {
+						throw new SandboxUnavailableError("bubblewrap (bwrap) is not installed on the host", {
+							code: "bwrap_missing",
+							remedy: "Install the bubblewrap package, then restart the server.",
+						});
+					},
 					store,
 					worktreeRoot: worktrees,
 				}),
@@ -768,7 +821,10 @@ describe("SelfIterationService", () => {
 			rpc: { register: (name: string) => void rpc.push(name) },
 			storage: new MemoryStorage(),
 			tools: { register: (tool: { name: string }) => void tools.push(tool.name) },
-			ui: { setStatus: () => undefined },
+			ui: {
+				setStatus: (status: { level?: string; code?: string; summary?: string }) =>
+					void statuses.push(status),
+			},
 		};
 		await selfIterationPlugin.setup(context as never);
 		expect(tools.toSorted()).toEqual([
@@ -782,6 +838,11 @@ describe("SelfIterationService", () => {
 			"self-iteration.upstream",
 			"self-iteration.worktree",
 		]);
+		const last = statuses.at(-1);
+		expect(last?.code).toBe("isolated_executor_unavailable");
+		expect(last?.level).toBe("warning");
+		expect(last?.summary).toContain("bubblewrap");
+		expect(last?.summary).toContain("Install the bubblewrap package");
 		expect(tools.some((name) => /maintenance|deploy|rollback|backup|reload/u.test(name))).toBe(
 			false,
 		);
@@ -802,6 +863,37 @@ describe("SelfIterationService", () => {
 		expect(
 			logs.some((entry) => entry.level === "debug" && entry.message === "self-iteration teardown"),
 		).toBe(true);
+	});
+
+	test("offers exec and check upfront only when the isolated executor passed its probe", async () => {
+		const { repo, store, worktrees } = await fixture();
+		const tools: string[] = [];
+		const statuses: { level?: string; code?: string }[] = [];
+		const context = {
+			audit: { record: async () => undefined },
+			dependencies: {
+				get: () => ({
+					healthCheck: async () => ({ checkedAtMs: 0, ok: true }),
+					reload: { reload: async () => ({ message: "ok", reloadedAtMs: 0, success: true }) },
+					repositoryRoot: repo,
+					sandbox: createTestSandbox(repo).provider,
+					store,
+					worktreeRoot: worktrees,
+				}),
+			},
+			logger: captureLogger([]),
+			rpc: { register: () => undefined },
+			storage: new MemoryStorage(),
+			tools: {
+				register: (tool: { name: string; policy?: { lazy?: boolean } }) =>
+					void tools.push(tool.name),
+			},
+			ui: { setStatus: (status: { level?: string; code?: string }) => void statuses.push(status) },
+		};
+		await selfIterationPlugin.setup(context as never);
+		expect(tools).toContain("self-iteration.exec");
+		expect(tools).toContain("self-iteration.check");
+		expect(statuses.at(-1)?.level).toBe("ok");
 	});
 });
 
@@ -986,4 +1078,267 @@ describe("workspace task binding and worktree provisioning", () => {
 			audits.filter((entry) => entry.action === "self-iteration.task.binding_missing"),
 		).toHaveLength(3);
 	});
+});
+
+describe("isolated Workspace exec and check targets", () => {
+	test("exec runs on a disposable snapshot: writes stay out of the worktree and the audit omits the script", async () => {
+		const { audits, service, sandboxCalls } = await fixture();
+		const task = await patchTask(service);
+		const worktree = (await service.status(task.id)).worktree.path;
+		if (worktree === null) throw new Error("worktree missing");
+		const result = await service.exec({
+			script:
+				"printf scratch > generated.txt && mkdir -p out && echo built > out/bundle.js && cat generated.txt",
+			taskId: task.id,
+		});
+		expect(result.passed).toBe(true);
+		expect(result.stdout.trim()).toBe("scratch");
+		expect(result.snapshot.checksum).toMatch(/^[0-9a-f]{64}$/u);
+		const call = sandboxCalls.at(-1);
+		expect(call?.snapshot).toBe(true);
+		expect(call?.command).toBe("bash");
+		expect(call?.args.slice(0, 2)).toEqual(["--noprofile", "--norc"]);
+		await expect(fs.stat(join(worktree, "generated.txt"))).rejects.toThrow();
+		await expect(fs.stat(join(worktree, "out"))).rejects.toThrow();
+		const exec = audits.find((entry) => entry.action === "self-iteration.exec");
+		expect(exec?.result).toBe("ok");
+		expect(JSON.stringify(audits)).not.toContain("generated.txt");
+		expect(JSON.stringify(audits)).not.toContain("printf scratch");
+	});
+
+	test("exec rejects oversized and empty scripts without starting a process", async () => {
+		const { sandboxCalls, service } = await fixture();
+		const task = await patchTask(service);
+		await expect(service.exec({ script: "   ", taskId: task.id })).rejects.toThrow(
+			"script is required",
+		);
+		await expect(
+			service.exec({ script: "x".repeat(16 * 1024 + 1), taskId: task.id }),
+		).rejects.toThrow("script_too_long");
+		expect(sandboxCalls.some((call) => call.snapshot === true)).toBe(false);
+	});
+
+	test("exec reports cancellation and timeout as outcomes, not as a successful run", async () => {
+		const { audits, service } = await fixture();
+		const task = await patchTask(service);
+		const controller = new AbortController();
+		setTimeout(() => controller.abort(), 150);
+		const startedAt = performance.now();
+		const cancelled = await service.exec({
+			script: "sleep 30",
+			signal: controller.signal,
+			taskId: task.id,
+		});
+		expect(cancelled.cancelled).toBe(true);
+		expect(cancelled.passed).toBe(false);
+		expect(performance.now() - startedAt).toBeLessThan(10_000);
+		expect(
+			audits.some(
+				(entry) => entry.action === "self-iteration.exec" && entry.reason === "cancelled",
+			),
+		).toBe(true);
+
+		await service.updatePolicy({ timeoutMs: 1000 }, "webui-admin");
+		const timed = await service.exec({ script: "sleep 30", taskId: task.id });
+		expect(timed.timedOut).toBe(true);
+		expect(timed.passed).toBe(false);
+	}, 30_000);
+
+	test("exec and concurrent checks share one provisioned worktree and each record their own snapshot", async () => {
+		const { service } = await fixture();
+		const task = await patchTask(service);
+		const [first, second] = await Promise.all([
+			service.exec({ script: "echo one", taskId: task.id }),
+			service.check({ target: "test", taskId: task.id }),
+		]);
+		expect(first.passed).toBe(true);
+		expect(second.passed).toBe(true);
+		expect(second.summary?.total ?? 0).toBeGreaterThanOrEqual(1);
+		const bundle = await service.status(task.id);
+		expect(bundle.worktree.path).not.toBeNull();
+		expect(bundle.executor.available).toBe(true);
+	});
+
+	test("check records a snapshot-bound artifact that changes when the task content changes", async () => {
+		const { service } = await fixture();
+		const task = await patchTask(service);
+		const first = await service.check({ target: "test", taskId: task.id });
+		expect(first.argv).toEqual(["bun", "test"]);
+		const before = (await service.status(task.id)).task.artifacts.filter(
+			(entry) => entry.kind === "test",
+		);
+		const recorded = before.at(-1);
+		expect(recorded?.name).toBe("check:test");
+		expect(recorded?.metadata?.snapshot).toMatchObject({ checksum: first.snapshot.checksum });
+		await service.edit({
+			content: "export const changed = 1;\n",
+			create: true,
+			path: "src/changed.ts",
+			taskId: task.id,
+		});
+		const second = await service.check({ target: "test", taskId: task.id });
+		expect(second.snapshot.checksum).not.toBe(first.snapshot.checksum);
+	});
+
+	test("check accepts only server-owned targets and refuses a pattern for targets that take none", async () => {
+		const { audits, sandboxCalls, service } = await fixture();
+		const task = await patchTask(service);
+		const before = sandboxCalls.length;
+		await expect(service.check({ target: "sh", taskId: task.id })).rejects.toThrow(
+			"unknown_check_target:sh",
+		);
+		await expect(
+			service.check({ pattern: "--preload=./evil.ts", target: "test", taskId: task.id }),
+		).rejects.toThrow("invalid_test_pattern");
+		await expect(
+			service.check({ pattern: "src", target: "lint", taskId: task.id }),
+		).rejects.toThrow("pattern_not_supported:lint");
+		expect(sandboxCalls.length).toBe(before);
+		expect(audits.some((entry) => entry.reason === "unknown_check_target:sh")).toBe(true);
+	});
+
+	test("an unavailable isolated executor fails closed before any command starts", async () => {
+		const { sandboxCalls, service } = await fixture({
+			sandbox: async () => {
+				throw new SandboxUnavailableError("bubblewrap probe failed", {
+					code: "namespace_denied",
+					remedy: "Allow unprivileged user namespaces.",
+				});
+			},
+		});
+		const task = await patchTask(service);
+		await expect(service.exec({ script: "echo no", taskId: task.id })).rejects.toThrow(
+			"sandbox_unavailable",
+		);
+		await expect(service.check({ target: "test", taskId: task.id })).rejects.toThrow(
+			"sandbox_unavailable",
+		);
+		expect(sandboxCalls).toHaveLength(0);
+		// A refused request must not provision a checkout first.
+		const fresh = await service.createTask({
+			goal: "Refused before provisioning",
+			mode: "patch",
+			sourceConversationId: "coding-conversation",
+		});
+		await expect(service.exec({ script: "echo no", taskId: fresh.id })).rejects.toThrow(
+			"sandbox_unavailable",
+		);
+		expect((await service.getTask(fresh.id))?.worktreePath).toBeUndefined();
+		const availability = await service.isolatedExecutorStatus();
+		expect(availability).toMatchObject({
+			available: false,
+			code: "namespace_denied",
+			remedy: "Allow unprivileged user namespaces.",
+		});
+	});
+
+	test("a non-isolated backend is refused for exec and check even if it is reachable", async () => {
+		const hostCalls: unknown[] = [];
+		const { service } = await fixture({
+			sandbox: async () => ({
+				id: "host",
+				isolated: false,
+				exec: async (input) => {
+					hostCalls.push(input);
+					throw new Error("must not run");
+				},
+			}),
+		});
+		const task = await patchTask(service);
+		await expect(service.exec({ script: "echo no", taskId: task.id })).rejects.toThrow(
+			"without OS isolation",
+		);
+		await expect(service.check({ target: "webui-build", taskId: task.id })).rejects.toThrow(
+			"without OS isolation",
+		);
+		expect(hostCalls).toHaveLength(0);
+		const availability = await service.isolatedExecutorStatus();
+		expect(availability.available).toBe(false);
+		expect(availability.remedy).toContain("TSUKAIMA_CODING_SANDBOX=bubblewrap");
+	});
+
+	test("model exec and check calls are denied without a Workspace binding", async () => {
+		const { audits, service, sandboxCalls } = await fixture();
+		await patchTask(service);
+		const tools: {
+			name: string;
+			execute: (
+				input: Record<string, unknown>,
+				invocation: { conversationId?: string },
+			) => Promise<{ content: { text: string }[] }>;
+		}[] = [];
+		registerSelfIterationTools(
+			{
+				audit: { record: async () => undefined },
+				logger: captureLogger([]),
+				tools: { register: (tool: never) => void tools.push(tool) },
+			} as unknown as PluginContext,
+			service,
+			{ isolatedExecution: true },
+		);
+		const exec = tools.find((tool) => tool.name === "self-iteration.exec");
+		const check = tools.find((tool) => tool.name === "self-iteration.check");
+		if (exec === undefined || check === undefined)
+			throw new Error("isolated tools were not registered");
+		const denied = await exec.execute({ script: "echo no" }, {});
+		expect(denied.content[0]?.text).toContain("task_binding_missing");
+		const unbound = await check.execute(
+			{ target: "test", taskId: "other-task" },
+			{ conversationId: "unbound" },
+		);
+		expect(unbound.content[0]?.text).toContain("task_binding_missing");
+		expect(sandboxCalls.some((call) => call.snapshot === true)).toBe(false);
+		expect(audits.some((entry) => entry.reason === "task_binding_missing")).toBe(true);
+	});
+});
+
+describe("isolated Workspace exec and check targets (real bubblewrap)", () => {
+	const bwrapProbe = probeBubblewrapSandbox({ repositoryPath: process.cwd() });
+
+	test("bun test and a shell pipeline run on the task snapshot under real namespaces", async () => {
+		if (!(await bwrapProbe).ok) return;
+		const { service } = await fixture({ realBubblewrap: true });
+		const task = await patchTask(service);
+		const worktree = (await service.status(task.id)).worktree.path;
+		if (worktree === null) throw new Error("worktree missing");
+		expect((await service.isolatedExecutorStatus()).backend).toBe("bubblewrap");
+
+		const check = await service.check({ target: "test", taskId: task.id });
+		expect(check.passed).toBe(true);
+		expect(check.summary?.total ?? 0).toBeGreaterThanOrEqual(1);
+		expect(check.snapshot.checksum).toMatch(/^[0-9a-f]{64}$/u);
+
+		const shell = await service.exec({
+			script:
+				"printf generated > scratch.txt && cat scratch.txt && echo && ls src | sort | head -n 5 | wc -l",
+			taskId: task.id,
+		});
+		expect(shell.passed).toBe(true);
+		expect(shell.stdout.split("\n")[0]).toBe("generated");
+		await expect(fs.stat(join(worktree, "scratch.txt"))).rejects.toThrow();
+	}, 120_000);
+
+	test("the real shell has no network and cannot see the live repository", async () => {
+		if (!(await bwrapProbe).ok) return;
+		const { repo, service } = await fixture({ realBubblewrap: true });
+		const task = await patchTask(service);
+		const listener = Bun.listen({
+			hostname: "127.0.0.1",
+			port: 0,
+			socket: { data() {}, open() {} },
+		});
+		try {
+			const shell = await service.exec({
+				script: [
+					`(exec 3<>/dev/tcp/127.0.0.1/${listener.port}) 2>/dev/null && echo reached || echo unreachable`,
+					`test -e '${join(repo, "src", "app.ts")}' && echo live-visible || echo live-absent`,
+				].join("\n"),
+				taskId: task.id,
+			});
+			expect(shell.stdout).toContain("unreachable");
+			expect(shell.stdout).toContain("live-absent");
+		} finally {
+			listener.stop(true);
+		}
+	}, 120_000);
 });

@@ -31,6 +31,8 @@ export interface RunnerConfig {
 
 export interface CommandResult {
 	readonly args: readonly string[];
+	/** True when an abort signal stopped the command; the process tree was killed. */
+	readonly cancelled?: boolean;
 	readonly command: string;
 	readonly durationMs: number;
 	readonly exitCode: number | null;
@@ -98,6 +100,8 @@ export interface ManagedProcessOptions {
 	readonly cwd: string;
 	readonly env: Readonly<Record<string, string>>;
 	readonly maxOutputBytes: number;
+	/** Aborting kills the child's whole process group, the same way a timeout does. */
+	readonly signal?: AbortSignal;
 	readonly timeoutMs: number;
 }
 
@@ -107,14 +111,32 @@ export interface ManagedProcessOptions {
  * process-supervision and output-capture semantics.
  */
 export async function runManagedProcess(options: ManagedProcessOptions): Promise<CommandResult> {
-	const { args, command, cwd, env, maxOutputBytes, timeoutMs } = options;
+	const { args, command, cwd, env, maxOutputBytes, signal, timeoutMs } = options;
 	const commandLabel = command.startsWith("/")
 		? command.slice(command.lastIndexOf("/") + 1)
 		: command;
 	const startMs = performance.now();
+	if (signal?.aborted === true) {
+		return {
+			args: [...args],
+			cancelled: true,
+			command: commandLabel,
+			durationMs: 0,
+			exitCode: null,
+			signal: null,
+			stderr: "",
+			stderrTruncated: false,
+			stdout: "",
+			stdoutTruncated: false,
+			timedOut: false,
+		};
+	}
 	return new Promise<CommandResult>((resolvePromise, rejectPromise) => {
 		const spawnOptions: SpawnOptions = {
 			cwd,
+			// A child leads its own process group so timeout and cancellation reach every
+			// descendant it started (test workers, shell background jobs), not only the direct child.
+			detached: true,
 			env: { ...env },
 			stdio: ["ignore", "pipe", "pipe"],
 		};
@@ -128,6 +150,7 @@ export async function runManagedProcess(options: ManagedProcessOptions): Promise
 		}
 
 		let timedOut = false;
+		let cancelled = false;
 		const stdoutChunks: Uint8Array[] = [];
 		const stderrChunks: Uint8Array[] = [];
 		let stdoutBytes = 0;
@@ -135,10 +158,30 @@ export async function runManagedProcess(options: ManagedProcessOptions): Promise
 		let stdoutTruncated = false;
 		let stderrTruncated = false;
 
+		const killTree = (): void => {
+			if (child.pid !== undefined) {
+				try {
+					process.kill(-child.pid, "SIGKILL");
+					return;
+				} catch {
+					// The group is already gone; fall through to the direct child.
+				}
+			}
+			child.kill("SIGKILL");
+		};
 		const timer = setTimeout(() => {
 			timedOut = true;
-			child.kill("SIGKILL");
+			killTree();
 		}, timeoutMs);
+		const onAbort = (): void => {
+			cancelled = true;
+			killTree();
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+		const settle = (): void => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+		};
 
 		stdoutStream.on("data", (chunk: Uint8Array) => {
 			const collected = collectChunk(chunk, stdoutBytes, maxOutputBytes);
@@ -159,19 +202,20 @@ export async function runManagedProcess(options: ManagedProcessOptions): Promise
 		});
 
 		child.on("error", (error: Error) => {
-			clearTimeout(timer);
+			settle();
 			rejectPromise(error);
 		});
 
-		child.on("close", (code: number | null, signal: string | null) => {
-			clearTimeout(timer);
+		child.on("close", (code: number | null, exitSignal: string | null) => {
+			settle();
 			const decoder = new TextDecoder("utf-8", { fatal: false });
 			resolvePromise({
 				args: [...args],
+				cancelled,
 				command: commandLabel,
 				durationMs: Math.round(performance.now() - startMs),
 				exitCode: code,
-				signal,
+				signal: exitSignal,
 				stderr: decoder.decode(concatChunks(stderrChunks)),
 				stderrTruncated,
 				stdout: decoder.decode(concatChunks(stdoutChunks)),

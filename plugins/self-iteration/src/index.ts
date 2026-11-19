@@ -34,16 +34,28 @@ const runtimes = new WeakMap<PluginContext, Runtime>();
 async function updateStatus(context: PluginContext, service: SelfIterationService): Promise<void> {
 	try {
 		const overview = await service.overview();
+		const metrics = {
+			approvals: overview.stats.approvals,
+			deployments: overview.stats.deployments,
+			proposals: overview.stats.proposals,
+			tasks: overview.stats.tasks,
+		};
+		if (!overview.executor.available) {
+			// The Workspace shell and check targets are withheld; say why and what to do about it.
+			context.ui.setStatus({
+				code: "isolated_executor_unavailable",
+				level: "warning",
+				metrics,
+				summary:
+					`Isolated Workspace executor unavailable: ${overview.executor.reason ?? "unknown reason"}. ${overview.executor.remedy ?? ""}`.trim(),
+			});
+			return;
+		}
 		context.ui.setStatus({
 			code: "ready",
 			level: "ok",
-			metrics: {
-				approvals: overview.stats.approvals,
-				deployments: overview.stats.deployments,
-				proposals: overview.stats.proposals,
-				tasks: overview.stats.tasks,
-			},
-			summary: "Self-iteration runtime ready",
+			metrics,
+			summary: `Self-iteration runtime ready (isolated executor: ${overview.executor.backend})`,
 		});
 	} catch (error) {
 		context.logger.warn("self-iteration status refresh failed", {
@@ -78,7 +90,15 @@ export const selfIterationPlugin: TsukaimaPlugin = {
 			...(context.storage === undefined ? {} : { storage: context.storage }),
 		});
 		runtimes.set(context, { service });
-		registerSelfIterationTools(context, service);
+		// Probe once at setup: the shell and check tools exist only when isolation is proven.
+		const executor = await service.isolatedExecutorStatus();
+		registerSelfIterationTools(context, service, { isolatedExecution: executor.available });
+		if (!executor.available) {
+			context.logger.warn("isolated executor unavailable; Workspace exec and check are withheld", {
+				code: executor.code,
+				reason: executor.reason,
+			});
+		}
 		registerSelfIterationRpc(context, service);
 		await updateStatus(context, service);
 		context.logger.info("self-iteration ready", {

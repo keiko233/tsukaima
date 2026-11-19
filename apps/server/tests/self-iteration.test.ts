@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { DomainCodingStore, type ReloadController } from "@tsukaima/coding";
+import { createHostSandbox, DomainCodingStore, type ReloadController } from "@tsukaima/coding";
 import { createOpenAICompatibleModelPort } from "@tsukaima/core";
 import { conversations, runtimeRestarts } from "@tsukaima/db";
 import type { MessageEnvelope } from "@tsukaima/contracts";
@@ -100,6 +100,12 @@ async function fixture() {
 						healthCheck: async () => ({ checkedAtMs: Date.now(), ok: true }),
 						reload,
 						repositoryRoot: repo,
+						// The host backend is the Compose default; pinning it keeps the isolated
+						// exec/check tools withheld regardless of whether bubblewrap is installed.
+						sandbox: createHostSandbox({
+							repositoryPath: repo,
+							worktreeRoot: join(root, "worktrees"),
+						}),
 						store,
 						worktreeRoot: join(root, "worktrees"),
 					},
@@ -128,6 +134,7 @@ describe("self-iteration runtime", () => {
 			const rows = await lifecycle.pluginHost.list();
 			const plugin = rows.find((entry) => entry.id === "self-iteration");
 			expect(plugin).toBeDefined();
+			// Without OS isolation the shell and check tools are withheld, not offered.
 			expect([...(plugin?.tools ?? [])].toSorted()).toEqual([
 				"self-iteration.analyze",
 				"self-iteration.build",

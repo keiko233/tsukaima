@@ -1,6 +1,6 @@
 import type { PluginContext, ToolInvocationContext, PluginTool, ToolResult } from "@tsukaima/sdk";
 import type { StructuredEdit } from "@tsukaima/coding";
-import { SELF_ITERATION_PLUGIN_ID } from "./domain.ts";
+import { CHECK_TARGET_NAMES, SELF_ITERATION_PLUGIN_ID } from "./domain.ts";
 import { elapsedMs, preview, scopedLogger, type ScopedLogger } from "./log.ts";
 import type { SelfIterationService } from "./service.ts";
 
@@ -70,7 +70,18 @@ const UPFRONT_TOOLS: ReadonlySet<string> = new Set([
 	"diff",
 	"propose",
 	"status",
+	// Registered only when the isolated executor is available (see registerSelfIterationTools).
+	"exec",
+	"check",
 ]);
+
+export interface SelfIterationToolOptions {
+	/**
+	 * Whether the isolated executor (bubblewrap) passed its probe. Workspace exec and check tools
+	 * are offered only then; without isolation they are not registered at all.
+	 */
+	readonly isolatedExecution?: boolean;
+}
 
 const BASE_POLICY = {
 	allowedTaskKinds: ["coding"],
@@ -139,7 +150,16 @@ async function invoke(
 
 function summarize(input: Record<string, unknown>): Record<string, unknown> {
 	const summary: Record<string, unknown> = {};
-	for (const key of ["taskId", "goal", "path", "pattern", "command", "action", "proposalId"]) {
+	for (const key of [
+		"taskId",
+		"goal",
+		"path",
+		"pattern",
+		"command",
+		"action",
+		"proposalId",
+		"target",
+	]) {
 		if (typeof input[key] === "string") summary[key] = input[key];
 	}
 	if (Array.isArray(input.args)) summary.args = input.args.slice(0, 16);
@@ -196,6 +216,7 @@ const TASK_FIELDS = {
 export function registerSelfIterationTools(
 	context: PluginContext,
 	service: SelfIterationService,
+	options: SelfIterationToolOptions = {},
 ): void {
 	const log = scopedLogger(context.logger, "tools");
 
@@ -343,6 +364,7 @@ export function registerSelfIterationTools(
 						...(stringValue(input, "pattern") === undefined
 							? {}
 							: { pattern: stringValue(input, "pattern")! }),
+						...(invocation.signal === undefined ? {} : { signal: invocation.signal }),
 					}),
 				),
 		),
@@ -364,6 +386,7 @@ export function registerSelfIterationTools(
 				invoke(context, log, "self-iteration.build", input, invocation, async () =>
 					service.build({
 						...(await boundTaskInput(service, input, invocation, "self-iteration.build")),
+						...(invocation.signal === undefined ? {} : { signal: invocation.signal }),
 					}),
 				),
 		),
@@ -450,6 +473,68 @@ export function registerSelfIterationTools(
 		),
 	);
 
+	if (options.isolatedExecution === true) {
+		context.tools.register(
+			tool(
+				"exec",
+				"Run one bash script against a disposable snapshot of the task worktree. The snapshot has no network, a scrubbed environment, and a private /tmp. Writes are discarded when the command ends; persist source changes with self-iteration.edit.",
+				{
+					properties: {
+						...TASK_FIELDS,
+						script: {
+							description: "Bash script run with -c. Keep it under 16 KiB.",
+							type: "string",
+						},
+					},
+					required: ["script"],
+					type: "object",
+				},
+				["coding.execute"],
+				300_000,
+				async (input, invocation) =>
+					invoke(context, log, "self-iteration.exec", input, invocation, async () =>
+						service.exec({
+							...(await boundTaskInput(service, input, invocation, "self-iteration.exec")),
+							script: typeof input.script === "string" ? input.script : "",
+							...(invocation.signal === undefined ? {} : { signal: invocation.signal }),
+						}),
+					),
+			),
+		);
+
+		context.tools.register(
+			tool(
+				"check",
+				"Run one named repository check (typecheck, lint, test, or webui-build) on a disposable snapshot of the task worktree. The result records the snapshot checksum it validated. Targets are fixed by the server; only test accepts a path filter.",
+				{
+					properties: {
+						...TASK_FIELDS,
+						pattern: {
+							description: "Optional path filter, only for target test.",
+							type: "string",
+						},
+						target: { enum: [...CHECK_TARGET_NAMES], type: "string" },
+					},
+					required: ["target"],
+					type: "object",
+				},
+				["coding.execute"],
+				600_000,
+				async (input, invocation) =>
+					invoke(context, log, "self-iteration.check", input, invocation, async () =>
+						service.check({
+							...(await boundTaskInput(service, input, invocation, "self-iteration.check")),
+							target: stringValue(input, "target") ?? "",
+							...(stringValue(input, "pattern") === undefined
+								? {}
+								: { pattern: stringValue(input, "pattern")! }),
+							...(invocation.signal === undefined ? {} : { signal: invocation.signal }),
+						}),
+					),
+			),
+		);
+	}
+
 	context.tools.register(
 		tool(
 			"status",
@@ -485,6 +570,7 @@ export function registerSelfIterationTools(
 							status: proposal.status,
 							title: proposal.title,
 						})),
+						executor: bundle.executor,
 						status: bundle.task.status,
 						taskId: bundle.task.id,
 						timeline: bundle.task.timeline,

@@ -36,6 +36,8 @@ export {
 	buildBubblewrapArgv,
 	createBubblewrapSandbox,
 	createHostSandbox,
+	describeSandboxAvailability,
+	ISOLATED_BACKEND_REMEDY,
 	probeBubblewrapSandbox,
 	resolveExecutable,
 	SANDBOX_PATH_DIRS,
@@ -45,11 +47,21 @@ export type {
 	BubblewrapArgvInput,
 	BubblewrapSandboxOptions,
 	HostSandboxOptions,
+	SandboxAvailability,
 	SandboxMount,
 	SandboxExecInput,
+	SandboxExecResult,
 	SandboxExecutor,
 	SandboxProvider,
+	SandboxUnavailableCode,
 } from "./sandbox.ts";
+
+export {
+	createTaskSnapshot,
+	SNAPSHOT_DEFAULT_MAX_BYTES,
+	SNAPSHOT_DEFAULT_MAX_FILES,
+} from "./snapshot.ts";
+export type { TaskSnapshot, TaskSnapshotManifest, TaskSnapshotOptions } from "./snapshot.ts";
 
 export {
 	assertSafeBaseRef,

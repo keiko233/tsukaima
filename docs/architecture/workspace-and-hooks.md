@@ -92,7 +92,10 @@ plugin sessions in `applySessionToolPolicy`.
 Chat and coding share one discovery path. Every conversation gets the host `tool_search` tool;
 tools marked lazy are omitted from the request until the model searches for them and the host
 loads the match into that conversation's `modelTools`. Plugin tools are lazy by default, and
-`lazy: false` opts a frequently used tool back into the upfront request. Each tool declares a
+`lazy: false` opts a frequently used tool back into the upfront request. Workspace turns offer
+the core coding tools upfront. The isolated `exec` and `check` tools join them only when the
+bubblewrap executor has passed its probe; otherwise they are not registered and the status view
+explains why. Each tool declares a
 `surface` of `chat`, `coding`, or `both`; the lifecycle removes mismatched tools before the turn,
 which also keeps them out of `tool_search` candidates. The context inspector reports loaded and
 deferred tools separately, and removal from `tools` is what makes a filtered tool undiscoverable.
