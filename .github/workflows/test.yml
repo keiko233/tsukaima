@@ -29,19 +29,12 @@ jobs:
 
   e2e:
     runs-on: ubuntu-24.04
+    container:
+      # Keep this version aligned with Playwright in bun.lock.
+      image: mcr.microsoft.com/playwright:v1.65.0-noble
+      options: --ipc=host
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - name: Install Chromium and system dependencies
-        run: |
-          for attempt in 1 2 3; do
-            if bunx playwright install --with-deps chromium; then
-              exit 0
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              sleep "$((attempt * 10))"
-            fi
-          done
-          exit 1
       - run: bun run test:e2e
