@@ -1,0 +1,1 @@
+ALTER TABLE `coding_proposals` ADD `evidence_json` text;

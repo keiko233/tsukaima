@@ -52,6 +52,7 @@ const TOOL = {
 const RAW = {
 	analyze: "self-iteration.analyze",
 	edit: "self-iteration.edit",
+	propose: "self-iteration.propose",
 	status: "self-iteration.status",
 	worktree: "self-iteration.worktree",
 } as const;
@@ -409,6 +410,57 @@ describe("Workspace agent execution (batch 2 isolation)", () => {
 		expect(JSON.parse(status.result.content[0]?.text ?? "{}")).toEqual(
 			expect.objectContaining({ taskId }),
 		);
+	}, 90_000);
+
+	test("a retry reuses the pending proposal, and an edit after proposing requires fresh evidence", async () => {
+		const { database, lifecycle, model } = await fixture();
+		const workspace = await lifecycle.workspace.create({
+			goal: "Change the fixture value to new.",
+			requestedBy: "test-admin",
+		});
+		await lifecycle.sessionMessaging.sendAgentMessage({
+			sessionId: workspace.sessionId,
+			source: "webui",
+			text: "Make the change, run the test, and propose it.",
+		});
+		await waitFor(() => (model.observed.outputs.has(TOOL.propose) ? true : undefined));
+		const proposed = model.observed.outputs.get(TOOL.propose) ?? {};
+		const proposalId = (proposed.proposal as { id?: string } | undefined)?.id;
+		if (proposalId === undefined) throw new Error("the turn did not record a proposal");
+
+		// The model's retry, through the same bound entry point, reuses the pending proposal.
+		const durable = await durableId(database, workspace.sessionId);
+		const proposeText = {
+			envChanges: [],
+			motivation: "Keep the fixture honest",
+			requiresRestart: false,
+			riskAssessment: "low",
+			rollbackNotes: "git revert the commit",
+			title: "Fixture patch",
+		};
+		const retry = await lifecycle.pluginHost.invokeTool(RAW.propose, proposeText, {
+			conversationId: durable,
+		});
+		if (!retry.ok) throw new Error("propose retry was denied");
+		const retried = parseOutput(retry.result.content[0]?.text ?? "{}");
+		expect(retried.reused).toBe(true);
+		expect((retried.proposal as { id?: string }).id).toBe(proposalId);
+		expect(await database.select().from(codingProposals)).toHaveLength(1);
+
+		// An edit after proposing makes the verification stale; the next proposal is refused.
+		const edit = await lifecycle.pluginHost.invokeTool(
+			RAW.edit,
+			{ find: "'new'", path: "src/app.ts", replace: "'newer'" },
+			{ conversationId: durable },
+		);
+		if (!edit.ok) throw new Error("edit after proposing was denied");
+		const stale = await lifecycle.pluginHost.invokeTool(RAW.propose, proposeText, {
+			conversationId: durable,
+		});
+		if (!stale.ok) throw new Error("stale propose was denied");
+		const refused = parseOutput(stale.result.content[0]?.text ?? "{}");
+		expect(refused.missing).toEqual(expect.arrayContaining(["testResult", "artifactMetadata"]));
+		expect(await database.select().from(codingProposals)).toHaveLength(1);
 	}, 90_000);
 
 	test("legacy tasks keep working through the binding, and mismatched or missing bindings fail closed", async () => {

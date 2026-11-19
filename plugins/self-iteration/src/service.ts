@@ -10,6 +10,7 @@ import {
 	describeSandboxAvailability,
 	DomainCodingStore,
 	ISOLATED_BACKEND_REMEDY,
+	measureTaskSnapshot,
 	missingProposalFields,
 	sha256Hex,
 	SandboxUnavailableError,
@@ -17,6 +18,8 @@ import {
 	validateStructuredEdit,
 	WorktreeManager,
 	type ArtifactMetadata,
+	type ProposalEvidence,
+	type ProposalEvidenceItem,
 	type SandboxAvailability,
 	type SandboxExecutor,
 	type TaskSnapshotManifest,
@@ -75,18 +78,16 @@ export interface ToolTaskInput {
 	readonly taskId?: string;
 }
 
+/**
+ * Model-authored proposal text only. The patch, changed files, revision, checksums, and validation
+ * evidence are derived by the server from the task worktree and never accepted from the caller.
+ */
 export interface ProposalRequest {
-	readonly artifactMetadata?: ArtifactMetadata | null;
-	readonly changedFiles?: readonly string[];
-	readonly diff?: string;
-	readonly diffChecksum?: string;
 	readonly envChanges?: readonly string[];
 	readonly motivation?: string;
 	readonly requiresRestart?: boolean;
 	readonly riskAssessment?: string;
 	readonly rollbackNotes?: string;
-	readonly sourceRevision?: string;
-	readonly testResult?: TestRunResult;
 	readonly title?: string;
 }
 
@@ -124,6 +125,27 @@ export interface CheckResult extends ExecResult {
 	readonly argv: readonly string[];
 	readonly summary?: { readonly failed: number; readonly total: number };
 	readonly target: CheckTargetName;
+}
+
+/** Diff of one worktree state, with the snapshot identity that state was measured as. */
+export interface DiffOutcome {
+	readonly changedFiles: readonly string[];
+	readonly diffChecksum: string;
+	readonly raw: string;
+	readonly snapshotChecksum: string;
+	readonly taskId: string;
+	readonly totalDeletions: number;
+	readonly totalInsertions: number;
+}
+
+/**
+ * How a validation result is bound to task content. `checksum` is the snapshot identity the result
+ * validated; an absent checksum means the result is unbound and cannot be proposal evidence.
+ */
+export interface ArtifactProvenance {
+	readonly checksum?: string;
+	readonly kind: "live" | "snapshot";
+	readonly reason?: string;
 }
 
 export interface TaskBundle {
@@ -193,6 +215,10 @@ export class SelfIterationService {
 	readonly #worktrees = new Map<string, WorktreeManager>();
 	/** In-flight provisioning per task, so concurrent first calls share one `git worktree add`. */
 	readonly #provisioning = new Map<string, Promise<IterationTask>>();
+	/** Tail of each task's mutation queue; worktree writes and evidence reads run in arrival order. */
+	readonly #taskLocks = new Map<string, Promise<void>>();
+	/** Counts worktree mutations made through this service, so a live run can prove none happened. */
+	readonly #generations = new Map<string, number>();
 
 	constructor(options: SelfIterationServiceOptions) {
 		this.#audit = options.audit;
@@ -482,7 +508,7 @@ export class SelfIterationService {
 	 */
 	async #ensureWorktree(
 		task: IterationTask,
-		options: { readonly actor: string; readonly baseRef?: string; readonly tool: string },
+		options: { readonly actor: string; readonly tool: string },
 	): Promise<IterationTask> {
 		const current = (await this.store.getTask(task.id)) ?? task;
 		if (current.worktreePath !== undefined) return current;
@@ -497,13 +523,14 @@ export class SelfIterationService {
 
 	async #provisionWorktree(
 		task: IterationTask,
-		options: { readonly actor: string; readonly baseRef?: string; readonly tool: string },
+		options: { readonly actor: string; readonly tool: string },
 	): Promise<IterationTask> {
 		const startedAt = performance.now();
 		const policy = await this.policy();
 		const manager = this.#managerFor(task.id, policy);
 		const path = manager.pathFor(task.id);
-		const baseRef = options.baseRef ?? task.baseRef;
+		// The durable task base is the only baseline: model calls cannot choose another revision.
+		const baseRef = task.baseRef;
 		try {
 			const adopted = await isWorktreeCheckout(path);
 			if (adopted) {
@@ -708,14 +735,11 @@ export class SelfIterationService {
 		}
 	}
 
-	async worktree(
-		input: ToolTaskInput & { readonly baseRef?: string },
-	): Promise<Record<string, unknown>> {
+	async worktree(input: ToolTaskInput): Promise<Record<string, unknown>> {
 		const task = await this.resolveTask(input, "patch", "self-iteration.worktree");
 		await this.#requireMode(task, "patch", "self-iteration.worktree");
 		const provisioned = await this.#ensureWorktree(task, {
 			actor: input.sourceConversationId ?? "agent",
-			...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
 			tool: "self-iteration.worktree",
 		});
 		return { baseRef: provisioned.baseRef, path: provisioned.worktreePath, taskId: task.id };
@@ -748,11 +772,10 @@ export class SelfIterationService {
 		});
 		try {
 			validateStructuredEdit(edit, { maxBytes: policy.maxOutputBytes });
-			const result = await applyStructuredEdit(
-				current.worktreePath!,
-				current.constraints.pathAllowlist,
-				edit,
-				{ maxBytes: policy.maxOutputBytes },
+			const result = await this.#mutateWorktree(task.id, () =>
+				applyStructuredEdit(current.worktreePath!, current.constraints.pathAllowlist, edit, {
+					maxBytes: policy.maxOutputBytes,
+				}),
 			);
 			this.#logger.debug("edit applied", {
 				bytesWritten: result.bytesWritten,
@@ -835,7 +858,9 @@ export class SelfIterationService {
 		});
 		try {
 			if (action === "abort") {
-				const result = await runner.exec("git", ["merge", "--abort"]);
+				const result = await this.#mutateWorktree(task.id, () =>
+					runner.exec("git", ["merge", "--abort"]),
+				);
 				await this.#recordTimeline(
 					task,
 					"self-iteration.upstream:abort",
@@ -855,7 +880,9 @@ export class SelfIterationService {
 			if (resolved.exitCode !== 0) {
 				throw new Error(`unknown_ref:${ref}`);
 			}
-			const result = await runner.exec("git", ["merge", "--no-ff", "--no-commit", ref]);
+			const result = await this.#mutateWorktree(task.id, () =>
+				runner.exec("git", ["merge", "--no-ff", "--no-commit", ref]),
+			);
 			const conflicts = await runner.exec("git", ["diff", "--name-only", "--diff-filter=U"]);
 			const conflicted = conflicts.stdout
 				.split("\n")
@@ -944,15 +971,17 @@ export class SelfIterationService {
 				throw new Error(`command_not_allowed:${command}`);
 			}
 			const sandbox = await this.#sandbox();
-			const result = await sandbox.exec({
-				args,
-				command,
-				cwd: worktreePath,
-				maxOutputBytes: policy.maxOutputBytes,
-				...(input.signal === undefined ? {} : { signal: input.signal }),
-				timeoutMs: policy.timeoutMs,
-				writable: true,
-			});
+			const { provenance, result } = await this.#measuredLiveRun(task.id, worktreePath, () =>
+				sandbox.exec({
+					args,
+					command,
+					cwd: worktreePath,
+					maxOutputBytes: policy.maxOutputBytes,
+					...(input.signal === undefined ? {} : { signal: input.signal }),
+					timeoutMs: policy.timeoutMs,
+					writable: true,
+				}),
+			);
 			const parsed = parseTest(result);
 			this.#logger.debug("test completed", {
 				command,
@@ -969,11 +998,13 @@ export class SelfIterationService {
 			const artifacts = [...((await this.store.getTask(task.id))?.artifacts ?? [])];
 			const metadata = {
 				args,
+				cancelled: result.cancelled === true,
 				command,
 				durationMs: result.durationMs,
 				exitCode: result.exitCode,
 				failed: parsed.failed,
-				passed: parsed.passed,
+				passed: parsed.passed && !result.timedOut && result.cancelled !== true,
+				provenance,
 				timedOut: result.timedOut,
 				total: parsed.total,
 			};
@@ -1060,15 +1091,17 @@ export class SelfIterationService {
 				throw new Error(`command_not_allowed:${command}`);
 			}
 			const sandbox = await this.#sandbox();
-			const result = await sandbox.exec({
-				args,
-				command,
-				cwd: worktreePath,
-				maxOutputBytes: policy.maxOutputBytes,
-				...(input.signal === undefined ? {} : { signal: input.signal }),
-				timeoutMs: policy.timeoutMs,
-				writable: true,
-			});
+			const { provenance, result } = await this.#measuredLiveRun(task.id, worktreePath, () =>
+				sandbox.exec({
+					args,
+					command,
+					cwd: worktreePath,
+					maxOutputBytes: policy.maxOutputBytes,
+					...(input.signal === undefined ? {} : { signal: input.signal }),
+					timeoutMs: policy.timeoutMs,
+					writable: true,
+				}),
+			);
 			this.#logger.debug("build command completed", {
 				command,
 				durationMs: result.durationMs,
@@ -1084,7 +1117,14 @@ export class SelfIterationService {
 				sizeBytes: Buffer.byteLength(result.stdout, "utf-8"),
 			};
 			const latest = (await this.store.getTask(task.id)) ?? task;
-			const metadata = { ...artifactMetadata, exitCode: result.exitCode };
+			const metadata = {
+				...artifactMetadata,
+				cancelled: result.cancelled === true,
+				exitCode: result.exitCode,
+				passed: result.exitCode === 0 && !result.timedOut && result.cancelled !== true,
+				provenance,
+				timedOut: result.timedOut,
+			};
 			await this.store.updateTask(task.id, {
 				artifacts: [
 					...latest.artifacts,
@@ -1336,10 +1376,13 @@ export class SelfIterationService {
 						kind: CHECK_ARTIFACT_KIND[target],
 						metadata: {
 							argv: [...argv],
+							builtAtMs: this.#now(),
 							cancelled: result.cancelled === true,
+							command: argv.join(" "),
 							durationMs: result.durationMs,
 							exitCode: result.exitCode,
 							passed,
+							provenance: { checksum: result.snapshot.checksum, kind: "snapshot" },
 							snapshot: { ...result.snapshot },
 							target,
 							timedOut: result.timedOut,
@@ -1408,16 +1451,17 @@ export class SelfIterationService {
 		}
 	}
 
-	async diff(input: ToolTaskInput): Promise<{
-		readonly changedFiles: readonly string[];
-		readonly diffChecksum: string;
-		readonly raw: string;
-		readonly taskId: string;
-		readonly totalDeletions: number;
-		readonly totalInsertions: number;
-	}> {
-		const startedAt = performance.now();
+	async diff(input: ToolTaskInput): Promise<DiffOutcome> {
 		const task = await this.resolveTask(input, "patch", "self-iteration.diff");
+		return this.#withTaskLock(task.id, () => this.#diffUnlocked(task, input));
+	}
+
+	/**
+	 * Diff and snapshot identity of one worktree state. The caller holds the task lock, so no edit
+	 * can land between the diff and the identity that describes it.
+	 */
+	async #diffUnlocked(task: IterationTask, input: ToolTaskInput): Promise<DiffOutcome> {
+		const startedAt = performance.now();
 		await this.#requireMode(task, "patch", "self-iteration.diff");
 		const current = await this.#taskWithWorktree(task);
 		const policy = await this.policy();
@@ -1429,6 +1473,11 @@ export class SelfIterationService {
 			const result = await new CodingTools(
 				await this.#runner(current.worktreePath!, policy),
 			).diff();
+			if (result.untrackedTruncated === true) {
+				// Untracked files past the expansion bound would be missing from the proposal while the
+				// snapshot still carries them, so the diff must not describe this state as complete.
+				throw new Error("diff_incomplete:untracked_limit");
+			}
 			if (result.files.length > policy.maxDiffFiles) {
 				this.#logger.warn("diff exceeds file limit", {
 					files: result.files.length,
@@ -1448,6 +1497,16 @@ export class SelfIterationService {
 			}
 			const changedFiles = result.files.map((file) => file.path);
 			const diffChecksum = sha256Hex(result.raw);
+			// A passing check validates the snapshot, so every changed path must exist in it with the
+			// same presence as the live tree. Otherwise the check did not validate this diff.
+			const measured = await measureTaskSnapshot({
+				paths: changedFiles,
+				repositoryPath: this.#binding.repositoryRoot,
+				sourcePath: current.worktreePath!,
+			});
+			const uncovered = measured.uncoveredPaths[0];
+			if (uncovered !== undefined) throw new Error(`diff_not_covered_by_snapshot:${uncovered}`);
+			const snapshotChecksum = measured.manifest.checksum;
 			this.#logger.debug("diff computed", {
 				changedFiles,
 				diffBytes: bytes,
@@ -1467,6 +1526,7 @@ export class SelfIterationService {
 						metadata: {
 							changedFiles,
 							diffBytes: bytes,
+							snapshotChecksum,
 							totalDeletions: result.totalDeletions,
 							totalInsertions: result.totalInsertions,
 						},
@@ -1496,6 +1556,7 @@ export class SelfIterationService {
 				changedFiles,
 				diffChecksum,
 				raw: result.raw,
+				snapshotChecksum,
 				taskId: task.id,
 				totalDeletions: result.totalDeletions,
 				totalInsertions: result.totalInsertions,
@@ -1513,146 +1574,165 @@ export class SelfIterationService {
 
 	async propose(input: ToolTaskInput & ProposalRequest): Promise<{
 		readonly approvalId: string;
+		readonly hint?: string;
 		readonly missing: readonly string[];
 		readonly proposal: DeploymentProposal;
+		readonly reused: boolean;
 	}> {
 		const startedAt = performance.now();
-		const task = await this.resolveTask(input, "proposal", "self-iteration.propose");
-		await this.#requireMode(task, "proposal", "self-iteration.propose");
+		const resolved = await this.resolveTask(input, "proposal", "self-iteration.propose");
+		await this.#requireMode(resolved, "proposal", "self-iteration.propose");
 		const policy = await this.policy();
 		this.#logger.trace("proposal requested", {
-			changedFiles: input.changedFiles,
-			hasDiff: input.diff !== undefined && input.diff.length > 0,
 			motivation: preview(input.motivation ?? ""),
 			requiresRestart: input.requiresRestart,
-			taskId: task.id,
+			taskId: resolved.id,
 			title: preview(input.title ?? ""),
 		});
-		const latest = (await this.store.getTask(task.id)) ?? task;
-		const diffArtifact = [...latest.artifacts]
-			.toReversed()
-			.find((artifact) => artifact.kind === "diff");
-		const buildArtifact = [...latest.artifacts]
-			.toReversed()
-			.find((artifact) => artifact.kind === "build");
-		const testArtifact = [...latest.artifacts]
-			.toReversed()
-			.find((artifact) => artifact.kind === "test");
-		const diffMetadata = recordValue(diffArtifact?.metadata);
-		let changedFiles: readonly string[] =
-			input.changedFiles ?? (diffMetadata.changedFiles as readonly string[] | undefined) ?? [];
-		let diffText = input.diff ?? "";
-		let diffChecksum = input.diffChecksum ?? diffArtifact?.checksum;
-		let sourceRevision = input.sourceRevision ?? "";
-		if (diffText.length === 0 && task.worktreePath !== undefined) {
-			const diff = await this.diff({
+		// Patch, checksums, changed files, revision, and validation all describe one worktree state.
+		// The task lock keeps edits out until the proposal is recorded or refused.
+		return this.#withTaskLock(resolved.id, async () => {
+			const task = (await this.store.getTask(resolved.id)) ?? resolved;
+			const diff =
+				task.worktreePath === undefined
+					? undefined
+					: await this.#diffUnlocked(task, {
+							taskId: task.id,
+							...(input.sourceConversationId === undefined
+								? {}
+								: { sourceConversationId: input.sourceConversationId }),
+						});
+			const fresh =
+				diff === undefined ? undefined : this.#freshEvidence(task.artifacts, diff.snapshotChecksum);
+			const sourceRevision = diff === undefined ? "" : await this.#sourceRevision(task);
+			const testResult =
+				fresh?.test === undefined
+					? undefined
+					: testMetadataToTestResult(recordValue(fresh.test.metadata));
+			const artifactMetadata =
+				fresh?.build === undefined ? null : buildArtifactMetadata(fresh.build);
+			const evidence: ProposalEvidence | null =
+				diff === undefined || fresh === undefined
+					? null
+					: {
+							diffChecksum: diff.diffChecksum,
+							items: [fresh.test, fresh.build].flatMap((artifact) =>
+								artifact === undefined ? [] : [evidenceItem(artifact)],
+							),
+							snapshotChecksum: diff.snapshotChecksum,
+						};
+			const proposalInput: DeploymentProposalInput = {
+				artifactMetadata,
+				changedFiles: diff?.changedFiles ?? [],
+				diff: diff?.raw ?? "",
+				...(diff === undefined ? {} : { diffChecksum: diff.diffChecksum }),
+				evidence,
+				envChanges: input.envChanges ?? [],
+				motivation: input.motivation ?? "",
+				requiresRestart: input.requiresRestart ?? false,
+				riskAssessment: input.riskAssessment ?? "",
+				rollbackNotes: input.rollbackNotes ?? "",
+				sourceRevision,
 				taskId: task.id,
-				...(input.sourceConversationId === undefined
-					? {}
-					: { sourceConversationId: input.sourceConversationId }),
-			});
-			if (changedFiles.length === 0) changedFiles = diff.changedFiles;
-			diffText = diff.raw;
-			diffChecksum = diff.diffChecksum;
-		}
-		if (sourceRevision.length === 0) sourceRevision = await this.#sourceRevision(task);
-		const artifactMetadata =
-			input.artifactMetadata ??
-			(buildArtifact?.metadata === undefined
-				? null
-				: (buildArtifact.metadata as unknown as ArtifactMetadata));
-		const testResult =
-			input.testResult ??
-			(testArtifact?.metadata === undefined
-				? undefined
-				: testMetadataToTestResult(testArtifact.metadata));
-		const proposalInput: DeploymentProposalInput = {
-			artifactMetadata,
-			changedFiles,
-			diff: diffText,
-			...(diffChecksum === undefined ? {} : { diffChecksum }),
-			envChanges: input.envChanges ?? [],
-			motivation: input.motivation ?? "",
-			requiresRestart: input.requiresRestart ?? false,
-			riskAssessment: input.riskAssessment ?? "",
-			rollbackNotes: input.rollbackNotes ?? "",
-			sourceRevision,
-			taskId: task.id,
-			...(testResult === undefined ? {} : { testResult }),
-			title: input.title ?? "",
-		};
-		const missing = missingProposalFields(proposalInput);
-		if (missing.length > 0) {
-			this.#logger.warn("proposal rejected for missing fields", {
-				missing,
+				...(testResult === undefined ? {} : { testResult }),
+				title: input.title ?? "",
+			};
+			const missing = missingProposalFields(proposalInput);
+			if (missing.length > 0) {
+				this.#logger.warn("proposal rejected for missing fields", {
+					missing,
+					taskId: task.id,
+				});
+				await this.#recordTimeline(
+					task,
+					"self-iteration.propose:invalid",
+					"denied",
+					missing.join(","),
+				);
+				await this.#auditDenied(task.id, "self-iteration.propose", `missing:${missing.join(",")}`);
+				const hint = verificationHint(missing, diff !== undefined);
+				return {
+					approvalId: "",
+					...(hint === undefined ? {} : { hint }),
+					missing,
+					proposal: null as never,
+					reused: false,
+				};
+			}
+			// A retry for unchanged content returns the proposal already awaiting approval.
+			const existing = await this.#pendingProposalFor(task.id, evidence);
+			if (existing !== undefined) {
+				this.#logger.debug("proposal reused for unchanged evidence", {
+					approvalId: existing.approvalId,
+					proposalId: existing.proposal.id,
+					taskId: task.id,
+				});
+				return {
+					approvalId: existing.approvalId,
+					missing: [],
+					proposal: existing.proposal,
+					reused: true,
+				};
+			}
+			const proposal = await this.store.createProposal(proposalInput);
+			await this.store.transition(proposal.id, "pending_approval");
+			this.#logger.debug("proposal transitioned", {
+				durationMs: elapsedMs(startedAt),
+				proposalId: proposal.id,
+				status: "pending_approval",
 				taskId: task.id,
 			});
-			await this.#recordTimeline(
-				task,
-				"self-iteration.propose:invalid",
-				"denied",
-				missing.join(","),
-			);
-			await this.#auditDenied(task.id, "self-iteration.propose", `missing:${missing.join(",")}`);
-			return { approvalId: "", missing, proposal: null as never };
-		}
-		const proposal = await this.store.createProposal(proposalInput);
-		await this.store.transition(proposal.id, "pending_approval");
-		this.#logger.debug("proposal transitioned", {
-			durationMs: elapsedMs(startedAt),
-			proposalId: proposal.id,
-			status: "pending_approval",
-			taskId: task.id,
-		});
-		const approval = await this.store.create({
-			action: "deploy",
-			expiresAtMs: this.#now() + APPROVAL_TTL_MS,
-			proposalId: proposal.id,
-			requestedBy: input.sourceConversationId ?? "agent",
-			taskId: task.id,
-		});
-		await this.store.updateTask(task.id, {
-			status: "awaiting_approval",
-			timeline: [
-				...latest.timeline,
-				{
-					atMs: this.#now(),
-					detail: proposal.id,
-					outcome: "success",
-					tool: "self-iteration.propose",
-				},
-			],
-		});
-		await this.#log(task, "info", `proposal ${proposal.id} awaiting approval`);
-		this.#logger.info("proposal created", {
-			approvalId: approval.id,
-			autoApply: policy.autoApply,
-			changedFiles: proposal.changedFiles.length,
-			diffChecksum: proposal.diffChecksum,
-			durationMs: elapsedMs(startedAt),
-			proposalId: proposal.id,
-			requiresRestart: proposal.requiresRestart,
-			taskId: task.id,
-		});
-		await this.#auditRecord({
-			action: "self-iteration.propose",
-			actorId: input.sourceConversationId ?? "agent",
-			actorKind: "agent",
-			payload: {
+			const approval = await this.store.create({
+				action: "deploy",
+				expiresAtMs: this.#now() + APPROVAL_TTL_MS,
+				proposalId: proposal.id,
+				requestedBy: input.sourceConversationId ?? "agent",
+				taskId: task.id,
+			});
+			await this.store.updateTask(task.id, {
+				status: "awaiting_approval",
+				timeline: [
+					...task.timeline,
+					{
+						atMs: this.#now(),
+						detail: proposal.id,
+						outcome: "success",
+						tool: "self-iteration.propose",
+					},
+				],
+			});
+			await this.#log(task, "info", `proposal ${proposal.id} awaiting approval`);
+			this.#logger.info("proposal created", {
 				approvalId: approval.id,
 				autoApply: policy.autoApply,
+				changedFiles: proposal.changedFiles.length,
 				diffChecksum: proposal.diffChecksum,
+				durationMs: elapsedMs(startedAt),
 				proposalId: proposal.id,
-			},
-			result: "ok",
-			targetId: proposal.id,
-			targetKind: "coding-proposal",
+				requiresRestart: proposal.requiresRestart,
+				taskId: task.id,
+			});
+			await this.#auditRecord({
+				action: "self-iteration.propose",
+				actorId: input.sourceConversationId ?? "agent",
+				actorKind: "agent",
+				payload: {
+					approvalId: approval.id,
+					autoApply: policy.autoApply,
+					diffChecksum: proposal.diffChecksum,
+					proposalId: proposal.id,
+				},
+				result: "ok",
+				targetId: proposal.id,
+				targetKind: "coding-proposal",
+			});
+			return {
+				approvalId: approval.id,
+				missing: [],
+				proposal: { ...proposal, status: "pending_approval" },
+				reused: false,
+			};
 		});
-		return {
-			approvalId: approval.id,
-			missing: [],
-			proposal: { ...proposal, status: "pending_approval" },
-		};
 	}
 
 	async resolveApproval(input: {
@@ -2326,6 +2406,120 @@ export class SelfIterationService {
 		}
 	}
 
+	/** Serialize one task's worktree mutations and evidence reads, in arrival order. Never nest. */
+	async #withTaskLock<T>(taskId: string, work: () => Promise<T>): Promise<T> {
+		const previous = this.#taskLocks.get(taskId) ?? Promise.resolve();
+		let release!: () => void;
+		const current = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const tail = previous.then(() => current);
+		this.#taskLocks.set(taskId, tail);
+		await previous;
+		try {
+			return await work();
+		} finally {
+			release();
+			if (this.#taskLocks.get(taskId) === tail) this.#taskLocks.delete(taskId);
+		}
+	}
+
+	/** A worktree write under the task lock; every completed write advances the task generation. */
+	async #mutateWorktree<T>(taskId: string, mutate: () => Promise<T>): Promise<T> {
+		return this.#withTaskLock(taskId, async () => {
+			try {
+				return await mutate();
+			} finally {
+				this.#generations.set(taskId, (this.#generations.get(taskId) ?? 0) + 1);
+			}
+		});
+	}
+
+	/**
+	 * Run a compatibility command on the live worktree. Its result is bound to the snapshot identity
+	 * only when the content and the task generation are unchanged across the whole run; otherwise the
+	 * result is recorded unbound and can never become proposal evidence.
+	 */
+	async #measuredLiveRun<T>(
+		taskId: string,
+		worktreePath: string,
+		run: () => Promise<T>,
+	): Promise<{ readonly provenance: ArtifactProvenance; readonly result: T }> {
+		const generation = this.#generations.get(taskId) ?? 0;
+		const before = await this.#identityOf(worktreePath);
+		const result = await run();
+		const after = await this.#identityOf(worktreePath);
+		if ((this.#generations.get(taskId) ?? 0) !== generation) {
+			return { provenance: { kind: "live", reason: "concurrent_edit" }, result };
+		}
+		if (before !== undefined && before === after) {
+			return { provenance: { checksum: before, kind: "live" }, result };
+		}
+		return {
+			provenance: {
+				kind: "live",
+				reason:
+					before === undefined || after === undefined ? "identity_unavailable" : "content_changed",
+			},
+			result,
+		};
+	}
+
+	/** Snapshot identity of the worktree as a snapshot run would record it. */
+	async #identityOf(worktreePath: string): Promise<string | undefined> {
+		try {
+			const measured = await measureTaskSnapshot({
+				paths: [],
+				repositoryPath: this.#binding.repositoryRoot,
+				sourcePath: worktreePath,
+			});
+			return measured.manifest.checksum;
+		} catch (error) {
+			this.#logger.warn("snapshot identity unavailable", {
+				error: errorMessage(error),
+				worktreePath,
+			});
+			return undefined;
+		}
+	}
+
+	/**
+	 * The newest validation of each kind that carries provenance. It counts only when it passed on
+	 * exactly the content the diff describes, so a newer failed, cancelled, unbound, or stale run
+	 * blocks an older passing one.
+	 */
+	#freshEvidence(artifacts: readonly TaskArtifact[], snapshotChecksum: string): FreshEvidence {
+		const newest = (kind: "build" | "test") =>
+			[...artifacts]
+				.toReversed()
+				.find(
+					(artifact) =>
+						artifact.kind === kind && recordValue(artifact.metadata).provenance !== undefined,
+				);
+		const fresh = (artifact: TaskArtifact | undefined) =>
+			artifact !== undefined && isFreshPass(artifact, snapshotChecksum) ? artifact : undefined;
+		return { build: fresh(newest("build")), test: fresh(newest("test")) };
+	}
+
+	/** A pending proposal already recorded for this exact evidence, with its approval. */
+	async #pendingProposalFor(
+		taskId: string,
+		evidence: ProposalEvidence | null,
+	): Promise<{ readonly approvalId: string; readonly proposal: DeploymentProposal } | undefined> {
+		if (evidence === null) return undefined;
+		const match = (await this.store.listProposals(taskId)).find(
+			(proposal) =>
+				proposal.status === "pending_approval" &&
+				proposal.evidence?.snapshotChecksum === evidence.snapshotChecksum &&
+				proposal.diffChecksum === evidence.diffChecksum,
+		);
+		if (match === undefined) return undefined;
+		const approval = (await this.store.listApprovals({ taskId })).find(
+			(item) => item.proposalId === match.id && item.status === "pending",
+		);
+		return approval === undefined ? undefined : { approvalId: approval.id, proposal: match };
+	}
+
 	async #taskWithWorktree(task: IterationTask): Promise<IterationTask> {
 		const current = (await this.store.getTask(task.id)) ?? task;
 		if (current.worktreePath === undefined) {
@@ -2589,6 +2783,53 @@ function parseTest(result: Awaited<ReturnType<CodingRunner["exec"]>>): TestRunRe
 		stdout: result.stdout,
 		total: passedCount + failed,
 	};
+}
+
+interface FreshEvidence {
+	readonly build: TaskArtifact | undefined;
+	readonly test: TaskArtifact | undefined;
+}
+
+/** A passing validation of exactly this snapshot identity; failed, cancelled, or timed-out runs never count. */
+function isFreshPass(artifact: TaskArtifact, snapshotChecksum: string): boolean {
+	const metadata = recordValue(artifact.metadata);
+	const provenance = recordValue(metadata.provenance);
+	return (
+		provenance.checksum === snapshotChecksum &&
+		metadata.passed === true &&
+		metadata.cancelled !== true &&
+		metadata.timedOut !== true
+	);
+}
+
+function buildArtifactMetadata(artifact: TaskArtifact): ArtifactMetadata {
+	const metadata = recordValue(artifact.metadata);
+	return {
+		builtAtMs: typeof metadata.builtAtMs === "number" ? metadata.builtAtMs : 0,
+		checksum: artifact.checksum ?? "",
+		command: typeof metadata.command === "string" ? metadata.command : artifact.name,
+		...(typeof metadata.sizeBytes === "number" ? { sizeBytes: metadata.sizeBytes } : {}),
+	};
+}
+
+function evidenceItem(artifact: TaskArtifact): ProposalEvidenceItem {
+	const provenance = recordValue(recordValue(artifact.metadata).provenance);
+	return {
+		kind: artifact.kind === "build" ? "build" : "test",
+		name: artifact.name,
+		provenance: provenance.kind === "snapshot" ? "snapshot" : "live",
+	};
+}
+
+/** Actionable next step for a refused proposal; the missing list alone does not say what to run. */
+function verificationHint(missing: readonly string[], hasWorktree: boolean): string | undefined {
+	if (missing.length === 0) return undefined;
+	if (!hasWorktree) return "The task has no worktree yet. Edit the task, then propose again.";
+	if (missing.includes("changedFiles")) return "The worktree has no changes to propose.";
+	if (missing.includes("testResult") || missing.includes("artifactMetadata")) {
+		return "Run self-iteration.check for test and webui-build after the last edit, then propose again. Evidence from earlier content, failed, cancelled, or unbound runs is not attached.";
+	}
+	return undefined;
 }
 
 function testMetadataToTestResult(metadata: Readonly<Record<string, unknown>>): TestRunResult {

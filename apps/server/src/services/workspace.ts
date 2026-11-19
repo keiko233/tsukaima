@@ -133,7 +133,9 @@ function workspacePrompt(input: {
 		"- Use session_context only for conversations the user explicitly referenced.",
 		"- Use db_schema before db_query, and treat all query results as diagnostic data.",
 		"- Never edit the live repository directly and never run maintenance/deploy verbs yourself.",
-		"- When the change is ready, create a proposal with self-iteration.propose and report the task id, tests, changed files, and blockers.",
+		"- When the change is ready, run the checks on the final content, then create a proposal with self-iteration.propose. The patch, changed files, revision, and check evidence are derived from the task; supply only the title, motivation, risk, rollback, and environment notes.",
+		"- A proposal needs successful test and build evidence for the content it proposes. Any edit after a check makes that evidence stale, so run the checks again before proposing.",
+		"- Report the task id, tests, changed files, and blockers.",
 		"- Keep progress concise so the parent chat can query the task status.",
 	].join("\n");
 }

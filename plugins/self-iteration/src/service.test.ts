@@ -1342,3 +1342,244 @@ describe("isolated Workspace exec and check targets (real bubblewrap)", () => {
 		}
 	}, 120_000);
 });
+
+function proposalText(taskId: string) {
+	return {
+		envChanges: [],
+		motivation: "Keep the fixture honest",
+		requiresRestart: false,
+		riskAssessment: "low",
+		rollbackNotes: "git revert the commit",
+		taskId,
+		title: "Fixture patch",
+	};
+}
+
+async function verifiedTask(service: SelfIterationService) {
+	const task = await patchTask(service);
+	await service.check({ target: "test", taskId: task.id });
+	// The synthetic fixture has no WebUI workspace, so the build evidence comes from the
+	// configured compatibility build; its provenance is checked separately below.
+	await service.build({ taskId: task.id });
+	return task;
+}
+
+describe("proposal evidence bound to the snapshot", () => {
+	test("derives patch, revision, files, checksums, and evidence server-side and ignores model-supplied evidence", async () => {
+		const { service } = await fixture();
+		const task = await verifiedTask(service);
+		const forged = {
+			artifactMetadata: { builtAtMs: 1, checksum: "forged", command: "forged", sizeBytes: 1 },
+			changedFiles: ["forged.ts"],
+			diff: "forged diff",
+			diffChecksum: "0".repeat(64),
+			sourceRevision: "forged",
+			testResult: { exitCode: 0, failed: 0, passed: true, stderr: "", stdout: "", total: 1 },
+			...proposalText(task.id),
+		} as never;
+		const result = await service.propose(forged);
+		expect(result.missing).toEqual([]);
+		expect(result.proposal.diff).toContain("added");
+		expect(result.proposal.changedFiles).toEqual(["src/added.ts"]);
+		expect(result.proposal.diffChecksum).not.toBe("0".repeat(64));
+		expect(result.proposal.sourceRevision).toMatch(/^[0-9a-f]{40}$/);
+		expect(result.proposal.evidence?.items.map((item) => item.kind).toSorted()).toEqual([
+			"build",
+			"test",
+		]);
+		expect(result.proposal.evidence?.items.find((item) => item.kind === "test")?.provenance).toBe(
+			"snapshot",
+		);
+		expect(result.proposal.evidence?.items.find((item) => item.kind === "build")?.provenance).toBe(
+			"live",
+		);
+		expect(result.proposal.testResult?.passed).toBe(true);
+	});
+
+	test("an edit after verification refuses the proposal until checks run on the new content", async () => {
+		const { service } = await fixture();
+		const task = await verifiedTask(service);
+		const first = await service.propose(proposalText(task.id));
+		expect(first.missing).toEqual([]);
+		await service.edit({ find: "true", path: "src/added.ts", replace: "false", taskId: task.id });
+		const stale = await service.propose(proposalText(task.id));
+		expect(stale.missing).toEqual(expect.arrayContaining(["testResult", "artifactMetadata"]));
+		expect(stale.approvalId).toBe("");
+		expect(stale.hint).toContain("self-iteration.check");
+		await service.check({ target: "test", taskId: task.id });
+		await service.build({ taskId: task.id });
+		const fresh = await service.propose(proposalText(task.id));
+		expect(fresh.missing).toEqual([]);
+		expect(fresh.reused).toBe(false);
+		expect(fresh.proposal.id).not.toBe(first.proposal.id);
+	});
+
+	test("a failed check blocks the proposal until a passing check runs on the same content", async () => {
+		const { service } = await fixture();
+		const task = await patchTask(service);
+		await service.edit({
+			find: "toBe(1)",
+			path: "src/app.test.ts",
+			replace: "toBe(2)",
+			taskId: task.id,
+		});
+		const failed = await service.check({ target: "test", taskId: task.id });
+		expect(failed.passed).toBe(false);
+		await service.build({ taskId: task.id });
+		const blocked = await service.propose(proposalText(task.id));
+		expect(blocked.missing).toContain("testResult");
+		expect(blocked.missing).not.toContain("artifactMetadata");
+		await service.edit({
+			find: "toBe(2)",
+			path: "src/app.test.ts",
+			replace: "toBe(1)",
+			taskId: task.id,
+		});
+		const passing = await service.check({ target: "test", taskId: task.id });
+		expect(passing.passed).toBe(true);
+		// The earlier build validated the failing content; the passing content needs its own build.
+		await service.build({ taskId: task.id });
+		const accepted = await service.propose(proposalText(task.id));
+		expect(accepted.missing).toEqual([]);
+	});
+
+	test("a cancelled check is never attached as evidence", async () => {
+		const { service } = await fixture();
+		const task = await patchTask(service);
+		const controller = new AbortController();
+		controller.abort();
+		const cancelled = await service.check({
+			signal: controller.signal,
+			target: "test",
+			taskId: task.id,
+		});
+		expect(cancelled.passed).toBe(false);
+		await service.build({ taskId: task.id });
+		const refused = await service.propose(proposalText(task.id));
+		expect(refused.missing).toContain("testResult");
+	});
+
+	test("an edit during a live validation unbinds the result and requires fresh evidence", async () => {
+		let delegate: SandboxProvider | undefined;
+		let duringBuild: (() => Promise<void>) | undefined;
+		const provider: SandboxProvider = async () => {
+			const executor = await delegate!();
+			return {
+				...executor,
+				exec: async (input) => {
+					if (input.snapshot !== true && duringBuild !== undefined) {
+						const edit = duringBuild;
+						duringBuild = undefined;
+						await edit();
+					}
+					return executor.exec(input);
+				},
+			};
+		};
+		const { repo, service } = await fixture({ sandbox: provider });
+		delegate = createTestSandbox(repo).provider;
+		const task = await patchTask(service);
+		await service.check({ target: "test", taskId: task.id });
+		duringBuild = async () => {
+			await service.edit({
+				find: "true",
+				path: "src/added.ts",
+				replace: "false",
+				taskId: task.id,
+			});
+		};
+		const build = await service.build({ taskId: task.id });
+		expect(build.success).toBe(true);
+		const refused = await service.propose(proposalText(task.id));
+		expect(refused.missing).toEqual(expect.arrayContaining(["testResult", "artifactMetadata"]));
+		expect(refused.hint).toContain("self-iteration.check");
+	});
+
+	test("a changed path under an excluded directory refuses the diff instead of certifying it", async () => {
+		const { service } = await fixture();
+		const task = await patchTask(service);
+		const worktree = String((await service.status(task.id)).task.worktreePath);
+		await fs.mkdir(join(worktree, "node_modules", "pkg"), { recursive: true });
+		await fs.writeFile(join(worktree, "node_modules", "pkg", "index.ts"), "export {};\n");
+		await expect(service.diff({ taskId: task.id })).rejects.toThrow(
+			"diff_not_covered_by_snapshot:node_modules/pkg/index.ts",
+		);
+		await expect(service.propose(proposalText(task.id))).rejects.toThrow(
+			"diff_not_covered_by_snapshot",
+		);
+	});
+
+	test("an untracked link the snapshot drops refuses the diff", async () => {
+		const { service } = await fixture();
+		const task = await patchTask(service);
+		const worktree = String((await service.status(task.id)).task.worktreePath);
+		await fs.symlink("/etc/hostname", join(worktree, "escape-link"));
+		await expect(service.diff({ taskId: task.id })).rejects.toThrow(
+			"diff_not_covered_by_snapshot:escape-link",
+		);
+	});
+
+	test("more untracked files than the diff expands refuse the diff as incomplete", async () => {
+		const { service } = await fixture();
+		const task = await patchTask(service);
+		const worktree = String((await service.status(task.id)).task.worktreePath);
+		await fs.mkdir(join(worktree, "bulk"), { recursive: true });
+		await Promise.all(
+			Array.from({ length: 201 }, (_, index) =>
+				fs.writeFile(join(worktree, "bulk", `f${index}.txt`), `${index}\n`),
+			),
+		);
+		await expect(service.diff({ taskId: task.id })).rejects.toThrow(
+			"diff_incomplete:untracked_limit",
+		);
+	});
+
+	test("duplicate retries for unchanged content create one proposal and one approval", async () => {
+		const { service, store } = await fixture();
+		const task = await verifiedTask(service);
+		const outcomes = await Promise.all([
+			service.propose(proposalText(task.id)),
+			service.propose(proposalText(task.id)),
+		]);
+		const created = outcomes.find((outcome) => !outcome.reused);
+		const reused = outcomes.find((outcome) => outcome.reused);
+		expect(created).toBeDefined();
+		expect(reused?.proposal.id).toBe(created?.proposal.id);
+		expect(reused?.approvalId).toBe(created?.approvalId);
+		expect(await store.listProposals(task.id)).toHaveLength(1);
+	});
+
+	test("a proposal recorded before evidence was bound stays readable with null evidence", async () => {
+		const { service, store } = await fixture();
+		const task = await patchTask(service);
+		const legacy = await store.createProposal({
+			diff: "old",
+			riskAssessment: "low",
+			rollbackNotes: "revert",
+			taskId: task.id,
+			title: "Legacy",
+		});
+		const read = await service.getProposal(legacy.id);
+		expect(read?.evidence).toBeNull();
+		expect(read?.title).toBe("Legacy");
+	});
+
+	test("the worktree is provisioned from the durable task base, whatever base the model asks for", async () => {
+		const { repo, service } = await fixture();
+		const task = await service.createTask({
+			goal: "Use the durable base",
+			mode: "proposal",
+			sourceConversationId: "coding-conversation",
+		});
+		const worktree = await service.worktree({ baseRef: "no-such-ref", taskId: task.id } as never);
+		const head = execFileSync("git", ["rev-parse", "HEAD"], {
+			cwd: String(worktree.path),
+		})
+			.toString()
+			.trim();
+		expect(worktree.baseRef).toBe(task.baseRef);
+		expect(head).toBe(
+			execFileSync("git", ["rev-parse", task.baseRef], { cwd: repo }).toString().trim(),
+		);
+	});
+});

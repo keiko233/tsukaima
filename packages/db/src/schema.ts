@@ -720,6 +720,7 @@ export const codingProposals = sqliteTable(
 		diff: text("diff").notNull(),
 		diffChecksum: text("diff_checksum").notNull().default(""),
 		envChangesJson: text("env_changes_json").notNull().default("[]"),
+		evidenceJson: text("evidence_json"),
 		id: text("id").primaryKey(),
 		motivation: text("motivation").notNull().default(""),
 		requiresRestart: integer("requires_restart").notNull().default(0),
