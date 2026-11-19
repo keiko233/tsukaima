@@ -130,7 +130,11 @@ import {
 import { WorkspaceReferenceService } from "./services/workspace-references.ts";
 import { WorkspaceSqlService } from "./services/workspace-sql.ts";
 import { WorkspaceTodoService } from "./services/workspace-todos.ts";
-import { WORKSPACE_TOOL_NAMES, createWorkspaceToolsExtension } from "./services/workspace-tools.ts";
+import {
+	WORKSPACE_CODING_TOOL_NAMES,
+	WORKSPACE_TOOL_NAMES,
+	createWorkspaceToolsExtension,
+} from "./services/workspace-tools.ts";
 import { WorkspaceService } from "./services/workspace.ts";
 
 /**
@@ -584,6 +588,7 @@ export class TsukaimaLifecycle {
 		});
 		this.workspaceToolsExtension = createWorkspaceToolsExtension({
 			audit: (entry) => this.writeAudit(entry),
+			gitIdentity: () => readGitIdentity(this.domainDatabase),
 			logger: this.runtimeLog,
 			messaging: this.sessionMessaging,
 			promptHooks: this.promptHooks,
@@ -881,6 +886,7 @@ export class TsukaimaLifecycle {
 		if (!codingAllowed) {
 			for (const name of codingTools) removed.add(name);
 			for (const name of codingAgentTools) removed.add(name);
+			for (const name of WORKSPACE_CODING_TOOL_NAMES) removed.add(name);
 		}
 		if (kind === "webui") {
 			// A chat may spawn/control workspaces but never edit code in its own turn.

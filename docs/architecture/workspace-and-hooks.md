@@ -42,7 +42,7 @@ visibility is synchronized per conversation before a turn:
 | Session | Repository tools | Workspace controls | Hooks |
 | --- | --- | --- | --- |
 | WebUI chat | No | Yes | Yes |
-| Workspace | Yes, with `coding` capability | Status/send only | Yes |
+| Workspace | Yes, with `coding` capability | Status/send and read-only Git identity | Yes |
 | IM private/group | No | No | No |
 | Task/plugin | No | No | No |
 
@@ -54,6 +54,9 @@ Workspace-control tools:
 - `session_lookup({ query, limit? })`
 - `hook_schedule({ prompt, timing, sessionId?, deliverAt? })`
 - `hook_list({ includeFinished? })`
+- `workspace_git_identity()` reads the effective author and committer name and email from the
+  server-owned Git identity service. It is offered only to coding Workspaces, never chat or IM,
+  and never reads `.git` configuration, credentials, or raw database rows.
 
 Coding tools (`self-iteration.*`) are offered to a Workspace turn in two tiers. `analyze`,
 `worktree`, `edit`, `test`, `build`, `diff`, `propose`, and `status` are offered in the first

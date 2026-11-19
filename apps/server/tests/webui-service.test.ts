@@ -394,6 +394,9 @@ describe("WebUI chat and session service", () => {
 			for (const toolName of codingTools) {
 				expect(withoutCoding.tools.some((tool) => tool.name === toolName)).toBe(false);
 			}
+			expect(withoutCoding.tools.some((tool) => tool.name === "workspace_git_identity")).toBe(
+				false,
+			);
 
 			const currentPolicy = await lifecycle.conversationPolicy.effectivePolicy(chat.sessionId);
 			await lifecycle.conversationPolicy.update({
@@ -411,6 +414,7 @@ describe("WebUI chat and session service", () => {
 				expect(withCoding.tools.some((tool) => codingTools.includes(tool.name))).toBe(false);
 			}
 			expect(withCoding.tools.some((tool) => tool.name === "workspace_spawn")).toBe(true);
+			expect(withCoding.tools.some((tool) => tool.name === "workspace_git_identity")).toBe(false);
 		} finally {
 			await lifecycle.stop();
 		}

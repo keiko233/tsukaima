@@ -18,6 +18,7 @@ import { probeBubblewrapSandbox } from "@tsukaima/coding";
 import { providerSafeToolName } from "@tsukaima/sdk";
 import { loadConfig } from "../src/config.ts";
 import { TsukaimaLifecycle } from "../src/lifecycle.ts";
+import { writeGitIdentity } from "../src/services/git-identity.ts";
 
 /**
  * Batch 1 acceptance: a deterministic model drives a Workspace turn through the same model
@@ -47,6 +48,8 @@ const TOOL = {
 	upstream: providerSafeToolName("self-iteration.upstream"),
 	worktree: providerSafeToolName("self-iteration.worktree"),
 } as const;
+
+const GIT_IDENTITY_TOOL = "workspace_git_identity";
 
 /** Registered plugin tool names, as `pluginHost.invokeTool` routes them. */
 const RAW = {
@@ -135,8 +138,9 @@ function parseOutput(content: unknown): Record<string, unknown> {
  * follow-up call is chosen from the previous tool's real output, never from a fixed transcript.
  * Turns that do not offer the coding tools get a plain acknowledgement.
  */
-function scriptedWorkspaceModel() {
+function scriptedWorkspaceModel(options: { readonly checkGitIdentity?: boolean } = {}) {
 	const observed: Observed = { calls: [], outputs: new Map(), requests: [] };
+	let identityRequested = false;
 	const port = createOpenAICompatibleModelPort(
 		{
 			apiKey: "test-key",
@@ -149,7 +153,16 @@ function scriptedWorkspaceModel() {
 				const last = messages.at(-1);
 				let body: unknown = textResponse("noted");
 				if (names.includes(TOOL.analyze)) {
-					if (last?.role === "user") {
+					if (
+						options.checkGitIdentity === true &&
+						!identityRequested &&
+						names.includes(GIT_IDENTITY_TOOL) &&
+						last?.role === "user"
+					) {
+						identityRequested = true;
+						observed.calls.push(GIT_IDENTITY_TOOL);
+						body = toolCallResponse(GIT_IDENTITY_TOOL, {}, "call-identity");
+					} else if (last?.role === "user") {
 						observed.calls.push(TOOL.analyze);
 						body = toolCallResponse(TOOL.analyze, { action: "read", path: "src/app.ts" }, "call-1");
 					} else if (last?.role === "tool") {
@@ -184,6 +197,11 @@ function nextCall(
 	output: Record<string, unknown>,
 ): { readonly args: Record<string, unknown>; readonly name: string } | undefined {
 	switch (name) {
+		case GIT_IDENTITY_TOOL:
+			return {
+				args: { action: "read", path: "src/app.ts" },
+				name: TOOL.analyze,
+			};
 		case TOOL.analyze:
 			// The read must come from the task's base revision, before any worktree exists.
 			expect(String(output.content)).toContain("export const value = 'old';");
@@ -537,6 +555,44 @@ describe("Workspace agent execution (batch 2 isolation)", () => {
 		expect(missing.ok).toBe(true);
 		if (!missing.ok) throw new Error("draft call was not routed");
 		expect(missing.result.content[0]?.text).toContain("task_binding_missing");
+	}, 60_000);
+
+	test("a workspace reads the effective Git identity from the server-owned service", async () => {
+		const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-workspace-identity-"));
+		directories.push(root);
+		const repo = await fixtureRepository(root);
+		const model = scriptedWorkspaceModel({ checkGitIdentity: true });
+		const lifecycle = await start(root, repo, model.port);
+		const database = lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("Domain database is not ready");
+		await writeGitIdentity(database, {
+			email: "workspace-agent@example.test",
+			name: "Workspace Agent",
+		});
+		const workspace = await lifecycle.workspace.create({
+			goal: "Read the effective Git identity.",
+			requestedBy: "test-admin",
+		});
+		await lifecycle.sessionMessaging.sendAgentMessage({
+			sessionId: workspace.sessionId,
+			source: "webui",
+			text: "Inspect the Git identity, then continue with the change.",
+		});
+		await waitFor(() =>
+			model.observed.outputs.has(GIT_IDENTITY_TOOL) && model.observed.outputs.has(TOOL.propose)
+				? true
+				: undefined,
+		);
+		expect(model.observed.outputs.get(GIT_IDENTITY_TOOL)).toEqual({
+			author: { email: "workspace-agent@example.test", name: "Workspace Agent" },
+			committer: { email: "workspace-agent@example.test", name: "Workspace Agent" },
+		});
+		expect(model.observed.calls[0]).toBe(GIT_IDENTITY_TOOL);
+		const first = model.observed.requests.find((request) =>
+			toolNames(request).includes(TOOL.analyze),
+		);
+		if (first === undefined) throw new Error("no workspace request offered coding tools");
+		expect(toolNames(first)).toContain(GIT_IDENTITY_TOOL);
 	}, 60_000);
 
 	test("concurrent first calls share one task worktree", async () => {

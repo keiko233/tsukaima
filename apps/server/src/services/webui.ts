@@ -31,7 +31,7 @@ import {
 	type MentionLabelScope,
 } from "./mention-labels.ts";
 import { collectRunSteps } from "./run-steps.ts";
-import { WORKSPACE_TOOL_NAMES } from "./workspace-tools.ts";
+import { WORKSPACE_CODING_TOOL_NAMES, WORKSPACE_TOOL_NAMES } from "./workspace-tools.ts";
 import { CODING_AGENT_TOOL_NAMES } from "./coding-agent-tools.ts";
 
 type ChatKind = "private" | "group" | "webui" | "workspace" | "task" | "plugin";
@@ -405,11 +405,10 @@ export async function getSessionContextStats(
 	);
 	const codingTools = lifecycle.pluginHost.modelToolNames("self-iteration");
 	const kind = session.chatKind ?? session.sessionKind;
+	const codingAllowed = kind === "workspace" && policy.capabilities.includes("coding");
 	const omittedTools = [
-		...(kind === "workspace" && policy.capabilities.includes("coding") ? [] : codingTools),
-		...(kind === "workspace" && policy.capabilities.includes("coding")
-			? []
-			: [...CODING_AGENT_TOOL_NAMES]),
+		...(codingAllowed ? [] : codingTools),
+		...(codingAllowed ? [] : [...CODING_AGENT_TOOL_NAMES, ...WORKSPACE_CODING_TOOL_NAMES]),
 		...(kind === "webui" || kind === "workspace" ? [] : WORKSPACE_TOOL_NAMES),
 	];
 	const [inspection, contextDetails] = await Promise.all([
