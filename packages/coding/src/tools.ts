@@ -146,6 +146,19 @@ export class CodingTools {
 		const result = await this.#runner.exec("bun", args);
 		return parseTestOutput(result);
 	}
+
+	/**
+	 * Run one command from the runner's allowlist with explicit, never shell-parsed arguments.
+	 * This powers the Workspace shell tool: the allowlist still constrains which programs may
+	 * start, and the executor constrains everything else.
+	 */
+	async runCommand(command: string, args: readonly string[]): Promise<CommandResult> {
+		if (command.length === 0) throw new Error("command is required");
+		if (args.some((arg) => arg.includes("\0"))) {
+			throw new Error("command arguments must not contain null bytes");
+		}
+		return await this.#runner.exec(command, args);
+	}
 }
 
 export function parseDiffOutput(

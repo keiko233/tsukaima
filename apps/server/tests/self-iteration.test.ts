@@ -134,7 +134,7 @@ describe("self-iteration runtime", () => {
 			const rows = await lifecycle.pluginHost.list();
 			const plugin = rows.find((entry) => entry.id === "self-iteration");
 			expect(plugin).toBeDefined();
-			// Without OS isolation the shell and check tools are withheld, not offered.
+			// Without OS isolation the bash exec, allowlisted shell, and named checks are withheld.
 			expect([...(plugin?.tools ?? [])].toSorted()).toEqual([
 				"self-iteration.analyze",
 				"self-iteration.build",

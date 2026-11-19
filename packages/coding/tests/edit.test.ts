@@ -67,6 +67,34 @@ describe("structured edits", () => {
 		expect(created.checksum).toHaveLength(64);
 	});
 
+	test("replaceAll rewrites every occurrence; without it multiple occurrences are rejected", async () => {
+		const target = join(worktreePath, "src", "repeat.ts");
+		await fs.writeFile(target, "one two one two\n");
+		await expect(
+			applyStructuredEdit(worktreePath, ["src"], {
+				find: "two",
+				path: "src/repeat.ts",
+				replace: "TWO",
+			}),
+		).rejects.toThrow(/occurs 2 times/u);
+		const replaced = await applyStructuredEdit(worktreePath, ["src"], {
+			find: "two",
+			path: "src/repeat.ts",
+			replaceAll: true,
+			replace: "TWO",
+		});
+		expect(replaced.path).toBe("src/repeat.ts");
+		expect(await fs.readFile(target, "utf-8")).toBe("one TWO one TWO\n");
+		await expect(
+			applyStructuredEdit(worktreePath, ["src"], {
+				content: "x",
+				create: true,
+				path: "src/other.ts",
+				replaceAll: true,
+			}),
+		).rejects.toThrow(EditValidationError);
+	});
+
 	test("rejects traversal, absolute paths, and symlink escapes", async () => {
 		await expect(
 			applyStructuredEdit(worktreePath, ["src"], {

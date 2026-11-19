@@ -1113,8 +1113,8 @@ describe("isolated Workspace exec and check targets", () => {
 			"script is required",
 		);
 		await expect(
-			service.exec({ script: "x".repeat(16 * 1024 + 1), taskId: task.id }),
-		).rejects.toThrow("script_too_long");
+			service.exec({ script: "x".repeat(64 * 1024 + 1), taskId: task.id }),
+		).rejects.toThrow("script_too_large");
 		expect(sandboxCalls.some((call) => call.snapshot === true)).toBe(false);
 	});
 
@@ -1138,7 +1138,7 @@ describe("isolated Workspace exec and check targets", () => {
 			),
 		).toBe(true);
 
-		await service.updatePolicy({ timeoutMs: 1000 }, "webui-admin");
+		await service.updatePolicy({ execTimeoutMs: 1000 }, "webui-admin");
 		const timed = await service.exec({ script: "sleep 30", taskId: task.id });
 		expect(timed.timedOut).toBe(true);
 		expect(timed.passed).toBe(false);
@@ -1195,6 +1195,40 @@ describe("isolated Workspace exec and check targets", () => {
 		).rejects.toThrow("pattern_not_supported:lint");
 		expect(sandboxCalls.length).toBe(before);
 		expect(audits.some((entry) => entry.reason === "unknown_check_target:sh")).toBe(true);
+	});
+
+	test("shell runs one allowlisted command with explicit args on the snapshot", async () => {
+		const { audits, sandboxCalls, service } = await fixture();
+		const task = await patchTask(service);
+		const result = await service.shell({
+			args: ["ls-files", "--others", "--exclude-standard"],
+			command: "git",
+			taskId: task.id,
+		});
+		expect(result.passed).toBe(true);
+		const call = sandboxCalls.at(-1);
+		expect(call?.command).toBe("git");
+		expect(call?.args).toEqual(["ls-files", "--others", "--exclude-standard"]);
+		expect(call?.snapshot).toBe(true);
+		expect(result.snapshot.checksum).toMatch(/^[0-9a-f]{64}$/u);
+		expect(audits.some((entry) => entry.action === "self-iteration.shell")).toBe(true);
+	});
+
+	test("shell rejects commands outside the allowlist before any process starts", async () => {
+		const { audits, sandboxCalls, service } = await fixture();
+		const task = await patchTask(service);
+		const before = sandboxCalls.length;
+		await expect(
+			service.shell({ args: ["-c", "evil"], command: "sh", taskId: task.id }),
+		).rejects.toThrow("command_not_allowed:sh");
+		await expect(service.shell({ command: "   ", taskId: task.id })).rejects.toThrow(
+			"command is required",
+		);
+		await expect(
+			service.shell({ args: ["--\0"], command: "git", taskId: task.id }),
+		).rejects.toThrow("invalid_args");
+		expect(sandboxCalls.length).toBe(before);
+		expect(audits.some((entry) => entry.reason === "command_not_allowed:sh")).toBe(true);
 	});
 
 	test("an unavailable isolated executor fails closed before any command starts", async () => {
@@ -1318,9 +1352,9 @@ describe("isolated Workspace exec and check targets (real bubblewrap)", () => {
 		await expect(fs.stat(join(worktree, "scratch.txt"))).rejects.toThrow();
 	}, 120_000);
 
-	test("the real shell has no network and cannot see the live repository", async () => {
+	test("the real shell can reach the network with the default policy, and is offline when the policy disables it", async () => {
 		if (!(await bwrapProbe).ok) return;
-		const { repo, service } = await fixture({ realBubblewrap: true });
+		const { service } = await fixture({ realBubblewrap: true });
 		const task = await patchTask(service);
 		const listener = Bun.listen({
 			hostname: "127.0.0.1",
@@ -1328,15 +1362,20 @@ describe("isolated Workspace exec and check targets (real bubblewrap)", () => {
 			socket: { data() {}, open() {} },
 		});
 		try {
-			const shell = await service.exec({
-				script: [
-					`(exec 3<>/dev/tcp/127.0.0.1/${listener.port}) 2>/dev/null && echo reached || echo unreachable`,
-					`test -e '${join(repo, "src", "app.ts")}' && echo live-visible || echo live-absent`,
-				].join("\n"),
+			// Default policy allows outbound connections; loopback to the host listener works.
+			const online = await service.exec({
+				script: `(exec 3<>/dev/tcp/127.0.0.1/${listener.port}) 2>/dev/null && echo reached || echo unreachable`,
 				taskId: task.id,
 			});
-			expect(shell.stdout).toContain("unreachable");
-			expect(shell.stdout).toContain("live-absent");
+			expect(online.stdout).toContain("reached");
+
+			// With the network disabled the same probe cannot connect.
+			await service.updatePolicy({ execNetwork: "none" }, "webui-admin");
+			const offline = await service.exec({
+				script: `(exec 3<>/dev/tcp/127.0.0.1/${listener.port}) 2>/dev/null && echo reached || echo unreachable`,
+				taskId: task.id,
+			});
+			expect(offline.stdout).toContain("unreachable");
 		} finally {
 			listener.stop(true);
 		}

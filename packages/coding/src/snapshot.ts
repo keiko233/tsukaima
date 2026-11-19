@@ -12,7 +12,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { SandboxMount } from "./sandbox.ts";
 
 /**
@@ -140,6 +140,18 @@ function isInside(root: string, candidate: string): boolean {
 	return rel.length === 0 || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
+/** One bounded git query against the snapshot source; a failure simply yields no git view. */
+async function snapshotGit(cwd: string, args: readonly string[]): Promise<string | undefined> {
+	const proc = Bun.spawn({
+		cmd: ["git", ...args],
+		cwd,
+		stderr: "pipe",
+		stdout: "pipe",
+	});
+	const out = (await new Response(proc.stdout).text()).trim();
+	return (await proc.exited) === 0 && out.length > 0 ? out : undefined;
+}
+
 function sha256(data: Uint8Array | string): string {
 	return createHash("sha256").update(data).digest("hex");
 }
@@ -176,6 +188,62 @@ export async function createTaskSnapshot(options: TaskSnapshotOptions): Promise<
 
 	const addMount = (path: string): void => {
 		mounts.set(path, { directory: true, path });
+	};
+
+	/**
+	 * Build a minimal read-only `.git` inside the snapshot so `git status`, `git diff`, and
+	 * `git log` work like they do in the task worktree. The snapshot previously had no git
+	 * metadata at all, so every git invocation failed with "not a git repository".
+	 *
+	 * The view never contains the repository's `config` (credential helpers, remote URLs),
+	 * hooks, or reflogs: `HEAD`, the resolved branch tip, a copy of `packed-refs`, and a
+	 * minimal config are all it holds. The shared object store is referenced through an
+	 * `objects/info/alternates` pointer to the host path the sandbox mounts read-only, so no
+	 * object is ever copied or writable. Sources without git metadata simply skip the view.
+	 */
+	const buildGitView = async (): Promise<void> => {
+		const gitDir = await snapshotGit(source, ["rev-parse", "--git-dir"]).then((value) =>
+			value === undefined ? undefined : realpath(resolve(source, value)).catch(() => undefined),
+		);
+		const commonDir = await snapshotGit(source, ["rev-parse", "--git-common-dir"]).then((value) =>
+			value === undefined ? undefined : realpath(resolve(source, value)).catch(() => undefined),
+		);
+		if (gitDir === undefined || commonDir === undefined) {
+			counters.skippedEntries += 1;
+			return;
+		}
+		const head = await Bun.file(join(gitDir, "HEAD"))
+			.text()
+			.catch(() => undefined);
+		if (head === undefined || head.trim().length === 0) {
+			counters.skippedEntries += 1;
+			return;
+		}
+		const commit = await snapshotGit(source, ["rev-parse", "HEAD"]);
+		const gitRoot = join(target, ".git");
+		await mkdir(join(gitRoot, "refs", "heads"), { mode: 0o755, recursive: true });
+		await Bun.write(join(gitRoot, "HEAD"), head);
+		if (commit !== undefined && /^[0-9a-f]{40,64}$/u.test(commit)) {
+			// Resolve the checked-out branch so status shows it even without a config file.
+			const symbolic = /^ref:\s*(refs\/[^\s]+)\s*$/u.exec(head);
+			if (symbolic?.[1] !== undefined) {
+				await Bun.write(join(gitRoot, symbolic[1]), `${commit}\n`);
+			}
+		}
+		await Bun.write(
+			join(gitRoot, "packed-refs"),
+			await Bun.file(join(commonDir, "packed-refs"))
+				.text()
+				.catch(() => ""),
+		);
+		// Shared object store: mounted read-only by the sandbox, referenced via alternates.
+		const objectsDir = join(commonDir, "objects");
+		await mkdir(join(gitRoot, "objects", "info"), { mode: 0o755, recursive: true });
+		await Bun.write(join(gitRoot, "objects", "info", "alternates"), `${objectsDir}\n`);
+		mounts.set(objectsDir, { directory: true, path: objectsDir });
+		// No repository `config` on purpose: identity comes from the process environment, and a
+		// missing remote list makes accidental push/fetch impossible inside the snapshot.
+		await Bun.write(join(gitRoot, "config"), "[core]\n\tbare = false\n");
 	};
 
 	/** Map one live `node_modules` entry to a snapshot entry. Never copies dependency content. */
@@ -303,6 +371,8 @@ export async function createTaskSnapshot(options: TaskSnapshotOptions): Promise<
 	};
 
 	await walk("");
+	options.signal?.throwIfAborted();
+	await buildGitView();
 	options.signal?.throwIfAborted();
 	const manifest: TaskSnapshotManifest = {
 		bytes: counters.bytes,

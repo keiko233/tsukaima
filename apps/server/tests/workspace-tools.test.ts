@@ -44,7 +44,7 @@ describe("workspace SQL diagnostics", () => {
 		});
 		expect(result.rowCount).toBe(1);
 		await expect(sql.query({ sql: "delete from workspace_todos" })).rejects.toThrow(
-			"Only SELECT or WITH queries are allowed",
+			"Only SELECT, WITH, or EXPLAIN QUERY PLAN is allowed",
 		);
 		await expect(sql.query({ sql: "select * from users" })).rejects.toThrow(
 			"Table is not available",
@@ -52,5 +52,7 @@ describe("workspace SQL diagnostics", () => {
 		await expect(
 			sql.query({ sql: "select * from workspace_todos; select * from users" }),
 		).rejects.toThrow("Only one statement is allowed");
+		const plan = await sql.query({ sql: "EXPLAIN QUERY PLAN select * from workspace_todos" });
+		expect(plan.rowCount).toBeGreaterThan(0);
 	});
 });

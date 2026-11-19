@@ -68,6 +68,12 @@ export interface SandboxExecInput {
 	/** Absolute path that becomes the sandbox working directory. */
 	readonly cwd: string;
 	readonly env?: Readonly<Record<string, string>>;
+	/**
+	 * Network posture. `none` (default) keeps the command fully offline; `outbound` allows
+	 * outgoing connections. The bubblewrap executor then retains the network namespace and
+	 * mounts DNS resolution read-only; the host executor shares the container network anyway.
+	 */
+	readonly network?: "none" | "outbound";
 	readonly maxOutputBytes: number;
 	readonly timeoutMs: number;
 	/** Optional committed-source export, mounted read-only at {@link ANALYSIS_MOUNT}. */
@@ -240,6 +246,8 @@ export interface BubblewrapArgvInput {
 	readonly env: Readonly<Record<string, string>>;
 	/** Read-only source tree exported for analysis; mounted at `/analysis` when present. */
 	readonly analysisPath?: string;
+	/** `outbound` retains the network namespace and DNS resolution; default is fully offline. */
+	readonly network?: "none" | "outbound";
 	/** Additional read-only host paths the command needs (for example a worktree's git dir). */
 	readonly readOnlyPaths?: readonly SandboxMount[];
 	readonly repositoryPath: string;
@@ -285,6 +293,10 @@ export function buildBubblewrapArgv(input: BubblewrapArgvInput): string[] {
 	}
 	for (const file of SYSTEM_READONLY_FILES) {
 		argv.push("--ro-bind-try", file, file);
+	}
+	if (input.network === "outbound") {
+		// Keep the host network namespace and mount DNS resolution so name lookups still work.
+		argv.push("--share-net", "--ro-bind-try", "/etc/resolv.conf", "/etc/resolv.conf");
 	}
 	const commandDir = dirname(input.commandPath);
 	if (
@@ -685,6 +697,9 @@ async function createExecutor(options: BubblewrapSandboxOptions): Promise<Sandbo
 					commandPath,
 					cwd,
 					env,
+					...(input.network === undefined || input.network === "none"
+						? {}
+						: { network: input.network }),
 					maxOutputBytes: input.maxOutputBytes,
 					...(input.signal === undefined ? {} : { signal: input.signal }),
 					repositoryPath,
@@ -718,6 +733,9 @@ async function createExecutor(options: BubblewrapSandboxOptions): Promise<Sandbo
 					commandPath,
 					cwd,
 					env,
+					...(input.network === undefined || input.network === "none"
+						? {}
+						: { network: input.network }),
 					readOnlyPaths,
 					repositoryPath,
 					writable,
@@ -749,7 +767,9 @@ async function executeInSnapshot(input: {
 	readonly bwrapPath: string;
 	readonly commandPath: string;
 	readonly cwd: string;
-	readonly env: Readonly<Record<string, string>>;
+	env: Readonly<Record<string, string>>;
+	/** Network posture passed through from the sandbox input. */
+	network?: "none" | "outbound";
 	readonly maxOutputBytes: number;
 	readonly repositoryPath: string;
 	readonly signal?: AbortSignal;
@@ -793,6 +813,9 @@ async function executeInSnapshot(input: {
 			commandPath: input.commandPath,
 			cwd: input.cwd,
 			env: input.env,
+			...(input.network === undefined || input.network === "none"
+				? {}
+				: { network: input.network }),
 			readOnlyPaths: snapshot.readOnlyMounts,
 			repositoryPath: input.repositoryPath,
 			writable: true,

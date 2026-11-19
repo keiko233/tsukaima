@@ -252,7 +252,7 @@ export function createCodingAgentToolsExtension(
 
 	const query = tool({
 		description:
-			"Run one read-only SELECT/WITH query against allowlisted workspace and coding tables. Results are capped at 200 rows and 64 KiB.",
+			"Run one read-only SELECT/WITH (or EXPLAIN QUERY PLAN) query against allowlisted workspace, coding, audit, schedule, and prompt-hook tables. Results are capped at 500 rows and 256 KiB. EXPLAIN QUERY PLAN requires no FROM clause.",
 		name: "db_query",
 		parameters: {
 			properties: {

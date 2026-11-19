@@ -40,6 +40,7 @@ async function write(path: string, content: string): Promise<void> {
 }
 
 async function buildRepository(): Promise<void> {
+	await write(join(repository, ".gitignore"), "secret.env\ndata/\n");
 	await write(join(repository, "package.json"), '{"name":"synthetic","private":true}\n');
 	await write(join(repository, "secret.env"), `TOKEN=${SECRET_MARKER}\n`);
 	await write(join(repository, "data", "state.txt"), "service data\n");
@@ -78,12 +79,44 @@ async function buildRepository(): Promise<void> {
 		"../../../../packages/lib",
 		join(repository, "plugins", "app", "node_modules", "@synthetic", "lib"),
 	);
+	const env = { HOME: root, PATH: process.env.PATH ?? "/usr/bin:/bin" };
+	const gitify = (args: readonly string[]): Promise<number> => {
+		const proc = Bun.spawn({
+			cmd: [
+				"git",
+				"-c",
+				"user.name=tsukaima-test",
+				"-c",
+				"user.email=test@tsukaima.invalid",
+				...args,
+			],
+			cwd: repository,
+			env,
+			stderr: "ignore",
+			stdout: "ignore",
+		});
+		return proc.exited;
+	};
+	for (const args of [
+		["init", "-b", "main"],
+		["add", "-A"],
+		["commit", "-m", "synthetic base"],
+	]) {
+		if ((await gitify(args)) !== 0) throw new Error(`fixture git ${args[0]} failed`);
+	}
 }
 
 /** A task worktree: tracked content only, with the metadata a real worktree carries. */
 async function buildWorktree(): Promise<void> {
+	const add = Bun.spawn({
+		cmd: ["git", "worktree", "add", "--detach", task, "HEAD"],
+		cwd: repository,
+		env: { HOME: root, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+		stderr: "ignore",
+		stdout: "ignore",
+	});
+	if ((await add.exited) !== 0) throw new Error("fixture git worktree add failed");
 	await write(join(task, "package.json"), '{"name":"synthetic","private":true}\n');
-	await write(join(task, ".git"), `gitdir: ${join(repository, ".git", "worktrees", "task-a")}\n`);
 	await write(
 		join(task, "packages", "lib", "package.json"),
 		'{"name":"@synthetic/lib","main":"src/index.ts"}\n',
@@ -104,9 +137,12 @@ async function buildWorktree(): Promise<void> {
 			"",
 		].join("\n"),
 	);
-	// Worktree links: the root link mirrors WorktreeManager (absolute, outside the task tree);
-	// the in-tree relative link must survive; the escaping link must be dropped.
-	await symlink(join(repository, "node_modules"), join(task, "node_modules"));
+	// Worktree links: the in-tree relative link must survive; the escaping link must be
+	// dropped. `git worktree add` already created the node_modules link like WorktreeManager;
+	// keep it only when it is absent so the fixture also works on hosts without the hook.
+	if (!existsSync(join(task, "node_modules"))) {
+		await symlink(join(repository, "node_modules"), join(task, "node_modules"));
+	}
 	await symlink("packages/lib/src/index.ts", join(task, "entry.ts"));
 	await symlink("/etc/hostname", join(task, "escape-host"));
 }
@@ -135,9 +171,17 @@ describe("task snapshot provenance", () => {
 		expect(await readFile(join(target, "packages", "lib", "src", "index.ts"), "utf8")).toContain(
 			"task",
 		);
-		expect(existsSync(join(target, ".git"))).toBe(false);
 		expect(existsSync(join(target, "secret.env"))).toBe(false);
 		expect(existsSync(join(target, "data"))).toBe(false);
+		// The minimal git view exists for status/diff/log, but carries no repository config,
+		// hooks, or credential state, and references objects only through alternates.
+		expect(existsSync(join(target, ".git", "HEAD"))).toBe(true);
+		expect(existsSync(join(target, ".git", "objects", "info", "alternates"))).toBe(true);
+		expect(existsSync(join(target, ".git", "hooks"))).toBe(false);
+		expect(existsSync(join(target, ".git", "refs", "heads", "main"))).toBe(false);
+		const config = await readFile(join(target, ".git", "config"), "utf8");
+		expect(config).not.toContain("remote");
+		expect(config).not.toContain("url");
 		// In-tree relative links survive; the absolute and escaping links do not.
 		expect(await readlink(join(target, "entry.ts"))).toBe("packages/lib/src/index.ts");
 		expect(existsSync(join(target, "escape-host"))).toBe(false);
@@ -149,10 +193,14 @@ describe("task snapshot provenance", () => {
 		expect(
 			await realpath(join(target, "plugins", "app", "node_modules", "@synthetic", "lib")),
 		).toBe(await realpath(join(target, "packages", "lib")));
-		// Installed packages stay in the install mount, which is the only host mount required.
-		expect(snapshot.readOnlyMounts.map((mount) => mount.path)).toEqual([
-			await realpath(join(repository, "node_modules")),
-		]);
+		// Installed packages stay in the install mount; the shared git object store is the other
+		// read-only host mount the minimal git view needs.
+		expect(snapshot.readOnlyMounts.map((mount) => mount.path).toSorted()).toEqual(
+			[
+				await realpath(join(repository, "node_modules")),
+				await realpath(join(repository, ".git", "objects")),
+			].toSorted(),
+		);
 		expect(snapshot.manifest.dependencyLinks).toBeGreaterThan(0);
 		expect(snapshot.manifest.unresolvedDependencies).toBe(0);
 	});
@@ -330,7 +378,9 @@ describe("bubblewrap snapshot execution (real namespaces)", () => {
 					`test -e '${join(repository, "data", "state.txt")}' && echo data-visible || echo data-absent`,
 					`test -e '${join(repository, ".git", "config")}' && echo git-visible || echo git-absent`,
 					`test -e '${join(repository, "packages", "lib", "src", "index.ts")}' && echo live-source-visible || echo live-source-absent`,
-					`test -e '${join(task, ".git")}' && echo worktree-git-visible || echo worktree-git-absent`,
+					`grep -q helper '${join(task, ".git", "config")}' 2>/dev/null && echo git-credential-visible || echo git-credential-absent`,
+					`test -e '${join(task, ".git", "HEAD")}' && echo snapshot-git-head-visible || echo snapshot-git-head-absent`,
+					`git status --porcelain >/dev/null 2>&1 && echo git-status-ok || echo git-status-failed`,
 					`test -e '${join(repository, "node_modules", "nested")}' && echo deps-visible || echo deps-absent`,
 					`test -L escape-host && echo escape-link || echo escape-dropped`,
 					`test -S /var/run/docker.sock && echo docker-visible || echo docker-absent`,
@@ -342,7 +392,10 @@ describe("bubblewrap snapshot execution (real namespaces)", () => {
 			expect(result.stdout).toContain("data-absent");
 			expect(result.stdout).toContain("git-absent");
 			expect(result.stdout).toContain("live-source-absent");
-			expect(result.stdout).toContain("worktree-git-absent");
+			expect(result.stdout).toContain("git-credential-absent");
+			// The minimal snapshot git view is present and functional without any repository config.
+			expect(result.stdout).toContain("snapshot-git-head-visible");
+			expect(result.stdout).toContain("git-status-ok");
 			expect(result.stdout).toContain("deps-visible");
 			expect(result.stdout).toContain("escape-dropped");
 			expect(result.stdout).toContain("docker-absent");

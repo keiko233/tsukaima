@@ -159,8 +159,6 @@ export interface TaskBundle {
 }
 
 const APPROVAL_TTL_MS = 30 * 60_000;
-/** Bound on a model-written shell script; the script is one argument, never a file. */
-const MAX_SCRIPT_CHARS = 16 * 1024;
 /** Shell used for the Workspace exec tool. It runs with no rc files and no profile. */
 const SHELL_COMMAND = "bash";
 const SHELL_FLAGS: readonly string[] = ["--noprofile", "--norc"];
@@ -170,6 +168,8 @@ const CHECK_ARTIFACT_KIND: Readonly<Record<CheckTargetName, "build" | "log" | "t
 	test: "test",
 	typecheck: "log",
 	"webui-build": "build",
+	"db-generate": "log",
+	"check-all": "log",
 };
 /** Bound on a model-supplied search pattern, so one argument cannot become a payload. */
 const MAX_SEARCH_PATTERN_CHARS = 4_000;
@@ -1219,15 +1219,15 @@ export class SelfIterationService {
 	): Promise<ExecResult> {
 		const startedAt = performance.now();
 		const resolved = await this.resolveTask(input, "patch", "self-iteration.exec");
+		const policy = await this.policy();
 		const scriptBytes = Buffer.byteLength(input.script, "utf-8");
 		const scriptSha256 = sha256Hex(input.script);
 		if (input.script.trim().length === 0) throw new Error("script is required");
-		if (input.script.length > MAX_SCRIPT_CHARS) {
-			throw new Error(`script_too_long:${input.script.length}>${MAX_SCRIPT_CHARS}`);
-		}
 		if (input.script.includes("\0")) throw new Error("invalid_script");
+		if (scriptBytes > policy.maxScriptBytes) {
+			throw new Error(`script_too_large:${scriptBytes}>${policy.maxScriptBytes}`);
+		}
 		const executor = await this.#requireIsolatedExecutor(resolved.id, "self-iteration.exec");
-		const policy = await this.policy();
 		const task = await this.#ensureWorktree(resolved, {
 			actor: input.sourceConversationId ?? "agent",
 			tool: "self-iteration.exec",
@@ -1238,10 +1238,11 @@ export class SelfIterationService {
 				args: [...SHELL_FLAGS, "-c", input.script],
 				command: SHELL_COMMAND,
 				cwd: task.worktreePath,
+				...(policy.execNetwork === "outbound" ? { network: "outbound" as const } : {}),
 				maxOutputBytes: policy.maxOutputBytes,
 				snapshot: true,
 				...(input.signal === undefined ? {} : { signal: input.signal }),
-				timeoutMs: policy.timeoutMs,
+				timeoutMs: policy.execTimeoutMs,
 				writable: true,
 			});
 			if (result.snapshot === undefined) throw new Error("snapshot_provenance_missing");
@@ -1304,6 +1305,117 @@ export class SelfIterationService {
 	}
 
 	/**
+	 * Run one command from the policy allowlist against a disposable snapshot of the task
+	 * worktree. The model picks the program and its arguments; governance comes from the fixed
+	 * allowlist, the OS sandbox, and the same discarded-snapshot semantics as exec. Built for
+	 * targeted git and bun invocations that the fixed check targets cannot express.
+	 */
+	async shell(
+		input: ToolTaskInput & {
+			readonly args?: readonly string[];
+			readonly command: string;
+			readonly signal?: AbortSignal;
+		},
+	): Promise<ExecResult> {
+		const startedAt = performance.now();
+		const resolved = await this.resolveTask(input, "patch", "self-iteration.shell");
+		const policy = await this.policy();
+		const command = input.command.trim();
+		if (command.length === 0) throw new Error("command is required");
+		if (!policy.allowedCommands.includes(command)) {
+			this.#logger.warn("shell command not allowed", { command, taskId: resolved.id });
+			await this.#auditDenied(
+				resolved.id,
+				"self-iteration.shell",
+				`command_not_allowed:${command}`,
+			);
+			throw new Error(`command_not_allowed:${command}`);
+		}
+		const args = (input.args ?? []).map((arg) => {
+			if (typeof arg !== "string") throw new Error("invalid_args");
+			if (arg.includes("\0")) throw new Error("invalid_args");
+			return arg;
+		});
+		const executor = await this.#requireIsolatedExecutor(resolved.id, "self-iteration.shell");
+		const task = await this.#ensureWorktree(resolved, {
+			actor: input.sourceConversationId ?? "agent",
+			tool: "self-iteration.shell",
+		});
+		try {
+			if (task.worktreePath === undefined) throw new Error("worktree_required");
+			const result = await executor.exec({
+				args,
+				command,
+				cwd: task.worktreePath,
+				...(policy.execNetwork === "outbound" ? { network: "outbound" as const } : {}),
+				maxOutputBytes: policy.maxOutputBytes,
+				snapshot: true,
+				...(input.signal === undefined ? {} : { signal: input.signal }),
+				timeoutMs: policy.execTimeoutMs,
+				writable: true,
+			});
+			if (result.snapshot === undefined) throw new Error("snapshot_provenance_missing");
+			const passed = result.exitCode === 0 && !result.timedOut && result.cancelled !== true;
+			const outcome = commandOutcomeLabel(result);
+			await this.#recordTimeline(
+				task,
+				"self-iteration.shell",
+				passed ? "success" : "failure",
+				`${command}:${outcome}`,
+			);
+			this.#logger.debug("shell completed", {
+				argsCount: args.length,
+				cancelled: result.cancelled === true,
+				command,
+				durationMs: elapsedMs(startedAt),
+				exitCode: result.exitCode,
+				snapshotChecksum: result.snapshot.checksum,
+				taskId: task.id,
+				timedOut: result.timedOut,
+			});
+			await this.#auditRecord({
+				action: "self-iteration.shell",
+				actorId: input.sourceConversationId ?? "agent",
+				actorKind: "agent",
+				payload: {
+					argsCount: args.length,
+					cancelled: result.cancelled === true,
+					command,
+					exitCode: result.exitCode,
+					snapshotChecksum: result.snapshot.checksum,
+					timedOut: result.timedOut,
+				},
+				...(passed ? { result: "ok" as const } : { reason: outcome, result: "failed" as const }),
+				targetId: task.id,
+				targetKind: "coding-task",
+			});
+			return {
+				cancelled: result.cancelled === true,
+				durationMs: result.durationMs,
+				exitCode: result.exitCode,
+				passed,
+				signal: result.signal,
+				snapshot: result.snapshot,
+				stderr: result.stderr,
+				stderrTruncated: result.stderrTruncated,
+				stdout: result.stdout,
+				stdoutTruncated: result.stdoutTruncated,
+				taskId: task.id,
+				timedOut: result.timedOut,
+			};
+		} catch (error) {
+			this.#logger.error("shell failed", {
+				command,
+				durationMs: elapsedMs(startedAt),
+				error: errorMessage(error),
+				taskId: task.id,
+			});
+			await this.#auditDenied(task.id, "self-iteration.shell", errorMessage(error));
+			throw error;
+		}
+	}
+
+	/**
 	 * Run one named check on a disposable snapshot of the task worktree. The recorded artifact
 	 * carries the snapshot checksum, so later proposal evidence can tell which content was checked.
 	 */
@@ -1355,7 +1467,7 @@ export class SelfIterationService {
 				maxOutputBytes: policy.maxOutputBytes,
 				snapshot: true,
 				...(input.signal === undefined ? {} : { signal: input.signal }),
-				timeoutMs: policy.timeoutMs,
+				timeoutMs: policy.checkTimeoutMs,
 				writable: true,
 			});
 			if (result.snapshot === undefined) throw new Error("snapshot_provenance_missing");
@@ -2594,14 +2706,20 @@ export class SelfIterationService {
 		}
 	}
 
-	/** A test-name filter stays positional and cannot smuggle a flag. */
+	/** A test-name filter stays positional and cannot smuggle a flag. Multiple paths are allowed. */
 	#testPatternArgs(pattern: string | undefined): readonly string[] {
 		const trimmed = pattern?.trim();
 		if (trimmed === undefined || trimmed.length === 0) return [];
-		if (trimmed.startsWith("-") || trimmed.includes("\0")) {
-			throw new Error("invalid_test_pattern");
+		if (trimmed.includes("\0")) throw new Error("invalid_test_pattern");
+		const paths = trimmed
+			.split(/[\s,]+/u)
+			.map((entry) => entry.trim())
+			.filter((entry) => entry.length > 0);
+		if (paths.length === 0) return [];
+		for (const path of paths) {
+			if (path.startsWith("-") || path.startsWith("/")) throw new Error("invalid_test_pattern");
 		}
-		return [trimmed];
+		return paths.slice(0, 8);
 	}
 
 	async #analysisCwd(): Promise<string> {

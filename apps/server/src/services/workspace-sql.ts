@@ -2,27 +2,34 @@ import { Database } from "bun:sqlite";
 import type { TsukaimaDatabase } from "@tsukaima/db";
 
 const ALLOWED_TABLES = new Set([
+	"audit_log",
 	"coding_approvals",
 	"coding_deployments",
 	"coding_proposals",
 	"coding_tasks",
 	"conversations",
+	"prompt_hooks",
+	"schedules",
+	"schedule_occurrences",
 	"workspace_references",
 	"workspace_sessions",
 	"workspace_todos",
 ]);
-const MAX_ROWS = 200;
-const MAX_OUTPUT_BYTES = 64 * 1024;
+const MAX_ROWS = 500;
+const MAX_OUTPUT_BYTES = 256 * 1024;
 const MAX_SQL_LENGTH = 8_000;
 
 const FORBIDDEN =
 	/\b(?:attach|detach|insert|update|delete|drop|alter|create|replace|vacuum|reindex|pragma)\b/iu;
 const READ_QUERY = /^\s*(?:select|with)\b/iu;
+const EXPLAIN_QUERY = /^\s*explain\s+query\s+plan\b/iu;
 
 function assertReadOnly(sql: string): void {
 	if (sql.length > MAX_SQL_LENGTH) throw new Error("SQL is too long");
 	if (sql.includes(";")) throw new Error("Only one statement is allowed");
-	if (!READ_QUERY.test(sql)) throw new Error("Only SELECT or WITH queries are allowed");
+	if (!READ_QUERY.test(sql) && !EXPLAIN_QUERY.test(sql)) {
+		throw new Error("Only SELECT, WITH, or EXPLAIN QUERY PLAN is allowed");
+	}
 	if (FORBIDDEN.test(sql)) throw new Error("Only read-only queries are allowed");
 }
 
@@ -95,9 +102,12 @@ export class WorkspaceSqlService {
 		snapshot.run("pragma query_only = on");
 		const startedAt = performance.now();
 		try {
-			const rows = snapshot
-				.query(`select * from (${sql}) limit ${MAX_ROWS + 1}`)
-				.all(...((input.params ?? []) as never[])) as unknown[];
+			// EXPLAIN QUERY PLAN is a statement prefix, not a subquery, so it runs unwrapped and
+			// the row cap still bounds its output.
+			const statement = EXPLAIN_QUERY.test(sql)
+				? snapshot.query(sql)
+				: snapshot.query(`select * from (${sql}) limit ${MAX_ROWS + 1}`);
+			const rows = statement.all(...((input.params ?? []) as never[])) as unknown[];
 			const truncated = rows.length > MAX_ROWS;
 			const limited = rows.slice(0, MAX_ROWS);
 			const text = JSON.stringify(limited);

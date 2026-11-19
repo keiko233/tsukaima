@@ -85,22 +85,33 @@ arbitrary code. The host chooses one of two governed executors with
   `git archive` snapshot for a read-only task, or the task worktree (including its edits) for a
   patch task. The live repository is never the analysis surface, and gitignored files are not
   visible to a read-only task.
-- The network namespace has loopback only; outbound egress is unavailable.
+- The network namespace has loopback only; outbound egress is unavailable by default. `exec`
+  and `shell` may pass `network: "outbound"` when the admin policy allows it (`execNetwork`),
+  which retains the host network namespace and mounts DNS resolution; inbound reachability is
+  still impossible because nothing is published inside the namespace.
 - Commands are resolved from fixed directories, never from a model-supplied path.
-- `exec` and `check` (Workspace tools, offered only when the bubblewrap probe passes) run on a
-  **disposable snapshot** of the task worktree. The snapshot is copied into a private scratch
-  directory outside the repository, bound writable at the worktree's own path, and deleted when
-  the command ends, so temporary files and generated outputs never persist. Only regular files
-  and in-tree relative symlinks are copied; absolute links and links that resolve outside the
-  task tree are dropped, and `.git` is never copied. The snapshot checksum covers every copied
+- `exec`, `shell`, and `check` (Workspace tools; `exec` and `check` are offered only when the
+  bubblewrap probe passes) run on a **disposable snapshot** of the task worktree. The snapshot is
+  copied into a private scratch directory outside the repository, bound writable at the worktree's
+  own path, and deleted when the command ends, so temporary files and generated outputs never
+  persist. Only regular files and in-tree relative symlinks are copied; absolute links and links
+  that resolve outside the task tree are dropped. The snapshot checksum covers every copied
   entry's path, mode, size, and content digest, and check artifacts record it so later evidence
   can identify the exact content that was validated.
+- The snapshot carries a **minimal `.git` view** so `git status`, `git diff`, and `git log` work:
+  `HEAD`, the resolved branch tip, `packed-refs`, and a config-free metadata directory. The
+  shared object store is mounted read-only and referenced through `objects/info/alternates`; no
+  object is copied or writable. The repository's real `.git/config` (credential helpers, remote
+  URLs), hooks, and reflogs are never present, so nothing inside the snapshot can push, fetch, or
+  read a stored credential. `git commit` inside the snapshot writes into the discarded copy.
 - Dependencies are reused, not copied. The live install is mounted read-only and the snapshot's
   `node_modules` trees link into it; workspace packages link to the snapshot's own copies, so a
   test imports the task's source. The live `packages/*` sources, the live checkout, and the
   repository's `.git` are not mounted.
-- `check` targets (`typecheck`, `lint`, `test`, `webui-build`) are fixed argv owned by the server;
-  the model names a target and, for `test` only, a path filter.
+- `check` targets (`typecheck`, `lint`, `test`, `webui-build`, `db-generate`, `check-all`) are
+  fixed argv owned by the server; the model names a target and, for `test` only, a path filter
+  (up to eight positional paths). `shell` runs one policy-allowlisted command (`bun`, `git`,
+  `rg`) with an explicit, never shell-parsed argument list on the same snapshot boundary.
 - Cancellation and timeout kill the child's whole process group and, under bubblewrap, every
   descendant through the PID namespace. Output is bounded per stream, and audit entries record
   exit status, timing, and the snapshot checksum, never the script text or output.

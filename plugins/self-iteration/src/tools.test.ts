@@ -191,6 +191,58 @@ describe("self-iteration model tools", () => {
 		).toBe(true);
 	});
 
+	test("offers exec, shell, and check with the extended check targets when isolated", () => {
+		const tools: PluginTool[] = [];
+		registerSelfIterationTools(
+			{
+				...contextFor([]),
+				tools: { register: (tool: PluginTool) => void tools.push(tool) },
+			} as unknown as PluginContext,
+			{} as SelfIterationService,
+			{ isolatedExecution: true },
+		);
+		for (const name of ["self-iteration.exec", "self-iteration.shell", "self-iteration.check"]) {
+			expect(tools.some((tool) => tool.name === name)).toBe(true);
+		}
+		expect(tools.find((tool) => tool.name === "self-iteration.shell")?.policy?.lazy).toBe(true);
+		const check = tools.find((tool) => tool.name === "self-iteration.check");
+		if (check === undefined) throw new Error("check tool missing");
+		const properties = check.parameters.properties as Record<string, { enum?: readonly string[] }>;
+		const targets = properties.target?.enum ?? [];
+		expect(targets).toContain("db-generate");
+		expect(targets).toContain("check-all");
+		expect(targets).not.toContain("sh");
+	});
+
+	test("the shell tool forwards allowlisted command and args to the service", async () => {
+		const seen: unknown[] = [];
+		const tools: PluginTool[] = [];
+		registerSelfIterationTools(
+			{
+				...contextFor([]),
+				tools: { register: (tool: PluginTool) => void tools.push(tool) },
+			} as unknown as PluginContext,
+			{
+				boundTaskId: async () => "task-bound",
+				shell: async (input: unknown) => {
+					seen.push(input);
+					return { exitCode: 0, passed: true };
+				},
+			} as unknown as SelfIterationService,
+			{ isolatedExecution: true },
+		);
+		const shell = tools.find((tool) => tool.name === "self-iteration.shell");
+		if (shell === undefined) throw new Error("shell tool missing");
+		await shell.execute({ args: ["status", "--short"], command: "git" }, { conversationId: "w" });
+		expect(seen[0]).toEqual(
+			expect.objectContaining({
+				args: ["status", "--short"],
+				command: "git",
+				taskId: "task-bound",
+			}),
+		);
+	});
+
 	test("model calls take the bound task and ignore goal-driven task creation", async () => {
 		const seen: unknown[] = [];
 		const tools: PluginTool[] = [];

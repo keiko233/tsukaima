@@ -162,7 +162,7 @@ function summarize(input: Record<string, unknown>): Record<string, unknown> {
 	]) {
 		if (typeof input[key] === "string") summary[key] = input[key];
 	}
-	if (Array.isArray(input.args)) summary.args = input.args.slice(0, 16);
+	if (Array.isArray(input.args)) summary.argsCount = input.args.length;
 	return summary;
 }
 
@@ -175,6 +175,7 @@ function structuredEdit(input: Record<string, unknown>): StructuredEdit {
 		...(typeof source.find === "string" ? { find: source.find } : {}),
 		path: typeof source.path === "string" ? source.path : "",
 		...(typeof source.replace === "string" ? { replace: source.replace } : {}),
+		...(source.replaceAll === true ? { replaceAll: true } : {}),
 	};
 }
 
@@ -197,7 +198,7 @@ function tool(
 		policy: {
 			...BASE_POLICY,
 			lazy: !UPFRONT_TOOLS.has(name),
-			maxPayloadBytes: 64 * 1024,
+			maxPayloadBytes: 512 * 1024,
 			surface: "coding",
 			timeoutMs,
 		},
@@ -277,7 +278,7 @@ export function registerSelfIterationTools(
 	context.tools.register(
 		tool(
 			"edit",
-			"Apply one validated structured edit strictly inside the task worktree and path allowlist.",
+			"Apply one validated structured edit strictly inside the task worktree and path allowlist. find/replace replaces exactly one occurrence unless replaceAll is true.",
 			{
 				properties: {
 					...TASK_FIELDS,
@@ -290,6 +291,7 @@ export function registerSelfIterationTools(
 							find: { type: "string" },
 							path: { type: "string" },
 							replace: { type: "string" },
+							replaceAll: { type: "boolean" },
 						},
 						required: ["path"],
 						type: "object",
@@ -297,6 +299,10 @@ export function registerSelfIterationTools(
 					find: { type: "string" },
 					path: { type: "string" },
 					replace: { type: "string" },
+					replaceAll: {
+						description: "Replace every occurrence of find. Default: exactly one.",
+						type: "boolean",
+					},
 				},
 				type: "object",
 			},
@@ -447,12 +453,12 @@ export function registerSelfIterationTools(
 		context.tools.register(
 			tool(
 				"exec",
-				"Run one bash script against a disposable snapshot of the task worktree. The snapshot has no network, a scrubbed environment, and a private /tmp. Writes are discarded when the command ends; persist source changes with self-iteration.edit.",
+				"Run one bash script against a disposable snapshot of the task worktree. The snapshot has a scrubbed environment and a private /tmp; outbound network access is allowed unless the admin policy disables it. Writes are discarded when the command ends; persist source changes with self-iteration.edit.",
 				{
 					properties: {
 						...TASK_FIELDS,
 						script: {
-							description: "Bash script run with -c. Keep it under 16 KiB.",
+							description: "Bash script run with -c. Size is capped by the admin policy.",
 							type: "string",
 						},
 					},
@@ -474,8 +480,42 @@ export function registerSelfIterationTools(
 
 		context.tools.register(
 			tool(
+				"shell",
+				"Run one allowlisted command (bun, git, rg) with explicit arguments against a disposable snapshot of the task worktree. Use this for targeted git or bun invocations the named checks cannot express; the allowlist is fixed by the admin policy. Writes are discarded.",
+				{
+					properties: {
+						...TASK_FIELDS,
+						args: {
+							description: "Argument list passed verbatim; never parsed by a shell.",
+							items: { type: "string" },
+							type: "array",
+						},
+						command: {
+							description: "One allowlisted program name, for example git or bun.",
+							type: "string",
+						},
+					},
+					required: ["command"],
+					type: "object",
+				},
+				["coding.execute"],
+				300_000,
+				async (input, invocation) =>
+					invoke(context, log, "self-iteration.shell", input, invocation, async () =>
+						service.shell({
+							args: stringArray(input, "args") ?? [],
+							command: stringValue(input, "command") ?? "",
+							...(await boundTaskInput(service, input, invocation, "self-iteration.shell")),
+							...(invocation.signal === undefined ? {} : { signal: invocation.signal }),
+						}),
+					),
+			),
+		);
+
+		context.tools.register(
+			tool(
 				"check",
-				"Run one named repository check (typecheck, lint, test, or webui-build) on a disposable snapshot of the task worktree. The result records the snapshot checksum it validated. Targets are fixed by the server; only test accepts a path filter.",
+				"Run one named repository check on a disposable snapshot of the task worktree. The result records the snapshot checksum it validated. Targets are fixed by the server; only test accepts a path filter.",
 				{
 					properties: {
 						...TASK_FIELDS,

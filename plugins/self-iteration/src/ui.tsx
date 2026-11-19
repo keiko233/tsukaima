@@ -509,9 +509,13 @@ function SelfIterationPanel() {
 	const [testCommand, setTestCommand] = useState("");
 	const [buildCommand, setBuildCommand] = useState("");
 	const [timeoutMs, setTimeoutMs] = useState("120000");
+	const [checkTimeoutMs, setCheckTimeoutMs] = useState("600000");
+	const [execTimeoutMs, setExecTimeoutMs] = useState("300000");
 	const [maxOutputBytes, setMaxOutputBytes] = useState("65536");
+	const [maxScriptBytes, setMaxScriptBytes] = useState("32768");
 	const [maxDiffBytes, setMaxDiffBytes] = useState("262144");
 	const [maxDiffFiles, setMaxDiffFiles] = useState("200");
+	const [execNetwork, setExecNetwork] = useState<"none" | "outbound">("outbound");
 
 	const applyPolicy = (policy: CodingPolicy): void => {
 		setAutoApply(policy.autoApply);
@@ -520,9 +524,13 @@ function SelfIterationPanel() {
 		setTestCommand(joinList(policy.testCommand));
 		setBuildCommand(joinList(policy.buildCommand));
 		setTimeoutMs(String(policy.timeoutMs));
+		setCheckTimeoutMs(String(policy.checkTimeoutMs));
+		setExecTimeoutMs(String(policy.execTimeoutMs));
 		setMaxOutputBytes(String(policy.maxOutputBytes));
+		setMaxScriptBytes(String(policy.maxScriptBytes));
 		setMaxDiffBytes(String(policy.maxDiffBytes));
 		setMaxDiffFiles(String(policy.maxDiffFiles));
+		setExecNetwork(policy.execNetwork);
 	};
 
 	const refresh = async (): Promise<void> => {
@@ -592,12 +600,16 @@ function SelfIterationPanel() {
 					allowedCommands: splitList(allowedCommands),
 					autoApply,
 					buildCommand: splitList(buildCommand),
+					checkTimeoutMs: Number(checkTimeoutMs) || 600000,
+					execNetwork,
 					maxDiffBytes: Number(maxDiffBytes) || 0,
 					maxDiffFiles: Number(maxDiffFiles) || 1,
 					maxOutputBytes: Number(maxOutputBytes) || 0,
+					maxScriptBytes: Number(maxScriptBytes) || 32768,
 					pathAllowlist: splitList(pathAllowlist),
 					testCommand: splitList(testCommand),
 					timeoutMs: Number(timeoutMs) || 1000,
+					execTimeoutMs: Number(execTimeoutMs) || 300000,
 				},
 			});
 			applyPolicy(policy);
@@ -656,8 +668,29 @@ function SelfIterationPanel() {
 					<Field label={t.t("policy_timeout")}>
 						<Input type="number" value={timeoutMs} onChange={setTimeoutMs} />
 					</Field>
+					<Field label={t.t("policy_check_timeout")}>
+						<Input type="number" value={checkTimeoutMs} onChange={setCheckTimeoutMs} />
+					</Field>
+					<Field label={t.t("policy_exec_timeout")}>
+						<Input type="number" value={execTimeoutMs} onChange={setExecTimeoutMs} />
+					</Field>
 					<Field label={t.t("policy_max_output")}>
 						<Input type="number" value={maxOutputBytes} onChange={setMaxOutputBytes} />
+					</Field>
+					<Field label={t.t("policy_max_script_bytes")}>
+						<Input type="number" value={maxScriptBytes} onChange={setMaxScriptBytes} />
+					</Field>
+					<Field label={t.t("policy_exec_network")}>
+						<select
+							className="h-8 w-full rounded-md border border-border bg-transparent px-2 text-xs"
+							value={execNetwork}
+							onChange={(event) =>
+								setExecNetwork(event.target.value === "none" ? "none" : "outbound")
+							}
+						>
+							<option value="outbound">outbound</option>
+							<option value="none">none</option>
+						</select>
 					</Field>
 					<Field label={t.t("policy_max_diff_bytes")}>
 						<Input type="number" value={maxDiffBytes} onChange={setMaxDiffBytes} />

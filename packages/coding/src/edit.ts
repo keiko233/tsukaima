@@ -6,6 +6,8 @@ import { assertSafeWorktreePath } from "./worktree.ts";
 export interface StructuredEdit {
 	/** `content` replaces the whole file, `find`/`replace` performs one exact substitution. */
 	readonly content?: string;
+	/** Replace every occurrence of `find`; without it exactly one occurrence must exist. */
+	readonly replaceAll?: boolean;
 	readonly create?: boolean;
 	readonly find?: string;
 	readonly path: string;
@@ -64,6 +66,9 @@ export function validateStructuredEdit(edit: StructuredEdit, options: EditOption
 	if (hasContent && edit.content!.length === 0) {
 		throw new EditValidationError("content must not be empty");
 	}
+	if (edit.replaceAll === true && !hasFind) {
+		throw new EditValidationError("replaceAll requires find/replace");
+	}
 	const size = Buffer.byteLength(hasContent ? edit.content! : (edit.replace ?? ""), "utf-8");
 	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 	if (size > maxBytes) {
@@ -104,13 +109,14 @@ export async function applyStructuredEdit(
 	const replace = edit.replace!;
 	const occurrences = previous.split(find).length - 1;
 	if (occurrences === 0) throw new EditValidationError(`find text not present in "${relPath}"`);
-	const maxReplacements = options.maxReplacements ?? 1;
+	const maxReplacements = edit.replaceAll === true ? Number.POSITIVE_INFINITY : 1;
 	if (occurrences > maxReplacements) {
 		throw new EditValidationError(
 			`find text occurs ${occurrences} times in "${relPath}" (max ${maxReplacements})`,
 		);
 	}
-	const next = previous.replace(find, replace);
+	const next =
+		edit.replaceAll === true ? previous.replaceAll(find, replace) : previous.replace(find, replace);
 	await writeFile(target, next, "utf-8");
 	return {
 		bytesWritten: Buffer.byteLength(next, "utf-8"),
