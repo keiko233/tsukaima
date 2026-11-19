@@ -451,6 +451,7 @@ export type WorkspaceDetail = z.infer<typeof workspaceDetailSchema>;
 export const sessionContextSectionSchema = z.object({
 	key: z.string(),
 	label: z.string(),
+	text: z.string().optional(),
 	tokens: z.number().int().nonnegative(),
 });
 export type SessionContextSection = z.infer<typeof sessionContextSectionSchema>;
@@ -1535,6 +1536,35 @@ export const personaSummarySchema = z.object({
 });
 export type PersonaSummary = z.infer<typeof personaSummarySchema>;
 
+export const promptTextSchema = z.string().max(20_000);
+export const promptKeySchema = z.enum([
+	"chat-system",
+	"coding-system",
+	"workspace-task",
+	"sidechat",
+	"memory-extraction",
+]);
+export type PromptKey = z.infer<typeof promptKeySchema>;
+export const promptViewSchema = z.object({
+	defaultText: z.string(),
+	key: promptKeySchema,
+	override: z.string().nullable(),
+});
+export const promptUpdateSchema = z
+	.object({
+		expectedOverride: z.string().nullable(),
+		key: promptKeySchema,
+		override: promptTextSchema.nullable(),
+	})
+	.strict();
+export const personaPromptUpdateSchema = z
+	.object({
+		id: z.string().min(1),
+		prompt: promptTextSchema.trim().min(1),
+		version: z.number().int().positive(),
+	})
+	.strict();
+
 export const personaUpsertInputSchema = z
 	.object({
 		id: z.string().min(1).optional(),
@@ -1781,7 +1811,17 @@ export const appContract = oc.router({
 				.meta({ audit: true }),
 			bindings: oc.output(z.array(personaBindingSchema)),
 			list: oc.output(z.array(personaSummarySchema)),
+			updatePrompt: oc
+				.input(personaPromptUpdateSchema)
+				.output(personaSummarySchema)
+				.meta({ audit: true }),
 			upsert: oc.input(personaUpsertInputSchema).output(personaSummarySchema).meta({ audit: true }),
+		},
+		prompts: {
+			list: oc.output(z.array(promptViewSchema)),
+			update: oc.input(promptUpdateSchema).output(promptViewSchema).meta({ audit: true }),
+			agentAccess: oc.output(z.boolean()),
+			setAgentAccess: oc.input(z.boolean()).output(z.boolean()).meta({ audit: true }),
 		},
 		policies: {
 			get: oc.input(policyGetInputSchema).output(conversationPolicyViewSchema),

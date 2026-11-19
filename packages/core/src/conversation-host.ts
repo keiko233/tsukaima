@@ -50,6 +50,7 @@ import {
 	createContextExtension,
 	MEMORY_SECTION_KEY,
 	PERSONA_SECTION_KEY,
+	SYSTEM_SECTION_KEY,
 	POLICY_SECTION_KEY,
 	type ContextPromptProvider,
 } from "./context.ts";
@@ -478,6 +479,7 @@ export interface ConversationContextInspection {
 	};
 	readonly sections: readonly {
 		readonly key: string;
+		readonly text: string;
 		readonly tokens: number;
 	}[];
 	readonly tokenSource: "usage" | "estimated";
@@ -2066,7 +2068,8 @@ export class PiDurableConversationHost {
 		const resolvedSections = new Map<string, string>(shownSections);
 		const contextProvider = this.options.contextProvider;
 		if (contextProvider !== undefined) {
-			const [personaRaw, policyRaw, memoriesRaw] = await Promise.all([
+			const [systemRaw, personaRaw, policyRaw, memoriesRaw] = await Promise.all([
+				contextProvider.renderSystem?.(conversationId).catch(() => undefined),
 				contextProvider.renderPersona(conversationId).catch(() => undefined),
 				contextProvider.renderPolicy?.(conversationId).catch(() => undefined),
 				contextProvider.renderMemories(conversationId).catch(() => undefined),
@@ -2078,6 +2081,9 @@ export class PiDurableConversationHost {
 					resolvedSections.set(key, `<${key}>\n${value}\n</${key}>`);
 				}
 			};
+			if (contextProvider.renderSystem !== undefined) {
+				applyProviderSection(SYSTEM_SECTION_KEY, systemRaw);
+			}
 			applyProviderSection(PERSONA_SECTION_KEY, personaRaw);
 			if (contextProvider.renderPolicy !== undefined) {
 				applyProviderSection(POLICY_SECTION_KEY, policyRaw);
@@ -2096,11 +2102,11 @@ export class PiDurableConversationHost {
 		let memoriesTokens = 0;
 		let otherSystemTokens =
 			rawSystemParts.length === 0 ? 0 : estimateTextTokens(rawSystemParts.join("\n\n"));
-		const sectionItems: { key: string; tokens: number }[] = [];
+		const sectionItems: { key: string; text: string; tokens: number }[] = [];
 		for (const [key, text] of resolvedSections) {
 			const tokens = estimateTextTokens(text);
 			if (tokens <= 0) continue;
-			sectionItems.push({ key, tokens });
+			sectionItems.push({ key, text, tokens });
 			if (key === PERSONA_SECTION_KEY) personaTokens += tokens;
 			else if (key === POLICY_SECTION_KEY) policyTokens += tokens;
 			else if (key === MEMORY_SECTION_KEY) memoriesTokens += tokens;
@@ -2108,7 +2114,12 @@ export class PiDurableConversationHost {
 		}
 		if (rawSystemParts.length > 0) {
 			const rawTokens = estimateTextTokens(rawSystemParts.join("\n\n"));
-			if (rawTokens > 0) sectionItems.unshift({ key: "system", tokens: rawTokens });
+			if (rawTokens > 0)
+				sectionItems.unshift({
+					key: "system",
+					text: rawSystemParts.join("\n\n"),
+					tokens: rawTokens,
+				});
 		}
 
 		const nonSystemMessages = view.messages.filter((message) => message.role !== "system");

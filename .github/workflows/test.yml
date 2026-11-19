@@ -28,10 +28,14 @@ jobs:
       - run: bun run check
 
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    container:
+      # Keep this version aligned with Playwright in bun.lock.
+      image: mcr.microsoft.com/playwright:v1.65.0-noble
+      options: --ipc=host
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      # This image ships Node.js and npm but lacks the unzip required by setup-bun.
+      - run: npm install --global bun@1.4.5
       - run: bun install --frozen-lockfile
-      - run: bunx playwright install --with-deps chromium
       - run: bun run test:e2e

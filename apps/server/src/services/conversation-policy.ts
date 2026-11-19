@@ -9,6 +9,7 @@ import {
 	conversationPolicySchema,
 	defaultConversationPolicy,
 	type PersonaBinding,
+	type personaPromptUpdateSchema,
 	type PersonaSummary,
 	type PolicyRevision,
 } from "@tsukaima/contracts";
@@ -23,6 +24,8 @@ import {
 } from "@tsukaima/db";
 import type { Logger } from "../logging.ts";
 import { readRuntimeSettings } from "../runtime-settings.ts";
+import type { z } from "zod";
+import { PromptConflictError } from "./prompts.ts";
 
 const nowIso = (): string => new Date().toISOString();
 
@@ -686,6 +689,32 @@ export class ConversationPolicyService {
 		return rows.map(toPersonaSummary);
 	}
 
+	updatePersonaPrompt(input: z.infer<typeof personaPromptUpdateSchema>, actor: "agent" | "user") {
+		return this.#db().transaction((tx) => {
+			const rows = tx
+				.select()
+				.from(personas)
+				.where(eq(personas.id, input.id))
+				.orderBy(desc(personas.version))
+				.all();
+			const active = rows.find((row) => row.isActive === 1);
+			const latest = rows[0];
+			if (active === undefined || latest === undefined || active.version !== input.version) {
+				throw new PromptConflictError();
+			}
+			const next = {
+				...active,
+				createdAt: nowIso(),
+				createdBy: actor === "agent" ? "agent" : "webui-admin",
+				promptJson: JSON.stringify(input.prompt),
+				version: latest.version + 1,
+			};
+			tx.update(personas).set({ isActive: 0 }).where(eq(personas.id, input.id)).run();
+			tx.insert(personas).values(next).run();
+			return toPersonaSummary(next);
+		});
+	}
+
 	async upsertPersona(input: {
 		id?: string;
 		isActive?: boolean;
@@ -697,57 +726,46 @@ export class ConversationPolicyService {
 	}): Promise<PersonaSummary> {
 		const database = this.#db();
 		const id = input.id ?? randomUUID();
-		const existing = await database
-			.select()
-			.from(personas)
-			.where(eq(personas.id, id))
-			.orderBy(desc(personas.version));
-		const highest = existing[0];
-		const maxVersion = highest?.version ?? 0;
-		let version = input.version ?? maxVersion + 1;
-		if (existing.some((row) => row.version === version)) version = maxVersion + 1;
-		const isActive = input.isActive ?? true;
-		const aliases = [
-			...new Set(
-				input.selfAliases ?? (highest === undefined ? [] : parseAliases(highest.aliasesJson)),
-			),
-		];
-		const now = nowIso();
-		const behavior = highest?.behaviorJson ?? "{}";
-		await database.transaction((tx) => {
+		return database.transaction((tx) => {
+			const existing = tx
+				.select()
+				.from(personas)
+				.where(eq(personas.id, id))
+				.orderBy(desc(personas.version))
+				.all();
+			const highest = existing[0];
+			const maxVersion = highest?.version ?? 0;
+			let version = input.version ?? maxVersion + 1;
+			if (existing.some((row) => row.version === version)) version = maxVersion + 1;
+			const isActive = input.isActive ?? true;
+			const aliases = [
+				...new Set(
+					input.selfAliases ?? (highest === undefined ? [] : parseAliases(highest.aliasesJson)),
+				),
+			];
+			const now = nowIso();
+			const behavior = highest?.behaviorJson ?? "{}";
+			const row = {
+				aliasesJson: JSON.stringify(aliases),
+				behaviorJson: behavior,
+				createdAt: now,
+				createdBy: "webui-admin",
+				id,
+				isActive: isActive ? 1 : 0,
+				modelPolicyId: null,
+				name: input.name,
+				promptJson: JSON.stringify(input.prompt),
+				summary: input.summary,
+				version,
+			};
 			if (isActive) {
 				tx.update(personas)
 					.set({ isActive: 0 })
 					.where(and(eq(personas.id, id), sql`${personas.version} <> ${version}`))
 					.run();
 			}
-			tx.insert(personas)
-				.values({
-					aliasesJson: JSON.stringify(aliases),
-					behaviorJson: behavior,
-					createdAt: now,
-					createdBy: "webui-admin",
-					id,
-					isActive: isActive ? 1 : 0,
-					name: input.name,
-					promptJson: JSON.stringify(input.prompt),
-					summary: input.summary,
-					version,
-				})
-				.run();
-		});
-		return toPersonaSummary({
-			aliasesJson: JSON.stringify(aliases),
-			behaviorJson: behavior,
-			createdAt: now,
-			createdBy: "webui-admin",
-			id,
-			isActive: isActive ? 1 : 0,
-			modelPolicyId: null,
-			name: input.name,
-			promptJson: JSON.stringify(input.prompt),
-			summary: input.summary,
-			version,
+			tx.insert(personas).values(row).run();
+			return toPersonaSummary(row);
 		});
 	}
 

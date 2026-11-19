@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { MessageEnvelope } from "@tsukaima/contracts";
-import { PiDurableConversationHost, createFakeModel } from "@tsukaima/core";
+import {
+	PiDurableConversationHost,
+	createFakeModel,
+	type DurableToolRegistration,
+} from "@tsukaima/core";
 import {
 	conversationMembers,
 	conversations,
@@ -28,6 +32,9 @@ import {
 	DrizzleContextProvider,
 	type DrizzleContextProviderOptions,
 } from "../src/services/context-provider.ts";
+import { ConversationPolicyService } from "../src/services/conversation-policy.ts";
+import { createPromptTools } from "../src/services/prompt-tools.ts";
+import { PromptService } from "../src/services/prompts.ts";
 
 const directories: string[] = [];
 
@@ -49,7 +56,9 @@ async function openFixture(): Promise<{ database: TsukaimaDatabase; directory: s
 
 function provider(
 	database: TsukaimaDatabase | (() => TsukaimaDatabase | undefined),
-	overrides: Partial<Pick<DrizzleContextProviderOptions, "budgetChars" | "memoryTopK">> = {},
+	overrides: Partial<
+		Pick<DrizzleContextProviderOptions, "budgetChars" | "memoryTopK" | "renderSystem">
+	> = {},
 ): DrizzleContextProvider {
 	return new DrizzleContextProvider({
 		database: typeof database === "function" ? database : () => database,
@@ -393,7 +402,7 @@ async function waitFor<T>(read: () => T | undefined, timeoutMs = 10_000): Promis
 }
 
 describe("context injection end to end", () => {
-	test("puts persona and memory text into the live model request", async () => {
+	test("puts configured system, persona, and memory text into the live model request", async () => {
 		const { database, directory } = await openFixture();
 		const storage = await openDurableStorage(join(directory, "durable.sqlite"));
 		const model = createFakeModel({ responses: ["ok"] });
@@ -403,13 +412,25 @@ describe("context injection end to end", () => {
 			captured.push(JSON.stringify(context));
 			return originalStream(target, context, options);
 		};
+		const prompts = new PromptService(
+			() => database,
+			async () => {},
+		);
 		const host = new PiDurableConversationHost({
-			contextProvider: provider(database),
+			contextProvider: provider(database, { renderSystem: (id) => prompts.renderSystem(id) }),
 			model,
 			policy: { maxMessages: 20, windowMs: 20 },
 			storage,
 		});
 		try {
+			await prompts.update(
+				{ key: "chat-system", expectedOverride: null, override: "E2E-SYSTEM-MARKER" },
+				"user",
+			);
+			await prompts.update(
+				{ key: "coding-system", expectedOverride: null, override: "E2E-CODING-MARKER" },
+				"user",
+			);
 			const durableConversationId = await host.createConversation();
 			await database.insert(conversations).values({
 				durableConversationId,
@@ -450,8 +471,73 @@ describe("context injection end to end", () => {
 			);
 			expect(request).toContain("E2E-PERSONA-MARKER");
 			expect(request).toContain("E2E-MEMORY-MARKER");
+			expect(request).toContain("E2E-SYSTEM-MARKER");
+			expect(request).not.toContain("E2E-CODING-MARKER");
 		} finally {
 			await host.close();
+			database.$client.close();
+		}
+	});
+
+	test("prompt tools enforce access before saving shared instructions", async () => {
+		const { database } = await openFixture();
+		try {
+			database
+				.insert(conversations)
+				.values([
+					{ id: "prompt-webui", kind: "webui", durableConversationId: "101" },
+					{ id: "prompt-im", kind: "private", durableConversationId: "102" },
+					{ id: "prompt-workspace", kind: "workspace", durableConversationId: "103" },
+				])
+				.run();
+			const prompts = new PromptService(
+				() => database,
+				async () => {},
+			);
+			const policy = new ConversationPolicyService({
+				database: () => database,
+				host: () => undefined,
+				logger,
+			});
+			const update = createPromptTools(prompts, policy).tools?.find(
+				({ name }) => name === "prompt_update",
+			);
+			if (update === undefined) throw new Error("Prompt update tool is missing");
+			const run = (conversationId: number, override: string) =>
+				update.execute(
+					{ key: "coding-system", expectedOverride: null, override },
+					{ conversationId } as Parameters<DurableToolRegistration["execute"]>[1],
+					{} as Parameters<DurableToolRegistration["execute"]>[2],
+				);
+			expect((await run(101, "Disabled write")).isError).toBe(true);
+			await prompts.setAgentAccess(true);
+			expect((await run(102, "IM write")).isError).toBe(true);
+			expect((await run(103, "Workspace without coding access")).isError).toBe(true);
+			await policy.update({
+				conversationId: "prompt-workspace",
+				scope: "conversation",
+				policy: { capabilities: ["coding"] },
+			});
+			expect((await run(101, "Coding instructions")).isError).toBeUndefined();
+			expect(await prompts.renderSystem("103")).toBe("Coding instructions");
+			expect(await prompts.renderSystem("101")).toBe("");
+			expect(
+				(
+					await update.execute(
+						{
+							key: "coding-system",
+							expectedOverride: "Coding instructions",
+							override: "Updated by workspace",
+						},
+						{ conversationId: 103 } as Parameters<DurableToolRegistration["execute"]>[1],
+						{} as Parameters<DurableToolRegistration["execute"]>[2],
+					)
+				).isError,
+			).toBeUndefined();
+			expect(await prompts.renderSystem("103")).toBe("Updated by workspace");
+			await prompts.setAgentAccess(false);
+			expect((await run(101, "Revoked write")).isError).toBe(true);
+		} finally {
 			database.$client.close();
 		}
 	});
