@@ -62,6 +62,7 @@ ARG GH_VERSION=2.104.0
 # these system libraries instead, so both paths work at runtime.
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
+		bubblewrap \
 		ca-certificates \
 		curl \
 		git \
