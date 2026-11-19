@@ -1,5 +1,6 @@
 import type { BusyArbitrationInput, BusyArbitrationResult } from "@tsukaima/core";
 import type { Logger } from "../logging.ts";
+import { DEFAULT_PROMPTS } from "./prompt-defaults.ts";
 
 const MAX_PENDING_CHARS = 3_000;
 const MAX_REQUEST_CHARS = 1_500;
@@ -68,6 +69,7 @@ export interface SidechatModels {
 }
 
 export interface SidechatServiceOptions {
+	readonly prompt?: () => Promise<string>;
 	/** Global default model id, read from runtime settings on demand. */
 	readonly defaultModelId: () => Promise<string | undefined>;
 	readonly logger: Logger;
@@ -97,11 +99,13 @@ export function resolveSidechatTarget(
  * any failure means `wait` at the caller.
  */
 export class SidechatService {
+	readonly #prompt: SidechatServiceOptions["prompt"];
 	readonly #defaultModelId: SidechatServiceOptions["defaultModelId"];
 	readonly #logger: Logger;
 	readonly #models: SidechatModels;
 
 	constructor(options: SidechatServiceOptions) {
+		this.#prompt = options.prompt;
 		this.#defaultModelId = options.defaultModelId;
 		this.#logger = options.logger.child("tsukaima::server::sidechat");
 		this.#models = options.models;
@@ -145,11 +149,15 @@ export class SidechatService {
 		);
 		timer.unref?.();
 		try {
-			const text = await this.#models.complete(target, buildSidechatPrompt(input), {
-				maxTokens: 160,
-				signal: controller.signal,
-				temperature: 0,
-			});
+			const text = await this.#models.complete(
+				target,
+				buildSidechatPrompt(input, await this.#prompt?.()),
+				{
+					maxTokens: 160,
+					signal: controller.signal,
+					temperature: 0,
+				},
+			);
 			const parsed = parseDecision(text);
 			if (parsed === undefined) {
 				this.#logger.debug("sidechat returned no usable decision", {
@@ -224,20 +232,12 @@ export class SidechatService {
 }
 
 /** Build the bounded routing prompt. Chat content is only sent to the model, never logged. */
-export function buildSidechatPrompt(input: BusyArbitrationInput): string {
+export function buildSidechatPrompt(
+	input: BusyArbitrationInput,
+	instructions = DEFAULT_PROMPTS.sidechat,
+): string {
 	return [
-		"You are the sidechat router for a chat agent that is still working on its current turn.",
-		"New user messages arrived in a pending batch. Decide exactly one action.",
-		"",
-		"Actions:",
-		"- interrupt: the pending batch corrects, completes, contradicts, or replaces the request being answered, so the current answer will be wrong or wasted. The caller will cancel the current generation and answer the merged conversation.",
-		"- steer: the agent is using tools and the pending batch adds a constraint or instruction that can be applied at the next tool step. Only valid when toolsActive is yes.",
-		"- wait: the pending batch is a separate thought, reaction, acknowledgement, emoji or sticker, or can simply be answered after the current answer. When unsure, choose wait.",
-		"",
-		"Rules:",
-		"- Prefer wait. Interrupt only when continuing the current answer would clearly waste the user's time or produce a wrong answer.",
-		"- A request that is obviously unfinished and directly continued by the pending batch is an interrupt.",
-		"- Do not interrupt for a mere reaction, thanks, laughter, or an unrelated new topic.",
+		instructions,
 		"",
 		`Current request being answered:\n${none(clip(input.runningRequest, MAX_REQUEST_CHARS))}`,
 		`Previous settled assistant answer:\n${none(clip(input.previousAnswer ?? "", MAX_ANSWER_CHARS))}`,

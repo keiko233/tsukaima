@@ -33,6 +33,7 @@ export function formatHeadlinePercent(usedPercent: number, contextWindow: number
 }
 
 function localizedSectionLabel(key: string, fallback: string): string {
+	if (key === "tsukaima-system") return m.context_section_system();
 	switch (key) {
 		case "tsukaima-persona":
 			return m.context_section_persona();
@@ -472,16 +473,20 @@ export function ContextPanelContent({
 								onToggle={() => toggle("sections")}
 							>
 								{stats.sections.map((section) => (
-									<div
-										key={section.key}
-										className="flex items-center justify-between gap-2 text-[11px]"
-									>
-										<span className="truncate text-foreground/90">
-											{localizedSectionLabel(section.key, section.label)}
-										</span>
-										<span className="shrink-0 tabular-nums text-muted-foreground">
-											{formatCompactTokens(section.tokens)}
-										</span>
+									<div key={section.key} className="space-y-1 text-[11px]">
+										<div className="flex items-center justify-between gap-2">
+											<span className="truncate text-foreground/90">
+												{localizedSectionLabel(section.key, section.label)}
+											</span>
+											<span className="shrink-0 tabular-nums text-muted-foreground">
+												{formatCompactTokens(section.tokens)}
+											</span>
+										</div>
+										{section.text && (
+											<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border p-2">
+												{section.text}
+											</pre>
+										)}
 									</div>
 								))}
 							</AccordionGroup>

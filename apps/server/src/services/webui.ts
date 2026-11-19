@@ -31,7 +31,8 @@ import {
 	type MentionLabelScope,
 } from "./mention-labels.ts";
 import { collectRunSteps } from "./run-steps.ts";
-import { WORKSPACE_TOOL_NAMES } from "./workspace-tools.ts";
+import { PROMPT_TOOL_NAMES } from "./prompt-tools.ts";
+import { WORKSPACE_CODING_TOOL_NAMES, WORKSPACE_TOOL_NAMES } from "./workspace-tools.ts";
 import { CODING_AGENT_TOOL_NAMES } from "./coding-agent-tools.ts";
 
 type ChatKind = "private" | "group" | "webui" | "workspace" | "task" | "plugin";
@@ -365,6 +366,8 @@ export async function getSession(
 
 function contextSectionLabel(key: string): string {
 	switch (key) {
+		case "tsukaima-system":
+			return "System instructions";
 		case "tsukaima-persona":
 			return "Persona";
 		case "tsukaima-policy":
@@ -405,12 +408,14 @@ export async function getSessionContextStats(
 	);
 	const codingTools = lifecycle.pluginHost.modelToolNames("self-iteration");
 	const kind = session.chatKind ?? session.sessionKind;
+	const codingAllowed = kind === "workspace" && policy.capabilities.includes("coding");
 	const omittedTools = [
-		...(kind === "workspace" && policy.capabilities.includes("coding") ? [] : codingTools),
-		...(kind === "workspace" && policy.capabilities.includes("coding")
-			? []
-			: [...CODING_AGENT_TOOL_NAMES]),
+		...(codingAllowed ? [] : codingTools),
+		...(codingAllowed ? [] : [...CODING_AGENT_TOOL_NAMES, ...WORKSPACE_CODING_TOOL_NAMES]),
 		...(kind === "webui" || kind === "workspace" ? [] : WORKSPACE_TOOL_NAMES),
+		...((kind === "webui" || codingAllowed) && lifecycle.prompts.agentAccess()
+			? []
+			: PROMPT_TOOL_NAMES),
 	];
 	const [inspection, contextDetails] = await Promise.all([
 		host.inspectConversationContext(session.durableConversationId, { omittedTools }),
@@ -425,6 +430,7 @@ export async function getSessionContextStats(
 		sections: inspection.sections.map((section) => ({
 			key: section.key,
 			label: contextSectionLabel(section.key),
+			text: section.text,
 			tokens: section.tokens,
 		})),
 		tools: inspection.tools.map((tool) => ({ ...tool })),

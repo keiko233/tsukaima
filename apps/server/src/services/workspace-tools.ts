@@ -2,12 +2,16 @@ import type { DurableExtension, DurableToolRegistration } from "@tsukaima/core";
 import type { MessageDeliveryMode, ThinkingLevel } from "@tsukaima/contracts";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
+import type { GitIdentity } from "./git-identity.ts";
 import type { PromptHookService } from "./prompt-hooks.ts";
 import type { ScheduleService } from "./schedule-service.ts";
 import type { SessionMessagingService } from "./session-messaging.ts";
 import type { WorkspaceService } from "./workspace.ts";
 
 export const WORKSPACE_TOOLS_EXTENSION_NAME = "tsukaima-workspace-tools";
+export const WORKSPACE_GIT_IDENTITY_TOOL_NAME = "workspace_git_identity";
+/** Workspace tools that must never be discoverable from chat, IM, task, or plugin surfaces. */
+export const WORKSPACE_CODING_TOOL_NAMES = [WORKSPACE_GIT_IDENTITY_TOOL_NAME] as const;
 export const WORKSPACE_TOOL_NAMES = [
 	"workspace_spawn",
 	"workspace_status",
@@ -15,10 +19,12 @@ export const WORKSPACE_TOOL_NAMES = [
 	"session_lookup",
 	"hook_schedule",
 	"hook_list",
+	...WORKSPACE_CODING_TOOL_NAMES,
 ] as const;
 
 export interface WorkspaceToolsOptions {
 	readonly audit?: (entry: AuditEntry) => Promise<void> | void;
+	readonly gitIdentity: () => Promise<GitIdentity> | GitIdentity;
 	readonly logger: Logger;
 	readonly messaging: SessionMessagingService;
 	readonly promptHooks: PromptHookService;
@@ -90,13 +96,14 @@ function deliveryMode(value: unknown): MessageDeliveryMode {
 
 function tool(input: {
 	readonly description: string;
+	readonly deferred?: boolean;
 	readonly execute: DurableToolRegistration["execute"];
 	readonly name: string;
 	readonly parameters: Record<string, unknown>;
 	readonly surface: "chat" | "coding" | "both";
 }): DurableToolRegistration {
 	return {
-		deferred: true,
+		...(input.deferred === false ? {} : { deferred: true }),
 		description: input.description,
 		execute: input.execute,
 		name: input.name,
@@ -246,6 +253,24 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 					...(sessionId === undefined ? {} : { sessionId }),
 					...(taskId === undefined ? {} : { taskId }),
 				});
+			});
+		},
+	});
+
+	const gitIdentity = tool({
+		deferred: false,
+		description:
+			"Read the effective Git author and committer name and email Tsukaima applies to commits and governed worktree git commands. Read-only: it reports the server-owned identity, never .git config, credentials, or database rows.",
+		name: WORKSPACE_GIT_IDENTITY_TOOL_NAME,
+		parameters: { properties: {}, type: "object" },
+		surface: "coding",
+		async execute(_args, api) {
+			return run(WORKSPACE_GIT_IDENTITY_TOOL_NAME, String(api.conversationId), async () => {
+				const identity = await options.gitIdentity();
+				return {
+					author: { email: identity.email, name: identity.name },
+					committer: { email: identity.email, name: identity.name },
+				};
 			});
 		},
 	});
@@ -404,6 +429,6 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 
 	return {
 		name: WORKSPACE_TOOLS_EXTENSION_NAME,
-		tools: [spawn, status, send, lookupSessions, scheduleHook, listHooks],
+		tools: [spawn, status, gitIdentity, send, lookupSessions, scheduleHook, listHooks],
 	};
 }

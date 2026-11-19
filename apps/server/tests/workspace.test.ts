@@ -275,11 +275,13 @@ describe("workspace sessions", () => {
 		expect(parentTools).toContain("tool_search");
 		expect(parentTools?.some((name) => name.startsWith("self-iteration_"))).toBe(false);
 		expect(workspaceTools).toContain("workspace_status");
+		expect(workspaceTools).toContain("workspace_git_identity");
 		expect(workspaceTools).not.toContain("workspace_spawn");
 		expect(workspaceTools).not.toContain("session_lookup");
 		expect(workspaceTools?.some((name) => name.startsWith("self-iteration_"))).toBe(true);
 		expect(workspaceTools).toContain("todo_write");
 		expect(workspaceTools).toContain("db_query");
+		expect(parentTools).not.toContain("workspace_git_identity");
 		expect(parentTools).not.toContain("todo_write");
 		expect(parentTools).not.toContain("db_query");
 		expect(parentTools?.some((name) => name.startsWith("self-iteration_"))).toBe(false);

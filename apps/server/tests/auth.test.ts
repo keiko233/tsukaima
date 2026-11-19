@@ -419,6 +419,7 @@ describe("admin auth", () => {
 			"personas/bindPersona": { personaId: "persona-1", scope: "global" },
 			"personas/bindings": {},
 			"personas/list": {},
+			"personas/updatePrompt": { id: "persona-1", prompt: "Sample instructions", version: 1 },
 			"personas/upsert": {
 				name: "Sample",
 				prompt: "You are a sample persona.",
@@ -463,6 +464,14 @@ describe("admin auth", () => {
 			"plugins/rpc": { input: {}, method: "test.ping" },
 			"plugins/setEnabled": { enabled: false, pluginId: "onebot-napcat" },
 			"plugins/updateConfig": { config: {}, pluginId: "onebot-napcat" },
+			"prompts/agentAccess": {},
+			"prompts/list": {},
+			"prompts/setAgentAccess": false,
+			"prompts/update": {
+				key: "chat-system",
+				expectedOverride: null,
+				override: "Sample instructions",
+			},
 			"repository/fetch": {},
 			"repository/identity": {},
 			"repository/pull": {},

@@ -108,6 +108,8 @@ import { ReplyExpectationStore } from "./services/reply-expectations.ts";
 import { SidechatService } from "./services/sidechat.ts";
 import { LiveRunCache } from "./services/live-run-cache.ts";
 import { PromptHookService } from "./services/prompt-hooks.ts";
+import { createPromptTools, PROMPT_TOOL_NAMES } from "./services/prompt-tools.ts";
+import { PromptService } from "./services/prompts.ts";
 import {
 	RestartCoordinator,
 	RestartReloadController,
@@ -130,7 +132,11 @@ import {
 import { WorkspaceReferenceService } from "./services/workspace-references.ts";
 import { WorkspaceSqlService } from "./services/workspace-sql.ts";
 import { WorkspaceTodoService } from "./services/workspace-todos.ts";
-import { WORKSPACE_TOOL_NAMES, createWorkspaceToolsExtension } from "./services/workspace-tools.ts";
+import {
+	WORKSPACE_CODING_TOOL_NAMES,
+	WORKSPACE_TOOL_NAMES,
+	createWorkspaceToolsExtension,
+} from "./services/workspace-tools.ts";
 import { WorkspaceService } from "./services/workspace.ts";
 
 /**
@@ -202,6 +208,7 @@ export class TsukaimaLifecycle {
 	readonly media: MediaService;
 	private readonly inboundMedia: InboundMediaResolver;
 	readonly promptHooks: PromptHookService;
+	readonly prompts: PromptService;
 	readonly replyExpectations: ReplyExpectationStore;
 	readonly followUpIntents: FollowUpIntentStore;
 	readonly github: GitHubService;
@@ -301,6 +308,10 @@ export class TsukaimaLifecycle {
 		});
 		this.executionLock = new ConversationExecutionLock();
 		this.hooks = new HookBus(this.logger);
+		this.prompts = new PromptService(
+			() => this.domainDatabase,
+			(entry) => this.writeAudit(entry),
+		);
 		this.promptHooks = new PromptHookService({
 			database: () => this.domainDatabase,
 			logger: this.runtimeLog,
@@ -368,6 +379,7 @@ export class TsukaimaLifecycle {
 			router: () => this.conversationRouter,
 		});
 		this.contextProvider = new DrizzleContextProvider({
+			renderSystem: (id) => this.prompts.renderSystem(id),
 			database: () => this.domainDatabase,
 			logger: this.runtimeLog,
 			policyService: this.conversationPolicy,
@@ -401,6 +413,7 @@ export class TsukaimaLifecycle {
 			complete: (prompt, modelId) => this.completeMemoryPrompt(prompt, modelId),
 			database: () => this.domainDatabase,
 			embed: (texts) => this.embedMemoryTexts(texts),
+			extractionPrompt: () => this.prompts.render("memory-extraction"),
 			llmEnabled: () => this.memoryModel !== undefined && this.memoryModel.providerId !== "fake",
 			logger: this.runtimeLog,
 			policyService: this.conversationPolicy,
@@ -538,6 +551,7 @@ export class TsukaimaLifecycle {
 			schedules: this.schedules,
 		});
 		this.workspace = new WorkspaceService({
+			taskPrompt: () => this.prompts.render("workspace-task"),
 			applyToolPolicy: async (sessionId, durableConversationId) => {
 				const policy = await this.conversationPolicy.effectivePolicy(sessionId);
 				await this.applySessionToolPolicy(durableConversationId, policy);
@@ -584,6 +598,7 @@ export class TsukaimaLifecycle {
 		});
 		this.workspaceToolsExtension = createWorkspaceToolsExtension({
 			audit: (entry) => this.writeAudit(entry),
+			gitIdentity: () => readGitIdentity(this.domainDatabase),
 			logger: this.runtimeLog,
 			messaging: this.sessionMessaging,
 			promptHooks: this.promptHooks,
@@ -881,6 +896,7 @@ export class TsukaimaLifecycle {
 		if (!codingAllowed) {
 			for (const name of codingTools) removed.add(name);
 			for (const name of codingAgentTools) removed.add(name);
+			for (const name of WORKSPACE_CODING_TOOL_NAMES) removed.add(name);
 		}
 		if (kind === "webui") {
 			// A chat may spawn/control workspaces but never edit code in its own turn.
@@ -892,6 +908,9 @@ export class TsukaimaLifecycle {
 			for (const name of sessionTools) removed.add(name);
 		}
 		try {
+			if ((!codingAllowed && kind !== "webui") || !this.prompts.agentAccess()) {
+				for (const name of PROMPT_TOOL_NAMES) removed.add(name);
+			}
 			await host.updateToolAccess(durableConversationId, { remove: [...removed] });
 		} catch (error) {
 			// Narrowing the filter failed, so drop to an empty allowlist. This is best effort: the
@@ -1073,6 +1092,7 @@ export class TsukaimaLifecycle {
 		this.memoryModel = model;
 		this.activeProviderId = model.providerId;
 		this.sidechatService = new SidechatService({
+			prompt: () => this.prompts.render("sidechat"),
 			defaultModelId: async () =>
 				this.domainDatabase === undefined
 					? undefined
@@ -1226,6 +1246,7 @@ export class TsukaimaLifecycle {
 						},
 					);
 		const dynamicExtensions = [
+			createPromptTools(this.prompts, this.conversationPolicy),
 			...(pluginTools === undefined ? [] : [pluginTools]),
 			...(this.workspaceToolsExtension === undefined ? [] : [this.workspaceToolsExtension]),
 			...(this.scheduleToolsExtension === undefined ? [] : [this.scheduleToolsExtension]),
