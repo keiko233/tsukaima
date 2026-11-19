@@ -58,10 +58,16 @@ export type {
 
 export {
 	createTaskSnapshot,
+	measureTaskSnapshot,
 	SNAPSHOT_DEFAULT_MAX_BYTES,
 	SNAPSHOT_DEFAULT_MAX_FILES,
 } from "./snapshot.ts";
-export type { TaskSnapshot, TaskSnapshotManifest, TaskSnapshotOptions } from "./snapshot.ts";
+export type {
+	TaskSnapshot,
+	TaskSnapshotManifest,
+	TaskSnapshotMeasurement,
+	TaskSnapshotOptions,
+} from "./snapshot.ts";
 
 export {
 	assertSafeBaseRef,
@@ -127,6 +133,8 @@ export type {
 	DeploymentProposalInput,
 	DeploymentProposalStatus,
 	DeploymentProposalStore,
+	ProposalEvidence,
+	ProposalEvidenceItem,
 } from "./proposal.ts";
 
 export { NoopReloadController, SupervisedReloadController } from "./reload.ts";

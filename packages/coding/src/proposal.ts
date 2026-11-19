@@ -23,12 +23,32 @@ export interface ArtifactMetadata {
 	readonly sizeBytes?: number;
 }
 
+/** One fresh, passing validation artifact a proposal's evidence is bound to. */
+export interface ProposalEvidenceItem {
+	readonly kind: "build" | "test";
+	readonly name: string;
+	/** `snapshot` for an isolated check; `live` for a compatibility run proven unchanged. */
+	readonly provenance: "live" | "snapshot";
+}
+
+/**
+ * Server-derived proof of what a proposal contains and what was validated. Both checksums are
+ * computed by the server from the task worktree; every item validated exactly `snapshotChecksum`.
+ */
+export interface ProposalEvidence {
+	readonly diffChecksum: string;
+	readonly items: readonly ProposalEvidenceItem[];
+	readonly snapshotChecksum: string;
+}
+
 export interface DeploymentProposal {
 	readonly artifactMetadata: ArtifactMetadata | null;
 	readonly changedFiles: readonly string[];
 	readonly createdAtMs: number;
 	readonly diff: string;
 	readonly diffChecksum: string;
+	/** Null for proposals recorded before evidence was bound to a snapshot. */
+	readonly evidence: ProposalEvidence | null;
 	readonly envChanges: readonly string[];
 	readonly id: string;
 	readonly motivation: string;
@@ -48,6 +68,7 @@ export interface DeploymentProposalInput {
 	readonly changedFiles?: readonly string[];
 	readonly diff: string;
 	readonly diffChecksum?: string;
+	readonly evidence?: ProposalEvidence | null;
 	readonly envChanges?: readonly string[];
 	readonly motivation?: string;
 	readonly requiresRestart?: boolean;
@@ -91,6 +112,7 @@ export function normalizeDeploymentProposal(
 		createdAtMs: now,
 		diff: input.diff,
 		diffChecksum: input.diffChecksum ?? sha256Hex(input.diff),
+		evidence: input.evidence ?? null,
 		envChanges: [...(input.envChanges ?? [])],
 		id: randomUUID(),
 		motivation: input.motivation ?? "",

@@ -120,6 +120,13 @@
 			"when": 1794901252214,
 			"tag": "0016_exotic_stranger",
 			"breakpoints": true
+		},
+		{
+			"idx": 17,
+			"version": "6",
+			"when": 1795065071363,
+			"tag": "0017_tiny_thanos",
+			"breakpoints": true
 		}
 	]
 }

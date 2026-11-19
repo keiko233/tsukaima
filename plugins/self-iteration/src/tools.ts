@@ -258,24 +258,18 @@ export function registerSelfIterationTools(
 	context.tools.register(
 		tool(
 			"worktree",
-			"Create a bounded git worktree for a patch task. All later writes stay inside it.",
+			"Create the bounded git worktree for this task from its durable base revision. All later writes stay inside it.",
 			{
-				properties: {
-					...TASK_FIELDS,
-					baseRef: { type: "string" },
-				},
+				properties: { ...TASK_FIELDS },
 				type: "object",
 			},
 			["coding.execute"],
 			60_000,
 			async (input, invocation) =>
 				invoke(context, log, "self-iteration.worktree", input, invocation, async () =>
-					service.worktree({
-						...(await boundTaskInput(service, input, invocation, "self-iteration.worktree")),
-						...(stringValue(input, "baseRef") === undefined
-							? {}
-							: { baseRef: stringValue(input, "baseRef")! }),
-					}),
+					service.worktree(
+						await boundTaskInput(service, input, invocation, "self-iteration.worktree"),
+					),
 				),
 		),
 	);
@@ -409,21 +403,15 @@ export function registerSelfIterationTools(
 	context.tools.register(
 		tool(
 			"propose",
-			"Submit a deployment proposal for admin approval. Requires all seven proposal field groups.",
+			"Submit a deployment proposal for admin approval. The patch, changed files, revision, and validation evidence are derived from the task worktree; supply only the proposal text. Evidence must come from checks run after the last edit.",
 			{
 				properties: {
 					...TASK_FIELDS,
-					artifactMetadata: { type: "object" },
-					changedFiles: { items: { type: "string" }, type: "array" },
-					diff: { type: "string" },
-					diffChecksum: { type: "string" },
 					envChanges: { items: { type: "string" }, type: "array" },
 					motivation: { type: "string" },
 					requiresRestart: { type: "boolean" },
 					riskAssessment: { type: "string" },
 					rollbackNotes: { type: "string" },
-					sourceRevision: { type: "string" },
-					testResult: { type: "object" },
 					title: { type: "string" },
 				},
 				type: "object",
@@ -446,28 +434,10 @@ export function registerSelfIterationTools(
 						...(stringValue(input, "rollbackNotes") === undefined
 							? {}
 							: { rollbackNotes: stringValue(input, "rollbackNotes")! }),
-						...(stringValue(input, "sourceRevision") === undefined
-							? {}
-							: { sourceRevision: stringValue(input, "sourceRevision")! }),
-						...(stringValue(input, "diff") === undefined
-							? {}
-							: { diff: stringValue(input, "diff")! }),
-						...(stringValue(input, "diffChecksum") === undefined
-							? {}
-							: { diffChecksum: stringValue(input, "diffChecksum")! }),
-						...(stringArray(input, "changedFiles") === undefined
-							? {}
-							: { changedFiles: stringArray(input, "changedFiles")! }),
 						...(stringArray(input, "envChanges") === undefined
 							? {}
 							: { envChanges: stringArray(input, "envChanges")! }),
 						...(input.requiresRestart === true ? { requiresRestart: true } : {}),
-						...(typeof input.artifactMetadata === "object" && input.artifactMetadata !== null
-							? { artifactMetadata: input.artifactMetadata as never }
-							: {}),
-						...(typeof input.testResult === "object" && input.testResult !== null
-							? { testResult: input.testResult as never }
-							: {}),
 					}),
 				),
 		),

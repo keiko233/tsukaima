@@ -36,6 +36,8 @@ export interface DiffResult {
 	readonly raw: string;
 	readonly totalDeletions: number;
 	readonly totalInsertions: number;
+	/** Set when more untracked files exist than the diff expands; the diff is then incomplete. */
+	readonly untrackedTruncated?: true;
 }
 
 export class CodingTools {
@@ -63,6 +65,11 @@ export class CodingTools {
 			this.#diffAgainstHead(),
 			this.#untrackedPaths(),
 		]);
+		const expanded = await this.#expandUntracked(tracked, untracked.paths);
+		return untracked.truncated ? { ...expanded, untrackedTruncated: true } : expanded;
+	}
+
+	async #expandUntracked(tracked: DiffResult, untracked: readonly string[]): Promise<DiffResult> {
 		const extra: DiffResult[] = [];
 		for (const path of untracked) {
 			const result = await this.#runner.exec("git", [
@@ -113,19 +120,25 @@ export class CodingTools {
 		return parseDiffOutput(numstatResult.stdout, nameStatusResult.stdout, rawResult.stdout);
 	}
 
-	async #untrackedPaths(): Promise<readonly string[]> {
+	async #untrackedPaths(): Promise<{
+		readonly paths: readonly string[];
+		readonly truncated: boolean;
+	}> {
 		const result = await this.#runner.exec("git", [
 			"ls-files",
 			"--others",
 			"--exclude-standard",
 			"-z",
 		]);
-		if (result.exitCode !== 0) return [];
-		return result.stdout
+		if (result.exitCode !== 0) return { paths: [], truncated: false };
+		const all = result.stdout
 			.split("\0")
 			.map((entry) => entry.trim())
-			.filter((entry) => entry.length > 0)
-			.slice(0, MAX_UNTRACKED_DIFF_FILES);
+			.filter((entry) => entry.length > 0);
+		return {
+			paths: all.slice(0, MAX_UNTRACKED_DIFF_FILES),
+			truncated: all.length > MAX_UNTRACKED_DIFF_FILES,
+		};
 	}
 
 	async runTests(pattern?: string): Promise<TestRunResult> {

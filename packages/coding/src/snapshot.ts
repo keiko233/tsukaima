@@ -2,13 +2,16 @@ import { createHash } from "node:crypto";
 import {
 	lstat,
 	mkdir,
+	mkdtemp,
 	readdir,
 	readFile,
 	readlink,
 	realpath,
+	rm,
 	symlink,
 	writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { SandboxMount } from "./sandbox.ts";
 
@@ -69,6 +72,68 @@ export interface TaskSnapshot {
 
 /** Directory names never copied: VCS metadata, and dependencies that are mapped separately. */
 const EXCLUDED_NAMES: ReadonlySet<string> = new Set([".git", "node_modules"]);
+
+/** Result of measuring a worktree the way a snapshot run would see it. */
+export interface TaskSnapshotMeasurement {
+	readonly manifest: TaskSnapshotManifest;
+	/** Given paths that the snapshot does not carry, so a check of the snapshot cannot cover them. */
+	readonly uncoveredPaths: readonly string[];
+}
+
+/**
+ * Copy a worktree into a private scratch directory and report the identity a snapshot run would
+ * record. The copy is deleted before returning, so a measurement leaves no host state behind.
+ * `paths` are repository-relative changed paths; any the copy does not reproduce are reported.
+ */
+export async function measureTaskSnapshot(options: {
+	readonly paths: readonly string[];
+	readonly repositoryPath: string;
+	readonly signal?: AbortSignal;
+	readonly sourcePath: string;
+}): Promise<TaskSnapshotMeasurement> {
+	const scratch = await mkdtemp(join(tmpdir(), "tsukaima-measure-"));
+	try {
+		const target = await realpath(scratch);
+		const snapshot = await createTaskSnapshot({
+			repositoryPath: options.repositoryPath,
+			sourcePath: options.sourcePath,
+			targetPath: target,
+			...(options.signal === undefined ? {} : { signal: options.signal }),
+		});
+		const source = await realpath(options.sourcePath);
+		const uncoveredPaths: string[] = [];
+		for (const path of options.paths) {
+			if (!(await coversPath(source, target, path))) uncoveredPaths.push(path);
+		}
+		return { manifest: snapshot.manifest, uncoveredPaths };
+	} finally {
+		await rm(scratch, { force: true, recursive: true });
+	}
+}
+
+/**
+ * A changed path is covered when the copy reproduces its presence in the live tree. Paths under an
+ * excluded directory, and paths that resolve outside the tree, are never reproduced.
+ */
+async function coversPath(source: string, target: string, path: string): Promise<boolean> {
+	const segments = path.split("/");
+	if (
+		isAbsolute(path) ||
+		segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")
+	) {
+		return false;
+	}
+	if (segments.some((segment) => EXCLUDED_NAMES.has(segment))) return false;
+	const live = await lstat(join(source, path)).then(
+		() => true,
+		() => false,
+	);
+	const copied = await lstat(join(target, path)).then(
+		() => true,
+		() => false,
+	);
+	return live === copied;
+}
 
 function isInside(root: string, candidate: string): boolean {
 	const rel = relative(root, candidate);
