@@ -73,13 +73,43 @@ export {
 } from "./busy-arbiter.ts";
 export {
 	CONTEXT_EXTENSION_NAME,
-	MEMORY_SECTION_KEY,
 	PERSONA_SECTION_KEY,
 	POLICY_SECTION_KEY,
+	SYSTEM_SECTION_KEY,
+	TURN_CONTEXT_MEMO,
+	TURN_CONTEXT_SECTION_PREFIX,
+	TURN_CONTEXT_TAG,
+	TURN_MEMORIES_KEY,
+	chatCompactionTranscript,
+	collectRunInputs,
+	collectRunTriggers,
 	createContextExtension,
+	injectTurnContext,
+	previousCompactionSummary,
+	renderTurnContextBlock,
+	turnContextCacheKey,
+	type ChatCompactionRequest,
 	type ContextExtensionOptions,
 	type ContextPromptProvider,
+	type RunInputScanOptions,
+	type TurnContextInput,
+	type TurnContextRequest,
+	type TurnContextSection,
+	type TurnContextSnapshot,
+	type TurnTrigger,
 } from "./context.ts";
+export {
+	applyMentionLabels,
+	envelopeHeader,
+	envelopeSpeaker,
+	envelopeTimeMs,
+	formatEnvelopeLine,
+	formatLocalClock,
+	formatLocalDateTime,
+	formatQuote,
+	type RenderableEnvelope,
+	type TurnFormatOptions,
+} from "./turn-format.ts";
 export {
 	ConversationExecutionLock,
 	defaultConversationExecutionLock,
@@ -104,7 +134,7 @@ export {
 } from "./openai.ts";
 export {
 	LURK_MARKER,
-	buildTriggerContext,
+	buildTurnCue,
 	classifyConversationTrigger,
 	extractLurkMarker,
 	mediaOnlyKind,
@@ -112,7 +142,7 @@ export {
 	type ResolvedReplyTarget,
 	type TriggerClassificationInput,
 	type TriggerClassificationResult,
-	type TriggerContextInput,
+	type TurnCueInput,
 } from "./trigger.ts";
 export {
 	boundedReplyDelayMs,

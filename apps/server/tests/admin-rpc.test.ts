@@ -15,6 +15,7 @@ import {
 	type OneBotTransport,
 } from "@tsukaima-plugin/onebot-napcat";
 import { createApp } from "../src/app.ts";
+import { DEFAULT_PROMPTS } from "../src/services/prompt-defaults.ts";
 import { signIn } from "./test-auth.ts";
 
 const directories: string[] = [];
@@ -439,7 +440,7 @@ describe("admin conversation policy and persona RPC", () => {
 			});
 			expect(await request("admin/prompts/list")).toContainEqual({
 				key: "chat-system",
-				defaultText: "",
+				defaultText: DEFAULT_PROMPTS["chat-system"],
 				override: null,
 			});
 

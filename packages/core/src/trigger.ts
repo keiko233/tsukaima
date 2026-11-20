@@ -2,7 +2,6 @@ import {
 	type ConversationPolicy,
 	type MessageEnvelope,
 	messagePartsText,
-	type TriggerClassification,
 	type TriggerDecision,
 } from "@tsukaima/contracts";
 
@@ -273,32 +272,37 @@ export function classifyConversationTrigger(
 	};
 }
 
-export interface TriggerContextInput {
+export interface TurnCueInput {
 	readonly result: TriggerClassificationResult;
-	readonly classification: Exclude<TriggerClassification, never> | "soft";
+	readonly classification: TriggerDecision;
 	readonly senderIsBot?: boolean;
 }
 
 /**
- * Compact model-visible contract for a soft/direct trigger. It intentionally avoids plugin,
- * transport, SQL, and database details.
+ * Compact ephemeral cue for a `soft` turn: the model was not addressed directly and may stay
+ * silent. Direct and ambient turns need no cue. The text reaches the model only through the
+ * turn-context hook and is never persisted into the transcript.
+ *
+ * TODO(batch-2, batch-6): revisit the lurk marker itself; keep this wording minimal.
  */
-export function buildTriggerContext(input: TriggerContextInput): string {
+export function buildTurnCue(input: TurnCueInput): string | undefined {
+	if (input.classification !== "soft") return undefined;
 	const result = input.result;
-	const media =
-		result.mediaOnly === undefined
-			? "none"
-			: result.mediaOnly === "sticker"
-				? "sticker only"
-				: "image only";
-	return [
-		"Conversation trigger:",
-		`- ${input.classification}`,
-		`- Bot name used without direct address: ${result.aliasMentioned ? "yes" : "no"}`,
-		`- Another bot is speaking: ${input.senderIsBot === true || result.peerBotSpeaking ? "yes" : "no"}`,
-		`- Media/notice summary: ${media}`,
-		`- If speaking would be noise, reply with exactly ${LURK_MARKER} and nothing else.`,
-	].join("\n");
+	const lines = [
+		result.aliasMentioned
+			? "Someone mentioned you by name without addressing you directly."
+			: "Nobody addressed you directly; you are just following the chat.",
+	];
+	if (input.senderIsBot === true || result.peerBotSpeaking) {
+		lines.push("The latest speaker is another bot.");
+	}
+	if (result.mediaOnly !== undefined) {
+		lines.push(
+			`The latest message is ${result.mediaOnly === "sticker" ? "a sticker" : "an image"} only.`,
+		);
+	}
+	lines.push(`If joining in would be noise, reply with exactly ${LURK_MARKER} and nothing else.`);
+	return lines.join("\n");
 }
 
 export interface LurkDecision {

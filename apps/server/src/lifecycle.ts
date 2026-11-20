@@ -383,6 +383,27 @@ export class TsukaimaLifecycle {
 		});
 		this.contextProvider = new DrizzleContextProvider({
 			renderSystem: (id) => this.prompts.renderSystem(id),
+			renderPrompt: (key) => this.prompts.render(key),
+			// Chat compaction runs on the conversation's own model. The deterministic fake model has
+			// no plugin provider; returning `undefined` keeps pi-durable's default summarizer.
+			completeText: async (request) => {
+				const target = request.model ?? this.activeModelTarget();
+				if (target === undefined || target.providerId === "fake") return undefined;
+				const result = await this.pluginHost.completeModel(
+					{
+						maxTokens: request.maxTokens,
+						messages: [
+							{ content: request.system, role: "system" },
+							{ content: request.prompt, role: "user" },
+						],
+						modelId: target.modelId,
+						providerId: target.providerId,
+						...(request.signal === undefined ? {} : { signal: request.signal }),
+					},
+					MODEL_CAPABILITIES.basicChat,
+				);
+				return result.text;
+			},
 			database: () => this.domainDatabase,
 			logger: this.runtimeLog,
 			policyService: this.conversationPolicy,

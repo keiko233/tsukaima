@@ -278,7 +278,11 @@ test("reconnects with capped exponential backoff", async () => {
 
 test("accepts inbound events through the channel", async () => {
 	const { envelopes, sockets } = await createChannel();
-	sockets[0]?.emit("message", [JSON.stringify(privateEvent)]);
+	const withoutReply = {
+		...privateEvent,
+		message: privateEvent.message.filter((segment) => segment.type !== "reply"),
+	};
+	sockets[0]?.emit("message", [JSON.stringify(withoutReply)]);
 	sockets[0]?.emit("message", [JSON.stringify(groupEvent)]);
 	sockets[0]?.emit("message", [JSON.stringify({ post_type: "meta_event" })]);
 	expect(envelopes).toHaveLength(2);
@@ -292,8 +296,58 @@ test("accepts inbound events through the channel", async () => {
 test("ignores a malformed frame without throwing", async () => {
 	const { envelopes, sockets } = await createChannel();
 	expect(() => sockets[0]?.emit("message", ["{not json"])).not.toThrow();
-	sockets[0]?.emit("message", [JSON.stringify(privateEvent)]);
+	const withoutReply = {
+		...privateEvent,
+		message: privateEvent.message.filter((segment) => segment.type !== "reply"),
+	};
+	sockets[0]?.emit("message", [JSON.stringify(withoutReply)]);
 	expect(envelopes).toHaveLength(1);
+});
+
+test("hydrates a quoted reply from get_msg", async () => {
+	const { channel, envelopes, sent, sockets } = await createChannel();
+	sockets[0]?.emit("message", [JSON.stringify(privateEvent)]);
+	for (let attempt = 0; attempt < 50 && sent.length === 0; attempt += 1) await Bun.sleep(2);
+	const action = sent.find((entry) => (entry as { action?: string }).action === "get_msg") as
+		| { echo: string; params: Record<string, unknown> }
+		| undefined;
+	expect(action?.params).toEqual({ message_id: "source-message" });
+	if (action !== undefined) {
+		sockets[0]?.respond({
+			data: {
+				message: [{ data: { text: "the quoted text" }, type: "text" }],
+				message_id: "source-message",
+				sender: { card: "Quoted User", nickname: "Nickname", user_id: 10_002 },
+			},
+			echo: action.echo,
+			retcode: 0,
+		});
+	}
+	for (let attempt = 0; attempt < 50 && envelopes.length === 0; attempt += 1) await Bun.sleep(2);
+	expect(envelopes[0]?.target).toEqual({
+		replyToEnvelopeId: "source-message",
+		quote: {
+			excerpt: "the quoted text",
+			senderDisplayName: "Quoted User",
+			senderPlatformId: "10002",
+		},
+	});
+	channel.stop();
+});
+
+test("keeps the reply id when get_msg fails", async () => {
+	const { channel, envelopes, sent, sockets } = await createChannel();
+	sockets[0]?.emit("message", [JSON.stringify(privateEvent)]);
+	for (let attempt = 0; attempt < 50 && sent.length === 0; attempt += 1) await Bun.sleep(2);
+	const action = sent.find((entry) => (entry as { action?: string }).action === "get_msg") as
+		| { echo: string }
+		| undefined;
+	if (action !== undefined) {
+		sockets[0]?.respond({ echo: action.echo, retcode: 1 });
+	}
+	for (let attempt = 0; attempt < 50 && envelopes.length === 0; attempt += 1) await Bun.sleep(2);
+	expect(envelopes[0]?.target).toEqual({ replyToEnvelopeId: "source-message" });
+	channel.stop();
 });
 
 test("normalizes and dispatches OneBot requests", async () => {

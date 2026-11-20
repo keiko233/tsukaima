@@ -214,7 +214,9 @@ export class SessionMessagingService {
 		}
 		await this.#policy.ensureHostPolicy(session.id, session.durableConversationId);
 		const hookContext = await this.#hooks.renderContext(session.id);
-		const triggerContext = [input.context, preparedContext, hookContext]
+		// Caller context and explicit references are conversation content and stay durable; prompt
+		// hooks are per-turn and reach the model only through the ephemeral turn context.
+		const attachedContext = [input.context, preparedContext]
 			.filter((entry): entry is string => entry !== undefined && entry.trim().length > 0)
 			.join("\n\n");
 
@@ -280,7 +282,10 @@ export class SessionMessagingService {
 				forceSubmit: true,
 				...(input.requestId === undefined ? {} : { requestId: input.requestId }),
 				submittedAtMs: Date.now(),
-				...(triggerContext.length === 0 ? {} : { triggerContext }),
+				...(attachedContext.length === 0 ? {} : { attachedContext }),
+				...(hookContext === undefined || hookContext.trim().length === 0
+					? {}
+					: { turnContext: { classification: "direct" as const, promptHooks: hookContext } }),
 				whenBusy: whenBusy(deliveryMode),
 			});
 			await database

@@ -8,6 +8,7 @@ import { m } from "@/paraglide/messages";
 
 const labels: Record<PromptKey, () => string> = {
 	"chat-system": m.prompts_chat,
+	"chat-compaction": m.prompts_chat_compaction,
 	"coding-system": m.prompts_coding,
 	"memory-extraction": m.prompts_memory,
 	"workspace-task": m.prompts_workspace,

@@ -1,6 +1,14 @@
 import { and, desc, eq, inArray, ne, or, sql, type SQL } from "drizzle-orm";
-import type { ContextPromptProvider } from "@tsukaima/core";
-import type { ConversationPolicy } from "@tsukaima/contracts";
+import {
+	formatLocalClock,
+	formatLocalDateTime,
+	TURN_MEMORIES_KEY,
+	type ChatCompactionRequest,
+	type ContextPromptProvider,
+	type TurnContextRequest,
+	type TurnContextSection,
+} from "@tsukaima/core";
+import type { ConversationPolicy, PersonaSummary } from "@tsukaima/contracts";
 import {
 	chatSnapshots,
 	conversationMembers,
@@ -10,18 +18,29 @@ import {
 	type TsukaimaDatabase,
 } from "@tsukaima/db";
 import { previewText, type Logger } from "../logging.ts";
-import { ConversationPolicyService } from "./conversation-policy.ts";
+import {
+	ConversationPolicyService,
+	DEFAULT_PERSONA_BEHAVIOR,
+	type PersonaBehavior,
+} from "./conversation-policy.ts";
 import { MemoryService, type RankedMemory } from "./memory-service.ts";
 
 /**
- * Combined persona + memory character budget for one request, in characters (not tokens,
- * so it stays independent of any tokenizer). The persona takes the first
- * `PERSONA_BUDGET_FRACTION`; memories may use the rest, so the combined text never exceeds
- * this budget.
+ * Persona character ceiling for the static system prefix. Personas are the single most
+ * important part of a chat agent's voice, so the ceiling is generous and a truncation note
+ * appears only when it is actually exceeded.
  */
-export const PROMPT_BUDGET_CHARS = 4_000;
-/** Persona's share of {@link PROMPT_BUDGET_CHARS}; memories get the remainder. */
-const PERSONA_BUDGET_FRACTION = 0.4;
+export const DEFAULT_PERSONA_BUDGET_CHARS = 12_000;
+/**
+ * Character budget for the budgeted part of the ephemeral turn context (observation window and
+ * recalled memories). Clock, prompt hooks, and the soft cue are budget-exempt core blocks.
+ */
+export const DEFAULT_TURN_BUDGET_CHARS = 6_000;
+/** Messages in the ambient group observation window. */
+const DEFAULT_OBSERVATION_LIMIT = 20;
+const OBSERVATION_SNIPPET_LIMIT = 200;
+/** Output budget of one chat compaction summary. */
+const COMPACTION_MAX_TOKENS = 2_048;
 const DEFAULT_MEMORY_TOP_K = 10;
 const RECENT_MESSAGE_LIMIT = 6;
 const RECENT_TIER_MIN_BUDGET = 260;
@@ -32,6 +51,17 @@ const MEMORY_TRUNCATION_NOTE = "[memories truncated to fit the context budget]";
 const RECENT_HEADER = "Recent conversation window:";
 const WARM_HEADER = "Warm session state:";
 const LONG_TERM_HEADER = "Known memories, most relevant first:";
+const OBSERVATION_HEADER = "Recent messages in this group, oldest first (you = your own messages):";
+const SELF_LABEL = "(you)";
+
+/** One host-model completion for chat compaction, on the conversation's own model. */
+export interface ContextCompletionRequest {
+	readonly maxTokens: number;
+	readonly model?: { readonly modelId: string; readonly providerId: string };
+	readonly prompt: string;
+	readonly signal?: AbortSignal;
+	readonly system: string;
+}
 
 /**
  * Resolves the persona and memory text for one durable conversation and keeps it inside a
@@ -44,10 +74,25 @@ const LONG_TERM_HEADER = "Known memories, most relevant first:";
  */
 export interface DrizzleContextProviderOptions {
 	readonly renderSystem?: (conversationId: string) => Promise<string | undefined>;
+	/** Shared prompt text (Settings -> Prompts); required for chat-native compaction. */
+	readonly renderPrompt?: (key: "chat-compaction") => Promise<string>;
+	/** Host model completion; required for chat-native compaction. */
+	readonly completeText?: (request: ContextCompletionRequest) => Promise<string | undefined>;
 	readonly database: () => TsukaimaDatabase | undefined;
 	readonly logger: Logger;
-	/** Combined persona + memory budget override; mainly for tests. */
+	/** Persona ceiling in characters; defaults to {@link DEFAULT_PERSONA_BUDGET_CHARS}. */
+	readonly personaBudgetChars?: number;
+	/** Turn-context budget in characters; defaults to {@link DEFAULT_TURN_BUDGET_CHARS}. */
+	readonly turnBudgetChars?: number;
+	/**
+	 * @deprecated Pre-Batch-1 memory budget override, kept for existing tests. It now sets the
+	 * memory budget used by {@link DrizzleContextProvider.renderMemories} only.
+	 */
 	readonly budgetChars?: number;
+	/** Ambient observation window size; mainly for tests. */
+	readonly observationLimit?: number;
+	/** IANA zone for clock labels; defaults to the host process zone. */
+	readonly timeZone?: string;
 	/** Maximum memories injected per request; mainly for tests. */
 	readonly memoryTopK?: number;
 	/** Shared policy resolution; a database-backed service is created when omitted. */
@@ -82,6 +127,12 @@ function snippet(text: string, limit: number): string {
 	return text.replace(/\s+/gu, " ").trim().slice(0, limit);
 }
 
+function observationSpeaker(displayName: string | null, platformId: string | null): string {
+	const name = displayName?.trim() || platformId?.trim() || "Unknown";
+	const id = platformId?.trim();
+	return id === undefined || id.length === 0 || id === name ? name : `${name}(${id})`;
+}
+
 function combine(conditions: readonly (SQL | undefined)[]): SQL {
 	const filtered = conditions.filter((condition): condition is SQL => condition !== undefined);
 	if (filtered.length === 0) return sql`1 = 1`;
@@ -113,22 +164,32 @@ export interface ContextInspectionDetails {
 }
 
 export class DrizzleContextProvider implements ContextPromptProvider {
-	readonly #budgetChars: number;
+	readonly #completeText: DrizzleContextProviderOptions["completeText"];
 	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #logger: Logger;
+	readonly #memoryBudget: number;
 	readonly #memoryService: MemoryService;
 	readonly #memoryTopK: number;
+	readonly #observationLimit: number;
 	readonly #personaBudget: number;
 	readonly #policyService: ConversationPolicyService;
-	readonly renderSystem?: NonNullable<DrizzleContextProviderOptions["renderSystem"]>;
+	readonly #renderPrompt: DrizzleContextProviderOptions["renderPrompt"];
+	readonly #renderSystem: DrizzleContextProviderOptions["renderSystem"];
+	readonly #timeZone: string | undefined;
+	readonly #turnBudget: number;
 
 	constructor(options: DrizzleContextProviderOptions) {
-		if (options.renderSystem !== undefined) this.renderSystem = options.renderSystem;
+		this.#renderSystem = options.renderSystem;
+		this.#renderPrompt = options.renderPrompt;
+		this.#completeText = options.completeText;
 		this.#database = options.database;
 		this.#logger = options.logger.child("tsukaima::server::context");
-		this.#budgetChars = options.budgetChars ?? PROMPT_BUDGET_CHARS;
+		this.#personaBudget = options.personaBudgetChars ?? DEFAULT_PERSONA_BUDGET_CHARS;
+		this.#turnBudget = options.turnBudgetChars ?? DEFAULT_TURN_BUDGET_CHARS;
+		this.#memoryBudget = options.budgetChars ?? this.#turnBudget;
 		this.#memoryTopK = options.memoryTopK ?? DEFAULT_MEMORY_TOP_K;
-		this.#personaBudget = Math.floor(this.#budgetChars * PERSONA_BUDGET_FRACTION);
+		this.#observationLimit = options.observationLimit ?? DEFAULT_OBSERVATION_LIMIT;
+		this.#timeZone = options.timeZone;
 		this.#policyService =
 			options.policyService ??
 			new ConversationPolicyService({
@@ -145,23 +206,35 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			});
 	}
 
+	/**
+	 * Shared base prompt (`chat-system` / `coding-system`). A chat persona marked `complete` is a
+	 * full system prompt of its own, so the shared chat base is omitted for it.
+	 */
+	async renderSystem(durableConversationId: string): Promise<string | undefined> {
+		const render = this.#renderSystem;
+		if (render === undefined) return undefined;
+		try {
+			const profile = await this.#personaProfile(durableConversationId);
+			if (profile !== undefined && profile.chatKind !== "workspace" && profile.behavior.complete) {
+				return undefined;
+			}
+			return await render(durableConversationId);
+		} catch (error) {
+			this.#logger.warn("system prompt unavailable", { error: errorMessage(error) });
+			return undefined;
+		}
+	}
+
 	async renderPersona(durableConversationId: string): Promise<string | undefined> {
 		try {
-			const database = this.#database();
-			if (database === undefined) return undefined;
-			const session = await this.#resolveSession(database, durableConversationId);
-			if (session === undefined) return undefined;
-			const persona = await this.#policyService.personaForSession({
-				...session,
-				conversationId: session.sessionId,
-			});
-			if (persona === undefined) return undefined;
-			const text = personaText(persona);
+			const profile = await this.#personaProfile(durableConversationId);
+			if (profile === undefined) return undefined;
+			const text = personaText(profile.persona);
 			if (text === undefined) return undefined;
 			const rendered = truncateChars(text, this.#personaBudget, PERSONA_TRUNCATION_NOTE);
 			this.#logger.debug("rendered persona context", {
 				durableConversationId,
-				personaName: persona.name,
+				personaName: profile.persona.name,
 				renderedChars: rendered.length,
 				truncated: rendered.length < text.length,
 			});
@@ -173,42 +246,36 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	}
 
 	/**
-	 * Compact identity + conversation contract. It names only user-visible behavior and never
-	 * leaks plugin/package/database/transport internals into the prompt.
+	 * Static, model-actionable chat behavior rules. Transport settings (pacing, cooldowns,
+	 * markdown stripping, access modes, wake keywords) are enforced by the runtime and never
+	 * shown to the model. The text depends only on persona and chat kind, so it stays
+	 * byte-stable across turns. Workspace sessions get their rules from the coding prompt.
 	 */
 	async renderPolicy(durableConversationId: string): Promise<string | undefined> {
 		try {
 			const database = this.#database();
 			if (database === undefined) return undefined;
 			const session = await this.#resolveSession(database, durableConversationId);
-			if (session === undefined) return undefined;
+			if (session === undefined || session.chatKind === "workspace") return undefined;
 			const [policy, persona] = await Promise.all([
 				this.#policyService.effectivePolicy(session.sessionId),
 				this.#policyService.personaForSession({ ...session, conversationId: session.sessionId }),
 			]);
-			const lines = ["Conversation contract:"];
-			if (persona !== undefined) lines.push(`- Speak as: ${persona.name}`);
-			lines.push(
-				`- Access: private ${policy.trigger.privateAccess}, group ${policy.trigger.groupAccess}`,
-				`- Group mentions: ${policy.trigger.groupMentionMode}`,
-				`- Reply pacing: settle ${policy.pacing.burstSettleMs} ms, wait at most ${policy.pacing.burstMaxWaitMs} ms, cooldown ${policy.pacing.replyCooldownMs} ms`,
-				`- Output: up to ${policy.pacing.maxImmediateOutputMessages} immediate messages, ${policy.pacing.sendIntervalMs} ms apart, markdown ${policy.pacing.stripMarkdown ? "stripped" : "kept"}; each newline sends a separate message`,
-			);
-			if (policy.trigger.keywords.length > 0) {
-				lines.push(`- Wake keywords: ${policy.trigger.keywords.join(", ")}`);
-			}
+			const lines: string[] = [];
+			if (persona !== undefined) lines.push(`- You are ${persona.name}; stay in character.`);
 			const aliases = [
 				...new Set([...policy.trigger.selfAliases, ...(persona?.selfAliases ?? [])]),
 			];
-			if (aliases.length > 0) lines.push(`- Self aliases: ${aliases.join(", ")}`);
-			lines.push(
-				"- Respond to direct questions, calls for your attention, and private chat messages.",
-			);
+			if (aliases.length > 0) lines.push(`- People may also call you: ${aliases.join(", ")}.`);
 			if (session.chatKind === "group") {
 				lines.push(
-					"- For an undirected group message, answer with exactly TSUKAIMA_LURK if you have nothing useful to add.",
+					"- This is a group chat. Keep track of who is talking to whom; not every message is meant for you.",
+					"- Join in when you are addressed or genuinely have something to add; otherwise let the others talk.",
 				);
+			} else if (session.chatKind === "private") {
+				lines.push("- This is a private one-on-one chat.");
 			}
+			lines.push("- Every line break in your reply is sent as a separate chat message.");
 			const rendered = lines.join("\n");
 			this.#logger.debug("rendered policy context", {
 				aliasCount: aliases.length,
@@ -223,6 +290,170 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		}
 	}
 
+	/**
+	 * Ephemeral per-run context. Clock, prompt hooks, and the soft cue are budget-exempt; the
+	 * observation window takes the turn budget first and recalled memories use what remains.
+	 * Every section degrades independently. Must stay read-only: prompt hooks were already
+	 * consumed at admission and arrive through `request.triggers`.
+	 */
+	async renderTurnContext(request: TurnContextRequest): Promise<readonly TurnContextSection[]> {
+		const database = this.#database();
+		if (database === undefined) return [];
+		let session: { chatKind: string; chatObjectId: string | null; sessionId: string } | undefined;
+		let behavior: PersonaBehavior = DEFAULT_PERSONA_BEHAVIOR;
+		try {
+			session = await this.#resolveSession(database, request.conversationId);
+			behavior = (await this.#personaProfile(request.conversationId))?.behavior ?? behavior;
+		} catch (error) {
+			this.#logger.warn("turn context session unavailable", { error: errorMessage(error) });
+		}
+		const chat = session !== undefined && session.chatKind !== "workspace";
+
+		const clock =
+			chat && behavior.includeRuntimeContext
+				? `Local time: ${formatLocalDateTime(request.nowMs, this.#timeZoneOptions())}`
+				: undefined;
+		const hooks = [
+			...new Set(
+				request.triggers
+					.map((trigger) => trigger.promptHooks?.trim())
+					.filter((value): value is string => value !== undefined && value.length > 0),
+			),
+		].join("\n\n");
+		// A run is soft only when none of its inputs addressed the assistant directly.
+		const soft =
+			request.triggers.length > 0 &&
+			request.triggers.every((trigger) => trigger.classification === "soft");
+		const cue = soft
+			? request.triggers.findLast((trigger) => trigger.cue !== undefined)?.cue
+			: undefined;
+
+		let remaining = this.#turnBudget;
+		let observation: string | undefined;
+		if (chat && session?.chatKind === "group") {
+			try {
+				const ownInputs = new Set<string>();
+				for (const input of request.inputs ?? []) {
+					if (input.envelopeId !== undefined) ownInputs.add(input.envelopeId);
+					if (input.platformMessageId !== undefined) ownInputs.add(input.platformMessageId);
+				}
+				observation = await this.#observationWindow(
+					database,
+					session.sessionId,
+					remaining,
+					ownInputs,
+				);
+				remaining -= observation?.length ?? 0;
+			} catch (error) {
+				this.#logger.warn("observation window unavailable", { error: errorMessage(error) });
+			}
+		}
+		let recalled: string | undefined;
+		if (session !== undefined && remaining > 0) {
+			try {
+				const collected = await this.#collectMemories(request.conversationId, session);
+				if (collected !== undefined && collected.enabled) {
+					recalled = this.#format(
+						{
+							policy: collected.policy,
+							ranked: collected.longTerm,
+							recent: collected.recent,
+							warm: collected.warm,
+						},
+						remaining,
+						// The observation window replaces the old recent tier in group chats.
+						{ includeRecent: false },
+					);
+				}
+			} catch (error) {
+				this.#logger.warn("memory context unavailable", { error: errorMessage(error) });
+			}
+		}
+
+		const sections: TurnContextSection[] = [];
+		const push = (key: string, text: string | undefined) => {
+			if (text !== undefined && text.trim().length > 0) sections.push({ key, text });
+		};
+		push("clock", clock);
+		push("observation", observation);
+		push(TURN_MEMORIES_KEY, recalled);
+		push("prompt-hooks", hooks);
+		push("cue", cue);
+		this.#logger.debug("rendered turn context", {
+			durableConversationId: request.conversationId,
+			keys: sections.map((entry) => entry.key).join(","),
+			renderedChars: sections.reduce((sum, entry) => sum + entry.text.length, 0),
+			triggerCount: request.triggers.length,
+		});
+		return sections;
+	}
+
+	/**
+	 * Chat-native compaction summary on the conversation's own model and the editable
+	 * `chat-compaction` prompt. Workspace sessions return `undefined` so pi-durable keeps its
+	 * coding summary format.
+	 */
+	async summarizeCompaction(request: ChatCompactionRequest): Promise<string | undefined> {
+		if (this.#completeText === undefined || this.#renderPrompt === undefined) return undefined;
+		const database = this.#database();
+		if (database === undefined) return undefined;
+		const session = await this.#resolveSession(database, request.conversationId);
+		if (session === undefined || session.chatKind === "workspace") return undefined;
+		if (request.transcript.trim().length === 0) return undefined;
+		const system = (await this.#renderPrompt("chat-compaction")).trim();
+		if (system.length === 0) return undefined;
+		const extra = request.instructions?.trim();
+		const previousSummary = request.previousSummary?.trim();
+		const prompt = [
+			...(previousSummary === undefined || previousSummary.length === 0
+				? []
+				: [
+						"Earlier summary to carry forward (preserve still-relevant facts and fold in the new messages):",
+						"<previous-summary>",
+						previousSummary,
+						"</previous-summary>",
+						"",
+					]),
+			"<chat-transcript>",
+			request.transcript,
+			"</chat-transcript>",
+			...(extra === undefined || extra.length === 0 ? [] : ["", "Additional instructions:", extra]),
+		].join("\n");
+		const summary = await this.#completeText({
+			maxTokens: COMPACTION_MAX_TOKENS,
+			prompt,
+			system,
+			...(request.model === undefined ? {} : { model: request.model }),
+			...(request.signal === undefined ? {} : { signal: request.signal }),
+		});
+		const trimmed = summary?.trim();
+		if (trimmed === undefined || trimmed.length === 0) {
+			// An empty result is a failed chat summary, not a reason to emit a coding checklist.
+			throw new Error("Chat compaction returned an empty summary");
+		}
+		this.#logger.debug("chat compaction summarized", {
+			durableConversationId: request.conversationId,
+			hadPreviousSummary: previousSummary !== undefined && previousSummary.length > 0,
+			reason: request.reason,
+			summaryChars: trimmed.length,
+			transcriptChars: request.transcript.length,
+		});
+		return trimmed;
+	}
+
+	/** Ordinary chat surfaces never fall back to the coding compaction format. */
+	async isChatConversation(durableConversationId: string): Promise<boolean> {
+		const database = this.#database();
+		if (database === undefined) return false;
+		try {
+			const session = await this.#resolveSession(database, durableConversationId);
+			return session !== undefined && session.chatKind !== "workspace";
+		} catch (error) {
+			this.#logger.warn("conversation kind unavailable", { error: errorMessage(error) });
+			return false;
+		}
+	}
+
 	async renderMemories(durableConversationId: string): Promise<string | undefined> {
 		try {
 			const collected = await this.#collectMemories(durableConversationId);
@@ -233,12 +464,16 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				});
 				return undefined;
 			}
-			const rendered = this.#format({
-				policy: collected.policy,
-				ranked: collected.longTerm,
-				recent: collected.recent,
-				warm: collected.warm,
-			});
+			const rendered = this.#format(
+				{
+					policy: collected.policy,
+					ranked: collected.longTerm,
+					recent: collected.recent,
+					warm: collected.warm,
+				},
+				this.#memoryBudget,
+				{ includeRecent: true },
+			);
 			this.#logger.debug("rendered memory context", {
 				durableConversationId,
 				hasWarm: collected.warm !== undefined,
@@ -324,7 +559,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			const nonEmptyRecent = collected.recent.filter(
 				(row) => (row.contentText ?? "").trim().length > 0,
 			);
-			const memoryBudget = this.#budgetChars - this.#personaBudget;
+			const memoryBudget = this.#memoryBudget;
 			if (memoryBudget >= RECENT_TIER_MIN_BUDGET) {
 				for (const row of nonEmptyRecent) {
 					const text = snippet(row.contentText ?? "", RECENT_SNIPPET_LIMIT);
@@ -352,6 +587,74 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			this.#logger.warn("context inspection unavailable", { error: errorMessage(error) });
 			return empty;
 		}
+	}
+
+	#timeZoneOptions() {
+		return this.#timeZone === undefined ? {} : { timeZone: this.#timeZone };
+	}
+
+	async #personaProfile(durableConversationId: string): Promise<
+		| {
+				readonly behavior: PersonaBehavior;
+				readonly chatKind: string;
+				readonly persona: PersonaSummary;
+		  }
+		| undefined
+	> {
+		const database = this.#database();
+		if (database === undefined) return undefined;
+		const session = await this.#resolveSession(database, durableConversationId);
+		if (session === undefined) return undefined;
+		const profile = await this.#policyService.personaProfileForSession({
+			...session,
+			conversationId: session.sessionId,
+		});
+		return profile === undefined ? undefined : { ...profile, chatKind: session.chatKind };
+	}
+
+	/**
+	 * Named, timestamped window of the latest group messages (ambient included), newest lines
+	 * kept first when the budget runs out. The assistant's own messages carry a self marker, and
+	 * the run's own newly submitted inputs are filtered so the model never sees them twice.
+	 */
+	async #observationWindow(
+		database: TsukaimaDatabase,
+		sessionId: string,
+		budget: number,
+		excludeIds: ReadonlySet<string>,
+	): Promise<string | undefined> {
+		const rows = await this.#recentMessages(
+			database,
+			sessionId,
+			this.#observationLimit + excludeIds.size,
+		);
+		const visible = rows
+			.filter((row) => {
+				if (excludeIds.size === 0) return true;
+				if (row.id.length > 0 && excludeIds.has(row.id)) return false;
+				return row.platformMessageId === null || !excludeIds.has(row.platformMessageId);
+			})
+			.slice(-this.#observationLimit);
+		const lines: string[] = [];
+		let used = OBSERVATION_HEADER.length + 1;
+		for (const row of visible.toReversed()) {
+			const text = snippet(row.contentText ?? "", OBSERVATION_SNIPPET_LIMIT);
+			if (text.length === 0) continue;
+			const at = Date.parse(row.occurredAt);
+			const clock = Number.isFinite(at)
+				? `[${formatLocalClock(at, this.#timeZoneOptions())}] `
+				: "";
+			const speaker =
+				row.direction === "outbound"
+					? SELF_LABEL
+					: observationSpeaker(row.senderDisplayName, row.senderExternalId);
+			const line = `${clock}${speaker}: ${text}`;
+			if (used + line.length + 1 > budget) break;
+			lines.push(line);
+			used += line.length + 1;
+		}
+		if (lines.length === 0) return undefined;
+		return [OBSERVATION_HEADER, ...lines.toReversed()].join("\n");
 	}
 
 	async #collectMemories(
@@ -490,7 +793,18 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	async #recentMessages(
 		database: TsukaimaDatabase,
 		sessionId: string | undefined,
-	): Promise<{ contentText: string | null; direction: string; id: string }[]> {
+		limit = RECENT_MESSAGE_LIMIT,
+	): Promise<
+		{
+			contentText: string | null;
+			direction: string;
+			id: string;
+			occurredAt: string;
+			platformMessageId: string | null;
+			senderDisplayName: string | null;
+			senderExternalId: string | null;
+		}[]
+	> {
 		if (sessionId === undefined) return [];
 		const [restore] = await database
 			.select({ appliedAt: chatSnapshots.appliedAt, payload: chatSnapshots.payloadJson })
@@ -516,21 +830,28 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				contentText: messages.contentText,
 				direction: messages.direction,
 				id: messages.id,
+				occurredAt: messages.occurredAt,
+				platformMessageId: messages.platformMessageId,
+				senderDisplayName: messages.senderDisplayName,
+				senderExternalId: messages.senderExternalId,
 			})
 			.from(messages)
 			.where(and(eq(messages.conversationId, sessionId), ne(messages.kind, "tool"), restoreWindow))
 			.orderBy(desc(messages.occurredAt))
-			.limit(RECENT_MESSAGE_LIMIT);
+			.limit(limit);
 		return recent.toReversed();
 	}
 
-	#format(input: {
-		readonly policy: ConversationPolicy;
-		readonly ranked: readonly RankedMemory[];
-		readonly recent: readonly { contentText: string | null; direction: string }[];
-		readonly warm: { readonly evidence: Record<string, unknown> } | undefined;
-	}): string | undefined {
-		const memoryBudget = this.#budgetChars - this.#personaBudget;
+	#format(
+		input: {
+			readonly policy: ConversationPolicy;
+			readonly ranked: readonly RankedMemory[];
+			readonly recent: readonly { contentText: string | null; direction: string }[];
+			readonly warm: { readonly evidence: Record<string, unknown> } | undefined;
+		},
+		memoryBudget: number,
+		options: { readonly includeRecent: boolean },
+	): string | undefined {
 		const lines: string[] = [];
 		let used = 0;
 		const push = (line: string): boolean => {
@@ -540,6 +861,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			return true;
 		};
 		const includeRecent =
+			options.includeRecent &&
 			memoryBudget >= RECENT_TIER_MIN_BUDGET &&
 			input.recent.some((row) => (row.contentText ?? "").trim().length > 0);
 		if (includeRecent) {

@@ -373,13 +373,16 @@ function contextSectionLabel(key: string): string {
 		case "tsukaima-policy":
 			return "Policy";
 		case "tsukaima-memory":
+		case "turn-context/memories":
 			return "Memories";
 		case "instructions":
 			return "Instructions";
 		case "system":
 			return "System";
 		default:
-			return key;
+			return key.startsWith("turn-context/")
+				? `Turn context: ${key.slice("turn-context/".length)}`
+				: key;
 	}
 }
 

@@ -1,8 +1,10 @@
-import type {
-	ChannelNotice,
-	ChannelRequest,
-	MessageEnvelope,
-	MessagePart,
+import {
+	MESSAGE_QUOTE_EXCERPT_MAX_CHARS,
+	type ChannelNotice,
+	type ChannelRequest,
+	type MessageEnvelope,
+	type MessagePart,
+	type MessageQuote,
 } from "@tsukaima/contracts";
 import type {
 	ChannelHistoryItem,
@@ -19,6 +21,7 @@ import {
 	singleLinePreview,
 } from "../logging.ts";
 import {
+	MAX_QUOTE_LOOKUP_TIMEOUT_MS,
 	normalizeOneBotEvent,
 	normalizeOneBotEventAsync,
 	normalizeOneBotNotice,
@@ -63,6 +66,9 @@ type NormalizeHookOptions = {
 	readonly logger?: PluginLogger | undefined;
 	readonly mentionNameTimeoutMs?: number | undefined;
 	readonly resolveMentionName?: OneBotMentionNameResolver | undefined;
+	readonly resolveQuotedMessage?:
+		| ((messageId: string) => Promise<MessageQuote | undefined>)
+		| undefined;
 };
 
 const DEFAULT_ACTION_TIMEOUT_MS = 5_000;
@@ -331,6 +337,31 @@ const historyItems = (raw: unknown): ChannelHistoryItem[] => {
 	return messages
 		.map((entry) => historyItem(entry))
 		.filter((entry): entry is ChannelHistoryItem => entry !== undefined);
+};
+
+/** Turn one `get_msg` response into the bounded quote the envelope contract accepts. */
+const quotedMessage = (raw: unknown, botAccountId: string): MessageQuote | undefined => {
+	const response = recordOf(raw);
+	if (response === undefined) return undefined;
+	const data = recordOf(response.data) ?? response;
+	const sender = recordOf(data.sender) ?? {};
+	const senderId = sender.user_id ?? data.user_id;
+	const senderName =
+		stringOf(sender.card)?.trim() || stringOf(sender.nickname)?.trim() || undefined;
+	const excerpt = textOfSegments(data.message ?? data.content)
+		.replace(/\s+/gu, " ")
+		.trim()
+		.slice(0, MESSAGE_QUOTE_EXCERPT_MAX_CHARS);
+	const fromSelf = senderId !== undefined && String(senderId) === botAccountId;
+	const quote: MessageQuote = {
+		...(excerpt.length === 0 ? {} : { excerpt }),
+		...(fromSelf ? { fromSelf: true } : {}),
+		...(senderName === undefined || senderName.length === 0
+			? {}
+			: { senderDisplayName: senderName }),
+		...(senderId === undefined ? {} : { senderPlatformId: String(senderId) }),
+	};
+	return Object.keys(quote).length === 0 ? undefined : quote;
 };
 
 export class OneBotChannel {
@@ -975,6 +1006,7 @@ export class OneBotChannel {
 			});
 		const wantsAsync =
 			needsMentionNameResolution ||
+			segments.some((segment) => segment.type === "reply") ||
 			segments.some(
 				(segment) =>
 					segment.type === "forward" ||
@@ -1039,7 +1071,18 @@ export class OneBotChannel {
 			...(this.config.mentionNameTimeoutMs === undefined
 				? {}
 				: { mentionNameTimeoutMs: this.config.mentionNameTimeoutMs }),
+			resolveQuotedMessage: (messageId) => this.resolveQuotedMessage(messageId),
 		};
+	}
+
+	/** Best-effort `get_msg` lookup; normalization bounds and degrades it on failure. */
+	private async resolveQuotedMessage(messageId: string): Promise<MessageQuote | undefined> {
+		const data = await this.readAction(
+			"get_msg",
+			{ message_id: messageId },
+			MAX_QUOTE_LOOKUP_TIMEOUT_MS,
+		);
+		return quotedMessage(data, this.config.botAccountId);
 	}
 
 	private handleResponse(parsed: unknown): boolean {

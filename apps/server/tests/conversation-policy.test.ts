@@ -428,9 +428,9 @@ describe("conversation policy service", () => {
 			);
 			expect(extension.name).toBe(CONTEXT_EXTENSION_NAME);
 			expect(extension.sections?.map((section) => section.key)).toEqual([
+				"tsukaima-system",
 				"tsukaima-persona",
 				"tsukaima-policy",
-				"tsukaima-memory",
 			]);
 			const provider = new DrizzleContextProvider({
 				database: () => database,
@@ -439,8 +439,10 @@ describe("conversation policy service", () => {
 			});
 			const text = await provider.renderPolicy("41");
 			if (text === undefined) throw new Error("Expected policy text");
-			expect(text).toContain("Speak as: Tsukaima");
-			expect(text).toContain("TSUKAIMA_LURK");
+			expect(text).toContain("You are Tsukaima; stay in character.");
+			expect(text).toContain("This is a group chat.");
+			expect(text).not.toContain("TSUKAIMA_LURK");
+			expect(text).not.toContain("burstSettleMs");
 			expect(text).not.toContain("persona_bindings");
 			expect(text).not.toContain("onebot");
 			expect(text).not.toContain("SQL");

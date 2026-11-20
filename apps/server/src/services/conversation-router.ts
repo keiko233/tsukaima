@@ -1,16 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import {
-	buildTriggerContext,
+	buildTurnCue,
 	classifyConversationTrigger,
 	type PiDurableConversationHost,
 	type ResolvedReplyTarget,
+	type TurnTrigger,
 } from "@tsukaima/core";
-import type { ConversationPolicy, MessagePart } from "@tsukaima/contracts";
+import type { ConversationPolicy, MessagePart, MessageQuote } from "@tsukaima/contracts";
 import {
 	channelNoticeSchema,
 	conversationPolicySchema,
 	defaultConversationPolicy,
+	MESSAGE_QUOTE_EXCERPT_MAX_CHARS,
 	messageEnvelopeSchema,
 	messagePartsText,
 	type ChannelNotice,
@@ -31,6 +33,7 @@ import type { AuditEntry } from "@tsukaima/sdk";
 import { previewText, type Logger } from "../logging.ts";
 import type { ConversationPacingTracker } from "./conversation-pacing.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
+import { loadMentionLabels } from "./mention-labels.ts";
 
 export interface ConversationIngestResult {
 	readonly chatObjectId: string;
@@ -224,11 +227,18 @@ export class ConversationRouter {
 				conversationPolicySchema.parse(defaultConversationPolicy);
 			const selfAliases =
 				(await this.#policy?.selfAliases(target.sessionId, policy)) ?? policy.trigger.selfAliases;
-			const replyTarget = await this.#resolveReplyTarget(
+			const reply = await this.#resolveReplyContext(
 				database,
 				target.chatObjectId,
 				message.target?.replyToEnvelopeId,
 			);
+			// A quote the channel resolved with `get_msg` still proves a reply to the bot when the
+			// original message is outside the local retention window.
+			const replyTarget =
+				reply?.target ??
+				(message.target?.quote?.fromSelf === true
+					? { direction: "outbound" as const, senderKind: "assistant" as const }
+					: undefined);
 			const recentActivity =
 				this.#pacing?.isRecentlyActive(
 					target.durableConversationId,
@@ -270,7 +280,14 @@ export class ConversationRouter {
 			// Fetch media bytes before durable append and persistence so both the model turn input
 			// (which resolves local blobs via `mediaId`/`sha256`) and the persisted transcript see
 			// the local media reference. Best-effort: a failed fetch keeps the original part.
-			const hydratedMessage = await this.#hydrateInboundMedia(message);
+			// Mention labels and the quoted reply are resolved here, once, so durable formatting in
+			// `@tsukaima/core` never needs channel or database lookups.
+			const hydratedMessage = await this.#enrichReferences(
+				database,
+				await this.#hydrateInboundMedia(message),
+				target.sessionId,
+				reply?.quote,
+			);
 			if (trigger.classification !== "ambient") {
 				this.#onInboundTrigger?.(target.durableConversationId);
 				await this.#policy?.ensureHostPolicy(target.sessionId, target.durableConversationId);
@@ -297,16 +314,7 @@ export class ConversationRouter {
 					conversationId: target.durableConversationId,
 					envelope: hydratedMessage,
 					submittedAtMs: Date.now(),
-					triggerContext: [
-						buildTriggerContext({
-							classification: trigger.classification,
-							result: trigger,
-							...(hydratedMessage.sender.isBot === undefined
-								? {}
-								: { senderIsBot: hydratedMessage.sender.isBot }),
-						}),
-						...(injected === undefined ? [] : [injected]),
-					].join("\n\n"),
+					turnContext: turnContextFor(trigger, hydratedMessage, injected),
 				});
 				if (cooldownMs > 0) {
 					host.scheduleActivityFlushAfter(target.durableConversationId, cooldownMs);
@@ -408,17 +416,22 @@ export class ConversationRouter {
 		}
 	}
 
-	async #resolveReplyTarget(
+	/**
+	 * The stored message an inbound reply quotes: trigger classification needs its direction,
+	 * and the durable turn needs its author and an excerpt.
+	 */
+	async #resolveReplyContext(
 		database: TsukaimaDatabase,
 		chatObjectId: string,
 		replyToEnvelopeId: string | undefined,
-	): Promise<ResolvedReplyTarget | undefined> {
+	): Promise<{ quote: MessageQuote; target: ResolvedReplyTarget } | undefined> {
 		if (replyToEnvelopeId === undefined) return undefined;
 		const [row] = await database
 			.select({
+				contentText: messages.contentText,
 				direction: messages.direction,
+				senderDisplayName: messages.senderDisplayName,
 				senderExternalId: messages.senderExternalId,
-				senderKind: messages.senderExternalId,
 			})
 			.from(messages)
 			.where(
@@ -429,15 +442,82 @@ export class ConversationRouter {
 			)
 			.limit(1);
 		if (row === undefined) return undefined;
+		const fromSelf = row.direction === "outbound" || row.senderExternalId === "tsukaima";
+		const excerpt = (row.contentText ?? "").replace(/\s+/gu, " ").trim();
+		const quote: MessageQuote = {
+			...(excerpt.length === 0
+				? {}
+				: { excerpt: excerpt.slice(0, MESSAGE_QUOTE_EXCERPT_MAX_CHARS) }),
+			...(fromSelf ? { fromSelf: true } : {}),
+			...(row.senderDisplayName === null || row.senderDisplayName.trim().length === 0
+				? {}
+				: { senderDisplayName: row.senderDisplayName }),
+			...(row.senderExternalId === null || row.senderExternalId.length === 0
+				? {}
+				: { senderPlatformId: row.senderExternalId }),
+		};
 		return {
-			direction: row.direction,
-			senderExternalId: row.senderExternalId,
-			senderKind:
-				row.direction === "outbound"
-					? "assistant"
-					: row.senderExternalId === "tsukaima"
-						? "assistant"
-						: "human",
+			quote,
+			target: {
+				direction: row.direction,
+				senderExternalId: row.senderExternalId,
+				senderKind: fromSelf ? "assistant" : "human",
+			},
+		};
+	}
+
+	/**
+	 * Fill mention labels from known identities and merge the stored quote under whatever the
+	 * channel already supplied. Best-effort: a lookup failure keeps the envelope as received,
+	 * including a quote the channel hydrated through `get_msg` for an unstored message.
+	 */
+	async #enrichReferences(
+		database: TsukaimaDatabase,
+		envelope: MessageEnvelope,
+		sessionId: string,
+		storedQuote: MessageQuote | undefined,
+	): Promise<MessageEnvelope> {
+		let mentions = envelope.mentions;
+		const unlabeled = mentions
+			.filter((mention) => mention.id !== undefined && mention.label === undefined)
+			.map((mention) => mention.id as string);
+		if (unlabeled.length > 0) {
+			try {
+				const labels = (
+					await loadMentionLabels(
+						database,
+						[{ conversationId: sessionId, platformAccountId: envelope.channelId }],
+						unlabeled,
+					)
+				).get(sessionId);
+				if (labels !== undefined && labels.size > 0) {
+					mentions = mentions.map((mention) => {
+						const label = mention.id === undefined ? undefined : labels.get(mention.id);
+						return label === undefined || mention.label !== undefined
+							? mention
+							: { ...mention, label };
+					});
+				}
+			} catch (error) {
+				this.#logger.debug("mention labels unavailable", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+		const channelQuote = envelope.target?.quote;
+		const quote =
+			storedQuote === undefined
+				? channelQuote
+				: channelQuote === undefined
+					? storedQuote
+					: { ...storedQuote, ...channelQuote };
+		if (mentions === envelope.mentions && quote === channelQuote) return envelope;
+		return {
+			...envelope,
+			mentions,
+			...(envelope.target === undefined && quote === undefined
+				? {}
+				: { target: { ...envelope.target, ...(quote === undefined ? {} : { quote }) } }),
 		};
 	}
 
@@ -878,4 +958,25 @@ export class ConversationRouter {
 		if (database === undefined) throw new Error("Domain database is not ready");
 		return database;
 	}
+}
+
+/** Ephemeral turn info for the host: soft cue plus prompt hooks consumed at admission. */
+function turnContextFor(
+	trigger: ReturnType<typeof classifyConversationTrigger>,
+	envelope: MessageEnvelope,
+	promptHooks: string | undefined,
+): TurnTrigger {
+	const decision = trigger.classification;
+	const classification: TurnTrigger["classification"] =
+		decision === "ignored" ? undefined : decision;
+	const cue = buildTurnCue({
+		classification: trigger.classification,
+		result: trigger,
+		...(envelope.sender.isBot === undefined ? {} : { senderIsBot: envelope.sender.isBot }),
+	});
+	return {
+		...(classification === undefined ? {} : { classification }),
+		...(cue === undefined ? {} : { cue }),
+		...(promptHooks === undefined || promptHooks.trim().length === 0 ? {} : { promptHooks }),
+	};
 }

@@ -200,7 +200,7 @@ describe("OneBot inbound segment fidelity", () => {
 			]),
 			config,
 		);
-		expect(envelope?.mentions).toEqual([{ id: "10002" }]);
+		expect(envelope?.mentions).toEqual([{ id: "10002", label: "Example User" }]);
 		// One text part: QQ already puts the separating space in the text segment.
 		expect(envelope?.parts).toEqual([{ text: "@Example User send a sticker", type: "text" }]);
 	});
@@ -245,8 +245,8 @@ describe("OneBot inbound segment fidelity", () => {
 		);
 		expect(inputs).toEqual([{ groupId: "555", userId: "10002" }]);
 		expect(envelope?.parts).toEqual([{ text: "@Target Person ping", type: "text" }]);
-		// Trigger classification still reads ids from the mention list.
-		expect(envelope?.mentions).toEqual([{ id: "10002" }]);
+		// Trigger classification still reads ids from the mention list, while rendering gets the label.
+		expect(envelope?.mentions).toEqual([{ id: "10002", label: "Target Person" }]);
 	});
 
 	test("keeps the id when mention name resolution fails", async () => {

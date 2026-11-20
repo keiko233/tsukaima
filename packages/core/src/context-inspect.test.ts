@@ -148,7 +148,9 @@ describe("inspectConversationContext", () => {
 
 			const host = new PiDurableConversationHost({
 				contextProvider: {
-					renderMemories: async () => "- [conversation/fact] User likes tea",
+					renderTurnContext: async () => [
+						{ key: "memories", text: "- [conversation/fact] User likes tea" },
+					],
 					renderPersona: async () => "You are Tsukaima, a traveling witch.",
 					renderPolicy: async () => "Conversation contract:\n- Access: private open",
 				},
@@ -192,6 +194,7 @@ describe("inspectConversationContext", () => {
 				stats.categories.personaTokens +
 				stats.categories.policyTokens +
 				stats.categories.memoriesTokens +
+				stats.categories.turnContextTokens +
 				stats.categories.otherSystemTokens;
 			expect(stats.usedTokens).toBe(categorySum);
 			expect(stats.usedTokens + stats.autocompact.bufferTokens + stats.freeSpaceTokens).toBe(

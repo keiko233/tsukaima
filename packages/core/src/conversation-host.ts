@@ -47,13 +47,29 @@ import {
 } from "@tsukaima/contracts";
 import type { SqliteStorage } from "@tsukaima/durable";
 import {
+	collectRunInputs,
+	collectRunTriggers,
 	createContextExtension,
-	MEMORY_SECTION_KEY,
 	PERSONA_SECTION_KEY,
 	SYSTEM_SECTION_KEY,
 	POLICY_SECTION_KEY,
+	renderTurnContextBlock,
+	TURN_CONTEXT_MEMO,
+	TURN_CONTEXT_SECTION_PREFIX,
+	TURN_CONTEXT_TAG,
+	TURN_MEMORIES_KEY,
+	turnContextCacheKey,
 	type ContextPromptProvider,
+	type TurnContextSnapshot,
+	type TurnTrigger,
 } from "./context.ts";
+import {
+	applyMentionLabels,
+	envelopeHeader,
+	formatEnvelopeLine,
+	type RenderableEnvelope,
+	type TurnFormatOptions,
+} from "./turn-format.ts";
 import {
 	ConversationExecutionLock,
 	defaultConversationExecutionLock,
@@ -71,6 +87,24 @@ type StoredEnvelope = JsonObject & {
 		readonly timestampMs: number;
 		readonly receivedAtMs?: number;
 	};
+	/**
+	 * Ephemeral routing info for the turn this envelope belongs to. Stored so recovery replays
+	 * the same turn context, but never rendered into the durable user message.
+	 */
+	turnContext?: JsonObject & {
+		classification?: "direct" | "soft" | "ambient";
+		cue?: string;
+		promptHooks?: string;
+	};
+	/**
+	 * Durable context the caller explicitly attached (WebUI references, workspace handoff
+	 * notes). Unlike `turnContext` it is part of the conversation and is rendered.
+	 */
+	attachedContext?: string;
+	/**
+	 * Legacy `Conversation trigger:` preamble written before Batch 1. Still parsed so pending
+	 * windows survive an upgrade, but never rendered again.
+	 */
 	triggerContext?: string;
 };
 
@@ -219,8 +253,16 @@ export type AppendConversationResult = {
 };
 
 export interface AppendConversationInput {
-	/** Compact trigger contract appended to the model submission for direct/soft turns. */
-	readonly triggerContext?: string;
+	/**
+	 * Ephemeral per-turn routing info (soft cue, consumed prompt hooks). Delivered to the model
+	 * through the turn-context hook only; never persisted into the durable user message.
+	 */
+	readonly turnContext?: TurnTrigger;
+	/**
+	 * Durable context explicitly attached by the caller (for example WebUI session references).
+	 * Rendered before the message lines and kept in the transcript.
+	 */
+	readonly attachedContext?: string;
 	readonly classification?: TriggerClassification;
 	/** Collect only; the router uses this while a cooldown/rate limit is active. */
 	readonly collectOnly?: boolean;
@@ -382,6 +424,11 @@ export interface DurableConversationHostOptions {
 	readonly onLiveRun?: (state: LiveRunSnapshot) => void;
 	/** How long a busy run may still be steered before a follow-up is queued. */
 	readonly steerGraceMs?: number;
+	/**
+	 * IANA zone for the `[HH:mm]` stamps in durable user turns; defaults to the process zone.
+	 * Tests pass a fixed zone so rendered transcripts are deterministic.
+	 */
+	readonly timeZone?: string;
 	readonly storage: SqliteStorage;
 }
 
@@ -400,6 +447,25 @@ export interface AdmittedTurn {
  * One observation of a conversation's live run, in the local clock domain. `undefined` means the
  * run settled: the caller clears whatever it was showing.
  */
+function pinnedTurnContext(
+	memos: Readonly<Record<string, unknown>> | undefined,
+): TurnContextSnapshot | undefined {
+	const raw = memos?.[TURN_CONTEXT_MEMO];
+	if (typeof raw !== "object" || raw === null) return undefined;
+	const record = raw as { renderedAtMs?: unknown; sections?: unknown };
+	if (typeof record.renderedAtMs !== "number" || !Array.isArray(record.sections)) {
+		return undefined;
+	}
+	const sections: { key: string; text: string }[] = [];
+	for (const entry of record.sections) {
+		if (typeof entry !== "object" || entry === null) continue;
+		const section = entry as { key?: unknown; text?: unknown };
+		if (typeof section.key !== "string" || typeof section.text !== "string") continue;
+		sections.push({ key: section.key, text: section.text });
+	}
+	return { renderedAtMs: record.renderedAtMs, sections };
+}
+
 export type LiveRunSnapshot = {
 	readonly conversationId: string;
 	/**
@@ -466,6 +532,8 @@ export interface ConversationContextInspection {
 		readonly personaTokens: number;
 		readonly policyTokens: number;
 		readonly toolsTokens: number;
+		/** Ephemeral per-request turn context other than recalled memories. */
+		readonly turnContextTokens: number;
 	};
 	readonly compacted: boolean;
 	readonly contextWindow: number;
@@ -736,6 +804,8 @@ export class PiDurableConversationHost {
 	>();
 	/** Recent interrupt timestamps for the per-minute ceiling. */
 	private readonly interruptTimes = new Map<string, number[]>();
+	/** One ephemeral snapshot per live run, shared across tool-round generation handovers. */
+	private readonly turnContextSnapshots = new Map<string, TurnContextSnapshot>();
 	private readonly contextExtension: Extension | undefined;
 	private readonly toolSearchExtension: Extension;
 	private readonly extensions = new Map<string, Extension>();
@@ -769,7 +839,13 @@ export class PiDurableConversationHost {
 		this.contextExtension =
 			options.contextProvider === undefined
 				? undefined
-				: createContextExtension(options.contextProvider);
+				: createContextExtension(options.contextProvider, {
+						resolveModel: (agentModel) => {
+							const ref = this.effectiveModelRef(agentModel);
+							return { modelId: ref.modelId, providerId: ref.provider };
+						},
+						turnContextCache: this.turnContextSnapshots,
+					});
 		if (this.contextExtension !== undefined) {
 			this.extensions.set(this.contextExtension.name, this.contextExtension);
 			this.registry.install(this.contextExtension);
@@ -868,7 +944,7 @@ export class PiDurableConversationHost {
 		);
 		const envelopes: StoredEnvelope[] = window?.envelopes ?? [];
 		const shouldOpen = !window || window.status !== "collecting";
-		const storedEnvelope = this.toStoredEnvelope(input.envelope, input.triggerContext);
+		const storedEnvelope = this.toStoredEnvelope(input.envelope, input);
 		const nextEnvelopes = shouldOpen ? [storedEnvelope] : [...envelopes, storedEnvelope];
 		// Pacing compares against `submittedAtMs`, which is local. Envelope timestamps come from
 		// the remote platform's clock, so using them here made the settle window unreachable
@@ -1991,10 +2067,12 @@ export class PiDurableConversationHost {
 		const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
 		if (conversation === undefined) return undefined;
 
-		const [agent, agentState, view] = await Promise.all([
+		const [agent, agentState, view, inspection, liveState] = await Promise.all([
 			conversation.agent(BACKGROUND_CONTEXT),
 			harness.snapshot(AgentDoc, numericId, BACKGROUND_CONTEXT),
 			conversation.context(BACKGROUND_CONTEXT),
+			harness.inspect(BACKGROUND_CONTEXT),
+			harness.snapshot(LiveDoc, numericId, BACKGROUND_CONTEXT),
 		]);
 
 		const modelRef = this.effectiveModelRef(agent.model);
@@ -2066,13 +2144,41 @@ export class PiDurableConversationHost {
 		}
 
 		const resolvedSections = new Map<string, string>(shownSections);
+		/** Ephemeral turn sections, keyed `turn-context/<key>`, as the next request would see them. */
+		const turnSections = new Map<string, string>();
 		const contextProvider = this.options.contextProvider;
 		if (contextProvider !== undefined) {
-			const [systemRaw, personaRaw, policyRaw, memoriesRaw] = await Promise.all([
+			// A live run reuses the snapshot pinned on its generation task; rendering a fresh one
+			// would show context the model is not actually seeing. Otherwise this is the next run.
+			const liveRunFirst = liveState?.run?.first;
+			const cachedPinned =
+				liveRunFirst === undefined
+					? undefined
+					: this.turnContextSnapshots.get(turnContextCacheKey(numericId, liveRunFirst));
+			const taskPinned = inspection.tasks
+				.filter(
+					(task) =>
+						task.record.kind === "pi.generation" &&
+						task.record.conversationId === numericId &&
+						task.record.memos !== undefined,
+				)
+				.toSorted((left, right) => (right.record.startedAt ?? 0) - (left.record.startedAt ?? 0))
+				.map((task) => pinnedTurnContext(task.record.memos))
+				.find((snapshot) => snapshot !== undefined);
+			const pinned = cachedPinned ?? taskPinned;
+			const turnRequest = {
+				conversationId,
+				inputs: collectRunInputs(view.entries.toReversed()),
+				nowMs: Date.now(),
+				triggers: collectRunTriggers(view.entries.toReversed()),
+			};
+			const [systemRaw, personaRaw, policyRaw, turnRaw] = await Promise.all([
 				contextProvider.renderSystem?.(conversationId).catch(() => undefined),
 				contextProvider.renderPersona(conversationId).catch(() => undefined),
 				contextProvider.renderPolicy?.(conversationId).catch(() => undefined),
-				contextProvider.renderMemories(conversationId).catch(() => undefined),
+				pinned === undefined
+					? contextProvider.renderTurnContext?.(turnRequest).catch(() => undefined)
+					: Promise.resolve(pinned.sections),
 			]);
 			const applyProviderSection = (key: string, value: string | undefined) => {
 				if (value === undefined || value.trim().length === 0) {
@@ -2088,7 +2194,11 @@ export class PiDurableConversationHost {
 			if (contextProvider.renderPolicy !== undefined) {
 				applyProviderSection(POLICY_SECTION_KEY, policyRaw);
 			}
-			applyProviderSection(MEMORY_SECTION_KEY, memoriesRaw);
+			for (const entry of turnRaw ?? []) {
+				const block = renderTurnContextBlock([entry]);
+				if (block === undefined) continue;
+				turnSections.set(`${TURN_CONTEXT_SECTION_PREFIX}${entry.key}`, block);
+			}
 		}
 		if (agent.instructions !== undefined && agent.instructions.trim().length > 0) {
 			resolvedSections.set(
@@ -2100,6 +2210,7 @@ export class PiDurableConversationHost {
 		let personaTokens = 0;
 		let policyTokens = 0;
 		let memoriesTokens = 0;
+		let turnContextTokens = 0;
 		let otherSystemTokens =
 			rawSystemParts.length === 0 ? 0 : estimateTextTokens(rawSystemParts.join("\n\n"));
 		const sectionItems: { key: string; text: string; tokens: number }[] = [];
@@ -2109,8 +2220,19 @@ export class PiDurableConversationHost {
 			sectionItems.push({ key, text, tokens });
 			if (key === PERSONA_SECTION_KEY) personaTokens += tokens;
 			else if (key === POLICY_SECTION_KEY) policyTokens += tokens;
-			else if (key === MEMORY_SECTION_KEY) memoriesTokens += tokens;
 			else otherSystemTokens += tokens;
+		}
+		if (turnSections.size > 0) {
+			// The wrapper tags cost a few tokens of their own; attribute them to turn context.
+			const wrapperTokens = estimateTextTokens(`<${TURN_CONTEXT_TAG}>\n</${TURN_CONTEXT_TAG}>`);
+			turnContextTokens += wrapperTokens;
+			for (const [key, text] of turnSections) {
+				const tokens = estimateTextTokens(text);
+				if (tokens <= 0) continue;
+				sectionItems.push({ key, text, tokens });
+				if (key === `${TURN_CONTEXT_SECTION_PREFIX}${TURN_MEMORIES_KEY}`) memoriesTokens += tokens;
+				else turnContextTokens += tokens;
+			}
 		}
 		if (rawSystemParts.length > 0) {
 			const rawTokens = estimateTextTokens(rawSystemParts.join("\n\n"));
@@ -2152,7 +2274,12 @@ export class PiDurableConversationHost {
 		const measuredUsageTokens =
 			measuredAssistant === undefined ? null : calculateContextTokens(measuredAssistant.usage);
 		const estimatedSystemTotal =
-			toolsTokens + personaTokens + policyTokens + memoriesTokens + otherSystemTokens;
+			toolsTokens +
+			personaTokens +
+			policyTokens +
+			memoriesTokens +
+			turnContextTokens +
+			otherSystemTokens;
 
 		let messagesTokens = estimatedMessagesTokens;
 		let usedTokens = estimatedSystemTotal + messagesTokens;
@@ -2193,6 +2320,7 @@ export class PiDurableConversationHost {
 				personaTokens,
 				policyTokens,
 				toolsTokens,
+				turnContextTokens,
 			},
 			compacted: view.head?.kind === CompactionEntry.kind,
 			contextWindow,
@@ -2736,15 +2864,18 @@ export class PiDurableConversationHost {
 		}
 
 		const blocks: Exclude<UserInput, string> = [];
-		const triggerContexts = this.triggerContexts(envelopes);
-		if (triggerContexts.length > 0) {
-			blocks.push({ text: triggerContexts.join("\n\n"), type: "text" });
+		const attached = this.attachedContexts(envelopes);
+		if (attached.length > 0) {
+			blocks.push({ text: attached.join("\n\n"), type: "text" });
 		}
 		let sawMedia = false;
 		for (const envelope of envelopes) {
-			let textParts: string[] = [`${this.envelopeSender(envelope)}:`];
+			let textParts: string[] = [`${envelopeHeader(envelope, this.turnFormat)}:`];
 			const flushText = () => {
-				const text = textParts.join(" ").trim();
+				const text = applyMentionLabels(
+					textParts.join(" ").trim(),
+					(envelope as RenderableEnvelope).mentions,
+				);
 				if (text.length > 0) blocks.push({ text, type: "text" });
 				textParts = [];
 			};
@@ -2791,27 +2922,29 @@ export class PiDurableConversationHost {
 		return model?.input.includes("image") === true;
 	}
 
-	private triggerContexts(envelopes: readonly StoredEnvelope[]): string[] {
+	/** Durable caller-attached context, deduplicated in arrival order. */
+	private attachedContexts(envelopes: readonly StoredEnvelope[]): string[] {
 		return [
 			...new Set(
 				envelopes
-					.map((envelope) => envelope.triggerContext)
+					.map((envelope) => envelope.attachedContext)
 					.filter((value): value is string => typeof value === "string" && value.length > 0),
 			),
 		];
 	}
 
-	private envelopeSender(envelope: StoredEnvelope): string {
-		return typeof envelope.sender === "object" &&
-			envelope.sender !== null &&
-			"displayName" in envelope.sender &&
-			typeof envelope.sender.displayName === "string"
-			? envelope.sender.displayName
-			: "Unknown";
+	/** Clock zone for durable turn lines. */
+	private get turnFormat(): TurnFormatOptions {
+		return this.options.timeZone === undefined ? {} : { timeZone: this.options.timeZone };
 	}
 
+	/**
+	 * Durable user message text: one `[HH:mm] Speaker [reply to …]: content` line per envelope,
+	 * preceded only by explicitly attached context. Trigger telemetry stays out of the
+	 * transcript; the turn-context hook delivers it ephemerally.
+	 */
 	private envelopesToText(envelopes: readonly StoredEnvelope[]): string {
-		const triggerContexts = this.triggerContexts(envelopes);
+		const attached = this.attachedContexts(envelopes);
 		const text = envelopes
 			.map((envelope) => {
 				const parts = Array.isArray(envelope.parts) ? envelope.parts : [];
@@ -2825,16 +2958,29 @@ export class PiDurableConversationHost {
 					})
 					.filter(Boolean)
 					.join(" ");
-				return `${this.envelopeSender(envelope)}: ${content}`;
+				return formatEnvelopeLine(envelope, content, this.turnFormat);
 			})
 			.join("\n");
-		return triggerContexts.length === 0 ? text : `${triggerContexts.join("\n\n")}\n\n${text}`;
+		return attached.length === 0 ? text : `${attached.join("\n\n")}\n\n${text}`;
 	}
 
-	private toStoredEnvelope(envelope: MessageEnvelope, triggerContext?: string): StoredEnvelope {
+	private toStoredEnvelope(
+		envelope: MessageEnvelope,
+		input: Pick<AppendConversationInput, "attachedContext" | "turnContext">,
+	): StoredEnvelope {
 		const stored = JSON.parse(JSON.stringify(envelope)) as StoredEnvelope;
-		if (triggerContext !== undefined && triggerContext.trim().length > 0) {
-			stored.triggerContext = triggerContext;
+		const turn = input.turnContext;
+		if (turn !== undefined) {
+			const turnContext: NonNullable<StoredEnvelope["turnContext"]> = {};
+			if (turn.classification !== undefined) turnContext.classification = turn.classification;
+			if (turn.cue !== undefined && turn.cue.trim().length > 0) turnContext.cue = turn.cue;
+			if (turn.promptHooks !== undefined && turn.promptHooks.trim().length > 0) {
+				turnContext.promptHooks = turn.promptHooks;
+			}
+			if (Object.keys(turnContext).length > 0) stored.turnContext = turnContext;
+		}
+		if (input.attachedContext !== undefined && input.attachedContext.trim().length > 0) {
+			stored.attachedContext = input.attachedContext;
 		}
 		return stored;
 	}

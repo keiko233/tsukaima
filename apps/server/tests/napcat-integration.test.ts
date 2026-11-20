@@ -413,11 +413,17 @@ describe("fake NapCat integration", () => {
 			});
 
 			const userContent = await waitFor(async () => {
-				return observedContext?.messages?.find((message) => message.role === "user")?.content;
+				return observedContext?.messages?.find(
+					(message) =>
+						message.role === "user" &&
+						!(typeof message.content === "string" && message.content.includes("<turn-context>")),
+				)?.content;
 			});
 			expect(userContent).toEqual([
-				{ text: expect.any(String), type: "text" },
-				{ text: "Test Nickname: look", type: "text" },
+				{
+					text: expect.stringMatching(/^\[\d{2}:\d{2}\] Test Nickname: look$/),
+					type: "text",
+				},
 				{
 					data: Buffer.from(jpeg).toString("base64"),
 					mimeType: "image/jpeg",
@@ -487,17 +493,21 @@ describe("fake NapCat integration", () => {
 			transports[0]?.emitOpen();
 			transports[0]?.emitMessage(groupEvent(710_001, 10_100, "Alpha Card", "opening line"));
 			await waitFor(async () => {
-				return seenUserText.find((text) => text.includes("Alpha Card: "));
+				return seenUserText.find((text) => text.includes("Alpha Card(10100): "));
 			});
 			transports[0]?.emitMessage(groupEvent(710_002, 10_200, "Beta Card", "follow up"));
 			await waitFor(async () => {
-				return seenUserText.find((text) => text.includes("Beta Card: "));
+				return seenUserText.find((text) => text.includes("Beta Card(10200): "));
 			});
 			expect(
-				seenUserText.some((text) => text.includes("Alpha Card: ") && text.includes("opening line")),
+				seenUserText.some(
+					(text) => text.includes("Alpha Card(10100): ") && text.includes("opening line"),
+				),
 			).toBe(true);
 			expect(
-				seenUserText.some((text) => text.includes("Beta Card: ") && text.includes("follow up")),
+				seenUserText.some(
+					(text) => text.includes("Beta Card(10200): ") && text.includes("follow up"),
+				),
 			).toBe(true);
 		} finally {
 			await lifecycle.stop();

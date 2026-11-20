@@ -45,6 +45,7 @@
 	--chart-persona: #4f7d63;
 	--chart-policy: #8a6415;
 	--chart-memories: #8a857c;
+	--chart-turn: #6f8a8a;
 	--chart-other: #7c7770;
 	--chart-buffer: #a39d93;
 	--chart-deferred: #b3ada3;
@@ -83,6 +84,7 @@
 	--chart-persona: #86b39b;
 	--chart-policy: #d4b36a;
 	--chart-memories: #a8a29a;
+	--chart-turn: #9dbaba;
 	--chart-other: #8e8a83;
 	--chart-buffer: #6e7378;
 	--chart-deferred: #7d8288;
@@ -126,6 +128,7 @@
 	--color-chart-persona: var(--chart-persona);
 	--color-chart-policy: var(--chart-policy);
 	--color-chart-memories: var(--chart-memories);
+	--color-chart-turn: var(--chart-turn);
 	--color-chart-other: var(--chart-other);
 	--color-chart-buffer: var(--chart-buffer);
 	--color-chart-deferred: var(--chart-deferred);
