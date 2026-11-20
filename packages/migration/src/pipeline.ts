@@ -1050,7 +1050,7 @@ export function createPipeline(target: string, options: PipelineOptions = {}): M
 								confidence: compression.confidence,
 								importance: 0.7,
 								conversationId: conversation.canonicalId,
-								createdAt: new Date(compression.sourceRange.end || now()).toISOString(),
+								createdAt: conversation.updatedAt,
 								updatedAt: new Date(now()).toISOString(),
 								createdBy: "migration",
 								visibility: "private",

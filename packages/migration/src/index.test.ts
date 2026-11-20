@@ -170,6 +170,10 @@ describe("DSH migration kit", () => {
 				visibility: "shared",
 			});
 			expect(memoryRows.filter((row) => row.status === "active")).toHaveLength(2);
+			expect(
+				memoryRows.find((row) => JSON.parse(row.evidenceJson ?? "{}").compactor === "migration")
+					?.createdAt,
+			).toBe("2026-01-01T00:01:00.000Z");
 			expect(memoryRows.every((row) => row.pinned === 0)).toBe(true);
 			expect(memoryRows.every((row) => row.extractionPromptVersion === "dsh-migration-v1")).toBe(
 				true,
