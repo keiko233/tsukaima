@@ -4,8 +4,14 @@ import { readdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import {
 	consumeProactiveMarkers,
+	conversationPolicySchema,
 	defaultConversationPolicy,
+	humanProfileSchema,
 	type ConversationPolicy,
+	type HumanProfile,
+	type ProactiveBubbleGateBridge,
+	type SocialProactiveCheckResult,
+	type SocialProfileBridge,
 } from "@tsukaima/contracts";
 import type {
 	PluginBackgroundTurnInput,
@@ -67,6 +73,7 @@ class FakeConversations implements PluginConversationsApi {
 	readonly policies = new Map<string, ConversationPolicy>();
 	readonly turns: PluginBackgroundTurnInput[] = [];
 	readonly results: PluginBackgroundTurnResult[] = [];
+	defaultPolicy: ConversationPolicy = defaultConversationPolicy;
 	defaultResult: PluginBackgroundTurnResult = {
 		delivered: true,
 		deliveryStatus: "sent",
@@ -96,7 +103,7 @@ class FakeConversations implements PluginConversationsApi {
 	}
 
 	async getPolicy(): Promise<ConversationPolicy> {
-		return defaultConversationPolicy;
+		return this.defaultPolicy;
 	}
 
 	async recentMessages(): Promise<readonly PluginConversationMessage[]> {
@@ -329,7 +336,84 @@ function loggedMessages(
 	return logs.filter((entry) => entry.level === level && entry.message.includes(needle));
 }
 
-async function setup(now = 1_000_000, globalEnabled = false) {
+class FakeSocialProfiles implements SocialProfileBridge {
+	readonly recorded: Array<{ conversationId: string; delivered: boolean; nowMs: number }> = [];
+	readonly profiles = new Map<string, HumanProfile>();
+	gateReason: string | undefined;
+
+	async getProfile(conversationId: string): Promise<HumanProfile | undefined> {
+		return this.profiles.get(conversationId);
+	}
+
+	async checkProactive(input: {
+		readonly conversationId: string;
+		readonly nowMs: number;
+	}): Promise<SocialProactiveCheckResult> {
+		const profile =
+			this.profiles.get(input.conversationId) ??
+			humanProfileSchema.parse({
+				conversationId: input.conversationId,
+				interactions: 24,
+				level: "L2",
+				otherFirst: 6,
+				proactiveAnswered: 2,
+				proactiveSent: 2,
+				warm: true,
+			});
+		const gate =
+			this.gateReason === undefined
+				? ({ allowed: true } as const)
+				: ({ allowed: false, reason: this.gateReason } as never);
+		return {
+			budget: {
+				bubbleEnabled: this.gateReason === undefined,
+				cooldownMs: 0,
+				dailyCap: 5,
+				hourlyCap: 2,
+				probability: 1,
+			},
+			gate,
+			level: profile.level,
+			profile,
+		};
+	}
+
+	async recordProactiveOutcome(input: {
+		readonly conversationId: string;
+		readonly delivered: boolean;
+		readonly nowMs: number;
+	}): Promise<HumanProfile | undefined> {
+		this.recorded.push(input);
+		return this.profiles.get(input.conversationId);
+	}
+}
+
+class FakeProactiveGate implements ProactiveBubbleGateBridge {
+	decision: "SHOULD" | "SKIP" = "SKIP";
+	calls = 0;
+
+	async decideProactiveBubble(): Promise<{
+		readonly decision: "SHOULD" | "SKIP";
+		readonly reason?: string;
+		readonly source: "gate" | "fallback";
+	}> {
+		this.calls += 1;
+		return {
+			decision: this.decision,
+			...(this.decision === "SKIP" ? { reason: "not_now" } : {}),
+			source: "gate",
+		};
+	}
+}
+
+async function setup(
+	now = 1_000_000,
+	globalEnabled = false,
+	options: {
+		readonly conversationGate?: ProactiveBubbleGateBridge;
+		readonly socialProfiles?: SocialProfileBridge;
+	} = {},
+) {
 	const clock = { now };
 	const database = new TestDatabase();
 	const conversations = new FakeConversations();
@@ -339,12 +423,16 @@ async function setup(now = 1_000_000, globalEnabled = false) {
 	const logs: LogRecord[] = [];
 	const logger = createRecordingLogger(logs);
 	const service = new ProactiveSchedulerService({
+		...(options.conversationGate === undefined
+			? {}
+			: { conversationGate: options.conversationGate }),
 		conversations,
 		database,
 		followUps,
 		logger,
 		now: () => clock.now,
 		random: () => 0,
+		...(options.socialProfiles === undefined ? {} : { socialProfiles: options.socialProfiles }),
 		tasks,
 	});
 	conversations.add("c1");
@@ -953,6 +1041,101 @@ describe("proactive delivery and markers", () => {
 				"audit",
 			]),
 		);
+	});
+});
+
+describe("Batch 6 social gates and proactive quota", () => {
+	test("proactive bubble SKIP never starts a model turn or consumes quota", async () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const social = new FakeSocialProfiles();
+		const gate = new FakeProactiveGate();
+		const { conversations, service } = await setup(now, true, {
+			conversationGate: gate,
+			socialProfiles: social,
+		});
+		conversations.defaultPolicy = conversationPolicySchema.parse({
+			...defaultConversationPolicy,
+			gate: { ...defaultConversationPolicy.gate, enabled: true },
+		});
+		await service.repository.saveState({
+			...emptyState("c1", now),
+			inboundCount: 10,
+			lastMessageAtMs: now - 30 * 60_000,
+			warmness: 0.9,
+		});
+		const tick = await service.runTick();
+		expect(gate.calls).toBe(1);
+		expect(conversations.turns).toHaveLength(0);
+		expect(social.recorded).toHaveLength(0);
+		expect(tick.delivered).toBe(0);
+		expect(tick.skipped).toBe(2);
+	});
+
+	test("a blocked social hard gate does not submit a turn or consume quota", async () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const social = new FakeSocialProfiles();
+		social.gateReason = "quiet_hours";
+		const { conversations, service } = await setup(now, true, { socialProfiles: social });
+		await service.repository.saveState({
+			...emptyState("c1", now),
+			inboundCount: 10,
+			lastMessageAtMs: now - 30 * 60_000,
+			warmness: 0.9,
+		});
+		const tick = await service.runTick();
+		expect(conversations.turns).toHaveLength(0);
+		expect(social.recorded).toHaveLength(0);
+		expect(tick.skipped).toBeGreaterThan(0);
+	});
+
+	test("marker suppression and provider errors never consume proactive quota", async () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const social = new FakeSocialProfiles();
+		const { conversations, service } = await setup(now, true, { socialProfiles: social });
+		await service.repository.saveState({
+			...emptyState("c1", now),
+			inboundCount: 10,
+			lastMessageAtMs: now - 30 * 60_000,
+			warmness: 0.9,
+		});
+		conversations.defaultResult = {
+			delivered: false,
+			deliveryStatus: "suppressed",
+			marker: "skip",
+			skippedReason: "marker_skip",
+		};
+		await service.runTick();
+		expect(social.recorded).toHaveLength(0);
+
+		conversations.error = new Error("synthetic provider failure");
+		conversations.defaultResult = {
+			delivered: true,
+			deliveryStatus: "sent",
+			text: "would consume quota",
+		};
+		await service.runTick();
+		expect(social.recorded).toHaveLength(0);
+	});
+
+	test("only a delivered turn consumes proactive quota", async () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const social = new FakeSocialProfiles();
+		const { conversations, service } = await setup(now, true, { socialProfiles: social });
+		await service.repository.saveState({
+			...emptyState("c1", now),
+			inboundCount: 10,
+			lastMessageAtMs: now - 30 * 60_000,
+			warmness: 0.9,
+		});
+		conversations.defaultResult = {
+			delivered: true,
+			deliveryStatus: "sent",
+			text: "synthetic proactive hello",
+		};
+		await service.runTick();
+		expect(social.recorded).toEqual([
+			expect.objectContaining({ conversationId: "c1", delivered: true }),
+		]);
 	});
 });
 

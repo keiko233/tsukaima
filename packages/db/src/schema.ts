@@ -1241,3 +1241,38 @@ export const chatSnapshots = sqliteTable(
 	},
 	(table) => [index("chat_snapshots_conversation_idx").on(table.conversationId, table.createdAt)],
 );
+
+/**
+ * Per-conversation social familiarity profile (`HumanProfile`), compatible with DSH
+ * `human-profiles.json`. Tracks interaction cadence, who initiates, proactive response rate,
+ * explicit refusal / consecutive unanswered cooldowns, active hour histogram, and derived
+ * familiarity level (`L0` / `L1` / `L2`).
+ */
+export const socialProfiles = sqliteTable(
+	"social_profiles",
+	{
+		activeHoursJson: text("active_hours_json").notNull().default("{}"),
+		conversationId: text("conversation_id")
+			.primaryKey()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		createdAt: text("created_at").notNull().default(now),
+		dayKey: text("day_key"),
+		interactions: integer("interactions").notNull().default(0),
+		level: text("level", { enum: ["L0", "L1", "L2"] })
+			.notNull()
+			.default("L0"),
+		otherFirst: integer("other_first").notNull().default(0),
+		proactiveAnswered: integer("proactive_answered").notNull().default(0),
+		proactiveSent: integer("proactive_sent").notNull().default(0),
+		proactiveToday: integer("proactive_today").notNull().default(0),
+		refusedAt: integer("refused_at"),
+		refusedCount: integer("refused_count").notNull().default(0),
+		selfFirst: integer("self_first").notNull().default(0),
+		silentUntil: integer("silent_until"),
+		unansweredAt: integer("unanswered_at"),
+		unansweredStreak: integer("unanswered_streak").notNull().default(0),
+		updatedAt: text("updated_at").notNull().default(now),
+		warm: integer("warm", { mode: "boolean" }).notNull().default(false),
+	},
+	(table) => [index("social_profiles_level_idx").on(table.level, table.silentUntil)],
+);

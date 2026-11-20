@@ -78,8 +78,14 @@ import {
 import { createFallbackCoreLogger, previewText, type CoreLogger } from "./logger.ts";
 import { createFakeModel, type ModelPort } from "./model.ts";
 import { busyDisposition, directFlushDecision } from "./output-pacing.ts";
-import { createChatRunExtension, type ConversationNarration } from "./run-hooks.ts";
+import {
+	createChatRunExtension,
+	type ChatRunExtensionOptions,
+	type ConversationNarration,
+} from "./run-hooks.ts";
 import type { BusyArbiter, BusyArbitrationResult } from "./busy-arbiter.ts";
+import type { ConversationGatePort } from "./gate.ts";
+import { shouldInterject, type FastLaneInterjector, type FastLaneReply } from "./interject.ts";
 import { shouldCloseActivityWindow } from "./index.ts";
 
 type StoredEnvelope = JsonObject & {
@@ -393,6 +399,17 @@ export interface DurableConversationHostOptions {
 	 * busy handling stays transport-level (`steer`/`follow-up`) and never aborts a run.
 	 */
 	readonly busyArbiter?: BusyArbiter;
+	/** Optional fail-open cheap pre-model gate (burst completion, group reply, proactive bubble). */
+	readonly conversationGate?: ConversationGatePort;
+	/**
+	 * Optional out-of-band fast-lane interjection handler for direct urgent messages arriving while
+	 * a long main turn is working. Never mutates or aborts the active main turn.
+	 */
+	readonly fastLaneInterjector?: FastLaneInterjector;
+	/** Deliver an out-of-band fast-lane interjection reply without touching main-turn expectations. */
+	readonly onFastLaneReply?: (reply: FastLaneReply) => Promise<void> | void;
+	/** Optional bounded single-retry repetition rewrite check wired into `ChatRunExtension`. */
+	readonly checkRepetitionRewrite?: ChatRunExtensionOptions["checkRepetitionRewrite"];
 	/** Convenience for tests: deterministic fake-model replies, ignored when `model` is set. */
 	readonly responses?: readonly string[];
 	/** Observe activity-window opens and closes. Errors never affect message processing. */
@@ -892,6 +909,9 @@ export class PiDurableConversationHost {
 				? {}
 				: { isDirectSendTool: options.isDirectSendTool }),
 			...(options.hasDirectSend === undefined ? {} : { hasDirectSend: options.hasDirectSend }),
+			...(options.checkRepetitionRewrite === undefined
+				? {}
+				: { checkRepetitionRewrite: options.checkRepetitionRewrite }),
 		});
 		this.extensions.set(chatRunExtension.name, chatRunExtension);
 		this.registry.install(chatRunExtension);
@@ -1018,6 +1038,29 @@ export class PiDurableConversationHost {
 				windowClosed);
 		const arbitrationEnabled = policy.sidechat.enabled && this.options.busyArbiter !== undefined;
 		let shouldSubmit = input.forceSubmit === true || burstWantsSubmit;
+		// Optional fail-open burst-completion gate: hold the window when the gate says `WAIT` and
+		// `burstMaxWaitMs` has not elapsed yet; errors/timeouts fall back to deterministic submit.
+		if (
+			shouldSubmit &&
+			input.forceSubmit !== true &&
+			!windowClosed &&
+			nextEnvelopes.length < pacing.burstMaxMessages &&
+			policy.gate.enabled &&
+			policy.gate.burstCompletion &&
+			this.options.conversationGate !== undefined &&
+			input.submittedAtMs - firstMessageAtMs < pacing.burstMaxWaitMs
+		) {
+			const gateDecision = await this.options.conversationGate.decideBurstCompletion({
+				conversationId: input.conversationId,
+				elapsedMs: Math.max(0, input.submittedAtMs - firstMessageAtMs),
+				envelopeCount: nextEnvelopes.length,
+				messages: nextEnvelopes.map((env) => this.envelopeToText(env as MessageEnvelope)),
+				policy: policy.gate,
+			});
+			if (gateDecision.decision === "WAIT") {
+				shouldSubmit = false;
+			}
+		}
 		let deferredWhileWorking = false;
 		if (
 			shouldSubmit &&
@@ -1456,9 +1499,12 @@ export class PiDurableConversationHost {
 			const envelopes = window.envelopes;
 			const now = Date.now();
 			const arbitrationEnabled = policy.sidechat.enabled && this.options.busyArbiter !== undefined;
-			const live = arbitrationEnabled
-				? await harness.snapshot(LiveDoc, numericId, BACKGROUND_CONTEXT)
-				: undefined;
+			const interjectEnabled =
+				policy.sidechat.interjectEnabled && this.options.fastLaneInterjector !== undefined;
+			const live =
+				arbitrationEnabled || interjectEnabled
+					? await harness.snapshot(LiveDoc, numericId, BACKGROUND_CONTEXT)
+					: undefined;
 			const working = live?.run !== undefined && live.run.inputs.length > 0;
 			let whenBusy: "steer" | "follow-up" =
 				busyDisposition(this.activeRunSince(conversationId), now, this.steerGraceMs) === "steer" &&
@@ -1466,6 +1512,127 @@ export class PiDurableConversationHost {
 					? "steer"
 					: "follow-up";
 			let interrupted = false;
+
+			// Optional fail-open burst-completion gate when idle and still under `burstMaxWaitMs`.
+			if (
+				!working &&
+				policy.gate.enabled &&
+				policy.gate.burstCompletion &&
+				this.options.conversationGate !== undefined &&
+				envelopes.length < policy.pacing.burstMaxMessages &&
+				now - window.openedAtMs < policy.pacing.burstMaxWaitMs
+			) {
+				const gateDecision = await this.options.conversationGate.decideBurstCompletion({
+					conversationId,
+					elapsedMs: Math.max(0, now - window.openedAtMs),
+					envelopeCount: envelopes.length,
+					messages: envelopes.map((env) => this.envelopeToText(env as MessageEnvelope)),
+					policy: policy.gate,
+				});
+				if (gateDecision.decision === "WAIT") {
+					const remainingMaxWait = Math.max(
+						1,
+						policy.pacing.burstMaxWaitMs - (now - window.openedAtMs),
+					);
+					this.scheduleActivityFlush(
+						conversationId,
+						Math.min(policy.pacing.burstSettleMs, remainingMaxWait),
+					);
+					return;
+				}
+			}
+
+			// Optional fast-lane busy interjection: answer one direct urgent message out-of-band
+			// without aborting or mutating the active main turn. Identity probes and trailing
+			// follow-ups are strictly excluded by `shouldInterject` and fall through to normal
+			// main-turn handling. A multi-envelope window stays on the main conversation so the
+			// earlier inputs are never dropped, and `maxInterruptsPerMinute` caps the lane per chat.
+			if (working && interjectEnabled && live !== undefined && envelopes.length === 1) {
+				const latest = envelopes.at(-1);
+				const latestText =
+					latest === undefined
+						? ""
+						: messagePartsText((latest as unknown as MessageEnvelope).parts);
+				const runAgeMs = now - (this.activeRunSince(conversationId) ?? now);
+				const eligibility = shouldInterject({
+					classification: latest?.turnContext?.classification,
+					policy,
+					runAgeMs,
+					text: latestText,
+				});
+				if (
+					eligibility.interject &&
+					this.options.fastLaneInterjector !== undefined &&
+					this.canInterrupt(conversationId, policy.sidechat.maxInterruptsPerMinute, now)
+				) {
+					const context = await this.arbitrationContext(conversation);
+					const senderName = (latest as unknown as MessageEnvelope | undefined)?.sender
+						?.displayName;
+					const recentLines = [
+						...(context.previousAnswer === undefined
+							? []
+							: [`assistant: ${context.previousAnswer}`]),
+						...envelopes.slice(0, -1).map((env) => this.envelopeToText(env as MessageEnvelope)),
+					].slice(-4);
+					const fastResult = await withTimeout(
+						Promise.resolve(
+							this.options.fastLaneInterjector({
+								conversationId,
+								messageText: latestText,
+								policy,
+								recentLines,
+								runAgeMs,
+								runningRequest: context.runningRequest,
+								...(senderName === undefined ? {} : { senderName }),
+							}),
+						).catch((error: unknown) => {
+							this.logger.warn("Fast-lane interjection failed; falling back to busy handling", {
+								conversationId,
+								error,
+							});
+							return undefined;
+						}),
+						Math.max(100, policy.sidechat.interjectTimeoutMs) + 250,
+						undefined,
+					);
+					const replyText = fastResult?.text?.trim();
+					if (fastResult?.handled === true && replyText !== undefined && replyText.length > 0) {
+						// Close the collecting window without touching or aborting the active main run.
+						await conversation.commit(async (tx) => {
+							const document = await tx.doc(activityWindowDoc, numericId, activityId, {
+								conversationId: numericId,
+								envelopes,
+								openedAtMs: window.openedAtMs,
+							});
+							document.envelopes = envelopes;
+							document.status = "closed";
+							document.closedAtMs = Date.now();
+						}, BACKGROUND_CONTEXT);
+						this.clearBusyHold(conversationId);
+						this.recordInterrupt(conversationId, now);
+						const interjectId = `interject:${activityId}:${latest?.id ?? String(now)}`;
+						void Promise.resolve(
+							this.options.onFastLaneReply?.({
+								conversationId,
+								interjectId,
+								text: replyText,
+							}),
+						).catch((error: unknown) => {
+							this.logger.warn("Fast-lane reply delivery failed", {
+								conversationId,
+								error,
+								interjectId,
+							});
+						});
+						this.logger.debug("Fast-lane busy interjection handled", {
+							conversationId,
+							interjectId,
+							reason: eligibility.reason,
+						});
+						return;
+					}
+				}
+			}
 
 			if (working && arbitrationEnabled && live !== undefined) {
 				const hold = this.busyHolds.get(conversationId);

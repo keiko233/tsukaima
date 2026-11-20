@@ -6,9 +6,13 @@ import {
 	ModelPolicyRouter,
 	ModelUsageLedger,
 	PiDurableConversationHost,
+	composeInterjectPrompt,
 	createFakeModel,
 	type ActivityWindowEvent,
+	type ConversationGatePort,
 	type DurableExtension,
+	type FastLaneInterjectInput,
+	type FastLaneInterjectResult,
 	type LiveRunSnapshot,
 	type ModelPort,
 	type ModelPolicy,
@@ -52,13 +56,17 @@ import {
 	wrapPluginSqlConnection,
 } from "@tsukaima/plugin-registry";
 import { runBackupDrill as executeBackupDrill, type BackupDrillReport } from "@tsukaima/migration";
-import type {
-	ChannelNotice,
-	ChannelRequest,
-	MessageEnvelope,
-	MessagePart,
-	RestartMode,
-	RestartStatus,
+import {
+	CONVERSATION_GATE_BINDING,
+	SOCIAL_PROFILE_BINDING,
+	messagePartsText,
+	type ChannelNotice,
+	type ChannelRequest,
+	type MessageEnvelope,
+	type MessagePart,
+	type ProactiveBubbleGateBridge,
+	type RestartMode,
+	type RestartStatus,
 } from "@tsukaima/contracts";
 import { loadConfig, type TsukaimaConfig } from "./config.ts";
 import {
@@ -80,6 +88,7 @@ import {
 	type BackupDrillRunResult,
 } from "./services/backup-drill-scheduler.ts";
 import { ChannelRegistry } from "./services/channel-registry.ts";
+import { ConversationGateService } from "./services/conversation-gate.ts";
 import { ConversationPacingTracker } from "./services/conversation-pacing.ts";
 import { ConversationPolicyService } from "./services/conversation-policy.ts";
 import { ConversationRouter } from "./services/conversation-router.ts";
@@ -90,6 +99,7 @@ import {
 	MemoryService,
 	type MemoryEmbeddingOutput,
 } from "./services/memory-service.ts";
+import { SocialProfileService } from "./services/social-profile.ts";
 import { InboundMediaResolver } from "./services/inbound-media.ts";
 import { MediaService } from "./services/media-service.ts";
 import { HookBus } from "./services/hook-bus.ts";
@@ -106,7 +116,7 @@ import { readGitIdentity } from "./services/git-identity.ts";
 import { GitHubCliService, githubHostFromApiUrl } from "./services/github-cli-service.ts";
 import { GitHubService } from "./services/github-service.ts";
 import { ReplyExpectationStore } from "./services/reply-expectations.ts";
-import { SidechatService } from "./services/sidechat.ts";
+import { SidechatService, resolveSidechatTarget } from "./services/sidechat.ts";
 import { LiveRunCache } from "./services/live-run-cache.ts";
 import { PromptHookService } from "./services/prompt-hooks.ts";
 import { createPromptTools, PROMPT_TOOL_NAMES } from "./services/prompt-tools.ts";
@@ -161,6 +171,8 @@ export interface LifecycleOptions {
 	readonly logger?: Logger;
 	/** Test or embedding override for the model catalog and provider. */
 	readonly model?: ModelPort | undefined;
+	/** Optional pre-model conversation gate override (tests or custom classifier endpoints). */
+	readonly conversationGate?: ConversationGatePort | undefined;
 	/** Opaque host bindings consumed by built-in plugins in tests or embedders. */
 	readonly pluginBindings?: ReadonlyMap<string, unknown>;
 	/** Overrides the built-in plugin set (tests and future plugin sources). */
@@ -205,6 +217,7 @@ export class TsukaimaLifecycle {
 	/** One lock shared by inbound turns, outbound pacing, tasks, and background turns. */
 	readonly executionLock: ConversationExecutionLock;
 	readonly memory: MemoryService;
+	readonly socialProfiles: SocialProfileService;
 	/** Admin chat snapshot checkpoint/restore; created after the conversation host exists. */
 	private chatSnapshotService: ChatSnapshotService | undefined;
 	private readonly plugins: readonly TsukaimaPlugin[];
@@ -246,6 +259,8 @@ export class TsukaimaLifecycle {
 	modelRouter: ModelPolicyRouter | undefined;
 	private memoryModel: ModelPort | undefined;
 	private sidechatService: SidechatService | undefined;
+	private conversationGateService: ConversationGatePort | undefined;
+	private readonly conversationGateOverride: ConversationGatePort | undefined;
 	private readonly codingStore = new DomainCodingStore(() => this.domainDatabase);
 	processedMessageCount = 0;
 	providerRestartRequired = false;
@@ -294,6 +309,7 @@ export class TsukaimaLifecycle {
 		this.liveRuns = new LiveRunCache(this.cache);
 		this.backupDrillRoot = options?.backupDrill?.root ?? config.backupDrillRoot;
 		this.modelOverride = options?.model;
+		this.conversationGateOverride = options?.conversationGate;
 		this.backupDrills = new BackupDrillScheduler({
 			intervalMs: options?.backupDrill?.intervalMs ?? config.backupDrillIntervalMs ?? 0,
 			logger: this.runtimeLog,
@@ -363,6 +379,7 @@ export class TsukaimaLifecycle {
 			applyModelToolPolicy: async (durableConversationId, policy) =>
 				this.applySessionToolPolicy(durableConversationId, policy),
 			audit: (entry) => this.writeAudit(entry),
+			conversationGate: () => this.conversationGateService,
 			database: () => this.domainDatabase,
 			host: () => this.conversationHost,
 			ingestMedia: (part, channelId) => this.ingestInboundMedia(part, channelId),
@@ -454,6 +471,11 @@ export class TsukaimaLifecycle {
 			tasks: this.pluginTasks,
 		});
 		this.memory.registerTaskHandlers(this.pluginTasks);
+		this.socialProfiles = new SocialProfileService({
+			database: () => this.domainDatabase,
+			logger: this.runtimeLog,
+			policyService: this.conversationPolicy,
+		});
 		this.chatSnapshotService = new ChatSnapshotService(this);
 		this.replyExpectations = new ReplyExpectationStore({
 			database: () => this.domainDatabase,
@@ -461,13 +483,43 @@ export class TsukaimaLifecycle {
 		this.followUpIntents = new FollowUpIntentStore({
 			database: () => this.domainDatabase,
 		});
+		this.hooks.on("message.received", (payload) => {
+			if (typeof payload !== "object" || payload === null) return;
+			const record = payload as {
+				envelope?: { parts?: readonly MessagePart[] };
+				sessionId?: unknown;
+			};
+			if (typeof record.sessionId !== "string") return;
+			const text =
+				Array.isArray(record.envelope?.parts) && record.envelope.parts.length > 0
+					? messagePartsText(record.envelope.parts)
+					: undefined;
+			void this.socialProfiles
+				.recordInbound({
+					conversationId: record.sessionId,
+					...(text === undefined ? {} : { text }),
+				})
+				.catch((error: unknown) => {
+					this.runtimeLog.debug("social profile inbound update skipped", {
+						error: error instanceof Error ? error.message : String(error),
+						sessionId: record.sessionId,
+					});
+				});
+		});
 		// Background memory work is one idle-debounced consolidation job per conversation. Both
 		// lifecycle events only note activity (no model call); the debounce coalesces them.
 		this.hooks.on("after.reply", (payload) => {
 			if (typeof payload !== "object" || payload === null) return;
-			const sessionId = (payload as { sessionId?: unknown }).sessionId;
-			if (typeof sessionId !== "string") return;
-			void this.memory.noteConversationActivity({ conversationId: sessionId });
+			const record = payload as { deliveryStatus?: unknown; sessionId?: unknown };
+			if (typeof record.sessionId !== "string") return;
+			void this.memory.noteConversationActivity({ conversationId: record.sessionId });
+			void this.socialProfiles
+				.recordOutbound({
+					conversationId: record.sessionId,
+					delivered: record.deliveryStatus === "sent",
+					proactive: false,
+				})
+				.catch(() => undefined);
 		});
 		this.replyDispatcher = new ReplyDispatcher({
 			audit: (entry) => this.writeAudit(entry),
@@ -664,6 +716,14 @@ export class TsukaimaLifecycle {
 		});
 		const pluginBindings = new Map(options?.pluginBindings ?? []);
 		pluginBindings.set(MEMORY_SERVICE_BINDING, this.memory);
+		pluginBindings.set(SOCIAL_PROFILE_BINDING, this.socialProfiles);
+		const proactiveGateBridge: ProactiveBubbleGateBridge = {
+			decideProactiveBubble: async (input) =>
+				this.conversationGateService === undefined
+					? { decision: "SHOULD", reason: "unconfigured", source: "fallback" }
+					: this.conversationGateService.decideProactiveBubble(input),
+		};
+		pluginBindings.set(CONVERSATION_GATE_BINDING, proactiveGateBridge);
 		pluginBindings.set(
 			ONEBOT_MENTION_NAME_BINDING,
 			createMentionIdentityStore(() => this.conversationRouter),
@@ -759,6 +819,83 @@ export class TsukaimaLifecycle {
 		const model = this.memoryModel;
 		if (model === undefined || model.providerId === "fake") return undefined;
 		return { modelId: model.modelId, providerId: model.providerId };
+	}
+
+	/**
+	 * Out-of-band fast-lane interjection for urgent direct messages while a main turn is busy.
+	 * Uses a one-line persona + familiarity anchor and minimal recent context; never mutates the
+	 * active durable run. Returns `undefined` when no model is available so normal busy handling
+	 * takes over.
+	 */
+	private async runFastLaneInterject(
+		input: FastLaneInterjectInput,
+	): Promise<FastLaneInterjectResult | undefined> {
+		const active = this.activeModelTarget();
+		const eligible = (
+			await this.pluginHost.listModels({ capability: MODEL_CAPABILITIES.sidechat }).catch(() => [])
+		).map((candidate) => ({ modelId: candidate.id, providerId: candidate.providerId }));
+		const configured =
+			input.policy.sidechat.interjectModel?.trim() || input.policy.sidechat.model?.trim();
+		const fallback =
+			configured !== undefined && configured.length > 0
+				? undefined
+				: this.domainDatabase === undefined
+					? undefined
+					: (await readRuntimeSettings(this.domainDatabase)).sidechatModelId;
+		const requested =
+			configured !== undefined && configured.length > 0 ? configured : fallback?.trim();
+		const target =
+			requested === undefined || requested.length === 0
+				? (active ?? eligible[0])
+				: (resolveSidechatTarget(eligible, requested, active) ?? active);
+		if (target === undefined) return undefined;
+
+		const sessionId = this.sessionIdForDurableConversation(input.conversationId);
+		const [personaAnchor, socialProfile] = await Promise.all([
+			this.contextProvider.personaAnchor(input.conversationId),
+			sessionId === undefined
+				? Promise.resolve(undefined)
+				: this.socialProfiles.getProfile(sessionId).catch(() => undefined),
+		]);
+		const prompt = composeInterjectPrompt({
+			messageText: input.messageText,
+			personaAnchor,
+			recentLines: input.recentLines,
+			...(socialProfile === undefined ? {} : { relationLevel: socialProfile.level }),
+			runningTaskSummary: input.runningRequest,
+			...(input.senderName === undefined ? {} : { senderName: input.senderName }),
+		});
+		const controller = new AbortController();
+		const timer = setTimeout(
+			() => controller.abort(),
+			Math.max(100, input.policy.sidechat.interjectTimeoutMs),
+		);
+		timer.unref?.();
+		try {
+			const result = await this.pluginHost.completeModel(
+				{
+					maxTokens: input.policy.sidechat.interjectMaxTokens,
+					messages: [
+						{ content: prompt.system, role: "system" },
+						{ content: prompt.user, role: "user" },
+					],
+					modelId: target.modelId,
+					providerId: target.providerId,
+					signal: controller.signal,
+				},
+				MODEL_CAPABILITIES.sidechat,
+			);
+			const text = result.text.trim();
+			return text.length === 0 ? { handled: false, reason: "empty" } : { handled: true, text };
+		} catch (error) {
+			this.runtimeLog.debug("fast-lane interjection failed; falling back to busy handling", {
+				conversationId: input.conversationId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return undefined;
+		} finally {
+			clearTimeout(timer);
+		}
 	}
 
 	get state(): LifecycleState {
@@ -1127,6 +1264,35 @@ export class TsukaimaLifecycle {
 		const model = await this.createModelPort(settings);
 		this.memoryModel = model;
 		this.activeProviderId = model.providerId;
+		const sidechatModels = {
+			active: () => this.activeModelTarget(),
+			eligible: async () =>
+				(await this.pluginHost.listModels({ capability: MODEL_CAPABILITIES.sidechat })).map(
+					(candidate) => ({ modelId: candidate.id, providerId: candidate.providerId }),
+				),
+			complete: async (
+				target: { readonly modelId: string; readonly providerId: string },
+				prompt: string,
+				options: {
+					readonly maxTokens: number;
+					readonly signal: AbortSignal;
+					readonly temperature: number;
+				},
+			) => {
+				const result = await this.pluginHost.completeModel(
+					{
+						maxTokens: options.maxTokens,
+						messages: [{ content: prompt, role: "user" }],
+						modelId: target.modelId,
+						providerId: target.providerId,
+						signal: options.signal,
+						temperature: options.temperature,
+					},
+					MODEL_CAPABILITIES.sidechat,
+				);
+				return result.text;
+			},
+		};
 		this.sidechatService = new SidechatService({
 			prompt: () => this.prompts.render("sidechat"),
 			defaultModelId: async () =>
@@ -1134,28 +1300,19 @@ export class TsukaimaLifecycle {
 					? undefined
 					: (await readRuntimeSettings(this.domainDatabase)).sidechatModelId,
 			logger: this.logger,
-			models: {
-				active: () => this.activeModelTarget(),
-				eligible: async () =>
-					(await this.pluginHost.listModels({ capability: MODEL_CAPABILITIES.sidechat })).map(
-						(candidate) => ({ modelId: candidate.id, providerId: candidate.providerId }),
-					),
-				complete: async (target, prompt, options) => {
-					const result = await this.pluginHost.completeModel(
-						{
-							maxTokens: options.maxTokens,
-							messages: [{ content: prompt, role: "user" }],
-							modelId: target.modelId,
-							providerId: target.providerId,
-							signal: options.signal,
-							temperature: options.temperature,
-						},
-						MODEL_CAPABILITIES.sidechat,
-					);
-					return result.text;
-				},
-			},
+			models: sidechatModels,
 		});
+		this.conversationGateService =
+			this.conversationGateOverride ??
+			new ConversationGateService({
+				defaultModelId: async () => {
+					if (this.domainDatabase === undefined) return undefined;
+					const current = await readRuntimeSettings(this.domainDatabase);
+					return current.gateModelId ?? current.sidechatModelId;
+				},
+				logger: this.logger,
+				models: sidechatModels,
+			});
 		if (settings.sidechatModelId === undefined) {
 			this.runtimeLog.info("sidechat model is not configured; using the active model", {
 				modelId: model.modelId,
@@ -1163,11 +1320,20 @@ export class TsukaimaLifecycle {
 		}
 		this.conversationHost = new PiDurableConversationHost({
 			busyArbiter: async (input) => this.sidechatService?.decide(input),
+			checkRepetitionRewrite: (conversationId, replyText) =>
+				this.contextProvider.checkRepetitionRewrite(conversationId, replyText),
 			contextProvider: this.contextProvider,
+			...(this.conversationGateService === undefined
+				? {}
+				: { conversationGate: this.conversationGateService }),
 			executionLock: this.executionLock,
+			fastLaneInterjector: (input) => this.runFastLaneInterject(input),
 			logger: this.logger.child("tsukaima::core::host"),
 			model,
 			onActivityEvent: (event) => this.forwardActivityEvent(event),
+			onFastLaneReply: async (reply) => {
+				await this.replyDispatcher.handleFastLaneReply(reply);
+			},
 			onAnswer: async (answer) => {
 				const sessionId = this.sessionIdForDurableConversation(answer.conversationId);
 				if (sessionId !== undefined) {

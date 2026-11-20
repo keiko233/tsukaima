@@ -17,6 +17,7 @@ import {
 	type ConversationPolicy,
 } from "@tsukaima/contracts";
 import { LENGTH_CONTINUATION_PROMPT } from "./context.ts";
+import { REPETITION_REWRITE_PROMPT } from "./humanize.ts";
 import type { CoreLogger } from "./logger.ts";
 import { extractLurkMarker } from "./trigger.ts";
 
@@ -64,6 +65,14 @@ export interface ChatRunExtensionOptions {
 	 * later tool round must not narrate a preamble after the tool already spoke.
 	 */
 	readonly hasDirectSend?: (conversationId: string) => boolean;
+	/**
+	 * Optional bounded single-retry check when `policy.humanization.repetitionRewriteEnabled` is
+	 * enabled. Returning `{ rewrite: true }` triggers at most one rewrite continuation per run.
+	 */
+	readonly checkRepetitionRewrite?: (
+		conversationId: string,
+		replyText: string,
+	) => Promise<{ readonly matched: readonly string[]; readonly rewrite: boolean } | undefined>;
 	readonly logger?: CoreLogger;
 }
 
@@ -206,6 +215,22 @@ async function continuationCount(
 	).length;
 }
 
+async function repetitionRewriteCount(
+	api: HookApi,
+	context: Context,
+	runFirst: EntryId | undefined,
+): Promise<number> {
+	const page = await runEntries(api, context, runFirst);
+	return page.items.filter((entry) =>
+		entry.model?.some(
+			(message) =>
+				message.role === "user" &&
+				typeof message.content === "string" &&
+				message.content.trim() === REPETITION_REWRITE_PROMPT,
+		),
+	).length;
+}
+
 /**
  * Chat-run behavior that needs pi-durable generation hooks:
  *
@@ -267,7 +292,35 @@ export function createChatRunExtension<Tool extends ToolRegistration = ToolRegis
 					}
 				},
 				async onYield(answer, api, context) {
-					if (answer.stopReason !== "length") return undefined;
+					if (answer.stopReason !== "length") {
+						// Bounded single-retry rewrite guard for severe catchphrase repetition.
+						if (options.checkRepetitionRewrite === undefined) return undefined;
+						try {
+							const conversationId = String(api.conversationId);
+							const policy = await options.readPolicy(conversationId);
+							if (!policy.humanization.repetitionRewriteEnabled) return undefined;
+							const runFirst = await liveRunFirst(api, context);
+							if ((await runKind(api, context, runFirst)) !== "chat") return undefined;
+							if ((await repetitionRewriteCount(api, context, runFirst)) >= 1) return undefined;
+							const text = extractLurkMarker(assistantMessageText(answer)).text;
+							if (text.length === 0) return undefined;
+							const check = await options.checkRepetitionRewrite(conversationId, text);
+							if (check?.rewrite === true) {
+								logger?.debug("Triggering bounded repetition rewrite", {
+									conversationId,
+									matched: check.matched,
+								});
+								return { continue: REPETITION_REWRITE_PROMPT };
+							}
+						} catch (error) {
+							if (context.abortSignal?.aborted) throw error;
+							logger?.warn("Repetition rewrite check failed", {
+								conversationId: String(api.conversationId),
+								error,
+							});
+						}
+						return undefined;
+					}
 					try {
 						const conversationId = String(api.conversationId);
 						const policy = await options.readPolicy(conversationId);

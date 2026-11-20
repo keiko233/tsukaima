@@ -13,6 +13,7 @@ export type { RuntimeSettings, RuntimeSettingsPatch };
 export interface PublicRuntimeSettings {
 	readonly chatModel?: RuntimeSettings["chatModel"];
 	readonly chatThinking?: RuntimeSettings["chatThinking"];
+	readonly gateModelId?: string;
 	readonly logLevel: RuntimeSettings["logLevel"];
 	readonly memoryModelId?: string;
 	readonly modelProviderId?: string;
@@ -33,6 +34,7 @@ export const DEFAULT_LOG_LEVEL = "info" as const;
 type SettingsValue = {
 	chatModel?: RuntimeSettings["chatModel"];
 	chatThinking?: RuntimeSettings["chatThinking"];
+	gateModelId?: string;
 	logLevel: RuntimeSettings["logLevel"];
 	memoryModelId?: string;
 	modelProviderId?: string;
@@ -45,6 +47,7 @@ function normalize(input: RuntimeSettings): SettingsValue {
 	return {
 		...(input.chatModel === undefined ? {} : { chatModel: input.chatModel }),
 		...(input.chatThinking === undefined ? {} : { chatThinking: input.chatThinking }),
+		...(input.gateModelId === undefined ? {} : { gateModelId: input.gateModelId }),
 		logLevel: input.logLevel,
 		...(input.memoryModelId === undefined ? {} : { memoryModelId: input.memoryModelId }),
 		...(input.modelProviderId === undefined ? {} : { modelProviderId: input.modelProviderId }),
@@ -99,6 +102,7 @@ export function publicRuntimeSettings(settings: RuntimeSettings): PublicRuntimeS
 	return {
 		...(settings.chatModel === undefined ? {} : { chatModel: settings.chatModel }),
 		...(settings.chatThinking === undefined ? {} : { chatThinking: settings.chatThinking }),
+		...(settings.gateModelId === undefined ? {} : { gateModelId: settings.gateModelId }),
 		logLevel: settings.logLevel,
 		...(settings.memoryModelId === undefined ? {} : { memoryModelId: settings.memoryModelId }),
 		...(settings.modelProviderId === undefined
@@ -125,6 +129,11 @@ export async function patchRuntimeSettings(
 			? undefined
 			: (patch.modelProviderId ?? current.modelProviderId);
 	if (modelProviderId !== undefined) next.modelProviderId = modelProviderId;
+	const gateModelId =
+		patch.gateModelId === null || patch.gateModelId === ""
+			? undefined
+			: (patch.gateModelId ?? current.gateModelId);
+	if (gateModelId !== undefined) next.gateModelId = gateModelId;
 	const sidechatModelId =
 		patch.sidechatModelId === null || patch.sidechatModelId === ""
 			? undefined

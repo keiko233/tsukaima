@@ -431,6 +431,40 @@ async function waitFor<T>(read: () => T | undefined, timeoutMs = 10_000): Promis
 	throw new Error("Timed out waiting for condition");
 }
 
+test("injects a dynamic style avoid-list and rhythm nudge into ephemeral turn context", async () => {
+	const { database } = await openFixture();
+	const now = Date.UTC(2026, 0, 1, 12, 0);
+	await database.insert(conversations).values({
+		durableConversationId: "durable-style",
+		id: "session-style",
+		kind: "private",
+		title: "Style chat",
+	});
+	for (let index = 0; index < 4; index += 1) {
+		await database.insert(messages).values({
+			contentText: `说实话\n第${index + 1}句`,
+			conversationId: "session-style",
+			direction: "outbound",
+			id: `style-reply-${index}`,
+			kind: "onebot-v11",
+			occurredAt: new Date(now - (4 - index) * 60_000).toISOString(),
+		});
+	}
+	const context = provider(database);
+	const sections = await context.renderTurnContext({
+		conversationId: "durable-style",
+		inputs: [],
+		nowMs: now,
+		triggers: [],
+	});
+	const style = sections.find((section) => section.key === "style-avoid");
+	const rhythm = sections.find((section) => section.key === "rhythm-nudge");
+	expect(style?.text).toContain("Style note");
+	expect(style?.text).toContain("说实话");
+	expect(rhythm?.text).toContain("Rhythm note");
+	expect(rhythm?.text).toContain("2 messages");
+});
+
 describe("context injection end to end", () => {
 	test("puts configured system, persona, and memory text into the live model request", async () => {
 		const { database, directory } = await openFixture();

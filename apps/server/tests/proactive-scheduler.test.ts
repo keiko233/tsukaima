@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,9 +12,13 @@ import {
 	type SendResult,
 	pluginManifestSchema,
 } from "@tsukaima/sdk";
-import { createFakeModel } from "@tsukaima/core";
-import { messagePartsText, type MessagePart } from "@tsukaima/contracts";
-import { auditLog, chatObjects, conversations } from "@tsukaima/db";
+import { type ConversationGatePort, createFakeModel, type ModelPort } from "@tsukaima/core";
+import {
+	messagePartsText,
+	type MessagePart,
+	type SocialFamiliarityLevel,
+} from "@tsukaima/contracts";
+import { auditLog, chatObjects, conversations, socialProfiles } from "@tsukaima/db";
 import { builtinPlugins } from "../src/plugins/builtin.ts";
 import { loadConfig } from "../src/config.ts";
 import { TsukaimaLifecycle } from "../src/lifecycle.ts";
@@ -77,11 +82,25 @@ const fakeChannelPlugin: TsukaimaPlugin = {
 	},
 };
 
-function createLifecycle(directory: string, responses: string[]): TsukaimaLifecycle {
+function createLifecycle(
+	directory: string,
+	responses: string[],
+	options: {
+		readonly conversationGate?: ConversationGatePort;
+		readonly onModelMessage?: () => void;
+	} = {},
+): TsukaimaLifecycle {
+	const model: ModelPort = createFakeModel({
+		...(options.onModelMessage === undefined ? {} : { onMessage: options.onModelMessage }),
+		responses,
+	});
 	return new TsukaimaLifecycle(
 		loadConfig({ TSUKAIMA_DATA_DIR: directory, TSUKAIMA_PORT: "7420" }),
 		{
-			model: createFakeModel({ responses }),
+			...(options.conversationGate === undefined
+				? {}
+				: { conversationGate: options.conversationGate }),
+			model,
 			plugins: [...builtinPlugins, fakeChannelPlugin],
 		},
 	);
@@ -149,11 +168,47 @@ async function seedActiveState(
 	);
 }
 
+async function seedSocialProfile(
+	lifecycle: TsukaimaLifecycle,
+	conversationId: string,
+	level: SocialFamiliarityLevel = "L2",
+): Promise<void> {
+	const database = lifecycle.domainDatabase;
+	if (database === undefined) throw new Error("database unavailable");
+	await database
+		.insert(socialProfiles)
+		.values({
+			conversationId,
+			interactions: level === "L2" ? 25 : 7,
+			level,
+			otherFirst: level === "L2" ? 6 : 2,
+			proactiveAnswered: 0,
+			proactiveSent: 0,
+			warm: true,
+		})
+		.onConflictDoUpdate({
+			set: { level, warm: true },
+			target: socialProfiles.conversationId,
+		});
+}
+
 async function enablePolicy(lifecycle: TsukaimaLifecycle): Promise<void> {
 	await lifecycle.pluginHost.invokeRpc("proactive-scheduler.policies.save", {
 		patch: { enabled: true, probability: 1 },
 		scope: "global",
 	});
+}
+
+function skipProactiveGate(): ConversationGatePort {
+	return {
+		decideBurstCompletion: async () => ({ decision: "SEND", source: "fallback" }),
+		decideProactiveBubble: async () => ({
+			decision: "SKIP",
+			reason: "not_now",
+			source: "gate",
+		}),
+		decideUndirectedGroupReply: async () => ({ decision: "REPLY", source: "fallback" }),
+	};
 }
 
 function sentTexts(): string[] {
@@ -215,11 +270,14 @@ describe("proactive-scheduler host integration", () => {
 		directories.push(directory);
 		const responses: string[] = [];
 		const lifecycle = createLifecycle(directory, responses);
+		// Level-derived budget caps the admin probability; a fixed random value keeps the tick deterministic.
+		const randomSpy = spyOn(Math, "random").mockReturnValue(0);
 		await lifecycle.start();
 		try {
 			await enablePolicy(lifecycle);
 			const delivered = await createConversation(lifecycle, "delivered");
 			await seedActiveState(lifecycle, delivered.conversationId);
+			await seedSocialProfile(lifecycle, delivered.conversationId, "L2");
 			responses.push("hello proactive");
 			const tick = (await lifecycle.pluginHost.invokeRpc(
 				"proactive-scheduler.tick",
@@ -232,6 +290,7 @@ describe("proactive-scheduler host integration", () => {
 
 			const skipped = await createConversation(lifecycle, "skipped");
 			await seedActiveState(lifecycle, skipped.conversationId);
+			await seedSocialProfile(lifecycle, skipped.conversationId, "L2");
 			responses.push("TSUKAIMA_SKIP");
 			await lifecycle.pluginHost.invokeRpc("proactive-scheduler.tick", undefined);
 			expect(sentTexts()).not.toContain("TSUKAIMA_SKIP");
@@ -245,6 +304,7 @@ describe("proactive-scheduler host integration", () => {
 
 			const unavailable = await createConversation(lifecycle, "unavailable");
 			await seedActiveState(lifecycle, unavailable.conversationId);
+			await seedSocialProfile(lifecycle, unavailable.conversationId, "L2");
 			if (adapter !== undefined) adapter.connected = false;
 			const before = adapter?.sent.length ?? 0;
 			await lifecycle.pluginHost.invokeRpc("proactive-scheduler.tick", undefined);
@@ -260,6 +320,91 @@ describe("proactive-scheduler host integration", () => {
 				}),
 			);
 		} finally {
+			randomSpy.mockRestore();
+			await lifecycle.stop();
+		}
+	});
+
+	test("proactive bubble SKIP and suppressed markers never consume social quota", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-proactive-"));
+		directories.push(directory);
+		const responses: string[] = [];
+		let modelCalls = 0;
+		const lifecycle = createLifecycle(directory, responses, {
+			conversationGate: skipProactiveGate(),
+			onModelMessage: () => {
+				modelCalls += 1;
+			},
+		});
+		const randomSpy = spyOn(Math, "random").mockReturnValue(0);
+		await lifecycle.start();
+		adapter?.sent.splice(0);
+		try {
+			await enablePolicy(lifecycle);
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("database unavailable");
+
+			const gated = await createConversation(lifecycle, "gated");
+			await seedActiveState(lifecycle, gated.conversationId);
+			await seedSocialProfile(lifecycle, gated.conversationId, "L2");
+			await lifecycle.conversationPolicy.update({
+				conversationId: gated.conversationId,
+				policy: { gate: { enabled: true } },
+				scope: "conversation",
+			});
+			const gatedTick = (await lifecycle.pluginHost.invokeRpc(
+				"proactive-scheduler.tick",
+				undefined,
+			)) as { delivered: number; skipped: number };
+			expect(gatedTick.delivered).toBe(0);
+			expect(modelCalls).toBe(0);
+			expect(sentTexts()).toHaveLength(0);
+			const decisions = (await lifecycle.pluginHost.invokeRpc(
+				"proactive-scheduler.decisions.list",
+				{ conversationId: gated.conversationId },
+			)) as {
+				decisions: { gateResult: string; skippedReason: string | null }[];
+			};
+			expect(decisions.decisions[0]).toEqual(
+				expect.objectContaining({ gateResult: "skipped", skippedReason: "not_now" }),
+			);
+
+			const suppressed = await createConversation(lifecycle, "suppressed");
+			await seedActiveState(lifecycle, suppressed.conversationId);
+			await seedSocialProfile(lifecycle, suppressed.conversationId, "L2");
+			responses.push("TSUKAIMA_SKIP");
+			await lifecycle.pluginHost.invokeRpc("proactive-scheduler.tick", undefined);
+			expect(modelCalls).toBe(1);
+			expect(sentTexts()).toHaveLength(0);
+
+			const delivered = await createConversation(lifecycle, "delivered-batch-6");
+			await seedActiveState(lifecycle, delivered.conversationId);
+			await seedSocialProfile(lifecycle, delivered.conversationId, "L2");
+			responses.push("synthetic proactive greeting");
+			await lifecycle.pluginHost.invokeRpc("proactive-scheduler.tick", undefined);
+			expect(modelCalls).toBe(2);
+			expect(sentTexts()).toContain("synthetic proactive greeting");
+
+			const profiles = await database
+				.select()
+				.from(socialProfiles)
+				.where(eq(socialProfiles.conversationId, delivered.conversationId));
+			expect(profiles[0]?.proactiveToday).toBe(1);
+			expect(profiles[0]?.proactiveSent).toBe(1);
+			const untouched = await database
+				.select()
+				.from(socialProfiles)
+				.where(eq(socialProfiles.conversationId, gated.conversationId));
+			expect(untouched[0]?.proactiveToday).toBe(0);
+			expect(untouched[0]?.proactiveSent).toBe(0);
+			const suppressedProfile = await database
+				.select()
+				.from(socialProfiles)
+				.where(eq(socialProfiles.conversationId, suppressed.conversationId));
+			expect(suppressedProfile[0]?.proactiveToday).toBe(0);
+			expect(suppressedProfile[0]?.proactiveSent).toBe(0);
+		} finally {
+			randomSpy.mockRestore();
 			await lifecycle.stop();
 		}
 	});

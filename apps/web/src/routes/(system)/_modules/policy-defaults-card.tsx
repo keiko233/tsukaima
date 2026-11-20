@@ -11,9 +11,12 @@ import { m } from "@/paraglide/messages";
 import {
 	PolicyCompactionFields,
 	PolicyCrossSessionFields,
+	PolicyGateFields,
+	PolicyHumanizationFields,
 	PolicyMemoryConsolidationFields,
 	PolicyPacingFields,
 	PolicySidechatFields,
+	PolicySocialFields,
 } from "../../_modules/policy/conversation-policy-fields";
 import { InlineError } from "../../_modules/shell/primitives";
 import { Modal, ModalActions } from "../../_modules/ui/modal";
@@ -132,6 +135,21 @@ export function PolicyDefaultsCard() {
 			...current,
 			memoryConsolidation: structuredClone(defaultConversationPolicy.memoryConsolidation),
 		}));
+	const resetSocial = () =>
+		change((current) => ({
+			...current,
+			social: structuredClone(defaultConversationPolicy.social),
+		}));
+	const resetHumanization = () =>
+		change((current) => ({
+			...current,
+			humanization: structuredClone(defaultConversationPolicy.humanization),
+		}));
+	const resetGate = () =>
+		change((current) => ({
+			...current,
+			gate: structuredClone(defaultConversationPolicy.gate),
+		}));
 
 	const save = () => {
 		if (draft === undefined) return;
@@ -189,6 +207,24 @@ export function PolicyDefaultsCard() {
 								title={m.policy_section_memory_consolidation()}
 							/>
 							<PolicyMemoryConsolidationFields draft={draft} onChange={change} />
+						</section>
+
+						<section className="space-y-2.5 border-t border-border/60 pt-3">
+							<SectionHeader onReset={resetSocial} title={m.policy_section_social()} />
+							<PolicySocialFields draft={draft} onChange={change} />
+						</section>
+
+						<section className="space-y-2.5 border-t border-border/60 pt-3">
+							<SectionHeader
+								onReset={resetHumanization}
+								title={m.policy_section_humanization()}
+							/>
+							<PolicyHumanizationFields draft={draft} onChange={change} />
+						</section>
+
+						<section className="space-y-2.5 border-t border-border/60 pt-3">
+							<SectionHeader onReset={resetGate} title={m.policy_section_gate()} />
+							<PolicyGateFields draft={draft} onChange={change} />
 						</section>
 
 						<div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3">

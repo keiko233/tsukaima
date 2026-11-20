@@ -13,6 +13,7 @@ import {
 	memories,
 	memoryConsolidationState,
 	messages,
+	socialProfiles,
 } from "@tsukaima/db";
 import type { TsukaimaLifecycle } from "../lifecycle.ts";
 
@@ -507,6 +508,17 @@ export class ChatSnapshotService {
 			// watermark past it would hide restored messages from the next background pass.
 			tx.delete(memoryConsolidationState)
 				.where(eq(memoryConsolidationState.conversationId, record.conversationId))
+				.run();
+			// Clear transient proactive silence/streak state from the discarded branch while keeping
+			// learned social familiarity profile intact.
+			tx.update(socialProfiles)
+				.set({
+					silentUntil: null,
+					unansweredAt: null,
+					unansweredStreak: 0,
+					updatedAt: now,
+				})
+				.where(eq(socialProfiles.conversationId, record.conversationId))
 				.run();
 			tx.update(chatSnapshots)
 				.set({ appliedAt: now, status: "applied" })

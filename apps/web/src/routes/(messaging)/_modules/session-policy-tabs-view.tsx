@@ -12,10 +12,13 @@ import {
 	Field,
 	PolicyCompactionFields,
 	PolicyCrossSessionFields,
+	PolicyGateFields,
 	PolicyGenerationFields,
+	PolicyHumanizationFields,
 	PolicyMemoryConsolidationFields,
 	PolicyPacingFields,
 	PolicySidechatFields,
+	PolicySocialFields,
 	Toggle,
 	fieldClass,
 	textareaClass,
@@ -392,6 +395,25 @@ export function PolicyPacingTabView({
 							{m.policy_section_memory_consolidation()}
 						</h3>
 						<PolicyMemoryConsolidationFields draft={draft} onChange={onChange} />
+					</div>
+
+					<div className="space-y-2 border-t border-border/60 pt-2.5">
+						<h3 className="text-xs font-semibold text-foreground">
+							{m.policy_section_social()}
+						</h3>
+						<PolicySocialFields draft={draft} onChange={onChange} />
+					</div>
+
+					<div className="space-y-2 border-t border-border/60 pt-2.5">
+						<h3 className="text-xs font-semibold text-foreground">
+							{m.policy_section_humanization()}
+						</h3>
+						<PolicyHumanizationFields draft={draft} onChange={onChange} />
+					</div>
+
+					<div className="space-y-2 border-t border-border/60 pt-2.5">
+						<h3 className="text-xs font-semibold text-foreground">{m.policy_section_gate()}</h3>
+						<PolicyGateFields draft={draft} onChange={onChange} />
 					</div>
 				</>
 			)}

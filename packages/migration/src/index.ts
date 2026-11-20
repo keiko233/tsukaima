@@ -110,6 +110,7 @@ export {
 	isSensitiveMemoryKey,
 	type ImportedMemoryRecord,
 	type ImportedSchedulerState,
+	type ImportedSocialProfile,
 	type MemoryImportResult,
 } from "./memory-import.ts";
 export {

@@ -185,6 +185,15 @@ export const sidechatPolicySchema = z
 		maxInterruptsPerMinute: z.number().int().min(0).default(3),
 		/** Stop accumulating and submit a follow-up if a run stays busy for this long. */
 		maxHoldMs: z.number().int().min(1).default(120_000),
+		/**
+		 * Allow an optional fast-lane interjection for direct urgent messages while a long main
+		 * turn is working, using minimal context plus a one-line persona/relation anchor.
+		 */
+		interjectEnabled: z.boolean().default(false),
+		/** Optional model id override for fast-lane busy interjections. */
+		interjectModel: z.string().min(1).optional(),
+		interjectTimeoutMs: z.number().int().min(100).max(30_000).default(3_000),
+		interjectMaxTokens: z.number().int().min(32).max(512).default(160),
 	})
 	.strict();
 
@@ -317,6 +326,105 @@ export const defaultMemoryConsolidationPolicy: MemoryConsolidationPolicy = {
 	summaryMaxChars: 1_200,
 };
 
+/**
+ * Per-conversation social familiarity learning and hard safety gates for proactive/bubble
+ * turns. Hard gates always enforce quiet hours, explicit refusal cooldown, consecutive
+ * unanswered silence, and recent self-message ratio ceiling regardless of familiarity level.
+ */
+export const socialPolicySchema = z
+	.object({
+		enabled: z.boolean().default(true),
+		/** Designate this conversation as a close/home chat (defaults familiarity to `L2`). */
+		homeChat: z.boolean().default(false),
+		/** Silence window after an explicit user refusal (hours). */
+		refusalCooldownHours: z.number().int().min(0).max(720).default(48),
+		/** Silence window after consecutive unanswered proactive turns (hours). */
+		unansweredSilenceHours: z.number().int().min(0).max(720).default(24),
+		/** Consecutive unanswered proactive messages before triggering `unansweredSilenceHours`. */
+		unansweredThreshold: z.number().int().min(1).max(20).default(2),
+		/** Maximum allowed fraction of outbound bot messages in the recent window (0..1). */
+		maxSelfMessageRatio: z.number().min(0).max(1).default(0.4),
+		/** Number of recent messages inspected for the self-message ratio gate. */
+		selfRatioWindowMessages: z.number().int().min(4).max(100).default(10),
+	})
+	.strict();
+
+export type SocialPolicy = z.infer<typeof socialPolicySchema>;
+
+export const defaultSocialPolicy: SocialPolicy = {
+	enabled: true,
+	homeChat: false,
+	maxSelfMessageRatio: 0.4,
+	refusalCooldownHours: 48,
+	selfRatioWindowMessages: 10,
+	unansweredSilenceHours: 24,
+	unansweredThreshold: 2,
+};
+
+/**
+ * Output humanization guards: anti-repetition avoid-list, optional bounded single-retry
+ * rewrite guard, reply rhythm variety nudge, outbound meta-leak sanitization, and optional
+ * hour/length-shaped reply delay curve.
+ */
+export const humanizationPolicySchema = z
+	.object({
+		antiRepetitionEnabled: z.boolean().default(true),
+		antiRepetitionWindow: z.number().int().min(2).max(50).default(12),
+		antiRepetitionThreshold: z.number().int().min(2).max(20).default(3),
+		/** Bounded single-retry rewrite when an answer still repeats flagged catchphrases severely. */
+		repetitionRewriteEnabled: z.boolean().default(false),
+		rhythmVarietyEnabled: z.boolean().default(true),
+		rhythmWindow: z.number().int().min(2).max(20).default(4),
+		metaLeakSanitizeEnabled: z.boolean().default(true),
+		/** Shape `pacing.replyDelayMaxMs` by local hour and reply length instead of uniform jitter. */
+		delayCurveEnabled: z.boolean().default(false),
+	})
+	.strict();
+
+export type HumanizationPolicy = z.infer<typeof humanizationPolicySchema>;
+
+export const defaultHumanizationPolicy: HumanizationPolicy = {
+	antiRepetitionEnabled: true,
+	antiRepetitionThreshold: 3,
+	antiRepetitionWindow: 12,
+	delayCurveEnabled: false,
+	metaLeakSanitizeEnabled: true,
+	repetitionRewriteEnabled: false,
+	rhythmVarietyEnabled: true,
+	rhythmWindow: 4,
+};
+
+/**
+ * Optional cheap pre-model gating (`ConversationGatePort`). Fail-open: when disabled,
+ * unconfigured, timed out, or circuit-broken, the runtime falls back cleanly to deterministic
+ * policy rules without blocking traffic.
+ */
+export const conversationGatePolicySchema = z
+	.object({
+		enabled: z.boolean().default(false),
+		/** Lightweight model id inside the active provider; falls back to runtime `gateModelId`. */
+		model: z.string().min(1).optional(),
+		timeoutMs: z.number().int().min(100).max(30_000).default(1_500),
+		burstCompletion: z.boolean().default(true),
+		undirectedGroupReply: z.boolean().default(true),
+		proactiveBubble: z.boolean().default(true),
+		circuitBreakerThreshold: z.number().int().min(1).max(20).default(3),
+		circuitBreakerCooldownMs: z.number().int().min(1_000).max(600_000).default(60_000),
+	})
+	.strict();
+
+export type ConversationGatePolicy = z.infer<typeof conversationGatePolicySchema>;
+
+export const defaultConversationGatePolicy: ConversationGatePolicy = {
+	burstCompletion: true,
+	circuitBreakerCooldownMs: 60_000,
+	circuitBreakerThreshold: 3,
+	enabled: false,
+	proactiveBubble: true,
+	timeoutMs: 1_500,
+	undirectedGroupReply: true,
+};
+
 export const conversationPolicySchema = z
 	.object({
 		version: z.number().int().min(1).default(1),
@@ -387,6 +495,9 @@ export const conversationPolicySchema = z
 		}),
 		sidechat: sidechatPolicySchema.default({
 			enabled: true,
+			interjectEnabled: false,
+			interjectMaxTokens: 160,
+			interjectTimeoutMs: 3_000,
 			maxHoldMs: 120_000,
 			maxInterruptsPerMinute: 3,
 			minConfidence: 0.6,
@@ -402,6 +513,9 @@ export const conversationPolicySchema = z
 		}),
 		crossSession: crossSessionPolicySchema.default(defaultCrossSessionPolicy),
 		memoryConsolidation: memoryConsolidationPolicySchema.default(defaultMemoryConsolidationPolicy),
+		social: socialPolicySchema.default(defaultSocialPolicy),
+		humanization: humanizationPolicySchema.default(defaultHumanizationPolicy),
+		gate: conversationGatePolicySchema.default(defaultConversationGatePolicy),
 	})
 	.strict();
 
@@ -464,6 +578,9 @@ export const defaultConversationPolicy: ConversationPolicy = {
 	},
 	sidechat: {
 		enabled: true,
+		interjectEnabled: false,
+		interjectMaxTokens: 160,
+		interjectTimeoutMs: 3_000,
 		maxHoldMs: 120_000,
 		maxInterruptsPerMinute: 3,
 		minConfidence: 0.6,
@@ -479,6 +596,9 @@ export const defaultConversationPolicy: ConversationPolicy = {
 	},
 	crossSession: defaultCrossSessionPolicy,
 	memoryConsolidation: defaultMemoryConsolidationPolicy,
+	social: defaultSocialPolicy,
+	humanization: defaultHumanizationPolicy,
+	gate: defaultConversationGatePolicy,
 };
 
 const triggerPolicyPatchSchema = z
@@ -530,6 +650,10 @@ const sidechatPolicyPatchSchema = z
 		minRunAgeMs: z.number().int().min(0).optional(),
 		maxInterruptsPerMinute: z.number().int().min(0).optional(),
 		maxHoldMs: z.number().int().min(1).optional(),
+		interjectEnabled: z.boolean().optional(),
+		interjectModel: z.string().min(1).nullish(),
+		interjectTimeoutMs: z.number().int().min(100).max(30_000).optional(),
+		interjectMaxTokens: z.number().int().min(32).max(512).optional(),
 	})
 	.strict();
 
@@ -585,6 +709,44 @@ const memoryConsolidationPolicyPatchSchema = z
 	})
 	.strict();
 
+const socialPolicyPatchSchema = z
+	.object({
+		enabled: z.boolean().optional(),
+		homeChat: z.boolean().optional(),
+		refusalCooldownHours: z.number().int().min(0).max(720).optional(),
+		unansweredSilenceHours: z.number().int().min(0).max(720).optional(),
+		unansweredThreshold: z.number().int().min(1).max(20).optional(),
+		maxSelfMessageRatio: z.number().min(0).max(1).optional(),
+		selfRatioWindowMessages: z.number().int().min(4).max(100).optional(),
+	})
+	.strict();
+
+const humanizationPolicyPatchSchema = z
+	.object({
+		antiRepetitionEnabled: z.boolean().optional(),
+		antiRepetitionWindow: z.number().int().min(2).max(50).optional(),
+		antiRepetitionThreshold: z.number().int().min(2).max(20).optional(),
+		repetitionRewriteEnabled: z.boolean().optional(),
+		rhythmVarietyEnabled: z.boolean().optional(),
+		rhythmWindow: z.number().int().min(2).max(20).optional(),
+		metaLeakSanitizeEnabled: z.boolean().optional(),
+		delayCurveEnabled: z.boolean().optional(),
+	})
+	.strict();
+
+const conversationGatePolicyPatchSchema = z
+	.object({
+		enabled: z.boolean().optional(),
+		model: z.string().min(1).nullish(),
+		timeoutMs: z.number().int().min(100).max(30_000).optional(),
+		burstCompletion: z.boolean().optional(),
+		undirectedGroupReply: z.boolean().optional(),
+		proactiveBubble: z.boolean().optional(),
+		circuitBreakerThreshold: z.number().int().min(1).max(20).optional(),
+		circuitBreakerCooldownMs: z.number().int().min(1_000).max(600_000).optional(),
+	})
+	.strict();
+
 /** Explicit, strict patch: unknown keys are rejected rather than silently dropped. */
 export const conversationPolicyPatchSchema = z
 	.object({
@@ -612,6 +774,9 @@ export const conversationPolicyPatchSchema = z
 		compaction: compactionPolicyPatchSchema.optional(),
 		crossSession: crossSessionPolicyPatchSchema.optional(),
 		memoryConsolidation: memoryConsolidationPolicyPatchSchema.optional(),
+		social: socialPolicyPatchSchema.optional(),
+		humanization: humanizationPolicyPatchSchema.optional(),
+		gate: conversationGatePolicyPatchSchema.optional(),
 	})
 	.strict();
 

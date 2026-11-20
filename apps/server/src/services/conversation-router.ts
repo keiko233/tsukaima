@@ -3,6 +3,7 @@ import { and, desc, eq } from "drizzle-orm";
 import {
 	buildTurnCue,
 	classifyConversationTrigger,
+	type ConversationGatePort,
 	type PiDurableConversationHost,
 	type ResolvedReplyTarget,
 	type TurnTrigger,
@@ -51,6 +52,8 @@ export interface ConversationRouterOptions {
 		policy: ConversationPolicy,
 	) => Promise<void> | void;
 	readonly audit?: (entry: AuditEntry) => Promise<void>;
+	/** Optional fail-open pre-model gate used to filter undirected group `soft` escalations. */
+	readonly conversationGate?: () => ConversationGatePort | undefined;
 	readonly database: () => TsukaimaDatabase | undefined;
 	readonly host: () => PiDurableConversationHost | undefined;
 	/** Rate limit for ignored-trigger audit rows, per channel/conversation key. */
@@ -116,6 +119,7 @@ const safeChannelId = (envelope: unknown): string => {
 export class ConversationRouter {
 	readonly #applyModelToolPolicy: ConversationRouterOptions["applyModelToolPolicy"];
 	readonly #audit: ConversationRouterOptions["audit"];
+	readonly #conversationGate: ConversationRouterOptions["conversationGate"];
 	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #host: () => PiDurableConversationHost | undefined;
 	readonly #ignoredAuditIntervalMs: number;
@@ -139,6 +143,7 @@ export class ConversationRouter {
 	constructor(options: ConversationRouterOptions) {
 		this.#applyModelToolPolicy = options.applyModelToolPolicy;
 		this.#audit = options.audit;
+		this.#conversationGate = options.conversationGate;
 		this.#database = options.database;
 		this.#host = options.host;
 		this.#ignoredAuditIntervalMs = options.ignoredAuditIntervalMs ?? 60_000;
@@ -264,22 +269,80 @@ export class ConversationRouter {
 				selfAliases,
 				...(replyTarget === undefined ? {} : { replyTarget }),
 			});
-			if (trigger.classification === "soft" && !trigger.aliasMentioned && recentActivity) {
+			// Optional fail-open pre-model gate for undirected group messages: when the gate returns
+			// `SKIP`, downgrade to `ambient` before `host.append` so the main chat model is never invoked.
+			let effectiveTrigger = trigger;
+			const gate = this.#conversationGate?.();
+			if (
+				message.conversationKey.kind === "group" &&
+				trigger.classification === "soft" &&
+				!trigger.aliasMentioned &&
+				policy.gate.enabled &&
+				policy.gate.undirectedGroupReply &&
+				gate !== undefined
+			) {
+				const recentRows = await database
+					.select({
+						contentText: messages.contentText,
+						direction: messages.direction,
+						senderDisplayName: messages.senderDisplayName,
+					})
+					.from(messages)
+					.where(eq(messages.conversationId, target.sessionId))
+					.orderBy(desc(messages.occurredAt), desc(messages.id))
+					.limit(6);
+				const recentContext = recentRows
+					.toReversed()
+					.map((row) => {
+						const who = row.direction === "outbound" ? "(you)" : (row.senderDisplayName ?? "user");
+						return `${who}: ${(row.contentText ?? "").trim()}`;
+					})
+					.filter((line) => line.length > 0);
+				const gateDecision = await gate.decideUndirectedGroupReply({
+					conversationId: target.sessionId,
+					messageText: messageText(message.parts),
+					policy: policy.gate,
+					recentContext,
+					senderName: message.sender.displayName,
+				});
+				if (gateDecision.decision === "SKIP") {
+					effectiveTrigger = {
+						...trigger,
+						classification: "ambient",
+						reason: `gate_skip:${gateDecision.reason ?? "undirected"}`,
+					};
+					messageLog.debug("undirected group message gated SKIP -> ambient", {
+						reason: gateDecision.reason,
+						sessionId: target.sessionId,
+						source: gateDecision.source,
+					});
+				}
+			}
+			if (
+				effectiveTrigger.classification === "soft" &&
+				!effectiveTrigger.aliasMentioned &&
+				recentActivity
+			) {
 				this.#pacing?.recordSoftEscalation(target.durableConversationId);
 			}
-			this.#stats[trigger.classification] += 1;
+			this.#stats[effectiveTrigger.classification] += 1;
 			messageLog.debug("conversation trigger classified", {
-				classification: trigger.classification,
+				classification: effectiveTrigger.classification,
 				recentActivity,
-				reason: trigger.reason,
+				reason: effectiveTrigger.reason,
 				sessionId: target.sessionId,
 			});
 
-			if (trigger.classification === "ignored") {
-				await this.#recordIgnored(message, target.sessionId, target.chatObjectId, trigger.reason);
+			if (effectiveTrigger.classification === "ignored") {
+				await this.#recordIgnored(
+					message,
+					target.sessionId,
+					target.chatObjectId,
+					effectiveTrigger.reason,
+				);
 				messageLog.warn("conversation trigger ignored", {
 					chatObjectId: target.chatObjectId,
-					reason: trigger.reason,
+					reason: effectiveTrigger.reason,
 					sessionId: target.sessionId,
 				});
 				return {
@@ -303,10 +366,10 @@ export class ConversationRouter {
 				target.sessionId,
 				reply?.quote,
 			);
-			if (trigger.classification !== "ambient") {
+			if (effectiveTrigger.classification !== "ambient") {
 				// Only a direct address interrupts in-flight output. A `soft` message is chatter the
 				// bot merely follows and must not cut a multi-bubble reply short.
-				if (trigger.classification === "direct") {
+				if (effectiveTrigger.classification === "direct") {
 					this.#onInboundTrigger?.(target.durableConversationId);
 				}
 				await this.#policy?.ensureHostPolicy(target.sessionId, target.durableConversationId);
@@ -321,39 +384,39 @@ export class ConversationRouter {
 				const cooldownMs =
 					this.#pacing?.remainingCooldownMs(target.durableConversationId, policy) ?? 0;
 				messageLog.debug("appending turn to durable conversation", {
-					classification: trigger.classification,
+					classification: effectiveTrigger.classification,
 					collectOnly: cooldownMs > 0,
 					cooldownMs,
 					durableConversationId: target.durableConversationId,
 				});
 				const injected = await this.#injectedPrompt(target.sessionId, target.durableConversationId);
 				await host.append({
-					classification: trigger.classification,
+					classification: effectiveTrigger.classification,
 					collectOnly: cooldownMs > 0,
 					conversationId: target.durableConversationId,
 					envelope: hydratedMessage,
 					submittedAtMs: Date.now(),
-					turnContext: turnContextFor(trigger, hydratedMessage, injected),
+					turnContext: turnContextFor(effectiveTrigger, hydratedMessage, injected),
 				});
 				if (cooldownMs > 0) {
 					host.scheduleActivityFlushAfter(target.durableConversationId, cooldownMs);
 				}
 			}
 			await this.#persistInbound(database, {
-				classification: trigger.classification,
+				classification: effectiveTrigger.classification,
 				envelope: hydratedMessage,
 				sender,
 				target,
 			});
 			messageLog.info("channel message processed", {
 				chatObjectId: target.chatObjectId,
-				classification: trigger.classification,
+				classification: effectiveTrigger.classification,
 				durationMs: Math.round(performance.now() - startedAt),
 				sessionId: target.sessionId,
 			});
 			return {
 				chatObjectId: target.chatObjectId,
-				classification: trigger.classification,
+				classification: effectiveTrigger.classification,
 				duplicated: false,
 				envelope: hydratedMessage,
 				ignored: false,

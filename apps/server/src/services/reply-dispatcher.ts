@@ -8,12 +8,14 @@ import {
 	type MessagePart,
 } from "@tsukaima/contracts";
 import {
-	boundedReplyDelayMs,
 	type ConversationAnswer,
 	type ConversationExecutionLock,
 	type ConversationNarration,
+	type FastLaneReply,
 	extractLurkMarker,
 	prepareOutboundParts,
+	sanitizeOutboundMetaLeaks,
+	shapedReplyDelayMs,
 	withConversationLock,
 } from "@tsukaima/core";
 import {
@@ -428,7 +430,13 @@ export class ReplyDispatcher {
 		) {
 			return { deliveryStatus: "skipped", reason: "rate_limited" };
 		}
-		const prepared = prepareOutboundParts([{ text: narration.text, type: "text" }], policy.pacing);
+		const narrationText = this.#sanitizeOutboundText(
+			narration.text,
+			policy,
+			narration.conversationId,
+			narration.narrationId,
+		);
+		const prepared = prepareOutboundParts([{ text: narrationText, type: "text" }], policy.pacing);
 		if (prepared.units.length === 0) return { deliveryStatus: "skipped", reason: "empty_output" };
 		const chatKind: ChatKind = session.chatKind;
 		const external = isExternalChat(chatKind);
@@ -504,6 +512,158 @@ export class ReplyDispatcher {
 
 	#shownText(durableConversationId: string): readonly string[] | undefined {
 		return this.#shownThisTurn.get(durableConversationId);
+	}
+
+	#sanitizeOutboundText(
+		text: string,
+		policy: ConversationPolicy,
+		conversationId: string,
+		entryId: string,
+	): string {
+		if (!policy.humanization.metaLeakSanitizeEnabled) return text;
+		const result = sanitizeOutboundMetaLeaks(text);
+		if (result.modified) {
+			this.#logger.warn("outbound meta-leak sanitized", {
+				conversationId,
+				entryId,
+				stripped: result.stripped,
+			});
+		}
+		return result.text;
+	}
+
+	#sanitizeOutboundParts(
+		parts: readonly MessagePart[],
+		policy: ConversationPolicy,
+		conversationId: string,
+		entryId: string,
+	): readonly MessagePart[] {
+		if (!policy.humanization.metaLeakSanitizeEnabled) return parts;
+		const stripped = new Set<string>();
+		const next: MessagePart[] = [];
+		for (const part of parts) {
+			if (part.type !== "text") {
+				next.push(part);
+				continue;
+			}
+			const result = sanitizeOutboundMetaLeaks(part.text);
+			if (result.modified) {
+				for (const name of result.stripped) stripped.add(name);
+			}
+			if (result.text.length > 0) {
+				next.push({ text: result.text, type: "text" });
+			}
+		}
+		if (stripped.size > 0) {
+			this.#logger.warn("outbound meta-leak sanitized", {
+				conversationId,
+				entryId,
+				stripped: [...stripped],
+			});
+		}
+		return next;
+	}
+
+	/**
+	 * Deliver an out-of-band fast-lane busy interjection reply without touching the active main
+	 * turn's reply expectation or `#shownThisTurn` state. Deduplicated by `interjectId`.
+	 */
+	handleFastLaneReply(reply: FastLaneReply): Promise<ReplyDeliveryOutcome | undefined> {
+		return this.#runOutboundLane(
+			reply.conversationId,
+			() => this.#handleFastLaneReplyNow(reply),
+			async () => ({ deliveryStatus: "skipped", reason: "cancelled" }),
+		);
+	}
+
+	async #handleFastLaneReplyNow(reply: FastLaneReply): Promise<ReplyDeliveryOutcome | undefined> {
+		const database = this.#database();
+		if (database === undefined) return undefined;
+		const [session] = await database
+			.select({
+				chatId: chatObjects.id,
+				chatKind: chatObjects.kind,
+				channelId: chatObjects.channelId,
+				platformConversationId: chatObjects.platformConversationId,
+				sessionId: conversations.id,
+			})
+			.from(conversations)
+			.innerJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
+			.where(eq(conversations.durableConversationId, reply.conversationId))
+			.orderBy(desc(conversations.updatedAt))
+			.limit(1);
+		if (session === undefined) return { deliveryStatus: "skipped", reason: "no_domain_session" };
+		let policy: ConversationPolicy = defaultConversationPolicy;
+		try {
+			policy = (await this.#policy?.effectivePolicy(session.sessionId)) ?? policy;
+		} catch {}
+		const sanitized = this.#sanitizeOutboundText(
+			reply.text,
+			policy,
+			reply.conversationId,
+			reply.interjectId,
+		);
+		const prepared = prepareOutboundParts([{ text: sanitized, type: "text" }], policy.pacing);
+		if (prepared.units.length === 0) return { deliveryStatus: "skipped", reason: "empty_output" };
+		const chatKind: ChatKind = session.chatKind;
+		const external = isExternalChat(chatKind);
+		const channelKind =
+			external && session.channelId !== null
+				? this.#channels.get(session.channelId)?.kind
+				: undefined;
+		const now = new Date().toISOString();
+		const id = randomUUID();
+		const inserted = await database
+			.insert(messages)
+			.values({
+				chatObjectId: session.chatId,
+				contentText: prepared.text,
+				conversationId: session.sessionId,
+				deliveryStatus: external ? "pending" : "sent",
+				direction: "outbound",
+				durableEntryId: reply.interjectId,
+				id,
+				ingestedAt: now,
+				kind: external ? (channelKind ?? "plugin") : chatKind,
+				occurredAt: now,
+				partsJson: JSON.stringify(prepared.parts),
+				senderDisplayName: "Tsukaima",
+				senderExternalId: "tsukaima",
+				updatedAt: now,
+			})
+			.onConflictDoNothing()
+			.returning({ id: messages.id });
+		if (inserted.length === 0) return { deliveryStatus: "skipped", reason: "duplicate" };
+		if (!external) return { deliveryStatus: "sent", text: prepared.text };
+		if (session.channelId === null || session.platformConversationId === null) {
+			const deliveryStatus = await this.#fail(
+				database,
+				id,
+				session.sessionId,
+				"External chat has no destination",
+				{ channelId: session.channelId, platformConversationId: session.platformConversationId },
+			);
+			return { deliveryStatus, text: prepared.text };
+		}
+		const deliveryStatus = await this.#deliverNow(
+			database,
+			{
+				channelId: session.channelId,
+				chatKind,
+				conversationId: reply.conversationId,
+				id,
+				narration: true,
+				parts: prepared.parts,
+				plan: prepared.units.map((parts) => ({ parts })),
+				platformConversationId: session.platformConversationId,
+				policy,
+				sessionId: session.sessionId,
+				units: prepared.units,
+			},
+			session.channelId,
+			session.platformConversationId,
+		);
+		return { deliveryStatus, text: prepared.text };
 	}
 
 	/**
@@ -734,7 +894,13 @@ export class ReplyDispatcher {
 			sessionId: session.sessionId,
 			text: answerText,
 		});
-		const prepared = prepareOutboundParts(transformed.parts, policy.pacing);
+		const sanitizedParts = this.#sanitizeOutboundParts(
+			transformed.parts,
+			policy,
+			answer.conversationId,
+			answer.entryId,
+		);
+		const prepared = prepareOutboundParts(sanitizedParts, policy.pacing);
 		if (prepared.units.length === 0) {
 			this.#logger.debug("assistant answer skipped as empty output", {
 				entryId: answer.entryId,
@@ -1627,8 +1793,20 @@ export class ReplyDispatcher {
 			if (typing) {
 				await this.#channels.sendTyping(channelId, target.chatKind, platformConversationId, true);
 			}
+			const totalTextChars = target.parts.reduce(
+				(sum, part) => sum + (part.type === "text" ? part.text.length : 0),
+				0,
+			);
 			const delayMs =
-				target.narration === true ? 0 : boundedReplyDelayMs(target.policy.pacing, this.#random);
+				target.narration === true
+					? 0
+					: shapedReplyDelayMs({
+							delayCurveEnabled: target.policy.humanization.delayCurveEnabled,
+							nowMs: this.#now(),
+							pacing: target.policy.pacing,
+							random: this.#random,
+							textLength: totalTextChars,
+						});
 			this.#logger.trace("delivering reply to channel", {
 				channelId,
 				chatKind: target.chatKind,

@@ -157,6 +157,7 @@ export function mergeConversationPolicy(
 	const trigger = mergeSection<ConversationTriggerPolicy>(base.trigger, triggerPatch);
 	const sidechat = mergeSection<ConversationPolicy["sidechat"]>(base.sidechat, sidechatPatch);
 	if (sidechatPatch?.model === null) delete sidechat.model;
+	if (sidechatPatch?.interjectModel === null) delete sidechat.interjectModel;
 	const compaction = mergeSection<ConversationPolicy["compaction"]>(
 		base.compaction,
 		patch.compaction,
@@ -179,6 +180,14 @@ export function mergeConversationPolicy(
 		base.memoryConsolidation,
 		patch.memoryConsolidation,
 	);
+	const social = mergeSection<ConversationPolicy["social"]>(base.social, patch.social);
+	const humanization = mergeSection<ConversationPolicy["humanization"]>(
+		base.humanization,
+		patch.humanization,
+	);
+	const gatePatch = patch.gate;
+	const gate = mergeSection<ConversationPolicy["gate"]>(base.gate, gatePatch);
+	if (gatePatch?.model === null) delete gate.model;
 	const memoryExtractModel =
 		patch.memoryExtractModel === null
 			? undefined
@@ -223,11 +232,14 @@ export function mergeConversationPolicy(
 		...(patch.capabilities === undefined ? {} : { capabilities: patch.capabilities }),
 		compaction,
 		crossSession,
+		gate,
 		generation,
+		humanization,
 		memoryConsolidation,
 		notices,
 		pacing,
 		sidechat,
+		social,
 		trigger,
 	});
 }

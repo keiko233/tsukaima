@@ -884,6 +884,8 @@ export const settingsViewSchema = z.object({
 	logLevel: logLevelSchema,
 	/** Models that plugins advertise for the busy-run sidechat classifier. */
 	models: z.array(modelCatalogEntrySchema).optional(),
+	/** Default lightweight model for cheap pre-model conversation gating. */
+	gateModelId: z.string().optional(),
 	/** Default lightweight model for background memory consolidation. */
 	memoryModelId: z.string().optional(),
 	modelProviderId: z.string().optional(),
@@ -905,6 +907,8 @@ export const runtimeSettingsSchema = z.object({
 	chatModel: modelSelectionSchema.optional(),
 	/** Default reasoning effort for chat sessions. */
 	chatThinking: thinkingLevelSchema.optional(),
+	/** Default lightweight model id for pre-model conversation gating (`ConversationGatePort`). */
+	gateModelId: z.string().min(1).optional(),
 	logLevel: logLevelSchema,
 	/**
 	 * Default model id (inside the active provider) for background memory consolidation, kept
@@ -926,6 +930,7 @@ export const runtimeSettingsPatchSchema = z
 	.object({
 		chatModel: modelSelectionSchema.nullish(),
 		chatThinking: thinkingLevelSchema.nullish(),
+		gateModelId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
 		logLevel: logLevelSchema.optional(),
 		memoryModelId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
 		modelProviderId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
@@ -937,6 +942,7 @@ export const runtimeSettingsPatchSchema = z
 		(input) =>
 			input.chatModel !== undefined ||
 			input.chatThinking !== undefined ||
+			input.gateModelId !== undefined ||
 			input.logLevel !== undefined ||
 			input.memoryModelId !== undefined ||
 			input.modelProviderId !== undefined ||

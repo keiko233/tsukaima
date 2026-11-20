@@ -159,6 +159,33 @@ mock.module("@/paraglide/messages", () => ({
 		policy_revision_active: () => "Active",
 		policy_save: () => "Save policy",
 		policy_save_persona: () => "Save persona aliases",
+		policy_gate_burst_completion: () => "Gate burst completion (SEND/WAIT)",
+		policy_gate_breaker_cooldown: () => "Breaker cooldown (ms)",
+		policy_gate_breaker_threshold: () => "Breaker failure threshold",
+		policy_gate_enabled: () => "Enable cheap pre-model gating",
+		policy_gate_model: () => "Gate model override",
+		policy_gate_model_default: () => "Use the gate default",
+		policy_gate_proactive_bubble: () => "Gate proactive bubbles (SHOULD/SKIP)",
+		policy_gate_timeout: () => "Gate timeout (ms)",
+		policy_gate_undirected_group: () => "Gate undirected group replies (REPLY/SKIP)",
+		policy_humanization_anti_repetition: () => "Dynamic overused-phrase avoid-list",
+		policy_humanization_anti_repetition_threshold: () => "Avoid-list repeat threshold",
+		policy_humanization_anti_repetition_window: () => "Avoid-list reply window",
+		policy_humanization_delay_curve: () => "Hour & length shaped reply delay curve",
+		policy_humanization_meta_leak_sanitize: () => "Strip outbound meta-leaks",
+		policy_humanization_repetition_rewrite: () => "Single-retry repetition rewrite",
+		policy_humanization_rhythm_variety: () => "Reply rhythm variety nudge",
+		policy_humanization_rhythm_window: () => "Rhythm window",
+		policy_social_enabled: () => "Learn per-chat familiarity",
+		policy_social_hint: () => "Hard safety gates still apply at every level.",
+		policy_social_home_chat: () => "Home chat (default L2 close)",
+		policy_social_max_self_ratio: () => "Max recent self-message ratio",
+		policy_social_refusal_cooldown_hours: () => "Refusal silence cooldown (hours)",
+		policy_social_self_ratio_window: () => "Self-message ratio sample size",
+		policy_social_unanswered_silence_hours: () => "Unanswered silence window (hours)",
+		policy_social_unanswered_threshold: () => "Unanswered streak threshold",
+		policy_sidechat_interject_enabled: () => "Fast-lane busy interjection",
+		policy_sidechat_interject_hint: () => "Only urgent direct messages while a long turn is working.",
 		policy_section_generation: () => "Generation",
 		policy_generation_hint: () => "Sampling overrides for OpenAI-compatible requests.",
 		policy_length_truncation: () => "When the output limit is reached",
@@ -189,7 +216,10 @@ mock.module("@/paraglide/messages", () => ({
 		policy_memory_consolidation_qa: () => "Recall earlier answers",
 		policy_memory_consolidation_summary: () => "Rolling summary limit (chars)",
 		policy_section_cross_session: () => "Cross-session awareness",
+		policy_section_gate: () => "Pre-model gate",
+		policy_section_humanization: () => "Output humanization",
 		policy_section_memory_consolidation: () => "Memory consolidation",
+		policy_section_social: () => "Social familiarity",
 		policy_section_compaction: () => "Context compaction",
 		policy_section_pacing: () => "Aggregation and pacing",
 		policy_section_persona: () => "Persona binding",
@@ -415,6 +445,13 @@ describe("SessionInspectorSidebar views", () => {
 		expect(html).toContain("Temperature");
 		expect(html).toContain("Top P");
 		expect(html).toContain("Stop sequences");
+		expect(html).toContain("Social familiarity");
+		expect(html).toContain("Learn per-chat familiarity");
+		expect(html).toContain("Output humanization");
+		expect(html).toContain("Dynamic overused-phrase avoid-list");
+		expect(html).toContain("Pre-model gate");
+		expect(html).toContain("Gate burst completion (SEND/WAIT)");
+		expect(html).toContain("Fast-lane busy interjection");
 		expect(html).not.toContain("Unsaved changes");
 	});
 

@@ -381,6 +381,14 @@ export function PolicySidechatFields({
 				onChange={(value) => updateSidechat({ enabled: value })}
 			/>
 			<p className="text-[11px] leading-4 text-muted-foreground">{m.policy_sidechat_hint()}</p>
+			<Toggle
+				checked={draft.sidechat.interjectEnabled}
+				label={m.policy_sidechat_interject_enabled()}
+				onChange={(value) => updateSidechat({ interjectEnabled: value })}
+			/>
+			<p className="text-[11px] leading-4 text-muted-foreground">
+				{m.policy_sidechat_interject_hint()}
+			</p>
 			<Field label={m.policy_sidechat_model()} hint={m.policy_sidechat_model_hint()}>
 				<Select
 					value={selected}
@@ -793,6 +801,250 @@ export function PolicyMemoryConsolidationFields({ draft, onChange }: PolicyField
 				checked={draft.memoryConsolidation.qaRecallEnabled}
 				label={m.policy_memory_consolidation_qa()}
 				onChange={(value) => updateConsolidation({ qaRecallEnabled: value })}
+			/>
+		</>
+	);
+}
+
+export function PolicySocialFields({ draft, onChange }: PolicyFieldsProps) {
+	const updateSocial = (patch: Partial<ConversationPolicy["social"]>) => {
+		onChange((current) => ({ ...current, social: { ...current.social, ...patch } }));
+	};
+	return (
+		<>
+			<Toggle
+				checked={draft.social.enabled}
+				label={m.policy_social_enabled()}
+				onChange={(value) => updateSocial({ enabled: value })}
+			/>
+			<Toggle
+				checked={draft.social.homeChat}
+				label={m.policy_social_home_chat()}
+				onChange={(value) => updateSocial({ homeChat: value })}
+			/>
+			<p className="text-[11px] leading-4 text-muted-foreground">
+				{m.policy_social_hint()}
+			</p>
+			<div className="grid grid-cols-2 gap-2.5">
+				<Field label={m.policy_social_refusal_cooldown_hours()}>
+					<input
+						type="number"
+						min={0}
+						max={720}
+						className={fieldClass}
+						value={draft.social.refusalCooldownHours}
+						onChange={(event) =>
+							updateSocial({ refusalCooldownHours: Number(event.target.value) })
+						}
+					/>
+				</Field>
+				<Field label={m.policy_social_unanswered_silence_hours()}>
+					<input
+						type="number"
+						min={0}
+						max={720}
+						className={fieldClass}
+						value={draft.social.unansweredSilenceHours}
+						onChange={(event) =>
+							updateSocial({ unansweredSilenceHours: Number(event.target.value) })
+						}
+					/>
+				</Field>
+				<Field label={m.policy_social_unanswered_threshold()}>
+					<input
+						type="number"
+						min={1}
+						max={20}
+						className={fieldClass}
+						value={draft.social.unansweredThreshold}
+						onChange={(event) =>
+							updateSocial({ unansweredThreshold: Number(event.target.value) })
+						}
+					/>
+				</Field>
+				<Field label={m.policy_social_max_self_ratio()}>
+					<input
+						type="number"
+						min={0}
+						max={1}
+						step={0.05}
+						className={fieldClass}
+						value={draft.social.maxSelfMessageRatio}
+						onChange={(event) =>
+							updateSocial({ maxSelfMessageRatio: Number(event.target.value) })
+						}
+					/>
+				</Field>
+				<Field label={m.policy_social_self_ratio_window()}>
+					<input
+						type="number"
+						min={4}
+						max={100}
+						className={fieldClass}
+						value={draft.social.selfRatioWindowMessages}
+						onChange={(event) =>
+							updateSocial({ selfRatioWindowMessages: Number(event.target.value) })
+						}
+					/>
+				</Field>
+			</div>
+		</>
+	);
+}
+
+export function PolicyHumanizationFields({ draft, onChange }: PolicyFieldsProps) {
+	const updateHumanization = (patch: Partial<ConversationPolicy["humanization"]>) => {
+		onChange((current) => ({
+			...current,
+			humanization: { ...current.humanization, ...patch },
+		}));
+	};
+	return (
+		<>
+			<Toggle
+				checked={draft.humanization.antiRepetitionEnabled}
+				label={m.policy_humanization_anti_repetition()}
+				onChange={(value) => updateHumanization({ antiRepetitionEnabled: value })}
+			/>
+			<div className="grid grid-cols-2 gap-2.5">
+				<Field label={m.policy_humanization_anti_repetition_window()}>
+					<input
+						type="number"
+						min={2}
+						max={50}
+						className={fieldClass}
+						value={draft.humanization.antiRepetitionWindow}
+						onChange={(event) =>
+							updateHumanization({ antiRepetitionWindow: Number(event.target.value) })
+						}
+					/>
+				</Field>
+				<Field label={m.policy_humanization_anti_repetition_threshold()}>
+					<input
+						type="number"
+						min={2}
+						max={20}
+						className={fieldClass}
+						value={draft.humanization.antiRepetitionThreshold}
+						onChange={(event) =>
+							updateHumanization({ antiRepetitionThreshold: Number(event.target.value) })
+						}
+					/>
+				</Field>
+			</div>
+			<Toggle
+				checked={draft.humanization.repetitionRewriteEnabled}
+				label={m.policy_humanization_repetition_rewrite()}
+				onChange={(value) => updateHumanization({ repetitionRewriteEnabled: value })}
+			/>
+			<Toggle
+				checked={draft.humanization.rhythmVarietyEnabled}
+				label={m.policy_humanization_rhythm_variety()}
+				onChange={(value) => updateHumanization({ rhythmVarietyEnabled: value })}
+			/>
+			<Field label={m.policy_humanization_rhythm_window()}>
+				<input
+					type="number"
+					min={2}
+					max={20}
+					className={fieldClass}
+					value={draft.humanization.rhythmWindow}
+					onChange={(event) => updateHumanization({ rhythmWindow: Number(event.target.value) })}
+				/>
+			</Field>
+			<Toggle
+				checked={draft.humanization.metaLeakSanitizeEnabled}
+				label={m.policy_humanization_meta_leak_sanitize()}
+				onChange={(value) => updateHumanization({ metaLeakSanitizeEnabled: value })}
+			/>
+			<Toggle
+				checked={draft.humanization.delayCurveEnabled}
+				label={m.policy_humanization_delay_curve()}
+				onChange={(value) => updateHumanization({ delayCurveEnabled: value })}
+			/>
+		</>
+	);
+}
+
+export function PolicyGateFields({ draft, onChange }: PolicyFieldsProps) {
+	const updateGate = (patch: Partial<ConversationPolicy["gate"]>) => {
+		onChange((current) => ({ ...current, gate: { ...current.gate, ...patch } }));
+	};
+	return (
+		<>
+			<Toggle
+				checked={draft.gate.enabled}
+				label={m.policy_gate_enabled()}
+				onChange={(value) => updateGate({ enabled: value })}
+			/>
+			<Field label={m.policy_gate_model()}>
+				<input
+					type="text"
+					className={fieldClass}
+					value={draft.gate.model ?? ""}
+					placeholder={m.policy_gate_model_default()}
+					onChange={(event) => {
+						const value = event.target.value.trim();
+						onChange((current) => {
+							const gate = { ...current.gate };
+							if (value.length === 0) delete gate.model;
+							else gate.model = value;
+							return { ...current, gate };
+						});
+					}}
+				/>
+			</Field>
+			<div className="grid grid-cols-3 gap-2.5">
+				<Field label={m.policy_gate_timeout()}>
+					<input
+						type="number"
+						min={100}
+						max={30_000}
+						className={fieldClass}
+						value={draft.gate.timeoutMs}
+						onChange={(event) => updateGate({ timeoutMs: Number(event.target.value) })}
+					/>
+				</Field>
+				<Field label={m.policy_gate_breaker_threshold()}>
+					<input
+						type="number"
+						min={1}
+						max={20}
+						className={fieldClass}
+						value={draft.gate.circuitBreakerThreshold}
+						onChange={(event) =>
+							updateGate({ circuitBreakerThreshold: Number(event.target.value) })
+						}
+					/>
+				</Field>
+				<Field label={m.policy_gate_breaker_cooldown()}>
+					<input
+						type="number"
+						min={1_000}
+						max={600_000}
+						step={1_000}
+						className={fieldClass}
+						value={draft.gate.circuitBreakerCooldownMs}
+						onChange={(event) =>
+							updateGate({ circuitBreakerCooldownMs: Number(event.target.value) })
+						}
+					/>
+				</Field>
+			</div>
+			<Toggle
+				checked={draft.gate.burstCompletion}
+				label={m.policy_gate_burst_completion()}
+				onChange={(value) => updateGate({ burstCompletion: value })}
+			/>
+			<Toggle
+				checked={draft.gate.undirectedGroupReply}
+				label={m.policy_gate_undirected_group()}
+				onChange={(value) => updateGate({ undirectedGroupReply: value })}
+			/>
+			<Toggle
+				checked={draft.gate.proactiveBubble}
+				label={m.policy_gate_proactive_bubble()}
+				onChange={(value) => updateGate({ proactiveBubble: value })}
 			/>
 		</>
 	);

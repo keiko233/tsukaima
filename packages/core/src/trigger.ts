@@ -288,8 +288,6 @@ export interface TurnCueInput {
  * Compact ephemeral cue for a `soft` turn: the model was not addressed directly and may stay
  * silent. Direct and ambient turns need no cue. The text reaches the model only through the
  * turn-context hook and is never persisted into the transcript.
- *
- * TODO(batch-6): revisit the lurk marker itself; keep this wording minimal.
  */
 export function buildTurnCue(input: TurnCueInput): string | undefined {
 	if (input.classification !== "soft") return undefined;
