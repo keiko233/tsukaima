@@ -96,6 +96,7 @@ Pipeline:
 6. `import`
    - Create canonical users, conversations, personas, memory, media, and history.
    - Import raw history first, then derived summaries/memory candidates.
+   - Hold global memories for admin review before they can enter chat context.
    - Use transactional/idempotent batches.
 7. `verify`
    - Check counts and source hashes.

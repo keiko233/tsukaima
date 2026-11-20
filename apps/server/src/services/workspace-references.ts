@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import type { WorkspaceReference } from "@tsukaima/contracts";
 import {
 	chatObjects,
@@ -114,7 +114,9 @@ export class WorkspaceReferenceService {
 								senderDisplayName: messages.senderDisplayName,
 							})
 							.from(messages)
-							.where(eq(messages.conversationId, reference.sessionId))
+							.where(
+								and(eq(messages.conversationId, reference.sessionId), ne(messages.kind, "tool")),
+							)
 							.orderBy(desc(messages.occurredAt))
 							.limit(12)
 					: await database

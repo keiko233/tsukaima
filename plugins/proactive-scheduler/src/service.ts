@@ -787,7 +787,7 @@ export class ProactiveSchedulerService {
 				});
 				continue;
 			}
-			if (conversation.kind === "task" || conversation.kind === "plugin") {
+			if (conversation.kind !== "group" && conversation.kind !== "private") {
 				this.#logger.trace("tick candidate skipped", {
 					conversationId: conversation.id,
 					reason: `conversation_kind_${conversation.kind}`,
@@ -821,15 +821,6 @@ export class ProactiveSchedulerService {
 						conversationId: conversation.id,
 						gates: gateSummary(evaluation.gates),
 						reason: evaluation.reason ?? "blocked",
-					});
-					await this.#recordDecision({
-						conversationId: conversation.id,
-						gateResult: "skipped",
-						gates: evaluation.gates,
-						kind: "tick",
-						marker: null,
-						skippedReason: evaluation.reason ?? "blocked",
-						taskId: null,
 					});
 					continue;
 				}

@@ -315,6 +315,59 @@ describe("background extraction", () => {
 			}),
 		]);
 	});
+
+	test("keeps automatic group extraction local even when the model requests global scope", async () => {
+		const { database, memory } = await setup({
+			complete: async (prompt) => {
+				expect(prompt).not.toContain("synthetic tool output");
+				return JSON.stringify([
+					{
+						confidence: 0.9,
+						content: "The group chose the Aurora theme.",
+						importance: 0.8,
+						kind: "fact",
+						scope: "global",
+						summary: "Aurora is the chosen theme",
+					},
+				]);
+			},
+			llmEnabled: true,
+		});
+		await seedSession(database, { id: "group-local", kind: "group", messageCount: 1 });
+		await database.insert(messages).values({
+			contentText: "synthetic tool output",
+			conversationId: "group-local",
+			direction: "outbound",
+			id: "tool-local",
+			kind: "tool",
+			occurredAt: "2026-11-13T00:00:10.000Z",
+		});
+		expect(await memory.extractForConversation("group-local")).toEqual({
+			candidates: 1,
+			written: 1,
+		});
+		expect(await database.select().from(memories)).toEqual([
+			expect.objectContaining({
+				conversationId: "group-local",
+				scope: "conversation",
+				sourceConversationId: "group-local",
+				sourceMessageId: "group-local-message-0",
+				visibility: "private",
+			}),
+		]);
+	});
+
+	test("does not infer a memory when the extractor returns an empty array", async () => {
+		const { database, memory } = await setup({
+			complete: async () => "[]",
+			llmEnabled: true,
+		});
+		await seedSession(database, { id: "session-empty", messageCount: 1 });
+		expect(await memory.extractForConversation("session-empty")).toEqual({
+			candidates: 0,
+			written: 0,
+		});
+	});
 });
 
 describe("additive compaction", () => {

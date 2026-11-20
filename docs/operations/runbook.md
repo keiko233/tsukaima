@@ -173,6 +173,40 @@ Rules:
 
 ## 6. Scheduled backup and restore drills
 
+### Recovering from proactive polling and shared memory pollution
+
+```sh
+bun tools/ops/clean-chat-data.ts --plan "$TSUKAIMA_DATA_DIR"
+bun tools/ops/clean-chat-data.ts --apply-to-copy "$TSUKAIMA_STAGING_DIR"
+bun tools/ops/clean-chat-data.ts --plan "$TSUKAIMA_STAGING_DIR"
+```
+
+- `--plan` opens both databases read-only and returns aggregate counts. Rehearse on private
+  copies made with SQLite’s online backup API or CLI `.backup`. The rehearsal copies of
+  `domain.sqlite` and `plugins/proactive_scheduler.sqlite` may be taken at different times
+  while the writer runs. Use those copies for rehearsal only.
+- For cutover, stop the writer gracefully and make a fresh consistent backup of the data
+  directory, including plugin databases, durable storage, and media. Verify and preserve
+  the original backup on a separate volume. Use a second copy as the cleanup input.
+  Budget space for the staging files, SQLite's journal or WAL, and temporary compaction files.
+- The cleanup deletes routine taskless polling skips and the corresponding denied audit
+  rows. It moves unreviewed automatically extracted group memories back into their original
+  conversation as pending and revokes the rest of the matched global memories. It preserves memory contents,
+  migration history, scheduled work, deliveries, and failure records.
+- Apply runs integrity checks, compacts the two edited databases, and writes an aggregate
+  maintenance audit in the domain database. Check that a second plan reports zero matches.
+  If either file fails, discard the staging pair and rerun from fresh copies. The two
+  databases do not share a transaction.
+- Promote the validated pair while the writer is stopped. Replace each complete SQLite
+  file set, handling any old WAL and SHM sidecars with the originals. Preserve file
+  ownership and permissions. Keep the writer stopped if either replacement fails, and
+  restore the original pair before retrying. Start a release containing the polling and
+  extraction fixes so the old write pattern cannot resume.
+- Verify health, check that the polling skip count stays flat across several ticks, and
+  confirm that explicit reminders still run. Compare direct replies, group participation,
+  persona style, and memory hits with representative DSH scenarios using the same model.
+  Review pending memories in the admin UI before approving them for local recall.
+
 The drill snapshots `domain.sqlite`, `durable.sqlite`, and the `blobs/` directory after
 `PRAGMA wal_checkpoint(FULL)`, verifies the manifest hashes, restores into an isolated staging
 directory, runs `PRAGMA integrity_check` on both databases, and compares blob SHA-256 hashes and file

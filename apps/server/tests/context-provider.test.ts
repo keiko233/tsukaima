@@ -280,6 +280,28 @@ describe("DrizzleContextProvider", () => {
 		}
 	});
 
+	test("keeps imported tool output out of the recent conversation window", async () => {
+		const { database } = await openFixture();
+		try {
+			await seedContextFixture(database);
+			await database.insert(messages).values(
+				Array.from({ length: 6 }, (_, index) => ({
+					contentText: "SYNTHETIC-TOOL-RESULT",
+					conversationId: "session-main",
+					direction: "outbound" as const,
+					id: `imported-tool-${index}`,
+					kind: "tool",
+					occurredAt: "2099-01-01T00:00:00.000Z",
+				})),
+			);
+			const text = await provider(database).renderMemories("42");
+			expect(text).toContain("I love matcha drinks");
+			expect(text).not.toContain("SYNTHETIC-TOOL-RESULT");
+		} finally {
+			database.$client.close();
+		}
+	});
+
 	test("does not inject shared chat memories into workspace sessions", async () => {
 		const { database } = await openFixture();
 		try {

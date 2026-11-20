@@ -1,5 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gt, inArray, isNull, like, lte, or, sql, type SQL } from "drizzle-orm";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	gt,
+	inArray,
+	isNull,
+	like,
+	lte,
+	ne,
+	or,
+	sql,
+	type SQL,
+} from "drizzle-orm";
 import type { ConversationPolicy, MemoryScope, MemoryStatus } from "@tsukaima/contracts";
 import { conversations, memories, messages, type TsukaimaDatabase } from "@tsukaima/db";
 import type { AuditEntry, PluginPermission, PluginTask } from "@tsukaima/sdk";
@@ -135,7 +149,6 @@ interface ExtractionCandidate {
 	readonly expiresAt?: string;
 	readonly importance: number;
 	readonly kind: string;
-	readonly scope?: MemoryScope;
 	readonly summary: string;
 }
 
@@ -509,39 +522,30 @@ function llmCandidateSchema(value: unknown): ExtractionCandidate | undefined {
 			? new Date(record.expiresAt).toISOString()
 			: undefined;
 	const content = typeof record.content === "string" ? record.content : record.summary;
-	const scope =
-		record.scope === "global" ||
-		record.scope === "persona" ||
-		record.scope === "user" ||
-		record.scope === "conversation" ||
-		record.scope === "project" ||
-		record.scope === "ephemeral"
-			? record.scope
-			: undefined;
 	return {
 		confidence,
 		content,
 		...(expiresAt === undefined ? {} : { expiresAt }),
 		importance,
 		kind: record.kind.trim().toLowerCase(),
-		...(scope === undefined ? {} : { scope }),
 		summary: snippet(record.summary, 1_000),
 	};
 }
 
-function parseLlmCandidates(text: string): ExtractionCandidate[] {
+function parseLlmCandidates(text: string): ExtractionCandidate[] | undefined {
 	const trimmed = text.trim();
 	const start = trimmed.indexOf("[");
 	const end = trimmed.lastIndexOf("]");
-	if (start === -1 || end <= start) return [];
+	if (start === -1 || end <= start) return undefined;
 	try {
 		const parsed: unknown = JSON.parse(trimmed.slice(start, end + 1));
-		if (!Array.isArray(parsed)) return [];
-		return parsed
+		if (!Array.isArray(parsed)) return undefined;
+		const candidates = parsed
 			.map(llmCandidateSchema)
 			.filter((candidate): candidate is ExtractionCandidate => candidate !== undefined);
+		return parsed.length > 0 && candidates.length === 0 ? undefined : candidates;
 	} catch {
-		return [];
+		return undefined;
 	}
 }
 
@@ -1004,7 +1008,7 @@ export class MemoryService {
 		const all = await database
 			.select()
 			.from(messages)
-			.where(eq(messages.conversationId, session.id))
+			.where(and(eq(messages.conversationId, session.id), ne(messages.kind, "tool")))
 			.orderBy(asc(messages.occurredAt), asc(messages.id));
 		const previous = await database
 			.select()
@@ -1272,12 +1276,12 @@ export class MemoryService {
 		const rows = await database
 			.select()
 			.from(messages)
-			.where(eq(messages.conversationId, session.id))
+			.where(and(eq(messages.conversationId, session.id), ne(messages.kind, "tool")))
 			.orderBy(desc(messages.occurredAt), desc(messages.id))
 			.limit(EXTRACTION_MESSAGE_LIMIT);
 		const chronological = rows.toReversed();
 		if (chronological.length === 0) return { candidates: 0, written: 0 };
-		let candidates: ExtractionCandidate[] = [];
+		let candidates: ExtractionCandidate[] | undefined;
 		let extractor: "heuristic" | "llm" = "heuristic";
 		let extractionModel = "deterministic";
 		const useLlm =
@@ -1286,7 +1290,7 @@ export class MemoryService {
 		if (useLlm) {
 			try {
 				const llm = await this.#llmExtract(policy, chronological);
-				if (llm.length > 0) {
+				if (llm !== undefined) {
 					candidates = llm;
 					extractor = "llm";
 					extractionModel = policy.memoryExtractModel ?? "default";
@@ -1297,26 +1301,23 @@ export class MemoryService {
 				});
 			}
 		}
-		if (candidates.length === 0) {
+		if (candidates === undefined) {
 			const heuristic = heuristicCandidates(chronological, this.#now());
 			candidates = heuristic.candidates;
 		}
-		const groupShared = session.kind === "group";
-		const canWriteShared = groupShared && policy.sharedMemoryWriteEnabled !== false;
-		const reviewRequired = policy.memoryReviewRequired === true || (groupShared && !canWriteShared);
+		const reviewRequired =
+			policy.memoryReviewRequired || (session.kind === "group" && !policy.sharedMemoryWriteEnabled);
 		let written = 0;
 		for (const candidate of candidates) {
 			if (written >= policy.memoryMaxWritesPerActivity) break;
 			if (candidate.confidence < policy.memoryMinConfidence) continue;
-			if (policy.sharedMemoryEnabled === false && candidate.scope === "global") continue;
-			const scope: MemoryScope = candidate.scope ?? (canWriteShared ? "global" : "conversation");
 			const status: MemoryStatus = reviewRequired ? "pending" : "active";
 			const messageIds = chronological.map((row) => row.id);
 			const source = chronological.at(-1);
 			const result = await this.create({
 				confidence: candidate.confidence,
 				content: candidate.content,
-				...(scope === "conversation" ? { conversationId: session.id } : {}),
+				conversationId: session.id,
 				createdBy: "task",
 				...(candidate.expiresAt === undefined ? {} : { expiresAt: candidate.expiresAt }),
 				evidence: {
@@ -1332,11 +1333,12 @@ export class MemoryService {
 						: policy.memoryExtractionPromptVersion,
 				importance: candidate.importance,
 				kind: candidate.kind,
-				scope,
+				scope: "conversation",
+				sourceConversationId: session.id,
 				...(source === undefined ? {} : { sourceMessageId: source.id }),
 				status,
 				summary: candidate.summary,
-				...(scope === "global" ? { visibility: "shared" } : { visibility: "private" }),
+				visibility: "private",
 			});
 			written += 1;
 			await this.#recordAudit(
@@ -1359,21 +1361,22 @@ export class MemoryService {
 	async #llmExtract(
 		policy: ConversationPolicy,
 		rows: readonly MessageRow[],
-	): Promise<ExtractionCandidate[]> {
-		if (this.#complete === undefined) return [];
+	): Promise<ExtractionCandidate[] | undefined> {
+		if (this.#complete === undefined) return undefined;
 		const transcript = rows
 			.filter((row) => row.contentText !== null)
 			.map((row) => `${row.direction}: ${snippet(row.contentText ?? "", 500)}`)
 			.join("\n");
 		const prompt = [
 			(await this.#extractionPrompt?.()) ?? DEFAULT_PROMPTS["memory-extraction"],
-			"Return ONLY a JSON array. Each item has: kind (fact|summary|setting|person|preference|style|glossary|todo|event|relationship|observation), summary (short), content, confidence (0..1), importance (0..1), optional expiresAt ISO date, optional scope.",
+			"Keep only durable information supported by the conversation. Omit speculation, transient banter, and claims inferred solely from assistant replies. Memory stays in this conversation.",
+			"Return ONLY a JSON array. Each item has: kind (fact|summary|setting|person|preference|style|glossary|todo|event|relationship|observation), summary (short), content, confidence (0..1), importance (0..1), optional expiresAt ISO date.",
 			`Prompt version: ${policy.memoryExtractionPromptVersion}.`,
 			"Conversation:",
 			transcript,
 		].join("\n");
 		const text = await this.#complete(prompt, policy.memoryExtractModel);
-		if (text === undefined) return [];
+		if (text === undefined) return undefined;
 		return parseLlmCandidates(text);
 	}
 

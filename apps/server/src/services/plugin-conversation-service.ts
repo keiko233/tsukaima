@@ -1,4 +1,4 @@
-import { desc, eq, or } from "drizzle-orm";
+import { and, desc, eq, ne, or } from "drizzle-orm";
 import { consumeProactiveMarkers, type ConversationPolicy } from "@tsukaima/contracts";
 import {
 	withConversationLock,
@@ -195,7 +195,7 @@ export class PluginConversationService {
 				senderDisplayName: messages.senderDisplayName,
 			})
 			.from(messages)
-			.where(eq(messages.conversationId, targetConversationId))
+			.where(and(eq(messages.conversationId, targetConversationId), ne(messages.kind, "tool")))
 			.orderBy(desc(messages.occurredAt))
 			.limit(bounded);
 		return rows.toReversed().map((row) => ({

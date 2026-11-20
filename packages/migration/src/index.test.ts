@@ -152,6 +152,7 @@ describe("DSH migration kit", () => {
 	});
 
 	test("imports, verifies, and rolls back through the domain database", async () => {
+		await fs.writeFile(join(snapshotRoot, "shared-memory.md"), "Synthetic shared reference.");
 		const source: [[string, string]] = [[snapshotRoot, "snapshot"]];
 		const pipeline = createPipeline(`sqlite:${join(testRoot, "domain.sqlite")}`);
 		const plan = await pipeline.dryRun(source);
@@ -159,12 +160,16 @@ describe("DSH migration kit", () => {
 
 		const imported = await pipeline.import(source, { dryRunPlan: plan });
 		expect(imported.messages).toBe(2);
-		expect(imported.memories).toBe(2);
+		expect(imported.memories).toBe(3);
 		const importedDatabase = await openDomainDatabase(join(testRoot, "domain.sqlite"));
 		try {
 			const memoryRows = await importedDatabase.select().from(memories);
-			expect(memoryRows).toHaveLength(2);
-			expect(memoryRows.every((row) => row.status === "active")).toBe(true);
+			expect(memoryRows).toHaveLength(3);
+			expect(memoryRows.find((row) => row.scope === "global")).toMatchObject({
+				status: "pending",
+				visibility: "shared",
+			});
+			expect(memoryRows.filter((row) => row.status === "active")).toHaveLength(2);
 			expect(memoryRows.every((row) => row.pinned === 0)).toBe(true);
 			expect(memoryRows.every((row) => row.extractionPromptVersion === "dsh-migration-v1")).toBe(
 				true,

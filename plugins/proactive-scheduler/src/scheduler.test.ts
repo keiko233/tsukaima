@@ -705,6 +705,22 @@ describe("durable tasks", () => {
 });
 
 describe("proactive delivery and markers", () => {
+	test("avoids persistent decisions for routine skips and historical WebUI sessions", async () => {
+		const { clock, conversations, service } = await setup(Date.UTC(2026, 0, 1, 12), true);
+		conversations.add("imported-webui", "webui");
+		await service.repository.saveState({
+			...emptyState("imported-webui", clock.now),
+			inboundCount: 10,
+			lastMessageAtMs: clock.now - 30 * 60_000,
+			warmness: 0.9,
+		});
+		for (let tick = 0; tick < 2; tick += 1) {
+			expect(await service.runTick()).toEqual({ candidates: 2, delivered: 0, skipped: 2 });
+		}
+		expect(await service.repository.listDecisions({})).toEqual([]);
+		expect(conversations.turns).toEqual([]);
+	});
+
 	test("delivers a tick and increments per-conversation counters", async () => {
 		const now = Date.UTC(2026, 0, 1, 12, 0);
 		const { logs, service } = await setup(now, true);

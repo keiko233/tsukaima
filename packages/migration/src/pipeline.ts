@@ -219,7 +219,7 @@ function memoryRow(memory: NormalizedDatabase["memories"][number]): {
 	updatedAt: string;
 	createdBy: "migration";
 	visibility: string;
-	status: "active";
+	status: "active" | "pending";
 	pinned: 0;
 	extractionModel: string;
 	extractionPromptVersion: string;
@@ -238,8 +238,8 @@ function memoryRow(memory: NormalizedDatabase["memories"][number]): {
 		createdAt: memory.createdAt,
 		updatedAt: memory.updatedAt,
 		createdBy: "migration",
-		visibility: "private",
-		status: "active",
+		visibility: memory.scope === "global" ? "shared" : "private",
+		status: memory.scope === "global" ? "pending" : "active",
 		pinned: 0,
 		extractionModel: "migration",
 		extractionPromptVersion: "dsh-migration-v1",

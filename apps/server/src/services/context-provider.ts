@@ -200,7 +200,14 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				...new Set([...policy.trigger.selfAliases, ...(persona?.selfAliases ?? [])]),
 			];
 			if (aliases.length > 0) lines.push(`- Self aliases: ${aliases.join(", ")}`);
-			lines.push("- If a reply would be noise, answer with exactly TSUKAIMA_LURK.");
+			lines.push(
+				"- Respond to direct questions, calls for your attention, and private chat messages.",
+			);
+			if (session.chatKind === "group") {
+				lines.push(
+					"- For an undirected group message, answer with exactly TSUKAIMA_LURK if you have nothing useful to add.",
+				);
+			}
 			const rendered = lines.join("\n");
 			this.#logger.debug("rendered policy context", {
 				aliasCount: aliases.length,
@@ -363,7 +370,9 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		}
 		const recent = await this.#recentMessages(database, session?.sessionId);
 		const warm =
-			session === undefined ? undefined : await this.#memoryService.warmState(session.sessionId);
+			session === undefined || session.chatKind === "workspace"
+				? undefined
+				: await this.#memoryService.warmState(session.sessionId);
 		const scopeFilter = await this.#scopeFilter(database, session, policy);
 		const query = [
 			...recent.map((row) => row.contentText ?? ""),
@@ -425,7 +434,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		}
 		const scopeCondition = or(...scopes);
 		if (scopeCondition === undefined) return undefined;
-		if (session?.chatKind === "group" && policy.sharedMemoryEnabled === false) {
+		if (policy.sharedMemoryEnabled === false) {
 			return and(scopeCondition, ne(memories.visibility, "shared"));
 		}
 		return scopeCondition;
@@ -489,7 +498,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				id: messages.id,
 			})
 			.from(messages)
-			.where(eq(messages.conversationId, sessionId))
+			.where(and(eq(messages.conversationId, sessionId), ne(messages.kind, "tool")))
 			.orderBy(desc(messages.occurredAt))
 			.limit(RECENT_MESSAGE_LIMIT);
 		return recent.toReversed();
