@@ -77,7 +77,8 @@ import {
 } from "./execution-lock.ts";
 import { createFallbackCoreLogger, previewText, type CoreLogger } from "./logger.ts";
 import { createFakeModel, type ModelPort } from "./model.ts";
-import { busyDisposition } from "./output-pacing.ts";
+import { busyDisposition, directFlushDecision } from "./output-pacing.ts";
+import { createChatRunExtension, type ConversationNarration } from "./run-hooks.ts";
 import type { BusyArbiter, BusyArbitrationResult } from "./busy-arbiter.ts";
 import { shouldCloseActivityWindow } from "./index.ts";
 
@@ -295,6 +296,11 @@ export interface ConversationAnswer {
 	readonly submissionRequestId?: string;
 	/** Concatenated text blocks of the assistant answer. */
 	readonly text: string;
+	/**
+	 * True when the answer stopped on its output token limit and no continuation completed it.
+	 * The dispatcher still delivers the text but records the truncation.
+	 */
+	readonly truncated?: boolean;
 }
 
 /**
@@ -308,7 +314,12 @@ export type SubmissionAnswerResolution =
 	| { readonly status: "missing" }
 	| { readonly status: "pending" }
 	| { readonly status: "unanswered"; readonly reason: string }
-	| { readonly status: "answered"; readonly entryId: string; readonly text: string };
+	| {
+			readonly status: "answered";
+			readonly entryId: string;
+			readonly text: string;
+			readonly truncated?: boolean;
+	  };
 
 /**
  * Activity-window transition for host consumers (the server forwards these to plugin
@@ -422,6 +433,16 @@ export interface DurableConversationHostOptions {
 	 * durable commit that produced the change, so a slow consumer never blocks either.
 	 */
 	readonly onLiveRun?: (state: LiveRunSnapshot) => void;
+	/**
+	 * Receive mid-turn narration: assistant text written before a tool call, or the delivered
+	 * prefix of an answer cut off by the output limit. Called from the generation hook, so the
+	 * callback must not wait on the conversation lock; the dispatcher dedupes by `narrationId`.
+	 */
+	readonly onNarration?: (narration: ConversationNarration) => Promise<void> | void;
+	/** Tools that post to the chat themselves; their message text is never narrated. */
+	readonly isDirectSendTool?: (toolName: string) => boolean;
+	/** True when this turn already delivered text through a direct send tool. */
+	readonly hasDirectSend?: (conversationId: string) => boolean;
 	/** How long a busy run may still be steered before a follow-up is queued. */
 	readonly steerGraceMs?: number;
 	/**
@@ -586,6 +607,13 @@ function assistantEntryText(entry: EntryRecord): string | undefined {
 	}
 	const text = texts.join("\n").trim();
 	return text.length === 0 ? undefined : text;
+}
+
+/** Stop reason of the last assistant message an entry holds. */
+function assistantEntryStopReason(entry: EntryRecord): string | undefined {
+	if (entry.kind !== "pi.assistant" || entry.model === undefined) return undefined;
+	const last = entry.model.findLast((message) => message.role === "assistant");
+	return last?.role === "assistant" ? last.stopReason : undefined;
 }
 
 /** Text of the user message an input entry placed, when the entry carries one. */
@@ -856,6 +884,17 @@ export class PiDurableConversationHost {
 		this.toolSearchExtension = toolSearchExtension;
 		this.extensions.set(toolSearchExtension.name, toolSearchExtension);
 		this.registry.install(toolSearchExtension);
+		const chatRunExtension = createChatRunExtension({
+			logger: this.logger,
+			readPolicy: (conversationId) => this.readPolicy(Number(conversationId) as ConversationId),
+			...(options.onNarration === undefined ? {} : { onNarration: options.onNarration }),
+			...(options.isDirectSendTool === undefined
+				? {}
+				: { isDirectSendTool: options.isDirectSendTool }),
+			...(options.hasDirectSend === undefined ? {} : { hasDirectSend: options.hasDirectSend }),
+		});
+		this.extensions.set(chatRunExtension.name, chatRunExtension);
+		this.registry.install(chatRunExtension);
 		if (options.extensions !== undefined) this.installExtensions(options.extensions);
 	}
 
@@ -951,8 +990,20 @@ export class PiDurableConversationHost {
 		// whenever the platform clock ran ahead. Prefer the locally observed time.
 		const firstMessageAtMs = envelopeObservedAtMs(nextEnvelopes[0]) ?? input.submittedAtMs;
 		const latestMessageAtMs = envelopeObservedAtMs(nextEnvelopes.at(-1)) ?? input.submittedAtMs;
+		const messageText = messagePartsText(input.envelope.parts);
+		// With the direct-flush heuristic enabled, length only shortcuts a direct address that is
+		// not part of an active burst. Disabling it restores the legacy rule where any long
+		// message submits at once.
+		const directFlush = directFlushDecision({
+			// Unclassified appends come from local surfaces (WebUI, tasks), which are always direct.
+			classification: input.classification ?? "direct",
+			pacing,
+			previousMessageAtMs: shouldOpen ? undefined : envelopeObservedAtMs(envelopes.at(-1)),
+			submittedAtMs: input.submittedAtMs,
+			text: messageText,
+		});
 		const longMessage =
-			messagePartsText(input.envelope.parts).length >= pacing.burstLongMessageThreshold;
+			!pacing.directFlushEnabled && messageText.length >= pacing.burstLongMessageThreshold;
 		const windowClosed = shouldCloseActivityWindow(
 			firstMessageAtMs,
 			input.submittedAtMs,
@@ -961,7 +1012,10 @@ export class PiDurableConversationHost {
 		);
 		const burstWantsSubmit =
 			input.collectOnly !== true &&
-			(nextEnvelopes.length >= pacing.burstMaxMessages || longMessage || windowClosed);
+			(nextEnvelopes.length >= pacing.burstMaxMessages ||
+				directFlush.flush ||
+				longMessage ||
+				windowClosed);
 		const arbitrationEnabled = policy.sidechat.enabled && this.options.busyArbiter !== undefined;
 		let shouldSubmit = input.forceSubmit === true || burstWantsSubmit;
 		let deferredWhileWorking = false;
@@ -998,6 +1052,7 @@ export class PiDurableConversationHost {
 			collectOnly: input.collectOnly === true,
 			conversationId: input.conversationId,
 			deferredWhileWorking,
+			directFlush: directFlush.reason,
 			envelopeCount: nextEnvelopes.length,
 			messageId: input.envelope.id,
 			shouldSubmit,
@@ -1132,6 +1187,7 @@ export class PiDurableConversationHost {
 				if (entry === undefined) return;
 				const text = assistantEntryText(entry);
 				if (text === undefined) return;
+				const truncated = assistantEntryStopReason(entry) === "length";
 				const activityId = activityIdFromSubmissionRequestId(settled.requestId ?? "");
 				const submissionRequestId = settled.requestId;
 				const entryId = String(answerId);
@@ -1153,6 +1209,7 @@ export class PiDurableConversationHost {
 					entryId,
 					...(submissionRequestId === undefined ? {} : { submissionRequestId }),
 					text,
+					...(truncated ? { truncated } : {}),
 				});
 			} catch (error) {
 				if (this.closed) return;
@@ -1930,7 +1987,13 @@ export class PiDurableConversationHost {
 		}
 		const text = assistantEntryText(answer.entry);
 		if (text === undefined) return { reason: "answer_has_no_text", status: "unanswered" };
-		return { entryId: String(record.answer), status: "answered", text };
+		const truncated = assistantEntryStopReason(answer.entry) === "length";
+		return {
+			entryId: String(record.answer),
+			status: "answered",
+			text,
+			...(truncated ? { truncated } : {}),
+		};
 	}
 
 	async compactConversation(

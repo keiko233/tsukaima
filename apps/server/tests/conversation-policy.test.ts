@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { MessageEnvelope } from "@tsukaima/contracts";
+import { defaultConversationPolicy, type MessageEnvelope } from "@tsukaima/contracts";
 import { CONTEXT_EXTENSION_NAME, createContextExtension } from "@tsukaima/core";
 import {
 	auditLog,
@@ -145,6 +145,58 @@ describe("conversation policy service", () => {
 			expect(history.find((revision) => revision.isActive)?.policy.version).toBe(2);
 			const rows = await database.select().from(policies);
 			expect(rows.filter((row) => row.scope === "conversation")).toHaveLength(2);
+		} finally {
+			database.$client.close();
+		}
+	});
+
+	test("keeps stored custom values while new defaults fill unset sections", async () => {
+		const database = await openFixture();
+		try {
+			const legacy = JSON.parse(JSON.stringify(defaultConversationPolicy)) as Record<
+				string,
+				unknown
+			>;
+			delete legacy.generation;
+			delete legacy.notices;
+			const pacing = legacy.pacing as Record<string, unknown>;
+			pacing.burstSettleMs = 321;
+			delete pacing.narrationMinIntervalMs;
+			delete pacing.directFlushEnabled;
+			const trigger = legacy.trigger as Record<string, unknown>;
+			trigger.keywords = ["custom-wake"];
+			await database.insert(policies).values({
+				createdAt: new Date().toISOString(),
+				id: "legacy-global",
+				isActive: 1,
+				policyJson: JSON.stringify(legacy),
+				scope: "global",
+				updatedAt: new Date().toISOString(),
+			});
+			const policyService = service(database);
+			const view = await policyService.view();
+			expect(view.policy.pacing.burstSettleMs).toBe(321);
+			expect(view.policy.pacing.narrationMinIntervalMs).toBe(
+				defaultConversationPolicy.pacing.narrationMinIntervalMs,
+			);
+			expect(view.policy.pacing.directFlushEnabled).toBe(
+				defaultConversationPolicy.pacing.directFlushEnabled,
+			);
+			expect(view.policy.generation).toEqual(defaultConversationPolicy.generation);
+			expect(view.policy.notices).toEqual(defaultConversationPolicy.notices);
+			expect(view.policy.trigger.keywords).toEqual(["custom-wake"]);
+
+			await policyService.update({
+				policy: { generation: { temperature: 0.5 } },
+				scope: "global",
+			});
+			const updated = await policyService.view();
+			expect(updated.policy.pacing.burstSettleMs).toBe(321);
+			expect(updated.policy.trigger.keywords).toEqual(["custom-wake"]);
+			expect(updated.policy.generation.temperature).toBe(0.5);
+			expect(updated.policy.generation.maxLengthContinuations).toBe(
+				defaultConversationPolicy.generation.maxLengthContinuations,
+			);
 		} finally {
 			database.$client.close();
 		}

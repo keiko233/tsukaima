@@ -137,6 +137,10 @@ describe("built-in plugin panels", () => {
 		expect(html).toContain("slow-chat");
 		expect(html).toContain("Tool use");
 		expect(html).toContain("Default");
+		expect(html).toContain("Temperature");
+		expect(html).toContain("Top P");
+		expect(html).toContain("Stop sequences");
+		expect(html).toContain("Request timeout (ms)");
 		expect(html).not.toContain("Edit this value in the plugin configuration JSON.");
 		expect(html.indexOf("onebot-napcat")).toBe(-1);
 	});

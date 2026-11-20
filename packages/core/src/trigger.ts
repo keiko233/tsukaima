@@ -23,7 +23,11 @@ export interface TriggerClassificationInput {
 	/** Merged aliases from the policy and the active persona. */
 	readonly selfAliases?: readonly string[];
 	readonly replyTarget?: ResolvedReplyTarget;
-	/** Recent conversation activity makes a group message eligible for quiet participation. */
+	/**
+	 * Recent conversation activity makes a group message eligible for quiet participation.
+	 * Ignored when `trigger.recentActivityEscalation` is `off`. The `throttled` budget is
+	 * process-local pacing state, so the caller applies it and passes `false` once spent.
+	 */
 	readonly recentActivity?: boolean;
 }
 
@@ -251,7 +255,9 @@ export function classifyConversationTrigger(
 		};
 	}
 
-	if (aliasMentioned || input.recentActivity === true) {
+	const activityEscalates =
+		input.recentActivity === true && policy.trigger.recentActivityEscalation !== "off";
+	if (aliasMentioned || activityEscalates) {
 		return {
 			aliasMentioned,
 			classification: "soft",
@@ -283,7 +289,7 @@ export interface TurnCueInput {
  * silent. Direct and ambient turns need no cue. The text reaches the model only through the
  * turn-context hook and is never persisted into the transcript.
  *
- * TODO(batch-2, batch-6): revisit the lurk marker itself; keep this wording minimal.
+ * TODO(batch-6): revisit the lurk marker itself; keep this wording minimal.
  */
 export function buildTurnCue(input: TurnCueInput): string | undefined {
 	if (input.classification !== "soft") return undefined;
@@ -310,10 +316,27 @@ export interface LurkDecision {
 	readonly text: string;
 }
 
-/** Extract the lurk marker before any outbound persistence or channel send. */
+/** Whitespace, quotes, brackets, and simple punctuation a model may wrap the marker in. */
+const LURK_WRAPPING = /^[\s"'`“”‘’「」『』()[\]{}<>.,!?;:。，、！？；：…~～*_-]*$/u;
+
+/**
+ * Decide lurk before any outbound persistence or channel send.
+ *
+ * Only a reply that *is* the marker (optionally wrapped in whitespace or simple punctuation)
+ * means silence. A marker mentioned inside a substantive reply never deletes that reply; the
+ * internal token is stripped so it cannot leak into the chat. A trailing marker line after real
+ * text ("ok\nTSUKAIMA_LURK") is prose with a marker, so "ok" is still sent.
+ */
 export function extractLurkMarker(text: string): LurkDecision {
-	const markerPattern = new RegExp(`(^|\\s)${LURK_MARKER}(?=\\s|$)`, "gu");
-	if (!markerPattern.test(text)) return { lurk: false, text: text.trim() };
-	const cleaned = text.replace(new RegExp(`${LURK_MARKER}`, "gu"), "").trim();
-	return { lurk: true, text: cleaned };
+	const trimmed = text.trim();
+	if (!trimmed.includes(LURK_MARKER)) return { lurk: false, text: trimmed };
+	const residue = trimmed.split(LURK_MARKER).join("");
+	if (LURK_WRAPPING.test(residue)) return { lurk: true, text: "" };
+	return {
+		lurk: false,
+		text: residue
+			.replace(/[ \t]{2,}/gu, " ")
+			.replace(/[ \t]+\n/gu, "\n")
+			.trim(),
+	};
 }

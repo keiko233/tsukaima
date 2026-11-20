@@ -235,6 +235,12 @@ export const openAiCompatiblePlugin: TsukaimaPlugin = {
 						reasoningLevels: model.reasoningLevels,
 						supportsReasoning: model.supportsReasoning,
 						supportsTools: model.supportsTools,
+						...(model.temperature === undefined ? {} : { temperature: model.temperature }),
+						...(model.topP === undefined ? {} : { topP: model.topP }),
+						...(model.stop === undefined ? {} : { stop: model.stop }),
+						...(model.requestTimeoutMs === undefined
+							? {}
+							: { requestTimeoutMs: model.requestTimeoutMs }),
 					})),
 				);
 				context.logger.debug("OpenAI-compatible model port created", {

@@ -44,6 +44,12 @@ export const openAiCompatibleModelSchema = z.object({
 	capabilities: z.array(z.string().trim().min(1)).default([]),
 	contextWindow: z.number().int().positive().default(128_000),
 	maxOutputTokens: z.number().int().positive().default(4_096),
+	/** Sampling defaults sent with every request; unset leaves the provider's own default. */
+	temperature: z.number().min(0).max(2).optional(),
+	topP: z.number().gt(0).max(1).optional(),
+	stop: z.array(z.string().min(1)).max(4).optional(),
+	/** Header wait and stream-idle timeout; unset uses the core default (60 s). */
+	requestTimeoutMs: z.number().int().min(1_000).max(600_000).optional(),
 });
 
 export type OpenAiCompatibleModel = z.infer<typeof openAiCompatibleModelSchema>;

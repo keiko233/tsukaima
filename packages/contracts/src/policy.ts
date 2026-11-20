@@ -50,6 +50,9 @@ export type TriggerClassification = z.infer<typeof triggerClassificationSchema>;
 export const triggerDecisionSchema = z.enum(["direct", "soft", "ambient", "ignored"]);
 export type TriggerDecision = z.infer<typeof triggerDecisionSchema>;
 
+export const recentActivityEscalationSchema = z.enum(["off", "throttled", "always"]);
+export type RecentActivityEscalation = z.infer<typeof recentActivityEscalationSchema>;
+
 export const conversationTriggerPolicySchema = z
 	.object({
 		privateAccess: z.enum(["open", "allowlist", "disabled"]).default("open"),
@@ -62,6 +65,14 @@ export const conversationTriggerPolicySchema = z
 		imageOnly: z.enum(["wake", "text-only", "lurk", "ignore"]).default("lurk"),
 		selfAliases: z.array(z.string().min(1)).default([]),
 		peerBotIds: z.array(z.string().min(1)).default([]),
+		/**
+		 * Whether recent bot activity lets an undirected group message start a full-model `soft`
+		 * turn. `always` is the legacy behavior (every message for the activity window),
+		 * `throttled` allows at most one such turn per `recentActivityMinIntervalMs`, and `off`
+		 * keeps undirected messages ambient. Direct, alias, and reply triggers are unaffected.
+		 */
+		recentActivityEscalation: recentActivityEscalationSchema.default("throttled"),
+		recentActivityMinIntervalMs: z.number().int().min(0).default(60_000),
 	})
 	.strict();
 
@@ -79,10 +90,28 @@ export type QuietHoursPolicy = z.infer<typeof quietHoursSchema>;
 
 export const conversationPacingPolicySchema = z
 	.object({
-		burstSettleMs: z.number().int().min(1).default(8_000),
-		burstMaxWaitMs: z.number().int().min(1).default(15_000),
+		burstSettleMs: z.number().int().min(1).default(1_200),
+		burstMaxWaitMs: z.number().int().min(1).default(5_000),
 		burstMaxMessages: z.number().int().min(1).default(20),
-		burstLongMessageThreshold: z.number().int().min(1).default(400),
+		burstLongMessageThreshold: z.number().int().min(1).default(32),
+		/**
+		 * Submit a single direct message (private chat, `@bot`, reply-to-bot, wake keyword)
+		 * without waiting for `burstSettleMs` when it already reads as complete: it ends with
+		 * terminal punctuation or reaches `burstLongMessageThreshold`.
+		 */
+		directFlushEnabled: z.boolean().default(true),
+		/**
+		 * A message that arrived within this window of the previous one is part of an active
+		 * burst, so the direct-flush shortcut waits for the normal settle window instead.
+		 */
+		activeBurstWindowMs: z.number().int().min(0).default(1_500),
+		/**
+		 * Deliver assistant text written before a tool call as a mid-turn message, so the chat
+		 * sees "let me check" before a slow tool finishes.
+		 */
+		narrationEnabled: z.boolean().default(true),
+		/** Minimum spacing between two narration messages of the same conversation. */
+		narrationMinIntervalMs: z.number().int().min(0).default(1_500),
 		replyCooldownMs: z.number().int().min(0).default(0),
 		typingEnabled: z.boolean().default(false),
 		replyDelayEnabled: z.boolean().default(false),
@@ -97,6 +126,48 @@ export const conversationPacingPolicySchema = z
 	.strict();
 
 export type ConversationPacingPolicy = z.infer<typeof conversationPacingPolicySchema>;
+
+/**
+ * Channel notices (platform interactions that are not messages). Notices are always persisted
+ * as history; these switches decide whether the model sees them and whether a self-targeted
+ * poke may wake the conversation. A wake still passes the normal access policy.
+ */
+export const conversationNoticePolicySchema = z
+	.object({
+		/** Show self-targeted pokes to the model in the next turn's observation window. */
+		pokeObserve: z.boolean().default(true),
+		/** Start a turn when someone pokes the bot. */
+		pokeWake: z.boolean().default(false),
+		/** Minimum spacing between two poke-triggered turns of the same conversation. */
+		pokeWakeCooldownMs: z.number().int().min(0).default(60_000),
+	})
+	.strict();
+
+export type ConversationNoticePolicy = z.infer<typeof conversationNoticePolicySchema>;
+
+export const lengthTruncationModeSchema = z.enum(["continue", "surface"]);
+export type LengthTruncationMode = z.infer<typeof lengthTruncationModeSchema>;
+
+/**
+ * Per-conversation generation controls. Sampling fields override the provider model's
+ * configured values for OpenAI-compatible requests only; unset fields keep the provider value.
+ */
+export const conversationGenerationPolicySchema = z
+	.object({
+		/**
+		 * What to do when the model stops on its output token limit: `continue` delivers the cut
+		 * text and asks the model to finish, at most `maxLengthContinuations` times per run;
+		 * `surface` delivers it as-is and records the truncation.
+		 */
+		lengthTruncation: lengthTruncationModeSchema.default("continue"),
+		maxLengthContinuations: z.number().int().min(0).max(3).default(1),
+		temperature: z.number().min(0).max(2).optional(),
+		topP: z.number().gt(0).max(1).optional(),
+		stop: z.array(z.string().min(1)).max(4).optional(),
+	})
+	.strict();
+
+export type ConversationGenerationPolicy = z.infer<typeof conversationGenerationPolicySchema>;
 
 /**
  * How a conversation decides what to do with messages that arrive while a model run is
@@ -210,22 +281,37 @@ export const conversationPolicySchema = z
 			peerBotIds: [],
 			privateAccess: "open",
 			replyToBotCounts: true,
+			recentActivityEscalation: "throttled",
+			recentActivityMinIntervalMs: 60_000,
 			selfAliases: [],
 			stickerOnly: "lurk",
 		}),
 		pacing: conversationPacingPolicySchema.default({
-			burstLongMessageThreshold: 400,
+			activeBurstWindowMs: 1_500,
+			burstLongMessageThreshold: 32,
 			burstMaxMessages: 20,
-			burstMaxWaitMs: 15_000,
-			burstSettleMs: 8_000,
+			burstMaxWaitMs: 5_000,
+			burstSettleMs: 1_200,
+			directFlushEnabled: true,
 			maxImmediateOutputMessages: 6,
 			maxRepliesPerMinute: 20,
+			narrationEnabled: true,
+			narrationMinIntervalMs: 1_500,
 			replyCooldownMs: 0,
 			replyDelayEnabled: false,
 			replyDelayMaxMs: 2_000,
 			sendIntervalMs: 400,
 			stripMarkdown: true,
 			typingEnabled: false,
+		}),
+		notices: conversationNoticePolicySchema.default({
+			pokeObserve: true,
+			pokeWake: false,
+			pokeWakeCooldownMs: 60_000,
+		}),
+		generation: conversationGenerationPolicySchema.default({
+			lengthTruncation: "continue",
+			maxLengthContinuations: 1,
 		}),
 		sidechat: sidechatPolicySchema.default({
 			enabled: true,
@@ -272,12 +358,18 @@ export const defaultConversationPolicy: ConversationPolicy = {
 		imageOnly: "lurk",
 		selfAliases: [],
 		peerBotIds: [],
+		recentActivityEscalation: "throttled",
+		recentActivityMinIntervalMs: 60_000,
 	},
 	pacing: {
-		burstSettleMs: 8_000,
-		burstMaxWaitMs: 15_000,
+		burstSettleMs: 1_200,
+		burstMaxWaitMs: 5_000,
 		burstMaxMessages: 20,
-		burstLongMessageThreshold: 400,
+		burstLongMessageThreshold: 32,
+		directFlushEnabled: true,
+		activeBurstWindowMs: 1_500,
+		narrationEnabled: true,
+		narrationMinIntervalMs: 1_500,
 		replyCooldownMs: 0,
 		typingEnabled: false,
 		replyDelayEnabled: false,
@@ -286,6 +378,15 @@ export const defaultConversationPolicy: ConversationPolicy = {
 		maxImmediateOutputMessages: 6,
 		stripMarkdown: true,
 		maxRepliesPerMinute: 20,
+	},
+	notices: {
+		pokeObserve: true,
+		pokeWake: false,
+		pokeWakeCooldownMs: 60_000,
+	},
+	generation: {
+		lengthTruncation: "continue",
+		maxLengthContinuations: 1,
 	},
 	sidechat: {
 		enabled: true,
@@ -316,6 +417,8 @@ const triggerPolicyPatchSchema = z
 		imageOnly: z.enum(["wake", "text-only", "lurk", "ignore"]).optional(),
 		selfAliases: z.array(z.string().min(1)).optional(),
 		peerBotIds: z.array(z.string().min(1)).optional(),
+		recentActivityEscalation: recentActivityEscalationSchema.optional(),
+		recentActivityMinIntervalMs: z.number().int().min(0).optional(),
 	})
 	.strict();
 
@@ -325,6 +428,10 @@ const pacingPolicyPatchSchema = z
 		burstMaxWaitMs: z.number().int().min(1).optional(),
 		burstMaxMessages: z.number().int().min(1).optional(),
 		burstLongMessageThreshold: z.number().int().min(1).optional(),
+		directFlushEnabled: z.boolean().optional(),
+		activeBurstWindowMs: z.number().int().min(0).optional(),
+		narrationEnabled: z.boolean().optional(),
+		narrationMinIntervalMs: z.number().int().min(0).optional(),
 		replyCooldownMs: z.number().int().min(0).optional(),
 		typingEnabled: z.boolean().optional(),
 		replyDelayEnabled: z.boolean().optional(),
@@ -347,6 +454,25 @@ const sidechatPolicyPatchSchema = z
 		minRunAgeMs: z.number().int().min(0).optional(),
 		maxInterruptsPerMinute: z.number().int().min(0).optional(),
 		maxHoldMs: z.number().int().min(1).optional(),
+	})
+	.strict();
+
+const noticePolicyPatchSchema = z
+	.object({
+		pokeObserve: z.boolean().optional(),
+		pokeWake: z.boolean().optional(),
+		pokeWakeCooldownMs: z.number().int().min(0).optional(),
+	})
+	.strict();
+
+/** `null` clears a sampling override so the provider model's value applies again. */
+const generationPolicyPatchSchema = z
+	.object({
+		lengthTruncation: lengthTruncationModeSchema.optional(),
+		maxLengthContinuations: z.number().int().min(0).max(3).optional(),
+		temperature: z.number().min(0).max(2).nullish(),
+		topP: z.number().gt(0).max(1).nullish(),
+		stop: z.array(z.string().min(1)).max(4).nullish(),
 	})
 	.strict();
 
@@ -381,6 +507,8 @@ export const conversationPolicyPatchSchema = z
 		memoryMaxWritesPerActivity: z.number().int().min(1).max(50).optional(),
 		trigger: triggerPolicyPatchSchema.optional(),
 		pacing: pacingPolicyPatchSchema.optional(),
+		notices: noticePolicyPatchSchema.optional(),
+		generation: generationPolicyPatchSchema.optional(),
 		sidechat: sidechatPolicyPatchSchema.optional(),
 		compaction: compactionPolicyPatchSchema.optional(),
 	})

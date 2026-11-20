@@ -379,6 +379,8 @@ export class TsukaimaLifecycle {
 			database: () => this.domainDatabase,
 			hooks: this.hooks,
 			logger: this.runtimeLog,
+			onDirectSend: (durableConversationId, text) =>
+				this.replyDispatcher.noteDirectSend(durableConversationId, text),
 			router: () => this.conversationRouter,
 		});
 		this.contextProvider = new DrizzleContextProvider({
@@ -1198,6 +1200,23 @@ export class TsukaimaLifecycle {
 				});
 			},
 			onLiveRun: (state) => this.forwardLiveRun(state),
+			// Detached on purpose: the generation hook must not wait for channel sends (the tool
+			// round would stall) or for the conversation lock (a background turn holding it may be
+			// waiting on this very run). The dispatcher reserves its outbound lane synchronously, so
+			// narration still precedes the turn's final answer.
+			onNarration: (narration) => {
+				void this.replyDispatcher.handleNarration(narration).catch((error: unknown) => {
+					this.runtimeLog.warn("narration delivery failed", {
+						conversationId: narration.conversationId,
+						error: error instanceof Error ? error.message : String(error),
+						narrationId: narration.narrationId,
+					});
+				});
+			},
+			// Channel send tools end in `send`/`send_message`. The suffix match stays compatible
+			// when Batch 3 gives them cleaner names, and OutboundService reports actual sends.
+			isDirectSendTool: (toolName) => /(^|[._-])send(_message)?$/u.test(toolName),
+			hasDirectSend: (conversationId) => this.replyDispatcher.hasDirectSendThisTurn(conversationId),
 			resolveImage: async (part) => {
 				if (part.type !== "image") return undefined;
 				// Only bytes already in the media store can be shown to the model. A part that only
@@ -1721,16 +1740,24 @@ export class TsukaimaLifecycle {
 		try {
 			const result = await this.conversationRouter.ingestNotice(notice);
 			if (notice.noticeType === "poke" && notice.isSelfTarget === true && !result.duplicated) {
+				const wake = await this.conversationRouter.wakeFromNotice(notice, result);
 				this.runtimeLog.info("poke at bot received", {
 					channelId,
 					conversationKey: notice.conversationKey,
 					senderId: notice.actorId,
+					wakeReason: wake.reason,
+					woken: wake.woken,
 				});
 				await this.writeAudit({
 					action: "channel.poke-at-bot",
 					actorId: notice.actorId ?? "unknown",
 					actorKind: "user",
-					payload: { noticeId: notice.id, sessionId: result.sessionId },
+					payload: {
+						noticeId: notice.id,
+						sessionId: result.sessionId,
+						wakeReason: wake.reason,
+						woken: wake.woken,
+					},
 					result: "ok",
 					...(notice.actorId === undefined ? {} : { targetId: notice.actorId }),
 					targetKind: "channel-user",

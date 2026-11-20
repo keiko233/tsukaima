@@ -239,11 +239,23 @@ export class ConversationRouter {
 				(message.target?.quote?.fromSelf === true
 					? { direction: "outbound" as const, senderKind: "assistant" as const }
 					: undefined);
-			const recentActivity =
+			const recentlyActive =
 				this.#pacing?.isRecentlyActive(
 					target.durableConversationId,
 					Math.max(300_000, policy.pacing.burstMaxWaitMs),
 				) ?? false;
+			const escalation = policy.trigger.recentActivityEscalation;
+			// `throttled` lets at most one undirected message per interval start a full-model `soft`
+			// turn, so recent activity alone cannot burn a model call on every group message.
+			const recentActivity =
+				recentlyActive &&
+				(escalation === "always" ||
+					(escalation === "throttled" &&
+						(this.#pacing?.softEscalationAvailable(
+							target.durableConversationId,
+							policy.trigger.recentActivityMinIntervalMs,
+						) ??
+							true)));
 			const trigger = classifyConversationTrigger({
 				chatKind: message.conversationKey.kind,
 				envelope: message,
@@ -252,6 +264,9 @@ export class ConversationRouter {
 				selfAliases,
 				...(replyTarget === undefined ? {} : { replyTarget }),
 			});
+			if (trigger.classification === "soft" && !trigger.aliasMentioned && recentActivity) {
+				this.#pacing?.recordSoftEscalation(target.durableConversationId);
+			}
 			this.#stats[trigger.classification] += 1;
 			messageLog.debug("conversation trigger classified", {
 				classification: trigger.classification,
@@ -289,7 +304,11 @@ export class ConversationRouter {
 				reply?.quote,
 			);
 			if (trigger.classification !== "ambient") {
-				this.#onInboundTrigger?.(target.durableConversationId);
+				// Only a direct address interrupts in-flight output. A `soft` message is chatter the
+				// bot merely follows and must not cut a multi-bubble reply short.
+				if (trigger.classification === "direct") {
+					this.#onInboundTrigger?.(target.durableConversationId);
+				}
 				await this.#policy?.ensureHostPolicy(target.sessionId, target.durableConversationId);
 				try {
 					await this.#applyModelToolPolicy?.(target.durableConversationId, policy);
@@ -590,15 +609,12 @@ export class ConversationRouter {
 	}
 
 	/**
-	 * Persist a platform notice as a system/notice row on the resolved session. Notices never
-	 * call the conversation host and never trigger a model turn; Phase 2 supplies wake policy
-	 * on top of the persisted `isSelfTarget` fact.
+	 * Persist a platform notice as a system/notice row on the resolved session. Ingestion never
+	 * calls the conversation host; {@link ConversationRouter.wakeFromNotice} decides separately
+	 * whether a self-targeted poke starts a turn. `DrizzleContextProvider` exposes observed
+	 * self-pokes to the next turn when `notices.pokeObserve` is enabled.
 	 */
-	async ingestNotice(notice: ChannelNotice): Promise<{
-		readonly duplicated: boolean;
-		readonly persisted: boolean;
-		readonly sessionId?: string;
-	}> {
+	async ingestNotice(notice: ChannelNotice): Promise<IngestedNotice> {
 		const parsed = channelNoticeSchema.safeParse(notice);
 		if (!parsed.success) throw new Error("Invalid channel notice");
 		const value = parsed.data;
@@ -659,7 +675,13 @@ export class ConversationRouter {
 				noticeType: value.noticeType,
 				sessionId: target.sessionId,
 			});
-			return { duplicated: true, persisted: true, sessionId: target.sessionId };
+			return {
+				duplicated: true,
+				durableConversationId: target.durableConversationId,
+				envelope,
+				persisted: true,
+				sessionId: target.sessionId,
+			};
 		}
 		const now = new Date().toISOString();
 		const occurredAt = timelineAt(now);
@@ -700,7 +722,74 @@ export class ConversationRouter {
 			noticeType: value.noticeType,
 			sessionId: target.sessionId,
 		});
-		return { duplicated: false, persisted: true, sessionId: target.sessionId };
+		return {
+			duplicated: false,
+			durableConversationId: target.durableConversationId,
+			envelope,
+			persisted: true,
+			sessionId: target.sessionId,
+		};
+	}
+
+	/**
+	 * Start a turn for a self-targeted poke when the conversation policy enables it.
+	 *
+	 * The wake passes the same access rules as a message (access mode, allowlist, peer bots,
+	 * quiet hours) and a per-conversation cooldown, so a poke can never be used to spam turns.
+	 */
+	async wakeFromNotice(
+		notice: ChannelNotice,
+		ingested: IngestedNotice,
+	): Promise<{ readonly woken: boolean; readonly reason: string }> {
+		if (notice.noticeType !== "poke" || notice.isSelfTarget !== true) {
+			return { reason: "not-self-poke", woken: false };
+		}
+		if (ingested.duplicated) return { reason: "duplicate", woken: false };
+		const { durableConversationId, envelope, sessionId } = ingested;
+		if (durableConversationId === undefined || envelope === undefined || sessionId === undefined) {
+			return { reason: "no-session", woken: false };
+		}
+		const host = this.#host();
+		if (host === undefined) return { reason: "host-not-ready", woken: false };
+		const policy =
+			(await this.#policy?.effectivePolicy(sessionId)) ??
+			conversationPolicySchema.parse(defaultConversationPolicy);
+		if (!policy.enabled || !policy.notices.pokeWake) return { reason: "disabled", woken: false };
+		const kind = envelope.conversationKey.kind;
+		const access = classifyConversationTrigger({
+			chatKind: kind,
+			envelope,
+			policy,
+		});
+		if (access.classification === "ignored") return { reason: access.reason, woken: false };
+		// A poke is a notice, not a free bypass of the reply cooldown or the per-minute ceiling.
+		// Check before consuming the poke cooldown so a rejected wake does not delay the next one.
+		const pacingCooldownMs = this.#pacing?.remainingCooldownMs(durableConversationId, policy) ?? 0;
+		if (pacingCooldownMs > 0) return { reason: "cooldown", woken: false };
+		if (
+			this.#pacing !== undefined &&
+			!this.#pacing.takeNoticeWake(durableConversationId, policy.notices.pokeWakeCooldownMs)
+		) {
+			return { reason: "cooldown", woken: false };
+		}
+		await this.#policy?.ensureHostPolicy(sessionId, durableConversationId);
+		try {
+			await this.#applyModelToolPolicy?.(durableConversationId, policy);
+		} catch (error) {
+			this.#logger.warn("conversation model tool policy failed", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionId,
+			});
+		}
+		await host.append({
+			classification: "direct",
+			conversationId: durableConversationId,
+			envelope,
+			forceSubmit: true,
+			submittedAtMs: Date.now(),
+			turnContext: { classification: "direct", cue: "Someone poked you." },
+		});
+		return { reason: "poke", woken: true };
 	}
 
 	async resolveIdentity(
@@ -961,6 +1050,15 @@ export class ConversationRouter {
 }
 
 /** Ephemeral turn info for the host: soft cue plus prompt hooks consumed at admission. */
+export interface IngestedNotice {
+	readonly duplicated: boolean;
+	readonly persisted: boolean;
+	readonly sessionId?: string;
+	readonly durableConversationId?: string;
+	/** The notice as a single channel-native envelope, for an optional wake turn. */
+	readonly envelope?: MessageEnvelope;
+}
+
 function turnContextFor(
 	trigger: ReturnType<typeof classifyConversationTrigger>,
 	envelope: MessageEnvelope,

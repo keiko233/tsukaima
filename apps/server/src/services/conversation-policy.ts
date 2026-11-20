@@ -161,6 +161,16 @@ export function mergeConversationPolicy(
 		base.compaction,
 		patch.compaction,
 	);
+	const notices = mergeSection<ConversationPolicy["notices"]>(base.notices, patch.notices);
+	const generationPatch = patch.generation;
+	const generation = mergeSection<ConversationPolicy["generation"]>(
+		base.generation,
+		generationPatch,
+	);
+	// `null` clears a sampling override so the provider model's own value applies again.
+	if (generationPatch?.temperature === null) delete generation.temperature;
+	if (generationPatch?.topP === null) delete generation.topP;
+	if (generationPatch?.stop === null) delete generation.stop;
 	const memoryExtractModel =
 		patch.memoryExtractModel === null
 			? undefined
@@ -204,6 +214,8 @@ export function mergeConversationPolicy(
 		...(patch.version === undefined ? {} : { version: patch.version }),
 		...(patch.capabilities === undefined ? {} : { capabilities: patch.capabilities }),
 		compaction,
+		generation,
+		notices,
 		pacing,
 		sidechat,
 		trigger,

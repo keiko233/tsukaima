@@ -29,6 +29,11 @@ export interface OutboundServiceOptions {
 	readonly database: () => TsukaimaDatabase | undefined;
 	readonly hooks?: HookBus;
 	readonly logger: Logger;
+	/**
+	 * Report a successful channel send to the reply dispatcher, so a final answer repeating the
+	 * text a tool already posted is not delivered twice.
+	 */
+	readonly onDirectSend?: (durableConversationId: string, text: string) => void;
 	readonly router: () => ConversationRouter;
 }
 
@@ -43,6 +48,7 @@ export class OutboundService {
 	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #hooks: HookBus | undefined;
 	readonly #logger: Logger;
+	readonly #onDirectSend: OutboundServiceOptions["onDirectSend"];
 	readonly #router: () => ConversationRouter;
 
 	constructor(options: OutboundServiceOptions) {
@@ -51,6 +57,7 @@ export class OutboundService {
 		this.#database = options.database;
 		this.#hooks = options.hooks;
 		this.#logger = options.logger;
+		this.#onDirectSend = options.onDirectSend;
 		this.#router = options.router;
 	}
 
@@ -121,6 +128,10 @@ export class OutboundService {
 					updatedAt: new Date().toISOString(),
 				})
 				.where(eq(messages.id, id));
+			const text = messagePartsText(input.parts);
+			if (text.trim().length > 0) {
+				this.#onDirectSend?.(resolved.durableConversationId, text);
+			}
 			await this.#touch(resolved.chatObjectId, resolved.sessionId);
 			this.#notify({ channelId: target.channelId, ...resolved, messageId: id });
 			return result;

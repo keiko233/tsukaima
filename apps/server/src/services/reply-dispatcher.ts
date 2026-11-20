@@ -11,6 +11,7 @@ import {
 	boundedReplyDelayMs,
 	type ConversationAnswer,
 	type ConversationExecutionLock,
+	type ConversationNarration,
 	extractLurkMarker,
 	prepareOutboundParts,
 	withConversationLock,
@@ -82,6 +83,49 @@ export function splitMessageParts(
 	return chunks.length === 0 ? [[]] : chunks;
 }
 
+/** Characters that carry no content: whitespace, punctuation, and symbols such as emoji. */
+const NARRATION_IGNORABLE = /[\s\p{P}\p{S}]/gu;
+
+/**
+ * Drop a narration prefix a final answer repeats before its new text.
+ *
+ * A final answer may repeat the preamble it already narrated (or the cut prefix delivered for a
+ * length continuation) and then continue. Sending that repeated prefix twice reads as a stutter,
+ * so strip the longest matching already-shown prefix and send only the remainder. When nothing
+ * substantive remains, the whole answer was already shown and must be suppressed.
+ */
+export function stripNarratedPrefix(
+	shown: readonly string[] | undefined,
+	text: string,
+): { readonly duplicate: boolean; readonly text: string } {
+	const trimmed = text.trim();
+	if (shown === undefined || shown.length === 0) return { duplicate: false, text: trimmed };
+	const candidates = shown.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+	const joined = candidates.join("\n");
+	if (joined.length > 0) candidates.push(joined);
+	let matched: string | undefined;
+	for (const candidate of candidates) {
+		if (trimmed === candidate) {
+			if (matched === undefined || candidate.length > matched.length) matched = candidate;
+			continue;
+		}
+		if (!trimmed.startsWith(candidate)) continue;
+		const next = trimmed.charAt(candidate.length);
+		const boundary = next === "" || /\s/u.test(next);
+		const terminal = /[.!?。！？…~～\n]$/u.test(candidate);
+		if (!boundary) continue;
+		if (!terminal && next !== "\n") continue;
+		if (matched === undefined || candidate.length > matched.length) matched = candidate;
+	}
+	if (matched === undefined) return { duplicate: false, text: trimmed };
+	const remainder = trimmed
+		.slice(matched.length)
+		.replace(/^[ \t]*\n?[ \t]*/u, "")
+		.trim();
+	const substantive = remainder.replace(NARRATION_IGNORABLE, "").length;
+	return { duplicate: substantive === 0, text: substantive === 0 ? "" : remainder };
+}
+
 export interface ReplyDispatcherOptions {
 	readonly audit: (entry: AuditEntry) => Promise<void>;
 	readonly channels: ChannelRegistry;
@@ -108,7 +152,12 @@ export interface ReplyDispatcherOptions {
 		| { readonly status: "missing" }
 		| { readonly status: "pending" }
 		| { readonly status: "unanswered"; readonly reason: string }
-		| { readonly status: "answered"; readonly entryId: string; readonly text: string }
+		| {
+				readonly status: "answered";
+				readonly entryId: string;
+				readonly text: string;
+				readonly truncated?: boolean;
+		  }
 	>;
 	readonly replyAsQuote?: boolean;
 	readonly now?: () => number;
@@ -123,6 +172,22 @@ export interface ReplyDispatcherOptions {
 
 interface DeliveryPlanItem {
 	readonly parts: readonly MessagePart[];
+}
+
+interface DeliveryTarget {
+	readonly channelId: string | null;
+	readonly chatKind: "private" | "group";
+	/** Durable conversation id; also the outbound lane and cancellation key. */
+	readonly conversationId: string;
+	readonly id: string;
+	/** Mid-turn narration skips the typing indicator and the pre-reply delay. */
+	readonly narration?: boolean;
+	readonly parts: readonly MessagePart[];
+	readonly plan: readonly DeliveryPlanItem[];
+	readonly platformConversationId: string | null;
+	readonly policy: ConversationPolicy;
+	readonly sessionId: string;
+	readonly units: readonly MessagePart[][];
 }
 
 export interface ReplyDeliveryOutcome {
@@ -170,6 +235,24 @@ export class ReplyDispatcher {
 	readonly #sleep: (ms: number, signal: AbortSignal) => Promise<void>;
 	readonly #lock: ConversationExecutionLock | undefined;
 	readonly #pendingOutput = new Map<string, AbortController>();
+	/** Per-conversation outbound lanes; tails of the serial delivery chain. */
+	readonly #outboundLanes = new Map<string, Promise<unknown>>();
+	/**
+	 * Per-conversation lane generations. Cancellation advances the generation, so queued lane
+	 * items of the cancelled turn see a stale token and never start; deliveries scheduled after
+	 * the interrupting inbound message capture the new generation and still run.
+	 */
+	readonly #laneEpochs = new Map<string, number>();
+	/**
+	 * Text already shown in the current turn, by durable conversation id: narrations and direct
+	 * channel sends made by tools. A final answer repeating it verbatim is suppressed. This is
+	 * process-local and deliberately not durable: recovery only replays the expected final answer,
+	 * and the outbound unique key bounds any post-restart duplicate to one message.
+	 */
+	readonly #shownThisTurn = new Map<string, string[]>();
+	/** Conversations where a tool already posted text during the current turn. */
+	readonly #directSendThisTurn = new Map<string, true>();
+	readonly #lastNarrationAtMs = new Map<string, number>();
 	#legacyIntentReported = false;
 	#reconcileTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -209,13 +292,218 @@ export class ReplyDispatcher {
 				}));
 	}
 
-	/** Cancel queued output for one conversation without touching other chats. */
+	/**
+	 * Cancel the in-flight output of one conversation without touching other chats. Callers
+	 * invoke this only for a direct interrupting message, never for ambient group chatter.
+	 *
+	 * Advancing the lane generation aborts whatever is sending now and makes every queued item of
+	 * the cancelled turn stale when its slot starts. A later turn reserves its lane item with the
+	 * new generation, so this cannot drop a newer reply.
+	 */
 	cancelPendingOutput(conversationId: string): boolean {
+		const nextEpoch = (this.#laneEpochs.get(conversationId) ?? 0) + 1;
+		this.#laneEpochs.set(conversationId, nextEpoch);
 		const controller = this.#pendingOutput.get(conversationId);
-		if (controller === undefined) return false;
-		controller.abort();
-		this.#logger.info("pending output cancelled", { conversationId });
+		const queued = this.#outboundLanes.has(conversationId);
+		if (controller === undefined && !queued) return false;
+		controller?.abort();
+		this.#logger.info("pending output cancelled", {
+			conversationId,
+			inFlight: controller !== undefined,
+			queued,
+		});
 		return true;
+	}
+
+	#laneEpoch(conversationId: string): number {
+		return this.#laneEpochs.get(conversationId) ?? 0;
+	}
+
+	#laneIsCurrent(conversationId: string, epoch: number): boolean {
+		return this.#laneEpoch(conversationId) === epoch;
+	}
+
+	/**
+	 * Run `task` after every earlier delivery of the same conversation. Different conversations
+	 * never wait on each other, and a failed delivery never blocks the next one. A queued task
+	 * whose lane generation was cancelled runs `stale` instead, which must settle any durable row
+	 * it already owns.
+	 */
+	#runOutboundLane<T>(
+		conversationId: string,
+		task: () => Promise<T>,
+		stale: () => Promise<T>,
+	): Promise<T> {
+		const epoch = this.#laneEpoch(conversationId);
+		const previous = this.#outboundLanes.get(conversationId) ?? Promise.resolve();
+		const run = previous
+			.catch(() => undefined)
+			.then(() => (this.#laneIsCurrent(conversationId, epoch) ? task() : stale()));
+		const tail = run.catch(() => undefined);
+		this.#outboundLanes.set(conversationId, tail);
+		void tail.then(() => {
+			if (this.#outboundLanes.get(conversationId) === tail) {
+				this.#outboundLanes.delete(conversationId);
+			}
+		});
+		return run;
+	}
+
+	/**
+	 * Record text a tool already posted to this conversation's chat during the current turn, so
+	 * a final answer that only repeats it is not sent a second time. `OutboundService` calls this
+	 * after a successful channel send; a later tool round also stops narrating a preamble.
+	 */
+	noteDirectSend(durableConversationId: string, text: string): void {
+		this.#directSendThisTurn.set(durableConversationId, true);
+		const trimmed = text.trim();
+		if (trimmed.length === 0) return;
+		const shown = this.#shownThisTurn.get(durableConversationId) ?? [];
+		shown.push(trimmed);
+		this.#shownThisTurn.set(durableConversationId, shown);
+	}
+
+	/** True when this turn already delivered text through a channel send tool. */
+	hasDirectSendThisTurn(durableConversationId: string): boolean {
+		return this.#directSendThisTurn.get(durableConversationId) === true;
+	}
+
+	/** The next turn starts with nothing shown and no direct-send suppression. */
+	#endTurn(durableConversationId: string): void {
+		this.#shownThisTurn.delete(durableConversationId);
+		this.#directSendThisTurn.delete(durableConversationId);
+	}
+
+	/**
+	 * Deliver one mid-turn narration at most once.
+	 *
+	 * The outbound row is keyed by `narrationId` through the `(conversationId, durableEntryId)`
+	 * unique index, so a hook replayed after a crash never sends it twice. Narration is not an
+	 * owed reply: it records no reply expectation or dispatch intent, and a pending row left by a
+	 * crash is reconciled as uncertain rather than resent. The lane slot is reserved before any
+	 * await so the narration always precedes the final answer of the same turn.
+	 */
+	handleNarration(narration: ConversationNarration): Promise<ReplyDeliveryOutcome | undefined> {
+		return this.#runOutboundLane(
+			narration.conversationId,
+			() => this.#handleNarrationNow(narration),
+			async () => ({ deliveryStatus: "skipped", reason: "cancelled" }),
+		);
+	}
+
+	async #handleNarrationNow(
+		narration: ConversationNarration,
+	): Promise<ReplyDeliveryOutcome | undefined> {
+		const database = this.#database();
+		if (database === undefined) return undefined;
+		const [session] = await database
+			.select({
+				chatId: chatObjects.id,
+				chatKind: chatObjects.kind,
+				channelId: chatObjects.channelId,
+				platformConversationId: chatObjects.platformConversationId,
+				sessionId: conversations.id,
+			})
+			.from(conversations)
+			.innerJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
+			.where(eq(conversations.durableConversationId, narration.conversationId))
+			.orderBy(desc(conversations.updatedAt))
+			.limit(1);
+		if (session === undefined) return { deliveryStatus: "skipped", reason: "no_domain_session" };
+		if (this.hasDirectSendThisTurn(narration.conversationId)) {
+			return { deliveryStatus: "skipped", reason: "direct-send" };
+		}
+		let policy: ConversationPolicy = defaultConversationPolicy;
+		try {
+			policy = (await this.#policy?.effectivePolicy(session.sessionId)) ?? policy;
+		} catch {}
+		if (!policy.pacing.narrationEnabled) return { deliveryStatus: "skipped", reason: "disabled" };
+		// Narration is a courtesy, not owed content: when two rounds produce preambles too close
+		// together, drop the later one instead of delaying the actual tool work.
+		const nowMs = this.#now();
+		const lastNarrationAtMs = this.#lastNarrationAtMs.get(narration.conversationId);
+		if (
+			lastNarrationAtMs !== undefined &&
+			nowMs - lastNarrationAtMs < policy.pacing.narrationMinIntervalMs
+		) {
+			return { deliveryStatus: "skipped", reason: "rate_limited" };
+		}
+		const prepared = prepareOutboundParts([{ text: narration.text, type: "text" }], policy.pacing);
+		if (prepared.units.length === 0) return { deliveryStatus: "skipped", reason: "empty_output" };
+		const chatKind: ChatKind = session.chatKind;
+		const external = isExternalChat(chatKind);
+		const channelKind =
+			external && session.channelId !== null
+				? this.#channels.get(session.channelId)?.kind
+				: undefined;
+		const now = new Date().toISOString();
+		const id = randomUUID();
+		const inserted = await database
+			.insert(messages)
+			.values({
+				chatObjectId: session.chatId,
+				contentText: prepared.text,
+				conversationId: session.sessionId,
+				deliveryStatus: external ? "pending" : "sent",
+				direction: "outbound",
+				durableEntryId: narration.narrationId,
+				id,
+				ingestedAt: now,
+				kind: external ? (channelKind ?? "plugin") : chatKind,
+				occurredAt: now,
+				partsJson: JSON.stringify(prepared.parts),
+				senderDisplayName: "Tsukaima",
+				senderExternalId: "tsukaima",
+				updatedAt: now,
+			})
+			.onConflictDoNothing()
+			.returning({ id: messages.id });
+		if (inserted.length === 0) return { deliveryStatus: "skipped", reason: "duplicate" };
+		this.#lastNarrationAtMs.set(narration.conversationId, nowMs);
+		const shown = this.#shownThisTurn.get(narration.conversationId) ?? [];
+		shown.push(prepared.text.trim());
+		this.#shownThisTurn.set(narration.conversationId, shown);
+		this.#logger.debug("narration accepted", {
+			conversationId: narration.conversationId,
+			kind: narration.kind,
+			narrationId: narration.narrationId,
+			sessionId: session.sessionId,
+			toolNames: narration.toolNames,
+		});
+		if (!external) return { deliveryStatus: "sent", text: prepared.text };
+		if (session.channelId === null || session.platformConversationId === null) {
+			const deliveryStatus = await this.#fail(
+				database,
+				id,
+				session.sessionId,
+				"External chat has no destination",
+				{ channelId: session.channelId, platformConversationId: session.platformConversationId },
+			);
+			return { deliveryStatus, text: prepared.text };
+		}
+		const deliveryStatus = await this.#deliverNow(
+			database,
+			{
+				channelId: session.channelId,
+				chatKind,
+				conversationId: narration.conversationId,
+				id,
+				narration: true,
+				parts: prepared.parts,
+				plan: prepared.units.map((parts) => ({ parts })),
+				platformConversationId: session.platformConversationId,
+				policy,
+				sessionId: session.sessionId,
+				units: prepared.units,
+			},
+			session.channelId,
+			session.platformConversationId,
+		);
+		return { deliveryStatus, text: prepared.text };
+	}
+
+	#shownText(durableConversationId: string): readonly string[] | undefined {
+		return this.#shownThisTurn.get(durableConversationId);
 	}
 
 	/**
@@ -355,7 +643,13 @@ export class ReplyDispatcher {
 
 		// Claim the durable dispatch intent before doing anything that could send. Recovery uses
 		// this row to find answers whose send may have happened, independent of time windows.
-		const claim = await this.#claimIntent(database, session.sessionId, answer.entryId);
+		// Claiming and persisting are short critical sections under the conversation lock; the
+		// slow part (typing, delays, multi-bubble sends) runs later on the outbound lane.
+		const claim = await withConversationLock(
+			answer.conversationId,
+			() => this.#claimIntent(database, session.sessionId, answer.entryId),
+			this.#lock,
+		);
 		if (claim !== "claimed") {
 			await this.#settleExpectation(answer, session.sessionId, "settled", "already_dispatched");
 			return { deliveryStatus: "skipped", reason: "already_dispatched" };
@@ -363,6 +657,7 @@ export class ReplyDispatcher {
 
 		const lurk = extractLurkMarker(answer.text);
 		if (lurk.lurk) {
+			this.#endTurn(answer.conversationId);
 			this.#pacing?.recordLurk(answer.conversationId);
 			await this.#audit({
 				action: "message.lurk",
@@ -387,6 +682,40 @@ export class ReplyDispatcher {
 			return { deliveryStatus: "suppressed", reason: "lurk", text: lurk.text };
 		}
 
+		const stripped = stripNarratedPrefix(this.#shownText(answer.conversationId), lurk.text);
+		// The turn is over either way; the next turn starts with nothing shown.
+		this.#endTurn(answer.conversationId);
+		if (stripped.duplicate) {
+			this.#logger.debug("assistant answer repeats text already shown this turn", {
+				conversationId: answer.conversationId,
+				entryId: answer.entryId,
+			});
+			await this.#settleIntent(database, session.sessionId, answer.entryId);
+			await this.#settleExpectation(answer, session.sessionId, "suppressed", "already_shown");
+			return { deliveryStatus: "suppressed", reason: "already_shown", text: stripped.text };
+		}
+		const answerText = stripped.text;
+		if (answer.truncated === true) {
+			// Continuation was unavailable or the budget is spent: deliver the cut text as-is and
+			// leave a durable audit trail instead of silently shipping a mid-word cut.
+			await this.#audit({
+				action: "message.answer-truncated",
+				actorKind: "agent",
+				payload: {
+					activityId: answer.activityId,
+					entryId: answer.entryId,
+					textChars: answer.text.length,
+				},
+				result: "ok",
+				targetId: session.sessionId,
+				targetKind: "session",
+			});
+			this.#logger.warn("assistant answer was cut off by the output limit", {
+				conversationId: answer.conversationId,
+				entryId: answer.entryId,
+			});
+		}
+
 		let policy: ConversationPolicy = defaultConversationPolicy;
 		try {
 			policy = (await this.#policy?.effectivePolicy(session.sessionId)) ?? policy;
@@ -401,9 +730,9 @@ export class ReplyDispatcher {
 			chatObjectId: session.chatId,
 			conversationId: answer.conversationId,
 			entryId: answer.entryId,
-			parts: [{ text: lurk.text, type: "text" }],
+			parts: [{ text: answerText, type: "text" }],
 			sessionId: session.sessionId,
-			text: lurk.text,
+			text: answerText,
 		});
 		const prepared = prepareOutboundParts(transformed.parts, policy.pacing);
 		if (prepared.units.length === 0) {
@@ -442,26 +771,27 @@ export class ReplyDispatcher {
 		const kind = external ? (channelKind ?? "plugin") : chatKind;
 		const now = new Date().toISOString();
 		const id = randomUUID();
-		const inserted = await database
-			.insert(messages)
-			.values({
-				chatObjectId: session.chatId,
-				contentText: text,
-				conversationId: session.sessionId,
-				deliveryStatus: external ? "pending" : "sent",
-				direction: "outbound",
-				durableEntryId: answer.entryId,
-				id,
-				ingestedAt: now,
-				kind,
-				occurredAt: now,
-				partsJson: JSON.stringify(parts),
-				senderDisplayName: "Tsukaima",
-				senderExternalId: "tsukaima",
-				updatedAt: now,
-			})
-			.onConflictDoNothing()
-			.returning({ id: messages.id });
+		const inserted = await withConversationLock(
+			answer.conversationId,
+			() =>
+				this.#insertOutbound(database, {
+					chatObjectId: session.chatId,
+					contentText: text,
+					conversationId: session.sessionId,
+					deliveryStatus: external ? "pending" : "sent",
+					direction: "outbound",
+					durableEntryId: answer.entryId,
+					id,
+					ingestedAt: now,
+					kind,
+					occurredAt: now,
+					partsJson: JSON.stringify(parts),
+					senderDisplayName: "Tsukaima",
+					senderExternalId: "tsukaima",
+					updatedAt: now,
+				}),
+			this.#lock,
+		);
 		if (inserted.length === 0) {
 			this.#logger.debug("assistant answer already dispatched", {
 				entryId: answer.entryId,
@@ -1075,6 +1405,7 @@ export class ReplyDispatcher {
 			recovered: true,
 			submissionRequestId: expectation.submissionRequestId,
 			text,
+			...(resolution.truncated === true ? { truncated: true } : {}),
 		});
 		if (outcome?.deliveryStatus === "sent") {
 			await this.#expectations.settle({
@@ -1137,6 +1468,17 @@ export class ReplyDispatcher {
 	}
 
 	/** Claim the durable dispatch intent for one answer before any send or outbound insert. */
+	async #insertOutbound(
+		database: TsukaimaDatabase,
+		values: typeof messages.$inferInsert,
+	): Promise<{ id: string }[]> {
+		return database
+			.insert(messages)
+			.values(values)
+			.onConflictDoNothing()
+			.returning({ id: messages.id });
+	}
+
 	async #claimIntent(
 		database: TsukaimaDatabase,
 		sessionId: string,
@@ -1217,18 +1559,7 @@ export class ReplyDispatcher {
 
 	async #deliver(
 		database: TsukaimaDatabase,
-		target: {
-			channelId: string | null;
-			chatKind: "private" | "group";
-			conversationId: string;
-			id: string;
-			parts: readonly MessagePart[];
-			plan: readonly DeliveryPlanItem[];
-			platformConversationId: string | null;
-			policy: ConversationPolicy;
-			sessionId: string;
-			units: readonly MessagePart[][];
-		},
+		target: DeliveryTarget,
 	): Promise<"failed" | "sent" | "uncertain"> {
 		const { channelId, platformConversationId } = target;
 		if (channelId === null || platformConversationId === null) {
@@ -1237,206 +1568,237 @@ export class ReplyDispatcher {
 				platformConversationId,
 			});
 		}
-		return withConversationLock(
+		// Delivery sleeps (typing, pre-reply delay, `sendIntervalMs`) run on the per-conversation
+		// outbound lane, never under the conversation execution lock: an inbound `host.append` must
+		// not stall behind a multi-bubble send burst. The lane still keeps bubbles of consecutive
+		// deliveries (narration, then the final answer) in order.
+		return this.#runOutboundLane(
 			target.conversationId,
-			async () => {
-				const startedAt = performance.now();
-				const controller = new AbortController();
-				this.#pendingOutput.set(target.conversationId, controller);
-				const replyTo = this.#replyAsQuote
-					? await this.#quoteTarget(database, target.sessionId, target.chatKind)
-					: undefined;
-				let firstPlatformMessageId: string | null = null;
-				let sentCount = 0;
-				const failures: string[] = [];
-				try {
-					if (target.policy.pacing.typingEnabled) {
-						await this.#channels.sendTyping(
+			() => this.#deliverNow(database, target, channelId, platformConversationId),
+			() => this.#dropStaleDelivery(database, target),
+		);
+	}
+
+	/** A queued lane item of a cancelled turn: own the durable row, but never send it. */
+	async #dropStaleDelivery(database: TsukaimaDatabase, target: DeliveryTarget): Promise<"failed"> {
+		await database
+			.update(messages)
+			.set({ deliveryStatus: "failed", updatedAt: new Date().toISOString() })
+			.where(eq(messages.id, target.id));
+		await this.#audit({
+			action: "message.cancel-output",
+			actorKind: "agent",
+			payload: {
+				chatKind: target.chatKind,
+				platformConversationId: target.platformConversationId,
+				reason: "stale_lane_item",
+				remainingUnits: target.units.length,
+			},
+			result: "ok",
+			targetId: target.sessionId,
+			targetKind: "session",
+		});
+		this.#logger.info("stale outbound lane item dropped", {
+			conversationId: target.conversationId,
+			messageId: target.id,
+			sessionId: target.sessionId,
+		});
+		return "failed";
+	}
+
+	/** Body of {@link ReplyDispatcher.#deliver}; callers must already be on the outbound lane. */
+	async #deliverNow(
+		database: TsukaimaDatabase,
+		target: DeliveryTarget,
+		channelId: string,
+		platformConversationId: string,
+	): Promise<"failed" | "sent" | "uncertain"> {
+		const startedAt = performance.now();
+		const controller = new AbortController();
+		const typing = target.policy.pacing.typingEnabled && target.narration !== true;
+		this.#pendingOutput.set(target.conversationId, controller);
+		const replyTo = this.#replyAsQuote
+			? await this.#quoteTarget(database, target.sessionId, target.chatKind)
+			: undefined;
+		let firstPlatformMessageId: string | null = null;
+		let sentCount = 0;
+		const failures: string[] = [];
+		try {
+			if (typing) {
+				await this.#channels.sendTyping(channelId, target.chatKind, platformConversationId, true);
+			}
+			const delayMs =
+				target.narration === true ? 0 : boundedReplyDelayMs(target.policy.pacing, this.#random);
+			this.#logger.trace("delivering reply to channel", {
+				channelId,
+				chatKind: target.chatKind,
+				delayMs,
+				planItems: target.plan.length,
+				platformConversationId,
+				sessionId: target.sessionId,
+				unitCount: target.units.length,
+			});
+			if (delayMs > 0) await this.#sleep(delayMs, controller.signal);
+			let replyTargetSent = false;
+			const sendChunk = async (chunk: readonly MessagePart[]) => {
+				if (controller.signal.aborted) throw new OutputCancelledError();
+				const result = await this.#channels.send(
+					channelId,
+					target.chatKind,
+					platformConversationId,
+					chunk,
+					replyTo !== undefined && !replyTargetSent
+						? { replyToPlatformMessageId: replyTo }
+						: undefined,
+				);
+				replyTargetSent = true;
+				if (firstPlatformMessageId === null && result.platformMessageId !== undefined) {
+					firstPlatformMessageId = result.platformMessageId;
+				}
+				sentCount += 1;
+			};
+			for (const [itemIndex, item] of target.plan.entries()) {
+				const chunks = splitMessageParts(item.parts, this.#splitMaxChars).filter(
+					(chunk) => chunk.length > 0,
+				);
+				for (const [chunkIndex, chunk] of chunks.entries()) {
+					try {
+						await sendChunk(chunk);
+					} catch (error) {
+						if (error instanceof OutputCancelledError) throw error;
+						const reason = error instanceof Error ? error.message : String(error);
+						failures.push(reason);
+						this.#logger.warn("reply chunk delivery failed; continuing with remaining output", {
 							channelId,
-							target.chatKind,
-							platformConversationId,
-							true,
-						);
-					}
-					const delayMs = boundedReplyDelayMs(target.policy.pacing, this.#random);
-					this.#logger.trace("delivering reply to channel", {
-						channelId,
-						chatKind: target.chatKind,
-						delayMs,
-						planItems: target.plan.length,
-						platformConversationId,
-						sessionId: target.sessionId,
-						unitCount: target.units.length,
-					});
-					if (delayMs > 0) await this.#sleep(delayMs, controller.signal);
-					let replyTargetSent = false;
-					const sendChunk = async (chunk: readonly MessagePart[]) => {
-						if (controller.signal.aborted) throw new OutputCancelledError();
-						const result = await this.#channels.send(
-							channelId,
-							target.chatKind,
-							platformConversationId,
-							chunk,
-							replyTo !== undefined && !replyTargetSent
-								? { replyToPlatformMessageId: replyTo }
-								: undefined,
-						);
-						replyTargetSent = true;
-						if (firstPlatformMessageId === null && result.platformMessageId !== undefined) {
-							firstPlatformMessageId = result.platformMessageId;
-						}
-						sentCount += 1;
-					};
-					for (const [itemIndex, item] of target.plan.entries()) {
-						const chunks = splitMessageParts(item.parts, this.#splitMaxChars).filter(
-							(chunk) => chunk.length > 0,
-						);
-						for (const [chunkIndex, chunk] of chunks.entries()) {
-							try {
-								await sendChunk(chunk);
-							} catch (error) {
-								if (error instanceof OutputCancelledError) throw error;
-								const reason = error instanceof Error ? error.message : String(error);
-								failures.push(reason);
-								this.#logger.warn("reply chunk delivery failed; continuing with remaining output", {
-									channelId,
-									chunkIndex,
-									itemIndex,
-									reason,
-									sentCount,
-									sessionId: target.sessionId,
-								});
-							}
-							if (
-								target.policy.pacing.sendIntervalMs > 0 &&
-								(itemIndex < target.plan.length - 1 || chunkIndex < chunks.length - 1)
-							) {
-								await this.#sleep(target.policy.pacing.sendIntervalMs, controller.signal);
-							}
-						}
-					}
-					if (failures.length > 0) {
-						// A failed chunk must not discard the rest of the reply. Keep sending the remaining
-						// text and media, then report the logical message as partial.
-						const firstFailure = failures[0] ?? "unknown send failure";
-						const deliveryStatus =
-							sentCount > 0 || failures.some((reason) => /timeout/i.test(reason))
-								? "uncertain"
-								: "failed";
-						await database
-							.update(messages)
-							.set({
-								deliveryStatus,
-								platformMessageId: firstPlatformMessageId,
-								updatedAt: new Date().toISOString(),
-							})
-							.where(eq(messages.id, target.id));
-						await this.#audit({
-							action: "message.send-reply",
-							payload: {
-								chatKind: target.chatKind,
-								failedCount: failures.length,
-								platformConversationId,
-								sentCount,
-								unitCount: target.units.length,
-							},
-							reason: firstFailure,
-							result: "failed",
-							targetId: target.sessionId,
-							targetKind: "session",
-						});
-						this.#logger.warn("assistant reply partially delivered", {
-							channelId,
-							chatKind: target.chatKind,
-							deliveryStatus,
-							failedCount: failures.length,
-							firstFailure,
-							platformConversationId,
+							chunkIndex,
+							itemIndex,
+							reason,
 							sentCount,
 							sessionId: target.sessionId,
 						});
-						return deliveryStatus;
 					}
-					await database
-						.update(messages)
-						.set({
-							deliveryStatus: "sent",
-							platformMessageId: firstPlatformMessageId,
-							updatedAt: new Date().toISOString(),
-						})
-						.where(eq(messages.id, target.id));
-					await this.#audit({
-						action: "message.send-reply",
-						payload: {
-							chatKind: target.chatKind,
-							platformConversationId,
-							sentCount,
-							unitCount: target.units.length,
-						},
-						result: "ok",
-						targetId: target.sessionId,
-						targetKind: "session",
-					});
-					this.#logger.debug("reply delivered to channel", {
-						channelId,
-						chatKind: target.chatKind,
-						durationMs: Math.round(performance.now() - startedAt),
-						platformConversationId,
-						sentCount,
-						sessionId: target.sessionId,
-					});
-					return "sent";
-				} catch (error) {
-					if (error instanceof OutputCancelledError) {
-						const deliveryStatus = sentCount === 0 ? "failed" : "uncertain";
-						await database
-							.update(messages)
-							.set({
-								deliveryStatus,
-								platformMessageId: firstPlatformMessageId,
-								updatedAt: new Date().toISOString(),
-							})
-							.where(eq(messages.id, target.id));
-						await this.#audit({
-							action: "message.cancel-output",
-							payload: {
-								chatKind: target.chatKind,
-								platformConversationId,
-								remainingUnits: target.units.length,
-								sentCount,
-							},
-							reason: "superseded by new inbound activity",
-							result: "ok",
-							targetId: target.sessionId,
-							targetKind: "session",
-						});
-						this.#logger.info("assistant reply delivery cancelled", {
-							sentCount,
-							sessionId: target.sessionId,
-						});
-						return deliveryStatus;
-					}
-					const message = error instanceof Error ? error.message : String(error);
-					return this.#fail(database, target.id, target.sessionId, message, {
-						chatKind: target.chatKind,
-						platformConversationId,
-					});
-				} finally {
-					if (target.policy.pacing.typingEnabled) {
-						await this.#channels.sendTyping(
-							channelId,
-							target.chatKind,
-							platformConversationId,
-							false,
-						);
-					}
-					if (this.#pendingOutput.get(target.conversationId) === controller) {
-						this.#pendingOutput.delete(target.conversationId);
+					if (
+						target.policy.pacing.sendIntervalMs > 0 &&
+						(itemIndex < target.plan.length - 1 || chunkIndex < chunks.length - 1)
+					) {
+						await this.#sleep(target.policy.pacing.sendIntervalMs, controller.signal);
 					}
 				}
-			},
-			this.#lock,
-		);
+			}
+			if (failures.length > 0) {
+				// A failed chunk must not discard the rest of the reply. Keep sending the remaining
+				// text and media, then report the logical message as partial.
+				const firstFailure = failures[0] ?? "unknown send failure";
+				const deliveryStatus =
+					sentCount > 0 || failures.some((reason) => /timeout/i.test(reason))
+						? "uncertain"
+						: "failed";
+				await database
+					.update(messages)
+					.set({
+						deliveryStatus,
+						platformMessageId: firstPlatformMessageId,
+						updatedAt: new Date().toISOString(),
+					})
+					.where(eq(messages.id, target.id));
+				await this.#audit({
+					action: "message.send-reply",
+					payload: {
+						chatKind: target.chatKind,
+						failedCount: failures.length,
+						platformConversationId,
+						sentCount,
+						unitCount: target.units.length,
+					},
+					reason: firstFailure,
+					result: "failed",
+					targetId: target.sessionId,
+					targetKind: "session",
+				});
+				this.#logger.warn("assistant reply partially delivered", {
+					channelId,
+					chatKind: target.chatKind,
+					deliveryStatus,
+					failedCount: failures.length,
+					firstFailure,
+					platformConversationId,
+					sentCount,
+					sessionId: target.sessionId,
+				});
+				return deliveryStatus;
+			}
+			await database
+				.update(messages)
+				.set({
+					deliveryStatus: "sent",
+					platformMessageId: firstPlatformMessageId,
+					updatedAt: new Date().toISOString(),
+				})
+				.where(eq(messages.id, target.id));
+			await this.#audit({
+				action: "message.send-reply",
+				payload: {
+					chatKind: target.chatKind,
+					platformConversationId,
+					sentCount,
+					unitCount: target.units.length,
+				},
+				result: "ok",
+				targetId: target.sessionId,
+				targetKind: "session",
+			});
+			this.#logger.debug("reply delivered to channel", {
+				channelId,
+				chatKind: target.chatKind,
+				durationMs: Math.round(performance.now() - startedAt),
+				platformConversationId,
+				sentCount,
+				sessionId: target.sessionId,
+			});
+			return "sent";
+		} catch (error) {
+			if (error instanceof OutputCancelledError) {
+				const deliveryStatus = sentCount === 0 ? "failed" : "uncertain";
+				await database
+					.update(messages)
+					.set({
+						deliveryStatus,
+						platformMessageId: firstPlatformMessageId,
+						updatedAt: new Date().toISOString(),
+					})
+					.where(eq(messages.id, target.id));
+				await this.#audit({
+					action: "message.cancel-output",
+					payload: {
+						chatKind: target.chatKind,
+						platformConversationId,
+						remainingUnits: target.units.length,
+						sentCount,
+					},
+					reason: "superseded by new inbound activity",
+					result: "ok",
+					targetId: target.sessionId,
+					targetKind: "session",
+				});
+				this.#logger.info("assistant reply delivery cancelled", {
+					sentCount,
+					sessionId: target.sessionId,
+				});
+				return deliveryStatus;
+			}
+			const message = error instanceof Error ? error.message : String(error);
+			return this.#fail(database, target.id, target.sessionId, message, {
+				chatKind: target.chatKind,
+				platformConversationId,
+			});
+		} finally {
+			if (typing) {
+				await this.#channels.sendTyping(channelId, target.chatKind, platformConversationId, false);
+			}
+			if (this.#pendingOutput.get(target.conversationId) === controller) {
+				this.#pendingOutput.delete(target.conversationId);
+			}
+		}
 	}
 
 	async #quoteTarget(
