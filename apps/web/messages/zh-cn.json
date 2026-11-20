@@ -503,6 +503,8 @@
 	"policy_stop_sequences_hint": "每行一个，最多四个；留空表示沿用 Provider 模型自身的值。",
 	"policy_unsaved": "有未保存的更改",
 	"policy_version": "版本 {version}",
+	"policy_workspace_delegation": "允许聊天委派工作区",
+	"policy_workspace_delegation_hint": "允许此会话中受信任的管理员创建并联系编程工作区。普通聊天会话永远不会获得仓库编程工具。",
 	"processed_requests": "已处理请求",
 	"receiving": "接收中",
 	"rename": "重命名",

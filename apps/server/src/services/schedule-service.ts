@@ -33,18 +33,22 @@ type OccurrenceRow = typeof scheduleOccurrences.$inferSelect;
 export interface ScheduleSnapshot {
 	readonly actionKind: ScheduleRow["actionKind"];
 	readonly chatObjectId: string | null;
+	readonly flexWindowMs: number | null;
 	readonly prompt: string;
+	readonly recurrenceKind: ScheduleRecurrence["kind"];
 	readonly respectQuietHours: boolean;
 	readonly revision: number;
 	readonly scheduleId: string;
 	readonly sessionId: string;
+	readonly timeZone: string;
 	readonly title: string;
 }
 
 export interface ScheduleExecutionResult {
+	readonly deferredUntilMs?: number;
 	readonly messageId?: string;
 	readonly result?: unknown;
-	readonly status?: "skipped" | "succeeded" | "uncertain";
+	readonly status?: "deferred" | "skipped" | "succeeded" | "uncertain";
 }
 
 export interface ScheduleChange {
@@ -100,7 +104,79 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+interface ScheduleRecurrenceMetadata {
+	readonly cancelIfReplied: boolean;
+	readonly flexWindowMs: number | null;
+}
+
+interface StoredRecurrenceEnvelope {
+	readonly recurrence: ScheduleRecurrence;
+	readonly scheduleMeta: ScheduleRecurrenceMetadata;
+}
+
+function encodeRecurrenceJson(
+	recurrence: ScheduleRecurrence,
+	meta: ScheduleRecurrenceMetadata,
+): string {
+	if (!meta.cancelIfReplied && meta.flexWindowMs === null) {
+		return JSON.stringify(recurrence);
+	}
+	const envelope: StoredRecurrenceEnvelope = {
+		recurrence,
+		scheduleMeta: meta,
+	};
+	return JSON.stringify(envelope);
+}
+
+function decodeRecurrenceJson(
+	value: string,
+	fallback: ScheduleRecurrence | null,
+): {
+	readonly cancelIfReplied: boolean;
+	readonly flexWindowMs: number | null;
+	readonly recurrence: ScheduleRecurrence | null;
+} {
+	const parsed = parseJson<unknown>(value, null);
+	if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+		const record = parsed as Record<string, unknown>;
+		if (
+			"scheduleMeta" in record &&
+			typeof record.scheduleMeta === "object" &&
+			record.scheduleMeta !== null &&
+			"recurrence" in record &&
+			typeof record.recurrence === "object" &&
+			record.recurrence !== null
+		) {
+			const meta = record.scheduleMeta as Record<string, unknown>;
+			return {
+				cancelIfReplied: meta.cancelIfReplied === true,
+				flexWindowMs:
+					typeof meta.flexWindowMs === "number" && Number.isFinite(meta.flexWindowMs)
+						? meta.flexWindowMs
+						: null,
+				recurrence: record.recurrence as ScheduleRecurrence,
+			};
+		}
+		if ("kind" in record) {
+			return {
+				cancelIfReplied: false,
+				flexWindowMs: null,
+				recurrence: parsed as ScheduleRecurrence,
+			};
+		}
+	}
+	return {
+		cancelIfReplied: false,
+		flexWindowMs: null,
+		recurrence: fallback,
+	};
+}
+
 function summaryFrom(row: ScheduleRow, targetSessionTitle: string): ScheduleSummary {
+	const decoded = decodeRecurrenceJson(row.recurrenceJson, {
+		at: new Date(row.createdAtMs).toISOString(),
+		kind: "once",
+	});
 	return {
 		actionKind: row.actionKind,
 		catchUp: row.catchUp,
@@ -110,10 +186,10 @@ function summaryFrom(row: ScheduleRow, targetSessionTitle: string): ScheduleSumm
 		maxRuns: row.maxRuns,
 		nextRunAt: iso(row.nextRunAtMs),
 		ownerKind: row.ownerKind,
-		recurrence: parseJson<ScheduleRecurrence>(row.recurrenceJson, {
-			kind: "once",
+		recurrence: decoded.recurrence ?? {
 			at: new Date(row.createdAtMs).toISOString(),
-		}),
+			kind: "once",
+		},
 		runCount: row.runCount,
 		source: row.source,
 		status: row.status,
@@ -131,8 +207,11 @@ function detailFrom(
 	targetSessionTitle: string,
 	occurrences: ScheduleOccurrence[],
 ): ScheduleDetail {
+	const decoded = decodeRecurrenceJson(row.recurrenceJson, null);
 	return {
 		...summaryFrom(row, targetSessionTitle),
+		cancelIfReplied: decoded.cancelIfReplied,
+		flexWindowMs: decoded.flexWindowMs,
 		graceMs: row.graceMs,
 		maxAttempts: row.maxAttempts,
 		occurrences,
@@ -173,14 +252,18 @@ function occurrenceFrom(row: OccurrenceRow): ScheduleOccurrence {
 }
 
 function snapshotFrom(row: ScheduleRow): ScheduleSnapshot {
+	const decoded = decodeRecurrenceJson(row.recurrenceJson, null);
 	return {
 		actionKind: row.actionKind,
 		chatObjectId: row.targetChatObjectId,
+		flexWindowMs: decoded.flexWindowMs,
 		prompt: row.prompt,
+		recurrenceKind: decoded.recurrence?.kind ?? row.recurrenceKind,
 		respectQuietHours: row.respectQuietHours,
 		revision: row.revision,
 		scheduleId: row.id,
 		sessionId: row.targetSessionId,
+		timeZone: row.timeZone,
 		title: row.title,
 	};
 }
@@ -289,7 +372,7 @@ export class ScheduleService {
 		let repaired = 0;
 		for (const row of active) {
 			if (row.nextRunAtMs !== null) continue;
-			const recurrence = parseJson<ScheduleRecurrence | null>(row.recurrenceJson, null);
+			const { recurrence } = decodeRecurrenceJson(row.recurrenceJson, null);
 			if (recurrence === null || (row.maxRuns !== null && row.runCount >= row.maxRuns)) continue;
 			const next = nextOccurrence({
 				afterMs: Math.max(now - 1, row.lastRunAtMs ?? 0),
@@ -342,7 +425,8 @@ export class ScheduleService {
 		}
 		const defaults = catchUpDefaults(input.recurrence);
 		const catchUp = input.catchUp ?? defaults.catchUp;
-		const graceMs = input.graceMs ?? defaults.graceMs;
+		const flexWindowMs = input.flexWindowMs ?? null;
+		const graceMs = input.graceMs ?? (flexWindowMs !== null ? flexWindowMs : defaults.graceMs);
 		const maxAttempts = input.maxAttempts ?? 3;
 		const next = nextOccurrence({
 			afterMs: now - 1,
@@ -376,7 +460,10 @@ export class ScheduleService {
 			ownerKind: input.ownerKind,
 			ownerPluginId: input.ownerPluginId ?? null,
 			prompt: input.prompt,
-			recurrenceJson: JSON.stringify(input.recurrence),
+			recurrenceJson: encodeRecurrenceJson(input.recurrence, {
+				cancelIfReplied: input.cancelIfReplied === true,
+				flexWindowMs,
+			}),
 			recurrenceKind: input.recurrence.kind,
 			respectQuietHours: input.respectQuietHours ?? false,
 			revision: 1,
@@ -466,17 +553,27 @@ export class ScheduleService {
 			.limit(1);
 		if (row === undefined) throw new Error("Schedule not found");
 		if (row.status === "cancelled") throw new Error("Cancelled schedules cannot be edited");
-		const recurrence =
-			input.recurrence ??
-			parseJson<ScheduleRecurrence>(row.recurrenceJson, {
-				kind: "once",
-				at: new Date(row.createdAtMs).toISOString(),
-			});
+		const existingMeta = decodeRecurrenceJson(row.recurrenceJson, {
+			at: new Date(row.createdAtMs).toISOString(),
+			kind: "once",
+		});
+		const recurrence = existingMeta.recurrence ?? {
+			at: new Date(row.createdAtMs).toISOString(),
+			kind: "once",
+		};
+		const nextRecurrence = input.recurrence ?? recurrence;
+		const nextCancelIfReplied = input.cancelIfReplied ?? existingMeta.cancelIfReplied;
+		const nextFlexWindowMs =
+			input.flexWindowMs === undefined ? existingMeta.flexWindowMs : input.flexWindowMs;
+		const metaChanged =
+			input.recurrence !== undefined ||
+			input.cancelIfReplied !== undefined ||
+			input.flexWindowMs !== undefined;
 		const timeZone = input.timeZone ?? row.timeZone;
 		if (!isValidTimeZone(timeZone)) throw new Error(`Invalid time zone: ${timeZone}`);
 		const next =
 			row.status === "active"
-				? nextOccurrence({ afterMs: now - 1, recurrence, timeZone })
+				? nextOccurrence({ afterMs: now - 1, recurrence: nextRecurrence, timeZone })
 				: row.nextRunAtMs;
 		const [updated] = await database
 			.update(schedules)
@@ -486,9 +583,15 @@ export class ScheduleService {
 				...(input.maxAttempts === undefined ? {} : { maxAttempts: input.maxAttempts }),
 				...(input.maxRuns === undefined ? {} : { maxRuns: input.maxRuns }),
 				...(input.prompt === undefined ? {} : { prompt: input.prompt }),
-				...(input.recurrence === undefined
-					? {}
-					: { recurrenceJson: JSON.stringify(recurrence), recurrenceKind: recurrence.kind }),
+				...(metaChanged
+					? {
+							recurrenceJson: encodeRecurrenceJson(nextRecurrence, {
+								cancelIfReplied: nextCancelIfReplied,
+								flexWindowMs: nextFlexWindowMs,
+							}),
+							recurrenceKind: nextRecurrence.kind,
+						}
+					: {}),
 				...(input.respectQuietHours === undefined
 					? {}
 					: { respectQuietHours: input.respectQuietHours }),
@@ -496,7 +599,7 @@ export class ScheduleService {
 				nextRunAtMs: next ?? null,
 				revision: row.revision + 1,
 				status:
-					row.status === "active" && next === undefined && recurrence.kind === "once"
+					row.status === "active" && next === undefined && nextRecurrence.kind === "once"
 						? "completed"
 						: row.status,
 				timeZone,
@@ -537,10 +640,13 @@ export class ScheduleService {
 		const now = this.#now();
 		const [row] = await database.select().from(schedules).where(eq(schedules.id, id)).limit(1);
 		if (row === undefined || row.status !== "paused") throw new Error("Paused schedule not found");
-		const recurrence = parseJson<ScheduleRecurrence>(row.recurrenceJson, {
-			kind: "once",
+		const recurrence = decodeRecurrenceJson(row.recurrenceJson, {
 			at: new Date(row.createdAtMs).toISOString(),
-		});
+			kind: "once",
+		}).recurrence ?? {
+			at: new Date(row.createdAtMs).toISOString(),
+			kind: "once",
+		};
 		const next = nextOccurrence({ afterMs: now - 1, recurrence, timeZone: row.timeZone });
 		if (next === undefined) throw new Error("Schedule has no future occurrence");
 		const [updated] = await database
@@ -575,6 +681,50 @@ export class ScheduleService {
 		await this.#auditMutation("schedule.cancel", row);
 		this.#changed(changeFrom(row));
 		return (await this.#summary(id))!;
+	}
+
+	/**
+	 * Cancel active `cancelIfReplied` schedules for `sessionId` when the user sends a new inbound
+	 * message before the reminder or check-in fires.
+	 */
+	async cancelRepliedSchedules(sessionId: string): Promise<number> {
+		const database = this.#database();
+		if (database === undefined) return 0;
+		const rows = await database
+			.select()
+			.from(schedules)
+			.where(and(eq(schedules.targetSessionId, sessionId), eq(schedules.status, "active")));
+		const now = this.#now();
+		let cancelled = 0;
+		for (const row of rows) {
+			if (!decodeRecurrenceJson(row.recurrenceJson, null).cancelIfReplied) continue;
+			const [updated] = await database
+				.update(schedules)
+				.set({ cancelledAtMs: now, nextRunAtMs: null, status: "cancelled", updatedAtMs: now })
+				.where(and(eq(schedules.id, row.id), eq(schedules.status, "active")))
+				.returning();
+			if (updated === undefined) continue;
+			await database
+				.update(scheduleOccurrences)
+				.set({ status: "cancelled", updatedAtMs: now })
+				.where(
+					and(
+						eq(scheduleOccurrences.scheduleId, row.id),
+						inArray(scheduleOccurrences.status, ["pending", "claimed"]),
+					),
+				);
+			await this.#recordAudit({
+				action: "schedule.cancel-replied",
+				actorKind: "system",
+				payload: { sessionId },
+				result: "ok",
+				targetId: row.id,
+				targetKind: "schedule",
+			});
+			this.#changed(changeFrom(updated));
+			cancelled += 1;
+		}
+		return cancelled;
 	}
 
 	async runNow(id: string): Promise<ScheduleOccurrence> {
@@ -701,7 +851,7 @@ export class ScheduleService {
 
 	async #materializeSchedule(row: ScheduleRow, now: number): Promise<number> {
 		const database = this.#db();
-		const recurrence = parseJson<ScheduleRecurrence | null>(row.recurrenceJson, null);
+		const { recurrence } = decodeRecurrenceJson(row.recurrenceJson, null);
 		if (recurrence === null) return 0;
 		const times: number[] = [];
 		let cursor = row.nextRunAtMs;
@@ -763,13 +913,25 @@ export class ScheduleService {
 		}
 		const exhausted = row.maxRuns !== null && row.runCount >= row.maxRuns;
 		const next = exhausted ? null : cursor;
+		// A one-off occurrence deferred past quiet hours shares its slot with the schedule's
+		// next run. Keep the schedule active until that occurrence settles; otherwise the
+		// materializer would mark it completed before the deferred execution actually happens.
+		const lastTime = times[times.length - 1]!;
+		const unresolved =
+			next === null ? await this.#occurrenceByKey(row.id, `scheduled:${lastTime}`) : null;
+		const waiting =
+			unresolved !== null &&
+			(unresolved.status === "pending" ||
+				unresolved.status === "claimed" ||
+				unresolved.status === "running");
+		const nextRunAtMs = waiting ? lastTime : next;
 		const [updated] = await database
 			.update(schedules)
 			.set({
-				nextRunAtMs: next,
-				status: next === null ? "completed" : "active",
+				nextRunAtMs,
+				status: nextRunAtMs === null ? "completed" : "active",
 				updatedAtMs: now,
-				...(next === null ? { completedAtMs: now } : {}),
+				...(nextRunAtMs === null ? { completedAtMs: now } : {}),
 			})
 			.where(eq(schedules.id, row.id))
 			.returning();
@@ -808,16 +970,20 @@ export class ScheduleService {
 				.update(scheduleOccurrences)
 				.set({ startedAtMs: now, status: "running", updatedAtMs: now })
 				.where(eq(scheduleOccurrences.id, claimed.id));
-			const snapshot = parseJson<ScheduleSnapshot>(claimed.snapshotJson, {
-				actionKind: "agent_turn",
-				chatObjectId: null,
-				prompt: "",
-				respectQuietHours: false,
-				revision: claimed.scheduleRevision,
-				scheduleId: claimed.scheduleId,
-				sessionId: "",
-				title: "",
-			});
+			const rawSnapshot = parseJson<Partial<ScheduleSnapshot>>(claimed.snapshotJson, {});
+			const snapshot: ScheduleSnapshot = {
+				actionKind: rawSnapshot.actionKind ?? "agent_turn",
+				chatObjectId: rawSnapshot.chatObjectId ?? null,
+				flexWindowMs: rawSnapshot.flexWindowMs ?? null,
+				prompt: rawSnapshot.prompt ?? "",
+				recurrenceKind: rawSnapshot.recurrenceKind ?? "once",
+				respectQuietHours: rawSnapshot.respectQuietHours ?? false,
+				revision: rawSnapshot.revision ?? claimed.scheduleRevision,
+				scheduleId: rawSnapshot.scheduleId ?? claimed.scheduleId,
+				sessionId: rawSnapshot.sessionId ?? "",
+				timeZone: rawSnapshot.timeZone ?? "UTC",
+				title: rawSnapshot.title ?? "",
+			};
 			try {
 				const result = await this.#executor.execute({
 					occurrence: occurrenceFrom({ ...claimed, status: "running", startedAtMs: now }),
@@ -836,7 +1002,56 @@ export class ScheduleService {
 	async #settleResult(occurrence: OccurrenceRow, result: ScheduleExecutionResult): Promise<void> {
 		const database = this.#db();
 		const now = this.#now();
-		const status = result.status ?? "succeeded";
+		if (result.status === "deferred" && result.deferredUntilMs !== undefined) {
+			const deferredUntilMs = result.deferredUntilMs;
+			await database
+				.update(scheduleOccurrences)
+				.set({
+					attempt: Math.max(0, occurrence.attempt - 1),
+					availableAtMs: deferredUntilMs,
+					finishedAtMs: null,
+					leaseExpiresAtMs: null,
+					leaseOwner: null,
+					occurrenceKey: `scheduled:${deferredUntilMs}`,
+					resultJson: JSON.stringify(result.result ?? { deferred: true }),
+					scheduledForMs: deferredUntilMs,
+					status: "pending",
+					updatedAtMs: now,
+				})
+				.where(eq(scheduleOccurrences.id, occurrence.id));
+			const [updated] = await database
+				.update(schedules)
+				.set({
+					completedAtMs: null,
+					nextRunAtMs: deferredUntilMs,
+					status: "active",
+					updatedAtMs: now,
+				})
+				.where(eq(schedules.id, occurrence.scheduleId))
+				.returning();
+			await this.#recordAudit({
+				action: "schedule.deferred",
+				actorKind: "system",
+				payload: {
+					deferredUntil: new Date(deferredUntilMs).toISOString(),
+					occurrenceId: occurrence.id,
+					reason: "quiet_hours",
+					sessionId: updated?.targetSessionId,
+				},
+				result: "ok",
+				targetId: occurrence.scheduleId,
+				targetKind: "schedule",
+			});
+			this.#logger.info("schedule occurrence deferred past quiet hours", {
+				deferredUntil: new Date(deferredUntilMs).toISOString(),
+				occurrenceId: occurrence.id,
+				scheduleId: occurrence.scheduleId,
+			});
+			if (updated !== undefined) this.#changed(changeFrom(updated));
+			return;
+		}
+		const status: "skipped" | "succeeded" | "uncertain" =
+			result.status === "deferred" ? "skipped" : (result.status ?? "succeeded");
 		await database
 			.update(scheduleOccurrences)
 			.set({
@@ -856,7 +1071,7 @@ export class ScheduleService {
 			.limit(1);
 		if (row === undefined) return;
 		const runCount = row.runCount + 1;
-		const once = parseJson<ScheduleRecurrence | null>(row.recurrenceJson, null)?.kind === "once";
+		const once = decodeRecurrenceJson(row.recurrenceJson, null).recurrence?.kind === "once";
 		const exhausted = row.maxRuns !== null && runCount >= row.maxRuns;
 		const completed = status === "succeeded" ? once || exhausted : once;
 		const failedUncertain = status === "uncertain" && once;
@@ -965,6 +1180,8 @@ export class ScheduleService {
 		const detail = await this.get(id);
 		if (detail === null) return null;
 		const {
+			cancelIfReplied: _cancelIfReplied,
+			flexWindowMs: _flexWindow,
 			graceMs: _grace,
 			maxAttempts: _attempts,
 			occurrences: _occurrences,

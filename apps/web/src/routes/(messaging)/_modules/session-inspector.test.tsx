@@ -243,6 +243,9 @@ mock.module("@/paraglide/messages", () => ({
 		policy_typing: () => "Show typing indicator",
 		policy_unsaved: () => "Unsaved changes",
 		policy_version: ({ version }: { version: number }) => `Version ${version}`,
+		policy_workspace_delegation: () => "Allow IM workspace delegation",
+		policy_workspace_delegation_hint: () =>
+			"Let trusted admins in this chat spawn and message coding workspaces. Ordinary chats never receive repository coding tools.",
 		restore: () => "Restore",
 		retry: () => "Retry",
 		set_receiving: () => "Use for new external messages",

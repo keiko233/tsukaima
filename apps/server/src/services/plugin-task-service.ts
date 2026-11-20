@@ -419,13 +419,22 @@ export class PluginTaskService {
 				...logs,
 				...(result.logs ?? []).map((entry) => `${new Date().toISOString()} ${entry}`),
 			];
-			const repeat = task.intervalMs !== undefined && task.intervalMs > 0 && result.stop !== true;
+			const deferred =
+				result.nextRunAtMs !== undefined &&
+				Number.isFinite(result.nextRunAtMs) &&
+				result.stop !== true;
+			const repeat =
+				deferred || (task.intervalMs !== undefined && task.intervalMs > 0 && result.stop !== true);
 			const [row] = await database
 				.update(pluginTasks)
 				.set({
 					attempts: repeat ? 0 : task.attempts,
 					logsJson: JSON.stringify(nextLogs),
-					nextRunAtMs: repeat ? now + task.intervalMs! : task.nextRunAtMs,
+					nextRunAtMs: deferred
+						? result.nextRunAtMs!
+						: repeat
+							? now + task.intervalMs!
+							: task.nextRunAtMs,
 					outcomeJson: JSON.stringify(result.outcome ?? null),
 					status: repeat ? "pending" : "completed",
 					updatedAtMs: now,

@@ -12,18 +12,44 @@ export const WORKSPACE_TOOLS_EXTENSION_NAME = "tsukaima-workspace-tools";
 export const WORKSPACE_GIT_IDENTITY_TOOL_NAME = "workspace_git_identity";
 /** Workspace tools that must never be discoverable from chat, IM, task, or plugin surfaces. */
 export const WORKSPACE_CODING_TOOL_NAMES = [WORKSPACE_GIT_IDENTITY_TOOL_NAME] as const;
-export const WORKSPACE_TOOL_NAMES = [
+/**
+ * Governed delegation tools exposed to authorized IM conversations (`private`/`group` when
+ * `policy.workspaceDelegationEnabled === true`). Strictly excludes coding tools and prompt hooks.
+ */
+export const IM_WORKSPACE_DELEGATION_TOOL_NAMES = [
 	"workspace_spawn",
 	"workspace_status",
 	"workspace_send",
 	"session_lookup",
+] as const;
+export const WORKSPACE_TOOL_NAMES = [
+	...IM_WORKSPACE_DELEGATION_TOOL_NAMES,
 	"hook_schedule",
 	"hook_list",
 	...WORKSPACE_CODING_TOOL_NAMES,
 ] as const;
 
+export interface WorkspaceCallerAuthorization {
+	readonly allowed: boolean;
+	readonly callerId?: string;
+	readonly channelId?: string;
+	readonly chatKind?: string;
+	readonly isAdmin?: boolean;
+	readonly platformConversationId?: string;
+	readonly reason?: string;
+	readonly sessionId?: string;
+}
+
 export interface WorkspaceToolsOptions {
 	readonly audit?: (entry: AuditEntry) => Promise<void> | void;
+	/**
+	 * Fail-closed runtime authorization for workspace tools. For IM conversations (`private`/`group`),
+	 * callers must satisfy BOTH `policy.workspaceDelegationEnabled === true` and trusted admin status.
+	 */
+	readonly authorizeCaller?: (
+		durableConversationId: string,
+		toolName: string,
+	) => Promise<WorkspaceCallerAuthorization>;
 	readonly gitIdentity: () => Promise<GitIdentity> | GitIdentity;
 	readonly logger: Logger;
 	readonly messaging: SessionMessagingService;
@@ -112,9 +138,30 @@ function tool(input: {
 	};
 }
 
+function callerPayload(
+	conversationId: string,
+	auth: WorkspaceCallerAuthorization | undefined,
+	extra?: Record<string, unknown>,
+): Record<string, unknown> {
+	return {
+		conversationId,
+		...(auth?.sessionId === undefined ? {} : { originSessionId: auth.sessionId }),
+		...(auth?.chatKind === undefined ? {} : { chatKind: auth.chatKind }),
+		...(auth?.channelId === undefined ? {} : { channelId: auth.channelId }),
+		...(auth?.platformConversationId === undefined
+			? {}
+			: { platformConversationId: auth.platformConversationId }),
+		...(auth?.callerId === undefined ? {} : { callerId: auth.callerId }),
+		...(auth?.isAdmin === undefined ? {} : { isAdmin: auth.isAdmin }),
+		...extra,
+	};
+}
+
 /**
  * Host-owned tools shared by chat and workspace sessions. Visibility is filtered per
- * conversation in the lifecycle; ordinary IM sessions never receive these tools.
+ * conversation in the lifecycle; IM conversations only receive `IM_WORKSPACE_DELEGATION_TOOL_NAMES`
+ * when `policy.workspaceDelegationEnabled === true`, and runtime execution additionally verifies
+ * trusted admin identity fail-closed.
  */
 export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): DurableExtension {
 	const resolveCurrentSession = async (durableConversationId: string): Promise<string> => {
@@ -136,7 +183,8 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 	const run = async <T>(
 		name: string,
 		conversationId: string,
-		body: () => Promise<T>,
+		body: (auth: WorkspaceCallerAuthorization | undefined) => Promise<T>,
+		extraAudit?: (result: T) => Record<string, unknown>,
 	): Promise<
 		| { output: { text: string; type: "text" }[] }
 		| {
@@ -144,13 +192,55 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 				output: { text: string; type: "text" }[];
 		  }
 	> => {
+		let auth: WorkspaceCallerAuthorization | undefined;
+		if (options.authorizeCaller !== undefined) {
+			try {
+				auth = await options.authorizeCaller(conversationId, name);
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : "authorization_check_failed";
+				await audit({
+					action: `workspace-tool.${name}`,
+					actorId: "unknown",
+					actorKind: "agent",
+					payload: { conversationId, reason },
+					reason,
+					result: "denied",
+					targetKind: "workspace-tool",
+				});
+				return failure(new Error(reason));
+			}
+			if (!auth.allowed) {
+				const reason = auth.reason ?? "workspace_delegation_denied";
+				await audit({
+					action: `workspace-tool.${name}`,
+					actorId: auth.callerId ?? "unknown",
+					actorKind: auth.callerId === undefined ? "agent" : "user",
+					payload: callerPayload(conversationId, auth, { reason }),
+					reason,
+					result: "denied",
+					...(auth.sessionId === undefined ? {} : { targetId: auth.sessionId }),
+					targetKind: "workspace-tool",
+				});
+				options.logger.warn("workspace tool denied", {
+					callerId: auth.callerId ?? null,
+					chatKind: auth.chatKind ?? null,
+					conversationId,
+					reason,
+					tool: name,
+				});
+				return failure(new Error(reason));
+			}
+		}
+		const isImCaller = auth?.chatKind === "private" || auth?.chatKind === "group";
 		try {
-			const result = await body();
+			const result = await body(auth);
 			await audit({
 				action: `workspace-tool.${name}`,
-				actorKind: "agent",
-				payload: { conversationId },
+				...(isImCaller && auth?.callerId !== undefined ? { actorId: auth.callerId } : {}),
+				actorKind: isImCaller && auth?.callerId !== undefined ? "user" : "agent",
+				payload: callerPayload(conversationId, auth, extraAudit?.(result)),
 				result: "ok",
+				...(auth?.sessionId === undefined ? {} : { targetId: auth.sessionId }),
 				targetKind: "workspace-tool",
 			});
 			return text(result);
@@ -158,10 +248,12 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 			const message = error instanceof Error ? error.message : String(error);
 			await audit({
 				action: `workspace-tool.${name}`,
-				actorKind: "agent",
-				payload: { conversationId },
+				...(isImCaller && auth?.callerId !== undefined ? { actorId: auth.callerId } : {}),
+				actorKind: isImCaller && auth?.callerId !== undefined ? "user" : "agent",
+				payload: callerPayload(conversationId, auth),
 				reason: message,
 				result: "failed",
+				...(auth?.sessionId === undefined ? {} : { targetId: auth.sessionId }),
 				targetKind: "workspace-tool",
 			});
 			options.logger.warn("workspace tool failed", {
@@ -174,6 +266,7 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 	};
 
 	const spawn = tool({
+		deferred: false,
 		description:
 			"Spawn a governed workspace session to inspect, patch, test, or propose a change in Tsukaima's running repository. Use this when the user reports a bug or asks for a new capability, or when you discover a concrete self-improvement worth executing. The workspace runs independently; do not claim the code is already changed.",
 		name: "workspace_spawn",
@@ -197,38 +290,51 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 		surface: "chat",
 		async execute(args, api) {
 			const input = record(args);
-			return run("workspace_spawn", String(api.conversationId), async () => {
-				const sourceSessionId = await resolveCurrentSession(String(api.conversationId));
-				const result = await options.workspace.spawnFromSession(sourceSessionId, {
-					...(stringValue(input, "baseRef") === undefined
-						? {}
-						: { baseRef: stringValue(input, "baseRef")! }),
-					goal: stringValue(input, "goal", true)!,
-					...(stringValue(input, "model") === undefined
-						? {}
-						: {
-								model: {
-									modelId: stringValue(input, "model")!,
-									...(stringValue(input, "modelProvider") === undefined
-										? {}
-										: { providerId: stringValue(input, "modelProvider")! }),
-								},
-							}),
-					...(thinkingLevel(input.effort) === undefined
-						? {}
-						: { thinking: thinkingLevel(input.effort)! }),
-				});
-				return {
-					...result,
-					parentSessionId: sourceSessionId,
-					status: "spawned",
-					next: "Use workspace_status to poll and workspace_send to queue constraints or interrupt.",
-				};
-			});
+			return run(
+				"workspace_spawn",
+				String(api.conversationId),
+				async (auth) => {
+					const sourceSessionId = await resolveCurrentSession(String(api.conversationId));
+					const isImCaller = auth?.chatKind === "private" || auth?.chatKind === "group";
+					const result = await options.workspace.spawnFromSession(sourceSessionId, {
+						...(stringValue(input, "baseRef") === undefined
+							? {}
+							: { baseRef: stringValue(input, "baseRef")! }),
+						goal: stringValue(input, "goal", true)!,
+						...(stringValue(input, "model") === undefined
+							? {}
+							: {
+									model: {
+										modelId: stringValue(input, "model")!,
+										...(stringValue(input, "modelProvider") === undefined
+											? {}
+											: { providerId: stringValue(input, "modelProvider")! }),
+									},
+								}),
+						...(isImCaller && auth?.callerId !== undefined
+							? { requestedBy: `im-admin:${auth.callerId}` }
+							: {}),
+						...(thinkingLevel(input.effort) === undefined
+							? {}
+							: { thinking: thinkingLevel(input.effort)! }),
+					});
+					return {
+						...result,
+						parentSessionId: sourceSessionId,
+						status: "spawned",
+						next: "Use workspace_status to poll and workspace_send to queue constraints or interrupt.",
+					};
+				},
+				(result) => ({
+					spawnedSessionId: result.sessionId,
+					taskId: result.taskId,
+				}),
+			);
 		},
 	});
 
 	const status = tool({
+		deferred: false,
 		description:
 			"Query a workspace coding task by workspace session id or task id. Returns status, goal, repo root, worktree, timeline, and proposals.",
 		name: "workspace_status",
@@ -276,6 +382,7 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 	});
 
 	const send = tool({
+		deferred: false,
 		description:
 			"Send a message to a workspace session. queue inserts after the current loop step, interrupt cancels the current generation, and follow-up waits for the turn to settle.",
 		name: "workspace_send",
@@ -291,11 +398,18 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 		surface: "both",
 		async execute(args, api) {
 			const input = record(args);
-			return run("workspace_send", String(api.conversationId), async () =>
-				options.workspace.sendToWorkspace({
-					deliveryMode: deliveryMode(input.mode),
-					sessionId: stringValue(input, "sessionId", true)!,
-					text: stringValue(input, "text", true)!,
+			return run(
+				"workspace_send",
+				String(api.conversationId),
+				async () =>
+					options.workspace.sendToWorkspace({
+						deliveryMode: deliveryMode(input.mode),
+						sessionId: stringValue(input, "sessionId", true)!,
+						text: stringValue(input, "text", true)!,
+					}),
+				(result) => ({
+					deliveryMode: result.deliveryMode,
+					targetWorkspaceSessionId: result.sessionId,
 				}),
 			);
 		},
@@ -382,8 +496,9 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 	});
 
 	const lookupSessions = tool({
+		deferred: false,
 		description:
-			"Find WebUI chat, workspace, or external session ids by title. Use this before targeting another conversation with hook_schedule.",
+			"Find WebUI chat, workspace, or external session ids by title. Use this before targeting another conversation with workspace_send or hook_schedule.",
 		name: "session_lookup",
 		parameters: {
 			properties: {

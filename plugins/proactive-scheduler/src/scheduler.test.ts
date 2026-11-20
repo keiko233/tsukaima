@@ -40,6 +40,7 @@ import {
 	GLOBAL_POLICY_SCOPE,
 	emptyState,
 	isQuietHours,
+	nextQuietHoursEndMs,
 	type ProactivePolicy,
 } from "./domain.ts";
 import { evaluateProactiveGates } from "./engine.ts";
@@ -1167,5 +1168,118 @@ describe("logging and tracing", () => {
 		expect(preview?.length ?? 0).toBeLessThanOrEqual(120);
 		expect(preview?.includes("\n")).toBe(false);
 		expect(preview?.startsWith("word word")).toBe(true);
+	});
+});
+
+describe("proactive quiet-hours deferral", () => {
+	test("nextQuietHoursEndMs handles wrap-around, adjacent ranges, and offset timezones", () => {
+		const wrap = {
+			enabled: true,
+			ranges: [{ end: "07:00", start: "22:00" }],
+			timezoneOffsetMinutes: 0,
+		};
+		expect(nextQuietHoursEndMs(wrap, Date.UTC(2026, 0, 1, 23, 30))).toBe(
+			Date.UTC(2026, 0, 2, 7, 0),
+		);
+		expect(nextQuietHoursEndMs(wrap, Date.UTC(2026, 0, 1, 6, 30))).toBe(Date.UTC(2026, 0, 1, 7, 0));
+		expect(nextQuietHoursEndMs(wrap, Date.UTC(2026, 0, 1, 12, 0))).toBeUndefined();
+		const sameDay = {
+			enabled: true,
+			ranges: [{ end: "06:00", start: "01:00" }],
+			timezoneOffsetMinutes: 0,
+		};
+		expect(nextQuietHoursEndMs(sameDay, Date.UTC(2026, 0, 1, 4, 30))).toBe(
+			Date.UTC(2026, 0, 1, 6, 0),
+		);
+		const chained = {
+			enabled: true,
+			ranges: [
+				{ end: "01:00", start: "23:00" },
+				{ end: "06:00", start: "01:00" },
+			],
+			timezoneOffsetMinutes: 0,
+		};
+		expect(nextQuietHoursEndMs(chained, Date.UTC(2026, 0, 1, 23, 30))).toBe(
+			Date.UTC(2026, 0, 2, 6, 0),
+		);
+		expect(nextQuietHoursEndMs(chained, Date.UTC(2026, 0, 1, 1, 30))).toBe(
+			Date.UTC(2026, 0, 1, 6, 0),
+		);
+		const east = {
+			enabled: true,
+			ranges: [{ end: "07:00", start: "22:00" }],
+			timezoneOffsetMinutes: 480,
+		};
+		expect(nextQuietHoursEndMs(east, Date.UTC(2026, 10, 17, 15, 30))).toBe(
+			Date.UTC(2026, 10, 17, 23, 0),
+		);
+		const west = {
+			enabled: true,
+			ranges: [{ end: "07:00", start: "22:00" }],
+			timezoneOffsetMinutes: -300,
+		};
+		expect(nextQuietHoursEndMs(west, Date.UTC(2026, 10, 18, 4, 30))).toBe(
+			Date.UTC(2026, 10, 18, 12, 0),
+		);
+		const allDay = {
+			enabled: true,
+			ranges: [{ end: "08:00", start: "08:00" }],
+			timezoneOffsetMinutes: 0,
+		};
+		expect(isQuietHours(allDay, Date.UTC(2026, 0, 1, 8, 0))).toBe(true);
+		expect(nextQuietHoursEndMs(allDay, Date.UTC(2026, 0, 1, 8, 0))).toBeUndefined();
+	});
+
+	test("a one-off reminder inside quiet hours is deferred and then delivered after quiet end", async () => {
+		const quietNow = Date.UTC(2026, 10, 17, 15, 30);
+		const quietEnd = Date.UTC(2026, 10, 17, 23, 0);
+		const { clock, conversations, service, tasks } = await setup(quietNow);
+		await service.repository.savePolicyExact(CONVERSATION_POLICY_SCOPE, "c1", {
+			...DEFAULT_PROACTIVE_POLICY,
+			enabled: true,
+			quietHours: {
+				enabled: true,
+				ranges: [{ end: "07:00", start: "22:00" }],
+				timezoneOffsetMinutes: 480,
+			},
+		});
+		const created = await service.createTask(
+			{ conversationId: "c1", delayMs: 0, kind: "remind", prompt: "Synthetic quiet reminder" },
+			undefined,
+			{ id: "synthetic-admin", kind: "admin" },
+		);
+		const hostTask = tasks.tasks.get(created.taskId);
+		if (hostTask === undefined) throw new Error("host task missing");
+		clock.now = quietNow;
+		const deferred = await service.runHostTask(hostTask);
+		expect(conversations.turns).toHaveLength(0);
+		expect(deferred).toEqual(
+			expect.objectContaining({
+				nextRunAtMs: quietEnd,
+				stop: false,
+			}),
+		);
+		const scheduled = (await service.listTasks({ conversationId: "c1" })).find(
+			(task) => task.id === created.id,
+		);
+		expect(scheduled).toEqual(
+			expect.objectContaining({
+				lastError: "quiet_hours_deferred",
+				scheduledForMs: quietEnd,
+				status: "scheduled",
+			}),
+		);
+		const rescheduledHost = tasks.tasks.get(hostTask.id);
+		expect(rescheduledHost).toEqual(expect.objectContaining({ nextRunAtMs: quietEnd }));
+
+		clock.now = quietEnd + 60_000;
+		const updatedHost = tasks.tasks.get(hostTask.id);
+		if (updatedHost === undefined) throw new Error("host task missing after deferral");
+		await service.runHostTask(updatedHost);
+		expect(conversations.turns).toHaveLength(1);
+		expect(
+			(await service.listTasks({ conversationId: "c1" })).find((task) => task.id === created.id)
+				?.status,
+		).toBe("completed");
 	});
 });

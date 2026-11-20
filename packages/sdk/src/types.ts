@@ -355,6 +355,8 @@ export interface PluginTaskExecutionResult {
 	readonly logs?: readonly string[];
 	/** A repeatable task may ask to stop after this run. */
 	readonly stop?: boolean;
+	/** Optional reschedule instant for a deferred task (e.g. quiet-hours deferral). */
+	readonly nextRunAtMs?: number;
 }
 
 export type PluginTaskHandler = (

@@ -32,7 +32,11 @@ import {
 } from "./mention-labels.ts";
 import { collectRunSteps } from "./run-steps.ts";
 import { PROMPT_TOOL_NAMES } from "./prompt-tools.ts";
-import { WORKSPACE_CODING_TOOL_NAMES, WORKSPACE_TOOL_NAMES } from "./workspace-tools.ts";
+import {
+	IM_WORKSPACE_DELEGATION_TOOL_NAMES,
+	WORKSPACE_CODING_TOOL_NAMES,
+	WORKSPACE_TOOL_NAMES,
+} from "./workspace-tools.ts";
 import { CODING_AGENT_TOOL_NAMES } from "./coding-agent-tools.ts";
 
 type ChatKind = "private" | "group" | "webui" | "workspace" | "task" | "plugin";
@@ -410,12 +414,23 @@ export async function getSessionContextStats(
 		session.durableConversationId,
 	);
 	const codingTools = lifecycle.pluginHost.modelToolNames("self-iteration");
+	const proactiveTools = lifecycle.pluginHost.modelToolNames("proactive-scheduler");
 	const kind = session.chatKind ?? session.sessionKind;
+	const isImChat = kind === "private" || kind === "group";
 	const codingAllowed = kind === "workspace" && policy.capabilities.includes("coding");
+	const imDelegationAllowed = isImChat && policy.workspaceDelegationEnabled === true;
+	const imDelegationSet = new Set<string>(IM_WORKSPACE_DELEGATION_TOOL_NAMES);
+	const omittedWorkspaceTools =
+		kind === "webui" || kind === "workspace"
+			? []
+			: imDelegationAllowed
+				? WORKSPACE_TOOL_NAMES.filter((name) => !imDelegationSet.has(name))
+				: [...WORKSPACE_TOOL_NAMES];
 	const omittedTools = [
 		...(codingAllowed ? [] : codingTools),
 		...(codingAllowed ? [] : [...CODING_AGENT_TOOL_NAMES, ...WORKSPACE_CODING_TOOL_NAMES]),
-		...(kind === "webui" || kind === "workspace" ? [] : WORKSPACE_TOOL_NAMES),
+		...omittedWorkspaceTools,
+		...(isImChat ? proactiveTools : []),
 		...((kind === "webui" || codingAllowed) && lifecycle.prompts.agentAccess()
 			? []
 			: PROMPT_TOOL_NAMES),

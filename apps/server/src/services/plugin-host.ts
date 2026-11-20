@@ -24,6 +24,7 @@ import {
 	type ToolInvocationContext,
 } from "@tsukaima/sdk";
 import {
+	PluginLifecycleError,
 	PluginLifecycleManager,
 	PluginRegistry,
 	loadPluginMigrations,
@@ -52,17 +53,12 @@ import { createPluginDatabase } from "./plugin-scoped-database.ts";
 import { createPluginCacheBridge } from "./plugin-cache.ts";
 import { createPluginMediaBridge } from "./plugin-media.ts";
 import { createPluginSchedulesApi } from "./plugin-schedules.ts";
+import { resolveImCallerContext } from "./im-caller-context.ts";
 import type { MediaService } from "./media-service.ts";
 import type { OutboundService } from "./outbound.ts";
-import {
-	chatObjects,
-	conversations as conversationsTable,
-	messages as messagesTable,
-	pluginInstallStates,
-	type TsukaimaDatabase,
-} from "@tsukaima/db";
+import { pluginInstallStates, type TsukaimaDatabase } from "@tsukaima/db";
 import type { KeyvCache } from "@tsukaima/cache";
-import { and, desc, eq, or } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 export interface PluginHostOptions {
 	readonly audit: (entry: AuditEntry) => Promise<void>;
@@ -173,6 +169,8 @@ export class PluginHost {
 		| undefined;
 	readonly #conversationRole: ((conversationId: string) => Promise<string | undefined>) | undefined;
 	readonly #plugins = new Map<string, TsukaimaPlugin>();
+	/** Plugins installed via manifest-only registration (no runtime code module attached). */
+	readonly #manifestOnlyPlugins = new Set<string>();
 	readonly #modelProviders = new Map<string, PluginModelProvider>();
 	readonly #modelProviderOwners = new Map<string, string>();
 	readonly #prepared = new Set<string>();
@@ -498,7 +496,43 @@ export class PluginHost {
 				pluginId,
 				tool: name,
 			});
-			return pluginContext.tools.invoke(name, input, effectiveContext);
+			const result = await pluginContext.tools.invoke(name, input, effectiveContext);
+			const isImCaller =
+				effectiveContext.chatKind === "private" || effectiveContext.chatKind === "group";
+			if (
+				result.ok === false &&
+				isImCaller &&
+				(result.reason === "unauthorized" ||
+					result.reason === "task_kind_denied" ||
+					result.reason === "permission_denied")
+			) {
+				const denialMessage = "message" in result ? result.message : undefined;
+				try {
+					await this.#audit({
+						action: "plugin-tool.denied",
+						actorId: effectiveContext.senderPlatformId ?? "unknown",
+						actorKind: effectiveContext.senderPlatformId === undefined ? "agent" : "user",
+						payload: {
+							chatKind: effectiveContext.chatKind,
+							conversationId: effectiveContext.conversationId,
+							pluginId,
+							...(result.reason === "permission_denied" ? { permission: result.permission } : {}),
+							...(denialMessage === undefined ? {} : { reason: denialMessage }),
+							tool: name,
+						},
+						...(denialMessage === undefined ? {} : { reason: denialMessage }),
+						result: "denied",
+						targetKind: "plugin-tool",
+					});
+				} catch (error) {
+					this.#logger.warn("plugin tool denial audit failed", {
+						error: error instanceof Error ? error.message : String(error),
+						pluginId,
+						tool: name,
+					});
+				}
+			}
+			return result;
 		}
 		throw new Error(`Unknown plugin tool ${name}`);
 	}
@@ -524,98 +558,26 @@ export class PluginHost {
 		const owner = this.#toolOwner(tool.name);
 		const manifest = owner === undefined ? undefined : this.#plugins.get(owner)?.manifest;
 		const conversation = context.conversationId;
-		let resolvedChannelId =
-			context.channelId ??
-			(conversation !== undefined && conversation.includes(":")
-				? (conversation.split(":")[0] ?? "")
-				: undefined);
-		let resolvedDomainConversationId: string | undefined;
-		let resolvedPlatformConversationId = context.platformConversationId;
-		let resolvedChatKind = context.chatKind;
-		let resolvedSenderPlatformId = context.senderPlatformId;
-		let resolvedUserId = context.userId;
-		let resolvedIsAdmin = context.isAdmin;
-		let resolvedRole = context.role;
-		const database = this.#database?.();
-		if (conversation !== undefined && database !== undefined) {
-			try {
-				const [row] = await database
-					.select({ chat: chatObjects, conversation: conversationsTable })
-					.from(conversationsTable)
-					.leftJoin(chatObjects, eq(chatObjects.id, conversationsTable.chatObjectId))
-					.where(
-						or(
-							eq(conversationsTable.durableConversationId, conversation),
-							eq(conversationsTable.id, conversation),
-						),
-					)
-					.limit(1);
-				if (row !== undefined) {
-					resolvedDomainConversationId = row.conversation.id;
-					resolvedChannelId =
-						row.conversation.channelId ?? row.chat?.channelId ?? resolvedChannelId;
-					resolvedChatKind = resolvedChatKind ?? row.chat?.kind ?? row.conversation.kind;
-					resolvedPlatformConversationId =
-						resolvedPlatformConversationId ??
-						row.conversation.platformConversationId ??
-						row.chat?.platformConversationId ??
-						undefined;
-					if (resolvedUserId === undefined || resolvedSenderPlatformId === undefined) {
-						if (row.conversation.kind === "private") {
-							const privatePeerId =
-								row.conversation.platformConversationId ??
-								row.chat?.platformConversationId ??
-								undefined;
-							resolvedUserId = resolvedUserId ?? privatePeerId;
-							resolvedSenderPlatformId = resolvedSenderPlatformId ?? privatePeerId;
-						}
-						if (resolvedUserId === undefined || resolvedSenderPlatformId === undefined) {
-							const [latestInbound] = await database
-								.select({ senderExternalId: messagesTable.senderExternalId })
-								.from(messagesTable)
-								.where(
-									and(
-										eq(messagesTable.conversationId, row.conversation.id),
-										eq(messagesTable.direction, "inbound"),
-									),
-								)
-								.orderBy(desc(messagesTable.occurredAt))
-								.limit(1);
-							if (
-								typeof latestInbound?.senderExternalId === "string" &&
-								latestInbound.senderExternalId.trim().length > 0
-							) {
-								const trimmedSender = latestInbound.senderExternalId.trim();
-								resolvedUserId = resolvedUserId ?? trimmedSender;
-								resolvedSenderPlatformId = resolvedSenderPlatformId ?? trimmedSender;
-							}
-						}
-					}
-				}
-			} catch {}
-		}
-		if (resolvedIsAdmin === undefined && resolvedUserId !== undefined) {
-			try {
-				const onebotSettings = await this.settings.read("onebot-napcat");
-				const adminUsers = Array.isArray(
-					(onebotSettings as { adminUsers?: unknown } | undefined)?.adminUsers,
-				)
-					? (onebotSettings as { adminUsers: unknown[] }).adminUsers.filter(
-							(entry): entry is string => typeof entry === "string",
-						)
-					: [];
-				if (adminUsers.includes(resolvedUserId)) {
-					resolvedIsAdmin = true;
-					resolvedRole = resolvedRole ?? "admin";
-				}
-			} catch {}
-		}
+		const caller = await resolveImCallerContext({
+			conversationId: conversation,
+			database: this.#database?.(),
+			overrides: {
+				channelId: context.channelId,
+				chatKind: context.chatKind,
+				isAdmin: context.isAdmin,
+				platformConversationId: context.platformConversationId,
+				role: context.role,
+				senderPlatformId: context.senderPlatformId,
+				userId: context.userId,
+			},
+			settings: this.settings,
+		});
 		const channelCapabilities =
 			conversation === undefined
 				? undefined
 				: this.channels.capabilities(
-						resolvedChannelId ?? conversation.split(":")[0] ?? "",
-						resolvedDomainConversationId ?? conversation,
+						caller.channelId ?? conversation.split(":")[0] ?? "",
+						caller.domainConversationId ?? conversation,
 					);
 		let conversationCapabilities: readonly string[] | undefined;
 		if (conversation !== undefined && this.#conversationCapabilities !== undefined) {
@@ -653,19 +615,17 @@ export class PluginHost {
 				: { conversationAllowedTools: context.allowedTools }),
 			...(channelCapabilities === undefined ? {} : { channelCapabilities }),
 			...(conversationCapabilities === undefined ? {} : { conversationCapabilities }),
-			...(resolvedPlatformConversationId === undefined
+			...(caller.platformConversationId === undefined
 				? {}
-				: { platformConversationId: resolvedPlatformConversationId }),
-			...(resolvedChatKind === undefined ? {} : { chatKind: resolvedChatKind }),
-			...(resolvedChannelId === undefined || resolvedChannelId.length === 0
+				: { platformConversationId: caller.platformConversationId }),
+			...(caller.chatKind === undefined ? {} : { chatKind: caller.chatKind }),
+			...(caller.channelId === undefined ? {} : { channelId: caller.channelId }),
+			...(caller.senderPlatformId === undefined
 				? {}
-				: { channelId: resolvedChannelId }),
-			...(resolvedSenderPlatformId === undefined
-				? {}
-				: { senderPlatformId: resolvedSenderPlatformId }),
-			...(resolvedUserId === undefined ? {} : { userId: resolvedUserId }),
-			...(resolvedIsAdmin === undefined ? {} : { isAdmin: resolvedIsAdmin }),
-			...(resolvedRole === undefined ? {} : { role: resolvedRole }),
+				: { senderPlatformId: caller.senderPlatformId }),
+			...(caller.userId === undefined ? {} : { userId: caller.userId }),
+			...(caller.isAdmin === undefined ? {} : { isAdmin: caller.isAdmin }),
+			...(caller.role === undefined ? {} : { role: caller.role }),
 			...(resolvedTaskKind === undefined ? {} : { taskKind: resolvedTaskKind }),
 		};
 	}
@@ -814,6 +774,24 @@ export class PluginHost {
 		}
 	}
 
+	/**
+	 * Explicit runtime boundary for dynamic plugin installation:
+	 * non-builtin manifests that declare model tools cannot be installed without an executable
+	 * runtime module because worker tool-schema registration is not yet wired. Rejecting them
+	 * up front prevents a plugin from appearing "installed" while contributing zero tools.
+	 * Manifest-only upgrades and downgrades run the same gate, so a plugin cannot gain tool
+	 * declarations without an executable runtime module.
+	 */
+	#assertRuntimeSupported(manifest: PluginManifest, hasRuntime: boolean): void {
+		if (hasRuntime || manifest.kind === "builtin") return;
+		if (manifest.tools.length > 0) {
+			const declared = manifest.tools.map((tool) => tool.name).join(", ");
+			throw new PluginLifecycleError(
+				`Plugin ${manifest.name} declares ${manifest.tools.length} tool(s) (${declared}), but dynamic installation of non-builtin tool-bearing plugins is not supported without a host runtime module (worker tool-schema registration is not wired). Install a manifest-only plugin without tools or bundle the plugin into the host runtime.`,
+			);
+		}
+	}
+
 	async install(
 		input: unknown,
 		options: {
@@ -821,14 +799,31 @@ export class PluginHost {
 			readonly enabled?: boolean;
 			readonly grantedPermissions?: readonly string[];
 			readonly migrations?: readonly PluginMigration[];
+			readonly plugin?: TsukaimaPlugin;
 			readonly rootDir?: string;
 			readonly runMode?: InstalledPlugin["runMode"];
 		} = {},
 	): Promise<PluginHostEntry> {
 		const manifest = await this.#registry.loadManifest(input);
+		if (options.plugin !== undefined && options.plugin.manifest.name !== manifest.name) {
+			throw new PluginLifecycleError(
+				`Plugin runtime module ${options.plugin.manifest.name} does not match manifest ${manifest.name}`,
+			);
+		}
+		this.#assertRuntimeSupported(manifest, options.plugin !== undefined);
 		await this.#lifecycle.install(manifest, options);
 		this.settings.registerManifest(manifest);
-		const plugin: TsukaimaPlugin = { manifest, setup() {} };
+		const plugin: TsukaimaPlugin = options.plugin ?? { manifest, setup() {} };
+		if (options.plugin === undefined) {
+			this.#manifestOnlyPlugins.add(manifest.name);
+			this.#logger.info("manifest-only plugin registered (no executable tool runtime)", {
+				kind: manifest.kind,
+				pluginId: manifest.name,
+				version: manifest.version,
+			});
+		} else {
+			this.#manifestOnlyPlugins.delete(manifest.name);
+		}
 		this.#plugins.set(manifest.name, plugin);
 		const installed = this.#registry.get(manifest.name);
 		if (installed !== undefined && installed.enabled) {
@@ -846,6 +841,7 @@ export class PluginHost {
 		options: PluginLifecycleUpgradeOptions = {},
 	): Promise<PluginHostEntry> {
 		const manifest = await this.#registry.loadManifest(input);
+		this.#assertRuntimeSupported(manifest, !this.#manifestOnlyPlugins.has(pluginId));
 		await this.#lifecycle.upgrade(pluginId, manifest, options);
 		this.#syncManifest(pluginId);
 		await this.#persistLifecycleState(pluginId);
@@ -858,6 +854,7 @@ export class PluginHost {
 		options: PluginLifecycleUpgradeOptions = {},
 	): Promise<PluginHostEntry> {
 		const manifest = await this.#registry.loadManifest(input);
+		this.#assertRuntimeSupported(manifest, !this.#manifestOnlyPlugins.has(pluginId));
 		await this.#lifecycle.downgrade(pluginId, manifest, options);
 		this.#syncManifest(pluginId);
 		await this.#persistLifecycleState(pluginId);
@@ -885,6 +882,7 @@ export class PluginHost {
 		await this.#lifecycle.uninstall(pluginId, options);
 		await this.#stopPlugin(pluginId);
 		this.#plugins.delete(pluginId);
+		this.#manifestOnlyPlugins.delete(pluginId);
 		this.#contexts.delete(pluginId);
 		this.#prepared.delete(pluginId);
 		const database = this.#database?.();

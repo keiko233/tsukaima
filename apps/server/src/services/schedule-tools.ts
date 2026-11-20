@@ -1,7 +1,9 @@
+import type { ScheduleRecurrence } from "@tsukaima/contracts";
 import type { DurableExtension, DurableToolRegistration } from "@tsukaima/core";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import type { ScheduleService } from "./schedule-service.ts";
+import { isValidTimeZone } from "./schedule-time.ts";
 import type { SessionMessagingService } from "./session-messaging.ts";
 
 export const SCHEDULE_TOOLS_EXTENSION_NAME = "tsukaima-schedule-tools";
@@ -64,7 +66,45 @@ function numberValue(input: Record<string, unknown>, key: string) {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function booleanValue(input: Record<string, unknown>, key: string): boolean | undefined {
+	const value = input[key];
+	return typeof value === "boolean" ? value : undefined;
+}
+
+function defaultTimeZone(): string {
+	const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+	return typeof detected === "string" && isValidTimeZone(detected) ? detected : "UTC";
+}
+
+function defaultTitleFromPrompt(prompt: string): string {
+	const firstLine = prompt.trim().split("\n")[0]?.trim() ?? "Scheduled reminder";
+	return firstLine.length <= 80 ? firstLine : `${firstLine.slice(0, 77)}...`;
+}
+
+/**
+ * Normalize explicit `recurrence` or IM convenience shorthands (`at` ISO timestamp or `delayMs`
+ * relative delay) into a canonical host `ScheduleRecurrence`.
+ */
+function resolveRecurrence(input: Record<string, unknown>, nowMs: number): ScheduleRecurrence {
+	if (typeof input.recurrence === "object" && input.recurrence !== null) {
+		return input.recurrence as ScheduleRecurrence;
+	}
+	const at = stringValue(input, "at");
+	if (at !== undefined) {
+		const parsed = Date.parse(at);
+		if (!Number.isFinite(parsed)) throw new Error("at must be a valid ISO-8601 timestamp");
+		return { at: new Date(parsed).toISOString(), kind: "once" };
+	}
+	const delayMs = numberValue(input, "delayMs");
+	if (delayMs !== undefined) {
+		if (delayMs < 0) throw new Error("delayMs must be non-negative");
+		return { at: new Date(nowMs + Math.floor(delayMs)).toISOString(), kind: "once" };
+	}
+	throw new Error("recurrence, at, or delayMs is required");
+}
+
 function tool(input: {
+	readonly deferred?: boolean;
 	readonly description: string;
 	readonly execute: DurableToolRegistration["execute"];
 	readonly name: string;
@@ -72,7 +112,7 @@ function tool(input: {
 	readonly surface: "chat" | "coding" | "both";
 }): DurableToolRegistration {
 	return {
-		deferred: true,
+		...(input.deferred === false ? {} : { deferred: true }),
 		description: input.description,
 		execute: input.execute,
 		name: input.name,
@@ -151,20 +191,55 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 	};
 
 	const create = tool({
+		deferred: false,
 		description:
-			"Create a durable reminder, recurring check-in, or delayed agent turn in the current session. Use this instead of promising to remember something later.",
+			"Create a durable reminder, recurring check-in, or delayed agent turn in the current session. Supports absolute ISO-8601 timestamps (`at` or `recurrence`), IANA `timeZone`, recurrence (`once`, `interval`, `calendar`), `cancelIfReplied`, `flexWindowMs`, and quiet-hours deferral for one-off reminders.",
 		name: "schedule_create",
 		parameters: {
 			properties: {
 				actionKind: { enum: ["agent_turn", "notify"], type: "string" },
+				at: {
+					description:
+						"Shorthand ISO-8601 timestamp with offset for a one-off reminder (alternative to recurrence).",
+					type: "string",
+				},
+				cancelIfReplied: {
+					description:
+						"If true, automatically cancel this reminder/check-in if the user replies before it fires.",
+					type: "boolean",
+				},
 				dedupeKey: { type: "string" },
+				delayMs: {
+					description:
+						"Shorthand relative delay in milliseconds for a one-off reminder (alternative to recurrence/at).",
+					minimum: 0,
+					type: "integer",
+				},
+				dueWindowMs: {
+					description: "Alias for flexWindowMs: skip if firing falls past this window in ms.",
+					minimum: 1,
+					type: "integer",
+				},
+				flexWindowMs: {
+					description: "Optional flex window in ms after the scheduled time before expiring.",
+					minimum: 1,
+					type: "integer",
+				},
 				maxRuns: { minimum: 1, type: "integer" },
 				prompt: { type: "string" },
 				recurrence: recurrenceParameter,
-				timeZone: { type: "string" },
+				respectQuietHours: {
+					description:
+						"Whether to honor conversation quiet hours. Defaults to true for IM conversations; one-off reminders defer to quiet-hours end.",
+					type: "boolean",
+				},
+				timeZone: {
+					description: "IANA time zone (e.g. Asia/Shanghai, UTC). Defaults to the host time zone.",
+					type: "string",
+				},
 				title: { type: "string" },
 			},
-			required: ["prompt", "recurrence", "title", "timeZone"],
+			required: ["prompt"],
 			type: "object",
 		},
 		surface: "both",
@@ -174,58 +249,55 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 			return run("schedule_create", conversationId, async () => {
 				const sessionId = await resolveCurrentSession(conversationId);
 				const session = await options.messaging.session(sessionId);
+				const isImChat = session.chat.kind === "private" || session.chat.kind === "group";
+				const prompt = stringValue(input, "prompt", true)!;
+				const title = stringValue(input, "title") ?? defaultTitleFromPrompt(prompt);
+				const timeZone = stringValue(input, "timeZone") ?? defaultTimeZone();
+				const recurrence = resolveRecurrence(input, Date.now());
+				const cancelIfReplied = booleanValue(input, "cancelIfReplied");
+				const flexWindowMs =
+					numberValue(input, "flexWindowMs") ?? numberValue(input, "dueWindowMs");
+				const respectQuietHours = booleanValue(input, "respectQuietHours") ?? isImChat;
 				const actionKind = input.actionKind === "notify" ? "notify" : "agent_turn";
-				if (session.session.kind === "workspace" && actionKind !== "notify") {
-					const detail = await options.schedules.create({
-						actionKind: "workspace_turn",
-						...(stringValue(input, "dedupeKey") === undefined
-							? {}
-							: { dedupeKey: stringValue(input, "dedupeKey")! }),
-						...(numberValue(input, "maxRuns") === undefined
-							? {}
-							: { maxRuns: numberValue(input, "maxRuns")! }),
-						ownerId: "agent",
-						ownerKind: "agent",
-						prompt: stringValue(input, "prompt", true)!,
-						recurrence: input.recurrence as never,
-						source: "workspace-tool",
-						targetSessionId: sessionId,
-						timeZone: stringValue(input, "timeZone", true)!,
-						title: stringValue(input, "title", true)!,
-					});
-					return {
-						nextRunAt: detail.nextRunAt,
-						scheduleId: detail.id,
-						status: detail.status,
-					};
-				}
+				const resolvedActionKind =
+					session.session.kind === "workspace" && actionKind !== "notify"
+						? ("workspace_turn" as const)
+						: actionKind;
 				const detail = await options.schedules.create({
-					actionKind,
+					actionKind: resolvedActionKind,
+					...(cancelIfReplied === undefined ? {} : { cancelIfReplied }),
 					...(stringValue(input, "dedupeKey") === undefined
 						? {}
 						: { dedupeKey: stringValue(input, "dedupeKey")! }),
+					...(flexWindowMs === undefined ? {} : { flexWindowMs: Math.floor(flexWindowMs) }),
 					...(numberValue(input, "maxRuns") === undefined
 						? {}
 						: { maxRuns: numberValue(input, "maxRuns")! }),
 					ownerId: "agent",
 					ownerKind: "agent",
-					prompt: stringValue(input, "prompt", true)!,
-					recurrence: input.recurrence as never,
+					prompt,
+					recurrence,
+					respectQuietHours,
 					source: session.session.kind === "workspace" ? "workspace-tool" : "chat-tool",
 					targetSessionId: sessionId,
-					timeZone: stringValue(input, "timeZone", true)!,
-					title: stringValue(input, "title", true)!,
+					timeZone,
+					title,
 				});
 				return {
+					cancelIfReplied: detail.cancelIfReplied,
+					flexWindowMs: detail.flexWindowMs,
 					nextRunAt: detail.nextRunAt,
+					respectQuietHours: detail.respectQuietHours,
 					scheduleId: detail.id,
 					status: detail.status,
+					timeZone: detail.timeZone,
 				};
 			});
 		},
 	});
 
 	const list = tool({
+		deferred: false,
 		description: "List durable schedules for the current session, including their next run.",
 		name: "schedule_list",
 		parameters: {
@@ -294,9 +366,13 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 		name: "schedule_update",
 		parameters: {
 			properties: {
+				cancelIfReplied: { type: "boolean" },
+				flexWindowMs: { minimum: 1, type: "integer" },
 				prompt: { type: "string" },
 				recurrence: recurrenceParameter,
+				respectQuietHours: { type: "boolean" },
 				scheduleId: { type: "string" },
+				timeZone: { type: "string" },
 				title: { type: "string" },
 			},
 			required: ["scheduleId"],
@@ -310,12 +386,21 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 				const sessionId = await resolveCurrentSession(conversationId);
 				const scheduleId = stringValue(input, "scheduleId", true)!;
 				await ownedSchedule(sessionId, scheduleId);
+				const cancelIfReplied = booleanValue(input, "cancelIfReplied");
+				const flexWindowMs = numberValue(input, "flexWindowMs");
+				const respectQuietHours = booleanValue(input, "respectQuietHours");
 				const detail = await options.schedules.update({
 					scheduleId,
+					...(cancelIfReplied === undefined ? {} : { cancelIfReplied }),
+					...(flexWindowMs === undefined ? {} : { flexWindowMs: Math.floor(flexWindowMs) }),
 					...(stringValue(input, "prompt") === undefined
 						? {}
 						: { prompt: stringValue(input, "prompt")! }),
 					...(input.recurrence === undefined ? {} : { recurrence: input.recurrence as never }),
+					...(respectQuietHours === undefined ? {} : { respectQuietHours }),
+					...(stringValue(input, "timeZone") === undefined
+						? {}
+						: { timeZone: stringValue(input, "timeZone")! }),
 					...(stringValue(input, "title") === undefined
 						? {}
 						: { title: stringValue(input, "title")! }),
@@ -326,6 +411,7 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 	});
 
 	const cancel = tool({
+		deferred: false,
 		description: "Cancel an agent-created schedule in the current session.",
 		name: "schedule_cancel",
 		parameters: {

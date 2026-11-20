@@ -432,20 +432,30 @@ export class WorkspaceService {
 			readonly baseRef?: string;
 			readonly goal?: string;
 			readonly model?: WorkspaceModelSelection;
+			readonly requestedBy?: string;
 			readonly tags?: readonly string[];
 			readonly thinking?: ThinkingLevel;
 		},
 	): Promise<CreateWorkspaceResult> {
 		const source = await this.#messaging.session(sourceSessionId);
+		const isImChat = source.chat.kind === "private" || source.chat.kind === "group";
 		if (source.chat.kind !== "webui" && source.chat.kind !== "workspace") {
-			throw new Error("Workspace spawn is only available to WebUI chat or workspace sessions");
+			if (!isImChat) {
+				throw new Error(
+					"Workspace spawn is only available to authorized chat or workspace sessions",
+				);
+			}
+			const effectivePolicy = await this.#policy.effectivePolicy(sourceSessionId);
+			if (effectivePolicy.workspaceDelegationEnabled !== true) {
+				throw new Error("Workspace delegation is not enabled for this conversation");
+			}
 		}
 		return this.create({
 			...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
 			...(input.goal === undefined ? {} : { goal: input.goal }),
 			...(input.model === undefined ? {} : { model: input.model }),
 			parentSessionId: sourceSessionId,
-			requestedBy: "chat-agent",
+			requestedBy: input.requestedBy ?? "chat-agent",
 			...(input.tags === undefined ? {} : { tags: input.tags }),
 			...(input.thinking === undefined ? {} : { thinking: input.thinking }),
 		});

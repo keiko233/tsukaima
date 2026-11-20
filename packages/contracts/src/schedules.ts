@@ -94,6 +94,8 @@ export const scheduleOccurrenceSchema = z.object({
 export type ScheduleOccurrence = z.infer<typeof scheduleOccurrenceSchema>;
 
 export const scheduleDetailSchema = scheduleSummarySchema.extend({
+	cancelIfReplied: z.boolean().default(false),
+	flexWindowMs: z.number().int().positive().nullable().default(null),
 	ownerId: z.string(),
 	ownerPluginId: z.string().nullable(),
 	graceMs: z.number().int().nonnegative(),
@@ -108,8 +110,15 @@ export type ScheduleDetail = z.infer<typeof scheduleDetailSchema>;
 export const scheduleCreateInputSchema = z
 	.object({
 		actionKind: scheduleActionKindSchema.default("agent_turn"),
+		cancelIfReplied: z.boolean().optional(),
 		catchUp: scheduleCatchUpSchema.optional(),
 		dedupeKey: z.string().min(1).max(200).optional(),
+		flexWindowMs: z
+			.number()
+			.int()
+			.min(1)
+			.max(24 * 3_600_000)
+			.optional(),
 		graceMs: z
 			.number()
 			.int()
@@ -148,7 +157,15 @@ export type ScheduleListOutput = z.infer<typeof scheduleListOutputSchema>;
 
 export const scheduleUpdateInputSchema = z
 	.object({
+		cancelIfReplied: z.boolean().optional(),
 		catchUp: scheduleCatchUpSchema.optional(),
+		flexWindowMs: z
+			.number()
+			.int()
+			.min(1)
+			.max(24 * 3_600_000)
+			.nullable()
+			.optional(),
 		graceMs: z
 			.number()
 			.int()

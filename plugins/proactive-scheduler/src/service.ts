@@ -24,6 +24,7 @@ import {
 	emptyState,
 	type GateResult,
 	isQuietHours,
+	nextQuietHoursEndMs,
 	type ProactivePolicy,
 	type ProactivePolicyPatch,
 	type ProactiveState,
@@ -392,8 +393,20 @@ export class ProactiveSchedulerService {
 			kind: "admin",
 		},
 	): Promise<ScheduledTask> {
+		const raw = (typeof input === "object" && input !== null ? input : {}) as Record<
+			string,
+			unknown
+		>;
+		const now = this.#now();
+		const derivedDelayMs =
+			typeof raw.delayMs === "number"
+				? raw.delayMs
+				: typeof raw.at === "string" && Number.isFinite(Date.parse(raw.at))
+					? Math.max(0, Math.floor(Date.parse(raw.at) - now))
+					: raw.delayMs;
 		const parsed = taskCreateInputSchema.parse({
-			...((typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>),
+			...raw,
+			...(derivedDelayMs === undefined ? {} : { delayMs: derivedDelayMs }),
 			...(defaultConversationId === undefined ? {} : { conversationId: defaultConversationId }),
 		});
 		const conversation = await this.#conversations.get(parsed.conversationId);
@@ -417,7 +430,6 @@ export class ProactiveSchedulerService {
 				`conversation already has ${pending.length} pending tasks (limit ${policy.maxPendingPerConversation})`,
 			);
 		}
-		const now = this.#now();
 		if (parsed.repeat?.untilMs !== undefined && parsed.repeat.untilMs <= now) {
 			throw new Error("repeat.untilMs must be in the future");
 		}
@@ -448,7 +460,7 @@ export class ProactiveSchedulerService {
 				},
 				respectQuietHours: true,
 				targetSessionId: canonicalConversationId,
-				timeZone: "UTC",
+				timeZone: parsed.timeZone ?? "UTC",
 				title: `${parsed.kind} · ${conversation.title}`.slice(0, 200),
 			});
 			this.#logger.info("proactive explicit task created as host schedule", {
@@ -1108,6 +1120,52 @@ export class ProactiveSchedulerService {
 		});
 		if (dueExpired || gate !== undefined) {
 			const reason = dueExpired ? "due_window_expired" : (gate ?? "policy_blocked");
+			// One-off user-requested reminders defer past quiet hours rather than dropping permanently.
+			if (
+				!dueExpired &&
+				gate === "quiet_hours" &&
+				claimed.repeat === null &&
+				(claimed.kind === "remind" || claimed.kind === "workflow")
+			) {
+				const deferredAtMs = nextQuietHoursEndMs(policy.quietHours, now);
+				if (deferredAtMs !== undefined) {
+					this.#logger.debug("one-off reminder deferred past quiet hours", {
+						conversationId: claimed.conversationId,
+						deferredUntil: new Date(deferredAtMs).toISOString(),
+						kind: claimed.kind,
+						taskId: claimed.id,
+					});
+					await this.#recordDecision({
+						conversationId: claimed.conversationId,
+						deliveryStatus: "skipped",
+						gateResult: "skipped",
+						gates: [
+							{
+								detail: new Date(deferredAtMs).toISOString(),
+								gate: "scheduled_task",
+								reason: "quiet_hours_deferred",
+								status: "info",
+							},
+						],
+						kind: claimed.kind,
+						marker: null,
+						skippedReason: "quiet_hours_deferred",
+						taskId: claimed.id,
+					});
+					await this.#repository.updateTask(claimed.id, {
+						lastError: "quiet_hours_deferred",
+						scheduledForMs: deferredAtMs,
+						status: "scheduled",
+					});
+					await this.#tasks.update(hostTask.id, { nextRunAtMs: deferredAtMs });
+					return {
+						logs: [`deferred quiet_hours until ${new Date(deferredAtMs).toISOString()}`],
+						nextRunAtMs: deferredAtMs,
+						outcome: { deferredUntilMs: deferredAtMs, reason: "quiet_hours_deferred" },
+						stop: false,
+					};
+				}
+			}
 			this.#logger.debug("scheduled task skipped by gate", {
 				conversationId: claimed.conversationId,
 				durationMs: this.#now() - startedAtMs,

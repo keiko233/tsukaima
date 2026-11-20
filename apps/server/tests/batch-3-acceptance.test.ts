@@ -256,9 +256,12 @@ describe("Batch 3 acceptance", () => {
 				"search-fetch_fetch",
 				"memory_recall",
 				"memory_save",
-				"proactive-scheduler_schedule",
+				"schedule_create",
+				"schedule_list",
+				"schedule_cancel",
 			]),
 		);
+		expect(offered).not.toContain("proactive-scheduler_schedule");
 		for (const deferred of [
 			"onebot-napcat_groupBan",
 			"onebot-napcat_groupKick",
