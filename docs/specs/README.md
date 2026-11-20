@@ -15,6 +15,10 @@ boundary, required behavior, contract changes, migration concerns, and acceptanc
 The [Workspace agent execution spec](workspace-agent-execution.md) follows the initial
 self-iteration rollout and defines three independently reviewable implementation batches.
 
+The [Chat agent runtime refactor spec](chat-agent-runtime-refactor.md) follows the post-cutover
+DSH parity audit and defines six independently reviewable implementation batches restoring chat
+freedom, prompt-cache efficiency, IM tool ergonomics, semantic memory, and humanlike pacing.
+
 ## Priority order
 
 | Phase | Spec | Why first |

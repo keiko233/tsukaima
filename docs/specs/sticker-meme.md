@@ -1,5 +1,9 @@
 # Sticker and meme spec
 
+[Chat agent runtime refactor](chat-agent-runtime-refactor.md) defines the post-cutover refactor
+of inline sticker expression and single-step sticker sending. It supersedes the corresponding
+initial rollout requirements below.
+
 ## Outcome
 
 Tsukaima imports Telegram sticker sets directly, enriches every sticker with a semantic profile,

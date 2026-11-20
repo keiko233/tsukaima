@@ -1,5 +1,9 @@
 # Memory and context spec
 
+[Chat agent runtime refactor](chat-agent-runtime-refactor.md) defines the post-cutover refactor
+of static system prompts, ephemeral turn context, chat-native compaction, and async semantic
+memory consolidation. It supersedes the corresponding initial rollout requirements below.
+
 ## Outcome
 
 Tsukaima preserves useful conversational and cross-session context without allowing memory to

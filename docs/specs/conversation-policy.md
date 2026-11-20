@@ -1,5 +1,9 @@
 # Conversation policy and humanlike pacing spec
 
+[Chat agent runtime refactor](chat-agent-runtime-refactor.md) defines the post-cutover refactor
+of prompt stability, burst pacing, mid-turn narration, sampling/timeouts, and social gating. It
+supersedes the corresponding initial rollout requirements below.
+
 ## Outcome
 
 A single policy engine controls when a conversation responds, waits, lurks, delays, and emits;
