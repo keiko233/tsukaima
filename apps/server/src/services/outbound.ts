@@ -34,6 +34,14 @@ export interface OutboundServiceOptions {
 	 * text a tool already posted is not delivered twice.
 	 */
 	readonly onDirectSend?: (durableConversationId: string, text: string) => void;
+	readonly onToolSend?: (input: {
+		readonly durableConversationId: string;
+		readonly hasMedia: boolean;
+		readonly parts: readonly MessagePart[];
+		readonly pluginId: string;
+		readonly sessionId: string;
+		readonly text: string;
+	}) => void;
 	readonly router: () => ConversationRouter;
 }
 
@@ -49,6 +57,7 @@ export class OutboundService {
 	readonly #hooks: HookBus | undefined;
 	readonly #logger: Logger;
 	readonly #onDirectSend: OutboundServiceOptions["onDirectSend"];
+	readonly #onToolSend: OutboundServiceOptions["onToolSend"];
 	readonly #router: () => ConversationRouter;
 
 	constructor(options: OutboundServiceOptions) {
@@ -58,6 +67,7 @@ export class OutboundService {
 		this.#hooks = options.hooks;
 		this.#logger = options.logger;
 		this.#onDirectSend = options.onDirectSend;
+		this.#onToolSend = options.onToolSend;
 		this.#router = options.router;
 	}
 
@@ -134,6 +144,14 @@ export class OutboundService {
 			}
 			await this.#touch(resolved.chatObjectId, resolved.sessionId);
 			this.#notify({ channelId: target.channelId, ...resolved, messageId: id });
+			this.#onToolSend?.({
+				durableConversationId: resolved.durableConversationId,
+				hasMedia: input.parts.some((part) => part.type !== "text"),
+				parts: input.parts,
+				pluginId,
+				sessionId: resolved.sessionId,
+				text: messagePartsText(input.parts),
+			});
 			return result;
 		} catch (error) {
 			await database

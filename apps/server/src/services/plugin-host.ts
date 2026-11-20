@@ -463,6 +463,19 @@ export class PluginHost {
 					: undefined;
 			const effectiveContext: ToolInvocationContext = {
 				...context,
+				...(context.platformConversationId !== undefined ||
+				policy.platformConversationId === undefined
+					? {}
+					: { platformConversationId: policy.platformConversationId }),
+				...(context.chatKind !== undefined || policy.chatKind === undefined
+					? {}
+					: { chatKind: policy.chatKind }),
+				...(context.channelId !== undefined || policy.channelId === undefined
+					? {}
+					: { channelId: policy.channelId }),
+				...(context.senderPlatformId !== undefined || policy.senderPlatformId === undefined
+					? {}
+					: { senderPlatformId: policy.senderPlatformId }),
 				...(context.userId !== undefined || policy.userId === undefined
 					? {}
 					: { userId: policy.userId }),
@@ -499,6 +512,10 @@ export class PluginHost {
 		readonly conversationAllowedTools?: readonly string[];
 		readonly channelCapabilities?: readonly string[];
 		readonly conversationCapabilities?: readonly string[];
+		readonly platformConversationId?: string;
+		readonly chatKind?: string;
+		readonly channelId?: string;
+		readonly senderPlatformId?: string;
 		readonly userId?: string;
 		readonly isAdmin?: boolean;
 		readonly role?: string;
@@ -508,10 +525,14 @@ export class PluginHost {
 		const manifest = owner === undefined ? undefined : this.#plugins.get(owner)?.manifest;
 		const conversation = context.conversationId;
 		let resolvedChannelId =
-			conversation !== undefined && conversation.includes(":")
+			context.channelId ??
+			(conversation !== undefined && conversation.includes(":")
 				? (conversation.split(":")[0] ?? "")
-				: undefined;
+				: undefined);
 		let resolvedDomainConversationId: string | undefined;
+		let resolvedPlatformConversationId = context.platformConversationId;
+		let resolvedChatKind = context.chatKind;
+		let resolvedSenderPlatformId = context.senderPlatformId;
 		let resolvedUserId = context.userId;
 		let resolvedIsAdmin = context.isAdmin;
 		let resolvedRole = context.role;
@@ -533,14 +554,22 @@ export class PluginHost {
 					resolvedDomainConversationId = row.conversation.id;
 					resolvedChannelId =
 						row.conversation.channelId ?? row.chat?.channelId ?? resolvedChannelId;
-					if (resolvedUserId === undefined) {
+					resolvedChatKind = resolvedChatKind ?? row.chat?.kind ?? row.conversation.kind;
+					resolvedPlatformConversationId =
+						resolvedPlatformConversationId ??
+						row.conversation.platformConversationId ??
+						row.chat?.platformConversationId ??
+						undefined;
+					if (resolvedUserId === undefined || resolvedSenderPlatformId === undefined) {
 						if (row.conversation.kind === "private") {
-							resolvedUserId =
+							const privatePeerId =
 								row.conversation.platformConversationId ??
 								row.chat?.platformConversationId ??
 								undefined;
+							resolvedUserId = resolvedUserId ?? privatePeerId;
+							resolvedSenderPlatformId = resolvedSenderPlatformId ?? privatePeerId;
 						}
-						if (resolvedUserId === undefined) {
+						if (resolvedUserId === undefined || resolvedSenderPlatformId === undefined) {
 							const [latestInbound] = await database
 								.select({ senderExternalId: messagesTable.senderExternalId })
 								.from(messagesTable)
@@ -556,7 +585,9 @@ export class PluginHost {
 								typeof latestInbound?.senderExternalId === "string" &&
 								latestInbound.senderExternalId.trim().length > 0
 							) {
-								resolvedUserId = latestInbound.senderExternalId.trim();
+								const trimmedSender = latestInbound.senderExternalId.trim();
+								resolvedUserId = resolvedUserId ?? trimmedSender;
+								resolvedSenderPlatformId = resolvedSenderPlatformId ?? trimmedSender;
 							}
 						}
 					}
@@ -622,6 +653,16 @@ export class PluginHost {
 				: { conversationAllowedTools: context.allowedTools }),
 			...(channelCapabilities === undefined ? {} : { channelCapabilities }),
 			...(conversationCapabilities === undefined ? {} : { conversationCapabilities }),
+			...(resolvedPlatformConversationId === undefined
+				? {}
+				: { platformConversationId: resolvedPlatformConversationId }),
+			...(resolvedChatKind === undefined ? {} : { chatKind: resolvedChatKind }),
+			...(resolvedChannelId === undefined || resolvedChannelId.length === 0
+				? {}
+				: { channelId: resolvedChannelId }),
+			...(resolvedSenderPlatformId === undefined
+				? {}
+				: { senderPlatformId: resolvedSenderPlatformId }),
 			...(resolvedUserId === undefined ? {} : { userId: resolvedUserId }),
 			...(resolvedIsAdmin === undefined ? {} : { isAdmin: resolvedIsAdmin }),
 			...(resolvedRole === undefined ? {} : { role: resolvedRole }),

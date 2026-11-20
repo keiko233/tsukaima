@@ -6,9 +6,12 @@ import {
 	createConsolePluginLogger,
 	createPluginContext,
 	createPluginToolsExtension,
+	legacyProviderSafeToolName,
 	normalizePluginLogger,
 	providerSafeToolName,
+	resolveToolName,
 } from "./bridges.ts";
+import { CURATED_EAGER_CHAT_TOOLS, resolveToolPolicyAccess } from "./policy.ts";
 import { pluginManifestSchema } from "./manifest.ts";
 import { PermissionDeniedError, hasPermission, permissionMatches } from "./permissions.ts";
 import { PluginRuntime } from "./runtime.ts";
@@ -450,5 +453,62 @@ describe("plugin sdk", () => {
 			async () => ({ ok: true, result: { content: [] } }),
 		);
 		expect(extension.tools).toEqual([]);
+	});
+
+	test("uses clean provider-safe tool names by default, disambiguates collisions, and resolves legacy names", () => {
+		expect(providerSafeToolName("onebot-napcat.send")).toBe("onebot-napcat_send");
+		expect(providerSafeToolName("sticker-meme.send")).toBe("sticker-meme_send");
+		expect(providerSafeToolName("memory.save")).toBe("memory_save");
+		expect(legacyProviderSafeToolName("onebot-napcat.send")).toMatch(
+			/^onebot-napcat_send_[0-9a-f]{8}$/u,
+		);
+
+		const catalog = ["onebot-napcat.send", "sticker-meme.send", "memory.save"];
+		expect(resolveToolName("onebot-napcat.send", catalog)).toBe("onebot-napcat.send");
+		expect(resolveToolName("onebot-napcat_send", catalog)).toBe("onebot-napcat.send");
+		expect(resolveToolName("onebot_napcat__send", catalog)).toBe("onebot-napcat.send");
+		expect(resolveToolName(legacyProviderSafeToolName("onebot-napcat.send"), catalog)).toBe(
+			"onebot-napcat.send",
+		);
+
+		// Without a catalog the static fallback still understands both the hyphenated clean name
+		// and the underscore alias of multi-word plugin ids, plus legacy hash suffixes.
+		expect(resolveToolName("onebot-napcat_send")).toBe("onebot-napcat.send");
+		expect(resolveToolName("onebot_napcat_send")).toBe("onebot-napcat.send");
+		expect(resolveToolName("onebot_napcat__send")).toBe("onebot-napcat.send");
+		expect(resolveToolName("onebot-napcat__send")).toBe("onebot-napcat.send");
+		expect(resolveToolName(legacyProviderSafeToolName("sticker-meme.send"))).toBe(
+			"sticker-meme.send",
+		);
+		expect(resolveToolName("search-fetch_web")).toBe("search-fetch.web");
+		expect(resolveToolName(legacyProviderSafeToolName("proactive-scheduler.schedule"))).toBe(
+			"proactive-scheduler.schedule",
+		);
+		expect(resolveToolName("memory_save")).toBe("memory.save");
+		expect(resolveToolName("onebot-napcat_send_private_msg")).toBe(
+			"onebot-napcat.send_private_msg",
+		);
+		expect(resolveToolName("demo_eager")).toBe("demo.eager");
+
+		expect(CURATED_EAGER_CHAT_TOOLS.has("onebot-napcat.send")).toBe(true);
+		expect(CURATED_EAGER_CHAT_TOOLS.has("sticker-meme.send")).toBe(true);
+
+		const sendTool: PluginTool = {
+			description: "Send",
+			execute: () => ({ content: [] }),
+			name: "onebot-napcat.send",
+			parameters: { type: "object" },
+			requiredPermissions: [],
+		};
+		expect(
+			resolveToolPolicyAccess(sendTool, {
+				conversationAllowedTools: [legacyProviderSafeToolName("onebot-napcat.send")],
+			}).allowed,
+		).toBe(true);
+		expect(
+			resolveToolPolicyAccess(sendTool, {
+				conversationAllowedTools: ["onebot-napcat_send"],
+			}).allowed,
+		).toBe(true);
 	});
 });

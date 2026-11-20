@@ -68,10 +68,21 @@ interface OneBotRuntime {
 
 const runtimes = new WeakMap<PluginContext, OneBotRuntime>();
 
+const EAGER_ONEBOT_METHODS: ReadonlySet<OneBotActionMethod> = new Set([
+	"listTargets",
+	"poke",
+	"react",
+	"readHistory",
+	"send",
+	"viewImage",
+]);
+
 const TOOL_DESCRIPTIONS: Record<OneBotActionMethod, string> = {
 	deleteGroupFile: "Delete a NapCat group file (disabled by default; admin only).",
 	deleteMessage: "Delete one platform message.",
-	fetchGroupFile: "Resolve a NapCat group file URL by file id.",
+	fetchGroupFile: "Resolve a NapCat group file URL by file id. Defaults to the current group.",
+	forwardMessage:
+		"Forward one or more existing platform messages by messageId (or [msg:<id>]) to the current chat or an explicit target.",
 	groupBan: "Mute one group member for a duration (admin only).",
 	groupKick: "Remove one member from a group (admin only).",
 	groupLeave: "Leave or dismiss a group (admin only).",
@@ -80,27 +91,33 @@ const TOOL_DESCRIPTIONS: Record<OneBotActionMethod, string> = {
 	groupSetName: "Rename a group (admin only).",
 	groupSetSpecialTitle: "Set a group member special title (admin only).",
 	groupWholeBan: "Enable or disable whole-group mute (admin only).",
-	listGroupFiles: "List NapCat group files.",
-	lookupMessage: "Look up one platform message by id.",
+	listGroupFiles: "List NapCat group files. Omit groupId to list files in the current group.",
+	listTargets:
+		"List policy-allowed private and group chat targets known to Tsukaima, highlighting the current conversation.",
+	lookupMessage: "Look up one platform message by id (or [msg:<id>]).",
 	markRead: "Mark a platform message as read.",
-	poke: "Poke a user or group member.",
+	poke: "Poke a user or group member. Omit target to poke within the current chat.",
 	rawAction: "Invoke an allowlisted raw OneBot action (disabled by default).",
-	react: "Add or remove an emoji reaction on a message.",
-	readHistory: "Read bounded platform history for a private chat or group.",
-	send: "Send text/media parts to a private chat or group.",
-	sendForward: "Send a combined/forward message bundle.",
+	react: "Add or remove an emoji reaction on a message by messageId (or [msg:<id>]).",
+	readHistory:
+		"Read bounded platform history for the current chat (or an explicit target), including [msg:<id>] references.",
+	send: "Send text/media parts to the current chat (when target is omitted) or an explicit private/group target.",
+	sendForward:
+		"Send a combined/forward message bundle to the current chat (when target is omitted) or an explicit target.",
 	setAvatar: "Change the bot account avatar (disabled by default; admin only).",
 	setLongnick: "Change the bot account long nickname (disabled by default; admin only).",
 	setOnlineStatus: "Change the bot account online status (disabled by default; admin only).",
 	setProfile: "Change bot account profile fields (disabled by default; admin only).",
 	setTyping: "Publish a typing/input indicator.",
 	uploadGroupFile: "Upload a file into a NapCat group.",
+	viewImage:
+		"Inspect an inbound image or sticker on demand by messageId ([msg:<id>]), mediaId, sha256, or the latest image in the current conversation.",
 };
 
 const TARGET_SCHEMA = {
 	additionalProperties: true,
 	description:
-		"Target chat. Prefer { kind: 'private' | 'group', platformConversationId: '<QQ user_id or group_id>' }.",
+		"Optional target chat. Omit to target the current conversation, or pass { kind: 'private' | 'group', platformConversationId: '<QQ user_id or group_id>' }.",
 	properties: {
 		channelId: { type: "string" },
 		kind: { enum: ["private", "group"], type: "string" },
@@ -116,16 +133,32 @@ const TARGET_SCHEMA = {
 const MESSAGE_PART_SCHEMA = {
 	additionalProperties: true,
 	properties: {
+		channelRef: { type: "string" },
+		fileName: {
+			description: "File name for file parts (alias: name).",
+			type: "string",
+		},
 		mediaId: { type: "string" },
 		mimeType: { type: "string" },
-		name: { type: "string" },
+		name: {
+			description: "Alias for fileName on file parts.",
+			type: "string",
+		},
+		previewText: { type: "string" },
 		sha256: { type: "string" },
+		sourceUrl: {
+			description: "HTTP(S) URL for image/audio/video/file parts (alias: url).",
+			type: "string",
+		},
 		text: { type: "string" },
 		type: {
 			enum: ["text", "image", "sticker", "audio", "video", "file", "channel-native"],
 			type: "string",
 		},
-		url: { type: "string" },
+		url: {
+			description: "Alias for sourceUrl on image/audio/video/file parts.",
+			type: "string",
+		},
 	},
 	required: ["type"],
 	type: "object",
@@ -137,9 +170,12 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 		properties: {
 			busid: { type: "integer" },
 			fileId: { type: "string" },
-			groupId: { type: "string" },
+			groupId: {
+				description: "QQ group_id. Defaults to the current group when omitted.",
+				type: "string",
+			},
 		},
-		required: ["groupId", "fileId"],
+		required: ["fileId"],
 		type: "object",
 	},
 	deleteMessage: {
@@ -155,9 +191,30 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 		properties: {
 			busid: { type: "integer" },
 			fileId: { type: "string" },
-			groupId: { type: "string" },
+			groupId: {
+				description: "QQ group_id. Defaults to the current group when omitted.",
+				type: "string",
+			},
 		},
-		required: ["groupId", "fileId"],
+		required: ["fileId"],
+		type: "object",
+	},
+	forwardMessage: {
+		additionalProperties: true,
+		properties: {
+			groupId: { type: "string" },
+			messageId: {
+				description: "Single platform message id (or [msg:<id>]) to forward.",
+				type: "string",
+			},
+			messageIds: {
+				description: "Multiple platform message ids (or [msg:<id>] references) to forward.",
+				items: { type: "string" },
+				type: "array",
+			},
+			target: TARGET_SCHEMA,
+			userId: { type: "string" },
+		},
 		type: "object",
 	},
 	groupBan: {
@@ -167,7 +224,7 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 			groupId: { type: "string" },
 			userId: { type: "string" },
 		},
-		required: ["groupId", "userId", "durationSeconds"],
+		required: ["userId", "durationSeconds"],
 		type: "object",
 	},
 	groupKick: {
@@ -177,7 +234,7 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 			rejectAddRequest: { type: "boolean" },
 			userId: { type: "string" },
 		},
-		required: ["groupId", "userId"],
+		required: ["userId"],
 		type: "object",
 	},
 	groupLeave: {
@@ -186,7 +243,6 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 			dismiss: { type: "boolean" },
 			groupId: { type: "string" },
 		},
-		required: ["groupId"],
 		type: "object",
 	},
 	groupSetAdmin: {
@@ -196,7 +252,7 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 			groupId: { type: "string" },
 			userId: { type: "string" },
 		},
-		required: ["groupId", "userId"],
+		required: ["userId"],
 		type: "object",
 	},
 	groupSetCard: {
@@ -206,7 +262,7 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 			groupId: { type: "string" },
 			userId: { type: "string" },
 		},
-		required: ["groupId", "userId", "card"],
+		required: ["userId", "card"],
 		type: "object",
 	},
 	groupSetName: {
@@ -215,7 +271,7 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 			groupId: { type: "string" },
 			groupName: { type: "string" },
 		},
-		required: ["groupId", "groupName"],
+		required: ["groupName"],
 		type: "object",
 	},
 	groupSetSpecialTitle: {
@@ -225,7 +281,7 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 			title: { type: "string" },
 			userId: { type: "string" },
 		},
-		required: ["groupId", "userId", "title"],
+		required: ["userId", "title"],
 		type: "object",
 	},
 	groupWholeBan: {
@@ -234,15 +290,32 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 			enable: { type: "boolean" },
 			groupId: { type: "string" },
 		},
-		required: ["groupId"],
 		type: "object",
 	},
 	listGroupFiles: {
 		additionalProperties: true,
 		properties: {
-			groupId: { type: "string" },
+			groupId: {
+				description: "QQ group_id. Omit to list files in the current group.",
+				type: "string",
+			},
 		},
-		required: ["groupId"],
+		type: "object",
+	},
+	listTargets: {
+		additionalProperties: true,
+		properties: {
+			kind: {
+				description: "Optional filter by chat kind ('private' or 'group').",
+				enum: ["private", "group"],
+				type: "string",
+			},
+			limit: { maximum: 100, minimum: 1, type: "integer" },
+			query: {
+				description: "Optional case-insensitive title or platform ID filter.",
+				type: "string",
+			},
+		},
 		type: "object",
 	},
 	lookupMessage: {
@@ -251,7 +324,6 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 			messageId: { type: "string" },
 			platformMessageId: { type: "string" },
 		},
-		required: ["platformMessageId"],
 		type: "object",
 	},
 	markRead: {
@@ -272,7 +344,7 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 			target: TARGET_SCHEMA,
 			userId: {
 				description:
-					"QQ user_id to poke. In private chat, defaults to target.platformConversationId.",
+					"QQ user_id to poke. Defaults to the current chat peer or latest sender when omitted.",
 				type: "string",
 			},
 		},
@@ -291,7 +363,10 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 		additionalProperties: true,
 		properties: {
 			emojiId: { type: "string" },
-			messageId: { type: "string" },
+			messageId: {
+				description: "Platform message id (or [msg:<id>] reference) to react to.",
+				type: "string",
+			},
 			set: { type: "boolean" },
 		},
 		required: ["messageId", "emojiId"],
@@ -314,7 +389,8 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 			forward: { type: "boolean" },
 			groupId: { type: "string" },
 			parts: {
-				description: "Ordered message parts, e.g. [{ type: 'text', text: 'Hello' }].",
+				description:
+					"Ordered message parts, e.g. [{ type: 'text', text: 'Hello' }, { type: 'image', sourceUrl: 'https://...' }].",
 				items: MESSAGE_PART_SCHEMA,
 				type: "array",
 			},
@@ -393,10 +469,36 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 		properties: {
 			file: { type: "string" },
 			folder: { type: "string" },
-			groupId: { type: "string" },
+			groupId: {
+				description: "QQ group_id. Defaults to the current group when omitted.",
+				type: "string",
+			},
 			name: { type: "string" },
 		},
-		required: ["groupId", "file", "name"],
+		required: ["file", "name"],
+		type: "object",
+	},
+	viewImage: {
+		additionalProperties: true,
+		properties: {
+			file: {
+				description: "Optional NapCat file reference or URL.",
+				type: "string",
+			},
+			mediaId: {
+				description: "Optional canonical mediaId from a message part.",
+				type: "string",
+			},
+			messageId: {
+				description:
+					"Optional platform message id (or [msg:<id>]) containing the image or sticker. Defaults to the latest image/sticker in the current chat.",
+				type: "string",
+			},
+			sha256: {
+				description: "Optional content hash of the stored image/sticker.",
+				type: "string",
+			},
+		},
 		type: "object",
 	},
 };
@@ -573,9 +675,11 @@ async function applySettings(
 	runtime.adapter = adapter;
 	runtime.facade = new OneBotActionFacade({
 		audit: context.audit,
+		...(context.conversations === undefined ? {} : { conversations: context.conversations }),
 		getAdapter: () => runtime.adapter,
 		getSettings: () => runtime.settings,
 		logger: context.logger.child?.("actions") ?? context.logger,
+		...(context.media === undefined ? {} : { media: context.media }),
 		...(context.outbound === undefined ? {} : { outbound: context.outbound }),
 	});
 	context.logger.info("starting OneBot channel", {
@@ -589,6 +693,7 @@ async function applySettings(
 
 function registerTools(context: PluginContext, runtime: OneBotRuntime): void {
 	for (const method of ONEBOT_ACTION_METHODS) {
+		const lazy = !EAGER_ONEBOT_METHODS.has(method);
 		context.tools.register({
 			description: TOOL_DESCRIPTIONS[method],
 			async execute(input, toolContext) {
@@ -599,17 +704,57 @@ function registerTools(context: PluginContext, runtime: OneBotRuntime): void {
 				const actor: OneBotActionActor = {
 					...(toolContext.userId === undefined ? {} : { actorId: toolContext.userId }),
 					actorKind: "agent",
+					...(toolContext.channelId === undefined ? {} : { channelId: toolContext.channelId }),
+					...(toolContext.chatKind === undefined ? {} : { chatKind: toolContext.chatKind }),
+					...(toolContext.conversationId === undefined
+						? {}
+						: { conversationId: toolContext.conversationId }),
+					...(toolContext.platformConversationId === undefined
+						? {}
+						: { platformConversationId: toolContext.platformConversationId }),
+					...(toolContext.senderPlatformId === undefined
+						? {}
+						: { senderPlatformId: toolContext.senderPlatformId }),
 					...(toolContext.isAdmin === true ? { trustedAdmin: true } : {}),
 				};
 				const outcome = await facade.run(method, input, actor);
 				if (!outcome.ok) throw new Error(`OneBot action denied or failed: ${outcome.reason}`);
+				if (
+					method === "viewImage" &&
+					typeof outcome.result === "object" &&
+					outcome.result !== null &&
+					"data" in outcome.result &&
+					typeof (outcome.result as { data?: unknown }).data === "string"
+				) {
+					const imageResult = outcome.result as {
+						readonly data: string;
+						readonly mediaId?: string;
+						readonly mimeType?: string;
+						readonly partType?: string;
+						readonly platformMessageId?: string;
+						readonly previewText?: string;
+						readonly sha256?: string;
+						readonly sizeBytes?: number;
+					};
+					const { data, ...summary } = imageResult;
+					return {
+						content: [{ text: JSON.stringify(summary), type: "text" }],
+						images: [
+							{
+								data,
+								mimeType: imageResult.mimeType ?? "image/png",
+							},
+						],
+					} satisfies ToolResult;
+				}
 				return {
 					content: [{ text: JSON.stringify(outcome.result ?? null), type: "text" }],
 				} satisfies ToolResult;
 			},
+			lazy,
 			name: `onebot-napcat.${method}`,
 			parameters: TOOL_PARAMETERS_BY_METHOD[method],
-			policy: { lazy: true, surface: "chat" },
+			policy: { lazy, surface: "chat" },
 			requiredPermissions: ONEBOT_ACTION_PERMISSIONS[method],
 		});
 	}

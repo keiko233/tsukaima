@@ -398,6 +398,7 @@ export interface PluginConversationSummary {
 	readonly durableConversationId: string;
 	readonly chatObjectId: string | null;
 	readonly channelId: string | null;
+	readonly platformConversationId?: string | null;
 	readonly kind: "private" | "group" | "webui" | "workspace" | "task" | "plugin";
 	readonly title: string;
 	readonly updatedAt: string;
@@ -409,10 +410,12 @@ export interface PluginConversationSummary {
 /** Bounded message metadata plus a short text preview for compact operational context. */
 export interface PluginConversationMessage {
 	readonly id: string;
+	readonly platformMessageId?: string | null;
 	readonly direction: "inbound" | "outbound" | "system";
 	readonly kind: string;
 	readonly senderDisplayName: string | null;
 	readonly textPreview: string;
+	readonly parts?: readonly MessagePart[];
 	readonly occurredAt: string;
 	readonly deliveryStatus: string | null;
 }
@@ -618,6 +621,10 @@ export type ToolSurface = "chat" | "coding" | "both";
 
 export interface ToolInvocationContext {
 	readonly conversationId?: string;
+	readonly platformConversationId?: string;
+	readonly chatKind?: string;
+	readonly channelId?: string;
+	readonly senderPlatformId?: string;
 	readonly userId?: string;
 	readonly isAdmin?: boolean;
 	readonly role?: string;
@@ -628,8 +635,19 @@ export interface ToolInvocationContext {
 	readonly signal?: AbortSignal;
 }
 
+export type ToolContentPart =
+	| { readonly text: string; readonly type: "text" }
+	| {
+			readonly data: string;
+			readonly mimeType: string;
+			readonly text?: string;
+			readonly type: "image";
+	  };
+
 export interface ToolResult {
 	content: readonly { readonly text: string; readonly type: "text" }[];
+	/** Optional multimodal image blocks returned to vision-capable models (e.g. `viewImage`). */
+	images?: readonly { readonly data: string; readonly mimeType: string }[];
 }
 
 export interface PluginTool {
@@ -685,7 +703,7 @@ export interface PluginToolRegistration {
 		api: PluginToolExecutionApi,
 		context: unknown,
 	): Promise<{
-		readonly output: { readonly type: "text"; readonly text: string }[];
+		readonly output: ToolContentPart[];
 		readonly isError?: boolean;
 	}>;
 }

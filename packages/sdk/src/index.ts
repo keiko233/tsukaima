@@ -6,6 +6,7 @@ export {
 } from "./permissions.ts";
 export { pluginPermissionSchema } from "./manifest.ts";
 export {
+	CURATED_EAGER_CHAT_TOOLS,
 	DEFAULT_TOOL_POLICY,
 	isModelVisibleTool,
 	resolveToolPolicy,
@@ -102,6 +103,7 @@ export type {
 	PluginUiRegistry,
 	PluginStatusListener,
 	PluginUiSlot,
+	ToolContentPart,
 	ToolInvocationContext,
 	ToolResult,
 } from "./types.ts";
@@ -153,8 +155,10 @@ export {
 	LocalStorageBridge,
 	LocalToolBridge,
 	LocalUiBridge,
+	legacyProviderSafeToolName,
 	normalizePluginLogger,
 	PLUGIN_TOOLS_EXTENSION_NAME,
 	providerSafeToolName,
+	resolveToolName,
 	type PluginToolsExtensionOptions,
 } from "./bridges.ts";

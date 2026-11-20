@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import type { ChannelRequest, MessageEnvelope } from "@tsukaima/contracts";
+import {
+	defaultConversationPolicy,
+	type ChannelRequest,
+	type MessageEnvelope,
+} from "@tsukaima/contracts";
 import {
 	createPluginContext,
 	type AuditEntry,
 	type ChannelAdapter,
 	type PluginChannelRegistry,
+	type PluginConversationsApi,
 	type PluginSettingsApi,
 } from "@tsukaima/sdk";
 import { ONEBOT_TRANSPORT_FACTORY_BINDING, oneBotNapCatPlugin } from "./index.ts";
@@ -17,6 +22,7 @@ import type {
 class FakeTransport implements OneBotTransport {
 	readonly sent: Array<{ action: string; params: Record<string, unknown> }> = [];
 	readonly #listeners = new Map<string, Array<(...args: never[]) => void>>();
+	respond: ((action: string, params: Record<string, unknown>) => unknown) | undefined;
 
 	close(): void {
 		this.emit("close");
@@ -38,11 +44,9 @@ class FakeTransport implements OneBotTransport {
 			params: Record<string, unknown>;
 		};
 		this.sent.push({ action: parsed.action, params: parsed.params });
+		const responseData = this.respond?.(parsed.action, parsed.params) ?? { message_id: 500 };
 		queueMicrotask(() => {
-			this.#emit(
-				"message",
-				JSON.stringify({ data: { message_id: 500 }, echo: parsed.echo, retcode: 0 }),
-			);
+			this.#emit("message", JSON.stringify({ data: responseData, echo: parsed.echo, retcode: 0 }));
 		});
 	}
 
@@ -79,7 +83,10 @@ class Registry implements PluginChannelRegistry {
 	}
 }
 
-async function createHarness(initial: Record<string, unknown>) {
+async function createHarness(
+	initial: Record<string, unknown>,
+	options?: { readonly conversations?: PluginConversationsApi },
+) {
 	const registry = new Registry();
 	const audits: AuditEntry[] = [];
 	const transports: FakeTransport[] = [];
@@ -100,6 +107,7 @@ async function createHarness(initial: Record<string, unknown>) {
 	const context = createPluginContext({
 		audit: { record: async (entry) => void audits.push(entry) },
 		channels: registry,
+		...(options?.conversations === undefined ? {} : { conversations: options.conversations }),
 		dependencies: {
 			get: <T>(key: string) =>
 				(key === ONEBOT_TRANSPORT_FACTORY_BINDING ? transportFactory : undefined) as T | undefined,
@@ -378,6 +386,191 @@ describe("OneBot action policy and audit", () => {
 			});
 			expect(history.ok).toBe(true);
 			expect(harness.transports[0]?.sent.at(-1)?.action).toBe("get_friend_msg_history");
+		} finally {
+			await oneBotNapCatPlugin.teardown?.(harness.context);
+		}
+	});
+
+	test("defaults target to the current chat from toolContext, strips [msg:<id>] references, normalizes url/name parts, and marks high-frequency tools eager", async () => {
+		const harness = await createHarness(base);
+		try {
+			const toolsByName = new Map(
+				harness.context.tools.list().map((entry) => [entry.name, entry] as const),
+			);
+			expect(toolsByName.get("onebot-napcat.send")?.lazy).toBe(false);
+			expect(toolsByName.get("onebot-napcat.readHistory")?.lazy).toBe(false);
+			expect(toolsByName.get("onebot-napcat.viewImage")?.lazy).toBe(false);
+			expect(toolsByName.get("onebot-napcat.poke")?.lazy).toBe(false);
+			expect(toolsByName.get("onebot-napcat.react")?.lazy).toBe(false);
+			expect(toolsByName.get("onebot-napcat.listTargets")?.lazy).toBe(false);
+			expect(toolsByName.get("onebot-napcat.groupBan")?.lazy).toBe(true);
+
+			const currentGroupContext = {
+				channelId: "onebot",
+				chatKind: "group",
+				conversationId: "conv-group-1",
+				platformConversationId: "20001",
+				senderPlatformId: "10005",
+			};
+
+			const implicitSend = await harness.context.tools.invoke(
+				"onebot-napcat.send",
+				{
+					parts: [
+						{ text: "Implicit group send", type: "text" },
+						{ type: "image", url: "https://example.com/test.png" },
+						{ name: "report.pdf", type: "file", url: "https://example.com/report.pdf" },
+					],
+				},
+				currentGroupContext,
+			);
+			expect(implicitSend.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "send_group_msg",
+				params: {
+					group_id: "20001",
+					message: [
+						{ data: { text: "Implicit group send" }, type: "text" },
+						{ data: { file: "https://example.com/test.png" }, type: "image" },
+						{
+							data: { file: "https://example.com/report.pdf", name: "report.pdf" },
+							type: "file",
+						},
+					],
+				},
+			});
+
+			const implicitPoke = await harness.context.tools.invoke(
+				"onebot-napcat.poke",
+				{ userId: "10008" },
+				currentGroupContext,
+			);
+			expect(implicitPoke.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "group_poke",
+				params: { group_id: "20001", user_id: "10008" },
+			});
+
+			const reactWithMsgRef = await harness.context.tools.invoke(
+				"onebot-napcat.react",
+				{ emojiId: "128077", messageId: "[msg:98765]" },
+				currentGroupContext,
+			);
+			expect(reactWithMsgRef.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "set_msg_emoji_like",
+				params: { emoji_id: "128077", message_id: "98765", set: true },
+			});
+
+			const forwardSingle = await harness.context.tools.invoke(
+				"onebot-napcat.forwardMessage",
+				{ messageId: "[msg:98765]" },
+				currentGroupContext,
+			);
+			expect(forwardSingle.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "forward_group_single_msg",
+				params: { group_id: "20001", message_id: "98765" },
+			});
+
+			const targetsResult = await harness.context.tools.invoke(
+				"onebot-napcat.listTargets",
+				{},
+				currentGroupContext,
+			);
+			expect(targetsResult.ok).toBe(true);
+		} finally {
+			await oneBotNapCatPlugin.teardown?.(harness.context);
+		}
+	});
+
+	test("discovers missing allowed group/friend targets from NapCat and filters disabled policy rows", async () => {
+		const currentGroup = {
+			channelId: "onebot",
+			chatObjectId: "chat-current",
+			durableConversationId: "durable-current",
+			id: "conv-current",
+			kind: "group" as const,
+			muted: false,
+			platformConversationId: "20001",
+			status: "active",
+			title: "Current group",
+			updatedAt: new Date().toISOString(),
+		};
+		const disabledGroup = {
+			...currentGroup,
+			chatObjectId: "chat-disabled",
+			durableConversationId: "durable-disabled",
+			id: "conv-disabled",
+			platformConversationId: "20002",
+			title: "Disabled group",
+		};
+		const enabledPolicy = {
+			...defaultConversationPolicy,
+			trigger: { ...defaultConversationPolicy.trigger, groupAccess: "open" as const },
+		};
+		const disabledPolicy = {
+			...defaultConversationPolicy,
+			enabled: false,
+			trigger: { ...defaultConversationPolicy.trigger, groupAccess: "disabled" as const },
+		};
+		const conversations: PluginConversationsApi = {
+			get: async (id) => (id === currentGroup.id ? currentGroup : undefined),
+			getPolicy: async (id) => (id === disabledGroup.id ? disabledPolicy : enabledPolicy),
+			list: async () => [currentGroup, disabledGroup],
+			recentMessages: async () => [],
+			submitBackgroundTurn: async () => ({
+				delivered: false,
+				deliveryStatus: "skipped",
+				skippedReason: "test_stub",
+			}),
+		};
+		const harness = await createHarness(base, { conversations });
+		const transport = harness.transports[0];
+		if (transport === undefined) throw new Error("transport missing");
+		transport.respond = (action) => {
+			if (action === "get_group_list") {
+				return [
+					{ group_id: "20001", group_name: "Current group" },
+					{ group_id: "20002", group_name: "Disabled group" },
+					{ group_id: "20003", group_name: "Discovered group" },
+				];
+			}
+			if (action === "get_friend_list") {
+				return [
+					{ nickname: "Discovered friend", remark: "Friend A", user_id: "10002" },
+					{ nickname: "Another friend", user_id: "10003" },
+				];
+			}
+			return { message_id: 500 };
+		};
+		try {
+			const result = await harness.context.tools.invoke(
+				"onebot-napcat.listTargets",
+				{},
+				{
+					channelId: "onebot",
+					chatKind: "group",
+					conversationId: "conv-current",
+					platformConversationId: "20001",
+					senderPlatformId: "10005",
+				},
+			);
+			expect(result.ok).toBe(true);
+			if (!result.ok) throw new Error("listTargets unavailable");
+			const listed = (
+				JSON.parse(result.result.content[0]?.text ?? "{}") as {
+					targets: { platformConversationId: string }[];
+				}
+			).targets;
+			expect(listed.map((target) => target.platformConversationId).toSorted()).toEqual([
+				"10002",
+				"10003",
+				"20001",
+				"20003",
+			]);
+			expect(transport.sent.some((entry) => entry.action === "get_group_list")).toBe(true);
+			expect(transport.sent.some((entry) => entry.action === "get_friend_list")).toBe(true);
 		} finally {
 			await oneBotNapCatPlugin.teardown?.(harness.context);
 		}

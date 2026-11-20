@@ -634,6 +634,13 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		return { items };
 	});
 
+	rpc.register("hints", async (input) => {
+		const record = recordValue(input);
+		const limit = asNumber(record.limit) ?? 3;
+		const hints = await repository.listCaptionHints(limit);
+		return { captions: hints.map((hint) => hint.caption) };
+	});
+
 	rpc.register("items.update", async (input) => {
 		const record = recordValue(input);
 		const id = normalizeText(record.id ?? record.itemId);

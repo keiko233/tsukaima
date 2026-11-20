@@ -4,6 +4,8 @@ export const STICKER_MEME_PLUGIN_ID = "sticker-meme";
 export const STICKER_MEME_RPC_PREFIX = `${STICKER_MEME_PLUGIN_ID}.`;
 export const STICKER_MEME_DIRECTIVE_PATTERN =
 	/\[\[sticker:([A-Za-z0-9_-]+)\]\]|<sticker\s+token=["']([A-Za-z0-9_-]+)["']\s*\/?>/gu;
+export const STICKER_MEME_INLINE_MARKER_PATTERN =
+	/\[(?:表情|sticker)\s*[:：]\s*([^\]\r\n]{1,80})\]/giu;
 
 export const stickerMemeManifest: PluginManifest = pluginManifestSchema.parse({
 	apiVersion: "1",

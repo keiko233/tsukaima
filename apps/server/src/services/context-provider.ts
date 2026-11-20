@@ -72,6 +72,10 @@ interface RunSpeakers {
 	readonly text: string;
 	readonly userId: string | undefined;
 }
+const STICKER_HINTS_HEADER =
+	"Ready-to-copy sticker captions (write the marker exactly when a sticker fits):";
+const STICKER_HINT_MAX_ITEMS = 3;
+const STICKER_CAPTION_MAX_CHARS = 32;
 
 /** One host-model completion for chat compaction, on the conversation's own model. */
 export interface ContextCompletionRequest {
@@ -119,6 +123,8 @@ export interface DrizzleContextProviderOptions {
 	readonly policyService?: ConversationPolicyService;
 	/** Shared memory service (hybrid recall, warm state); created internally when omitted. */
 	readonly memoryService?: MemoryService;
+	/** Optional bounded sticker captions for the ephemeral turn context. */
+	readonly stickerCaptions?: () => Promise<readonly string[] | undefined>;
 }
 
 const errorMessage = (error: unknown): string =>
@@ -202,12 +208,14 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	readonly #policyService: ConversationPolicyService;
 	readonly #renderPrompt: DrizzleContextProviderOptions["renderPrompt"];
 	readonly #renderSystem: DrizzleContextProviderOptions["renderSystem"];
+	readonly #stickerCaptions: DrizzleContextProviderOptions["stickerCaptions"];
 	readonly #timeZone: string | undefined;
 	readonly #turnBudget: number;
 
 	constructor(options: DrizzleContextProviderOptions) {
 		this.#renderSystem = options.renderSystem;
 		this.#renderPrompt = options.renderPrompt;
+		this.#stickerCaptions = options.stickerCaptions;
 		this.#completeText = options.completeText;
 		this.#database = options.database;
 		this.#logger = options.logger.child("tsukaima::server::context");
@@ -400,6 +408,37 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			} catch (error) {
 				this.#logger.warn("memory context unavailable", { error: errorMessage(error) });
 			}
+			remaining -= recalled?.length ?? 0;
+		}
+		let stickerHints: string | undefined;
+		if (chat && this.#stickerCaptions !== undefined && remaining > 0) {
+			try {
+				const captions = await this.#stickerCaptions();
+				const cleaned = [
+					...new Set(
+						(captions ?? [])
+							.map((caption) =>
+								caption
+									.replace(/[\][\r\n]+/gu, " ")
+									.trim()
+									.slice(0, STICKER_CAPTION_MAX_CHARS),
+							)
+							.filter((caption) => caption.length > 0),
+					),
+				].slice(0, STICKER_HINT_MAX_ITEMS);
+				if (cleaned.length > 0) {
+					const text = [
+						STICKER_HINTS_HEADER,
+						...cleaned.map((caption) => `- [表情:${caption}]`),
+					].join("\n");
+					if (text.length <= remaining) {
+						stickerHints = text;
+						remaining -= text.length;
+					}
+				}
+			} catch (error) {
+				this.#logger.debug("sticker captions unavailable", { error: errorMessage(error) });
+			}
 		}
 
 		let crossSession: string | undefined;
@@ -462,6 +501,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		push("consistency", consistency);
 		push("style-avoid", styleAvoid);
 		push("rhythm-nudge", rhythmNudge);
+		push("stickers", stickerHints);
 		push("prompt-hooks", hooks);
 		push("cue", cue);
 		this.#logger.debug("rendered turn context", {
@@ -717,7 +757,13 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				row.direction === "outbound"
 					? SELF_LABEL
 					: observationSpeaker(row.senderDisplayName, row.senderExternalId);
-			const line = `${clock}${speaker}: ${text}`;
+			const msgRef =
+				row.direction === "inbound" &&
+				row.platformMessageId !== null &&
+				row.platformMessageId.trim().length > 0
+					? ` [msg:${row.platformMessageId.trim()}]`
+					: "";
+			const line = `${clock}${speaker}: ${text}${msgRef}`;
 			if (used + line.length + 1 > budget) break;
 			lines.push(line);
 			used += line.length + 1;

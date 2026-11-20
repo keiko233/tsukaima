@@ -7,6 +7,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	createPluginContext,
 	LocalModelRegistry,
 	pluginManifestSchema,
 	type AuditEntry,
@@ -700,6 +701,66 @@ describe("sticker selection and send tokens", () => {
 			mimeType: "video/webm",
 			type: "video",
 		});
+	});
+
+	test("resolves inline [表情:描述] and [sticker:描述] markers (default 1 per turn) and supports single-step sticker-meme.send", async () => {
+		const setup = await setupSelection();
+		const transform = createStickerReplyTransform({
+			audit: { record: async (entry) => void setup.audits.push(entry) },
+			media: setup.media,
+			repository: setup.repository,
+			selection: setup.selection,
+		});
+		const transformed = await transform({
+			conversationId: "conversation-1",
+			parts: [
+				{
+					text: "太棒啦 [表情:happy] 再来一个 [sticker:happy] 未知 [表情:nonexistent_xyz]",
+					type: "text",
+				},
+			],
+		});
+		expect(transformed?.parts).toEqual([
+			{ text: "太棒啦 ", type: "text" },
+			{
+				mediaId: setup.fresh.mediaId,
+				mimeType: "image/png",
+				modelReadable: false,
+				previewText: "fresh",
+				sha256: setup.fresh.hash,
+				type: "sticker",
+			},
+			{ text: " 再来一个 ", type: "text" },
+			{ text: " 未知 ", type: "text" },
+		]);
+
+		const context = createPluginContext({
+			grantedPermissions: stickerMemeManifest.permissions,
+			manifest: stickerMemeManifest,
+			pluginId: "sticker-meme",
+		});
+		registerStickerTools(context, setup.selection);
+		const toolsByName = new Map(context.tools.list().map((entry) => [entry.name, entry] as const));
+		expect(toolsByName.get("sticker-meme.search")?.policy?.lazy).toBe(false);
+		expect(toolsByName.get("sticker-meme.send")?.lazy).toBe(false);
+		expect(toolsByName.get("sticker-meme.send")?.policy?.lazy).toBe(false);
+
+		const sent = await context.tools.invoke(
+			"sticker-meme.send",
+			{ query: "happy" },
+			{ conversationId: "conversation-1" },
+		);
+		expect(sent.ok).toBe(true);
+		if (sent.ok) {
+			const payload = JSON.parse(sent.result.content[0]?.text ?? "{}") as {
+				directive?: string;
+				inlineMarker?: string;
+				itemId?: string;
+			};
+			expect(payload.itemId).toBe("fresh");
+			expect(payload.directive).toMatch(/^\[\[sticker:st_[a-z0-9]+\]\]$/u);
+			expect(payload.inlineMarker).toBe("[表情:fresh]");
+		}
 	});
 });
 
