@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runBackupDrill } from "@tsukaima/migration";
+import { runBackupDrill, runGlobalSnapshotDrill } from "@tsukaima/migration";
 import { BackupDrillScheduler } from "../../apps/server/src/services/backup-drill-scheduler.ts";
 import { createLogger } from "../../apps/server/src/logging.ts";
 import { drillOptionsFromEnv, parseBackupDrillArgs } from "./backup-drill.ts";
@@ -130,10 +130,56 @@ describe("backup drill", () => {
 		const options = drillOptionsFromEnv(
 			{ TSUKAIMA_DATA_DIR: "/tmp/env-data" },
 			{
+				dryRun: false,
+				global: false,
 				help: false,
 				keepStaging: false,
 			},
 		);
 		expect(options).toEqual({ dataDir: "/tmp/env-data" });
+
+		const globalParsed = parseBackupDrillArgs([
+			"--global",
+			"--dry-run",
+			"--data-dir",
+			"/tmp/tsukaima-data",
+		]);
+		expect(globalParsed).toMatchObject({
+			dataDir: "/tmp/tsukaima-data",
+			dryRun: true,
+			global: true,
+		});
+		const globalOptions = drillOptionsFromEnv(
+			{},
+			{
+				dataDir: "/tmp/tsukaima-data",
+				dryRun: true,
+				global: true,
+				help: false,
+				keepStaging: false,
+			},
+		);
+		expect(globalOptions).toEqual({
+			dataDir: "/tmp/tsukaima-data",
+			dryRun: true,
+			keepStaging: false,
+		});
+	});
+
+	test("global drill captures every store and reports only logical data", async () => {
+		const dataDir = await dataDirectory();
+		const report = await runGlobalSnapshotDrill({
+			dataDir,
+			dryRun: true,
+			now: () => Date.parse("2026-11-14T00:00:00.000Z"),
+			runId: "drill-global",
+		});
+		expect(report.ok).toBe(true);
+		expect(report.sqlite.stores).toEqual(["domain.sqlite", "durable.sqlite"]);
+		expect(report.cutover.rehearsed).toBe(false);
+		// Reports stay logical: no file bytes leak into the serialized report.
+		const serialized = JSON.stringify(report);
+		expect(serialized).not.toContain("sticker-bytes");
+		expect(serialized).not.toContain("image-bytes");
 	});
 });

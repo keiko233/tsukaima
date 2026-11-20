@@ -84,6 +84,7 @@ import { ConversationPacingTracker } from "./services/conversation-pacing.ts";
 import { ConversationPolicyService } from "./services/conversation-policy.ts";
 import { ConversationRouter } from "./services/conversation-router.ts";
 import { DrizzleContextProvider } from "./services/context-provider.ts";
+import { ChatSnapshotService } from "./services/chat-snapshot.ts";
 import {
 	MEMORY_SERVICE_BINDING,
 	MemoryService,
@@ -204,6 +205,8 @@ export class TsukaimaLifecycle {
 	/** One lock shared by inbound turns, outbound pacing, tasks, and background turns. */
 	readonly executionLock: ConversationExecutionLock;
 	readonly memory: MemoryService;
+	/** Admin chat snapshot checkpoint/restore; created after the conversation host exists. */
+	private chatSnapshotService: ChatSnapshotService | undefined;
 	private readonly plugins: readonly TsukaimaPlugin[];
 	readonly media: MediaService;
 	private readonly inboundMedia: InboundMediaResolver;
@@ -420,6 +423,7 @@ export class TsukaimaLifecycle {
 			tasks: this.pluginTasks,
 		});
 		this.memory.registerTaskHandlers(this.pluginTasks);
+		this.chatSnapshotService = new ChatSnapshotService(this);
 		this.replyExpectations = new ReplyExpectationStore({
 			database: () => this.domainDatabase,
 		});
@@ -1748,6 +1752,14 @@ export class TsukaimaLifecycle {
 		reason?: string,
 	): Promise<{ status: "approved" | "rejected" | "failed" | "uncertain" }> {
 		return this.requestService.respond(requestId, action, reason);
+	}
+
+	/** Admin chat-snapshot service; available once construction is complete. */
+	get chatSnapshots(): ChatSnapshotService {
+		if (this.chatSnapshotService === undefined) {
+			throw new Error("Chat snapshot service is not ready");
+		}
+		return this.chatSnapshotService;
 	}
 
 	async writeAudit(entry: AuditEntry): Promise<void> {

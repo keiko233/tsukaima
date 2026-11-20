@@ -1749,10 +1749,113 @@ export const memoryCompactResultSchema = z.object({
 });
 export type MemoryCompactResult = z.infer<typeof memoryCompactResultSchema>;
 
+// ─── Admin chat snapshots ──────────────────────────────────────────────────
+
+export const chatSnapshotCountsSchema = z.object({
+	/** Committed durable entries that backed the model context at capture time. */
+	entries: z.number().int().nonnegative(),
+	memories: z.number().int().nonnegative(),
+	messages: z.number().int().nonnegative(),
+	/** Shared/global/user/persona memories observed at capture but never restored. */
+	quarantinedMemories: z.number().int().nonnegative(),
+});
+export type ChatSnapshotCounts = z.infer<typeof chatSnapshotCountsSchema>;
+
+export const chatSnapshotRowSchema = z.object({
+	appliedAt: z.string().nullable(),
+	conversationId: z.string().min(1),
+	createdAt: z.string().min(1),
+	createdBy: z.string().min(1),
+	counts: chatSnapshotCountsSchema,
+	durableConversationId: z.string().nullable(),
+	id: z.string().min(1),
+	purpose: z.enum(["checkpoint", "undo"]),
+	restoredFromId: z.string().nullable(),
+	status: z.enum(["active", "applied"]),
+	title: z.string().nullable(),
+});
+export type ChatSnapshotRow = z.infer<typeof chatSnapshotRowSchema>;
+
+export const chatSnapshotCreateInputSchema = z
+	.object({
+		conversationId: z.string().min(1),
+		title: z.string().trim().min(1).max(200).optional(),
+	})
+	.strict();
+export type ChatSnapshotCreateInput = z.infer<typeof chatSnapshotCreateInputSchema>;
+
+export const chatSnapshotIdInputSchema = z.object({ id: z.string().min(1) }).strict();
+
+export const chatSnapshotListInputSchema = z
+	.object({ conversationId: z.string().min(1).optional() })
+	.strict();
+
+export const chatSnapshotBlockSchema = z.object({
+	code: z.enum([
+		"conversation_missing",
+		"context_changed",
+		"unsupported_kind",
+		"run_active",
+		"delivery_pending",
+		"already_applied",
+		"snapshot_missing",
+		"host_unavailable",
+	]),
+	message: z.string().min(1),
+});
+export type ChatSnapshotBlock = z.infer<typeof chatSnapshotBlockSchema>;
+
+export const chatSnapshotPreviewSchema = z.object({
+	blocked: z.array(chatSnapshotBlockSchema),
+	/** True when nothing blocks a safe apply. */
+	applicable: z.boolean(),
+	modelContext: z.object({
+		entries: z.number().int().nonnegative(),
+		/** Restores rebuild context with the host's reset-with-handoff semantics. */
+		strategy: z.literal("reset-with-handoff"),
+	}),
+	quarantinedSharedMemories: z.array(
+		z.object({
+			id: z.string().min(1),
+			kind: z.string().min(1),
+			scope: z.string().min(1),
+			summary: z.string().min(1),
+		}),
+	),
+	restorableMemories: z.number().int().nonnegative(),
+	visibleTranscript: z.object({
+		/** Visible history is immutable: applying never rewrites or replays message rows. */
+		preserved: z.literal(true),
+		messageCount: z.number().int().nonnegative(),
+	}),
+});
+export type ChatSnapshotPreview = z.infer<typeof chatSnapshotPreviewSchema>;
+
+export const chatSnapshotApplyResultSchema = z.object({
+	ok: z.literal(true),
+	preview: chatSnapshotPreviewSchema,
+	/** Snapshot captured automatically right before the apply mutated state. */
+	undoSnapshotId: z.string().min(1),
+});
+export type ChatSnapshotApplyResult = z.infer<typeof chatSnapshotApplyResultSchema>;
+
 // ─── Contract ────────────────────────────────────────────────────────────────
 
 export const appContract = oc.router({
 	admin: {
+		chatSnapshot: {
+			apply: oc
+				.input(chatSnapshotIdInputSchema)
+				.output(chatSnapshotApplyResultSchema)
+				.meta({ audit: true }),
+			create: oc
+				.input(chatSnapshotCreateInputSchema)
+				.output(chatSnapshotRowSchema)
+				.meta({ audit: true }),
+			get: oc.input(chatSnapshotIdInputSchema).output(chatSnapshotRowSchema.nullable()),
+			list: oc.input(chatSnapshotListInputSchema).output(z.array(chatSnapshotRowSchema)),
+			preview: oc.input(chatSnapshotIdInputSchema).output(chatSnapshotPreviewSchema),
+		},
 		chats: {
 			createLocal: oc
 				.input(chatsCreateLocalInputSchema)

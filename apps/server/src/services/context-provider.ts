@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, ne, or, sql, type SQL } from "drizzle-orm";
 import type { ContextPromptProvider } from "@tsukaima/core";
 import type { ConversationPolicy } from "@tsukaima/contracts";
 import {
+	chatSnapshots,
 	conversationMembers,
 	conversations,
 	memories,
@@ -491,6 +492,25 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		sessionId: string | undefined,
 	): Promise<{ contentText: string | null; direction: string; id: string }[]> {
 		if (sessionId === undefined) return [];
+		const [restore] = await database
+			.select({ appliedAt: chatSnapshots.appliedAt, payload: chatSnapshots.payloadJson })
+			.from(chatSnapshots)
+			.innerJoin(conversations, eq(conversations.id, chatSnapshots.conversationId))
+			.where(
+				and(
+					eq(chatSnapshots.conversationId, sessionId),
+					eq(chatSnapshots.status, "applied"),
+					eq(chatSnapshots.durableConversationId, conversations.durableConversationId),
+				),
+			)
+			.orderBy(desc(chatSnapshots.appliedAt))
+			.limit(1);
+		const restoreWindow = restore?.appliedAt
+			? sql`(julianday(${messages.ingestedAt}) > julianday(${restore.appliedAt}) OR EXISTS (
+				SELECT 1 FROM json_each(${restore.payload}, '$.messages') AS snapshot_message
+				WHERE json_extract(snapshot_message.value, '$.id') = ${messages.id}
+			))`
+			: undefined;
 		const recent = await database
 			.select({
 				contentText: messages.contentText,
@@ -498,7 +518,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				id: messages.id,
 			})
 			.from(messages)
-			.where(and(eq(messages.conversationId, sessionId), ne(messages.kind, "tool")))
+			.where(and(eq(messages.conversationId, sessionId), ne(messages.kind, "tool"), restoreWindow))
 			.orderBy(desc(messages.occurredAt))
 			.limit(RECENT_MESSAGE_LIMIT);
 		return recent.toReversed();

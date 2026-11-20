@@ -1183,3 +1183,36 @@ export const pluginInstallStates = sqliteTable("plugin_install_states", {
 	retainData: integer("retain_data").notNull().default(1),
 	updatedAt: text("updated_at").notNull().default(now),
 });
+
+/**
+ * Admin chat snapshot: a local logical checkpoint of one chat's recoverable context. The payload
+ * captures the visible transcript, the conversation-scoped active memories, and the durable
+ * committed entries that back the model context. Applying a snapshot reconciles conversation
+ * memories and resets the durable context generation; shared/global/user/persona memory is never
+ * included or restored, and an undo checkpoint is captured before every apply.
+ */
+export const chatSnapshots = sqliteTable(
+	"chat_snapshots",
+	{
+		appliedAt: text("applied_at"),
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		createdAt: text("created_at").notNull().default(now),
+		createdBy: text("created_by").notNull(),
+		durableConversationId: text("durable_conversation_id"),
+		id: text("id").primaryKey(),
+		payloadJson: text("payload_json").notNull(),
+		/** `undo` snapshots are captured automatically right before an apply mutates state. */
+		purpose: text("purpose", { enum: ["checkpoint", "undo"] })
+			.notNull()
+			.default("checkpoint"),
+		restoredFromId: text("restored_from_id"),
+		status: text("status", { enum: ["active", "applied"] })
+			.notNull()
+			.default("active"),
+		title: text("title"),
+		updatedAt: text("updated_at").notNull().default(now),
+	},
+	(table) => [index("chat_snapshots_conversation_idx").on(table.conversationId, table.createdAt)],
+);

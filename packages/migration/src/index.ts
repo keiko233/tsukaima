@@ -132,6 +132,13 @@ export {
 	type ScheduleRequestImportResult,
 } from "./schedule-request-import.ts";
 export {
+	runGlobalSnapshotDrill,
+	type GlobalSnapshotCheckRecord,
+	type GlobalSnapshotFileRecord,
+	type GlobalSnapshotOptions,
+	type GlobalSnapshotReport,
+} from "./global-snapshot.ts";
+export {
 	backupRunDirectory,
 	createPreImportBackup,
 	readBackupManifest,

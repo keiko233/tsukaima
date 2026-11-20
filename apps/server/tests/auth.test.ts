@@ -386,6 +386,11 @@ describe("admin auth", () => {
 		const sampleInputs: Record<string, unknown> = {
 			"chats/createLocal": { sessionTitle: "Sample", title: "Sample" },
 			"chats/list": {},
+			"chatSnapshot/apply": { id: "snapshot-1" },
+			"chatSnapshot/create": { conversationId: "session-1" },
+			"chatSnapshot/get": { id: "snapshot-1" },
+			"chatSnapshot/list": {},
+			"chatSnapshot/preview": { id: "snapshot-1" },
 			"conversations/list": {},
 			"diagnostics/clearLogs": {},
 			"diagnostics/logs": {},

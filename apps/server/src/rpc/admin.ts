@@ -2,6 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { MODEL_CAPABILITIES, type PluginModelInfo } from "@tsukaima/sdk";
 import { conversations, modelPolicies, type memories } from "@tsukaima/db";
 import { adminBase, type TsukaimaApiContext } from "./base.ts";
+import { ChatSnapshotBlockError } from "../services/chat-snapshot.ts";
 import {
 	abortSessionRun,
 	compactSessionContext,
@@ -77,6 +78,25 @@ async function auditMemory(
 
 type LifecycleModelPolicy = TsukaimaApiContext["lifecycle"]["routingPolicies"][number];
 
+/** Block reports become a 409 with every refusal reason attached. */
+function asSnapshotRpcError(error: unknown): unknown {
+	if (error instanceof ChatSnapshotBlockError) {
+		return new ORPCError("CONFLICT", {
+			data: { blocked: error.blocks },
+			message: error.message,
+		});
+	}
+	return error;
+}
+
+async function runSnapshot<T>(operation: () => Promise<T>): Promise<T> {
+	try {
+		return await operation();
+	} catch (error) {
+		throw asSnapshotRpcError(error);
+	}
+}
+
 /** Normalizes the readonly policy list owned by the lifecycle into the mutable contract shape. */
 function toContractPolicies(policies: readonly LifecycleModelPolicy[]) {
 	return policies.map((policy) => ({
@@ -149,6 +169,28 @@ async function settingsView(context: TsukaimaApiContext) {
 }
 
 export const adminRouter = {
+	chatSnapshot: {
+		apply: adminBase.admin.chatSnapshot.apply.handler(async ({ context, input }) =>
+			runSnapshot(() => context.lifecycle.chatSnapshots.apply(input.id)),
+		),
+		create: adminBase.admin.chatSnapshot.create.handler(async ({ context, input }) =>
+			runSnapshot(() =>
+				context.lifecycle.chatSnapshots.create({
+					conversationId: input.conversationId,
+					...(input.title === undefined ? {} : { title: input.title }),
+				}),
+			),
+		),
+		get: adminBase.admin.chatSnapshot.get.handler(
+			async ({ context, input }) => (await context.lifecycle.chatSnapshots.get(input.id)) ?? null,
+		),
+		list: adminBase.admin.chatSnapshot.list.handler(async ({ context, input }) =>
+			context.lifecycle.chatSnapshots.list(input ?? {}),
+		),
+		preview: adminBase.admin.chatSnapshot.preview.handler(async ({ context, input }) =>
+			runSnapshot(() => context.lifecycle.chatSnapshots.preview(input.id)),
+		),
+	},
 	chats: {
 		createLocal: adminBase.admin.chats.createLocal.handler(async ({ context, input }) =>
 			createLocalChat(context.lifecycle, input),

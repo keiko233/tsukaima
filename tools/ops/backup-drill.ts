@@ -1,5 +1,10 @@
 #!/usr/bin/env bun
-import { runBackupDrill, type BackupDrillOptions } from "@tsukaima/migration";
+import {
+	runBackupDrill,
+	runGlobalSnapshotDrill,
+	type BackupDrillOptions,
+	type GlobalSnapshotOptions,
+} from "@tsukaima/migration";
 
 interface CliOptions {
 	readonly dataDir?: string;
@@ -10,12 +15,17 @@ interface CliOptions {
 	readonly reportsDir?: string;
 	readonly mediaDir?: string;
 	readonly keepStaging: boolean;
+	/** Run the aggregate global-snapshot drill (all stores + blobs + cutover rehearsal). */
+	readonly global: boolean;
+	readonly dryRun: boolean;
 	readonly help: boolean;
 }
 
 const USAGE = `Usage: bun tools/ops/backup-drill.ts [options]
 
-Runs a SQLite + blob backup/restore drill against a running-or-stopped data directory.
+Runs a backup/restore drill against a running-or-stopped data directory.
+
+Default: SQLite (domain/durable) + blob backup/restore drill.
 
 Options:
   --data-dir <dir>       Data directory containing domain.sqlite/durable.sqlite/blobs
@@ -26,6 +36,10 @@ Options:
   --reports-dir <dir>    Override the report directory
   --media-dir <dir>      Override the blob/media directory
   --keep-staging         Keep the restored staging copy for inspection
+  --global               Full-scope aggregate drill: every SQLite store (domain, durable,
+                         plugins), all referenced blobs, integrity + foreign keys, cross-store
+                         consistency, and an atomic generation cutover rehearsal
+  --dry-run              With --global: verify only, skip the cutover rehearsal
   --help                 Show this help
 `;
 
@@ -38,12 +52,16 @@ export function parseBackupDrillArgs(argv: readonly string[]): CliOptions {
 	let reportsDir: string | undefined;
 	let mediaDir: string | undefined;
 	let keepStaging = false;
+	let global = false;
+	let dryRun = false;
 	let help = false;
 	for (let index = 0; index < argv.length; index += 1) {
 		const argument = argv[index];
 		if (argument === undefined) continue;
 		if (argument === "--help" || argument === "-h") help = true;
 		else if (argument === "--keep-staging") keepStaging = true;
+		else if (argument === "--global") global = true;
+		else if (argument === "--dry-run") dryRun = true;
 		else if (argument === "--data-dir") dataDir = argv[++index];
 		else if (argument === "--run-id") runId = argv[++index];
 		else if (argument === "--root") root = argv[++index];
@@ -56,6 +74,8 @@ export function parseBackupDrillArgs(argv: readonly string[]): CliOptions {
 	return {
 		...(backupRoot === undefined ? {} : { backupRoot }),
 		...(dataDir === undefined ? {} : { dataDir }),
+		dryRun,
+		global,
 		help,
 		keepStaging,
 		...(mediaDir === undefined ? {} : { mediaDir }),
@@ -69,8 +89,18 @@ export function parseBackupDrillArgs(argv: readonly string[]): CliOptions {
 export function drillOptionsFromEnv(
 	env: Record<string, string | undefined>,
 	options: CliOptions,
-): BackupDrillOptions {
+): BackupDrillOptions | GlobalSnapshotOptions {
 	const dataDir = options.dataDir ?? env.TSUKAIMA_DATA_DIR ?? "./data";
+	if (options.global) {
+		const globalOptions: GlobalSnapshotOptions = {
+			dataDir,
+			dryRun: options.dryRun,
+			keepStaging: options.keepStaging,
+			...(options.root === undefined ? {} : { root: options.root }),
+			...(options.runId === undefined ? {} : { runId: options.runId }),
+		};
+		return globalOptions;
+	}
 	return {
 		dataDir,
 		...(options.backupRoot === undefined ? {} : { backupRoot: options.backupRoot }),
@@ -89,7 +119,11 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 		process.stdout.write(USAGE);
 		return 0;
 	}
-	const report = await runBackupDrill(drillOptionsFromEnv(process.env, options));
+	const drillOptions = drillOptionsFromEnv(process.env, options);
+	const report =
+		"sqlite" in drillOptions
+			? await runGlobalSnapshotDrill(drillOptions as GlobalSnapshotOptions)
+			: await runBackupDrill(drillOptions as BackupDrillOptions);
 	process.stdout.write(`${JSON.stringify(report, null, "\t")}\n`);
 	return report.ok ? 0 : 1;
 }

@@ -283,3 +283,90 @@ bun run ops:backup-drill -- --data-dir "$TSUKAIMA_DATA_DIR"
 
 Then confirm `/healthz` and `/readyz`, open a local WebUI chat, and send one supervised message
 through the connected NapCat channel.
+
+## 9. Chat snapshots and aggregate recovery drills
+
+### Admin chat snapshots (per-chat logical checkpoint)
+
+Each ordinary chat (private, group, WebUI) can be checkpointed and restored through the admin RPC:
+
+- `admin/chatSnapshot/create` — capture transcript pointers, bounded recent excerpts, and active
+  conversation-memory text and status. Durable entry IDs record what existed at capture time.
+- `admin/chatSnapshot/preview` — every block condition at once (`run_active`,
+  `delivery_pending`, `unsupported_kind`, `already_applied`, `conversation_missing`,
+  `snapshot_missing`, `host_unavailable`, `context_changed`), other memory scopes, and the
+  restore strategy.
+- `admin/chatSnapshot/apply` — fenced re-check, an automatic undo checkpoint, conversation-memory
+  reconciliation, then a durable context rebuild through the host's reset-with-handoff semantics.
+- `admin/chatSnapshot/list` / `admin/chatSnapshot/get` — checkpoint history.
+
+Behavior contract:
+
+- The visible transcript remains intact. The model continues from a bounded historical excerpt,
+  the checkpoint's recent-message window, and messages ingested after apply. The host resets its
+  context without replaying durable entries or re-queuing old submissions, hooks, or deliveries.
+- Workspace and other execution-surface conversations are rejected (`unsupported_kind`).
+- A conversation with a running generation, queued/placed submissions, or pending/uncertain
+  outbound delivery is fenced (`run_active`, `delivery_pending`). Previews become applicable
+  again once the state settles.
+- Global, user, persona, and project memories are never mutated by an apply. They appear in the
+  preview as `quarantinedSharedMemories` — an explicit, separately previewed scope; moving them
+  requires a separate approved change, not a chat restore.
+- Every apply captures an undo checkpoint first, and both the create and apply are audited
+  (`chat-snapshot.create`, `chat-snapshot.apply`).
+
+### Aggregate global snapshot drill
+
+The scheduled drill (section 6) proves per-file consistency of `domain.sqlite`,
+`durable.sqlite`, and blobs, but not whole-data consistency. The aggregate drill extends it:
+
+```sh
+bun tools/ops/backup-drill.ts --global --data-dir "$TSUKAIMA_DATA_DIR"
+# verification only (no cutover rehearsal):
+bun tools/ops/backup-drill.ts --global --dry-run --data-dir "$TSUKAIMA_DATA_DIR"
+```
+
+For each run it captures one immutable generation under `<root>/generations/<runId>/` containing:
+
+- `domain.sqlite`, `durable.sqlite`, `cache.sqlite` when present, and SQLite files in `plugins/`;
+- every file under `blobs/`;
+- a checksummed, versioned `manifest.json` (logical names, sizes, SHA-256, aggregate hash).
+
+Verification, all against the captured generation (never the live files):
+
+1. Manifest re-verification: every recorded hash recomputed; any extra or missing file fails.
+2. `PRAGMA integrity_check` and `PRAGMA foreign_key_check` on every captured store.
+3. Cross-store consistency: every numeric `conversations.durable_conversation_id` must exist in
+   the durable store's conversations, and every `media` row must have its blob file. A missing
+   Tsukaima table is reported as skipped (non-Tsukaima stores); any other failure fails the run.
+4. Cutover rehearsal (unless `--dry-run`): a recovery journal with the rollback plan is written
+   to `<root>/reports/<runId>-recovery-journal.json`, a `current-generation` pointer is swapped,
+   and the swap is rolled back to prove the plan is executable.
+
+Exit code `0` requires all four gates. The report contains only logical names, counts, hashes,
+and check results. For a real restore, stop the runtime writers first or supply a `stopWriters`
+hook when driving the drill programmatically. Overlay the verified stores and blobs on a staged
+copy of the data directory. Check scheduled work and pending deliveries before starting the
+runtime. Keep the original data directory for rollback. Worktrees and other operational files
+require a separate full-directory backup.
+
+### DSH recovery decision tree
+
+Immediate recovery from a DSH failure chooses exactly one path, in this order:
+
+1. **Verified post-import snapshot** — if a Tsukaima snapshot taken after the last import
+   verifies with `--global` (all stores, cross-store, manifest), restore it. This is the only
+   path that returns to baseline quality without re-importing.
+2. **Rebuild from the original DSH export** — if no qualifying snapshot exists, re-run the
+   offline pipeline (section 5) against the verified original DSH export with the current
+   migration fixes. Expect a full import, not an incremental patch.
+3. **Rehearsed cleanup on an isolated copy** — if neither artifact is available, rehearse
+   `clean-chat-data` on staging copies and promote only after a zero-match re-plan. This
+   cleans pollution but does **not** restore lost data; record in the audit that the outcome is
+   "cleaned", not "restored".
+
+Cutover gating is identical for all three paths: stop the writer, promote only verified files,
+keep the pre-change copy until health checks pass, and never let a restore re-send outbound
+messages. The committed DSH baseline fixture is synthetic and is never used as production
+recovery data; if no production artifact was captured before the incident, path 3 is the only
+safe option.

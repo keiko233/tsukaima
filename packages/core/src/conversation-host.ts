@@ -2269,6 +2269,37 @@ export class PiDurableConversationHost {
 		};
 	}
 
+	/**
+	 * Point-in-time activity fence for one conversation: whether a run is working on it and how
+	 * many submissions are queued or placed. Read-only; used by admin flows that must not mutate
+	 * a conversation while delivery or a run is in flight.
+	 */
+	async conversationActivity(
+		conversationId: string,
+	): Promise<{ busy: boolean; pendingSubmissions: number } | undefined> {
+		const parsedNumeric = Number(conversationId);
+		if (!Number.isSafeInteger(parsedNumeric)) return undefined;
+		const harness = await this.openHarness();
+		const numericId = parsedNumeric as ConversationId;
+		// An idle conversation has no live document; the in-process run map and the live-run
+		// snapshot are the same source `appendLocked` fences against, so both are consulted.
+		if (this.activeRunSince(String(numericId)) !== undefined) {
+			return { busy: true, pendingSubmissions: 0 };
+		}
+		const live = await harness.snapshot(LiveDoc, numericId, BACKGROUND_CONTEXT);
+		const working = live?.run !== undefined && live.run.inputs.length > 0;
+		const inspection = await harness.inspect(BACKGROUND_CONTEXT);
+		const conversationIdText = String(numericId);
+		let pendingSubmissions = 0;
+		for (const submission of inspection.submissions) {
+			if (String(submission.conversationId) !== conversationIdText) continue;
+			if (submission.status === "queued" || submission.status === "placed") {
+				pendingSubmissions += 1;
+			}
+		}
+		return { busy: working || pendingSubmissions > 0, pendingSubmissions };
+	}
+
 	async resumeActivityWindow(conversationId: string): Promise<void> {
 		const harness = await this.openHarness();
 		const numericId = Number(conversationId) as ConversationId;
