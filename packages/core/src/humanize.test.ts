@@ -178,3 +178,16 @@ describe("humanize: rhythm nudge", () => {
 		expect(detectRigidRhythm(["a\nb", "c", "e\nf\ng", "h"]).rigid).toBe(false);
 	});
 });
+
+describe("humanize: stickers meta-leak", () => {
+	test("strips a leaked <stickers> block and tag", () => {
+		const result = sanitizeOutboundMetaLeaks(
+			"早上好\n<stickers>\n[caption] synthetic sticker\n</stickers>\n<stickers>inline</stickers>\n今天几点见？",
+		);
+		expect(result.modified).toBe(true);
+		expect(result.text).not.toContain("<stickers>");
+		expect(result.text).not.toContain("synthetic sticker");
+		expect(result.text).toContain("早上好");
+		expect(result.text).toContain("今天几点见？");
+	});
+});

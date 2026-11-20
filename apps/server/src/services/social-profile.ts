@@ -456,6 +456,8 @@ export class SocialProfileService implements SocialProfileBridge {
 	readonly #logger: Logger;
 	readonly #now: () => number;
 	readonly #policyService: ConversationPolicyService | undefined;
+	/** Per-conversation promise chains: bursts must never interleave read-modify-write. */
+	readonly #queues = new Map<string, Promise<unknown>>();
 
 	constructor(options: SocialProfileServiceOptions) {
 		this.#database = options.database;
@@ -543,6 +545,15 @@ export class SocialProfileService implements SocialProfileBridge {
 		readonly text?: string;
 		readonly timezoneOffsetMinutes?: number;
 	}): Promise<HumanProfile | undefined> {
+		return this.#serialize(input.conversationId, () => this.#recordInboundNow(input));
+	}
+
+	async #recordInboundNow(input: {
+		readonly conversationId: string;
+		readonly nowMs?: number;
+		readonly text?: string;
+		readonly timezoneOffsetMinutes?: number;
+	}): Promise<HumanProfile | undefined> {
 		const database = this.#database();
 		if (database === undefined) return undefined;
 		const nowMs = input.nowMs ?? this.#now();
@@ -610,6 +621,16 @@ export class SocialProfileService implements SocialProfileBridge {
 	 * turns never consume proactive quota.
 	 */
 	async recordOutbound(input: {
+		readonly conversationId: string;
+		readonly delivered: boolean;
+		readonly nowMs?: number;
+		readonly proactive: boolean;
+		readonly timezoneOffsetMinutes?: number;
+	}): Promise<HumanProfile | undefined> {
+		return this.#serialize(input.conversationId, () => this.#recordOutboundNow(input));
+	}
+
+	async #recordOutboundNow(input: {
 		readonly conversationId: string;
 		readonly delivered: boolean;
 		readonly nowMs?: number;
@@ -722,6 +743,22 @@ export class SocialProfileService implements SocialProfileBridge {
 			level,
 			profile: { ...profile, level },
 		};
+	}
+
+	/**
+	 * Serialize every profile mutation for one conversation. Callers read the row, mutate a
+	 * draft, and upsert it, so two concurrent messages would otherwise overwrite each other and
+	 * could drop a refusal's `refusedAt`/`silentUntil` or lose interaction counts.
+	 */
+	#serialize<T>(conversationId: string, task: () => Promise<T>): Promise<T> {
+		const previous = this.#queues.get(conversationId) ?? Promise.resolve();
+		const run = previous.catch(() => undefined).then(task);
+		const tail = run.catch(() => undefined);
+		this.#queues.set(conversationId, tail);
+		void tail.then(() => {
+			if (this.#queues.get(conversationId) === tail) this.#queues.delete(conversationId);
+		});
+		return run;
 	}
 
 	async #effectivePolicy(conversationId: string): Promise<ConversationPolicy> {

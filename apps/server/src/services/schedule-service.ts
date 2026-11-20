@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { scheduleRecurrenceSchema } from "@tsukaima/contracts";
 import type {
 	ScheduleCreateInput,
 	ScheduleDetail,
@@ -419,18 +420,21 @@ export class ScheduleService {
 		if (input.actionKind === "agent_turn" && target.session.kind === "workspace") {
 			throw new Error("Use workspace_turn for a workspace session");
 		}
-		if (input.recurrence.kind === "once") {
-			const at = Date.parse(input.recurrence.at);
+		// Parse, never trust the typed crate shape: this path is reachable from RPC input and a
+		// malformed recurrence must fail before any row is written.
+		const recurrence = scheduleRecurrenceSchema.parse(input.recurrence);
+		if (recurrence.kind === "once") {
+			const at = Date.parse(recurrence.at);
 			if (!Number.isFinite(at)) throw new Error("Invalid one-time schedule");
 		}
-		const defaults = catchUpDefaults(input.recurrence);
+		const defaults = catchUpDefaults(recurrence);
 		const catchUp = input.catchUp ?? defaults.catchUp;
 		const flexWindowMs = input.flexWindowMs ?? null;
 		const graceMs = input.graceMs ?? (flexWindowMs !== null ? flexWindowMs : defaults.graceMs);
 		const maxAttempts = input.maxAttempts ?? 3;
 		const next = nextOccurrence({
 			afterMs: now - 1,
-			recurrence: input.recurrence,
+			recurrence,
 			timeZone: input.timeZone,
 		});
 		if (next === undefined) throw new Error("Schedule has no future occurrence");
@@ -460,11 +464,11 @@ export class ScheduleService {
 			ownerKind: input.ownerKind,
 			ownerPluginId: input.ownerPluginId ?? null,
 			prompt: input.prompt,
-			recurrenceJson: encodeRecurrenceJson(input.recurrence, {
+			recurrenceJson: encodeRecurrenceJson(recurrence, {
 				cancelIfReplied: input.cancelIfReplied === true,
 				flexWindowMs,
 			}),
-			recurrenceKind: input.recurrence.kind,
+			recurrenceKind: recurrence.kind,
 			respectQuietHours: input.respectQuietHours ?? false,
 			revision: 1,
 			runCount: 0,
@@ -482,7 +486,7 @@ export class ScheduleService {
 			actorKind: input.ownerKind === "plugin" ? "plugin" : input.ownerKind,
 			payload: {
 				actionKind: input.actionKind,
-				recurrenceKind: input.recurrence.kind,
+				recurrenceKind: recurrence.kind,
 				sessionId: target.session.id,
 			},
 			result: "ok",
@@ -1027,8 +1031,41 @@ export class ScheduleService {
 					status: "active",
 					updatedAtMs: now,
 				})
-				.where(eq(schedules.id, occurrence.scheduleId))
+				// A cancel/pause that lands while the turn is running must win: never resurrect the
+				// schedule behind the operator's back. The occurrence is settled below instead.
+				.where(and(eq(schedules.id, occurrence.scheduleId), eq(schedules.status, "active")))
 				.returning();
+			if (updated === undefined) {
+				await database
+					.update(scheduleOccurrences)
+					.set({
+						finishedAtMs: now,
+						leaseExpiresAtMs: null,
+						leaseOwner: null,
+						resultJson: JSON.stringify(result.result ?? { deferred: true }),
+						status: "skipped",
+						updatedAtMs: now,
+					})
+					.where(eq(scheduleOccurrences.id, occurrence.id));
+				await this.#recordAudit({
+					action: "schedule.deferred",
+					actorKind: "system",
+					payload: {
+						deferredUntil: new Date(deferredUntilMs).toISOString(),
+						occurrenceId: occurrence.id,
+						reason: "schedule_no_longer_active",
+					},
+					reason: "schedule_cancelled_or_paused_during_run",
+					result: "denied",
+					targetId: occurrence.scheduleId,
+					targetKind: "schedule",
+				});
+				this.#logger.info("schedule occurrence skipped after concurrent pause/cancel", {
+					occurrenceId: occurrence.id,
+					scheduleId: occurrence.scheduleId,
+				});
+				return;
+			}
 			await this.#recordAudit({
 				action: "schedule.deferred",
 				actorKind: "system",

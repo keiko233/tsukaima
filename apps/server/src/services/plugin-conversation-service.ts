@@ -445,11 +445,17 @@ export class PluginConversationService {
 			text: consumed.text,
 		});
 		const deliveryStatus = outcome?.deliveryStatus ?? "skipped";
+		// A channel tool already sent this text (`already_sent_via_tool`) or the exact answer
+		// was already shown. The bubble is not new, but the proactive turn did deliver content,
+		// so quota/streak accounting must treat it as delivered.
+		const deliveredViaTool =
+			outcome?.reason === "already_sent_via_tool" || outcome?.reason === "already_shown";
 		await this.#record(pluginId, input, conversation.id, deliveryStatus, outcome?.reason);
 		return {
 			activityId,
-			delivered: deliveryStatus === "sent",
+			delivered: deliveryStatus === "sent" || deliveredViaTool,
 			deliveryStatus,
+			...(deliveredViaTool ? { deliveredViaTool: true } : {}),
 			entryId,
 			...(outcome?.reason === undefined ? {} : { skippedReason: outcome.reason }),
 			submissionRequestId,

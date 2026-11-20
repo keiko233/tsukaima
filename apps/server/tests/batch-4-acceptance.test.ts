@@ -10,10 +10,16 @@ import { createOpenAICompatibleModelPort } from "@tsukaima/core";
 import { auditLog, chatObjects, conversations, messages, pluginInstallStates } from "@tsukaima/db";
 import type { DurableExtension } from "@tsukaima/core";
 import { PluginLifecycleError } from "@tsukaima/plugin-registry";
-import { pluginManifestSchema, type PluginManifest, type TsukaimaPlugin } from "@tsukaima/sdk";
+import {
+	pluginManifestSchema,
+	resolveToolName,
+	type PluginManifest,
+	type TsukaimaPlugin,
+} from "@tsukaima/sdk";
 import { createApp } from "../src/app.ts";
 import type { TsukaimaLifecycle } from "../src/lifecycle.ts";
 import { resolveImCallerContext } from "../src/services/im-caller-context.ts";
+import { authorizeWorkspaceToolCall } from "../src/services/workspace-authorization.ts";
 import type { PluginSettingsStore } from "../src/services/plugin-settings.ts";
 
 const directories: string[] = [];
@@ -87,6 +93,15 @@ async function waitFor<T>(read: () => T | undefined, timeoutMs = 5_000): Promise
 	while (Date.now() - startedAt < timeoutMs) {
 		const value = read();
 		if (value !== undefined) return value;
+		await Bun.sleep(20);
+	}
+	throw new Error("Timed out waiting for condition");
+}
+
+async function waitUntil(check: () => boolean, timeoutMs = 5_000): Promise<void> {
+	const startedAt = Date.now();
+	while (Date.now() - startedAt < timeoutMs) {
+		if (check()) return;
 		await Bun.sleep(20);
 	}
 	throw new Error("Timed out waiting for condition");
@@ -938,5 +953,571 @@ describe("plugin runtime boundary", () => {
 		expect((await lifecycle.pluginHost.list()).some((plugin) => plugin.id === manifest.name)).toBe(
 			false,
 		);
+	});
+});
+
+describe("workspace caller authorization", () => {
+	test("a domain DB read failure fails closed instead of allowing the workspace tool", async () => {
+		const { lifecycle } = await createHarness();
+		const session = await seedImSession(lifecycle, {
+			messages: [{ senderExternalId: "10002" }],
+		});
+		await lifecycle.updatePluginConfig("onebot-napcat", { adminUsers: ["10002"] });
+		await lifecycle.conversationPolicy.update({
+			conversationId: session.sessionId,
+			policy: { workspaceDelegationEnabled: true },
+			scope: "conversation",
+		});
+		const database = lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("database missing");
+		const originalSelect = database.select;
+		try {
+			database.select = (() => {
+				throw new Error("synthetic caller read failure");
+			}) as typeof database.select;
+			const denied = await executeTool(
+				workspaceToolsExtension(lifecycle),
+				"workspace_spawn",
+				{ goal: "Synthetic unavailable-caller task" },
+				session.durableConversationId,
+			);
+			expect(denied.isError).toBe(true);
+			expect(resultText(denied)).toContain("disallowed_chat_kind");
+		} finally {
+			database.select = originalSelect;
+		}
+	});
+
+	test("a settled turn's sender binding never authorizes the next turn", async () => {
+		const { lifecycle } = await createHarness();
+		const session = await seedImSession(lifecycle, {
+			messages: [{ senderExternalId: "10002" }],
+		});
+		await lifecycle.updatePluginConfig("onebot-napcat", { adminUsers: ["10002"] });
+		await lifecycle.conversationPolicy.update({
+			conversationId: session.sessionId,
+			policy: { workspaceDelegationEnabled: true },
+			scope: "conversation",
+		});
+		const binding = lifecycle as unknown as {
+			boundTurnSender(conversationId: string): string | null | undefined;
+			noteTurnSender(turn: {
+				conversationId: string;
+				senderExternalId?: string;
+				submissionRequestId: string;
+			}): void;
+			settleTurnSender(conversationId: string, submissionRequestId: string): void;
+		};
+		// The admin turn ended without an answer (empty final text or an interrupted run).
+		binding.noteTurnSender({
+			conversationId: session.durableConversationId,
+			senderExternalId: "10002",
+			submissionRequestId: "synthetic-settled-turn",
+		});
+		binding.settleTurnSender(session.durableConversationId, "synthetic-settled-turn");
+		expect(binding.boundTurnSender(session.durableConversationId)).toBeUndefined();
+
+		// The next turn's non-admin sender is authoritative even though an admin spoke last.
+		binding.noteTurnSender({
+			conversationId: session.durableConversationId,
+			senderExternalId: "10003",
+			submissionRequestId: "synthetic-next-turn",
+		});
+		const denied = await executeTool(
+			workspaceToolsExtension(lifecycle),
+			"workspace_spawn",
+			{ goal: "Synthetic next-turn task" },
+			session.durableConversationId,
+		);
+		expect(denied.isError).toBe(true);
+		expect(resultText(denied)).toContain("admin_required");
+	});
+
+	test("an ambient admin message cannot upgrade a turn bound to a non-admin sender", async () => {
+		const { lifecycle } = await createHarness();
+		const session = await seedImSession(lifecycle, {
+			messages: [{ senderExternalId: "10002" }],
+		});
+		await lifecycle.updatePluginConfig("onebot-napcat", { adminUsers: ["10002"] });
+		await lifecycle.conversationPolicy.update({
+			conversationId: session.sessionId,
+			policy: { workspaceDelegationEnabled: true },
+			scope: "conversation",
+		});
+		const database = lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("database missing");
+		// The active turn was triggered by the non-admin sender. Bind it exactly as
+		// `onTurnAdmitted` does before an admin speaks ambiently.
+		const noteTurnSender = (
+			lifecycle as unknown as {
+				noteTurnSender(turn: {
+					conversationId: string;
+					senderExternalId?: string;
+					submissionRequestId: string;
+				}): void;
+			}
+		).noteTurnSender.bind(lifecycle);
+		noteTurnSender({
+			conversationId: session.durableConversationId,
+			senderExternalId: "10003",
+			submissionRequestId: "synthetic-ambient-turn",
+		});
+		await database.insert(messages).values({
+			chatObjectId: session.chatId ?? undefined,
+			contentText: "synthetic ambient admin message",
+			conversationId: session.sessionId,
+			direction: "inbound",
+			id: randomUUID(),
+			ingestedAt: new Date().toISOString(),
+			kind: "onebot-v11",
+			occurredAt: new Date(Date.now() + 5_000).toISOString(),
+			platformMessageId: `msg-${randomUUID()}`,
+			senderDisplayName: "Synthetic admin",
+			senderExternalId: "10002",
+		});
+		const denied = await executeTool(
+			workspaceToolsExtension(lifecycle),
+			"workspace_spawn",
+			{ goal: "Synthetic TOCTOU task" },
+			session.durableConversationId,
+		);
+		expect(denied.isError).toBe(true);
+		expect(resultText(denied)).toContain("admin_required");
+		const audits = await database.select().from(auditLog);
+		const denial = audits.find(
+			(row) => row.action === "workspace-tool.workspace_spawn" && row.result === "denied",
+		);
+		expect(auditPayload(denial!)).toEqual(
+			expect.objectContaining({ callerId: "10003", reason: "admin_required" }),
+		);
+	});
+});
+
+function lastUserText(request: WireRequest): string {
+	for (const message of [...(request.messages ?? [])].toReversed()) {
+		if (message.role !== "user") continue;
+		return typeof message.content === "string"
+			? message.content
+			: JSON.stringify(message.content ?? "");
+	}
+	return "";
+}
+
+async function waitForDenialAudit(
+	lifecycle: TsukaimaLifecycle,
+	callerId: string,
+	timeoutMs = 5_000,
+): Promise<Record<string, unknown>> {
+	const database = lifecycle.domainDatabase;
+	if (database === undefined) throw new Error("database missing");
+	const startedAt = Date.now();
+	while (Date.now() - startedAt < timeoutMs) {
+		const rows = await database.select().from(auditLog);
+		const denial = rows.find(
+			(row) =>
+				row.action === "workspace-tool.workspace_spawn" &&
+				row.result === "denied" &&
+				auditPayload(row).callerId === callerId,
+		);
+		if (denial !== undefined) return auditPayload(denial);
+		await Bun.sleep(20);
+	}
+	throw new Error(`Timed out waiting for the ${callerId} denial audit`);
+}
+
+/** Stalls the admin run so the test can settle or steer it before it answers. */
+function slowAdminFetch(adminMarker: string, followUpMarker?: string) {
+	return async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+		const request = JSON.parse(String(init?.body ?? "{}")) as WireRequest;
+		const last = request.messages?.at(-1);
+		if (followUpMarker !== undefined && lastUserText(request).includes(followUpMarker)) {
+			if (last?.role === "tool") return Response.json(textResponse("Synthetic follow-up done"));
+			const id = `call-${randomUUID()}`;
+			return Response.json(
+				toolCallResponse("workspace_spawn", { goal: "Synthetic denied delegation" }, id),
+			);
+		}
+		if (lastUserText(request).includes(adminMarker)) {
+			await new Promise<void>((resolve) => {
+				if (init?.signal?.aborted === true) return resolve();
+				const timer = setTimeout(resolve, 800);
+				init?.signal?.addEventListener(
+					"abort",
+					() => {
+						clearTimeout(timer);
+						resolve();
+					},
+					{ once: true },
+				);
+			});
+			return Response.json(textResponse("slow synthetic admin answer"));
+		}
+		return Response.json(textResponse("ok"));
+	};
+}
+
+describe("submission-scoped turn sender binding", () => {
+	interface AdmittedBindingTurn {
+		readonly conversationId: string;
+		readonly senderExternalId?: string;
+		readonly submissionRequestId: string;
+		readonly midRun?: boolean;
+		readonly whenBusy?: "steer" | "follow-up";
+	}
+
+	function senderBinding(lifecycle: TsukaimaLifecycle): {
+		boundTurnSender: (conversationId: string) => string | null | undefined;
+		noteTurnSender: (turn: AdmittedBindingTurn) => void;
+		settleTurnSender: (conversationId: string, submissionRequestId: string) => void;
+	} {
+		return lifecycle as unknown as {
+			boundTurnSender: (conversationId: string) => string | null | undefined;
+			noteTurnSender: (turn: AdmittedBindingTurn) => void;
+			settleTurnSender: (conversationId: string, submissionRequestId: string) => void;
+		};
+	}
+
+	test("an admin turn ending with empty final text never authorizes the next non-admin turn", async () => {
+		let adminSendAttempted = false;
+		const scriptedFetch = async (_input: string | URL | Request, init?: RequestInit) => {
+			const request = JSON.parse(String(init?.body ?? "{}")) as WireRequest;
+			const last = request.messages?.at(-1);
+			if (lastUserText(request).includes("synthetic non-admin follow-up")) {
+				if (last?.role === "tool") return Response.json(textResponse("Synthetic follow-up done"));
+				const id = `call-${randomUUID()}`;
+				return Response.json(
+					toolCallResponse("workspace_spawn", { goal: "Synthetic denied delegation" }, id),
+				);
+			}
+			if (last?.role === "tool") return Response.json(textResponse(""));
+			const sendTool = toolNames(request).find(
+				(name) => resolveToolName(name) === "onebot-napcat.send",
+			);
+			expect(sendTool).toBeDefined();
+			adminSendAttempted = true;
+			const id = `call-${randomUUID()}`;
+			return Response.json(toolCallResponse(sendTool!, { text: "synthetic direct send" }, id));
+		};
+
+		const { lifecycle } = await createHarness(scriptedFetch as typeof fetch);
+		const session = await seedImSession(lifecycle, {
+			messages: [{ senderExternalId: "10002" }],
+		});
+		await lifecycle.updatePluginConfig("onebot-napcat", { adminUsers: ["10002"] });
+		await lifecycle.conversationPolicy.update({
+			conversationId: session.sessionId,
+			policy: { workspaceDelegationEnabled: true },
+			scope: "conversation",
+		});
+		const host = lifecycle.conversationHost;
+		if (host === undefined) throw new Error("host missing");
+		const binding = senderBinding(lifecycle);
+		const now = Date.now();
+		await host.append({
+			conversationId: session.durableConversationId,
+			envelope: envelope({
+				id: "turn-one-direct-send",
+				platformConversationId: session.platformConversationId,
+				senderId: "10002",
+				text: "synthetic admin direct send",
+			}),
+			forceSubmit: true,
+			submittedAtMs: now,
+		});
+		await waitUntil(() => binding.boundTurnSender(session.durableConversationId) === "10002");
+		// Empty final text means `onAnswer` never fires; settlement must still release the turn.
+		await waitUntil(() => binding.boundTurnSender(session.durableConversationId) === undefined);
+		expect(adminSendAttempted).toBe(true);
+
+		await host.append({
+			conversationId: session.durableConversationId,
+			envelope: envelope({
+				id: "turn-two-follow-up",
+				platformConversationId: session.platformConversationId,
+				senderId: "10003",
+				text: "synthetic non-admin follow-up",
+			}),
+			forceSubmit: true,
+			submittedAtMs: now + 1,
+		});
+		await waitUntil(() => binding.boundTurnSender(session.durableConversationId) === "10003");
+		const denial = await waitForDenialAudit(lifecycle, "10003");
+		expect(denial).toEqual(expect.objectContaining({ reason: "admin_required" }));
+	});
+
+	test("an interrupted admin turn never authorizes the next non-admin turn", async () => {
+		const scriptedFetch = slowAdminFetch(
+			"synthetic admin interrupted turn",
+			"synthetic non-admin after interrupt",
+		);
+
+		const { lifecycle } = await createHarness(scriptedFetch as typeof fetch);
+		const session = await seedImSession(lifecycle, {
+			messages: [{ senderExternalId: "10002" }],
+		});
+		await lifecycle.updatePluginConfig("onebot-napcat", { adminUsers: ["10002"] });
+		await lifecycle.conversationPolicy.update({
+			conversationId: session.sessionId,
+			policy: { workspaceDelegationEnabled: true },
+			scope: "conversation",
+		});
+		const host = lifecycle.conversationHost;
+		if (host === undefined) throw new Error("host missing");
+		const binding = senderBinding(lifecycle);
+		const now = Date.now();
+		await host.append({
+			conversationId: session.durableConversationId,
+			envelope: envelope({
+				id: "interrupted-admin-turn",
+				platformConversationId: session.platformConversationId,
+				senderId: "10002",
+				text: "synthetic admin interrupted turn",
+			}),
+			forceSubmit: true,
+			submittedAtMs: now,
+		});
+		await waitUntil(() => binding.boundTurnSender(session.durableConversationId) === "10002");
+		await host.abortConversation(session.durableConversationId);
+		await waitUntil(() => binding.boundTurnSender(session.durableConversationId) === undefined);
+
+		await host.append({
+			conversationId: session.durableConversationId,
+			envelope: envelope({
+				id: "after-interrupt-follow-up",
+				platformConversationId: session.platformConversationId,
+				senderId: "10003",
+				text: "synthetic non-admin after interrupt",
+			}),
+			forceSubmit: true,
+			submittedAtMs: now + 1,
+		});
+		await waitUntil(() => binding.boundTurnSender(session.durableConversationId) === "10003");
+		const denial = await waitForDenialAudit(lifecycle, "10003");
+		expect(denial).toEqual(expect.objectContaining({ reason: "admin_required" }));
+	});
+
+	test("a non-admin steer into an admin run makes the merged run fail closed", async () => {
+		const scriptedFetch = slowAdminFetch("synthetic admin running turn");
+
+		const { lifecycle } = await createHarness(scriptedFetch as typeof fetch);
+		const session = await seedImSession(lifecycle, {
+			messages: [{ senderExternalId: "10002" }],
+		});
+		await lifecycle.updatePluginConfig("onebot-napcat", { adminUsers: ["10002"] });
+		await lifecycle.conversationPolicy.update({
+			conversationId: session.sessionId,
+			policy: { workspaceDelegationEnabled: true },
+			scope: "conversation",
+		});
+		const host = lifecycle.conversationHost;
+		if (host === undefined) throw new Error("host missing");
+		const binding = senderBinding(lifecycle);
+		const now = Date.now();
+		await host.append({
+			conversationId: session.durableConversationId,
+			envelope: envelope({
+				id: "admin-running-turn",
+				platformConversationId: session.platformConversationId,
+				senderId: "10002",
+				text: "synthetic admin running turn",
+			}),
+			forceSubmit: true,
+			submittedAtMs: now,
+		});
+		await waitUntil(() => binding.boundTurnSender(session.durableConversationId) === "10002");
+
+		await host.append({
+			conversationId: session.durableConversationId,
+			envelope: envelope({
+				id: "non-admin-steer",
+				platformConversationId: session.platformConversationId,
+				senderId: "10003",
+				text: "synthetic non-admin steer",
+			}),
+			forceSubmit: true,
+			submittedAtMs: now + 1,
+			whenBusy: "steer",
+		});
+		// The steer is inserted after the admin's entry, and the mixed run fails closed.
+		await waitUntil(() => binding.boundTurnSender(session.durableConversationId) === null);
+		const denied = await executeTool(
+			workspaceToolsExtension(lifecycle),
+			"workspace_spawn",
+			{ goal: "Synthetic mixed-speaker delegation" },
+			session.durableConversationId,
+		);
+		expect(denied.isError).toBe(true);
+		expect(resultText(denied)).toContain("admin_required");
+		await host.abortConversation(session.durableConversationId);
+	});
+
+	test("a refused submit rolls its sender binding back instead of polluting the next turn", async () => {
+		const { lifecycle } = await createHarness();
+		const session = await seedImSession(lifecycle, {
+			messages: [{ senderExternalId: "10002" }],
+		});
+		await lifecycle.updatePluginConfig("onebot-napcat", { adminUsers: ["10002"] });
+		await lifecycle.conversationPolicy.update({
+			conversationId: session.sessionId,
+			policy: { workspaceDelegationEnabled: true },
+			scope: "conversation",
+		});
+		const host = lifecycle.conversationHost;
+		if (host === undefined) throw new Error("host missing");
+		const binding = senderBinding(lifecycle);
+		const options = (
+			host as unknown as {
+				options: {
+					onTurnAdmitted: ((turn: AdmittedBindingTurn) => Promise<void> | void) | undefined;
+				};
+			}
+		).options;
+		const originalAdmission = options.onTurnAdmitted;
+		let refused = false;
+		try {
+			// Refuse the submit after the binding was announced, exactly as a failing commit does.
+			options.onTurnAdmitted = async (turn) => {
+				await originalAdmission?.(turn);
+				refused = true;
+				throw new Error("synthetic refused submit");
+			};
+			const now = Date.now();
+			await expect(
+				host.append({
+					conversationId: session.durableConversationId,
+					envelope: envelope({
+						id: "refused-admin-turn",
+						platformConversationId: session.platformConversationId,
+						senderId: "10002",
+						text: "synthetic refused admin turn",
+					}),
+					forceSubmit: true,
+					submittedAtMs: now,
+				}),
+			).rejects.toThrow("synthetic refused submit");
+		} finally {
+			options.onTurnAdmitted = originalAdmission;
+		}
+		expect(refused).toBe(true);
+		expect(binding.boundTurnSender(session.durableConversationId)).toBeUndefined();
+
+		await host.append({
+			conversationId: session.durableConversationId,
+			envelope: envelope({
+				id: "after-refused-turn",
+				platformConversationId: session.platformConversationId,
+				senderId: "10003",
+				text: "synthetic non-admin after refusal",
+			}),
+			forceSubmit: true,
+			submittedAtMs: Date.now() + 1,
+		});
+		await waitUntil(() => binding.boundTurnSender(session.durableConversationId) === "10003");
+		const denied = await executeTool(
+			workspaceToolsExtension(lifecycle),
+			"workspace_spawn",
+			{ goal: "Synthetic next-turn delegation" },
+			session.durableConversationId,
+		);
+		expect(denied.isError).toBe(true);
+		expect(resultText(denied)).toContain("admin_required");
+	});
+});
+
+describe("plugin runtime boundary: kind and restart bypass vectors", () => {
+	test("a builtin-labelled manifest without a runtime module still cannot declare tools", async () => {
+		const { lifecycle } = await createHarness();
+		const manifest = {
+			...manifestOnlyManifest("builtin-tool-plugin", "1.0.0", [
+				{
+					description: "Synthetic builtin tool",
+					name: "builtin-tool-plugin.ping",
+					parameters: { properties: {}, type: "object" },
+					requiredPermissions: [],
+				},
+			]),
+			kind: "builtin" as const,
+		};
+		await expect(lifecycle.pluginHost.install(manifest, { migrations: [] })).rejects.toThrow(
+			PluginLifecycleError,
+		);
+		expect((await lifecycle.pluginHost.list()).some((plugin) => plugin.id === manifest.name)).toBe(
+			false,
+		);
+	});
+
+	test("a restart cannot turn a manifest-only plugin into a runtime plugin", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-runtime-restart-"));
+		directories.push(directory);
+		const config = {
+			TSUKAIMA_DATA_DIR: directory,
+			TSUKAIMA_PORT: "7420",
+			TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
+		};
+		const first = createApp(config);
+		lifecycles.push(first.lifecycle);
+		await first.lifecycle.start();
+		await first.lifecycle.pluginHost.install(
+			manifestOnlyManifest("restart-manifest-plugin", "1.0.0"),
+			{ migrations: [] },
+		);
+		await first.lifecycle.stop();
+
+		// A fresh process only sees persisted install state; the runtime module set is empty.
+		const second = createApp(config);
+		lifecycles.push(second.lifecycle);
+		await second.lifecycle.start();
+		await expect(
+			second.lifecycle.pluginHost.upgrade(
+				"restart-manifest-plugin",
+				manifestOnlyManifest("restart-manifest-plugin", "2.0.0", [
+					{
+						description: "Synthetic restart tool",
+						name: "restart-manifest-plugin.ping",
+						parameters: { properties: {}, type: "object" },
+						requiredPermissions: [],
+					},
+				]),
+			),
+		).rejects.toThrow(PluginLifecycleError);
+	});
+});
+
+describe("workspace tool authorization matrix", () => {
+	test("workspace chats may use coding tools but never spawn another workspace", () => {
+		const spawn = authorizeWorkspaceToolCall({
+			caller: { chatKind: "workspace", domainConversationId: "session-1" },
+			toolName: "workspace_spawn",
+		});
+		expect(spawn).toMatchObject({ allowed: false, reason: "workspace_spawn_not_permitted" });
+		expect(
+			authorizeWorkspaceToolCall({
+				caller: { chatKind: "workspace", domainConversationId: "session-1" },
+				toolName: "workspace_git_identity",
+			}).allowed,
+		).toBe(true);
+		expect(
+			authorizeWorkspaceToolCall({
+				caller: { chatKind: "webui", domainConversationId: "session-1" },
+				toolName: "workspace_git_identity",
+			}),
+		).toMatchObject({ allowed: false, reason: "workspace_coding_tool_denied" });
+		expect(
+			authorizeWorkspaceToolCall({
+				caller: { chatKind: "webui", domainConversationId: "session-1" },
+				toolName: "workspace_spawn",
+			}).allowed,
+		).toBe(true);
+		for (const chatKind of [undefined, "task", "plugin"] as const) {
+			expect(
+				authorizeWorkspaceToolCall({
+					caller: {
+						...(chatKind === undefined ? {} : { chatKind }),
+						domainConversationId: "session-1",
+					},
+					toolName: "workspace_spawn",
+				}),
+			).toMatchObject({ allowed: false, reason: "disallowed_chat_kind" });
+		}
 	});
 });

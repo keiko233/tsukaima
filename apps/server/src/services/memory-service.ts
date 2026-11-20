@@ -1967,7 +1967,11 @@ export class MemoryService {
 				candidate.subject === undefined
 					? undefined
 					: personIds.get(memoryPersonKey(candidate.subject));
+			// Facts learned in a private chat stay conversation-scoped: promoting them to `user`
+			// scope would bypass `crossSession.privateToGroup` and surface private details in a
+			// group chat. Only group conversations may promote a participant-scoped fact.
 			const userScoped =
+				session.kind === "group" &&
 				subjectUserId !== undefined &&
 				policy.sharedMemoryWriteEnabled &&
 				userScopeKinds.has(candidate.kind);

@@ -9,6 +9,7 @@ import {
 	composeInterjectPrompt,
 	createFakeModel,
 	type ActivityWindowEvent,
+	type AdmittedTurn,
 	type ConversationGatePort,
 	type DurableExtension,
 	type FastLaneInterjectInput,
@@ -107,6 +108,9 @@ import {
 import { SocialProfileService } from "./services/social-profile.ts";
 import { InboundMediaResolver } from "./services/inbound-media.ts";
 import { resolveImCallerContext } from "./services/im-caller-context.ts";
+import { computeOmittedSessionTools } from "./services/session-tool-policy.ts";
+import { isDirectSendToolName } from "./services/tool-names.ts";
+import { authorizeWorkspaceToolCall } from "./services/workspace-authorization.ts";
 import { MediaService } from "./services/media-service.ts";
 import { HookBus } from "./services/hook-bus.ts";
 import { createMentionIdentityStore } from "./services/mention-identity-store.ts";
@@ -125,7 +129,7 @@ import { ReplyExpectationStore } from "./services/reply-expectations.ts";
 import { SidechatService, resolveSidechatTarget } from "./services/sidechat.ts";
 import { LiveRunCache } from "./services/live-run-cache.ts";
 import { PromptHookService } from "./services/prompt-hooks.ts";
-import { createPromptTools, PROMPT_TOOL_NAMES } from "./services/prompt-tools.ts";
+import { createPromptTools } from "./services/prompt-tools.ts";
 import { PromptService } from "./services/prompts.ts";
 import {
 	RestartCoordinator,
@@ -138,22 +142,16 @@ import { RequestService } from "./services/request-service.ts";
 import { RepositoryService } from "./services/repository-service.ts";
 import { ScheduleExecutionService } from "./services/schedule-executor.ts";
 import { ScheduleService } from "./services/schedule-service.ts";
-import { SCHEDULE_TOOL_NAMES } from "./services/schedule-tools.ts";
 import { createScheduleToolsExtension } from "./services/schedule-tools.ts";
 import { SessionMessagingService } from "./services/session-messaging.ts";
 import { UpgradeService } from "./services/upgrade-service.ts";
 import { createVideoFrameExtractor } from "./services/video-frames.ts";
-import {
-	CODING_AGENT_TOOL_NAMES,
-	createCodingAgentToolsExtension,
-} from "./services/coding-agent-tools.ts";
+import { createCodingAgentToolsExtension } from "./services/coding-agent-tools.ts";
 import { WorkspaceReferenceService } from "./services/workspace-references.ts";
 import { WorkspaceSqlService } from "./services/workspace-sql.ts";
 import { WorkspaceTodoService } from "./services/workspace-todos.ts";
 import {
 	IM_WORKSPACE_DELEGATION_TOOL_NAMES,
-	WORKSPACE_CODING_TOOL_NAMES,
-	WORKSPACE_TOOL_NAMES,
 	createWorkspaceToolsExtension,
 } from "./services/workspace-tools.ts";
 import { WorkspaceService } from "./services/workspace.ts";
@@ -270,6 +268,13 @@ export class TsukaimaLifecycle {
 	private conversationGateService: ConversationGatePort | undefined;
 	private readonly conversationGateOverride: ConversationGatePort | undefined;
 	private readonly codingStore = new DomainCodingStore(() => this.domainDatabase);
+	/**
+	 * Sender bound to each active turn, keyed by conversation and then by submission request id.
+	 * Tools read the head at execution time so an ambient message from a different group member
+	 * cannot upgrade the caller's admin status mid-turn. The exact request id is the only cleanup
+	 * key: one submission can settle without disturbing another still running in the conversation.
+	 */
+	private readonly turnSenders = new Map<string, Map<string, string | null>>();
 	processedMessageCount = 0;
 	providerRestartRequired = false;
 	routingPolicies: readonly ModelPolicy[] = [];
@@ -413,10 +418,8 @@ export class TsukaimaLifecycle {
 				this.replyDispatcher.noteDirectSend(durableConversationId, text),
 			onToolSend: (sent) => {
 				if (sent.pluginId === "onebot-napcat") {
-					this.replyDispatcher?.recordTurnToolSend({
+					this.replyDispatcher.recordTurnToolSend({
 						durableConversationId: sent.durableConversationId,
-						hasMedia: sent.hasMedia,
-						sessionId: sent.sessionId,
 						text: sent.text,
 					});
 				}
@@ -534,6 +537,7 @@ export class TsukaimaLifecycle {
 				.recordInbound({
 					conversationId: record.sessionId,
 					...(text === undefined ? {} : { text }),
+					timezoneOffsetMinutes: -new Date().getTimezoneOffset(),
 				})
 				.catch((error: unknown) => {
 					this.runtimeLog.debug("social profile inbound update skipped", {
@@ -727,43 +731,27 @@ export class TsukaimaLifecycle {
 				const caller = await resolveImCallerContext({
 					conversationId: durableConversationId,
 					database: this.domainDatabase,
+					overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
 					settings: this.pluginSettings,
 				});
-				const chatKind = caller.chatKind;
-				const isImChat = chatKind === "private" || chatKind === "group";
-				const base = {
-					...(caller.senderPlatformId === undefined ? {} : { callerId: caller.senderPlatformId }),
-					...(caller.channelId === undefined ? {} : { channelId: caller.channelId }),
-					...(chatKind === undefined ? {} : { chatKind }),
-					...(caller.isAdmin === undefined ? {} : { isAdmin: caller.isAdmin }),
-					...(caller.platformConversationId === undefined
-						? {}
-						: { platformConversationId: caller.platformConversationId }),
-					...(caller.domainConversationId === undefined
-						? {}
-						: { sessionId: caller.domainConversationId }),
-				};
-				if (toolName === "workspace_git_identity" && chatKind !== "workspace") {
-					return { ...base, allowed: false, reason: "workspace_coding_tool_denied" };
+				const isImChat = caller.chatKind === "private" || caller.chatKind === "group";
+				let policy: { readonly workspaceDelegationEnabled: boolean } | undefined;
+				if (isImChat && caller.domainConversationId !== undefined) {
+					try {
+						policy = await this.conversationPolicy.effectivePolicy(caller.domainConversationId);
+					} catch (error) {
+						this.runtimeLog.warn("workspace tool policy read failed; denying caller", {
+							conversationId: durableConversationId,
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
 				}
-				if (!isImChat) {
-					return { ...base, allowed: true };
-				}
-				if (!imDelegationTools.has(toolName)) {
-					return { ...base, allowed: false, reason: "im_tool_not_permitted" };
-				}
-				const sessionId = caller.domainConversationId;
-				if (sessionId === undefined) {
-					return { ...base, allowed: false, reason: "session_not_found" };
-				}
-				const policy = await this.conversationPolicy.effectivePolicy(sessionId);
-				if (policy.workspaceDelegationEnabled !== true) {
-					return { ...base, allowed: false, reason: "workspace_delegation_disabled" };
-				}
-				if (caller.isAdmin !== true || caller.senderPlatformId === undefined) {
-					return { ...base, allowed: false, reason: "admin_required" };
-				}
-				return { ...base, allowed: true };
+				return authorizeWorkspaceToolCall({
+					caller,
+					delegationToolNames: imDelegationTools,
+					policy,
+					toolName,
+				});
 			},
 			gitIdentity: () => readGitIdentity(this.domainDatabase),
 			logger: this.runtimeLog,
@@ -779,6 +767,7 @@ export class TsukaimaLifecycle {
 				const caller = await resolveImCallerContext({
 					conversationId: durableConversationId,
 					database: this.domainDatabase,
+					overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
 					settings: this.pluginSettings,
 				});
 				const chatKind = caller.chatKind;
@@ -977,6 +966,7 @@ export class TsukaimaLifecycle {
 				this.conversationPolicy.capabilitiesForDurableConversation(conversationId),
 			conversationRole: (conversationId) =>
 				this.conversationPolicy.roleForDurableConversation(conversationId),
+			turnSender: (conversationId) => this.boundTurnSender(conversationId),
 			conversations: this.pluginConversations,
 			followUps: this.followUpIntents,
 			database: () => this.domainDatabase,
@@ -1253,10 +1243,6 @@ export class TsukaimaLifecycle {
 		if (database === undefined || host === undefined) return;
 		const codingTools = this.pluginHost.modelToolNames("self-iteration");
 		const proactiveTools = this.pluginHost.modelToolNames("proactive-scheduler");
-		const sessionTools = [...WORKSPACE_TOOL_NAMES, ...SCHEDULE_TOOL_NAMES];
-		const imDelegationAllowedSet = new Set<string>(IM_WORKSPACE_DELEGATION_TOOL_NAMES);
-		const codingAgentTools = [...CODING_AGENT_TOOL_NAMES];
-		const removed = new Set<string>();
 		let kind: string | undefined;
 		let readFailed = false;
 		const queryKind = async (): Promise<string | undefined> => {
@@ -1292,44 +1278,27 @@ export class TsukaimaLifecycle {
 		if (kind !== undefined && !readFailed) {
 			this.sessionKindByDurableId.set(durableConversationId, kind);
 		}
-		const surface = kind === "workspace" ? "coding" : "chat";
-		for (const name of host.modelToolNamesNotForSurface(surface)) removed.add(name);
-		// Fail closed on a transient read error: never grant coding or prompt mutation tools when the
-		// live domain row could not be read, but keep standard non-coding chat tools intact instead
-		// of permanently wiping the durable allowlist to `[]`.
-		const codingAllowed =
-			!readFailed && kind === "workspace" && policy.capabilities.includes("coding");
-		if (!codingAllowed) {
-			for (const name of codingTools) removed.add(name);
-			for (const name of codingAgentTools) removed.add(name);
-			for (const name of WORKSPACE_CODING_TOOL_NAMES) removed.add(name);
-		}
-		const isImChat = kind === "private" || kind === "group";
-		if (kind === "webui" && !readFailed) {
-			// A chat may spawn/control workspaces but never edit code in its own turn.
-			for (const name of codingTools) removed.add(name);
-		} else if (kind === "workspace") {
-			removed.add("workspace_spawn");
-		} else if (isImChat && !readFailed) {
-			// Unified scheduling for IM: expose host `schedule_*` tools and withhold duplicate
-			// `proactive-scheduler.*` model tools so IM models see one consistent schedule family.
-			for (const name of proactiveTools) removed.add(name);
-			if (policy.workspaceDelegationEnabled === true) {
-				for (const name of WORKSPACE_TOOL_NAMES) {
-					if (!imDelegationAllowedSet.has(name)) removed.add(name);
-				}
-			} else {
-				for (const name of WORKSPACE_TOOL_NAMES) removed.add(name);
-			}
-		} else {
-			// Unknown/background conversations or transient DB read failure: fail closed on host session tools.
-			for (const name of sessionTools) removed.add(name);
-			for (const name of proactiveTools) removed.add(name);
-		}
+		// Prompt-tool access reads the domain settings, so a transient DB failure must fail closed
+		// instead of skipping the filter entirely.
+		let agentAccess = false;
 		try {
-			if (readFailed || (!codingAllowed && kind !== "webui") || !this.prompts.agentAccess()) {
-				for (const name of PROMPT_TOOL_NAMES) removed.add(name);
-			}
+			agentAccess = this.prompts.agentAccess();
+		} catch {
+			agentAccess = false;
+		}
+		// One shared helper drives both the durable filter and the WebUI inspector preview.
+		const removed = computeOmittedSessionTools({
+			agentAccess,
+			capabilities: policy.capabilities,
+			chatSurfaceOmitted: host.modelToolNamesNotForSurface("chat"),
+			codingSurfaceOmitted: host.modelToolNamesNotForSurface("coding"),
+			codingTools,
+			kind,
+			proactiveTools,
+			readFailed,
+			workspaceDelegationEnabled: policy.workspaceDelegationEnabled === true,
+		});
+		try {
 			await host.updateToolAccess(durableConversationId, { remove: [...removed] });
 		} catch (error) {
 			this.runtimeLog.warn("conversation tool policy sync failed", {
@@ -1607,6 +1576,8 @@ export class TsukaimaLifecycle {
 						: { sourceTaskId: turn.origin.sourceTaskId }),
 					submissionRequestId: turn.submissionRequestId,
 				});
+				if (turn.midRun !== true) this.replyDispatcher.beginTurn(turn.conversationId);
+				this.noteTurnSender(turn);
 			},
 			onTurnAdmitted: async (turn) => {
 				const sessionId = this.sessionIdForDurableConversation(turn.conversationId);
@@ -1616,8 +1587,22 @@ export class TsukaimaLifecycle {
 					kind: "chat",
 					submissionRequestId: turn.submissionRequestId,
 				});
+				if (turn.midRun !== true) this.replyDispatcher.beginTurn(turn.conversationId);
+				this.noteTurnSender(turn);
 			},
-			onLiveRun: (state) => this.forwardLiveRun(state),
+			// A submission settles exactly once, whatever its outcome: a dispatched answer, empty
+			// final text, an interrupted run, `unanswered`, or a refused submit. Deleting the exact
+			// request id keeps a stale admin binding from authorizing a later non-admin turn.
+			onSubmissionSettled: (event) => {
+				this.settleTurnSender(
+					event.conversationId,
+					event.submissionRequestId,
+					event.preserveReplyState === true,
+				);
+			},
+			onLiveRun: (state) => {
+				this.forwardLiveRun(state);
+			},
 			// Detached on purpose: the generation hook must not wait for channel sends (the tool
 			// round would stall) or for the conversation lock (a background turn holding it may be
 			// waiting on this very run). The dispatcher reserves its outbound lane synchronously, so
@@ -1631,9 +1616,9 @@ export class TsukaimaLifecycle {
 					});
 				});
 			},
-			// Channel send tools end in `send`/`send_message`. The suffix match stays compatible
-			// when Batch 3 gives them cleaner names, and OutboundService reports actual sends.
-			isDirectSendTool: (toolName) => /(^|[._-])send(_message)?$/u.test(toolName),
+			// Only canonical channel chat-send tools count: `workspace_send` and
+			// `sticker-meme_send` are not direct sends and must not suppress the final answer.
+			isDirectSendTool: (toolName) => isDirectSendToolName(toolName),
 			hasDirectSend: (conversationId) => this.replyDispatcher.hasDirectSendThisTurn(conversationId),
 			resolveImage: async (part) => {
 				if (part.type !== "image") return undefined;
@@ -2051,6 +2036,66 @@ export class TsukaimaLifecycle {
 			.limit(1)
 			.all();
 		return row?.id;
+	}
+
+	/**
+	 * Bind the triggering inbound sender to a newly admitted turn. Bindings are keyed by the
+	 * submission request id, so settlement removes exactly one turn and never shifts another
+	 * turn's sender.
+	 */
+	private noteTurnSender(turn: AdmittedTurn): void {
+		const durableConversationId = turn.conversationId;
+		const sender =
+			turn.senderExternalId === undefined || turn.senderExternalId.trim().length === 0
+				? null
+				: turn.senderExternalId;
+		let entries = this.turnSenders.get(durableConversationId);
+		if (entries === undefined) {
+			entries = new Map();
+			this.turnSenders.set(durableConversationId, entries);
+		}
+		// A steer joins the run that is already working. When the steer comes from another speaker
+		// (or from no human at all), the merged run is mixed-speaker: every entry fails closed so
+		// neither speaker's admin status can authorize the other's tool call.
+		const mixedSteer =
+			turn.whenBusy === "steer" &&
+			[...entries.values()].some((bound) => bound === null || bound !== sender);
+		if (mixedSteer) {
+			for (const submissionRequestId of entries.keys()) {
+				entries.set(submissionRequestId, null);
+			}
+			entries.set(turn.submissionRequestId, null);
+			return;
+		}
+		entries.set(turn.submissionRequestId, sender);
+	}
+
+	/** Sender bound to the oldest active turn; `undefined` means no turn is currently bound. */
+	private boundTurnSender(durableConversationId: string): string | null | undefined {
+		const entries = this.turnSenders.get(durableConversationId);
+		if (entries === undefined) return undefined;
+		// Map iteration follows insertion order, so the first value is the active head.
+		for (const sender of entries.values()) return sender;
+		return undefined;
+	}
+
+	/**
+	 * Release exactly one settled submission's binding. When that was the conversation's last
+	 * active turn, its per-turn reply state (shown narrations, tool sends) must not suppress the
+	 * next turn either: a turn that ended with empty final text, was interrupted, or was never
+	 * answered produces no `handleAnswer` that would otherwise clear it.
+	 */
+	private settleTurnSender(
+		durableConversationId: string,
+		submissionRequestId: string,
+		preserveReplyState = false,
+	): void {
+		const entries = this.turnSenders.get(durableConversationId);
+		if (entries === undefined) return;
+		entries.delete(submissionRequestId);
+		if (entries.size > 0) return;
+		this.turnSenders.delete(durableConversationId);
+		if (!preserveReplyState) this.replyDispatcher.beginTurn(durableConversationId);
 	}
 
 	/**

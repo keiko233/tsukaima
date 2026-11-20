@@ -13,6 +13,16 @@ This file is the cross-session handoff record. Update it whenever implementation
   `sticker-meme`, `proactive-scheduler`, `search-fetch`, `self-iteration`), DSH migration kit,
   Playwright WebUI E2E suite, secret scanning, and backup/restore drills all exist. Remaining
   work is operational: run the real DSH snapshot/import/verify/rollback and cut NapCat over.
+- Post-cutover chat agent runtime refactor (`docs/specs/chat-agent-runtime-refactor.md`, Batches 1–6)
+  is implemented: frozen static system prompt prefix with ephemeral per-run `<turn-context>` hooks
+  and chat-native compaction (`Batch 1`), responsive burst pacing with mid-turn narration, lock-free
+  outbound delivery, OpenAI sampling/timeout guards, and poke notices (`Batch 2`), async semantic
+  memory consolidation (`0019`), cross-session privacy awareness, and QA consistency recall
+  (`Batch 5`), per-conversation social familiarity profiles (`0020`), output humanization guards,
+  fail-open pre-model gating, and fast-lane busy interjection (`Batch 6`), curated eager chat tools
+  with current-chat addressing, OneBot parity, and inline/single-step stickers (`Batch 3`), and
+  governed fail-closed IM-to-Workspace delegation, unified timezone-aware scheduling with
+  quiet-hours deferral, and explicit plugin runtime boundaries (`Batch 4`).
 - Bun workspace, strict TypeScript config, domain schema/migrations, Pi Durable Bun SQLite adapter, startup lifecycle, Elysia + oRPC API, and React/TanStack WebUI exist.
 - Implemented packages:
   - `packages/contracts`: message, conversation policy, activity window, submission, and admin event schemas.

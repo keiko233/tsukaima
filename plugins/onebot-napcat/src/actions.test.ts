@@ -505,6 +505,15 @@ describe("OneBot action policy and audit", () => {
 			platformConversationId: "20002",
 			title: "Disabled group",
 		};
+		const allowedPrivate = {
+			...currentGroup,
+			chatObjectId: "chat-allowed-private",
+			durableConversationId: "durable-allowed-private",
+			id: "conv-allowed-private",
+			kind: "private" as const,
+			platformConversationId: "10004",
+			title: "Allowed private chat",
+		};
 		const enabledPolicy = {
 			...defaultConversationPolicy,
 			trigger: { ...defaultConversationPolicy.trigger, groupAccess: "open" as const },
@@ -517,7 +526,7 @@ describe("OneBot action policy and audit", () => {
 		const conversations: PluginConversationsApi = {
 			get: async (id) => (id === currentGroup.id ? currentGroup : undefined),
 			getPolicy: async (id) => (id === disabledGroup.id ? disabledPolicy : enabledPolicy),
-			list: async () => [currentGroup, disabledGroup],
+			list: async () => [currentGroup, disabledGroup, allowedPrivate],
 			recentMessages: async () => [],
 			submitBackgroundTurn: async () => ({
 				delivered: false,
@@ -566,11 +575,144 @@ describe("OneBot action policy and audit", () => {
 			expect(listed.map((target) => target.platformConversationId).toSorted()).toEqual([
 				"10002",
 				"10003",
+				"10004",
 				"20001",
 				"20003",
 			]);
 			expect(transport.sent.some((entry) => entry.action === "get_group_list")).toBe(true);
 			expect(transport.sent.some((entry) => entry.action === "get_friend_list")).toBe(true);
+		} finally {
+			await oneBotNapCatPlugin.teardown?.(harness.context);
+		}
+	});
+});
+
+describe("OneBot cross-chat fail-closed policy", () => {
+	const currentContext = {
+		channelId: "onebot",
+		chatKind: "group",
+		conversationId: "conv-current",
+		platformConversationId: "20001",
+		senderPlatformId: "10005",
+	};
+	const currentGroup = {
+		channelId: "onebot",
+		chatObjectId: "chat-current",
+		durableConversationId: "durable-current",
+		id: "conv-current",
+		kind: "group" as const,
+		muted: false,
+		platformConversationId: "20001",
+		status: "active",
+		title: "Current group",
+		updatedAt: new Date().toISOString(),
+	};
+	const otherGroup = {
+		...currentGroup,
+		chatObjectId: "chat-other",
+		durableConversationId: "durable-other",
+		id: "conv-other",
+		platformConversationId: "30001",
+		title: "Allowlisted group",
+	};
+	const openPolicy = {
+		...defaultConversationPolicy,
+		trigger: { ...defaultConversationPolicy.trigger, groupAccess: "open" as const },
+	};
+	const allowlistPolicy = {
+		...defaultConversationPolicy,
+		trigger: {
+			...defaultConversationPolicy.trigger,
+			allowlist: [] as string[],
+			groupAccess: "allowlist" as const,
+		},
+	};
+	const conversationsFor = (
+		list: () => Promise<readonly (typeof currentGroup)[]>,
+	): PluginConversationsApi => ({
+		get: async (id) => (id === currentGroup.id ? currentGroup : undefined),
+		getPolicy: async (id) => (id === otherGroup.id ? allowlistPolicy : openPolicy),
+		list,
+		recentMessages: async () => [],
+		submitBackgroundTurn: async () => ({
+			delivered: false,
+			deliveryStatus: "skipped",
+			skippedReason: "test_stub",
+		}),
+	});
+
+	test("denies allowlisted cross-chat targets for send, poke, and group-file actions", async () => {
+		const conversations = conversationsFor(async () => [currentGroup, otherGroup]);
+		const harness = await createHarness(base, { conversations });
+		try {
+			const calls: Array<[string, Record<string, unknown>]> = [
+				[
+					"onebot-napcat.send",
+					{
+						parts: [{ text: "cross", type: "text" }],
+						target: { kind: "group", platformConversationId: "30001" },
+					},
+				],
+				[
+					"onebot-napcat.sendForward",
+					{
+						parts: [{ text: "cross", type: "text" }],
+						target: { kind: "group", platformConversationId: "30001" },
+					},
+				],
+				[
+					"onebot-napcat.forwardMessage",
+					{ messageId: "[msg:1]", target: { kind: "group", platformConversationId: "30001" } },
+				],
+				[
+					"onebot-napcat.poke",
+					{ target: { kind: "group", platformConversationId: "30001" }, userId: "10008" },
+				],
+				["onebot-napcat.listGroupFiles", { groupId: "30001" }],
+				["onebot-napcat.fetchGroupFile", { fileId: "file-1", groupId: "30001" }],
+				[
+					"onebot-napcat.uploadGroupFile",
+					{ file: "file:///tmp/synthetic.txt", groupId: "30001", name: "synthetic.txt" },
+				],
+			];
+			for (const [tool, input] of calls) {
+				await expect(harness.context.tools.invoke(tool, input, currentContext)).rejects.toThrow(
+					"cross-chat-target-not-allowed",
+				);
+			}
+		} finally {
+			await oneBotNapCatPlugin.teardown?.(harness.context);
+		}
+	});
+
+	test("a conversation policy read failure fails closed instead of allowing a cross-chat action", async () => {
+		const conversations = conversationsFor(async () => {
+			throw new Error("synthetic conversation DB failure");
+		});
+		const harness = await createHarness(base, { conversations });
+		try {
+			await expect(
+				harness.context.tools.invoke(
+					"onebot-napcat.poke",
+					{ target: { kind: "group", platformConversationId: "30001" }, userId: "10008" },
+					currentContext,
+				),
+			).rejects.toThrow("cross-chat-target-denied");
+		} finally {
+			await oneBotNapCatPlugin.teardown?.(harness.context);
+		}
+	});
+
+	test("an unparseable cross-chat target is denied before execution", async () => {
+		const harness = await createHarness(base);
+		try {
+			await expect(
+				harness.context.tools.invoke(
+					"onebot-napcat.listGroupFiles",
+					{},
+					{ ...currentContext, chatKind: "private", platformConversationId: "10005" },
+				),
+			).rejects.toThrow("cross-chat-target-invalid");
 		} finally {
 			await oneBotNapCatPlugin.teardown?.(harness.context);
 		}

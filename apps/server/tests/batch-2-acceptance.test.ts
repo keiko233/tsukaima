@@ -813,3 +813,223 @@ describe("Batch 2 acceptance: poke notices", () => {
 		}
 	});
 });
+
+describe("Reply dispatcher turn-state hardening", () => {
+	test("length-prefix narration is owed and bypasses direct-send, disabled, and rate-limit skips", async () => {
+		const { lifecycle, onebot } = await createLifecycle();
+		try {
+			const session = await createExternalSession(lifecycle, {
+				kind: "private",
+				platformConversationId: "user-1",
+			});
+			await lifecycle.conversationPolicy.update({
+				conversationId: session.sessionId,
+				policy: {
+					pacing: {
+						narrationEnabled: true,
+						narrationMinIntervalMs: 60_000,
+						replyDelayEnabled: false,
+						sendIntervalMs: 0,
+					},
+				},
+				scope: "conversation",
+			});
+			lifecycle.replyDispatcher.beginTurn(session.durableConversationId);
+			const directSend = await lifecycle.outbound.send("onebot-napcat", {
+				originConversationId: session.durableConversationId,
+				parts: [{ text: "Tool already posted this.", type: "text" }],
+				target: {
+					channelId: "onebot",
+					kind: "private",
+					platformConversationId: "user-1",
+				},
+			});
+			expect(directSend.platformMessageId).toBeDefined();
+			const afterDirectSend = await lifecycle.replyDispatcher.handleNarration({
+				conversationId: session.durableConversationId,
+				kind: "length-prefix",
+				narrationId: "narration:length:direct",
+				text: "Owed tail after a tool send.",
+				toolNames: ["probe_tool"],
+			});
+			expect(afterDirectSend).toMatchObject({ deliveryStatus: "sent" });
+
+			// A new turn resets direct-send state; only then does a preamble go out normally.
+			lifecycle.replyDispatcher.beginTurn(session.durableConversationId);
+			const firstPreamble = await lifecycle.replyDispatcher.handleNarration({
+				conversationId: session.durableConversationId,
+				kind: "tool-preamble",
+				narrationId: "narration:preamble:1",
+				text: "A preamble.",
+				toolNames: ["probe_tool"],
+			});
+			expect(firstPreamble).toMatchObject({ deliveryStatus: "sent" });
+			const withinInterval = await lifecycle.replyDispatcher.handleNarration({
+				conversationId: session.durableConversationId,
+				kind: "length-prefix",
+				narrationId: "narration:length:rate",
+				text: "Owed tail inside the narration interval.",
+				toolNames: ["probe_tool"],
+			});
+			expect(withinInterval).toMatchObject({ deliveryStatus: "sent" });
+
+			await lifecycle.conversationPolicy.update({
+				conversationId: session.sessionId,
+				policy: { pacing: { narrationEnabled: false } },
+				scope: "conversation",
+			});
+			const disabled = await lifecycle.replyDispatcher.handleNarration({
+				conversationId: session.durableConversationId,
+				kind: "length-prefix",
+				narrationId: "narration:length:disabled",
+				text: "Owed tail with narration disabled.",
+				toolNames: ["probe_tool"],
+			});
+			expect(disabled).toMatchObject({ deliveryStatus: "sent" });
+
+			const rows = await outboundRows(lifecycle, session.sessionId);
+			expect(rows.map((row) => row.contentText)).toEqual([
+				"Tool already posted this.",
+				"Owed tail after a tool send.",
+				"A preamble.",
+				"Owed tail inside the narration interval.",
+				"Owed tail with narration disabled.",
+			]);
+			const sent = onebot.actions.filter((action) => action.action === "send_private_msg");
+			expect(sent).toHaveLength(5);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("tool-send suppression never leaks into the next turn", async () => {
+		const { lifecycle } = await createLifecycle();
+		try {
+			const session = await createExternalSession(lifecycle, {
+				kind: "private",
+				platformConversationId: "user-1",
+			});
+			await lifecycle.conversationPolicy.update({
+				conversationId: session.sessionId,
+				policy: { pacing: { replyDelayEnabled: false, sendIntervalMs: 0 } },
+				scope: "conversation",
+			});
+			lifecycle.replyDispatcher.beginTurn(session.durableConversationId);
+			lifecycle.replyDispatcher.recordTurnToolSend({
+				durableConversationId: session.durableConversationId,
+				text: "好的",
+			});
+			const suppressed = await lifecycle.replyDispatcher.handleAnswer({
+				activityId: "activity-tool-dup",
+				conversationId: session.durableConversationId,
+				entryId: "entry-tool-dup",
+				text: "好的",
+			});
+			expect(suppressed).toMatchObject({
+				deliveryStatus: "suppressed",
+				reason: "already_sent_via_tool",
+			});
+
+			lifecycle.replyDispatcher.beginTurn(session.durableConversationId);
+			const legitimate = await lifecycle.replyDispatcher.handleAnswer({
+				activityId: "activity-next-turn",
+				conversationId: session.durableConversationId,
+				entryId: "entry-next-turn",
+				text: "好的",
+			});
+			expect(legitimate).toMatchObject({ deliveryStatus: "sent" });
+			const rows = await outboundRows(lifecycle, session.sessionId);
+			expect(rows.map((row) => row.durableEntryId)).toEqual(["entry-next-turn"]);
+			expect(rows[0]?.contentText).toBe("好的");
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("a cross-chat tool send never marks the target turn as already shown", async () => {
+		const { lifecycle } = await createLifecycle();
+		try {
+			const chatA = await createExternalSession(lifecycle, {
+				kind: "group",
+				platformConversationId: "group-a",
+			});
+			const chatB = await createExternalSession(lifecycle, {
+				kind: "group",
+				platformConversationId: "group-b",
+			});
+			await lifecycle.conversationPolicy.update({
+				conversationId: chatB.sessionId,
+				policy: { pacing: { replyDelayEnabled: false, sendIntervalMs: 0 } },
+				scope: "conversation",
+			});
+			lifecycle.replyDispatcher.beginTurn(chatB.durableConversationId);
+			await lifecycle.outbound.send("onebot-napcat", {
+				originConversationId: chatA.durableConversationId,
+				parts: [{ text: "跨群消息", type: "text" }],
+				target: { channelId: "onebot", kind: "group", platformConversationId: "group-b" },
+			});
+			expect(lifecycle.replyDispatcher.hasDirectSendThisTurn(chatB.durableConversationId)).toBe(
+				false,
+			);
+			const answer = await lifecycle.replyDispatcher.handleAnswer({
+				activityId: "activity-cross-chat-answer",
+				conversationId: chatB.durableConversationId,
+				entryId: "entry-cross-chat-answer",
+				text: "跨群消息",
+			});
+			expect(answer).toMatchObject({ deliveryStatus: "sent" });
+			const rows = await outboundRows(lifecycle, chatB.sessionId);
+			expect(rows.map((row) => row.contentText)).toEqual(["跨群消息", "跨群消息"]);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("a busy outbound lane delivers narration before the final answer", async () => {
+		const { lifecycle, onebot } = await createLifecycle();
+		try {
+			const session = await createExternalSession(lifecycle, {
+				kind: "private",
+				platformConversationId: "user-1",
+			});
+			await lifecycle.conversationPolicy.update({
+				conversationId: session.sessionId,
+				policy: {
+					pacing: {
+						narrationEnabled: true,
+						narrationMinIntervalMs: 0,
+						replyDelayEnabled: false,
+						sendIntervalMs: 30,
+						stripMarkdown: false,
+					},
+				},
+				scope: "conversation",
+			});
+			const narration = lifecycle.replyDispatcher.handleNarration({
+				conversationId: session.durableConversationId,
+				kind: "tool-preamble",
+				narrationId: "narration:lane:1",
+				text: "first bubble\nsecond bubble",
+				toolNames: ["probe_tool"],
+			});
+			const answer = lifecycle.replyDispatcher.handleAnswer({
+				activityId: "activity-lane-order",
+				conversationId: session.durableConversationId,
+				entryId: "entry-lane-order",
+				text: "final answer",
+			});
+			const [narrationOutcome, answerOutcome] = await Promise.all([narration, answer]);
+			expect(narrationOutcome).toMatchObject({ deliveryStatus: "sent" });
+			expect(answerOutcome).toMatchObject({ deliveryStatus: "sent" });
+			const texts = onebot.actions
+				.filter((action) => action.action === "send_private_msg")
+				.map((action) => {
+					const parts = action.params.message as Array<{ data?: { text?: string } }>;
+					return parts[0]?.data?.text;
+				});
+			expect(texts).toEqual(["first bubble", "second bubble", "final answer"]);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+});

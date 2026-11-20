@@ -821,3 +821,32 @@ async function runImageTurnWithVision(supportsImage: boolean, options: Multimoda
 		await rm(directory, { force: true, recursive: true });
 	}
 }
+
+describe("PiDurableConversationHost turn sender binding", () => {
+	test("passes the triggering envelope sender to admission", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-sender-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const admitted: Array<string | undefined> = [];
+			const host = new PiDurableConversationHost({
+				model: createFakeModel({ responses: ["bound"] }),
+				onTurnAdmitted: (turn) => {
+					admitted.push(turn.senderExternalId);
+				},
+				storage,
+			});
+			const conversationId = await host.createConversation();
+			await host.append({
+				conversationId,
+				envelope: envelope("sender-1", "hello"),
+				forceSubmit: true,
+				submittedAtMs: Date.now(),
+			});
+			expect(admitted).toEqual(["user-1"]);
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+});

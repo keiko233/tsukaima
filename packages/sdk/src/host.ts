@@ -182,6 +182,12 @@ export interface PluginOutboundSendInput {
 	readonly target: OutboundTarget;
 	readonly parts: readonly MessagePart[];
 	readonly options?: SendOptions;
+	/**
+	 * Durable conversation that initiated this send, when called from a conversation tool.
+	 * The reply dispatcher only treats the send as belonging to the target turn when this is
+	 * absent or matches the target: a cross-chat send from Chat A must never pollute Chat B.
+	 */
+	readonly originConversationId?: string;
 }
 
 /**

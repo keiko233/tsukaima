@@ -446,6 +446,12 @@ export interface PluginBackgroundTurnResult {
 	readonly deliveryStatus: PluginBackgroundDeliveryStatus;
 	/** Durable activity id of the turn, also available when a retry reuses an existing answer. */
 	readonly activityId?: string;
+	/**
+	 * True when the turn's text was already delivered by a channel tool (or was already shown
+	 * as the exact answer text). No new bubble was sent, but the reply obligation was satisfied,
+	 * so proactive quota and unanswered-streak accounting must still count it.
+	 */
+	readonly deliveredViaTool?: boolean;
 	/** Durable assistant entry id of the turn. */
 	readonly entryId?: string;
 	/** Output marker that was consumed and never delivered (`skip`, `lurk`, `schedule-later`). */

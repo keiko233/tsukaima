@@ -1,4 +1,4 @@
-import type { ScheduleRecurrence } from "@tsukaima/contracts";
+import { type ScheduleRecurrence, scheduleRecurrenceSchema } from "@tsukaima/contracts";
 import type { DurableExtension, DurableToolRegistration } from "@tsukaima/core";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
@@ -87,7 +87,7 @@ function defaultTitleFromPrompt(prompt: string): string {
  */
 function resolveRecurrence(input: Record<string, unknown>, nowMs: number): ScheduleRecurrence {
 	if (typeof input.recurrence === "object" && input.recurrence !== null) {
-		return input.recurrence as ScheduleRecurrence;
+		return scheduleRecurrenceSchema.parse(input.recurrence);
 	}
 	const at = stringValue(input, "at");
 	if (at !== undefined) {
@@ -396,7 +396,9 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 					...(stringValue(input, "prompt") === undefined
 						? {}
 						: { prompt: stringValue(input, "prompt")! }),
-					...(input.recurrence === undefined ? {} : { recurrence: input.recurrence as never }),
+					...(input.recurrence === undefined
+						? {}
+						: { recurrence: scheduleRecurrenceSchema.parse(input.recurrence) }),
 					...(respectQuietHours === undefined ? {} : { respectQuietHours }),
 					...(stringValue(input, "timeZone") === undefined
 						? {}

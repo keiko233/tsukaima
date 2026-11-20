@@ -14,6 +14,13 @@ export interface ImCallerContextOverrides {
 	readonly platformConversationId?: string | undefined;
 	readonly role?: string | undefined;
 	readonly senderPlatformId?: string | undefined;
+	/**
+	 * Host-bound sender of the active turn. When present it is authoritative: the resolver
+	 * never falls back to "latest ambient inbound message", which a group member could change
+	 * between turn admission and tool execution. `null` means the turn has no human sender
+	 * (for example a proactive background turn) and admin status must fail closed.
+	 */
+	readonly turnBoundSender?: string | null | undefined;
 	readonly userId?: string | undefined;
 }
 
@@ -58,6 +65,12 @@ export async function resolveImCallerContext(
 	let resolvedChatKind = overrides.chatKind;
 	let resolvedSenderPlatformId = overrides.senderPlatformId;
 	let resolvedUserId = overrides.userId;
+	const turnBoundSender = overrides.turnBoundSender;
+	const senderIsTurnBound = turnBoundSender !== undefined;
+	if (senderIsTurnBound) {
+		resolvedSenderPlatformId = turnBoundSender ?? undefined;
+		resolvedUserId = turnBoundSender ?? undefined;
+	}
 	let resolvedIsAdmin = overrides.isAdmin;
 	let resolvedRole = overrides.role;
 
@@ -93,7 +106,13 @@ export async function resolveImCallerContext(
 						resolvedUserId = resolvedUserId ?? privatePeerId;
 						resolvedSenderPlatformId = resolvedSenderPlatformId ?? privatePeerId;
 					}
-					if (resolvedUserId === undefined || resolvedSenderPlatformId === undefined) {
+					// A group turn with a known (or deliberately absent) turn sender must never fall
+					// back to the latest persisted inbound row: that is the TOCTOU an ambient admin
+					// message exploits after a non-admin triggered the turn.
+					if (
+						!senderIsTurnBound &&
+						(resolvedUserId === undefined || resolvedSenderPlatformId === undefined)
+					) {
 						const [latestInbound] = await database
 							.select({ senderExternalId: messagesTable.senderExternalId })
 							.from(messagesTable)

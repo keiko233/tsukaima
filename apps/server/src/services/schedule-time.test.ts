@@ -4,6 +4,7 @@ import {
 	isValidTimeZone,
 	localParts,
 	nextOccurrence,
+	nextQuietHoursEndMs,
 	previewOccurrences,
 	zonedTimeToUtc,
 } from "./schedule-time.ts";
@@ -124,5 +125,32 @@ describe("schedule recurrence", () => {
 			catchUp: "skip",
 			graceMs: 15 * 60_000,
 		});
+	});
+});
+
+describe("schedule recurrence: DST gap anchoring", () => {
+	test("resolves a spring-forward wall time in far-offset zones", () => {
+		expect(
+			zonedTimeToUtc(
+				{ day: 8, month: 3, year: 2026 },
+				{ hour: 2, minute: 30 },
+				"America/Los_Angeles",
+			),
+		).toBe(Date.parse("2026-03-08T10:00:00.000Z"));
+		expect(
+			zonedTimeToUtc(
+				{ day: 27, month: 9, year: 2026 },
+				{ hour: 2, minute: 30 },
+				"Pacific/Auckland",
+			),
+		).toBe(Date.parse("2026-09-26T14:00:00.000Z"));
+	});
+
+	test("quiet-hours end inside the spring-forward gap resolves to the first valid minute", () => {
+		const quietHours = { enabled: true, endHour: 2, startHour: 0 };
+		const atMs = Date.parse("2026-03-08T09:59:00.000Z");
+		expect(nextQuietHoursEndMs(atMs, quietHours, "America/Los_Angeles")).toBe(
+			Date.parse("2026-03-08T10:00:00.000Z"),
+		);
 	});
 });

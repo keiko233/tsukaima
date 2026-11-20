@@ -12,6 +12,7 @@ import {
 	PolicyCompactionFields,
 	PolicyCrossSessionFields,
 	PolicyGateFields,
+	PolicyGenerationFields,
 	PolicyHumanizationFields,
 	PolicyMemoryConsolidationFields,
 	PolicyPacingFields,
@@ -19,6 +20,7 @@ import {
 	PolicySocialFields,
 	PolicyWorkspaceDelegationField,
 } from "../../_modules/policy/conversation-policy-fields";
+import { toPolicyPatch } from "../../_modules/policy/policy-patch";
 import { InlineError } from "../../_modules/shell/primitives";
 import { Modal, ModalActions } from "../../_modules/ui/modal";
 
@@ -115,6 +117,7 @@ export function PolicyDefaultsCard() {
 		change((current) => ({
 			...current,
 			pacing: structuredClone(defaultConversationPolicy.pacing),
+			workspaceDelegationEnabled: false,
 		}));
 	const resetSidechat = () =>
 		change((current) => ({
@@ -151,15 +154,20 @@ export function PolicyDefaultsCard() {
 			...current,
 			gate: structuredClone(defaultConversationPolicy.gate),
 		}));
+	const resetGeneration = () =>
+		change((current) => ({
+			...current,
+			generation: structuredClone(defaultConversationPolicy.generation),
+		}));
 
 	const save = () => {
 		if (draft === undefined) return;
-		savePolicy.mutate({ policy: draft, scope: "global" });
+		savePolicy.mutate({ policy: toPolicyPatch(draft), scope: "global" });
 	};
 
 	const overrideEveryConversation = () => {
 		if (draft === undefined) return;
-		overrideAll.mutate({ policy: draft });
+		overrideAll.mutate({ policy: toPolicyPatch(draft) });
 	};
 
 	return (
@@ -193,6 +201,11 @@ export function PolicyDefaultsCard() {
 								models={settingsQuery.data?.models}
 								onChange={change}
 							/>
+						</section>
+
+						<section className="space-y-2.5 border-t border-border/60 pt-3">
+							<SectionHeader onReset={resetGeneration} title={m.policy_section_generation()} />
+							<PolicyGenerationFields draft={draft} onChange={change} />
 						</section>
 
 						<section className="space-y-2.5 border-t border-border/60 pt-3">

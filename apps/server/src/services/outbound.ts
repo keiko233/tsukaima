@@ -96,6 +96,12 @@ export class OutboundService {
 			throw new Error(`Channel ${target.channelId} is not registered`);
 		}
 		const resolved = await this.#resolve(target);
+		// A tool send from another conversation (cross-chat `onebot-napcat.send`) is recorded in
+		// the target transcript, but it must never mark the target's active turn as already
+		// shown: the reply to that turn is unrelated to this message.
+		const originMatches =
+			input.originConversationId === undefined ||
+			input.originConversationId === resolved.durableConversationId;
 		const now = new Date().toISOString();
 		const id = randomUUID();
 		await database.insert(messages).values({
@@ -139,19 +145,21 @@ export class OutboundService {
 				})
 				.where(eq(messages.id, id));
 			const text = messagePartsText(input.parts);
-			if (text.trim().length > 0) {
+			if (originMatches && text.trim().length > 0) {
 				this.#onDirectSend?.(resolved.durableConversationId, text);
 			}
 			await this.#touch(resolved.chatObjectId, resolved.sessionId);
 			this.#notify({ channelId: target.channelId, ...resolved, messageId: id });
-			this.#onToolSend?.({
-				durableConversationId: resolved.durableConversationId,
-				hasMedia: input.parts.some((part) => part.type !== "text"),
-				parts: input.parts,
-				pluginId,
-				sessionId: resolved.sessionId,
-				text: messagePartsText(input.parts),
-			});
+			if (originMatches) {
+				this.#onToolSend?.({
+					durableConversationId: resolved.durableConversationId,
+					hasMedia: input.parts.some((part) => part.type !== "text"),
+					parts: input.parts,
+					pluginId,
+					sessionId: resolved.sessionId,
+					text,
+				});
+			}
 			return result;
 		} catch (error) {
 			await database

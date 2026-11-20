@@ -180,3 +180,31 @@ describe("Batch 6 scaffold", () => {
 		expect(prompt.user).toContain("Bob");
 	});
 });
+
+describe("Batch 6 scaffold: gate hard timeout", () => {
+	test("a driver that ignores AbortSignal still fails open within timeoutMs", async () => {
+		const gate = new FailOpenConversationGate({
+			defaultTimeoutMs: 100,
+			driver: {
+				decideBurstCompletion: async () => new Promise(() => {}),
+				decideProactiveBubble: async () => new Promise(() => {}),
+				decideUndirectedGroupReply: async () => new Promise(() => {}),
+			},
+		});
+		const enabledGate = { ...policy.gate, enabled: true, timeoutMs: 100 };
+		const startedAtMs = performance.now();
+		const decision = await gate.decideBurstCompletion({
+			conversationId: "conv-hung",
+			elapsedMs: 0,
+			envelopeCount: 1,
+			messages: ["synthetic message"],
+			policy: enabledGate,
+		});
+		expect(decision).toMatchObject({
+			decision: "SEND",
+			reason: "timeout",
+			source: "fallback",
+		});
+		expect(performance.now() - startedAtMs).toBeLessThan(2_000);
+	});
+});

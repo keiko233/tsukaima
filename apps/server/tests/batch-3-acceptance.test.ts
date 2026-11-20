@@ -680,3 +680,95 @@ describe("Batch 3 acceptance", () => {
 		).rejects.toThrow("recent [msg:<id>], mediaId, or sha256");
 	});
 });
+
+describe("Batch 3 acceptance: viewImage conversation scoping", () => {
+	test("only resolves media referenced by a message in the scoped conversation and caps bytes", async () => {
+		const harness = await createHarness();
+		const current = await createExternalSession(harness.lifecycle, {
+			kind: "group",
+			platformConversationId: "20001",
+			title: "Current group",
+		});
+		const other = await createExternalSession(harness.lifecycle, {
+			kind: "group",
+			platformConversationId: "20002",
+			title: "Other group",
+		});
+		const database = harness.lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("database missing");
+		const bytes = new TextEncoder().encode("synthetic-scoped-image");
+		const stored = await harness.lifecycle.media.store({
+			bytes,
+			kind: "image",
+			mimeType: "image/png",
+			source: "channel",
+		});
+		await database.insert(messages).values({
+			contentText: "[image]",
+			conversationId: current.sessionId,
+			direction: "inbound",
+			id: randomUUID(),
+			kind: "onebot-v11",
+			occurredAt: new Date().toISOString(),
+			partsJson: JSON.stringify([
+				{ mediaId: stored.id, mimeType: stored.mimeType, sha256: stored.sha256, type: "image" },
+			]),
+			platformMessageId: "scoped-image-message",
+			senderDisplayName: "Synthetic speaker",
+			senderExternalId: "10005",
+		});
+		const sameChat = await invokeTool(
+			harness.lifecycle,
+			"onebot-napcat.viewImage",
+			{ mediaId: stored.id },
+			current.durableConversationId,
+		);
+		expect(sameChat.ok).toBe(true);
+		await expect(
+			invokeTool(
+				harness.lifecycle,
+				"onebot-napcat.viewImage",
+				{ mediaId: stored.id },
+				other.durableConversationId,
+			),
+		).rejects.toThrow("not referenced by a message in this conversation");
+		await expect(
+			invokeTool(
+				harness.lifecycle,
+				"onebot-napcat.viewImage",
+				{ url: "https://example.invalid/unreferenced.png" },
+				current.durableConversationId,
+			),
+		).rejects.toThrow("not referenced by a message in this conversation");
+
+		const bigBytes = Buffer.alloc(5 * 1024 * 1024 + 1, 0x89);
+		const big = await harness.lifecycle.media.store({
+			bytes: bigBytes,
+			kind: "image",
+			mimeType: "image/png",
+			source: "webui",
+		});
+		await database.insert(messages).values({
+			contentText: "[image]",
+			conversationId: current.sessionId,
+			direction: "inbound",
+			id: randomUUID(),
+			kind: "onebot-v11",
+			occurredAt: new Date().toISOString(),
+			partsJson: JSON.stringify([
+				{ mediaId: big.id, mimeType: big.mimeType, sha256: big.sha256, type: "image" },
+			]),
+			platformMessageId: "oversized-image-message",
+			senderDisplayName: "Synthetic speaker",
+			senderExternalId: "10005",
+		});
+		await expect(
+			invokeTool(
+				harness.lifecycle,
+				"onebot-napcat.viewImage",
+				{ mediaId: big.id },
+				current.durableConversationId,
+			),
+		).rejects.toThrow("size cap");
+	});
+});

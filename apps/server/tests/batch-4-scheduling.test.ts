@@ -634,6 +634,24 @@ describe("schedule_create IM tool semantics", () => {
 		}
 	});
 
+	test("rejects a malformed recurrence before persisting a schedule", async () => {
+		const harness = await createSchedulingHarness();
+		const { clock, durableConversationId, schedules, scheduleTools } = harness;
+		clock.now = Date.parse("2026-11-17T00:00:00.000Z");
+		const result = await executeScheduleTool(
+			scheduleTools,
+			"schedule_create",
+			{
+				prompt: "Synthetic malformed recurrence",
+				recurrence: { everyMs: 1_000, kind: "interval" },
+				timeZone: "UTC",
+			},
+			durableConversationId,
+		);
+		expect(resultText(result)).toContain("anchorAt");
+		expect(await schedules.list()).toHaveLength(0);
+	});
+
 	test("supports interval and calendar recurrence with a timezone-aware next tick", async () => {
 		const harness = await createSchedulingHarness();
 		const { clock, durableConversationId, schedules, scheduleTools } = harness;

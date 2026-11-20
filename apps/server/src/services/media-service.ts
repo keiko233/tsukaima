@@ -45,6 +45,15 @@ export interface StoredMedia {
 	readonly width: number | null;
 }
 
+/** Video responses NapCat/CDNs return; octet-stream is sniffed/followed by kind. */
+const VIDEO_MEDIA_CONTENT_TYPES: readonly string[] = [
+	"application/octet-stream",
+	"video/mp4",
+	"video/quicktime",
+	"video/webm",
+	"video/x-matroska",
+];
+
 const DEFAULT_MIME: Record<MediaKind, string> = {
 	audio: "audio/ogg",
 	file: "application/octet-stream",
@@ -205,9 +214,14 @@ export class MediaService {
 		input: Omit<MediaStoreInput, "bytes" | "sourceUrl">,
 	): Promise<StoredMedia> {
 		// Inbound URLs are attacker-controlled. Public-destination, redirect, size, and content
-		// type checks live in the guard; a failure means the part stays a placeholder.
+		// type checks live in the guard; a failure means the part stays a placeholder. Video parts
+		// get a video MIME allowlist on the exact same DNS-pinned fetch guard.
+		const policy =
+			input.kind === "video"
+				? { ...this.#fetchPolicy, allowedContentTypes: VIDEO_MEDIA_CONTENT_TYPES }
+				: this.#fetchPolicy;
 		const fetched = await fetchGuardedMedia(url, {
-			policy: this.#fetchPolicy,
+			policy,
 			...(this.#resolve === undefined ? {} : { resolve: this.#resolve }),
 			...(this.#transport === undefined ? {} : { transport: this.#transport }),
 		});

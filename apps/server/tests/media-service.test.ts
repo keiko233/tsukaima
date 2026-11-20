@@ -310,3 +310,37 @@ describe("MediaService", () => {
 		}
 	});
 });
+
+describe("MediaService storeFromUrl video allowlist", () => {
+	test("accepts video MIME types for video parts while keeping image URLs image-only", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-media-video-"));
+		directories.push(directory);
+		const database = await openDomainDatabase(join(directory, "domain.sqlite"));
+		migrateDomainDatabase(database);
+		const service = new MediaService({
+			blobsDir: join(directory, "blobs"),
+			database: () => database,
+			logger,
+			resolve: async () => ["93.184.216.34"],
+			transport: async () =>
+				new Response(new Uint8Array([0x00, 0x00, 0x00, 0x18]), {
+					headers: { "content-type": "video/mp4" },
+				}),
+		});
+		try {
+			const video = await service.storeFromUrl("https://cdn.example/video.mp4", {
+				kind: "video",
+				source: "channel",
+			});
+			expect(video).toMatchObject({ kind: "video", mimeType: "video/mp4" });
+			await expect(
+				service.storeFromUrl("https://cdn.example/video-as-image.mp4", {
+					kind: "image",
+					source: "channel",
+				}),
+			).rejects.toMatchObject({ code: "blocked_content_type" });
+		} finally {
+			database.$client.close();
+		}
+	});
+});
