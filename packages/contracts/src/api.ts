@@ -884,6 +884,8 @@ export const settingsViewSchema = z.object({
 	logLevel: logLevelSchema,
 	/** Models that plugins advertise for the busy-run sidechat classifier. */
 	models: z.array(modelCatalogEntrySchema).optional(),
+	/** Default lightweight model for background memory consolidation. */
+	memoryModelId: z.string().optional(),
 	modelProviderId: z.string().optional(),
 	sidechatModelId: z.string().optional(),
 	workspaceModel: modelSelectionSchema.optional(),
@@ -904,6 +906,11 @@ export const runtimeSettingsSchema = z.object({
 	/** Default reasoning effort for chat sessions. */
 	chatThinking: thinkingLevelSchema.optional(),
 	logLevel: logLevelSchema,
+	/**
+	 * Default model id (inside the active provider) for background memory consolidation, kept
+	 * separate from the chat persona model. `ConversationPolicy.memoryExtractModel` overrides it.
+	 */
+	memoryModelId: z.string().min(1).optional(),
 	/** Plugin id that owns the active model provider. */
 	modelProviderId: z.string().min(1).optional(),
 	/** Default model id for the busy-conversation sidechat classifier. */
@@ -920,6 +927,7 @@ export const runtimeSettingsPatchSchema = z
 		chatModel: modelSelectionSchema.nullish(),
 		chatThinking: thinkingLevelSchema.nullish(),
 		logLevel: logLevelSchema.optional(),
+		memoryModelId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
 		modelProviderId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
 		sidechatModelId: z.union([z.string().min(1), z.literal(""), z.null()]).optional(),
 		workspaceModel: modelSelectionSchema.nullish(),
@@ -930,6 +938,7 @@ export const runtimeSettingsPatchSchema = z
 			input.chatModel !== undefined ||
 			input.chatThinking !== undefined ||
 			input.logLevel !== undefined ||
+			input.memoryModelId !== undefined ||
 			input.modelProviderId !== undefined ||
 			input.sidechatModelId !== undefined ||
 			input.workspaceModel !== undefined ||

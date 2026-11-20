@@ -14,6 +14,7 @@ export interface PublicRuntimeSettings {
 	readonly chatModel?: RuntimeSettings["chatModel"];
 	readonly chatThinking?: RuntimeSettings["chatThinking"];
 	readonly logLevel: RuntimeSettings["logLevel"];
+	readonly memoryModelId?: string;
 	readonly modelProviderId?: string;
 	readonly sidechatModelId?: string;
 	readonly workspaceModel?: RuntimeSettings["workspaceModel"];
@@ -33,6 +34,7 @@ type SettingsValue = {
 	chatModel?: RuntimeSettings["chatModel"];
 	chatThinking?: RuntimeSettings["chatThinking"];
 	logLevel: RuntimeSettings["logLevel"];
+	memoryModelId?: string;
 	modelProviderId?: string;
 	sidechatModelId?: string;
 	workspaceModel?: RuntimeSettings["workspaceModel"];
@@ -44,6 +46,7 @@ function normalize(input: RuntimeSettings): SettingsValue {
 		...(input.chatModel === undefined ? {} : { chatModel: input.chatModel }),
 		...(input.chatThinking === undefined ? {} : { chatThinking: input.chatThinking }),
 		logLevel: input.logLevel,
+		...(input.memoryModelId === undefined ? {} : { memoryModelId: input.memoryModelId }),
 		...(input.modelProviderId === undefined ? {} : { modelProviderId: input.modelProviderId }),
 		...(input.sidechatModelId === undefined ? {} : { sidechatModelId: input.sidechatModelId }),
 		...(input.workspaceModel === undefined ? {} : { workspaceModel: input.workspaceModel }),
@@ -97,6 +100,7 @@ export function publicRuntimeSettings(settings: RuntimeSettings): PublicRuntimeS
 		...(settings.chatModel === undefined ? {} : { chatModel: settings.chatModel }),
 		...(settings.chatThinking === undefined ? {} : { chatThinking: settings.chatThinking }),
 		logLevel: settings.logLevel,
+		...(settings.memoryModelId === undefined ? {} : { memoryModelId: settings.memoryModelId }),
 		...(settings.modelProviderId === undefined
 			? {}
 			: { modelProviderId: settings.modelProviderId }),
@@ -126,6 +130,11 @@ export async function patchRuntimeSettings(
 			? undefined
 			: (patch.sidechatModelId ?? current.sidechatModelId);
 	if (sidechatModelId !== undefined) next.sidechatModelId = sidechatModelId;
+	const memoryModelId =
+		patch.memoryModelId === null || patch.memoryModelId === ""
+			? undefined
+			: (patch.memoryModelId ?? current.memoryModelId);
+	if (memoryModelId !== undefined) next.memoryModelId = memoryModelId;
 	const chatModel = patch.chatModel === null ? undefined : (patch.chatModel ?? current.chatModel);
 	if (chatModel !== undefined) next.chatModel = chatModel;
 	const workspaceModel =

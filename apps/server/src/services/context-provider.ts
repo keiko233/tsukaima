@@ -8,7 +8,7 @@ import {
 	type TurnContextRequest,
 	type TurnContextSection,
 } from "@tsukaima/core";
-import type { ConversationPolicy, PersonaSummary } from "@tsukaima/contracts";
+import type { ConversationPolicy, PersonaSummary, WarmStatePayload } from "@tsukaima/contracts";
 import {
 	chatSnapshots,
 	conversationMembers,
@@ -23,6 +23,8 @@ import {
 	DEFAULT_PERSONA_BEHAVIOR,
 	type PersonaBehavior,
 } from "./conversation-policy.ts";
+import { queryCrossSession, renderCrossSession } from "./cross-session.ts";
+import { renderWarmStateLines } from "./memory-consolidation.ts";
 import { MemoryService, type RankedMemory } from "./memory-service.ts";
 
 /**
@@ -42,17 +44,31 @@ const OBSERVATION_SNIPPET_LIMIT = 200;
 /** Output budget of one chat compaction summary. */
 const COMPACTION_MAX_TOKENS = 2_048;
 const DEFAULT_MEMORY_TOP_K = 10;
-const RECENT_MESSAGE_LIMIT = 6;
-const RECENT_TIER_MIN_BUDGET = 260;
+/**
+ * Latest messages used only as the lexical recall query seed. They are never rendered: the
+ * named, timestamped observation window (Batch 1) is the model-visible recent context.
+ */
+const RECALL_QUERY_MESSAGE_LIMIT = 6;
 const MEMORY_SNIPPET_LIMIT = 180;
-const RECENT_SNIPPET_LIMIT = 120;
+const QA_SNIPPET_LIMIT = 200;
 const PERSONA_TRUNCATION_NOTE = "[persona truncated to fit the context budget]";
 const MEMORY_TRUNCATION_NOTE = "[memories truncated to fit the context budget]";
-const RECENT_HEADER = "Recent conversation window:";
-const WARM_HEADER = "Warm session state:";
+const WARM_HEADER = "Conversation state:";
+const QA_HEADER = "You answered similar questions here before; stay consistent:";
 const LONG_TERM_HEADER = "Known memories, most relevant first:";
 const OBSERVATION_HEADER = "Recent messages in this group, oldest first (you = your own messages):";
 const SELF_LABEL = "(you)";
+/** One canonical speaker of the current run, used for cross-session and consistency lookup. */
+interface RunSpeaker {
+	readonly name?: string;
+	readonly userId: string;
+}
+interface RunSpeakers {
+	readonly name: string | undefined;
+	readonly speakers: readonly RunSpeaker[];
+	readonly text: string;
+	readonly userId: string | undefined;
+}
 
 /** One host-model completion for chat compaction, on the conversation's own model. */
 export interface ContextCompletionRequest {
@@ -68,9 +84,10 @@ export interface ContextCompletionRequest {
  * character budget. Every failure degrades to `undefined` (the section is omitted) — prompt
  * rendering must never break a model run — and memory content is never written to logs.
  *
- * Memory retrieval is tiered: a bounded recent-message window, the latest additive warm
- * summary (`kind = 'summary'`), then hybrid-ranked long-term memories. Conversation policy
- * gates long-term recall and prevents private/group scope leakage.
+ * Memory retrieval is tiered: the merged structured warm state written by background
+ * consolidation (`kind = 'summary'`), then hybrid-ranked long-term memories. Recent messages
+ * only seed the recall query. Conversation policy gates recall and prevents private/group
+ * scope leakage.
  */
 export interface DrizzleContextProviderOptions {
 	readonly renderSystem?: (conversationId: string) => Promise<string | undefined>;
@@ -150,12 +167,6 @@ function combine(conditions: readonly (SQL | undefined)[]): SQL {
 	const filtered = conditions.filter((condition): condition is SQL => condition !== undefined);
 	if (filtered.length === 0) return sql`1 = 1`;
 	return and(...filtered) ?? sql`1 = 1`;
-}
-
-function stringList(value: unknown): string[] {
-	return Array.isArray(value)
-		? value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
-		: [];
 }
 
 export interface ContextMemoryInspectionItem {
@@ -361,25 +372,53 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				this.#logger.warn("observation window unavailable", { error: errorMessage(error) });
 			}
 		}
+		let speaker: RunSpeakers | undefined;
+		if (chat && session !== undefined) {
+			try {
+				speaker = await this.#currentSpeaker(database, session.sessionId, request);
+			} catch (error) {
+				this.#logger.warn("current speaker unavailable", { error: errorMessage(error) });
+			}
+		}
 		let recalled: string | undefined;
 		if (session !== undefined && remaining > 0) {
 			try {
 				const collected = await this.#collectMemories(request.conversationId, session);
 				if (collected !== undefined && collected.enabled) {
 					recalled = this.#format(
-						{
-							policy: collected.policy,
-							ranked: collected.longTerm,
-							recent: collected.recent,
-							warm: collected.warm,
-						},
+						{ ranked: collected.longTerm, warm: collected.warm?.state },
 						remaining,
-						// The observation window replaces the old recent tier in group chats.
-						{ includeRecent: false },
+						speaker?.speakers.flatMap((entry) =>
+							entry.name === undefined ? [entry.userId] : [entry.userId, entry.name],
+						) ?? [],
 					);
+					remaining -= recalled?.length ?? 0;
 				}
 			} catch (error) {
 				this.#logger.warn("memory context unavailable", { error: errorMessage(error) });
+			}
+		}
+
+		let crossSession: string | undefined;
+		let consistency: string | undefined;
+		if (chat && session !== undefined && speaker !== undefined && remaining > 0) {
+			try {
+				const policy = await this.#policyService.effectivePolicy(session.sessionId);
+				if (policy.memoryEnabled) {
+					crossSession = await this.#crossSession(
+						database,
+						session,
+						policy,
+						speaker,
+						request.nowMs,
+					);
+					remaining -= crossSession?.length ?? 0;
+					if (policy.memoryConsolidation.qaRecallEnabled && remaining > 0) {
+						consistency = await this.#qaConsistency(session.sessionId, speaker.text, remaining);
+					}
+				}
+			} catch (error) {
+				this.#logger.warn("cross-session context unavailable", { error: errorMessage(error) });
 			}
 		}
 
@@ -390,6 +429,8 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		push("clock", clock);
 		push("observation", observation);
 		push(TURN_MEMORIES_KEY, recalled);
+		push("cross-session", crossSession);
+		push("consistency", consistency);
 		push("prompt-hooks", hooks);
 		push("cue", cue);
 		this.#logger.debug("rendered turn context", {
@@ -478,14 +519,8 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				return undefined;
 			}
 			const rendered = this.#format(
-				{
-					policy: collected.policy,
-					ranked: collected.longTerm,
-					recent: collected.recent,
-					warm: collected.warm,
-				},
+				{ ranked: collected.longTerm, warm: collected.warm?.state },
 				this.#memoryBudget,
-				{ includeRecent: true },
 			);
 			this.#logger.debug("rendered memory context", {
 				durableConversationId,
@@ -530,15 +565,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				};
 			}
 
-			const warmTopics =
-				collected.warm === undefined
-					? []
-					: (() => {
-							const listed = stringList(collected.warm.evidence.topic);
-							if (listed.length > 0) return listed;
-							const raw = String(collected.warm.evidence.topic ?? "").trim();
-							return raw.length > 0 ? [raw] : [];
-						})();
+			const warmTopics = collected.warm?.state?.topics ?? [];
 
 			const items: ContextMemoryInspectionItem[] = [];
 			if (collected.warm !== undefined) {
@@ -572,20 +599,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			const nonEmptyRecent = collected.recent.filter(
 				(row) => (row.contentText ?? "").trim().length > 0,
 			);
-			const memoryBudget = this.#memoryBudget;
-			if (memoryBudget >= RECENT_TIER_MIN_BUDGET) {
-				for (const row of nonEmptyRecent) {
-					const text = snippet(row.contentText ?? "", RECENT_SNIPPET_LIMIT);
-					if (text.length === 0) continue;
-					items.push({
-						id: row.id,
-						kind: row.direction,
-						scope: "recent",
-						summary: text,
-						tier: "recent",
-					});
-				}
-			}
+			// Recent messages only seed the recall query; they are no longer an injected tier.
 
 			return {
 				memories: {
@@ -704,7 +718,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		const scopeFilter = await this.#scopeFilter(database, session, policy);
 		const query = [
 			...recent.map((row) => row.contentText ?? ""),
-			...(warm === undefined ? [] : [String(warm.evidence.topic ?? "")]),
+			...(warm?.state?.topics ?? []),
 		].join("\n");
 		this.#logger.trace("collecting memories for context", {
 			durableConversationId,
@@ -817,7 +831,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	async #recentMessages(
 		database: TsukaimaDatabase,
 		sessionId: string | undefined,
-		limit = RECENT_MESSAGE_LIMIT,
+		limit = RECALL_QUERY_MESSAGE_LIMIT,
 	): Promise<
 		{
 			contentText: string | null;
@@ -829,6 +843,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			rawRefJson: string | null;
 			senderDisplayName: string | null;
 			senderExternalId: string | null;
+			senderUserId: string | null;
 		}[]
 	> {
 		if (sessionId === undefined) return [];
@@ -862,6 +877,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				rawRefJson: messages.rawRefJson,
 				senderDisplayName: messages.senderDisplayName,
 				senderExternalId: messages.senderExternalId,
+				senderUserId: messages.senderUserId,
 			})
 			.from(messages)
 			.where(and(eq(messages.conversationId, sessionId), ne(messages.kind, "tool"), restoreWindow))
@@ -872,13 +888,11 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 
 	#format(
 		input: {
-			readonly policy: ConversationPolicy;
 			readonly ranked: readonly RankedMemory[];
-			readonly recent: readonly { contentText: string | null; direction: string }[];
-			readonly warm: { readonly evidence: Record<string, unknown> } | undefined;
+			readonly warm: WarmStatePayload | undefined;
 		},
 		memoryBudget: number,
-		options: { readonly includeRecent: boolean },
+		preferredSpeakerIds: readonly string[] = [],
 	): string | undefined {
 		const lines: string[] = [];
 		let used = 0;
@@ -888,34 +902,16 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			used += line.length + 1;
 			return true;
 		};
-		const includeRecent =
-			options.includeRecent &&
-			memoryBudget >= RECENT_TIER_MIN_BUDGET &&
-			input.recent.some((row) => (row.contentText ?? "").trim().length > 0);
-		if (includeRecent) {
-			if (push(RECENT_HEADER)) {
-				for (const row of input.recent) {
-					const text = snippet(row.contentText ?? "", RECENT_SNIPPET_LIMIT);
-					if (text.length === 0) continue;
-					if (!push(`- ${row.direction}: ${text}`)) break;
-				}
-			}
-		}
-		if (input.warm !== undefined) {
-			if (push(WARM_HEADER)) {
-				const topic = stringList(input.warm.evidence.topic).join(", ");
-				const topicText = topic.length > 0 ? topic : String(input.warm.evidence.topic ?? "").trim();
-				if (topicText.length > 0) push(`- Topic: ${snippet(topicText, 140)}`);
-				for (const [label, key] of [
-					["Decisions", "decisions"],
-					["Todos", "todos"],
-					["Open threads", "openThreads"],
-				] as const) {
-					const values = stringList(input.warm.evidence[key]);
-					if (values.length === 0) continue;
-					push(`- ${label}: ${values.map((value) => snippet(value, 120)).join("; ")}`);
-				}
-			}
+		// Pre-Batch-5 regex warm rows carry no structured state and are deliberately not shown.
+		const warmLines =
+			input.warm === undefined
+				? []
+				: renderWarmStateLines(input.warm, {
+						maxLineChars: Math.min(memoryBudget, 600),
+						preferredPersonKeys: preferredSpeakerIds,
+					});
+		if (warmLines.length > 0 && push(WARM_HEADER)) {
+			for (const line of warmLines) if (!push(line)) break;
 		}
 		const pool = input.ranked.slice(0, this.#memoryTopK);
 		if (pool.length > 0) {
@@ -938,5 +934,123 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		return text.length > memoryBudget
 			? truncateChars(text, memoryBudget, MEMORY_TRUNCATION_NOTE)
 			: text;
+	}
+
+	/**
+	 * Resolve the canonical speakers of the run's own inputs. A burst may contain several
+	 * speakers; cross-session covers each identified one (bounded), while unknown speakers
+	 * contribute only their text to QA consistency and yield no cross-session context.
+	 */
+	async #currentSpeaker(
+		database: TsukaimaDatabase,
+		sessionId: string,
+		request: TurnContextRequest,
+	): Promise<RunSpeakers> {
+		const envelopeIds = request.inputs
+			.map((input) => input.envelopeId)
+			.filter((id): id is string => id !== undefined);
+		const platformIds = request.inputs
+			.map((input) => input.platformMessageId)
+			.filter((id): id is string => id !== undefined);
+		if (envelopeIds.length === 0 && platformIds.length === 0) {
+			return { name: undefined, speakers: [], text: "", userId: undefined };
+		}
+		const rows = await database
+			.select({
+				contentText: messages.contentText,
+				senderDisplayName: messages.senderDisplayName,
+				senderUserId: messages.senderUserId,
+			})
+			.from(messages)
+			.where(
+				and(
+					eq(messages.conversationId, sessionId),
+					eq(messages.direction, "inbound"),
+					or(
+						envelopeIds.length === 0 ? undefined : inArray(messages.id, envelopeIds),
+						platformIds.length === 0 ? undefined : inArray(messages.platformMessageId, platformIds),
+					),
+				),
+			)
+			.orderBy(desc(messages.occurredAt))
+			.limit(Math.max(1, request.inputs.length));
+		const newest = rows[0];
+		const speakerIds = new Set<string>();
+		const speakers: RunSpeaker[] = [];
+		for (const row of rows) {
+			const userId = row.senderUserId ?? undefined;
+			if (userId === undefined || speakerIds.has(userId)) continue;
+			speakerIds.add(userId);
+			const name = row.senderDisplayName?.trim() || undefined;
+			speakers.push(name === undefined ? { userId } : { name, userId });
+			if (speakers.length >= 3) break;
+		}
+		return {
+			name: newest?.senderDisplayName?.trim() || undefined,
+			speakers,
+			text: rows
+				.map((row) => row.contentText ?? "")
+				.toReversed()
+				.join("\n"),
+			userId: newest?.senderUserId ?? undefined,
+		};
+	}
+
+	async #crossSession(
+		database: TsukaimaDatabase,
+		session: { chatKind: string; sessionId: string },
+		policy: ConversationPolicy,
+		speaker: RunSpeakers,
+		nowMs: number,
+	): Promise<string | undefined> {
+		if (speaker.speakers.length === 0) return undefined;
+		const blocks: string[] = [];
+		let remaining = policy.crossSession.maxChars;
+		for (const entry of speaker.speakers) {
+			if (remaining <= 0) break;
+			const entries = await queryCrossSession(database, {
+				currentKind: session.chatKind,
+				currentSessionId: session.sessionId,
+				nowMs,
+				policy: policy.crossSession,
+				sourceAllowed: async (conversationId) => {
+					const source = await this.#policyService.effectivePolicy(conversationId);
+					return source.memoryEnabled && source.crossSession.enabled;
+				},
+				speakerUserId: entry.userId,
+			});
+			if (entries.length === 0) continue;
+			const block = renderCrossSession(entries, {
+				formatTime: (iso) => {
+					const at = Date.parse(iso);
+					return Number.isFinite(at) ? formatLocalClock(at, this.#timeZoneOptions()) : iso;
+				},
+				maxChars: remaining,
+				speakerName: entry.name ?? "This person",
+			});
+			if (block === undefined) continue;
+			blocks.push(block);
+			remaining -= block.length + 1;
+		}
+		return blocks.length === 0 ? undefined : blocks.join("\n");
+	}
+
+	async #qaConsistency(
+		sessionId: string,
+		query: string,
+		budget: number,
+	): Promise<string | undefined> {
+		const answers = await this.#memoryService.recallAnsweredQuestions(sessionId, query);
+		if (answers.length === 0) return undefined;
+		const lines = [QA_HEADER];
+		let used = QA_HEADER.length;
+		for (const entry of answers) {
+			const question = snippet(entry.question, QA_SNIPPET_LIMIT);
+			const line = `- Q: ${question} A: ${snippet(entry.answer, QA_SNIPPET_LIMIT)}`;
+			if (used + line.length + 1 > budget) break;
+			lines.push(line);
+			used += line.length + 1;
+		}
+		return lines.length > 1 ? lines.join("\n") : undefined;
 	}
 }

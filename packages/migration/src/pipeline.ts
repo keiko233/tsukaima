@@ -23,6 +23,7 @@ import {
 	users,
 } from "@tsukaima/db";
 import { DSH_SOURCE, type SnapshotSource } from "./dsh-inspect.ts";
+import { crossSessionPolicyPatchFromDsh } from "./config-map.ts";
 import { FakeCompressor, type Compressor, type CompressionResult } from "./compressor.ts";
 import {
 	createPreImportBackup,
@@ -975,6 +976,28 @@ export function createPipeline(target: string, options: PipelineOptions = {}): M
 						);
 						await insert(memories, db.memories.map(memoryRow));
 						await insert(policies, db.settings.map(settingsRecord));
+						// Apply the DSH cross-session fields as a real global conversation policy. The
+						// policy schema fills every section this object leaves out, and version 2 wins
+						// over the raw settings rows above (which parse back to the version-1 default).
+						const crossSessionPatch = crossSessionPolicyPatchFromDsh(
+							normalized.config.flatMap((entry) => entry.leaves),
+						);
+						if (Object.keys(crossSessionPatch).length > 0) {
+							const policyId = `dsh_global_cross_session_${sha256String(
+								stableStringify(crossSessionPatch),
+							).slice(7, 23)}`;
+							const sourceHash = sha256String(stableStringify(crossSessionPatch));
+							record("policies", policyId, "global:conversation.crossSession", sourceHash);
+							await insert(policies, [
+								{
+									conversationId: null,
+									id: policyId,
+									isActive: 1,
+									policyJson: safeJson({ crossSession: crossSessionPatch, version: 2 }),
+									scope: "global" as const,
+								},
+							]);
+						}
 
 						if (db.stickerPacks.length > 0) {
 							insertStickerMemeData(

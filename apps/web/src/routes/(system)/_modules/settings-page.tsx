@@ -159,6 +159,11 @@ export function SettingsPage() {
 	const configuredModelMissing =
 		configuredSidechatModel !== undefined &&
 		!models.some((model) => model.id === configuredSidechatModel);
+	const configuredMemoryModel = settings?.memoryModelId;
+	const memoryModelValue = configuredMemoryModel ?? ACTIVE_SIDECHAT_MODEL;
+	const configuredMemoryModelMissing =
+		configuredMemoryModel !== undefined &&
+		!availableModels.some((model) => model.id === configuredMemoryModel);
 	const changeLocale = (value: string) => {
 		const next = toLocale(value);
 		if (next === undefined || next === locale) return;
@@ -298,6 +303,46 @@ export function SettingsPage() {
 							{models.length === 0 ? (
 								<p className="text-[11px] text-muted-foreground">
 									{m.settings_sidechat_model_empty()}
+								</p>
+							) : null}
+						</div>
+						<div className="space-y-1.5">
+							<div className="px-1 text-[11.5px] font-medium text-foreground">
+								{m.settings_memory_model_label()}
+							</div>
+							<Select
+								value={memoryModelValue}
+								disabled={updateSettings.isPending}
+								onValueChange={(value) => {
+									const next = value === ACTIVE_SIDECHAT_MODEL ? null : value;
+									if ((next ?? undefined) === configuredMemoryModel) return;
+									updateSettings.mutate({ memoryModelId: next });
+								}}
+							>
+								<SelectTrigger className="w-full">
+									<span className="sr-only">{m.settings_memory_model_label()}: </span>
+									<SelectValue placeholder={m.settings_memory_model_placeholder()} />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value={ACTIVE_SIDECHAT_MODEL}>
+										{m.settings_memory_model_active()}
+									</SelectItem>
+									{availableModels.map((model) => (
+										<SelectItem key={model.id} value={model.id}>
+											{modelOptionLabel(model)}
+										</SelectItem>
+									))}
+									{configuredMemoryModel !== undefined && configuredMemoryModelMissing ? (
+										<SelectItem value={configuredMemoryModel}>
+											{configuredMemoryModel} · {m.settings_memory_model_unavailable()}
+										</SelectItem>
+									) : null}
+								</SelectContent>
+							</Select>
+							<p className="text-[11px] text-muted-foreground">{m.settings_memory_model_hint()}</p>
+							{availableModels.length === 0 ? (
+								<p className="text-[11px] text-muted-foreground">
+									{m.settings_memory_model_empty()}
 								</p>
 							) : null}
 						</div>

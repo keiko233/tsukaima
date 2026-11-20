@@ -95,26 +95,45 @@ function provider(
 }
 
 describe("hybrid memory retrieval", () => {
-	test("uses mock embedding cosine similarity when lexical overlap is absent", async () => {
+	test("uses stored embeddings without a network call on the prompt-render path", async () => {
 		const { database, policy } = await setup();
 		await insertConversation(database, { id: "session-vector" });
-		const context = provider(database, policy, {
-			embed: vectorEmbed,
+		let embedCalls = 0;
+		const memory = new MemoryService({
+			database: () => database,
+			embed: async (texts) => {
+				embedCalls += 1;
+				return vectorEmbed(texts);
+			},
+			logger,
+			now: () => fixedNow,
+			policyService: policy,
+		});
+		const context = new DrizzleContextProvider({
+			budgetChars: 1_200,
+			database: () => database,
+			logger,
+			memoryService: memory,
 			memoryTopK: 1,
+			policyService: policy,
 		});
 		await database.insert(memories).values([
 			{
-				content: "Loves matcha",
+				content: "Loves matcha latte",
 				createdBy: "agent",
+				embeddingJson: JSON.stringify([1, 0]),
+				embeddingModel: "mock-embed",
 				id: "mem-matcha",
 				importance: 0.1,
 				kind: "preference",
 				scope: "global",
-				summary: "Loves matcha",
+				summary: "Loves matcha latte",
 			},
 			{
 				content: "Uses Postgres",
 				createdBy: "agent",
+				embeddingJson: JSON.stringify([0, 1]),
+				embeddingModel: "mock-embed",
 				id: "mem-postgres",
 				importance: 0.95,
 				kind: "fact",
@@ -123,11 +142,11 @@ describe("hybrid memory retrieval", () => {
 			},
 		]);
 		const text = await context.renderMemories("durable-session-vector");
-		expect(text).toContain("Loves matcha");
+		expect(embedCalls).toBe(0);
+		expect(text).toContain("Loves matcha latte");
 		expect(text).not.toContain("Uses Postgres");
 		const cached = await database.select().from(memories).where(eq(memories.id, "mem-matcha"));
 		expect(cached[0]?.embeddingModel).toBe("mock-embed");
-		expect(cached[0]?.embeddingJson).not.toBeNull();
 	});
 
 	test("applies pinned and importance weighting", async () => {
@@ -159,7 +178,7 @@ describe("hybrid memory retrieval", () => {
 		expect(text).toContain("Pinned fact");
 	});
 
-	test("renders recent, warm summary, and long-term tiers inside the budget", async () => {
+	test("renders structured warm state and long-term memories inside the budget", async () => {
 		const { database, policy } = await setup();
 		await insertConversation(database, { id: "session-warm" });
 		const context = provider(database, policy);
@@ -170,10 +189,16 @@ describe("hybrid memory retrieval", () => {
 				createdBy: "task",
 				evidenceJson: JSON.stringify({
 					compactedThroughMessageId: "session-warm-message",
-					decisions: ["We decided to use SQLite"],
-					openThreads: ["Should we invite the group?"],
-					todos: ["Buy beans tomorrow"],
-					topic: "sqlite, beans",
+					state: {
+						answers: [],
+						atmosphere: "Dry humor, short replies.",
+						commitments: [],
+						glossary: [],
+						people: [],
+						summary: "Warm session summary through 2026-11-13.",
+						topics: ["sqlite", "beans"],
+						version: 2,
+					},
 				}),
 				id: "mem-warm",
 				importance: 0.65,
@@ -193,10 +218,10 @@ describe("hybrid memory retrieval", () => {
 		]);
 		const text = await context.renderMemories("durable-session-warm");
 		if (text === undefined) throw new Error("Expected memory text");
-		expect(text).toContain("Recent conversation window:");
-		expect(text).toContain("Warm session state:");
-		expect(text).toContain("Topic: sqlite, beans");
+		expect(text).toContain("Conversation state:");
+		expect(text).toContain("- Topics: sqlite, beans");
 		expect(text).toContain("Known memories, most relevant first:");
+		expect(text).not.toContain("Recent conversation window:");
 		expect(text.length).toBeLessThanOrEqual(1_200);
 	});
 

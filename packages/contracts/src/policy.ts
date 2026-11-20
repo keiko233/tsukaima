@@ -245,6 +245,78 @@ export const conversationCompactionPresets = {
 
 export type ConversationCompactionPreset = keyof typeof conversationCompactionPresets;
 
+/**
+ * Cross-session awareness for the current speaker (DSH `crossSessionEnabled`,
+ * `crossRecentMinutes`, `crossRecentLimit`, `crossInjectMaxChars`, `crossPrivateToGroup`).
+ * The derived context is fail-closed: an unknown speaker yields nothing, and private chat text
+ * never reaches a group prompt unless `privateToGroup` is explicitly `text`.
+ */
+export const crossSessionPrivacySchema = z.enum(["none", "indicator", "text"]);
+export type CrossSessionPrivacy = z.infer<typeof crossSessionPrivacySchema>;
+
+export const crossSessionPolicySchema = z
+	.object({
+		enabled: z.boolean().default(true),
+		/** Look-back window for the speaker's activity in other chats. */
+		windowMinutes: z.number().int().min(1).max(10_080).default(120),
+		/** Maximum other conversations listed. */
+		maxEntries: z.number().int().min(0).max(20).default(4),
+		/** Character budget of the rendered cross-session block. */
+		maxChars: z.number().int().min(0).max(4_000).default(600),
+		/**
+		 * What a group prompt may learn about the speaker's private chats: `none` hides them,
+		 * `indicator` says only that a recent private chat exists, `text` allows snippets.
+		 */
+		privateToGroup: crossSessionPrivacySchema.default("indicator"),
+	})
+	.strict();
+
+export type CrossSessionPolicy = z.infer<typeof crossSessionPolicySchema>;
+
+export const defaultCrossSessionPolicy: CrossSessionPolicy = {
+	enabled: true,
+	maxChars: 600,
+	maxEntries: 4,
+	privateToGroup: "indicator",
+	windowMinutes: 120,
+};
+
+/**
+ * Background semantic memory consolidation. One idle-debounced durable job per conversation
+ * folds the settled message delta into the merged warm state and long-term memories. It runs
+ * when the conversation has been idle for `idleMs`, when `minNewMessages` unconsolidated
+ * messages accumulated, or at the latest `maxDelayMs` after the first pending message.
+ */
+export const memoryConsolidationPolicySchema = z
+	.object({
+		idleMs: z.number().int().min(0).default(90_000),
+		minNewMessages: z.number().int().min(1).default(30),
+		maxDelayMs: z.number().int().min(0).default(600_000),
+		/** Settled messages read per consolidation pass. */
+		maxBatchMessages: z.number().int().min(1).max(500).default(80),
+		/** A batch that fails this many times is dropped (watermark advanced) and audited. */
+		maxFailures: z.number().int().min(1).max(10).default(3),
+		/** Bound on the rolling summary carried in the warm state. */
+		summaryMaxChars: z.number().int().min(100).max(8_000).default(1_200),
+		maxPersonCards: z.number().int().min(0).max(100).default(16),
+		/** Recall earlier answers to recurring questions so replies stay consistent. */
+		qaRecallEnabled: z.boolean().default(true),
+	})
+	.strict();
+
+export type MemoryConsolidationPolicy = z.infer<typeof memoryConsolidationPolicySchema>;
+
+export const defaultMemoryConsolidationPolicy: MemoryConsolidationPolicy = {
+	idleMs: 90_000,
+	maxBatchMessages: 80,
+	maxDelayMs: 600_000,
+	maxFailures: 3,
+	maxPersonCards: 16,
+	minNewMessages: 30,
+	qaRecallEnabled: true,
+	summaryMaxChars: 1_200,
+};
+
 export const conversationPolicySchema = z
 	.object({
 		version: z.number().int().min(1).default(1),
@@ -328,6 +400,8 @@ export const conversationPolicySchema = z
 			reserveTokens: 16_384,
 			triggerTokens: 0,
 		}),
+		crossSession: crossSessionPolicySchema.default(defaultCrossSessionPolicy),
+		memoryConsolidation: memoryConsolidationPolicySchema.default(defaultMemoryConsolidationPolicy),
 	})
 	.strict();
 
@@ -403,6 +477,8 @@ export const defaultConversationPolicy: ConversationPolicy = {
 		reserveTokens: 16_384,
 		triggerTokens: 0,
 	},
+	crossSession: defaultCrossSessionPolicy,
+	memoryConsolidation: defaultMemoryConsolidationPolicy,
 };
 
 const triggerPolicyPatchSchema = z
@@ -486,6 +562,29 @@ const compactionPolicyPatchSchema = z
 	})
 	.strict();
 
+const crossSessionPolicyPatchSchema = z
+	.object({
+		enabled: z.boolean().optional(),
+		windowMinutes: z.number().int().min(1).max(10_080).optional(),
+		maxEntries: z.number().int().min(0).max(20).optional(),
+		maxChars: z.number().int().min(0).max(4_000).optional(),
+		privateToGroup: crossSessionPrivacySchema.optional(),
+	})
+	.strict();
+
+const memoryConsolidationPolicyPatchSchema = z
+	.object({
+		idleMs: z.number().int().min(0).optional(),
+		minNewMessages: z.number().int().min(1).optional(),
+		maxDelayMs: z.number().int().min(0).optional(),
+		maxBatchMessages: z.number().int().min(1).max(500).optional(),
+		maxFailures: z.number().int().min(1).max(10).optional(),
+		summaryMaxChars: z.number().int().min(100).max(8_000).optional(),
+		maxPersonCards: z.number().int().min(0).max(100).optional(),
+		qaRecallEnabled: z.boolean().optional(),
+	})
+	.strict();
+
 /** Explicit, strict patch: unknown keys are rejected rather than silently dropped. */
 export const conversationPolicyPatchSchema = z
 	.object({
@@ -511,6 +610,8 @@ export const conversationPolicyPatchSchema = z
 		generation: generationPolicyPatchSchema.optional(),
 		sidechat: sidechatPolicyPatchSchema.optional(),
 		compaction: compactionPolicyPatchSchema.optional(),
+		crossSession: crossSessionPolicyPatchSchema.optional(),
+		memoryConsolidation: memoryConsolidationPolicyPatchSchema.optional(),
 	})
 	.strict();
 

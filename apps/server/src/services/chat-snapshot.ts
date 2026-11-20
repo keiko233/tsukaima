@@ -7,7 +7,13 @@ import type {
 	ChatSnapshotPreview,
 	ChatSnapshotRow,
 } from "@tsukaima/contracts";
-import { chatSnapshots, conversations, memories, messages } from "@tsukaima/db";
+import {
+	chatSnapshots,
+	conversations,
+	memories,
+	memoryConsolidationState,
+	messages,
+} from "@tsukaima/db";
 import type { TsukaimaLifecycle } from "../lifecycle.ts";
 
 type ConversationDbRow = typeof conversations.$inferSelect;
@@ -497,6 +503,11 @@ export class ChatSnapshotService {
 						.run();
 				}
 			}
+			// The transcript is restored to the snapshot's visible state, so any consolidation
+			// watermark past it would hide restored messages from the next background pass.
+			tx.delete(memoryConsolidationState)
+				.where(eq(memoryConsolidationState.conversationId, record.conversationId))
+				.run();
 			tx.update(chatSnapshots)
 				.set({ appliedAt: now, status: "applied" })
 				.where(eq(chatSnapshots.id, record.id))

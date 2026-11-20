@@ -387,8 +387,10 @@ describe("WebUI chat and session service", () => {
 			expect(withoutCoding.messageCount).toBeGreaterThanOrEqual(2);
 			expect(withoutCoding.categories.messagesTokens).toBeGreaterThan(0);
 			expect(withoutCoding.categories.policyTokens).toBeGreaterThan(0);
-			expect(withoutCoding.categories.memoriesTokens).toBeGreaterThan(0);
+			// Recent messages only seed recall now; they are not injected as a memory tier.
+			expect(withoutCoding.categories.memoriesTokens).toBe(0);
 			expect(withoutCoding.memories.enabled).toBe(true);
+			expect(withoutCoding.memories.items).toHaveLength(0);
 			expect(withoutCoding.memories.recentCount).toBeGreaterThanOrEqual(1);
 			const codingTools = lifecycle.pluginHost.modelToolNames("self-iteration");
 			for (const toolName of codingTools) {

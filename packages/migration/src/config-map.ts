@@ -269,6 +269,44 @@ const PLUGIN_AREAS: Readonly<Record<string, DshConfigArea>> = {
 	"search-fetch": "search",
 };
 
+/**
+ * DSH cross-session keys (normalized) mapped onto `ConversationPolicy.crossSession`. Kept as
+ * plain strings so this package does not depend on `@tsukaima/contracts`.
+ */
+export const DSH_CROSS_SESSION_POLICY_FIELDS: Readonly<Record<string, string>> = {
+	crosssessionenabled: "enabled",
+	crossrecentminutes: "windowMinutes",
+	crossrecentlimit: "maxEntries",
+	crossinjectmaxchars: "maxChars",
+	crossprivatetogroup: "privateToGroup",
+};
+
+const CROSS_SESSION_POLICY_TARGET = "policies.conversation.crossSession";
+
+/**
+ * Build a `ConversationPolicyPatch["crossSession"]`-shaped object from mapped DSH leaves.
+ * `crossPrivateToGroup: true` maps to `text`; anything else fails closed to `none`.
+ * Out-of-range numbers are left for the policy schema to reject during import review.
+ */
+export function crossSessionPolicyPatchFromDsh(
+	leaves: readonly MappedConfigLeaf[],
+): Record<string, unknown> {
+	const patch: Record<string, unknown> = {};
+	for (const leaf of leaves) {
+		if (leaf.action !== "remap" && leaf.action !== "direct") continue;
+		const field = DSH_CROSS_SESSION_POLICY_FIELDS[normalizeKey(leaf.key)];
+		if (field === undefined) continue;
+		if (field === "privateToGroup") {
+			patch[field] = leaf.safeValue === true ? "text" : "none";
+		} else if (field === "enabled") {
+			if (typeof leaf.safeValue === "boolean") patch[field] = leaf.safeValue;
+		} else if (typeof leaf.safeValue === "number" && Number.isInteger(leaf.safeValue)) {
+			patch[field] = leaf.safeValue;
+		}
+	}
+	return patch;
+}
+
 const POLICY_KEYS = new Set<string>();
 for (const area of DSH_CONFIG_AREAS) {
 	for (const key of areaKeys(area)) POLICY_KEYS.add(key);
@@ -443,6 +481,20 @@ function mapLeaf(leaf: ConfigLeaf, prefix: string): MappedConfigLeaf {
 			redacted: true,
 			source,
 			target: `${definition.target}.${leaf.key}`,
+			valueClass,
+		};
+	}
+	const crossSessionField = DSH_CROSS_SESSION_POLICY_FIELDS[normalizedKey];
+	if (crossSessionField !== undefined) {
+		return {
+			action: "remap",
+			area,
+			key: leaf.key,
+			reason: "Maps DSH cross-session windows to conversation cross-session policy",
+			redacted: false,
+			safeValue: leaf.value,
+			source,
+			target: `${CROSS_SESSION_POLICY_TARGET}.${crossSessionField}`,
 			valueClass,
 		};
 	}

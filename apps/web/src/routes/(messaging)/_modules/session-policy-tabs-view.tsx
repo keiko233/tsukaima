@@ -11,7 +11,9 @@ import { m } from "@/paraglide/messages";
 import {
 	Field,
 	PolicyCompactionFields,
+	PolicyCrossSessionFields,
 	PolicyGenerationFields,
+	PolicyMemoryConsolidationFields,
 	PolicyPacingFields,
 	PolicySidechatFields,
 	Toggle,
@@ -376,6 +378,20 @@ export function PolicyPacingTabView({
 							{m.policy_section_generation()}
 						</h3>
 						<PolicyGenerationFields draft={draft} onChange={onChange} />
+					</div>
+
+					<div className="space-y-2 border-t border-border/60 pt-2.5">
+						<h3 className="text-xs font-semibold text-foreground">
+							{m.policy_section_cross_session()}
+						</h3>
+						<PolicyCrossSessionFields draft={draft} onChange={onChange} />
+					</div>
+
+					<div className="space-y-2 border-t border-border/60 pt-2.5">
+						<h3 className="text-xs font-semibold text-foreground">
+							{m.policy_section_memory_consolidation()}
+						</h3>
+						<PolicyMemoryConsolidationFields draft={draft} onChange={onChange} />
 					</div>
 				</>
 			)}
