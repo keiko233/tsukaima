@@ -250,14 +250,23 @@ upstream `VERSION`, and the chosen path:
 
 - A clean checkout with no local commits merges with `--ff-only` and schedules the standard
   one-minute update restart.
-- A checkout with local commits creates a governed `proposal` workspace. The workspace agent
-  merges the upstream ref inside its worktree and finalize merges that branch back with `--no-ff`
-  after a proposal exists.
+- A checkout with local commits creates a governed workspace. The server merges the upstream ref
+  in the workspace worktree, derives the patch and snapshot, and records a proposal; finalize
+  merges the reviewed commit back with `--no-ff` only after re-verifying that proposal.
 - Uncommitted changes are never merged automatically. Commit or discard them first.
 
-Finalize verifies that the upstream commit is an ancestor of the live `HEAD` before scheduling the
-restart. This changes the source checkout only; the host-side image build and container replacement
-remain operator-controlled as described above.
+Finalize first verifies that the live checkout is still on the recorded branch and commit, is
+clean, and that the upstream target commit is an ancestor of the workspace HEAD. It also
+re-derives the proposal patch and worktree snapshot, rejects stale or unverified evidence, and
+leaves an uncommitted workspace untouched. Only after those checks is the pending proposal marked
+approved and the exact reviewed commit merged into the live checkout. This changes the source
+checkout only; the host-side image build and container replacement remain operator-controlled as
+described above.
+
+Host preparation does not resolve merge conflicts and does not run repository checks. A conflict
+fails the start before a proposal or live change exists. The proposal records the exact diff and
+worktree snapshot with no fabricated check result; finalizing is the administrator's explicit
+approval and never auto-approves a model-authored change.
 
 The same card exposes `Fetch`, `Pull`, and `Push`. `Pull` is `--ff-only`, so a diverged branch fails
 instead of creating a merge commit. `Push` is off unless `TSUKAIMA_ALLOW_PUSH=true`, and the UI asks

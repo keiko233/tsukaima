@@ -110,13 +110,20 @@ first and counts commits on both sides.
 | Checkout state | Upgrade path |
 | --- | --- |
 | Clean, no local commits | Merge `origin/<branch>` with `--ff-only`, then schedule the update restart |
-| Local commits | Create a `proposal` workspace; the agent merges the upstream ref in its worktree and records the result |
+| Local commits | Create a governed workspace; the server merges the upstream ref in its worktree and records a snapshot-bound proposal |
 | Uncommitted changes | No automatic merge; commit or discard them first |
 
-Finalizing an upgrade re-checks that the upstream target commit is an ancestor of `HEAD`, then
-schedules the existing one-minute update window. The workspace's own branch is merged with
-`--no-ff`; uncommitted workspace changes are committed first. The host supervisor still owns
-the image/container switch.
+Finalizing an upgrade re-checks that the live checkout is still the recorded branch and commit,
+is clean, and that the upstream target commit is an ancestor of both the workspace HEAD and the
+final live `HEAD`. The workspace must be clean and its proposal evidence must still match the
+re-derived patch and snapshot. Only then is the pending proposal marked approved and the exact
+reviewed commit merged with `--no-ff`; uncommitted workspace changes are rejected, never committed
+automatically. The host supervisor still owns the image/container switch.
+
+Host preparation does not resolve merge conflicts and does not run repository checks. A conflict
+fails the start before a proposal or live change exists. Proposal evidence binds the exact diff
+and worktree snapshot without inventing a check result; the administrator's explicit finalize is
+the approval gate, and no model-authored change is approved automatically.
 
 ## Shared delivery
 
