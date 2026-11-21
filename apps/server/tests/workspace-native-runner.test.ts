@@ -12,7 +12,7 @@ import {
 import { codingTasks, messages, workspaceSessions, type TsukaimaDatabase } from "@tsukaima/db";
 import { loadConfig } from "../src/config.ts";
 import { TsukaimaLifecycle } from "../src/lifecycle.ts";
-import { abortSessionRun } from "../src/services/webui.ts";
+import { abortSessionRun, getSessionContextStats } from "../src/services/webui.ts";
 
 const directories: string[] = [];
 const lifecycles: TsukaimaLifecycle[] = [];
@@ -246,6 +246,10 @@ describe("workspace native Pi integration", () => {
 		expect(requests[0]?.some((name) => name.startsWith("self-iteration"))).toBe(false);
 		expect(requests[0]).not.toContain("db_query");
 		expect(requests[0]).not.toContain("tool_search");
+		const context = await getSessionContextStats(lifecycle, workspace.sessionId);
+		expect(context?.tools.map((tool) => tool.name).sort()).toEqual([...requests[0]!].sort());
+		expect(context?.personaName).toBeNull();
+		expect(context?.usedTokens).toBeGreaterThan(0);
 	}, 60_000);
 
 	test("abort stops an active native run and a repeated message id is idempotent", async () => {

@@ -421,6 +421,10 @@ export async function getSessionContextStats(
 		.limit(1);
 	if (session === undefined) return null;
 
+	if ((session.chatKind ?? session.sessionKind) === "workspace") {
+		return lifecycle.workspaceNative.contextStats(sessionId);
+	}
+
 	const policy = await lifecycle.conversationPolicy.ensureHostPolicy(
 		sessionId,
 		session.durableConversationId,

@@ -10,7 +10,7 @@ import {
 	type SandboxExecutor,
 } from "@tsukaima/coding";
 import type { ConversationAgentSettings, LiveRunSnapshot, ModelPort } from "@tsukaima/core";
-import type { WorkspaceTodoStatus } from "@tsukaima/contracts";
+import type { SessionContextStats, WorkspaceTodoStatus } from "@tsukaima/contracts";
 import {
 	chatObjects,
 	codingTasks,
@@ -27,6 +27,7 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { calculateContextTokens, estimateTextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { Type } from "typebox";
 import type { Logger } from "../logging.ts";
 import type { WorkspaceReferenceService } from "./workspace-references.ts";
@@ -371,6 +372,75 @@ export class WorkspaceNativeRunner {
 			await native.session.abort();
 			return true;
 		});
+	}
+
+	contextStats(sessionId: string): SessionContextStats | null {
+		const runner = this.#sessions.get(sessionId)?.session.runner;
+		if (runner === undefined) return null;
+		const session = runner.session;
+		const model = session.model;
+		if (model === undefined) return null;
+		const branch = session.sessionManager.getBranch();
+		const compacted = branch.some((entry) => entry.type === "compaction");
+		const compaction = session.settingsManager.getCompactionSettings(model);
+		const contextWindow = model.contextWindow;
+		const bufferTokens = compaction.enabled ? Math.min(contextWindow, compaction.reserveTokens) : 0;
+		const tools = session.getActiveToolNames().map((name) => {
+			const definition = session.getToolDefinition(name);
+			const description = definition?.description ?? "";
+			return {
+				deferred: false,
+				description,
+				name,
+				tokens: estimateTextTokens(
+					JSON.stringify({ description, name, parameters: definition?.parameters }),
+				),
+			};
+		});
+		const toolsTokens = tools.reduce((total, tool) => total + tool.tokens, 0);
+		const systemTokens = estimateTextTokens(session.systemPrompt);
+		const base = toolsTokens + systemTokens;
+		const usage = session.getContextUsage()?.tokens;
+		const hasProviderUsage = session.messages.some(
+			(message) => message.role === "assistant" && calculateContextTokens(message.usage) > 0,
+		);
+		const usedTokens =
+			usage != null && hasProviderUsage
+				? Math.max(base, usage)
+				: base + estimateTextTokens(JSON.stringify(session.messages));
+		return {
+			autocompact: {
+				backgroundTokens: 0,
+				bufferTokens,
+				enabled: compaction.enabled,
+				keepRecentTokens: compaction.keepRecentTokens,
+			},
+			categories: {
+				memoriesTokens: 0,
+				messagesTokens: usedTokens - base,
+				otherSystemTokens: systemTokens,
+				personaTokens: 0,
+				policyTokens: 0,
+				toolsTokens,
+				turnContextTokens: 0,
+			},
+			compacted,
+			contextWindow,
+			deferredToolsTokens: 0,
+			freeSpaceTokens: Math.max(0, contextWindow - usedTokens - bufferTokens),
+			measuredUsageTokens: null,
+			memories: { enabled: false, items: [], recentCount: 0, warmTopics: [] },
+			messageCount: session.messages.length,
+			model: { modelId: model.id, providerId: model.provider },
+			personaName: null,
+			sections: [
+				{ key: "system", label: "System", text: session.systemPrompt, tokens: systemTokens },
+			],
+			tokenSource: "estimated",
+			tools,
+			usedPercent: contextWindow > 0 ? Math.min(100, (usedTokens / contextWindow) * 100) : 0,
+			usedTokens,
+		};
 	}
 
 	async dispose(): Promise<void> {
