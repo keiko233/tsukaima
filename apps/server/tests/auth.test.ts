@@ -536,6 +536,7 @@ describe("admin auth", () => {
 			"users/list": {},
 			"workspace/create": { goal: "Sample workspace" },
 			"workspace/get": { sessionId: "session-1" },
+			"workspace/git": { sessionId: "session-1" },
 			"workspace/list": {},
 			"workspace/todos": { sessionId: "session-1" },
 			"workspace/update": { sessionId: "session-1", tags: ["patch"] },

@@ -14,8 +14,17 @@ import { ContextPanel } from "./context-panel";
 import { SessionModelView } from "./session-model-view";
 import type { InspectorTab } from "./session-inspector-sidebar";
 import { SessionSchedulesView } from "./session-schedules-view";
+import { WorkspaceGitPanel } from "./workspace-git-panel";
 
-const WORKSPACE_TABS = ["context", "model", "todos", "sessions", "data", "schedules"] as const;
+const WORKSPACE_TABS = [
+	"context",
+	"model",
+	"todos",
+	"sessions",
+	"git",
+	"data",
+	"schedules",
+] as const;
 type WorkspaceTab = (typeof WORKSPACE_TABS)[number];
 
 function workspaceTab(tab: InspectorTab): WorkspaceTab {
@@ -23,6 +32,7 @@ function workspaceTab(tab: InspectorTab): WorkspaceTab {
 		tab === "todos" ||
 		tab === "sessions" ||
 		tab === "data" ||
+		tab === "git" ||
 		tab === "schedules"
 		? tab
 		: "context";
@@ -124,6 +134,7 @@ export function WorkspaceInspectorTabs({
 						value === "todos" ||
 						value === "sessions" ||
 						value === "data" ||
+						value === "git" ||
 						value === "schedules"
 					) {
 						onTabChange(value);
@@ -166,6 +177,12 @@ export function WorkspaceInspectorTabs({
 							{m.workspace_inspector_sessions()}
 						</TabsTrigger>
 						<TabsTrigger
+							value="git"
+							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
+						>
+							Git
+						</TabsTrigger>
+						<TabsTrigger
 							value="data"
 							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
 						>
@@ -203,6 +220,11 @@ export function WorkspaceInspectorTabs({
 				</TabsContent>
 				<TabsContent value="model" className="mt-0 flex min-h-0 flex-1 flex-col">
 					<SessionModelView sessionId={session.id} surface="workspace" />
+				</TabsContent>
+				<TabsContent value="git" className="mt-0 flex min-h-0 flex-1 flex-col">
+					{selected === "git" ? (
+						<WorkspaceGitPanel key={session.id} sessionId={session.id} />
+					) : null}
 				</TabsContent>
 				<TabsContent value="todos" className="mt-0 min-h-0 flex-1 overflow-y-auto p-3">
 					{todoItems.length === 0 ? (

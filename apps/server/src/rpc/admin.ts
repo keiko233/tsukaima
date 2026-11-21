@@ -759,6 +759,9 @@ export const adminRouter = {
 		get: adminBase.admin.workspace.get.handler(async ({ context, input }) =>
 			context.lifecycle.workspace.get(input.sessionId),
 		),
+		git: adminBase.admin.workspace.git.handler(async ({ context, input }) =>
+			context.lifecycle.workspace.git(input.sessionId, input.path),
+		),
 		list: adminBase.admin.workspace.list.handler(async ({ context, input }) => {
 			const includeArchived = input?.includeArchived;
 			return context.lifecycle.workspace.list(

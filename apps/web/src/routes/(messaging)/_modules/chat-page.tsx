@@ -1,7 +1,7 @@
 "use client";
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, Circle, MessageCircle, PanelRight } from "lucide-react";
+import { ChevronLeft, Circle, MessageCircle, PanelRight, Square } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import { orpc, type DeliveryStatus } from "@/lib/api";
@@ -75,13 +75,20 @@ export function ChatPage({
 	const setSurfaceInspectorTab = (tab: InspectorTab) => {
 		if (surface === "workspace") {
 			setInspectorTab(
-				tab === "model" || tab === "todos" || tab === "sessions" || tab === "data"
+				tab === "model" ||
+					tab === "todos" ||
+					tab === "sessions" ||
+					tab === "data" ||
+					tab === "git" ||
+					tab === "schedules"
 					? tab
 					: "context",
 			);
 			return;
 		}
-		setInspectorTab(tab === "todos" || tab === "sessions" || tab === "data" ? "context" : tab);
+		setInspectorTab(
+			tab === "todos" || tab === "sessions" || tab === "data" || tab === "git" ? "context" : tab,
+		);
 	};
 	const liveRun = useLiveRun(sessionId);
 	// The live run's elapsed label is a wall clock, not the render time of a message. Tick it only
@@ -135,6 +142,25 @@ export function ChatPage({
 		[messages.data],
 	);
 	const diagnostics = useQuery(orpc.admin.diagnostics.status.queryOptions());
+	const abort = useMutation(
+		orpc.admin.sessions.abort.mutationOptions({
+			onError: (error) =>
+				toast.error(m.command_abort_failed(), { description: errorMessage(error) }),
+			onSuccess: async ({ cancelledPendingOutput }) => {
+				toast.success(
+					cancelledPendingOutput ? m.command_abort_done_cancelled() : m.command_abort_done(),
+				);
+				await Promise.all([
+					queryClient.invalidateQueries({
+						queryKey: orpc.admin.sessions.contextStats.key({ input: { sessionId } }),
+					}),
+					queryClient.invalidateQueries({
+						queryKey: orpc.admin.sessions.messages.key({ input: { sessionId } }),
+					}),
+				]);
+			},
+		}),
+	);
 	const send = useMutation(
 		orpc.admin.sessions.send.mutationOptions({
 			onError: (error) =>
@@ -288,6 +314,19 @@ export function ChatPage({
 					) : null}
 				</div>
 				<div className="flex shrink-0 items-center gap-1">
+					{surface === "workspace" ? (
+						<Button
+							type="button"
+							variant={liveRun === undefined ? "ghost" : "danger"}
+							size="xs"
+							disabled={abort.isPending}
+							aria-label={abort.isPending ? m.command_abort_running() : m.command_abort_action()}
+							title={abort.isPending ? m.command_abort_running() : m.command_abort_action()}
+							onClick={() => abort.mutate({ sessionId })}
+						>
+							<Square aria-hidden="true" className="size-3.5" />
+						</Button>
+					) : null}
 					<Button
 						type="button"
 						variant={contextOpen ? "secondary" : "ghost"}

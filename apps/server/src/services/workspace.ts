@@ -26,6 +26,7 @@ import { DEFAULT_PROMPTS } from "./prompt-defaults.ts";
 import type { SessionMessagingService } from "./session-messaging.ts";
 import type { WorkspaceReferenceService } from "./workspace-references.ts";
 import type { WorkspaceTodoService } from "./workspace-todos.ts";
+import { inspectWorkspaceGit } from "./workspace-git.ts";
 
 const WORKSPACE_CAPABILITIES = ["coding"];
 const DEFAULT_WORKSPACE_TITLE = "New workspace";
@@ -717,6 +718,16 @@ export class WorkspaceService {
 
 	async listTodos(sessionId: string): Promise<WorkspaceTodo[]> {
 		return this.#todos.list(sessionId);
+	}
+
+	async git(sessionId: string, path?: string) {
+		const [row] = await this.#db()
+			.select({ worktree: codingTasks.worktreePath })
+			.from(workspaceSessions)
+			.innerJoin(codingTasks, eq(codingTasks.id, workspaceSessions.taskId))
+			.where(eq(workspaceSessions.id, sessionId))
+			.limit(1);
+		return row?.worktree ? inspectWorkspaceGit(row.worktree, path) : null;
 	}
 
 	async #proposals(taskId: string | null): Promise<WorkspaceProposalSummary[]> {

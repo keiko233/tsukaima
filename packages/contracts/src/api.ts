@@ -1123,6 +1123,18 @@ export const sessionsSearchOutputSchema = z.array(
 
 export const workspaceGetInputSchema = z.object({ sessionId: z.string().min(1) });
 
+const workspaceGitInputSchema = workspaceGetInputSchema.extend({
+	path: z.string().min(1).max(4096).optional(),
+});
+
+const workspaceGitOutputSchema = z.object({
+	files: z.array(z.object({ path: z.string(), status: z.string() })),
+	truncated: z.boolean(),
+	file: z
+		.object({ code: z.string().nullable(), diff: z.string(), truncated: z.boolean() })
+		.nullable(),
+});
+
 export const workspaceListInputSchema = z
 	.object({ includeArchived: z.boolean().optional() })
 	.optional();
@@ -2057,6 +2069,7 @@ export const appContract = oc.router({
 				.output(createLocalChatOutputSchema.extend({ taskId: z.string().nullable() }))
 				.meta({ audit: true }),
 			get: oc.input(workspaceGetInputSchema).output(workspaceDetailSchema.nullable()),
+			git: oc.input(workspaceGitInputSchema).output(workspaceGitOutputSchema.nullable()),
 			list: oc.input(workspaceListInputSchema).output(z.array(workspaceSummarySchema)),
 			todos: oc
 				.input(workspaceTodosInputSchema)

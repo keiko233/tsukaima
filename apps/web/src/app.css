@@ -268,6 +268,12 @@
 		text-decoration: var(--shiki-light-text-decoration, none);
 	}
 
+	.dark .workspace-git-code .shiki,
+	.dark .workspace-git-code .shiki span {
+		background-color: var(--shiki-dark-bg, transparent) !important;
+		color: var(--shiki-dark) !important;
+	}
+
 	.dark .runtime-log-token {
 		background-color: var(--shiki-dark-bg, transparent) !important;
 		color: var(--shiki-dark, var(--runtime-log-light-color, currentColor)) !important;

@@ -39,7 +39,8 @@ export type InspectorTab =
 	| "schedules"
 	| "todos"
 	| "sessions"
-	| "data";
+	| "data"
+	| "git";
 
 const INSPECTOR_TAB_KEY = "tsukaima.webui.inspector-tab";
 
@@ -54,7 +55,8 @@ function isInspectorTab(value: string | null): value is InspectorTab {
 		value === "schedules" ||
 		value === "todos" ||
 		value === "sessions" ||
-		value === "data"
+		value === "data" ||
+		value === "git"
 	);
 }
 
@@ -66,12 +68,15 @@ export function storedInspectorTab(surface: "chat" | "workspace" = "chat"): Insp
 				return raw === "todos" ||
 					raw === "sessions" ||
 					raw === "data" ||
+					raw === "git" ||
 					raw === "schedules" ||
 					raw === "model"
 					? raw
 					: "context";
 			}
-			return raw === "todos" || raw === "sessions" || raw === "data" ? "context" : raw;
+			return raw === "todos" || raw === "sessions" || raw === "data" || raw === "git"
+				? "context"
+				: raw;
 		}
 		return "context";
 	} catch {
