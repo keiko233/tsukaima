@@ -1,0 +1,16 @@
+{
+	"plugin_name": "Agent Skills",
+	"plugin_description": "从配置的目录按需加载 Agent Skills，并提供给聊天与工作区回合。",
+	"panel_skills": "技能",
+	"skills": "技能",
+	"enabled": "已启用",
+	"roots": "根目录",
+	"diagnostics": "诊断",
+	"rescan": "重新扫描",
+	"rescanned": "技能目录已重新扫描",
+	"empty": "配置的根目录中没有可用技能。",
+	"no_paths_hint": "请设置 TSUKAIMA_SKILLS_PATHS，或在插件配置中添加技能根目录。",
+	"preview": "预览",
+	"disabled_badge": "已停用",
+	"action_failed": "技能操作失败"
+}

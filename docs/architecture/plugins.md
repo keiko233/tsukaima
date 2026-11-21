@@ -97,6 +97,8 @@ Implemented:
 - `openai-compatible`: OpenAI-compatible/Magpie model-provider factory. Owns its API key, base
   URL, discovered model catalog, per-model enablement/capabilities, and the provider status. The
   host only selects the provider id; other plugins query enabled models through the SDK catalog.
+- `skills`: on-demand Agent Skills discovery, a bounded turn-context catalog, and read-only
+  `load_skill` / `read_skill_resource` text loaders. See [skills.md](../specs/skills.md).
 
 Planned first-party set:
 

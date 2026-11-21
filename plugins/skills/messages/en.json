@@ -1,0 +1,16 @@
+{
+	"plugin_name": "Agent Skills",
+	"plugin_description": "Load on-demand Agent Skills from configured folders and expose them to chat and workspace turns.",
+	"panel_skills": "Skills",
+	"skills": "Skills",
+	"enabled": "Enabled",
+	"roots": "Roots",
+	"diagnostics": "Diagnostics",
+	"rescan": "Rescan",
+	"rescanned": "Skill catalog rescanned",
+	"empty": "No skills are available in the configured roots.",
+	"no_paths_hint": "Set TSUKAIMA_SKILLS_PATHS or add skill roots in the plugin config.",
+	"preview": "Preview",
+	"disabled_badge": "Disabled",
+	"action_failed": "Skill action failed"
+}
