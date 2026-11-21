@@ -386,4 +386,39 @@ describe("plugin host", () => {
 			const traceEntry = entries.find((entry) => entry.message === "plugin trace probe");
 			expect(traceEntry?.fields.apiKey).toBe("[REDACTED]");
 		}));
+
+	test("normalizes model tool names with clean namespaces and resolves aliases", async () =>
+		withApp({}, async (lifecycle) => {
+			const memoryTools = lifecycle.pluginHost.modelToolNames("memory");
+			expect(memoryTools).toEqual([
+				"memory_recall",
+				"memory_save",
+				"memory_update",
+				"memory_forget",
+			]);
+
+			const stickerTools = lifecycle.pluginHost.modelToolNames("sticker-meme");
+			expect(stickerTools).toContain("sticker-meme_search");
+			expect(stickerTools).toContain("sticker-meme_send");
+			expect(stickerTools).toContain("sticker-meme_choose");
+
+			const napcatTools = lifecycle.pluginHost.modelToolNames("onebot-napcat");
+			expect(napcatTools).toContain("onebot-napcat_send");
+			expect(napcatTools).toContain("onebot-napcat_poke");
+			expect(napcatTools).toContain("onebot-napcat_react");
+			expect(napcatTools).toContain("onebot-napcat_listTargets");
+
+			// Backward-compatible resolution
+			expect(lifecycle.pluginHost.resolveModelToolName("memory_save")).toBe("memory.save");
+			expect(lifecycle.pluginHost.resolveModelToolName("memory.save")).toBe("memory.save");
+			expect(lifecycle.pluginHost.resolveModelToolName("save")).toBe("memory.save");
+			expect(lifecycle.pluginHost.resolveModelToolName("onebot-napcat_send")).toBe(
+				"onebot-napcat.send",
+			);
+			expect(lifecycle.pluginHost.resolveModelToolName("sticker-meme_send")).toBe(
+				"sticker-meme.send",
+			);
+			// Ambiguous short name "send" does not resolve to either
+			expect(lifecycle.pluginHost.resolveModelToolName("send")).toBeUndefined();
+		}));
 });

@@ -213,11 +213,11 @@ describe("tool policy", () => {
 		expect(extension.tools).toEqual([
 			expect.objectContaining({
 				deferred: true,
-				name: "lazy",
+				name: "demo_lazy",
 				surface: "coding",
 			}),
 			expect.objectContaining({
-				name: "eager",
+				name: "demo_eager",
 				surface: "chat",
 			}),
 		]);
