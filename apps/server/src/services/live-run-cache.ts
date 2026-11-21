@@ -8,7 +8,9 @@ const STATE_TTL_MS = 30 * 60_000;
 /** The final state of one answer, used to keep its process chain readable after `pi.live` clears. */
 const FINAL_TTL_MS = 7 * 24 * 60 * 60_000;
 const STREAM_TTL_MS = STATE_TTL_MS;
-const STREAM_MAX_EVENTS = 500;
+/** Keep replay useful without letting one run's stream value grow without bound. */
+const STREAM_MAX_EVENTS = 100;
+const STREAM_MAX_BYTES = 256 * 1024;
 const STATE_PREFIX = "run.state.";
 const FINAL_PREFIX = "run.final.";
 const CHANNEL = "run";
@@ -25,6 +27,29 @@ export interface LiveRunFinal {
 	readonly entryId: string;
 	readonly sessionId: string;
 	readonly steps: readonly RunStep[];
+}
+
+interface PendingWaiter {
+	readonly reject: (error: unknown) => void;
+	readonly resolve: (update: LiveRunUpdate | undefined) => void;
+}
+
+interface PendingCommit {
+	next: LiveRunState;
+	patch: LiveRunPatch;
+	readonly waiters: PendingWaiter[];
+	update: LiveRunUpdate;
+}
+
+interface QueuedRecord {
+	readonly reject: (error: unknown) => void;
+	readonly resolve: (update: LiveRunUpdate | undefined) => void;
+	readonly snapshot: LiveRunSnapshot;
+}
+
+interface Hydration {
+	readonly queued: QueuedRecord[];
+	ready: Promise<void>;
 }
 
 function phaseOf(
@@ -237,36 +262,42 @@ export class LiveRunCache {
 	 * would store nothing.
 	 */
 	readonly #process = new Map<string, LiveRunState>();
+	/** Last state actually persisted, which is the base every streamed patch is relative to. */
+	readonly #published = new Map<string, LiveRunState>();
 	readonly #timelines = new Map<string, LiveRunTimeline>();
 	/** Stable run identity per session, so a replaced watcher does not restart the timeline. */
 	readonly #runIds = new Map<string, string>();
-	readonly #queues = new Map<string, Promise<void>>();
+	readonly #pending = new Map<string, PendingCommit>();
+	readonly #flushing = new Map<string, Promise<void>>();
+	readonly #flushScheduled = new Set<string>();
+	readonly #hydrated = new Set<string>();
+	readonly #hydrations = new Map<string, Hydration>();
 
 	constructor(cache: KeyvCache) {
 		this.#cache = cache;
 	}
 
-	/** Store one observation, in per-session commit order. Resolves after the event is published. */
-	async record(sessionId: string, snapshot: LiveRunSnapshot): Promise<LiveRunUpdate | undefined> {
-		const previous = this.#queues.get(sessionId) ?? Promise.resolve();
-		const current = previous.then(() => this.#recordNow(sessionId, snapshot));
-		const tail = current.then(
-			() => undefined,
-			() => undefined,
-		);
-		this.#queues.set(sessionId, tail);
-		try {
-			return await current;
-		} finally {
-			if (this.#queues.get(sessionId) === tail) this.#queues.delete(sessionId);
-		}
+	/**
+	 * Store one observation. The timeline observes synchronously, so no turn transition or
+	 * settle is lost, while SQLite persistence only keeps the latest pending state/patch.
+	 */
+	record(sessionId: string, snapshot: LiveRunSnapshot): Promise<LiveRunUpdate | undefined> {
+		if (this.#hydrated.has(sessionId)) return this.#recordObserved(sessionId, snapshot);
+		const hydration = this.#hydrationFor(sessionId);
+		return new Promise((resolve, reject) => {
+			hydration.queued.push({ reject, resolve, snapshot });
+		});
 	}
 
 	async snapshot(sessionId: string): Promise<LiveRunState | undefined> {
 		const memory = this.#last.get(sessionId);
 		if (memory !== undefined) return memory;
 		const stored = await this.#cache.get<LiveRunState>(`${STATE_PREFIX}${sessionId}`);
-		if (stored !== undefined) this.#last.set(sessionId, stored);
+		if (stored !== undefined) {
+			this.#last.set(sessionId, stored);
+			this.#published.set(sessionId, stored);
+			this.#hydrated.add(sessionId);
+		}
 		return stored;
 	}
 
@@ -286,7 +317,7 @@ export class LiveRunCache {
 	async finalizeAnswer(sessionId: string, entryId: string): Promise<LiveRunFinal | undefined> {
 		// A live commit can still be queued when the durable answer callback fires. Let it land
 		// first: the clean settle keeps the process snapshot, and a failure keeps its reason.
-		await this.#queues.get(sessionId);
+		await this.#drain(sessionId);
 		const current = await this.snapshot(sessionId);
 		const state =
 			current?.failure === undefined
@@ -315,10 +346,7 @@ export class LiveRunCache {
 		sessionId: string,
 		afterRevision = 0,
 	): Promise<readonly { patch: LiveRunPatch; revision: number; sessionId: string }[]> {
-		const stream = this.#cache.stream(`run.${sessionId}.events`, {
-			maxEvents: STREAM_MAX_EVENTS,
-			ttlMs: STREAM_TTL_MS,
-		});
+		const stream = this.#stream(sessionId);
 		const events = await stream.read<{
 			patch: LiveRunPatch;
 			revision: number;
@@ -338,14 +366,76 @@ export class LiveRunCache {
 
 	/** Wait for queued commits before the cache handle closes under them. */
 	async close(): Promise<void> {
-		await Promise.allSettled(this.#queues.values());
+		const sessionIds = new Set([
+			...this.#pending.keys(),
+			...this.#flushing.keys(),
+			...this.#hydrations.keys(),
+		]);
+		await Promise.allSettled([...this.#hydrations.values()].map((hydration) => hydration.ready));
+		await Promise.all([...sessionIds].map(async (sessionId) => await this.#drain(sessionId)));
 	}
 
-	async #recordNow(
+	#stream(sessionId: string) {
+		return this.#cache.stream(`run.${sessionId}.events`, {
+			maxBytes: STREAM_MAX_BYTES,
+			maxEvents: STREAM_MAX_EVENTS,
+			ttlMs: STREAM_TTL_MS,
+		});
+	}
+
+	#hydrationFor(sessionId: string): Hydration {
+		const existing = this.#hydrations.get(sessionId);
+		if (existing !== undefined) return existing;
+		const hydration: Hydration = { queued: [], ready: Promise.resolve() };
+		hydration.ready = (async () => {
+			try {
+				if (!this.#last.has(sessionId)) {
+					const stored = await this.#cache.get<LiveRunState>(`${STATE_PREFIX}${sessionId}`);
+					if (!this.#last.has(sessionId) && stored !== undefined) {
+						this.#last.set(sessionId, stored);
+						this.#published.set(sessionId, stored);
+					}
+				}
+				this.#hydrated.add(sessionId);
+				// A same-tick burst queues here, then observes in order before one flush.
+				for (const queued of hydration.queued.splice(0)) {
+					void this.#recordObserved(sessionId, queued.snapshot).then(queued.resolve, queued.reject);
+				}
+			} catch (error) {
+				this.#hydrated.add(sessionId);
+				for (const queued of hydration.queued.splice(0)) queued.reject(error);
+			} finally {
+				if (this.#hydrations.get(sessionId) === hydration) {
+					this.#hydrations.delete(sessionId);
+				}
+			}
+		})();
+		this.#hydrations.set(sessionId, hydration);
+		return hydration;
+	}
+
+	async #drain(sessionId: string): Promise<void> {
+		const hydration = this.#hydrations.get(sessionId);
+		if (hydration !== undefined) await hydration.ready.catch(() => undefined);
+		for (;;) {
+			const active = this.#flushing.get(sessionId);
+			if (active !== undefined) {
+				await active.catch(() => undefined);
+				continue;
+			}
+			if (this.#pending.has(sessionId)) {
+				await this.#startFlush(sessionId).catch(() => undefined);
+				continue;
+			}
+			return;
+		}
+	}
+
+	#recordObserved(
 		sessionId: string,
 		snapshot: LiveRunSnapshot,
 	): Promise<LiveRunUpdate | undefined> {
-		const previous = await this.snapshot(sessionId);
+		const previous = this.#last.get(sessionId);
 		const previousRunId = this.#runIds.get(sessionId);
 		const newRun = startsNewRun(previous, previousRunId, snapshot);
 		let timeline = this.#timelines.get(sessionId);
@@ -395,26 +485,95 @@ export class LiveRunCache {
 			// `finalizeAnswer`, which runs after the durable answer entry exists.
 			this.#process.set(sessionId, next);
 		}
-		const patch = buildPatch(previous, next);
-		if (!patchHasChange(patch)) {
-			this.#last.set(sessionId, next);
-			return undefined;
-		}
-
-		await this.#cache.set(`${STATE_PREFIX}${sessionId}`, next, { ttlMs: STATE_TTL_MS });
 		this.#last.set(sessionId, next);
-		const stream = this.#cache.stream(`run.${sessionId}.events`, {
-			maxEvents: STREAM_MAX_EVENTS,
-			ttlMs: STREAM_TTL_MS,
-		});
-		await stream.append({ patch, revision: next.revision ?? 0, sessionId });
+
+		// The patch is always relative to the last persisted state. When a burst coalesces
+		// several observations, the latest patch therefore carries all of their changes.
+		const patch = buildPatch(this.#published.get(sessionId), next);
+		if (!patchHasChange(patch)) {
+			const pending = this.#pending.get(sessionId);
+			if (pending !== undefined) {
+				this.#pending.delete(sessionId);
+				for (const waiter of pending.waiters.splice(0)) waiter.resolve(undefined);
+			}
+			return Promise.resolve(undefined);
+		}
 		const update: LiveRunUpdate = {
 			patch,
 			revision: next.revision ?? 0,
 			sessionId,
 			state: next,
 		};
-		await this.#cache.publish(CHANNEL, update);
-		return update;
+		const pending = this.#pending.get(sessionId);
+		if (pending !== undefined) {
+			pending.next = next;
+			pending.patch = patch;
+			pending.update = update;
+			return new Promise((resolve, reject) => pending.waiters.push({ reject, resolve }));
+		}
+		const created: PendingCommit = { next, patch, update, waiters: [] };
+		this.#pending.set(sessionId, created);
+		const result = new Promise<LiveRunUpdate | undefined>((resolve, reject) =>
+			created.waiters.push({ reject, resolve }),
+		);
+		this.#requestFlush(sessionId);
+		return result;
+	}
+
+	#requestFlush(sessionId: string): void {
+		if (this.#flushScheduled.has(sessionId) || this.#flushing.has(sessionId)) return;
+		this.#flushScheduled.add(sessionId);
+		queueMicrotask(() => {
+			this.#flushScheduled.delete(sessionId);
+			if (this.#flushing.has(sessionId) || !this.#pending.has(sessionId)) return;
+			void this.#startFlush(sessionId);
+		});
+	}
+
+	#startFlush(sessionId: string): Promise<void> {
+		const existing = this.#flushing.get(sessionId);
+		if (existing !== undefined) return existing;
+		const task = this.#flushLoop(sessionId);
+		this.#flushing.set(sessionId, task);
+		void task.then(
+			() => {
+				if (this.#flushing.get(sessionId) === task) this.#flushing.delete(sessionId);
+				if (this.#pending.has(sessionId)) this.#requestFlush(sessionId);
+			},
+			() => {
+				if (this.#flushing.get(sessionId) === task) this.#flushing.delete(sessionId);
+				if (this.#pending.has(sessionId)) this.#requestFlush(sessionId);
+			},
+		);
+		return task;
+	}
+
+	async #flushLoop(sessionId: string): Promise<void> {
+		for (;;) {
+			const pending = this.#pending.get(sessionId);
+			if (pending === undefined) return;
+			this.#pending.delete(sessionId);
+			await this.#persist(sessionId, pending);
+		}
+	}
+
+	async #persist(sessionId: string, pending: PendingCommit): Promise<void> {
+		const waiters = pending.waiters.splice(0);
+		try {
+			await this.#cache.set(`${STATE_PREFIX}${sessionId}`, pending.next, {
+				ttlMs: STATE_TTL_MS,
+			});
+			this.#published.set(sessionId, pending.next);
+			await this.#stream(sessionId).append({
+				patch: pending.patch,
+				revision: pending.next.revision ?? 0,
+				sessionId,
+			});
+			await this.#cache.publish(CHANNEL, pending.update);
+			for (const waiter of waiters) waiter.resolve(pending.update);
+		} catch (error) {
+			for (const waiter of waiters) waiter.reject(error);
+			throw error;
+		}
 	}
 }

@@ -295,6 +295,47 @@ describe("LiveRunCache", () => {
 		expect(final?.steps.map((step) => step.kind)).toEqual(["model", "thinking", "text"]);
 	});
 
+	test("coalesces a same-tick record burst without losing the settled answer", async () => {
+		const { cache, live } = setup();
+		const model = { modelId: "model-1", providerId: "provider-1" };
+		const burst = Array.from({ length: 20 }, (_, index) =>
+			live.record(
+				"session-burst",
+				snapshot({
+					attempt: 1,
+					generationStartedAtMs: 1_100,
+					model,
+					partialText: "x".repeat(index + 1),
+				}),
+			),
+		);
+		const settled = live.record(
+			"session-burst",
+			snapshot({
+				attempt: 1,
+				generationStartedAtMs: 1_100,
+				model,
+				partialText: "the final answer is complete.",
+				settled: true,
+			}),
+		);
+		// Finalization must flush everything still pending, not just the last awaited record.
+		const final = await live.finalizeAnswer("session-burst", "entry-burst");
+		await Promise.all([...burst, settled]);
+
+		expect(final?.steps.at(-1)).toMatchObject({
+			kind: "text",
+			text: "the final answer is complete.",
+		});
+		const state = await live.snapshot("session-burst");
+		expect(state).toMatchObject({ settled: true });
+		expect(state?.steps?.at(-1)).toMatchObject({
+			kind: "text",
+			text: "the final answer is complete.",
+		});
+		expect(cache.stats().streamAppends).toBeLessThan(burst.length + 1);
+	});
+
 	test("replays deltas after a revision", async () => {
 		const { live } = setup();
 		await live.record("session-1", snapshot());

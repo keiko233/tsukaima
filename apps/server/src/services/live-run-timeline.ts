@@ -3,10 +3,15 @@ import type { LiveRunSnapshot } from "@tsukaima/core";
 
 /** Cap for a model retry error shown in the live timeline. */
 const MAX_STEP_TEXT_CHARS = 2_000;
+/** Cap for the tool output retained in a committed step. */
+export const LIVE_RUN_TOOL_OUTPUT_MAX_CHARS = 4_000;
+/** Cap for the compact tool arguments retained in a committed step. */
+export const LIVE_RUN_TOOL_ARGUMENTS_MAX_CHARS = 1_000;
 
 function clip(value: string, max: number): string {
 	const trimmed = value.trim();
-	return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max)}…`;
+	if (trimmed.length <= max) return trimmed;
+	return `${trimmed.slice(0, Math.max(0, max - 1))}…`;
 }
 
 interface DraftTool {
@@ -38,6 +43,8 @@ export class LiveRunTimeline {
 	#text = "";
 	#drafts = new Map<string, DraftTool>();
 	#tools: LiveRunSnapshot["tools"] = [];
+	/** Tool calls already committed as steps, so a repeated snapshot cannot duplicate them. */
+	#committedToolCalls = new Set<string>();
 
 	constructor(startedAtMs: number) {
 		this.startedAtMs = startedAtMs;
@@ -247,8 +254,10 @@ export class LiveRunTimeline {
 		this.#text = "";
 		if (options.keepDrafts === true) return;
 		for (const draft of this.#drafts.values()) {
+			if (this.#committedToolCalls.has(draft.callId)) continue;
+			this.#committedToolCalls.add(draft.callId);
 			this.#steps.push({
-				argumentsText: draft.argumentsText ?? "",
+				argumentsText: clip(draft.argumentsText ?? "", LIVE_RUN_TOOL_ARGUMENTS_MAX_CHARS),
 				isError: false,
 				kind: "tool",
 				output: "",
@@ -260,13 +269,17 @@ export class LiveRunTimeline {
 
 	#commitTools(): void {
 		for (const tool of this.#tools) {
-			const argumentsText =
-				tool.argumentsText ?? this.#drafts.get(tool.callId)?.argumentsText ?? "";
+			if (this.#committedToolCalls.has(tool.callId)) continue;
+			this.#committedToolCalls.add(tool.callId);
+			const argumentsText = clip(
+				tool.argumentsText ?? this.#drafts.get(tool.callId)?.argumentsText ?? "",
+				LIVE_RUN_TOOL_ARGUMENTS_MAX_CHARS,
+			);
 			this.#steps.push({
 				argumentsText,
 				isError: false,
 				kind: "tool",
-				output: tool.output ?? "",
+				output: clip(tool.output ?? "", LIVE_RUN_TOOL_OUTPUT_MAX_CHARS),
 				toolName: tool.toolName,
 			});
 		}
