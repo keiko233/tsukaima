@@ -252,7 +252,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		if (render === undefined) return undefined;
 		try {
 			const profile = await this.#personaProfile(durableConversationId);
-			if (profile !== undefined && profile.chatKind !== "workspace" && profile.behavior.complete) {
+			if (profile?.behavior.complete) {
 				return undefined;
 			}
 			return await render(durableConversationId);
@@ -630,6 +630,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			const database = this.#database();
 			if (database === undefined) return empty;
 			const session = await this.#resolveSession(database, durableConversationId);
+			if (session?.chatKind === "workspace") return empty;
 			const persona =
 				session === undefined
 					? undefined
@@ -704,7 +705,6 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	async #personaProfile(durableConversationId: string): Promise<
 		| {
 				readonly behavior: PersonaBehavior;
-				readonly chatKind: string;
 				readonly persona: PersonaSummary;
 		  }
 		| undefined
@@ -712,12 +712,11 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		const database = this.#database();
 		if (database === undefined) return undefined;
 		const session = await this.#resolveSession(database, durableConversationId);
-		if (session === undefined) return undefined;
-		const profile = await this.#policyService.personaProfileForSession({
+		if (session === undefined || session.chatKind === "workspace") return undefined;
+		return this.#policyService.personaProfileForSession({
 			...session,
 			conversationId: session.sessionId,
 		});
-		return profile === undefined ? undefined : { ...profile, chatKind: session.chatKind };
 	}
 
 	/**
