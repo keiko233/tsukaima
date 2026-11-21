@@ -2,16 +2,18 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import {
 	conversations,
 	memories,
+	memoryConsolidationState,
 	messages,
 	migrateDomainDatabase,
 	openDomainDatabase,
 	type TsukaimaDatabase,
 } from "@tsukaima/db";
-import { createLogger } from "../src/logging.ts";
+import type { AuditEntry } from "@tsukaima/sdk";
+import { createLogger, type Logger } from "../src/logging.ts";
 import { ConversationPolicyService } from "../src/services/conversation-policy.ts";
 import { MemoryService } from "../src/services/memory-service.ts";
 import { PluginTaskService } from "../src/services/plugin-task-service.ts";
@@ -28,8 +30,10 @@ afterEach(async () => {
 
 async function setup(
 	options: {
+		readonly audit?: (entry: AuditEntry) => Promise<void>;
 		readonly complete?: (prompt: string) => Promise<string | undefined>;
 		readonly llmEnabled?: boolean;
+		readonly logger?: Logger;
 		readonly tasks?: PluginTaskService;
 	} = {},
 ): Promise<{
@@ -44,13 +48,14 @@ async function setup(
 	const policy = new ConversationPolicyService({
 		database: () => database,
 		host: () => undefined,
-		logger,
+		logger: options.logger ?? logger,
 	});
 	const memory = new MemoryService({
+		...(options.audit === undefined ? {} : { audit: options.audit }),
 		database: () => database,
 		...(options.complete === undefined ? {} : { complete: options.complete }),
 		...(options.llmEnabled === undefined ? {} : { llmEnabled: () => options.llmEnabled === true }),
-		logger,
+		logger: options.logger ?? logger,
 		now,
 		policyService: policy,
 		...(options.tasks === undefined ? {} : { tasks: options.tasks }),
@@ -437,5 +442,84 @@ describe("additive compaction", () => {
 			created: false,
 			memory: capped.memory,
 		});
+	});
+
+	test("logs concrete parse error and writes deterministic fallback on max consolidation failures", async () => {
+		const auditEntries: AuditEntry[] = [];
+		const logWarnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];
+		const testLogger = createLogger({
+			level: "trace",
+			sink: (entry) => {
+				if (entry.level === "warn") {
+					logWarnings.push({ fields: entry.fields, message: entry.message });
+				}
+			},
+		});
+
+		const { database, memory } = await setup({
+			audit: async (entry) => {
+				auditEntries.push(entry);
+			},
+			complete: async () => "invalid output without json braces",
+			llmEnabled: true,
+			logger: testLogger,
+		});
+
+		await seedSession(database, { id: "session-fail", messageCount: 10 });
+
+		// Attempt 1: fails and logs concrete parse reason
+		const run1 = await memory.consolidateConversation("session-fail");
+		expect(run1.status).toBe("failed");
+		if (run1.status !== "failed") throw new Error("Expected failed");
+		expect(run1.reason).toContain("no JSON object found");
+		expect(
+			logWarnings.some((w) => w.message === "failed to parse memory consolidation output"),
+		).toBe(true);
+		const lastWarning = logWarnings.findLast(
+			(w) => w.message === "failed to parse memory consolidation output",
+		);
+		expect(lastWarning?.fields?.error).toContain("no JSON object found");
+
+		// Attempt 2: fails again
+		const run2 = await memory.consolidateConversation("session-fail");
+		expect(run2.status).toBe("failed");
+
+		// Attempt 3: hits maxFailures (default 3), drops batch, writes fallback warm state & heuristic memories
+		const run3 = await memory.consolidateConversation("session-fail");
+		expect(run3.status).toBe("dropped");
+		if (run3.status !== "dropped") throw new Error("Expected dropped");
+		expect(run3.reason).toBe("max-failures");
+
+		// Verify fallback warm state was written
+		const warmMemories = await database
+			.select()
+			.from(memories)
+			.where(and(eq(memories.conversationId, "session-fail"), eq(memories.kind, "summary")));
+		expect(warmMemories).toHaveLength(1);
+		const evidence = JSON.parse(warmMemories[0]?.evidenceJson ?? "{}");
+		expect(evidence.model).toBe("deterministic-fallback");
+		expect(evidence.state.version).toBe(2);
+
+		// Verify fallback heuristic candidates were written
+		const durableMemories = await database
+			.select()
+			.from(memories)
+			.where(and(eq(memories.conversationId, "session-fail"), ne(memories.kind, "summary")));
+		expect(durableMemories.length).toBeGreaterThan(0);
+		expect(
+			durableMemories.some((m) => m.summary.includes("Aurora") || m.summary.includes("buy beans")),
+		).toBe(true);
+
+		// Verify watermark was advanced past the batch
+		const [stateRow] = await database
+			.select()
+			.from(memoryConsolidationState)
+			.where(eq(memoryConsolidationState.conversationId, "session-fail"));
+		expect(stateRow?.watermarkMessageId).toBe("session-fail-message-9");
+		expect(stateRow?.droppedBatches).toBe(1);
+		expect(stateRow?.lastError).toContain("no JSON object found");
+
+		// Verify audit drop was recorded
+		expect(auditEntries.some((entry) => entry.action === "memory.consolidate.drop")).toBe(true);
 	});
 });

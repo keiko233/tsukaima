@@ -15,10 +15,21 @@ export const warmStatePersonCardSchema = z.object({
 	/** Canonical key: the domain user id when known, otherwise a normalized display name. */
 	key: z.string().min(1).max(200),
 	name: z.string().min(1).max(120),
-	aliases: z.array(z.string().min(1).max(120)).max(8).default([]),
+	aliases: z
+		.array(z.string().min(1).max(120))
+		.max(8)
+		.nullish()
+		.transform((v) => v ?? []),
 	/** Short third-person notes about this person as seen in this chat. */
-	notes: z.array(z.string().min(1).max(240)).max(8).default([]),
-	lastSeenAt: z.string().optional(),
+	notes: z
+		.array(z.string().min(1).max(240))
+		.max(8)
+		.nullish()
+		.transform((v) => v ?? []),
+	lastSeenAt: z
+		.string()
+		.nullish()
+		.transform((v) => v ?? undefined),
 });
 export type WarmStatePersonCard = z.infer<typeof warmStatePersonCardSchema>;
 
@@ -33,9 +44,20 @@ export const warmStateCommitmentSchema = z.object({
 	key: z.string().min(1).max(120),
 	text: z.string().min(1).max(240),
 	/** Person card key of the owner, or `self` for the assistant. */
-	owner: z.string().min(1).max(200).optional(),
-	status: z.enum(["open", "done", "cancelled"]).default("open"),
-	expiresAt: z.string().optional(),
+	owner: z
+		.string()
+		.min(1)
+		.max(200)
+		.nullish()
+		.transform((v) => v ?? undefined),
+	status: z
+		.enum(["open", "done", "cancelled"])
+		.nullish()
+		.transform((v) => v ?? "open"),
+	expiresAt: z
+		.string()
+		.nullish()
+		.transform((v) => v ?? undefined),
 });
 export type WarmStateCommitment = z.infer<typeof warmStateCommitmentSchema>;
 
@@ -44,22 +66,53 @@ export const warmStateAnswerSchema = z.object({
 	key: z.string().min(1).max(120),
 	question: z.string().min(1).max(240),
 	answer: z.string().min(1).max(400),
-	answeredAt: z.string().optional(),
+	answeredAt: z
+		.string()
+		.nullish()
+		.transform((v) => v ?? undefined),
 });
 export type WarmStateAnswer = z.infer<typeof warmStateAnswerSchema>;
 
 export const warmStatePayloadSchema = z.object({
 	version: z.literal(WARM_STATE_SCHEMA_VERSION),
 	/** Bounded rolling summary of the conversation so far. */
-	summary: z.string().max(8_000).default(""),
+	summary: z
+		.string()
+		.max(8_000)
+		.nullish()
+		.transform((v) => v ?? ""),
 	/** Current topics, most active first. */
-	topics: z.array(z.string().min(1).max(80)).max(6).default([]),
-	people: z.array(warmStatePersonCardSchema).max(100).default([]),
+	topics: z
+		.array(z.string().min(1).max(80))
+		.max(6)
+		.nullish()
+		.transform((v) => v ?? []),
+	people: z
+		.array(warmStatePersonCardSchema)
+		.max(100)
+		.nullish()
+		.transform((v) => v ?? []),
 	/** One or two sentences on the room's mood, in-jokes, and conventions. */
-	atmosphere: z.string().max(400).default(""),
-	glossary: z.array(warmStateGlossaryEntrySchema).max(30).default([]),
-	commitments: z.array(warmStateCommitmentSchema).max(20).default([]),
-	answers: z.array(warmStateAnswerSchema).max(30).default([]),
+	atmosphere: z
+		.string()
+		.max(400)
+		.nullish()
+		.transform((v) => v ?? ""),
+	glossary: z
+		.array(warmStateGlossaryEntrySchema)
+		.max(30)
+		.nullish()
+		.transform((v) => v ?? []),
+	commitments: z
+		.array(warmStateCommitmentSchema)
+		.max(20)
+		.nullish()
+		.transform((v) => v ?? []),
+	answers: z
+		.array(warmStateAnswerSchema)
+		.max(30)
+		.nullish()
+		.transform((v) => v ?? []),
 });
 export type WarmStatePayload = z.infer<typeof warmStatePayloadSchema>;
 
@@ -87,12 +140,34 @@ export const consolidationMemoryCandidateSchema = z.object({
 		"style",
 	]),
 	summary: z.string().min(1).max(400),
-	content: z.string().max(1_000).optional(),
+	content: z
+		.string()
+		.max(1_000)
+		.nullish()
+		.transform((v) => v ?? undefined),
 	/** Person card key the memory is about, when it is about one participant. */
-	subject: z.string().min(1).max(200).optional(),
-	confidence: z.number().min(0).max(1).default(0.6),
-	importance: z.number().min(0).max(1).default(0.5),
-	expiresAt: z.string().optional(),
+	subject: z
+		.string()
+		.min(1)
+		.max(200)
+		.nullish()
+		.transform((v) => v ?? undefined),
+	confidence: z
+		.number()
+		.min(0)
+		.max(1)
+		.nullish()
+		.transform((v) => v ?? 0.6),
+	importance: z
+		.number()
+		.min(0)
+		.max(1)
+		.nullish()
+		.transform((v) => v ?? 0.5),
+	expiresAt: z
+		.string()
+		.nullish()
+		.transform((v) => v ?? undefined),
 });
 export type ConsolidationMemoryCandidate = z.infer<typeof consolidationMemoryCandidateSchema>;
 
@@ -102,6 +177,10 @@ export type ConsolidationMemoryCandidate = z.infer<typeof consolidationMemoryCan
  */
 export const memoryConsolidationOutputSchema = z.object({
 	state: warmStatePayloadSchema.omit({ version: true }),
-	memories: z.array(consolidationMemoryCandidateSchema).max(20).default([]),
+	memories: z
+		.array(consolidationMemoryCandidateSchema)
+		.max(20)
+		.nullish()
+		.transform((v) => v ?? []),
 });
 export type MemoryConsolidationOutput = z.infer<typeof memoryConsolidationOutputSchema>;

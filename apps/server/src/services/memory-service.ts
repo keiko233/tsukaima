@@ -39,7 +39,7 @@ import {
 	MEMORY_CONSOLIDATION_PROMPT_VERSION,
 	mergeWarmState,
 	nextConsolidationRunAt,
-	parseConsolidationOutput,
+	parseConsolidationOutputDetailed,
 	parseWarmState,
 	renderConsolidationPrompt,
 	renderWarmStateLines,
@@ -59,7 +59,7 @@ export const MEMORY_COMPACTION_PROMPT_VERSION = "memory-compact-v1";
 /** First retry delay of a failed consolidation batch; doubles per failure. */
 const CONSOLIDATION_RETRY_BASE_MS = 30_000;
 /** Hard ceiling for one consolidation model call, independent of provider behavior. */
-const CONSOLIDATION_TIMEOUT_MS = 30_000;
+const CONSOLIDATION_TIMEOUT_MS = 90_000;
 const QA_RECALL_LIMIT = 2;
 /**
  * Tuned on synthetic English and CJK recurring-question pairs: questions that share a subject
@@ -1383,7 +1383,20 @@ export class MemoryService {
 						previous,
 					});
 					const text = await this.#completeConsolidationPrompt(prompt, modelId);
-					output = text === undefined ? undefined : parseConsolidationOutput(text);
+					if (text === undefined) {
+						failure = "empty consolidation model response";
+					} else {
+						const parseResult = parseConsolidationOutputDetailed(text);
+						if (parseResult.ok) {
+							output = parseResult.data;
+						} else {
+							failure = parseResult.error;
+							this.#logger.warn("failed to parse memory consolidation output", {
+								conversationId: session.id,
+								error: parseResult.error,
+							});
+						}
+					}
 				} catch (error) {
 					failure = errorMessage(error);
 				}
@@ -1393,7 +1406,10 @@ export class MemoryService {
 						config,
 						conversationId: session.id,
 						cursor,
+						delta,
 						error: failure,
+						policy,
+						session,
 						through,
 					});
 				}
@@ -1601,13 +1617,41 @@ export class MemoryService {
 		readonly config: ConversationPolicy["memoryConsolidation"];
 		readonly conversationId: string;
 		readonly cursor: ConsolidationCursor;
+		readonly delta: readonly ConsolidationMessage[];
 		readonly error: string;
+		readonly policy: ConversationPolicy;
+		readonly session: { readonly id: string; readonly kind: string };
 		readonly through: ConsolidationMessage;
 	}): Promise<MemoryConsolidationResult> {
 		const prior = input.cursor.failedBatchKey === input.batchKey ? input.cursor.failureCount : 0;
 		const failures = prior + 1;
 		const now = this.#now();
 		if (failures >= input.config.maxFailures) {
+			const previous = (await this.warmState(input.conversationId))?.state;
+			const fallbackState = deterministicWarmState({
+				delta: input.delta,
+				policy: input.config,
+				previous,
+			});
+			const fallbackCandidates = heuristicCandidates(
+				input.delta.map((message) => ({
+					contentText: message.text,
+					direction: message.direction,
+					id: message.id,
+				})),
+				now,
+			).candidates;
+			await this.#writeWarmState(input.conversationId, fallbackState, {
+				delta: input.delta,
+				model: "deterministic-fallback",
+				through: input.through,
+			});
+			await this.#writeConsolidatedMemories(input.session, input.policy, fallbackCandidates, {
+				delta: input.delta,
+				extractor: "heuristic",
+				model: "deterministic-fallback",
+				state: fallbackState,
+			});
 			// Drop the batch: advance the watermark past it so it can never loop.
 			await this.#saveConsolidationState(input.conversationId, {
 				droppedBatches: input.cursor.droppedBatches + 1,
@@ -1633,6 +1677,7 @@ export class MemoryService {
 			);
 			this.#logger.warn("memory consolidation batch dropped after repeated failures", {
 				conversationId: input.conversationId,
+				error: input.error,
 				failures,
 			});
 			const remaining = await this.#countPending(input.conversationId, {
@@ -1671,7 +1716,7 @@ export class MemoryService {
 			error: input.error.slice(0, 200),
 			failures,
 		});
-		return { reason: "model-output", status: "failed" };
+		return { reason: input.error, status: "failed" };
 	}
 
 	/**

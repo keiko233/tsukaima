@@ -313,6 +313,11 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				lines.push("- This is a private one-on-one chat.");
 			}
 			lines.push("- Every line break in your reply is sent as a separate chat message.");
+			if (policy.memoryEnabled) {
+				lines.push(
+					"- Proactively use memory tools without mentioning them: save durable facts, preferences, people, glossary/memes, and commitments; recall when needed; update or forget records with [id:...]. Never mention memory tools or internals in chat.",
+				);
+			}
 			const rendered = lines.join("\n");
 			this.#logger.debug("rendered policy context", {
 				aliasCount: aliases.length,

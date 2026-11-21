@@ -255,6 +255,73 @@ async function seedContextFixture(database: TsukaimaDatabase): Promise<void> {
 }
 
 describe("DrizzleContextProvider", () => {
+	test("handles complete: true persona by omitting renderSystem while injecting memory guidance in renderPolicy", async () => {
+		const { database } = await openFixture();
+		const policyService = new ConversationPolicyService({
+			database: () => database,
+			host: () => undefined,
+			logger,
+		});
+		const contextProvider = new DrizzleContextProvider({
+			database: () => database,
+			logger,
+			policyService,
+			renderSystem: async () => "BASE-CHAT-SYSTEM-PROMPT",
+		});
+
+		try {
+			const now = new Date().toISOString();
+			await database.insert(conversations).values({
+				durableConversationId: "conv-complete-durable",
+				id: "session-complete",
+				kind: "private",
+				title: "Complete Persona Session",
+				updatedAt: now,
+			});
+
+			await database.insert(personas).values({
+				behaviorJson: JSON.stringify({ complete: true }),
+				id: "persona-complete",
+				isActive: 1,
+				name: "Complete Persona",
+				promptJson: JSON.stringify("FULL COMPLETE SYSTEM PROMPT"),
+				summary: "complete persona prompt",
+				version: 1,
+			});
+
+			await database.insert(personaBindings).values({
+				conversationId: "session-complete",
+				id: "binding-complete",
+				isActive: 1,
+				isGlobal: 0,
+				personaId: "persona-complete",
+			});
+
+			// 1. renderSystem is omitted for complete: true personas
+			const system = await contextProvider.renderSystem("conv-complete-durable");
+			expect(system).toBeUndefined();
+
+			// 2. renderPolicy still renders and includes memory tool guidance when memory is enabled
+			const policyText = await contextProvider.renderPolicy("conv-complete-durable");
+			expect(policyText).toBeDefined();
+			expect(policyText).toContain("You are Complete Persona; stay in character.");
+			expect(policyText).toContain("Proactively use memory tools without mentioning them");
+			expect(policyText).toContain("[id:...]");
+
+			// 3. When memoryEnabled is false, memory guidance is omitted
+			await policyService.update({
+				conversationId: "session-complete",
+				policy: { memoryEnabled: false },
+				scope: "conversation",
+			});
+			const disabledPolicyText = await contextProvider.renderPolicy("conv-complete-durable");
+			expect(disabledPolicyText).toBeDefined();
+			expect(disabledPolicyText).not.toContain("Proactively use memory tools");
+		} finally {
+			database.$client.close();
+		}
+	});
+
 	test("prefers a conversation persona binding over the global binding", async () => {
 		const { database } = await openFixture();
 		try {
