@@ -170,12 +170,13 @@ function effectiveWrite(
 	requestedScope: MemoryScope | undefined,
 ): { scope: MemoryScope; status: MemoryStatus } {
 	const sharedContext = resolved.session.kind === "group";
-	const sharedWrites = sharedContext && resolved.policy.sharedMemoryWriteEnabled !== false;
+	const sharedWritesAllowed = resolved.policy.sharedMemoryWriteEnabled !== false;
 	const reviewRequired =
-		resolved.policy.memoryReviewRequired === true ||
-		(sharedContext && resolved.policy.sharedMemoryWriteEnabled === false);
-	const scope: MemoryScope = sharedWrites
-		? (requestedScope ?? "global")
+		resolved.policy.memoryReviewRequired === true || (sharedContext && !sharedWritesAllowed);
+	const defaultScope: MemoryScope =
+		sharedContext && sharedWritesAllowed ? "global" : "conversation";
+	const scope: MemoryScope = sharedWritesAllowed
+		? (requestedScope ?? defaultScope)
 		: requestedScope === "global" || requestedScope === "persona"
 			? "conversation"
 			: (requestedScope ?? "conversation");
@@ -184,21 +185,29 @@ function effectiveWrite(
 
 function recallTool(context: PluginContext, log: PluginLogger): PluginTool {
 	return {
-		description: "Recall relevant long-term memories for this conversation.",
+		description:
+			"Proactively query long-term memories (facts, persona notes, learned memes/glossary, preferences, people) by keywords and/or kind/scope. Returns matching memory IDs for update or deletion.",
 		execute: async (input, invocation) => {
 			const startedAt = performance.now();
 			const query = inputString(input, "query") ?? "";
+			const kind = inputString(input, "kind");
+			const scope = inputScope(input);
 			const requested = inputNumber(input, "limit");
 			const limit = Math.min(MAX_RECALL_LIMIT, Math.max(1, requested ?? 8));
 			const resolved = await resolveMemoryTool(context, log, invocation, "memory.recall");
 			if (typeof resolved === "string") return text(resolved);
 			log.trace("memory.recall start", {
 				conversationId: invocation.conversationId,
+				kind,
 				limit,
 				query: preview(query),
+				scope,
 				sessionId: resolved.session.id,
 			});
-			const ranked = await resolved.service.recordSearch(resolved.session.id, query, limit * 2);
+			const ranked = await resolved.service.recordSearch(resolved.session.id, query, limit * 2, {
+				...(kind === undefined ? {} : { kind }),
+				...(scope === undefined ? {} : { scope }),
+			});
 			const visible = ranked
 				.filter(
 					(entry) =>
@@ -218,7 +227,7 @@ function recallTool(context: PluginContext, log: PluginLogger): PluginTool {
 				visible
 					.map(
 						(entry) =>
-							`- [${entry.memory.scope}/${entry.memory.kind}] ${entry.memory.summary.slice(0, 240)}`,
+							`- [id:${entry.memory.id}] [${entry.memory.scope}/${entry.memory.kind}] ${entry.memory.summary.slice(0, 240)}`,
 					)
 					.join("\n"),
 			);
@@ -226,8 +235,21 @@ function recallTool(context: PluginContext, log: PluginLogger): PluginTool {
 		name: "memory.recall",
 		parameters: {
 			properties: {
+				kind: {
+					description:
+						"Optional kind filter, e.g. fact, preference, person, relationship, event, todo, glossary, style, persona.",
+					type: "string",
+				},
 				limit: { maximum: MAX_RECALL_LIMIT, minimum: 1, type: "integer" },
-				query: { type: "string" },
+				query: {
+					description: "Keywords or topic to search; omit or leave empty to list top memories.",
+					type: "string",
+				},
+				scope: {
+					description: "Optional scope filter.",
+					enum: ["global", "persona", "user", "conversation", "project", "ephemeral"],
+					type: "string",
+				},
 			},
 			type: "object",
 		},
@@ -239,7 +261,7 @@ function recallTool(context: PluginContext, log: PluginLogger): PluginTool {
 function saveTool(context: PluginContext, log: PluginLogger): PluginTool {
 	return {
 		description:
-			"Save a durable memory (preference, fact, person, todo, event, setting, or summary).",
+			"Proactively save a durable memory: persona/character settings (scope='persona'), hot memes/slang/in-jokes (kind='glossary'), user preferences, facts, people, relationships, events, or todos.",
 		execute: async (input, invocation) => {
 			const startedAt = performance.now();
 			const resolved = await resolveMemoryTool(context, log, invocation, "memory.save");
@@ -447,7 +469,7 @@ function updateTool(context: PluginContext, log: PluginLogger): PluginTool {
 			required: ["id", "summary"],
 			type: "object",
 		},
-		policy: { lazy: true, maxPayloadBytes: 16_384, surface: "both", timeoutMs: 20_000 },
+		policy: { lazy: false, maxPayloadBytes: 16_384, surface: "both", timeoutMs: 20_000 },
 		requiredPermissions: ["memory.write"],
 	};
 }
@@ -533,7 +555,7 @@ function forgetTool(context: PluginContext, log: PluginLogger): PluginTool {
 		},
 		policy: {
 			destructive: true,
-			lazy: true,
+			lazy: false,
 			maxPayloadBytes: 2_048,
 			surface: "both",
 			timeoutMs: 20_000,

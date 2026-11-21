@@ -295,4 +295,62 @@ describe("memory tools", () => {
 			await lifecycle.stop();
 		}
 	});
+
+	test("supports eager update/forget, persona/global saves in private chat, and kind/scope recall filters", async () => {
+		const { lifecycle } = await setup();
+		try {
+			for (const name of ["memory.recall", "memory.save", "memory.update", "memory.forget"]) {
+				const tool = lifecycle.pluginHost.tools().find((entry) => entry.name === name);
+				expect(tool?.policy?.lazy).toBe(false);
+			}
+
+			const memeSave = await lifecycle.pluginHost.invokeTool(
+				"memory.save",
+				{ kind: "glossary", scope: "global", summary: "热梗: 尊嘟假嘟 (表示惊讶或怀疑)" },
+				{ conversationId: "durable-private-tools" },
+			);
+			expect(memeSave.ok).toBe(true);
+			if (!memeSave.ok) throw new Error("meme save failed");
+			expect(memeSave.result.content[0]?.text).toContain("(global/glossary, active)");
+
+			const personaSave = await lifecycle.pluginHost.invokeTool(
+				"memory.save",
+				{ kind: "style", scope: "persona", summary: "说话喜欢偶尔带一点傲娇吐槽" },
+				{ conversationId: "durable-private-tools" },
+			);
+			expect(personaSave.ok).toBe(true);
+			if (!personaSave.ok) throw new Error("persona save failed");
+			expect(personaSave.result.content[0]?.text).toContain("(persona/style, active)");
+
+			const memeRecall = await lifecycle.pluginHost.invokeTool(
+				"memory.recall",
+				{ kind: "glossary", query: "尊嘟假嘟", scope: "global" },
+				{ conversationId: "durable-private-tools" },
+			);
+			expect(memeRecall.ok).toBe(true);
+			if (!memeRecall.ok) throw new Error("meme recall failed");
+			const recallText = memeRecall.result.content[0]?.text ?? "";
+			expect(recallText).toContain("尊嘟假嘟");
+			expect(recallText).not.toContain("傲娇吐槽");
+			const idMatch = /\[id:([^\]]+)\]/u.exec(recallText);
+			expect(idMatch?.[1]).toBeDefined();
+			const memeId = idMatch![1]!;
+
+			const updated = await lifecycle.pluginHost.invokeTool(
+				"memory.update",
+				{ id: memeId, summary: "热梗: 尊嘟假嘟 (真的假的，网络流行语)" },
+				{ conversationId: "durable-private-tools" },
+			);
+			expect(updated.ok).toBe(true);
+
+			const forgotten = await lifecycle.pluginHost.invokeTool(
+				"memory.forget",
+				{ id: memeId },
+				{ conversationId: "durable-private-tools" },
+			);
+			expect(forgotten.ok).toBe(true);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
 });

@@ -24,6 +24,8 @@ export const CURATED_EAGER_CHAT_TOOLS: ReadonlySet<string> = new Set([
 	"search-fetch.fetch",
 	"memory.recall",
 	"memory.save",
+	"memory.update",
+	"memory.forget",
 	"proactive-scheduler.schedule",
 	"proactive-scheduler.list",
 	"proactive-scheduler.cancel",

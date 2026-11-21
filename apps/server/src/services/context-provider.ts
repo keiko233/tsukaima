@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import {
 	detectOverusedPhrases,
 	detectRigidRhythm,
@@ -858,7 +858,10 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				})) !== undefined
 			) {
 				scopes.push(
-					combine([eq(memories.scope, "persona"), eq(memories.conversationId, session.sessionId)]),
+					combine([
+						eq(memories.scope, "persona"),
+						or(eq(memories.conversationId, session.sessionId), isNull(memories.conversationId)),
+					]),
 				);
 			}
 			const participants = await this.#resolveParticipants(database, session.sessionId);
@@ -1022,7 +1025,8 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 					const summary = (entry.memory.summary.trim() || entry.memory.content.trim())
 						.replace(/\s+/gu, " ")
 						.slice(0, MEMORY_SNIPPET_LIMIT);
-					if (!push(`- [${entry.memory.scope}/${entry.memory.kind}] ${summary}`)) break;
+					const idPrefix = memoryBudget >= 240 ? `[id:${entry.memory.id}] ` : "";
+					if (!push(`- ${idPrefix}[${entry.memory.scope}/${entry.memory.kind}] ${summary}`)) break;
 					shown += 1;
 				}
 				if (shown < pool.length) {

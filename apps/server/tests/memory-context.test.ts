@@ -268,4 +268,42 @@ describe("hybrid memory retrieval", () => {
 		await policy.update({ policy: { memoryEnabled: false }, scope: "global" });
 		expect(await context.renderMemories("durable-session-group")).toBeUndefined();
 	});
+
+	test("injects keyword-matched glossary and persona memories into the latest turn context", async () => {
+		const { database, policy } = await setup();
+		await insertConversation(database, { id: "session-keyword" });
+		const context = provider(database, policy, { memoryTopK: 2 });
+		await database.insert(memories).values([
+			{
+				content: "Unrelated pinned memory",
+				createdBy: "agent",
+				id: "mem-unrelated-pin",
+				importance: 0.95,
+				kind: "fact",
+				pinned: 1,
+				scope: "global",
+				summary: "Unrelated pinned note about weather",
+			},
+			{
+				content: "热梗: 尊嘟假嘟 意思是 真的假的",
+				createdBy: "agent",
+				id: "mem-meme",
+				importance: 0.4,
+				kind: "glossary",
+				scope: "global",
+				summary: "热梗: 尊嘟假嘟 (真的假的)",
+			},
+		]);
+
+		const sections = await context.renderTurnContext({
+			conversationId: "durable-session-keyword",
+			inputs: [{ envelopeId: "env-1", text: "今天群里都在刷尊嘟假嘟这个热梗" }],
+			nowMs: fixedNow.getTime(),
+			triggers: [{ classification: "direct" }],
+		});
+		const memorySection = sections.find((section) => section.key === "memories");
+		expect(memorySection).toBeDefined();
+		expect(memorySection?.text).toContain("[id:mem-meme]");
+		expect(memorySection?.text).toContain("尊嘟假嘟");
+	});
 });

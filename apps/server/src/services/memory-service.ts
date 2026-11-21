@@ -69,7 +69,7 @@ const QA_MATCH_THRESHOLD = 0.35;
 const EXTRACTION_MESSAGE_LIMIT = 30;
 const CANDIDATE_LIMIT = 120;
 const KEYWORD_CANDIDATES_PER_TOKEN = 30;
-const MAX_QUERY_TOKENS = 8;
+const MAX_QUERY_TOKENS = 24;
 /**
  * Recall blend. Lexical evidence leads, stored vectors add semantic signal, and prior
  * importance/recency only break ties: prompt rendering must not be dominated by old rows.
@@ -335,9 +335,9 @@ export function extractMemoryTokens(text: string, limit = MAX_QUERY_TOKENS): str
 		.split(/[^\p{L}\p{N}]+/u)) {
 		if (raw.length < 2 || STOPWORDS.has(raw)) continue;
 		if (CJK.test(raw)) {
-			if (raw.length <= 4) tokens.add(raw);
-			else {
-				for (let index = 0; index + 2 <= raw.length; index += 1) {
+			if (raw.length <= 12) tokens.add(raw);
+			if (raw.length > 4) {
+				for (let index = 0; index + 2 <= raw.length && tokens.size < limit; index += 1) {
 					tokens.add(raw.slice(index, index + 2));
 				}
 			}
@@ -472,7 +472,9 @@ function lexicalScore(
 	const haystack = `${memory.summary}\n${memory.content}`.toLowerCase();
 	let hits = 0;
 	for (const token of tokens) if (haystack.includes(token)) hits += 1;
-	return hits / tokens.length;
+	if (hits === 0) return 0;
+	// Any keyword match should strongly outrank unrelated pinned/high-importance memories.
+	return Math.min(1, 0.55 + 0.45 * (hits / Math.max(1, Math.min(tokens.length, 6))));
 }
 
 function pinnedValue(value: boolean | undefined): number {
@@ -1222,25 +1224,32 @@ export class MemoryService {
 			.map((entry) => entry.answer);
 	}
 
-	async recordSearch(conversationId: string | undefined, query: string, limit = 10) {
-		const scopeFilter =
+	async recordSearch(
+		conversationId: string | undefined,
+		query: string,
+		limit = 10,
+		filters?: { readonly kind?: string | undefined; readonly scope?: MemoryScope | undefined },
+	) {
+		const scopeCondition =
 			conversationId === undefined
 				? undefined
-				: combine([
-						or(
-							eq(memories.scope, "global"),
-							and(
-								eq(memories.scope, "persona"),
-								or(eq(memories.conversationId, conversationId), isNull(memories.conversationId)),
-							),
-							and(eq(memories.scope, "conversation"), eq(memories.conversationId, conversationId)),
+				: or(
+						eq(memories.scope, "global"),
+						and(
+							eq(memories.scope, "persona"),
+							or(eq(memories.conversationId, conversationId), isNull(memories.conversationId)),
 						),
-					]);
+						and(eq(memories.scope, "conversation"), eq(memories.conversationId, conversationId)),
+					);
+		const extraConditions: (SQL | undefined)[] = [scopeCondition];
+		if (filters?.kind !== undefined) extraConditions.push(eq(memories.kind, filters.kind));
+		if (filters?.scope !== undefined) extraConditions.push(eq(memories.scope, filters.scope));
+		const scopeFilter = combine(extraConditions);
 		return this.recall({
 			...(conversationId === undefined ? {} : { conversationId }),
 			limit,
 			query,
-			...(scopeFilter === undefined ? {} : { scopeFilter }),
+			scopeFilter,
 		});
 	}
 
