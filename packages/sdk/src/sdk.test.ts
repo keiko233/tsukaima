@@ -228,7 +228,10 @@ describe("plugin sdk", () => {
 		expect(result).toEqual({ output: [{ text: "echo:ping", type: "text" }] });
 		expect(invocations).toEqual([
 			{
-				context: { conversationId: "42" },
+				context: expect.objectContaining({
+					conversationId: "42",
+					signal: expect.any(AbortSignal),
+				}),
 				input: { text: "ping" },
 				name: "sample.echo",
 			},
