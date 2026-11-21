@@ -21,7 +21,8 @@ import {
 	type WriteOperations,
 } from "@earendil-works/pi-coding-agent";
 import type { Api, ImageContent, Model } from "@earendil-works/pi-ai";
-import { CodingRunner } from "./runner.ts";
+import { spawn } from "node:child_process";
+import { CodingRunner, SCRUBBED_COMMAND_ENV } from "./runner.ts";
 import { SandboxUnavailableError, type SandboxExecutor } from "./sandbox.ts";
 import { assertSafeWorktreePath } from "./worktree.ts";
 
@@ -99,8 +100,10 @@ export interface PiWorkspaceRunnerConfig {
 	readonly worktreePath: string;
 	/** Worktree-relative path prefixes the native file tools may read or modify. */
 	readonly pathAllowlist: readonly string[];
-	/** Commands the native `bash` tool may run. Always executed as one argv, never through a shell. */
+	/** Commands the native `bash` tool may run in governed mode. */
 	readonly allowedCommands: readonly string[];
+	/** How `bash` executes commands: `"governed"` (default) or `"host"` (direct shell in worktree). */
+	readonly bashMode?: "governed" | "host";
 	/**
 	 * Isolation provider for model-influenced command execution. The provider is resolved during
 	 * `start()`; a provider that cannot isolate fails startup instead of falling back to the host.
@@ -162,6 +165,7 @@ interface ResolvedRunnerConfig {
 	readonly agentDir: string;
 	readonly allowedCommands: readonly string[];
 	readonly appendPrompt: readonly string[];
+	readonly bashMode: "governed" | "host";
 	readonly maxFileBytes: number;
 	readonly maxOutputBytes: number;
 	readonly maxWriteBytes: number;
@@ -194,9 +198,10 @@ export class PiWorkspaceRunner {
 	async start(): Promise<void> {
 		if (this.#session !== undefined) return;
 		const resolved = await resolveConfig(this.#config);
-		const executor = resolved.nativeTools.includes("bash")
-			? await this.#config.executor()
-			: undefined;
+		const executor =
+			resolved.nativeTools.includes("bash") && resolved.bashMode === "governed"
+				? await this.#config.executor()
+				: undefined;
 		if (
 			executor !== undefined &&
 			(this.#config.requireIsolatedSandbox ?? true) &&
@@ -224,6 +229,7 @@ export class PiWorkspaceRunner {
 		await resourceLoader.reload();
 		const tools = createNativeToolDefinitions(
 			{
+				bashMode: resolved.bashMode,
 				...(executor === undefined
 					? {}
 					: {
@@ -415,6 +421,7 @@ export async function createPiWorkspaceRunner(
 }
 
 interface NativeToolDependencies {
+	readonly bashMode: "governed" | "host";
 	readonly runner?: CodingRunner;
 	readonly maxFileBytes: number;
 	readonly maxWriteBytes: number;
@@ -450,7 +457,10 @@ function createNativeToolDefinitions(
 					asToolDefinition(
 						createBashToolDefinition(deps.worktreePath, {
 							exposeSessionEnvironment: false,
-							operations: createGovernedBashOperations(deps),
+							operations:
+								deps.bashMode === "host"
+									? createHostBashOperations(deps)
+									: createGovernedBashOperations(deps),
 						}),
 					),
 				);
@@ -561,6 +571,83 @@ async function assertExistingFile(
 		throw new Error(`File exceeds ${deps.maxFileBytes} bytes: ${absolutePath}`);
 	}
 	return target;
+}
+
+function createHostBashOperations(deps: NativeToolDependencies): BashOperations {
+	return {
+		exec: async (command, cwd, { onData, signal, timeout }) => {
+			if (!samePath(deps.worktreePath, cwd)) {
+				throw new GovernedShellError("command working directory must be the task worktree");
+			}
+			const requestedMs = timeout === undefined ? undefined : Math.round(timeout * 1000);
+			if (requestedMs !== undefined && (!Number.isFinite(requestedMs) || requestedMs <= 0)) {
+				throw new Error("Invalid timeout: must be a finite number of seconds");
+			}
+			const timeoutMs =
+				requestedMs === undefined ? deps.timeoutMs : Math.min(requestedMs, deps.timeoutMs);
+			if (signal?.aborted === true) throw new Error("aborted");
+
+			return await new Promise<{ exitCode: number | null }>((resolvePromise, rejectPromise) => {
+				const child = spawn("/bin/bash", ["-c", command], {
+					cwd,
+					detached: true,
+					env: SCRUBBED_COMMAND_ENV,
+					stdio: ["ignore", "pipe", "pipe"],
+				});
+				let timedOut = false;
+				let aborted = false;
+				let settled = false;
+				const killGroup = () => {
+					if (child.pid === undefined) return;
+					try {
+						process.kill(-child.pid, "SIGKILL");
+					} catch {
+						try {
+							child.kill("SIGKILL");
+						} catch {
+							// Process already exited.
+						}
+					}
+				};
+				const timer = setTimeout(() => {
+					timedOut = true;
+					killGroup();
+				}, timeoutMs);
+				timer.unref?.();
+				const onAbort = () => {
+					aborted = true;
+					killGroup();
+				};
+				signal?.addEventListener("abort", onAbort, { once: true });
+				const cleanup = () => {
+					clearTimeout(timer);
+					signal?.removeEventListener("abort", onAbort);
+				};
+				child.stdout?.on("data", (chunk: Buffer) => onData(chunk));
+				child.stderr?.on("data", (chunk: Buffer) => onData(chunk));
+				child.on("error", (error) => {
+					if (settled) return;
+					settled = true;
+					cleanup();
+					rejectPromise(error);
+				});
+				child.on("close", (code, sig) => {
+					if (settled) return;
+					settled = true;
+					cleanup();
+					if (aborted) {
+						rejectPromise(new Error("aborted"));
+						return;
+					}
+					if (timedOut) {
+						rejectPromise(new Error(`timeout:${Math.max(1, Math.round(timeoutMs / 1000))}`));
+						return;
+					}
+					resolvePromise({ exitCode: code ?? (sig === "SIGKILL" ? 137 : 1) });
+				});
+			});
+		},
+	};
 }
 
 function createGovernedBashOperations(deps: NativeToolDependencies): BashOperations {
@@ -747,6 +834,7 @@ async function resolveConfig(config: PiWorkspaceRunnerConfig): Promise<ResolvedR
 	if (samePath(worktreePath, agentDir) || isInside(worktreePath, agentDir)) {
 		throw invalidConfig("agentDir must be outside the worktree");
 	}
+	const bashMode = config.bashMode ?? "governed";
 	const pathAllowlist = validateAllowlist(config.pathAllowlist);
 	const allowedCommands = validateCommands(config.allowedCommands);
 	const nativeTools = validateNativeTools(config.nativeTools);
@@ -772,6 +860,7 @@ async function resolveConfig(config: PiWorkspaceRunnerConfig): Promise<ResolvedR
 		agentDir,
 		allowedCommands,
 		appendPrompt: [...(config.appendPrompt ?? [])],
+		bashMode,
 		worktreePath,
 		maxFileBytes,
 		maxOutputBytes,

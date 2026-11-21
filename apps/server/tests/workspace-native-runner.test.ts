@@ -246,7 +246,7 @@ describe("workspace native Pi integration", () => {
 		);
 		expect(await fs.readFile(join(repo, "src", "app.ts"), "utf-8")).toContain("'old'");
 		expect(requests[0]).toContain("edit");
-		expect(requests[0]).not.toContain("bash");
+		expect(requests[0]).toContain("bash");
 		expect(requests[0]?.some((name) => name.startsWith("self-iteration"))).toBe(false);
 		expect(requests[0]).not.toContain("db_query");
 		expect(requests[0]).not.toContain("tool_search");

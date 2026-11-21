@@ -887,7 +887,7 @@ export async function listRunSteps(
 	if (cachedThinking.length > durableThinking.length) {
 		return {
 			...withDuration,
-			steps: [...cachedThinking, ...durable.steps.filter((step) => step.kind !== "thinking")],
+			steps: [...cached.steps],
 		};
 	}
 	return durable;

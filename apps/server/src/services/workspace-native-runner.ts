@@ -527,15 +527,14 @@ export class WorkspaceNativeRunner {
 		await mkdir(sessionDir, { recursive: true });
 		const sessionFile = join(sessionDir, "session.jsonl");
 		const worktreeTask = await this.#options.ensureWorktree(context.taskId);
-		const executor = await this.#options.executor();
 		const nativeTools: readonly PiWorkspaceNativeToolName[] = worktreeTask.analysisOnly
 			? ["read"]
-			: executor.isolated
-				? ["read", "bash", "edit", "write"]
-				: ["read", "edit", "write"];
+			: ["read", "bash", "edit", "write"];
 		const runner = await createPiWorkspaceRunner({
 			agentDir,
 			allowedCommands: worktreeTask.constraints.allowedCommands,
+			bashMode: "host",
+			requireIsolatedSandbox: false,
 			appendPrompt: [
 				await this.#options.taskPrompt({
 					baseRef: context.baseRef,
@@ -545,7 +544,7 @@ export class WorkspaceNativeRunner {
 				}),
 			],
 			additionalTools: this.#additionalTools(context),
-			executor: async () => executor,
+			executor: this.#options.executor,
 			...(worktreeTask.constraints.maxOutputBytes === undefined
 				? {}
 				: { maxOutputBytes: worktreeTask.constraints.maxOutputBytes }),
@@ -743,10 +742,19 @@ export class WorkspaceNativeRunner {
 		const unsubscribe = native.session.subscribe((event) => {
 			const message = "message" in event ? (event.message as PipeMessage | undefined) : undefined;
 			if (event.type === "turn_start") {
-				// Snapshot the finished tools before the new turn clears them so the timeline can
-				// commit them without waiting for a throttled poll that may never see this round.
-				if (state.tools.some((tool) => tool.status === "done")) emit();
+				// Flush any pending snapshot from the ending turn before clearing per-turn state
+				// so the timeline commits the previous round once without re-ingesting its thinking.
+				if (scheduled !== undefined) {
+					clearTimeout(scheduled);
+					scheduled = undefined;
+					emit();
+				} else if (state.tools.some((tool) => tool.status === "done")) {
+					emit();
+				}
 				state.tools = state.tools.filter((tool) => tool.status !== "done");
+				state.partialText = undefined;
+				state.partialThinking = undefined;
+				state.draftTools = [];
 				state.turns += 1;
 				throttled();
 				return;

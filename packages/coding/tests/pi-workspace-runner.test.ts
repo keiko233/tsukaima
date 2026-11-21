@@ -561,3 +561,44 @@ describe("parseGovernedShellCommand", () => {
 		).toThrow(GovernedShellError);
 	});
 });
+
+describe("PiWorkspaceRunner host bash mode", () => {
+	test("runs shell pipelines and non-allowlisted commands directly in the worktree", async () => {
+		const fauxRuntime = await createFauxRuntime();
+		fauxRuntime.faux.setResponses([
+			fauxAssistantMessage([
+				{
+					type: "toolCall",
+					id: "call_host_bash",
+					name: "bash",
+					arguments: { command: "ls src && echo hello | tr a-z A-Z" },
+				},
+			]),
+			fauxAssistantMessage("host bash done"),
+		]);
+		const runner = await createPiWorkspaceRunner({
+			agentDir: context.agentDir,
+			allowedCommands: ["bun"],
+			bashMode: "host",
+			executor: async () => {
+				throw new Error("executor should not be called in host bash mode");
+			},
+			model: fauxRuntime.model,
+			modelRuntime: fauxRuntime.runtime,
+			pathAllowlist: ["src", "package.json"],
+			requireIsolatedSandbox: false,
+			sessionFile: join(context.root, `session-${crypto.randomUUID()}.jsonl`),
+			worktreePath: context.worktreePath,
+		});
+		disposers.push(async () => await runner.dispose());
+		const events: AgentSessionEvent[] = [];
+		runner.subscribe((event) => events.push(event));
+		const result = await runner.run("run host bash");
+		expect(result.assistantText).toBe("host bash done");
+		expect(result.toolErrors).toBe(0);
+		const end = findToolEnd(events, "bash");
+		expect(end).toBeDefined();
+		expect(eventText(end!)).toContain("hello.ts");
+		expect(eventText(end!)).toContain("HELLO");
+	});
+});

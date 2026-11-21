@@ -9,6 +9,7 @@ import { createApp } from "../src/app.ts";
 import {
 	createLocalChat,
 	createSession,
+	listRunSteps,
 	getSessionContextStats,
 	getSessionMessage,
 	listChats,
@@ -450,6 +451,142 @@ describe("WebUI chat and session service", () => {
 
 			const inheritedPolicy = await lifecycle.conversationPolicy.effectivePolicy(nextSession.id);
 			expect(inheritedPolicy.trigger.keywords).toEqual(["friday-check"]);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("listRunSteps preserves chronological order when cached thinking exceeds durable thinking", async () => {
+		const lifecycle = await createLifecycle();
+		await lifecycle.start();
+		try {
+			const chat = await createLocalChat(lifecycle, {
+				sessionTitle: "Session 1",
+				title: "RunSteps Order",
+			});
+			const database = lifecycle.domainDatabase!;
+			const host = lifecycle.conversationHost!;
+			const [sessionRow] = await database
+				.select({ durableConversationId: conversations.durableConversationId })
+				.from(conversations)
+				.where(eq(conversations.id, chat.sessionId))
+				.limit(1);
+			const durableId = sessionRow!.durableConversationId;
+			const entryId = "entry-order-1";
+			host.listEntries = (async () => [
+				{
+					conversationId: durableId,
+					data: {},
+					id: "entry-win",
+					kind: "tsukaima.activityWindow",
+					occurredAtMs: 1000,
+				},
+				{
+					conversationId: durableId,
+					data: {},
+					id: "entry-tool-call",
+					kind: "pi.assistant",
+					model: [
+						{
+							content: [{ arguments: { path: "a.ts" }, id: "c1", name: "read", type: "toolCall" }],
+							role: "assistant",
+							stopReason: "toolUse",
+						},
+					],
+					occurredAtMs: 1001,
+				},
+				{
+					conversationId: durableId,
+					data: {},
+					id: "entry-tool-res",
+					kind: "pi.tool-result",
+					model: [
+						{
+							content: [{ text: "ok", type: "text" }],
+							role: "toolResult",
+							toolCallId: "c1",
+							toolName: "read",
+						},
+					],
+					occurredAtMs: 1002,
+				},
+				{
+					conversationId: durableId,
+					data: {},
+					id: entryId,
+					kind: "pi.assistant",
+					model: [
+						{
+							content: [{ text: "done", type: "text" }],
+							role: "assistant",
+							stopReason: "stop",
+						},
+					],
+					occurredAtMs: 1003,
+				},
+			]) as unknown as typeof host.listEntries;
+			await lifecycle.liveRuns.record(chat.sessionId, {
+				attempt: 1,
+				conversationId: durableId,
+				draftTools: [],
+				failure: undefined,
+				generationStartedAtMs: undefined,
+				model: undefined,
+				partialText: undefined,
+				partialThinking: "first thought",
+				retry: undefined,
+				runId: "run-1",
+				settled: false,
+				startedAtMs: 1000,
+				tools: [],
+				turns: 1,
+			});
+			await lifecycle.liveRuns.record(chat.sessionId, {
+				attempt: 1,
+				conversationId: durableId,
+				draftTools: [],
+				failure: undefined,
+				generationStartedAtMs: undefined,
+				model: undefined,
+				partialText: undefined,
+				partialThinking: "first thought",
+				retry: undefined,
+				runId: "run-1",
+				settled: false,
+				startedAtMs: 1000,
+				tools: [
+					{
+						argumentsText: undefined,
+						callId: "c1",
+						output: "ok",
+						status: "done",
+						toolName: "read",
+					},
+				],
+				turns: 1,
+			});
+			await lifecycle.liveRuns.record(chat.sessionId, {
+				attempt: 1,
+				conversationId: durableId,
+				draftTools: [],
+				failure: undefined,
+				generationStartedAtMs: undefined,
+				model: undefined,
+				partialText: "done",
+				partialThinking: "second thought",
+				retry: undefined,
+				runId: "run-1",
+				settled: true,
+				startedAtMs: 1000,
+				tools: [],
+				turns: 2,
+			});
+			await lifecycle.liveRuns.finalizeAnswer(chat.sessionId, entryId);
+
+			const result = await listRunSteps(lifecycle, { entryId, sessionId: chat.sessionId });
+			const kinds = result.steps.map((step) => step.kind);
+			expect(kinds.indexOf("thinking")).toBeLessThan(kinds.indexOf("tool"));
+			expect(kinds.lastIndexOf("thinking")).toBeGreaterThan(kinds.indexOf("tool"));
 		} finally {
 			await lifecycle.stop();
 		}

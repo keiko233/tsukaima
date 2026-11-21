@@ -20,7 +20,6 @@ import {
 	type ModelPolicy,
 } from "@tsukaima/core";
 import {
-	createBubblewrapSandbox,
 	createHostSandbox,
 	DomainCodingStore,
 	reconcileRestartDeployment,
@@ -642,10 +641,7 @@ export class TsukaimaLifecycle {
 			repositoryPath: config.repositoryRoot,
 			worktreeRoot: workspaceWorktreeRoot,
 		};
-		const workspaceSandboxProvider =
-			config.codingSandbox === "bubblewrap"
-				? createBubblewrapSandbox(workspaceSandbox)
-				: createHostSandbox(workspaceSandbox);
+		const workspaceSandboxProvider = createHostSandbox(workspaceSandbox);
 		this.workspaceNative = new WorkspaceNativeRunner({
 			agentDirRoot: join(config.dataDir, "workspace-agents"),
 			audit: (entry) => this.writeAudit(entry),

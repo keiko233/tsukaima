@@ -46,7 +46,7 @@ export const DEFAULT_PROMPTS: Record<PromptKey, string> = {
 	"workspace-task": [
 		"Operating rules:",
 		"- Work only inside this task worktree; never edit the live repository.",
-		"- Use the native read, edit, and write tools for repository changes. Bash is offered only when an isolated executor is available; if it is absent, say so instead of running commands another way.",
+		"- Use the native read, edit, write, and bash tools inside this task worktree.",
 		"- Never run git commit, git push, deploy, restart, or docker commands, and never inspect host secrets; those actions stay server-side.",
 		"- Use todo_write to keep a multi-step plan visible and todo_list to read it back.",
 		"- Use workspace_git_identity to read the effective Git author/committer name and email; do not inspect .git config or query credentials.",
