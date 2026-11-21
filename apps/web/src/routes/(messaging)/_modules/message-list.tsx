@@ -29,6 +29,7 @@ import { m } from "@/paraglide/messages";
 import { runtimeUrl } from "@/lib/runtime-url";
 import { formatDateTime, formatTimestamp } from "../../_modules/lib/format";
 import { LiveRunMessage } from "./live-run-message";
+import { MessageText } from "./message-text";
 import { RunSteps } from "./run-steps";
 
 function deliveryLabel(status: DeliveryStatus): string {
@@ -153,7 +154,7 @@ function InlineMedia({ part }: { part: MediaPart }) {
 	);
 }
 
-function MessageBody({ message }: { message: MessageSummary }) {
+function MessageBody({ message, markdown }: { message: MessageSummary; markdown: boolean }) {
 	const textParts = message.parts.filter((part) => part.type === "text" && part.text);
 	const mediaParts = message.parts.filter((part) => part.type !== "text");
 	const inlineParts = mediaParts.filter((part) => isInlineImage(part));
@@ -162,9 +163,10 @@ function MessageBody({ message }: { message: MessageSummary }) {
 	return (
 		<div className="space-y-1.5">
 			{textParts.length > 0 ? (
-				<p className="whitespace-pre-wrap break-words">
-					{textParts.map((part) => (part.type === "text" ? part.text : "")).join("")}
-				</p>
+				<MessageText
+					markdown={markdown}
+					text={textParts.map((part) => (part.type === "text" ? part.text : "")).join("")}
+				/>
 			) : null}
 			{inlineParts.length > 0 ? (
 				<div className="flex flex-wrap gap-1.5">
@@ -215,11 +217,13 @@ function sameSender(left: MessageSummary, right: MessageSummary): boolean {
 
 function MessageRow({
 	grouped,
+	markdown,
 	message,
 	sessionId,
 }: {
 	/** Follows an earlier message from the same sender, so the identity chrome is skipped. */
 	grouped: boolean;
+	markdown: boolean;
 	message: MessageSummary;
 	/** Session the message belongs to, needed to expand a turn's steps. */
 	sessionId: string;
@@ -264,6 +268,7 @@ function MessageRow({
 					<RunSteps
 						answerText={message.contentText}
 						entryId={message.durableEntryId}
+						markdown={markdown}
 						sessionId={sessionId}
 					/>
 				) : null}
@@ -279,7 +284,7 @@ function MessageRow({
 								assistant ? "max-w-[46rem]" : "max-w-[min(32rem,80%)] rounded-lg px-2.5 py-1.5",
 							)}
 						>
-							<MessageBody message={message} />
+							<MessageBody markdown={assistant && markdown} message={message} />
 						</MessageBubbleContent>
 					</MessageBubble>
 				)}
@@ -340,6 +345,7 @@ function MessageRow({
 
 export function MessageList({
 	messages,
+	markdown = false,
 	liveRun,
 	now,
 	sessionId,
@@ -348,6 +354,7 @@ export function MessageList({
 	onLoadOlder,
 }: {
 	messages: readonly MessageSummary[];
+	markdown?: boolean;
 	/** Session the messages belong to, needed to expand a turn's steps. */
 	sessionId: string;
 	/** In-flight assistant turn, appended below the persisted transcript. */
@@ -442,7 +449,7 @@ export function MessageList({
 								>
 									{message === undefined ? (
 										liveRun === undefined ? null : (
-											<LiveRunMessage now={now} run={liveRun} />
+											<LiveRunMessage markdown={markdown} now={now} run={liveRun} />
 										)
 									) : (
 										<MessageRow
@@ -450,6 +457,7 @@ export function MessageList({
 												messages[virtualItem.index - 1] !== undefined &&
 												sameSender(messages[virtualItem.index - 1]!, message)
 											}
+											markdown={markdown}
 											message={message}
 											sessionId={sessionId}
 										/>

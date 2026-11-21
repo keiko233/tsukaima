@@ -65,6 +65,24 @@ describe("LiveRunMessage", () => {
 		expect(html).toContain("思考中");
 	});
 
+	test("renders workspace output as Markdown without loading external images", () => {
+		const html = renderToStaticMarkup(
+			<LiveRunMessage
+				markdown
+				now={5_000}
+				run={run({
+					partialText: "## Summary\n\n- **Ready**\n\n![example](https://example.invalid/image.png)",
+					steps: [{ kind: "text", text: "Reading `demo.ts`." }],
+				})}
+			/>,
+		);
+		expect(html).toContain("<h2>Summary</h2>");
+		expect(html).toContain("<strong>Ready</strong>");
+		expect(html).toContain("<code>demo.ts</code>");
+		expect(html).toContain("<span>example</span>");
+		expect(html).not.toContain("https://example.invalid/image.png");
+	});
+
 	test("renders elapsed seconds from the run start", () => {
 		// 4s of wall clock from `startedAtMs` to `now`.
 		const html = render(run({ startedAtMs: 1_000 }), 5_000);

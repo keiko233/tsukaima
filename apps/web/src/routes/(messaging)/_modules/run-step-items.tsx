@@ -11,11 +11,12 @@ import { ToolCallRow } from "./tool-call-row";
  * This transcript is right-aligned, so the rows are rendered directly.
  */
 export interface RunStepRow {
-	readonly body?: ReactNode;
+	readonly body?: string;
 	readonly id: string;
 	/** Marks the row and its body as a failure. */
 	readonly isError?: boolean;
 	readonly label: ReactNode;
+	readonly markdown?: boolean;
 	/** Full-width interactive content rendered instead of the label/body pair (tool calls). */
 	readonly node?: ReactNode;
 }
@@ -92,7 +93,12 @@ export function toStepRows(steps: readonly RunStep[], answerText?: string): RunS
 				return;
 			case "text":
 				if (index !== lastText || (answerText !== undefined && step.text !== answerText)) {
-					rows.push({ body: step.text, id: `text-${index}`, label: m.run_step_text() });
+					rows.push({
+						body: step.text,
+						id: `text-${index}`,
+						label: m.run_step_text(),
+						markdown: true,
+					});
 				}
 				return;
 		}

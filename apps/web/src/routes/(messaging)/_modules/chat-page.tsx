@@ -408,6 +408,7 @@ export function ChatPage({
 								hasOlder={messages.hasNextPage}
 								liveRun={liveRun}
 								loadingOlder={messages.isFetchingNextPage}
+								markdown={surface === "workspace"}
 								messages={transcript}
 								now={now}
 								onLoadOlder={() => void messages.fetchNextPage()}

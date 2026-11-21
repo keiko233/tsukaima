@@ -13,6 +13,7 @@ import {
 import type { LiveRunPhase, LiveRunState, RunStep } from "@tsukaima/contracts";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
+import { MessageText } from "./message-text";
 import { ToolCallRow } from "./tool-call-row";
 
 function elapsedSeconds(startedAtMs: number, now: number): number {
@@ -44,7 +45,9 @@ function phaseLabel(phase: LiveRunPhase | undefined, working: boolean): string {
 	}
 }
 
-function modelStatusText(status: Extract<RunStep, { kind: "model" }>["status"]): string | undefined {
+function modelStatusText(
+	status: Extract<RunStep, { kind: "model" }>["status"],
+): string | undefined {
 	switch (status) {
 		case "running":
 			return m.live_run_model_running();
@@ -57,13 +60,7 @@ function modelStatusText(status: Extract<RunStep, { kind: "model" }>["status"]):
 	}
 }
 
-function ModelCallRow({
-	step,
-	now,
-}: {
-	step: Extract<RunStep, { kind: "model" }>;
-	now: number;
-}) {
+function ModelCallRow({ step, now }: { step: Extract<RunStep, { kind: "model" }>; now: number }) {
 	const status = modelStatusText(step.status);
 	const seconds = stepSeconds(step.startedAtMs, step.endedAtMs, now);
 	const meta = [
@@ -99,14 +96,16 @@ function ModelCallRow({
 	);
 }
 
-function StepRow({ step, now }: { step: RunStep; now: number }) {
+function StepRow({ step, now, markdown }: { step: RunStep; now: number; markdown: boolean }) {
 	switch (step.kind) {
 		case "model":
 			return <ModelCallRow now={now} step={step} />;
 		case "thinking":
 			return (
 				<>
-					<span className="text-[11px] leading-5 text-muted-foreground">{m.run_step_thinking()}</span>
+					<span className="text-[11px] leading-5 text-muted-foreground">
+						{m.run_step_thinking()}
+					</span>
 					<p className="max-w-full whitespace-pre-wrap break-words text-left text-[11px] leading-5 text-muted-foreground/80">
 						{step.text}
 					</p>
@@ -122,16 +121,16 @@ function StepRow({ step, now }: { step: RunStep; now: number }) {
 				/>
 			);
 		case "failure":
-			return (
-				<p className="text-left text-[11px] leading-5 text-destructive">{step.detail}</p>
-			);
+			return <p className="text-left text-[11px] leading-5 text-destructive">{step.detail}</p>;
 		case "text":
 			return (
 				<>
 					<span className="text-[11px] leading-5 text-muted-foreground">{m.run_step_text()}</span>
-					<p className="max-w-full whitespace-pre-wrap break-words text-left text-[11px] leading-5 text-muted-foreground/80">
-						{step.text}
-					</p>
+					<MessageText
+						className="max-w-full text-left text-[11px] leading-5 text-muted-foreground/80"
+						markdown={markdown}
+						text={step.text}
+					/>
 				</>
 			);
 	}
@@ -139,6 +138,7 @@ function StepRow({ step, now }: { step: RunStep; now: number }) {
 
 export interface LiveRunMessageProps {
 	run: LiveRunState;
+	markdown?: boolean;
 	/** Wall clock at render time, so the elapsed label ticks with the transcript. */
 	now: number;
 }
@@ -153,7 +153,7 @@ export interface LiveRunMessageProps {
  * and tool calls; the current request adds its partial thinking, draft tool calls, and running
  * tools below them. A slow model therefore reads as model call #1 working, not a hung bot.
  */
-export function LiveRunMessage({ run, now }: LiveRunMessageProps) {
+export function LiveRunMessage({ run, now, markdown = false }: LiveRunMessageProps) {
 	const [collapsed, setCollapsed] = useState(false);
 	const working = !run.settled && run.failure === undefined;
 	const partial = run.partialText ?? "";
@@ -164,9 +164,7 @@ export function LiveRunMessage({ run, now }: LiveRunMessageProps) {
 	const tools = run.tools;
 	// A failed run keeps the partial in the bubble. The timeline also records it as the final
 	// round's text step, so hide that duplicate while keeping earlier rounds' preambles.
-	const visibleSteps = steps.filter(
-		(step) => step.kind !== "text" || step.text !== partial,
-	);
+	const visibleSteps = steps.filter((step) => step.kind !== "text" || step.text !== partial);
 	const hasActivity =
 		visibleSteps.length > 0 || thinking.length > 0 || draftTools.length > 0 || tools.length > 0;
 	const expanded = working || !collapsed;
@@ -212,7 +210,7 @@ export function LiveRunMessage({ run, now }: LiveRunMessageProps) {
 								key={`step-${index}-${step.kind}`}
 								className="flex w-full min-w-0 flex-col items-start gap-0.5"
 							>
-								<StepRow now={now} step={step} />
+								<StepRow markdown={markdown} now={now} step={step} />
 							</li>
 						))}
 						{thinking.length > 0 ? (
@@ -264,15 +262,19 @@ export function LiveRunMessage({ run, now }: LiveRunMessageProps) {
 				{partial.length > 0 ? (
 					<MessageBubble variant="ghost" className="max-w-full">
 						<MessageBubbleContent className="max-w-[46rem]">
-							<p className="whitespace-pre-wrap break-words">
-								{partial}
+							<div>
+								<MessageText
+									className={markdown ? "" : "inline"}
+									markdown={markdown}
+									text={partial}
+								/>
 								{working ? (
 									<span
 										aria-hidden="true"
 										className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-current align-text-bottom"
 									/>
 								) : null}
-							</p>
+							</div>
 						</MessageBubbleContent>
 					</MessageBubble>
 				) : null}

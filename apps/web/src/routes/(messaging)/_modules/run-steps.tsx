@@ -6,6 +6,7 @@ import { useState } from "react";
 import { orpc } from "@/lib/api";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
+import { MessageText } from "./message-text";
 import { toStepRows } from "./run-step-items";
 
 /**
@@ -21,10 +22,12 @@ import { toStepRows } from "./run-step-items";
 export function RunSteps({
 	answerText,
 	entryId,
+	markdown = false,
 	sessionId,
 }: {
 	answerText?: string;
 	entryId: string;
+	markdown?: boolean;
 	sessionId: string;
 }) {
 	const [open, setOpen] = useState(false);
@@ -84,14 +87,14 @@ export function RunSteps({
 										</span>
 									)}
 									{row.body === undefined ? null : (
-										<p
+										<MessageText
 											className={cn(
-												"max-w-full whitespace-pre-wrap break-words text-left text-[11px] leading-5",
+												"max-w-full text-left text-[11px] leading-5",
 												row.isError ? "text-destructive" : "text-muted-foreground/80",
 											)}
-										>
-											{row.body}
-										</p>
+											markdown={markdown && row.markdown === true}
+											text={row.body}
+										/>
 									)}
 								</>
 							)}
