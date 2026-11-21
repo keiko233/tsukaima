@@ -737,9 +737,18 @@ describe("sticker selection and send tokens", () => {
 			{ text: " 未知 ", type: "text" },
 		]);
 
+		const sentThrough: { conversationId: string; parts: readonly unknown[] }[] = [];
 		const context = createPluginContext({
 			grantedPermissions: stickerMemeManifest.permissions,
 			manifest: stickerMemeManifest,
+			outbound: {
+				recordInteraction: async () => undefined,
+				send: async () => ({}),
+				sendToConversation: async (input) => {
+					sentThrough.push(input);
+					return {};
+				},
+			},
 			pluginId: "sticker-meme",
 		});
 		registerStickerTools(context, setup.selection);
@@ -756,20 +765,37 @@ describe("sticker selection and send tokens", () => {
 		expect(sent.ok).toBe(true);
 		if (sent.ok) {
 			const payload = JSON.parse(sent.result.content[0]?.text ?? "{}") as {
-				directive?: string;
-				inlineMarker?: string;
 				itemId?: string;
+				matchedBy?: string;
+				name?: string;
+				packId?: string;
+				packName?: string;
+				sent?: boolean;
 			};
-			expect(payload.itemId).toBe("fresh");
-			expect(payload.directive).toMatch(/^\[\[sticker:st_[a-z0-9]+\]\]$/u);
-			expect(payload.inlineMarker).toBe("[表情:fresh]");
+			expect(payload).toMatchObject({
+				itemId: "fresh",
+				matchedBy: "query",
+				name: "fresh",
+				packId: "pack-main",
+				packName: "Main",
+				sent: true,
+			});
+			expect(payload).not.toHaveProperty("directive");
+			expect(payload).not.toHaveProperty("inlineMarker");
 		}
+		expect(sentThrough).toHaveLength(1);
+		expect(sentThrough[0]?.conversationId).toBe("conversation-1");
+		expect(sentThrough[0]?.parts[0]).toMatchObject({
+			mediaId: setup.fresh.mediaId,
+			type: "sticker",
+		});
 	});
 
-	test("resolves every inline marker backed by a send-tool token", async () => {
+	test("resolveForSend sends immediately without issuing a marker token", async () => {
 		const setup = await setupSelection();
 		const transform = createStickerReplyTransform({
 			audit: { record: async (entry) => void setup.audits.push(entry) },
+			maxInlineStickersPerTurn: 2,
 			media: setup.media,
 			repository: setup.repository,
 			selection: setup.selection,
@@ -782,6 +808,9 @@ describe("sticker selection and send tokens", () => {
 			conversationId: "conversation-1",
 			itemId: "spammed",
 		});
+		expect(first.item.id).toBe("fresh");
+		expect(second.item.id).toBe("spammed");
+		expect("choose" in first).toBe(false);
 		const transformed = await transform({
 			conversationId: "conversation-1",
 			parts: [{ text: "First [表情:fresh]\nSecond [表情:spammed]", type: "text" }],
@@ -797,8 +826,6 @@ describe("sticker selection and send tokens", () => {
 			setup.fresh.mediaId,
 			setup.spammed.mediaId,
 		]);
-		expect((await setup.repository.getToken(first.choose.sendToken))?.usedAt).not.toBeNull();
-		expect((await setup.repository.getToken(second.choose.sendToken))?.usedAt).not.toBeNull();
 	});
 });
 
@@ -2443,9 +2470,18 @@ describe("sticker debug logging", () => {
 		expect(available.some((pack) => pack.packId === "pack-disabled")).toBe(false);
 
 		// Register tools and test list_packs tool
+		const sentThrough: { conversationId: string; parts: readonly unknown[] }[] = [];
 		const context = createPluginContext({
 			grantedPermissions: stickerMemeManifest.permissions,
 			manifest: stickerMemeManifest,
+			outbound: {
+				recordInteraction: async () => undefined,
+				send: async () => ({}),
+				sendToConversation: async (input) => {
+					sentThrough.push(input);
+					return {};
+				},
+			},
 			pluginId: "sticker-meme",
 		});
 		registerStickerTools(context, selection);
@@ -2494,7 +2530,7 @@ describe("sticker debug logging", () => {
 		const tagSearch = await selection.search({ query: "animals" });
 		expect(tagSearch.map((candidate) => candidate.itemId)).toContain("beta-1");
 
-		// Test send tool with direct match: matchedBy is "query" and no availablePacks
+		// Test send tool with direct match: matchedBy is "query" and it sends immediately
 		const directSend = await context.tools.invoke(
 			"sticker-meme.send",
 			{ query: "smile" },
@@ -2503,16 +2539,17 @@ describe("sticker debug logging", () => {
 		expect(directSend.ok).toBe(true);
 		if (directSend.ok) {
 			const parsed = JSON.parse(directSend.result.content[0]?.text ?? "{}") as {
-				availablePacks?: unknown;
 				itemId: string;
 				matchedBy: string;
+				sent: boolean;
 			};
 			expect(parsed.itemId).toBe("alpha-1");
 			expect(parsed.matchedBy).toBe("query");
-			expect(parsed.availablePacks).toBeUndefined();
+			expect(parsed.sent).toBe(true);
 		}
+		expect(sentThrough.at(-1)?.parts[0]).toMatchObject({ type: "sticker" });
 
-		// Test send tool with unmatched query: falls back to top approved stickers with matchedBy: "fallback" and availablePacks
+		// Test send tool with unmatched query: falls back to top approved stickers with matchedBy: "fallback"
 		const fallbackSend = await context.tools.invoke(
 			"sticker-meme.send",
 			{ query: "completely_unmatched_term" },
@@ -2521,12 +2558,12 @@ describe("sticker debug logging", () => {
 		expect(fallbackSend.ok).toBe(true);
 		if (fallbackSend.ok) {
 			const parsed = JSON.parse(fallbackSend.result.content[0]?.text ?? "{}") as {
-				availablePacks: readonly { packId: string }[];
 				itemId: string;
 				matchedBy: string;
+				sent: boolean;
 			};
 			expect(parsed.matchedBy).toBe("fallback");
-			expect(parsed.availablePacks).toHaveLength(2);
+			expect(parsed.sent).toBe(true);
 			expect(["alpha-1", "alpha-2", "beta-1"]).toContain(parsed.itemId);
 		}
 

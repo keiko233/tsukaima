@@ -1,5 +1,6 @@
 import type { PluginContext, PluginLogger, ToolResult } from "@tsukaima/sdk";
 import { elapsedMs, traceLog } from "./logging.ts";
+import { toStickerMessagePart } from "./output.ts";
 import type { StickerSearchInput, StickerSelectionService } from "./selection.ts";
 
 const text = (value: string): ToolResult => ({ content: [{ text: value, type: "text" }] });
@@ -154,7 +155,7 @@ export function registerStickerTools(
 	});
 	context.tools.register({
 		description:
-			"Select and prepare (or directly send) the best matching approved sticker in one step by query, emotion, itemId, packId, or tags. All enabled packs in the library are approved for use in chat (unless explicitly restricted to a different personaId). Use sticker-meme_list_packs or omit filters to browse available packs. Returns a ready-to-use [[sticker:<token>]] directive (or inline [表情:<query>] marker) so you do not need a separate sticker-meme_search -> sticker-meme_choose two-step round.",
+			"Select and immediately send the best matching approved sticker in one step by query, emotion, itemId, packId, or tags. All enabled packs in the library are approved for use in chat (unless explicitly restricted to a different personaId). Use sticker-meme.list_packs or omit filters to browse available packs. The sticker is delivered to this conversation right away; do not write sticker directives or markers in your reply.",
 		async execute(input, invocation) {
 			const startedAt = Date.now();
 			const conversationId = invocation.conversationId;
@@ -173,27 +174,38 @@ export function registerStickerTools(
 				itemId: itemId ?? null,
 				tool: "sticker-meme.send",
 			});
-			const { availablePacks, choose, item, matchedBy, pack } = await selection.resolveForSend({
+			const { item, matchedBy, pack } = await selection.resolveForSend({
 				...search,
 				conversationId,
 				...(itemId === undefined ? {} : { itemId }),
 			});
+			const outbound = context.outbound;
+			if (outbound === undefined) {
+				log.debug("sticker tool rejected", {
+					durationMs: elapsedMs(startedAt),
+					reason: "outbound_unavailable",
+					tool: "sticker-meme.send",
+				});
+				return text("Sticker sending is unavailable: this host exposes no outbound channel.");
+			}
+			await outbound.sendToConversation({
+				conversationId,
+				parts: [toStickerMessagePart(item)],
+			});
 			log.debug("sticker tool completed", {
-				chosenId: choose.itemId,
 				durationMs: elapsedMs(startedAt),
+				itemId: item.id,
 				matchedBy,
-				tokenIssued: true,
 				tool: "sticker-meme.send",
 			});
 			return text(
 				JSON.stringify({
-					...choose,
-					inlineMarker: `[表情:${item.name}]`,
+					itemId: item.id,
 					matchedBy,
 					name: item.name,
 					packId: pack.id,
 					packName: pack.name,
-					...(availablePacks === undefined ? {} : { availablePacks }),
+					sent: true,
 				}),
 			);
 		},
@@ -230,7 +242,7 @@ export function registerStickerTools(
 	});
 	context.tools.register({
 		description:
-			"Choose one approved sticker and issue a single-use, short-lived, conversation-bound send token. Use the returned directive verbatim in the final reply, on its own line at the point where the sticker should be sent. Every newline in the final reply becomes a separate chat message; keep one thought or one sticker per line so text and stickers arrive naturally one after another.",
+			"Deprecated legacy token picker. Prefer sticker-meme.send, which sends the chosen sticker immediately and needs no token or reply marker. This tool only returns a single-use send token for older callers.",
 		async execute(input, invocation) {
 			const startedAt = Date.now();
 			const conversationId = invocation.conversationId;

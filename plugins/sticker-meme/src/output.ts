@@ -76,7 +76,14 @@ export function splitStickerDirectives(text: string, logger?: PluginLogger): Sti
 	return normalizeDirectiveText(text, logger);
 }
 
-const toStickerMessagePart = (item: StickerItem): MessagePart => {
+/** Remove stray sticker directives or inline markers so markup never reaches chat text. */
+export function stripStickerMarkers(text: string): string {
+	const stripped = text.replace(new RegExp(COMBINED_STICKER_PATTERN.source, "giu"), "");
+	if (stripped === text) return text;
+	return stripped.replace(/[ \t]{2,}/gu, " ").trim();
+}
+
+export const toStickerMessagePart = (item: StickerItem): MessagePart => {
 	const mediaPart = {
 		...(item.height === null ? {} : { height: item.height }),
 		mediaId: item.mediaId,
@@ -187,7 +194,8 @@ export function createStickerReplyTransform(options: StickerOutputOptions) {
 			}
 			for (const piece of splitStickerDirectives(part.text, logger)) {
 				if (piece.type === "text") {
-					if (piece.text.length > 0) output.push({ text: piece.text, type: "text" });
+					const clean = stripStickerMarkers(piece.text);
+					if (clean.length > 0) output.push({ text: clean, type: "text" });
 					continue;
 				}
 				if (piece.type === "inline") {

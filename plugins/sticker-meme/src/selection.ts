@@ -48,7 +48,6 @@ export interface AvailableStickerPack {
 
 export interface StickerSendResolution {
 	readonly availablePacks?: readonly AvailableStickerPack[];
-	readonly choose: StickerChooseResult;
 	readonly item: StickerItem;
 	readonly matchedBy: "query" | "fallback";
 	readonly pack: StickerPack;
@@ -587,8 +586,9 @@ export class StickerSelectionService {
 
 	/**
 	 * Single-step sticker selection for `sticker-meme.send`: resolves the best matching approved
-	 * item (or an explicit `itemId`), issues a conversation-bound token/directive, and returns the
-	 * full item metadata so the tool can either send immediately or return the directive.
+	 * item (or an explicit `itemId`), validates that its media is present, and records the use so
+	 * the tool can send it immediately. No send token is issued; immediate sending is the only
+	 * path, so markers and directives are never handed back to the model.
 	 * When the explicit query returns no matches, falls back to available stickers and returns
 	 * `matchedBy: "fallback"` along with `availablePacks`.
 	 */
@@ -637,14 +637,20 @@ export class StickerSelectionService {
 			throw new Error("No sticker candidate matched");
 		}
 
-		const choose = await this.choose({
-			conversationId,
-			itemId: item.id,
-		});
+		const denial = await this.#selectable(item, pack);
+		if (denial !== undefined) {
+			await this.#recordDenied(conversationId, denial, item.id);
+			this.#logger?.debug("sticker send failed", {
+				durationMs: elapsedMs(startedAt),
+				itemId: item.id,
+				reason: denial,
+			});
+			throw new Error(`Sticker is not selectable: ${denial}`);
+		}
+		await this.#repository.recordUse(item.id);
 
 		return {
 			...(availablePacks === undefined ? {} : { availablePacks }),
-			choose,
 			item,
 			matchedBy,
 			pack,

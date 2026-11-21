@@ -79,7 +79,7 @@ interface RunSpeakers {
 	readonly userId: string | undefined;
 }
 const STICKER_HINTS_HEADER =
-	"Ready-to-copy sticker captions (write the marker exactly when a sticker fits):";
+	"Sticker captions you can send (call sticker-meme.send with query or emotion when one fits; never write sticker markers in your reply):";
 const STICKER_HINT_MAX_ITEMS = 3;
 const STICKER_CAPTION_MAX_CHARS = 32;
 /** Ephemeral nudge for when a chat turn may speak mid-turn instead of waiting silently. */
@@ -484,10 +484,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 					lines.push(packOverview);
 				}
 				if (cleanedCaptions.length > 0) {
-					lines.push(
-						STICKER_HINTS_HEADER,
-						...cleanedCaptions.map((caption) => `- [表情:${caption}]`),
-					);
+					lines.push(STICKER_HINTS_HEADER, ...cleanedCaptions.map((caption) => `- ${caption}`));
 				}
 				if (lines.length > 0) {
 					const text = lines.join("\n");

@@ -484,7 +484,7 @@ describe("Batch 3 acceptance", () => {
 			triggers: [],
 		});
 		const stickerSection = sections.find((section) => section.key === "stickers");
-		expect(stickerSection?.text).toContain("[表情:开心]");
+		expect(stickerSection?.text).toContain("- 开心");
 		expect(
 			stickerSection?.text.split("\n").filter((line) => line.startsWith("- ")).length,
 		).toBeLessThanOrEqual(3);
@@ -506,6 +506,7 @@ describe("Batch 3 acceptance", () => {
 			}),
 		]);
 
+		harness.onebot.actions.length = 0;
 		const send = await invokeTool(
 			harness.lifecycle,
 			"sticker-meme.send",
@@ -515,25 +516,43 @@ describe("Batch 3 acceptance", () => {
 		expect(send.ok).toBe(true);
 		if (!send.ok) throw new Error("sticker send unavailable");
 		const payload = decodeToolResult(send.result) as {
-			readonly directive: string;
-			readonly inlineMarker: string;
-			readonly sendToken: string;
+			readonly itemId: string;
+			readonly matchedBy: string;
+			readonly name: string;
+			readonly packId: string;
+			readonly packName: string;
+			readonly sent: boolean;
 		};
-		expect(payload.directive).toBe(`[[sticker:${payload.sendToken}]]`);
-		expect(payload.inlineMarker).toBe("[表情:开心]");
+		expect(payload).toMatchObject({
+			itemId: "item-happy",
+			matchedBy: "query",
+			name: "开心",
+			packId: "pack-batch-3",
+			packName: "Batch 3 pack",
+			sent: true,
+		});
+		const immediateSend = harness.onebot.actions.find(
+			(action) => action.action === "send_group_msg" && action.params.group_id === "20001",
+		);
+		expect(segmentsOf(immediateSend)).toEqual([
+			expect.objectContaining({
+				data: expect.objectContaining({ sub_type: 1 }),
+				type: "image",
+			}),
+		]);
 
 		harness.onebot.actions.length = 0;
 		await harness.lifecycle.replyDispatcher.handleAnswer({
 			activityId: randomUUID(),
 			conversationId: session.durableConversationId,
 			entryId: "directive-sticker-entry",
-			text: `Legacy ${payload.directive}`,
+			text: "Legacy [[sticker:st_legacy]]",
 		});
 		const directiveSegments = harness.onebot.actions
 			.filter((action) => action.action === "send_group_msg" && action.params.group_id === "20001")
 			.flatMap((action) => segmentsOf(action));
-		expect(directiveSegments.map((segment) => segment.type)).toEqual(["text", "image"]);
-		expect(directiveSegments[1]).toMatchObject({ data: { sub_type: 1 }, type: "image" });
+		expect(directiveSegments.every((segment) => segment.type === "text")).toBe(true);
+		expect(JSON.stringify(directiveSegments)).toContain("[sticker unavailable]");
 	});
 
 	test("suppresses duplicate final text after a channel tool send while preserving stickers and new text", async () => {

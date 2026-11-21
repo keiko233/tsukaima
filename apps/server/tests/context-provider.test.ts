@@ -496,9 +496,9 @@ describe("DrizzleContextProvider", () => {
 			expect(stickerSection).toBeDefined();
 			const markerLines = (stickerSection?.text ?? "")
 				.split("\n")
-				.filter((line) => line.startsWith("- [表情:"));
+				.filter((line) => line.startsWith("- "));
 			expect(markerLines).toHaveLength(3);
-			expect(stickerSection?.text).toContain("[表情:开心]");
+			expect(stickerSection?.text).toContain("- 开心");
 			expect(stickerSection?.text).not.toContain("不要出现");
 			expect(stickerSection?.text.length ?? 0).toBeLessThanOrEqual(400);
 
@@ -548,8 +548,8 @@ describe("DrizzleContextProvider", () => {
 			expect(stickerSection?.text).toContain(
 				"Available sticker packs: Alpha Pack (120), Beta Pack (59)",
 			);
-			expect(stickerSection?.text).toContain("[表情:开心]");
-			expect(stickerSection?.text).toContain("[表情:点赞]");
+			expect(stickerSection?.text).toContain("- 开心");
+			expect(stickerSection?.text).toContain("- 点赞");
 
 			// Test when only packs are available without captions
 			const packsOnlyContext = provider(database, {
@@ -567,7 +567,7 @@ describe("DrizzleContextProvider", () => {
 			const packsOnlySection = packsOnlySections.find((section) => section.key === "stickers");
 			expect(packsOnlySection).toBeDefined();
 			expect(packsOnlySection?.text).toBe("Available sticker packs: Solo Pack (42)");
-			expect(packsOnlySection?.text).not.toContain("Ready-to-copy");
+			expect(packsOnlySection?.text).not.toContain("Sticker captions");
 		} finally {
 			database.$client.close();
 		}

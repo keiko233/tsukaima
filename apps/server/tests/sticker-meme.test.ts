@@ -272,20 +272,28 @@ describe("sticker-meme host integration", () => {
 				{ conversationId: durableConversationId },
 			);
 			if (!firstSend.ok || !secondSend.ok) throw new Error("sticker send unavailable");
-			const firstMarker = (decodeToolText(firstSend) as { inlineMarker: string }).inlineMarker;
-			const secondMarker = (decodeToolText(secondSend) as { inlineMarker: string }).inlineMarker;
+			const firstPayload = decodeToolText(firstSend) as {
+				readonly itemId: string;
+				readonly sent: boolean;
+			};
+			const secondPayload = decodeToolText(secondSend) as {
+				readonly itemId: string;
+				readonly sent: boolean;
+			};
+			expect(firstPayload).toMatchObject({ itemId: "item-smile", sent: true });
+			expect(secondPayload).toMatchObject({ itemId: "item-grin", sent: true });
+			// Each tool call sends immediately; nothing is deferred to a reply marker.
+			const sentImages = onebot.actions.filter((action) => action.action.startsWith("send_"));
+			expect(sentImages.length).toBeGreaterThanOrEqual(2);
+
 			onebot.actions.length = 0;
 			await lifecycle.replyDispatcher.handleAnswer({
 				activityId: randomUUID(),
 				conversationId: durableConversationId,
 				entryId: "entry-inline-markers",
-				text: `Two\n${firstMarker}\n${secondMarker}`,
+				text: "Two",
 			});
-			expect(segmentsOf(onebot.actions).map((segment) => segment.type)).toEqual([
-				"text",
-				"image",
-				"image",
-			]);
+			expect(segmentsOf(onebot.actions).map((segment) => segment.type)).toEqual(["text"]);
 			const [markerOutbound] = await database
 				.select()
 				.from(messages)
@@ -297,7 +305,7 @@ describe("sticker-meme host integration", () => {
 				)
 				.limit(1);
 			const markerParts = JSON.parse(markerOutbound?.partsJson ?? "[]") as MessagePart[];
-			expect(markerParts.map((part) => part.type)).toEqual(["text", "sticker", "sticker"]);
+			expect(markerParts.map((part) => part.type)).toEqual(["text"]);
 
 			onebot.actions.length = 0;
 			await lifecycle.replyDispatcher.handleAnswer({
@@ -316,6 +324,9 @@ describe("sticker-meme host integration", () => {
 				audits.some(
 					(row) => row.action === "sticker.transform.rejected" && row.result === "denied",
 				),
+			).toBe(true);
+			expect(
+				audits.some((row) => row.action === "sticker.transform.sent" && row.result === "ok"),
 			).toBe(true);
 			expect(
 				audits.some((row) => row.action === "sticker.token.issued" && row.result === "ok"),
