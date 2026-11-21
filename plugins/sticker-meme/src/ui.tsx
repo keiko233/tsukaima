@@ -275,6 +275,24 @@ function JobProgressCard({ job }: { job: JobProgressRow }) {
 	);
 }
 
+function StickerMediaPreview({
+	alt,
+	className,
+	mimeType,
+	preview,
+}: {
+	alt: string;
+	className: string;
+	mimeType: string;
+	preview: string;
+}) {
+	const src = `data:${mimeType};base64,${preview}`;
+	if (mimeType.toLowerCase().startsWith("video/")) {
+		return <video aria-label={alt} autoPlay className={className} loop muted playsInline src={src} />;
+	}
+	return <img alt={alt} className={className} src={src} />;
+}
+
 function StickerInspector({
 	item,
 	onChanged,
@@ -350,10 +368,11 @@ function StickerInspector({
 						{preview === undefined ? (
 							<span className="text-[10px] text-muted-foreground">{t.t("item_preview")}</span>
 						) : (
-							<img
+							<StickerMediaPreview
 								alt={item.name}
 								className="size-full object-contain"
-								src={`data:${item.mimeType};base64,${preview}`}
+								mimeType={item.mimeType}
+								preview={preview}
 							/>
 						)}
 					</div>
@@ -431,12 +450,14 @@ function PackAccordion({
 	onChanged,
 	onLoadPreviews,
 	pack,
+	previewErrors,
 	previews,
 }: {
 	items: readonly ItemRow[];
 	onChanged: () => Promise<void>;
 	onLoadPreviews: (items: readonly ItemRow[]) => Promise<void>;
 	pack: PackRow;
+	previewErrors: Record<string, boolean>;
 	previews: Record<string, string>;
 }) {
 	const t = usePluginI18n();
@@ -462,7 +483,7 @@ function PackAccordion({
 	useEffect(() => {
 		if (expanded) void onLoadPreviews(items);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [expanded, items.length]);
+	}, [expanded, items]);
 	const save = async () => {
 		setSaving(true);
 		try {
@@ -607,14 +628,15 @@ function PackAccordion({
 										onClick={() => setSelectedId(isSelected ? null : item.id)}
 									>
 										{preview === undefined ? (
-											<span className="flex size-full items-center justify-center text-[10px] text-muted-foreground">
-												{t.t("item_preview")}
+											<span className="flex size-full items-center justify-center text-center text-[10px] text-muted-foreground">
+												{previewErrors[item.id] ? t.t("preview_failed") : t.t("item_preview")}
 											</span>
 										) : (
-											<img
+											<StickerMediaPreview
 												alt={item.name}
 												className="size-full object-contain"
-												src={`data:${item.mimeType};base64,${preview}`}
+												mimeType={item.mimeType}
+												preview={preview}
 											/>
 										)}
 										{missing ? (
@@ -744,6 +766,7 @@ function StickerPanel() {
 	const [candidates, setCandidates] = useState<readonly ItemRow[]>([]);
 	const [stats, setStats] = useState<StatsRow | null>(null);
 	const [previews, setPreviews] = useState<Record<string, string>>({});
+	const [previewErrors, setPreviewErrors] = useState<Record<string, boolean>>({});
 	const [directory, setDirectory] = useState("");
 	const [bundle, setBundle] = useState("");
 	const [exported, setExported] = useState("");
@@ -871,6 +894,7 @@ function StickerPanel() {
 		if (pending.length === 0) return;
 		const limit = pLimit(4);
 		const loaded: Record<string, string> = {};
+		const failed: Record<string, boolean> = {};
 		await Promise.all(
 			pending.map(async (item) => {
 				previewLoadingRef.current.add(item.id);
@@ -879,7 +903,9 @@ function StickerPanel() {
 						rpc.call<PreviewRow>(rpcName("preview"), { itemId: item.id }),
 					);
 					loaded[item.id] = preview.dataBase64;
+					failed[item.id] = false;
 				} catch {
+					failed[item.id] = true;
 				} finally {
 					previewLoadingRef.current.delete(item.id);
 				}
@@ -887,6 +913,9 @@ function StickerPanel() {
 		);
 		if (Object.keys(loaded).length > 0) {
 			setPreviews((current) => ({ ...current, ...loaded }));
+		}
+		if (Object.keys(failed).length > 0) {
+			setPreviewErrors((current) => ({ ...current, ...failed }));
 		}
 	};
 
@@ -1045,7 +1074,7 @@ function StickerPanel() {
 			const report = await rpc.call<TelegramImportRow>(rpcName("telegram.import"), {
 				animatedFormat: telegramAnimatedFormat,
 				deferSemantic: backgroundSemantic,
-				dryRun,
+				dryRun: false,
 				includeAnimated: telegramAnimated,
 				includeVideo: telegramAnimated,
 				semanticMode,
@@ -1065,7 +1094,7 @@ function StickerPanel() {
 				}),
 			);
 			await syncJobProgress("telegram.import");
-			if (!dryRun) await refresh();
+			await refresh();
 		} catch (error) {
 			const message = String(error);
 			setTelegramError(message);
@@ -1576,6 +1605,7 @@ function StickerPanel() {
 								key={pack.id}
 								items={items.filter((item) => item.packId === pack.id)}
 								pack={pack}
+								previewErrors={previewErrors}
 								previews={previews}
 								onChanged={refresh}
 								onLoadPreviews={loadPreviews}

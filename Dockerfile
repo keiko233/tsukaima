@@ -65,6 +65,7 @@ RUN apt-get update \
 		bubblewrap \
 		ca-certificates \
 		curl \
+		ffmpeg \
 		git \
 		ripgrep \
 		tini \
