@@ -299,6 +299,18 @@ function MessageRow({
 										: message.replyDecision.gate.decision === "SKIP"
 											? m.reply_decision_gate_skip()
 											: m.reply_decision_gate_reply()}
+									{message.replyDecision.gate.modelId ? (
+										<span> · {message.replyDecision.gate.modelId}</span>
+									) : null}
+									{message.replyDecision.gate.confidence !== undefined ? (
+										<span>
+											{" "}
+											·{" "}
+											{m.reply_decision_confidence({
+												percent: Math.round(message.replyDecision.gate.confidence * 100),
+											})}
+										</span>
+									) : null}
 									{message.replyDecision.gate.reason ? (
 										<div>{message.replyDecision.gate.reason}</div>
 									) : null}

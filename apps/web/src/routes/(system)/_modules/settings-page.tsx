@@ -2,7 +2,12 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import type { ModelCatalogEntry, ModelSelection, ThinkingLevel } from "@tsukaima/contracts";
+import {
+	NATIVE_DECISION_MODELS,
+	type ModelCatalogEntry,
+	type ModelSelection,
+	type ThinkingLevel,
+} from "@tsukaima/contracts";
 import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
 import {
 	Select,
@@ -154,11 +159,18 @@ export function SettingsPage() {
 	const settings = settingsQuery.data;
 	const models = settings?.models ?? [];
 	const availableModels = settings?.availableModels ?? [];
-	const configuredSidechatModel = settings?.sidechatModelId;
-	const sidechatModelValue = configuredSidechatModel ?? ACTIVE_SIDECHAT_MODEL;
-	const configuredModelMissing =
-		configuredSidechatModel !== undefined &&
-		!models.some((model) => model.id === configuredSidechatModel);
+	const classifierFields = [
+		{
+			key: "sidechatModelId",
+			label: m.settings_sidechat_model_label(),
+			fallback: m.settings_sidechat_model_active(),
+		},
+		{
+			key: "gateModelId",
+			label: m.settings_gate_model_label(),
+			fallback: m.settings_gate_model_default(),
+		},
+	] as const;
 	const configuredMemoryModel = settings?.memoryModelId;
 	const memoryModelValue = configuredMemoryModel ?? ACTIVE_SIDECHAT_MODEL;
 	const configuredMemoryModelMissing =
@@ -264,48 +276,53 @@ export function SettingsPage() {
 								))}
 							</SelectContent>
 						</Select>
-						<div className="space-y-1.5">
-							<div className="px-1 text-[11.5px] font-medium text-foreground">
-								{m.settings_sidechat_model_label()}
-							</div>
-							<Select
-								value={sidechatModelValue}
-								disabled={updateSettings.isPending}
-								onValueChange={(value) => {
-									const next = value === ACTIVE_SIDECHAT_MODEL ? null : value;
-									if ((next ?? undefined) === configuredSidechatModel) return;
-									updateSettings.mutate({ sidechatModelId: next });
-								}}
-							>
-								<SelectTrigger className="w-full">
-									<span className="sr-only">{m.settings_sidechat_model_label()}: </span>
-									<SelectValue placeholder={m.settings_sidechat_model_placeholder()} />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value={ACTIVE_SIDECHAT_MODEL}>
-										{m.settings_sidechat_model_active()}
-									</SelectItem>
-									{models.map((model) => (
-										<SelectItem key={model.id} value={model.id}>
-											{modelOptionLabel(model)}
-										</SelectItem>
-									))}
-									{configuredSidechatModel !== undefined && configuredModelMissing ? (
-										<SelectItem value={configuredSidechatModel}>
-											{configuredSidechatModel} · {m.settings_sidechat_model_unavailable()}
-										</SelectItem>
-									) : null}
-								</SelectContent>
-							</Select>
-							<p className="text-[11px] text-muted-foreground">
-								{m.settings_sidechat_model_hint()}
-							</p>
-							{models.length === 0 ? (
-								<p className="text-[11px] text-muted-foreground">
-									{m.settings_sidechat_model_empty()}
-								</p>
-							) : null}
-						</div>
+						{classifierFields.map(({ key, label, fallback }) => {
+							const configured = settings?.[key];
+							const missing =
+								configured !== undefined &&
+								!models.some((model) => model.id === configured) &&
+								!NATIVE_DECISION_MODELS.some((model) => model.id === configured);
+							return (
+								<div key={key} className="space-y-1.5">
+									<div className="px-1 text-[11.5px] font-medium text-foreground">{label}</div>
+									<Select
+										value={configured ?? ACTIVE_SIDECHAT_MODEL}
+										disabled={updateSettings.isPending}
+										onValueChange={(value) => {
+											const next = value === ACTIVE_SIDECHAT_MODEL ? null : value;
+											if ((next ?? undefined) === configured) return;
+											updateSettings.mutate({ [key]: next });
+										}}
+									>
+										<SelectTrigger className="w-full">
+											<span className="sr-only">{label}</span>
+											<SelectValue placeholder={label} />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value={ACTIVE_SIDECHAT_MODEL}>{fallback}</SelectItem>
+											{NATIVE_DECISION_MODELS.map((model) => (
+												<SelectItem key={model.id} value={model.id}>
+													{model.label} · {model.apiKeyEnv}
+												</SelectItem>
+											))}
+											{models.map((model) => (
+												<SelectItem key={model.id} value={model.id}>
+													{modelOptionLabel(model)}
+												</SelectItem>
+											))}
+											{missing && configured !== undefined ? (
+												<SelectItem value={configured}>
+													{configured} · {m.settings_sidechat_model_unavailable()}
+												</SelectItem>
+											) : null}
+										</SelectContent>
+									</Select>
+									<p className="text-[11px] text-muted-foreground">
+										{m.settings_sidechat_model_hint()}
+									</p>
+								</div>
+							);
+						})}
 						<div className="space-y-1.5">
 							<div className="px-1 text-[11.5px] font-medium text-foreground">
 								{m.settings_memory_model_label()}

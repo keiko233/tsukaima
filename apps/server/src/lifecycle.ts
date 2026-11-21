@@ -95,6 +95,7 @@ import {
 } from "./services/backup-drill-scheduler.ts";
 import { ChannelRegistry } from "./services/channel-registry.ts";
 import { ConversationGateService } from "./services/conversation-gate.ts";
+import { NativeDecisionModels } from "./services/decision-models.ts";
 import { ConversationPacingTracker } from "./services/conversation-pacing.ts";
 import { ConversationPolicyService } from "./services/conversation-policy.ts";
 import { ConversationRouter } from "./services/conversation-router.ts";
@@ -267,6 +268,7 @@ export class TsukaimaLifecycle {
 	private sidechatService: SidechatService | undefined;
 	private conversationGateService: ConversationGatePort | undefined;
 	private readonly conversationGateOverride: ConversationGatePort | undefined;
+	private readonly decisionModels: NativeDecisionModels;
 	private readonly codingStore = new DomainCodingStore(() => this.domainDatabase);
 	/**
 	 * Sender bound to each active turn, keyed by conversation and then by submission request id.
@@ -301,6 +303,7 @@ export class TsukaimaLifecycle {
 
 	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
 		this.config = config;
+		this.decisionModels = new NativeDecisionModels(options?.env ?? process.env);
 		this.logLevel = config.logLevel;
 		this.customLoggerProvided = options?.logger !== undefined;
 		this.logger =
@@ -1038,7 +1041,7 @@ export class TsukaimaLifecycle {
 		const requested =
 			configured !== undefined && configured.length > 0 ? configured : fallback?.trim();
 		const target =
-			requested === undefined || requested.length === 0
+			requested === undefined || requested.length === 0 || this.decisionModels.supports(requested)
 				? (active ?? eligible[0])
 				: (resolveSidechatTarget(eligible, requested, active) ?? active);
 		if (target === undefined) return undefined;
@@ -1506,6 +1509,7 @@ export class TsukaimaLifecycle {
 			},
 		};
 		this.sidechatService = new SidechatService({
+			decisionModels: this.decisionModels,
 			prompt: () => this.prompts.render("sidechat"),
 			defaultModelId: async () =>
 				this.domainDatabase === undefined
@@ -1517,6 +1521,7 @@ export class TsukaimaLifecycle {
 		this.conversationGateService =
 			this.conversationGateOverride ??
 			new ConversationGateService({
+				decisionModels: this.decisionModels,
 				defaultModelId: async () => {
 					if (this.domainDatabase === undefined) return undefined;
 					const current = await readRuntimeSettings(this.domainDatabase);

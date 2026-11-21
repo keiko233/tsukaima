@@ -12,6 +12,7 @@ import {
 	type UndirectedGroupGateInput,
 } from "@tsukaima/core";
 import type { Logger } from "../logging.ts";
+import type { NativeDecisionModels } from "./decision-models.ts";
 import {
 	resolveSidechatTarget,
 	type SidechatModelTarget,
@@ -68,29 +69,42 @@ function parseBinaryDecision<A extends string, B extends string>(
 	return undefined;
 }
 
-export function buildBurstCompletionPrompt(input: BurstCompletionGateInput): string {
+export function buildBurstCompletionPrompt(
+	input: BurstCompletionGateInput,
+	structured = false,
+): string {
 	const lines = input.messages.slice(-6).map((msg, i) => `${i + 1}. ${clip(msg)}`);
 	return [
 		"Decide whether the user has finished typing their thought or is still mid-burst.",
 		`Elapsed: ${Math.max(0, Math.round(input.elapsedMs))} ms. Message count: ${input.envelopeCount}.`,
 		"Messages (oldest first):",
 		...lines,
-		'Return only JSON: {"decision":"SEND|WAIT","confidence":0.0,"reason":"short reason"}',
+		...(structured
+			? []
+			: ['Return only JSON: {"decision":"SEND|WAIT","confidence":0.0,"reason":"short reason"}']),
 	].join("\n");
 }
 
-export function buildUndirectedGroupPrompt(input: UndirectedGroupGateInput): string {
+export function buildUndirectedGroupPrompt(
+	input: UndirectedGroupGateInput,
+	structured = false,
+): string {
 	const recent = (input.recentContext ?? []).slice(-6).map((line) => `- ${clip(line)}`);
 	return [
 		"Decide whether the assistant should join this undirected group message or stay quiet.",
 		"Choose SKIP unless the assistant is clearly invited by context or has something genuinely helpful to add.",
 		...(recent.length > 0 ? ["Recent group context:", ...recent] : []),
 		`Latest message from ${clip(input.senderName, 60)}: ${clip(input.messageText)}`,
-		'Return only JSON: {"decision":"REPLY|SKIP","confidence":0.0,"reason":"short reason"}',
+		...(structured
+			? []
+			: ['Return only JSON: {"decision":"REPLY|SKIP","confidence":0.0,"reason":"short reason"}']),
 	].join("\n");
 }
 
-export function buildProactiveBubblePrompt(input: ProactiveBubbleGateInput): string {
+export function buildProactiveBubblePrompt(
+	input: ProactiveBubbleGateInput,
+	structured = false,
+): string {
 	const recent = input.recentMessages
 		.slice(-6)
 		.map((msg) => `- ${msg.direction}: ${clip(msg.textPreview)}`);
@@ -98,7 +112,9 @@ export function buildProactiveBubblePrompt(input: ProactiveBubbleGateInput): str
 		"Decide whether it feels natural to send a short proactive follow-up message in this chat right now.",
 		`Chat kind: ${input.conversationKind}. Familiarity: ${input.level}. Idle minutes: ${Math.round(input.idleMinutes)}.`,
 		...(recent.length > 0 ? ["Recent messages:", ...recent] : []),
-		'Return only JSON: {"decision":"SHOULD|SKIP","confidence":0.0,"reason":"short reason"}',
+		...(structured
+			? []
+			: ['Return only JSON: {"decision":"SHOULD|SKIP","confidence":0.0,"reason":"short reason"}']),
 	].join("\n");
 }
 
@@ -107,6 +123,7 @@ export interface ConversationGateServiceOptions {
 	readonly circuitBreakerThreshold?: number;
 	/** Optional custom classifier driver (e.g. HTTP endpoint or test double); overrides model path. */
 	readonly customDriver?: ConversationGateDriver;
+	readonly decisionModels?: NativeDecisionModels;
 	/** Global default gate model id from runtime settings. */
 	readonly defaultModelId: () => Promise<string | undefined>;
 	readonly logger: Logger;
@@ -123,6 +140,7 @@ export interface ConversationGateServiceOptions {
  */
 export class ConversationGateService implements ConversationGatePort {
 	readonly #breaker: GateCircuitBreaker;
+	readonly #decisionModels: NativeDecisionModels | undefined;
 	readonly #customDriver: ConversationGateDriver | undefined;
 	readonly #defaultModelId: () => Promise<string | undefined>;
 	readonly #gate: FailOpenConversationGate;
@@ -133,6 +151,7 @@ export class ConversationGateService implements ConversationGatePort {
 		this.#logger = options.logger.child("tsukaima::server::gate");
 		this.#customDriver = options.customDriver;
 		this.#defaultModelId = options.defaultModelId;
+		this.#decisionModels = options.decisionModels;
 		this.#models = options.models;
 		this.#breaker = new GateCircuitBreaker({
 			...(options.circuitBreakerCooldownMs === undefined
@@ -144,30 +163,43 @@ export class ConversationGateService implements ConversationGatePort {
 			...(options.now === undefined ? {} : { now: options.now }),
 		});
 		const driver: ConversationGateDriver = options.customDriver ?? {
-			decideBurstCompletion: async (input, signal) => {
-				const text = await this.#completePrompt(
+			decideBurstCompletion: (input, signal) =>
+				this.#decide(
 					input.policy.model,
-					buildBurstCompletionPrompt(input),
+					(structured) => buildBurstCompletionPrompt(input, structured),
+					"SEND",
+					"WAIT",
+					{
+						SEND: "The user has finished the thought and the assistant can answer.",
+						WAIT: "The user is likely to send another message to complete the thought.",
+					},
 					signal,
-				);
-				return text === undefined ? undefined : parseBinaryDecision(text, "SEND", "WAIT");
-			},
-			decideProactiveBubble: async (input, signal) => {
-				const text = await this.#completePrompt(
+				),
+			decideProactiveBubble: (input, signal) =>
+				this.#decide(
 					input.policy?.model,
-					buildProactiveBubblePrompt(input),
+					(structured) => buildProactiveBubblePrompt(input, structured),
+					"SHOULD",
+					"SKIP",
+					{
+						SHOULD: "A short unsolicited follow-up fits the situation and relationship.",
+						SKIP: "A follow-up would feel unnecessary, disruptive, or unwelcome.",
+					},
 					signal,
-				);
-				return text === undefined ? undefined : parseBinaryDecision(text, "SHOULD", "SKIP");
-			},
-			decideUndirectedGroupReply: async (input, signal) => {
-				const text = await this.#completePrompt(
+				),
+			decideUndirectedGroupReply: (input, signal) =>
+				this.#decide(
 					input.policy.model,
-					buildUndirectedGroupPrompt(input),
+					(structured) => buildUndirectedGroupPrompt(input, structured),
+					"REPLY",
+					"SKIP",
+					{
+						REPLY:
+							"The assistant is clearly invited by context or can add something genuinely helpful.",
+						SKIP: "The message is group chatter and the assistant should stay silent.",
+					},
 					signal,
-				);
-				return text === undefined ? undefined : parseBinaryDecision(text, "REPLY", "SKIP");
-			},
+				),
 		};
 		this.#gate = new FailOpenConversationGate({
 			breaker: this.#breaker,
@@ -225,44 +257,59 @@ export class ConversationGateService implements ConversationGatePort {
 
 	async #hasBackend(policyModelId: string | undefined): Promise<boolean> {
 		if (this.#customDriver !== undefined) return true;
-		return (await this.#resolveTarget(policyModelId)) !== undefined;
+		const requested = await this.#requestedModel(policyModelId);
+		return (
+			this.#decisionModels?.supports(requested) === true ||
+			(await this.#resolveTarget(requested)) !== undefined
+		);
 	}
 
-	async #resolveTarget(
-		policyModelId: string | undefined,
-	): Promise<SidechatModelTarget | undefined> {
+	async #requestedModel(policyModelId: string | undefined): Promise<string | undefined> {
+		return (
+			policyModelId?.trim() ||
+			(await this.#defaultModelId().catch(() => undefined))?.trim() ||
+			undefined
+		);
+	}
+
+	async #resolveTarget(requested: string | undefined): Promise<SidechatModelTarget | undefined> {
 		const models = this.#models;
 		if (models === undefined) return undefined;
 		const active = models.active();
 		const eligible = await models.eligible().catch(() => []);
-		const configured = policyModelId?.trim();
-		const fallback =
-			configured !== undefined && configured.length > 0
-				? undefined
-				: (await this.#defaultModelId().catch(() => undefined))?.trim();
-		const requested =
-			configured !== undefined && configured.length > 0
-				? configured
-				: fallback !== undefined && fallback.length > 0
-					? fallback
-					: undefined;
 		if (requested === undefined) return active ?? eligible[0];
 		return resolveSidechatTarget(eligible, requested, active) ?? active;
 	}
 
-	async #completePrompt(
+	async #decide<A extends string, B extends string>(
 		policyModelId: string | undefined,
-		prompt: string,
+		prompt: (structured: boolean) => string,
+		first: A,
+		second: B,
+		options: Readonly<Record<A | B, string>>,
 		signal: AbortSignal,
-	): Promise<string | undefined> {
+	) {
+		const requested = await this.#requestedModel(policyModelId);
+		if (this.#decisionModels?.supports(requested)) {
+			const result = await this.#decisionModels.choose<A | B>(requested, {
+				context: prompt(true),
+				instructions:
+					"Apply the conversation guidelines to the supplied context and choose the applicable outcome.",
+				options,
+				signal,
+			});
+			return { ...result, modelId: requested };
+		}
 		const models = this.#models;
 		if (models === undefined) return undefined;
-		const target = await this.#resolveTarget(policyModelId);
+		const target = await this.#resolveTarget(requested);
 		if (target === undefined) return undefined;
-		return models.complete(target, prompt, {
+		const text = await models.complete(target, prompt(false), {
 			maxTokens: 96,
 			signal,
 			temperature: 0,
 		});
+		const result = parseBinaryDecision(text, first, second);
+		return result === undefined ? undefined : { ...result, modelId: target.modelId };
 	}
 }

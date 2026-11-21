@@ -37,6 +37,7 @@ export interface UndirectedGroupGateDecision {
 	readonly confidence?: number;
 	readonly decision: "REPLY" | "SKIP";
 	readonly latencyMs?: number;
+	readonly modelId?: string;
 	readonly reason?: string;
 	readonly source: GateDecisionSource;
 }

@@ -53,6 +53,12 @@ export type TriggerDecision = z.infer<typeof triggerDecisionSchema>;
 export const recentActivityEscalationSchema = z.enum(["off", "throttled", "always"]);
 export type RecentActivityEscalation = z.infer<typeof recentActivityEscalationSchema>;
 
+/** Native choice-only backends, offered only by the classifier selectors. */
+export const NATIVE_DECISION_MODELS = [
+	{ apiKeyEnv: "GEMINI_API_KEY", id: "gemini-decision-1", label: "Gemini Decision 1" },
+	{ apiKeyEnv: "TYPESAFE_API_KEY", id: "jev-latest", label: "Jev" },
+] as const;
+
 export const conversationTriggerPolicySchema = z
 	.object({
 		privateAccess: z.enum(["open", "allowlist", "disabled"]).default("open"),

@@ -1,5 +1,6 @@
 import type { BusyArbitrationInput, BusyArbitrationResult } from "@tsukaima/core";
 import type { Logger } from "../logging.ts";
+import type { NativeDecisionModels } from "./decision-models.ts";
 import { DEFAULT_PROMPTS } from "./prompt-defaults.ts";
 
 const MAX_PENDING_CHARS = 3_000;
@@ -69,6 +70,7 @@ export interface SidechatModels {
 }
 
 export interface SidechatServiceOptions {
+	readonly decisionModels?: NativeDecisionModels;
 	readonly prompt?: () => Promise<string>;
 	/** Global default model id, read from runtime settings on demand. */
 	readonly defaultModelId: () => Promise<string | undefined>;
@@ -99,12 +101,14 @@ export function resolveSidechatTarget(
  * any failure means `wait` at the caller.
  */
 export class SidechatService {
+	readonly #decisionModels: NativeDecisionModels | undefined;
 	readonly #prompt: SidechatServiceOptions["prompt"];
 	readonly #defaultModelId: SidechatServiceOptions["defaultModelId"];
 	readonly #logger: Logger;
 	readonly #models: SidechatModels;
 
 	constructor(options: SidechatServiceOptions) {
+		this.#decisionModels = options.decisionModels;
 		this.#prompt = options.prompt;
 		this.#defaultModelId = options.defaultModelId;
 		this.#logger = options.logger.child("tsukaima::server::sidechat");
@@ -113,8 +117,6 @@ export class SidechatService {
 
 	async decide(input: BusyArbitrationInput): Promise<BusyArbitrationResult | undefined> {
 		if (!input.policy.sidechat.enabled) return undefined;
-		const active = this.#models.active();
-		const eligible = await this.#models.eligible().catch(() => []);
 		const configured = input.policy.sidechat.model?.trim();
 		const fallback =
 			configured !== undefined && configured.length > 0
@@ -126,18 +128,24 @@ export class SidechatService {
 				: fallback !== undefined && fallback.trim().length > 0
 					? fallback.trim()
 					: undefined;
+		const native = this.#decisionModels;
+		const nativeModelId = native?.supports(requested) ? requested : undefined;
+		const active = this.#models.active();
+		const eligible =
+			nativeModelId === undefined ? await this.#models.eligible().catch(() => []) : [];
 		// With nothing configured, a plugin-declared model is better than no classifier at all.
 		let target =
 			requested === undefined
 				? (active ?? eligible[0])
 				: resolveSidechatTarget(eligible, requested, active);
-		if (requested !== undefined && target === undefined) {
+		if (nativeModelId === undefined && requested !== undefined && target === undefined) {
 			this.#logger.warn("sidechat model is not available; using the active model", {
 				modelId: requested,
 			});
 			target = active;
 		}
-		if (target === undefined) {
+		const modelId = nativeModelId ?? target?.modelId;
+		if (modelId === undefined) {
 			this.#logger.warn("sidechat has no usable model", { modelId: requested });
 			return undefined;
 		}
@@ -149,29 +157,40 @@ export class SidechatService {
 		);
 		timer.unref?.();
 		try {
-			const text = await this.#models.complete(
-				target,
-				buildSidechatPrompt(input, await this.#prompt?.()),
-				{
+			const instructions = (await this.#prompt?.()) ?? DEFAULT_PROMPTS.sidechat;
+			let parsed: ReturnType<typeof parseDecision>;
+			if (native !== undefined && nativeModelId !== undefined) {
+				parsed = await native.choose<"interrupt" | "steer" | "wait">(nativeModelId, {
+					context: buildSidechatContext(input),
+					instructions,
+					options: {
+						interrupt:
+							"Stop the current response because the new request explicitly cancels, supersedes, or urgently replaces it.",
+						steer: "Keep the active tool work and incorporate the new information into this run.",
+						wait: "Finish the current run and handle the pending messages afterward.",
+					},
+					signal: controller.signal,
+				});
+			} else if (target !== undefined) {
+				const text = await this.#models.complete(target, buildSidechatPrompt(input, instructions), {
 					maxTokens: 160,
 					signal: controller.signal,
 					temperature: 0,
-				},
-			);
-			const parsed = parseDecision(text);
+				});
+				parsed = parseDecision(text);
+			}
 			if (parsed === undefined) {
 				this.#logger.debug("sidechat returned no usable decision", {
 					durationMs: Math.round(performance.now() - startedAt),
-					modelId: target.modelId,
-					outputChars: text.length,
-					providerId: target.providerId,
+					modelId,
+					providerId: target?.providerId,
 				});
 				return undefined;
 			}
 			if (parsed.decision !== "wait" && parsed.confidence === undefined) {
 				this.#logger.debug("sidechat decision without confidence downgraded", {
 					decision: parsed.decision,
-					modelId: target.modelId,
+					modelId,
 				});
 				return { decision: "wait", reason: "missing confidence" };
 			}
@@ -183,7 +202,7 @@ export class SidechatService {
 					confidence: parsed.confidence,
 					decision: parsed.decision,
 					minConfidence: input.policy.sidechat.minConfidence,
-					modelId: target.modelId,
+					modelId,
 				});
 				return {
 					decision: "wait",
@@ -193,7 +212,7 @@ export class SidechatService {
 			}
 			if (parsed.decision === "steer" && !input.toolsActive) {
 				this.#logger.debug("sidechat steer downgraded: no active tool round", {
-					modelId: target.modelId,
+					modelId,
 				});
 				return {
 					decision: "wait",
@@ -205,8 +224,8 @@ export class SidechatService {
 				confidence: parsed.confidence,
 				decision: parsed.decision,
 				durationMs: Math.round(performance.now() - startedAt),
-				modelId: target.modelId,
-				providerId: target.providerId,
+				modelId,
+				providerId: target?.providerId,
 				toolRounds: input.turns,
 				toolsActive: input.toolsActive,
 			});
@@ -215,13 +234,13 @@ export class SidechatService {
 			if (controller.signal.aborted) {
 				this.#logger.debug("sidechat timed out", {
 					durationMs: Math.round(performance.now() - startedAt),
-					modelId: target.modelId,
+					modelId,
 					timeoutMs: input.policy.sidechat.timeoutMs,
 				});
 			} else {
 				this.#logger.warn("sidechat completion failed", {
 					error: error instanceof Error ? error.message : String(error),
-					modelId: target.modelId,
+					modelId,
 				});
 			}
 			return undefined;
@@ -239,12 +258,18 @@ export function buildSidechatPrompt(
 	return [
 		instructions,
 		"",
+		buildSidechatContext(input),
+		"",
+		'Return only JSON, with no markdown and no prose: {"decision":"interrupt|steer|wait","confidence":0.0,"reason":"short reason"}',
+	].join("\n");
+}
+
+function buildSidechatContext(input: BusyArbitrationInput): string {
+	return [
 		`Current request being answered:\n${none(clip(input.runningRequest, MAX_REQUEST_CHARS))}`,
 		`Previous settled assistant answer:\n${none(clip(input.previousAnswer ?? "", MAX_ANSWER_CHARS))}`,
 		`Assistant progress so far:\n${none(clip(input.partialAnswer ?? "", MAX_PARTIAL_CHARS))}`,
 		`Tool rounds so far: ${input.turns}. Tools active now: ${input.toolsActive ? "yes" : "no"}. Run age: ${Math.max(0, Math.round(input.runAgeMs))} ms.`,
 		`Pending messages, newest last:\n${clip(input.pendingText, MAX_PENDING_CHARS)}`,
-		"",
-		'Return only JSON, with no markdown and no prose: {"decision":"interrupt|steer|wait","confidence":0.0,"reason":"short reason"}',
 	].join("\n");
 }

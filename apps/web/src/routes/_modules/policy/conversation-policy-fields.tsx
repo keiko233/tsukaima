@@ -6,6 +6,7 @@ import {
 	conversationCompactionPresets,
 	type ModelCatalogEntry,
 	type ModelSelection,
+	NATIVE_DECISION_MODELS,
 	type ThinkingLevel,
 } from "@tsukaima/contracts";
 import { Button } from "@tsukaima/ui/components/motion/button";
@@ -388,6 +389,7 @@ export function PolicySidechatFields({
 	const missing =
 		draft.sidechat.model !== undefined &&
 		draft.sidechat.model.length > 0 &&
+		!NATIVE_DECISION_MODELS.some((model) => model.id === draft.sidechat.model) &&
 		!models.some((model) => model.id === draft.sidechat.model);
 
 	return (
@@ -420,6 +422,11 @@ export function PolicySidechatFields({
 						<SelectItem value={POLICY_DEFAULT_MODEL}>
 							{m.policy_sidechat_model_default()}
 						</SelectItem>
+						{NATIVE_DECISION_MODELS.map((model) => (
+							<SelectItem key={model.id} value={model.id}>
+								{model.label} · {model.apiKeyEnv}
+							</SelectItem>
+						))}
 						{models.map((model) => (
 							<SelectItem key={model.id} value={model.id}>
 								{modelOptionLabel(model)}
@@ -839,9 +846,7 @@ export function PolicySocialFields({ draft, onChange }: PolicyFieldsProps) {
 				label={m.policy_social_home_chat()}
 				onChange={(value) => updateSocial({ homeChat: value })}
 			/>
-			<p className="text-[11px] leading-4 text-muted-foreground">
-				{m.policy_social_hint()}
-			</p>
+			<p className="text-[11px] leading-4 text-muted-foreground">{m.policy_social_hint()}</p>
 			<div className="grid grid-cols-2 gap-2.5">
 				<Field label={m.policy_social_refusal_cooldown_hours()}>
 					<input
@@ -850,9 +855,7 @@ export function PolicySocialFields({ draft, onChange }: PolicyFieldsProps) {
 						max={720}
 						className={fieldClass}
 						value={draft.social.refusalCooldownHours}
-						onChange={(event) =>
-							updateSocial({ refusalCooldownHours: Number(event.target.value) })
-						}
+						onChange={(event) => updateSocial({ refusalCooldownHours: Number(event.target.value) })}
 					/>
 				</Field>
 				<Field label={m.policy_social_unanswered_silence_hours()}>
@@ -874,9 +877,7 @@ export function PolicySocialFields({ draft, onChange }: PolicyFieldsProps) {
 						max={20}
 						className={fieldClass}
 						value={draft.social.unansweredThreshold}
-						onChange={(event) =>
-							updateSocial({ unansweredThreshold: Number(event.target.value) })
-						}
+						onChange={(event) => updateSocial({ unansweredThreshold: Number(event.target.value) })}
 					/>
 				</Field>
 				<Field label={m.policy_social_max_self_ratio()}>
@@ -887,9 +888,7 @@ export function PolicySocialFields({ draft, onChange }: PolicyFieldsProps) {
 						step={0.05}
 						className={fieldClass}
 						value={draft.social.maxSelfMessageRatio}
-						onChange={(event) =>
-							updateSocial({ maxSelfMessageRatio: Number(event.target.value) })
-						}
+						onChange={(event) => updateSocial({ maxSelfMessageRatio: Number(event.target.value) })}
 					/>
 				</Field>
 				<Field label={m.policy_social_self_ratio_window()}>
@@ -997,6 +996,7 @@ export function PolicyGateFields({ draft, onChange }: PolicyFieldsProps) {
 			<Field label={m.policy_gate_model()}>
 				<input
 					type="text"
+					list="native-decision-models"
 					className={fieldClass}
 					value={draft.gate.model ?? ""}
 					placeholder={m.policy_gate_model_default()}
@@ -1010,6 +1010,13 @@ export function PolicyGateFields({ draft, onChange }: PolicyFieldsProps) {
 						});
 					}}
 				/>
+				<datalist id="native-decision-models">
+					{NATIVE_DECISION_MODELS.map((model) => (
+						<option key={model.id} value={model.id}>
+							{model.label} · {model.apiKeyEnv}
+						</option>
+					))}
+				</datalist>
 			</Field>
 			<div className="grid grid-cols-3 gap-2.5">
 				<Field label={m.policy_gate_timeout()}>

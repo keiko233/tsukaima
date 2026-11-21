@@ -59,6 +59,7 @@ export const inboundReplyDecisionSchema = z.object({
 		.object({
 			confidence: z.number().min(0).max(1).optional(),
 			decision: z.enum(["REPLY", "SKIP"]),
+			modelId: z.string().optional(),
 			reason: z.string().optional(),
 			source: z.enum(["gate", "fallback"]),
 		})
