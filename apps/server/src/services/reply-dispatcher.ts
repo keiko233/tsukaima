@@ -33,6 +33,7 @@ import type { ConversationPolicyService } from "./conversation-policy.ts";
 import type { HookBus } from "./hook-bus.ts";
 import type { FollowUpIntentStore } from "./follow-up-intents.ts";
 import type { ReplyExpectation, ReplyExpectationStore } from "./reply-expectations.ts";
+import { TurnEmissionTracker, type TurnEmissionSnapshot } from "./turn-emission.ts";
 
 type ChatKind = "private" | "group" | "webui" | "workspace" | "task" | "plugin";
 
@@ -395,23 +396,14 @@ export class ReplyDispatcher {
 	 */
 	readonly #laneEpochs = new Map<string, number>();
 	/**
-	 * Text already shown in the current turn, by durable conversation id: narrations and direct
-	 * channel sends made by tools. A final answer repeating it verbatim is suppressed. This is
+	 * Outbound content already shown in the current turn, by durable conversation id: narrations,
+	 * streamed lines, tool text sends, and stickers/media/files. Only text sends suppress a later
+	 * narration or a repeated final answer; a sticker or media send never does. This is
 	 * process-local and deliberately not durable: recovery only replays the expected final answer,
 	 * and the outbound unique key bounds any post-restart duplicate to one message.
 	 */
-	readonly #shownThisTurn = new Map<string, string[]>();
-	/** Conversations where a tool already posted text during the current turn. */
-	readonly #directSendThisTurn = new Map<string, true>();
+	readonly #emissions = new TurnEmissionTracker();
 	readonly #lastNarrationAtMs = new Map<string, number>();
-	/**
-	 * Tool-delivered text (`onebot-napcat.send`) for the current turn, keyed by durable
-	 * conversation id. A final answer repeating it is suppressed while standalone media/sticker
-	 * parts still go out. `handleAnswer` consumes it synchronously at entry and `beginTurn` clears
-	 * it, so a later turn that legitimately says the same thing is never suppressed by an older
-	 * turn.
-	 */
-	readonly #turnToolSends = new Map<string, string[]>();
 	#legacyIntentReported = false;
 	#reconcileTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -514,17 +506,39 @@ export class ReplyDispatcher {
 	 * after a successful channel send; a later tool round also stops narrating a preamble.
 	 */
 	noteDirectSend(durableConversationId: string, text: string): void {
-		this.#directSendThisTurn.set(durableConversationId, true);
 		const trimmed = text.trim();
 		if (trimmed.length === 0) return;
-		const shown = this.#shownThisTurn.get(durableConversationId) ?? [];
-		shown.push(trimmed);
-		this.#shownThisTurn.set(durableConversationId, shown);
+		this.#emissions.record(durableConversationId, {
+			id: `direct-send:${randomUUID()}`,
+			kind: "text",
+			shown: true,
+			text: trimmed,
+		});
+	}
+
+	/**
+	 * Record the non-text parts of a channel send from the current turn. A sticker/media/file send
+	 * is remembered for the live transcript but never blocks narration or the final text reply.
+	 */
+	noteDirectSendParts(durableConversationId: string, parts: readonly MessagePart[]): void {
+		this.#emissions.recordParts(durableConversationId, parts);
+	}
+
+	/** Record a completed outbound emission, for example a streamed line flushed mid-turn. */
+	noteEmission(
+		durableConversationId: string,
+		emission: {
+			readonly id: string;
+			readonly kind: "stream-line";
+			readonly text: string;
+		},
+	): void {
+		this.#emissions.record(durableConversationId, emission);
 	}
 
 	/** True when this turn already delivered text through a channel send tool. */
 	hasDirectSendThisTurn(durableConversationId: string): boolean {
-		return this.#directSendThisTurn.get(durableConversationId) === true;
+		return this.#emissions.hasTextEmitted(durableConversationId);
 	}
 
 	/**
@@ -543,9 +557,7 @@ export class ReplyDispatcher {
 	 * entry, before its first await, so it can never wipe a newer turn that started meanwhile.
 	 */
 	#endTurn(durableConversationId: string): void {
-		this.#shownThisTurn.delete(durableConversationId);
-		this.#directSendThisTurn.delete(durableConversationId);
-		this.#turnToolSends.delete(durableConversationId);
+		this.#emissions.end(durableConversationId);
 	}
 
 	/**
@@ -580,20 +592,17 @@ export class ReplyDispatcher {
 	#recordNarrationShown(narration: ConversationNarration): string | undefined {
 		const text = narration.text.trim();
 		if (text.length === 0) return undefined;
-		const shown = this.#shownThisTurn.get(narration.conversationId) ?? [];
-		shown.push(text);
-		this.#shownThisTurn.set(narration.conversationId, shown);
+		this.#emissions.record(narration.conversationId, {
+			id: narration.narrationId,
+			kind: "narration",
+			text,
+		});
 		return text;
 	}
 
 	#rollbackNarrationShown(narration: ConversationNarration, recorded: string | undefined): void {
 		if (recorded === undefined) return;
-		const shown = this.#shownThisTurn.get(narration.conversationId);
-		if (shown === undefined) return;
-		const index = shown.lastIndexOf(recorded);
-		if (index < 0) return;
-		shown.splice(index, 1);
-		if (shown.length === 0) this.#shownThisTurn.delete(narration.conversationId);
+		this.#emissions.remove(narration.conversationId, narration.narrationId);
 	}
 
 	async #handleNarrationNow(
@@ -646,7 +655,23 @@ export class ReplyDispatcher {
 			narration.conversationId,
 			narration.narrationId,
 		);
-		const prepared = prepareOutboundParts([{ text: narrationText, type: "text" }], policy.pacing);
+		const transformed = await this.#transformReply({
+			channelId: session.channelId,
+			chatKind: session.chatKind,
+			chatObjectId: session.chatId,
+			conversationId: narration.conversationId,
+			entryId: narration.narrationId,
+			parts: [{ text: narrationText, type: "text" }],
+			sessionId: session.sessionId,
+			text: narrationText,
+		});
+		const sanitizedParts = this.#sanitizeOutboundParts(
+			transformed.parts,
+			policy,
+			narration.conversationId,
+			narration.narrationId,
+		);
+		const prepared = prepareOutboundParts(sanitizedParts, policy.pacing);
 		if (prepared.units.length === 0) return { deliveryStatus: "skipped", reason: "empty_output" };
 		const chatKind: ChatKind = session.chatKind;
 		const external = isExternalChat(chatKind);
@@ -685,7 +710,19 @@ export class ReplyDispatcher {
 			sessionId: session.sessionId,
 			toolNames: narration.toolNames,
 		});
-		if (!external) return { deliveryStatus: "sent", text: prepared.text };
+		// The row is persisted, so the live update goes out before the channel send. The WebUI
+		// renders the narration bubble immediately instead of waiting for the final answer.
+		if (!external) {
+			this.#emitAfterReply({
+				channelId: session.channelId,
+				chatObjectId: session.chatId,
+				deliveryStatus: "sent",
+				entryId: narration.narrationId,
+				sessionId: session.sessionId,
+				text: prepared.text,
+			});
+			return { deliveryStatus: "sent", text: prepared.text };
+		}
 		if (session.channelId === null || session.platformConversationId === null) {
 			const deliveryStatus = await this.#fail(
 				database,
@@ -694,6 +731,14 @@ export class ReplyDispatcher {
 				"External chat has no destination",
 				{ channelId: session.channelId, platformConversationId: session.platformConversationId },
 			);
+			this.#emitAfterReply({
+				channelId: session.channelId,
+				chatObjectId: session.chatId,
+				deliveryStatus,
+				entryId: narration.narrationId,
+				sessionId: session.sessionId,
+				text: prepared.text,
+			});
 			return { deliveryStatus, text: prepared.text };
 		}
 		const deliveryStatus = await this.#deliverNow(
@@ -714,11 +759,30 @@ export class ReplyDispatcher {
 			session.channelId,
 			session.platformConversationId,
 		);
+		this.#emitAfterReply({
+			channelId: session.channelId,
+			chatObjectId: session.chatId,
+			deliveryStatus,
+			entryId: narration.narrationId,
+			sessionId: session.sessionId,
+			text: prepared.text,
+		});
 		return { deliveryStatus, text: prepared.text };
 	}
 
-	#shownText(durableConversationId: string): readonly string[] | undefined {
-		return this.#shownThisTurn.get(durableConversationId);
+	#emitAfterReply(input: {
+		readonly channelId: string | null;
+		readonly chatObjectId: string;
+		readonly deliveryStatus: "failed" | "sent" | "uncertain";
+		readonly entryId: string;
+		readonly sessionId: string;
+		readonly text: string;
+	}): void {
+		this.#hooks.emitDetached("after.reply", input);
+	}
+
+	#shownText(durableConversationId: string): TurnEmissionSnapshot {
+		return this.#emissions.capture(durableConversationId);
 	}
 
 	#sanitizeOutboundText(
@@ -773,7 +837,7 @@ export class ReplyDispatcher {
 
 	/**
 	 * Deliver an out-of-band fast-lane busy interjection reply without touching the active main
-	 * turn's reply expectation or `#shownThisTurn` state. Deduplicated by `interjectId`.
+	 * turn's reply expectation or `#emissions` state. Deduplicated by `interjectId`.
 	 */
 	handleFastLaneReply(reply: FastLaneReply): Promise<ReplyDeliveryOutcome | undefined> {
 		return this.#runOutboundLane(
@@ -883,8 +947,11 @@ export class ReplyDispatcher {
 	}): void {
 		const trimmed = input.text.trim();
 		if (trimmed.length === 0) return;
-		const existing = this.#turnToolSends.get(input.durableConversationId) ?? [];
-		this.#turnToolSends.set(input.durableConversationId, [...existing, trimmed]);
+		this.#emissions.record(input.durableConversationId, {
+			id: `tool-send:${randomUUID()}`,
+			kind: "text",
+			text: trimmed,
+		});
 	}
 
 	/**
@@ -991,12 +1058,11 @@ export class ReplyDispatcher {
 		// A recovered answer belongs to an older, not-live turn, so it must neither read nor clear
 		// the state an active live turn is still recording.
 		const recovered = answer.recovered === true;
-		const shownThisTurn = recovered ? undefined : this.#shownText(answer.conversationId);
-		const turnToolSends = recovered ? undefined : this.#turnToolSends.get(answer.conversationId);
+		const emissions = this.#shownText(answer.conversationId);
+		const shownThisTurn = recovered ? undefined : emissions.narrated;
+		const turnToolSends = recovered ? undefined : emissions.sentTexts;
 		if (!recovered) {
-			this.#shownThisTurn.delete(answer.conversationId);
-			this.#directSendThisTurn.delete(answer.conversationId);
-			this.#turnToolSends.delete(answer.conversationId);
+			this.#endTurn(answer.conversationId);
 			this.#lastNarrationAtMs.delete(answer.conversationId);
 		}
 		const database = this.#database();
@@ -1114,6 +1180,19 @@ export class ReplyDispatcher {
 			return { deliveryStatus: "suppressed", reason: "already_shown", text: stripped.text };
 		}
 		const answerText = stripped.text;
+		// The turn already showed substantive outbound content (a narration, a streamed line, or a
+		// sticker/media/file) and the final answer adds nothing. That is a satisfied turn, not a
+		// missing reply: settle the expectation instead of waiting for a follow-up send.
+		const midTurnSubstantive = recovered !== true && emissions.substantiveOutbound;
+		if (midTurnSubstantive && answerText.replace(NARRATION_IGNORABLE, "").length === 0) {
+			this.#logger.debug("assistant answer empty after mid-turn outbound content", {
+				conversationId: answer.conversationId,
+				entryId: answer.entryId,
+			});
+			await this.#settleIntent(database, session.sessionId, answer.entryId);
+			await this.#settleExpectation(answer, session.sessionId, "suppressed", "already_shown");
+			return { deliveryStatus: "suppressed", reason: "already_shown", text: answerText };
+		}
 		if (answer.truncated === true) {
 			// Continuation was unavailable or the budget is spent: deliver the cut text as-is and
 			// leave a durable audit trail instead of silently shipping a mid-word cut.

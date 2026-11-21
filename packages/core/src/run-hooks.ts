@@ -116,6 +116,29 @@ export function isSubstantiveNarration(text: string): boolean {
 	return [...text.replace(NARRATION_IGNORABLE, "")].length >= 2;
 }
 
+const SILENT_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"sticker-meme.list_packs",
+	"sticker-meme.search",
+	"sticker-meme_list_packs",
+	"sticker-meme_search",
+	"sticker_meme_list_packs",
+	"sticker_meme_search",
+]);
+
+/**
+ * True for tools that only read background state: memory, sticker lookup, and todos. A round
+ * that calls nothing else has nothing to announce, so it never narrates a preamble.
+ * Names arrive model-visible (`.` or `_` separated, optionally legacy hash-suffixed).
+ */
+export function isSilentBackgroundTool(name: string): boolean {
+	const trimmed = name.trim().replace(/_[0-9a-f]{8}$/u, "");
+	if (trimmed.length === 0) return false;
+	const normalized = trimmed.toLocaleLowerCase();
+	if (normalized.startsWith("memory_") || normalized.startsWith("memory.")) return true;
+	if (normalized.startsWith("todo_") || normalized.startsWith("todo.")) return true;
+	return SILENT_TOOL_NAMES.has(normalized);
+}
+
 /**
  * Pure narration gate: decides whether one terminal provider message should be narrated.
  * Kept separate from the hook so the acceptance tests can cover every branch directly.
@@ -133,6 +156,11 @@ export function narrationCandidate(input: {
 	if (input.message.stopReason !== "toolUse") return { narrate: false, reason: "not-tool-use" };
 	if (input.runKind !== "chat") return { narrate: false, reason: "background-run" };
 	const toolNames = assistantToolNames(input.message);
+	// A round that only reads background memory, stickers, or todos is not worth a preamble:
+	// the model is looking something up, not doing slow visible work.
+	if (toolNames.length > 0 && toolNames.every((name) => isSilentBackgroundTool(name))) {
+		return { narrate: false, reason: "silent-tools" };
+	}
 	if (toolNames.some((name) => input.isDirectSendTool?.(name) === true)) {
 		return { narrate: false, reason: "direct-send-tool" };
 	}

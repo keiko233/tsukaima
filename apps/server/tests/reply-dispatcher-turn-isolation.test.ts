@@ -211,4 +211,46 @@ describe("reply dispatcher turn isolation", () => {
 			await lifecycle.stop();
 		}
 	});
+
+	test("a sticker send mid-turn neither blocks narration nor suppresses the final text", async () => {
+		const { lifecycle } = await createHarness();
+		try {
+			const dispatcher = lifecycle.replyDispatcher;
+			const events: { readonly entryId?: unknown }[] = [];
+			const dispose = lifecycle.hooks.on("after.reply", (payload) => {
+				if (typeof payload === "object" && payload !== null) events.push(payload);
+			});
+			try {
+				dispatcher.beginTurn("durable-1");
+				dispatcher.noteDirectSendParts("durable-1", [
+					{ sha256: "synthetic-sticker-hash", type: "sticker" },
+				]);
+				expect(dispatcher.hasDirectSendThisTurn("durable-1")).toBe(false);
+				const preamble = await dispatcher.handleNarration(
+					narration("narration-sticker", "The sticker is on its way."),
+				);
+				// The narrative bubble is live for the WebUI as soon as it is persisted.
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				expect(preamble).toMatchObject({ deliveryStatus: "sent" });
+				expect(events.some((event) => event.entryId === "narration-sticker")).toBe(true);
+				const final = await dispatcher.handleAnswer(
+					answer({ entryId: "answer-after-sticker", text: "All set." }),
+				);
+				expect(final).toMatchObject({ deliveryStatus: "sent" });
+				// An empty final answer after the sticker is a satisfied turn, not a missing reply.
+				dispatcher.beginTurn("durable-1");
+				dispatcher.noteDirectSendParts("durable-1", [
+					{ sha256: "synthetic-sticker-hash-2", type: "sticker" },
+				]);
+				const empty = await dispatcher.handleAnswer(
+					answer({ entryId: "answer-empty-after-sticker", text: "" }),
+				);
+				expect(empty).toMatchObject({ deliveryStatus: "suppressed", reason: "already_shown" });
+			} finally {
+				dispose();
+			}
+		} finally {
+			await lifecycle.stop();
+		}
+	});
 });

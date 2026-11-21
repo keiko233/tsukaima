@@ -459,12 +459,9 @@ export class TsukaimaLifecycle {
 			onDirectSend: (durableConversationId, text) =>
 				this.replyDispatcher.noteDirectSend(durableConversationId, text),
 			onToolSend: (sent) => {
-				if (sent.pluginId === "onebot-napcat") {
-					this.replyDispatcher.recordTurnToolSend({
-						durableConversationId: sent.durableConversationId,
-						text: sent.text,
-					});
-				}
+				// Stickers/media/files are recorded so they never look like chat text: only a text
+				// send suppresses a later preamble or a repeated final reply.
+				this.replyDispatcher.noteDirectSendParts(sent.durableConversationId, sent.parts);
 			},
 			router: () => this.conversationRouter,
 		});

@@ -180,6 +180,38 @@ describe("narrationCandidate", () => {
 			}).narrate,
 		).toBe(false);
 	});
+
+	test("skips a round that only calls silent background tools", () => {
+		const silent = ["memory.save", "sticker-meme.search", "todo_write", "memory_save_9fa1ce39"];
+		for (const name of silent) {
+			const decision = narrationCandidate({
+				message: assistant(
+					[
+						{ text: "Let me look that up.", type: "text" },
+						{ arguments: {}, id: "call-1", name, type: "toolCall" },
+					],
+					"toolUse",
+				),
+				policy,
+				runKind: "chat",
+			});
+			expect(decision).toMatchObject({ narrate: false, reason: "silent-tools" });
+		}
+		// A mixed round still does visible work, so the preamble is narrated as before.
+		const mixed = narrationCandidate({
+			message: assistant(
+				[
+					{ text: "I'll check the current page.", type: "text" },
+					{ arguments: {}, id: "call-1", name: "memory.save", type: "toolCall" },
+					{ arguments: {}, id: "call-2", name: "web_search", type: "toolCall" },
+				],
+				"toolUse",
+			),
+			policy,
+			runKind: "chat",
+		});
+		expect(mixed).toMatchObject({ narrate: true });
+	});
 });
 
 describe("samplingOverrides", () => {

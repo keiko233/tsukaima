@@ -82,6 +82,9 @@ const STICKER_HINTS_HEADER =
 	"Ready-to-copy sticker captions (write the marker exactly when a sticker fits):";
 const STICKER_HINT_MAX_ITEMS = 3;
 const STICKER_CAPTION_MAX_CHARS = 32;
+/** Ephemeral nudge for when a chat turn may speak mid-turn instead of waiting silently. */
+const LIVE_REPLY_GUIDE =
+	"While working, you may send one short natural line before a slow or external tool call. Stay silent for background memory, sticker lookup, and todo tools, and never repeat a mid-turn line in the final reply.";
 
 /** One host-model completion for chat compaction, on the conversation's own model. */
 export interface ContextCompletionRequest {
@@ -580,6 +583,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		push("rhythm-nudge", rhythmNudge);
 		push("stickers", stickerHints);
 		push("skills", skillCatalog);
+		if (chat) push("live-replies", LIVE_REPLY_GUIDE);
 		push("prompt-hooks", hooks);
 		push("cue", cue);
 		this.#logger.debug("rendered turn context", {
