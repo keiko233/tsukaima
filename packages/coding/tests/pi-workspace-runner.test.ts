@@ -102,6 +102,7 @@ async function createTestExecutor(): Promise<SandboxExecutor> {
 		id: "test-isolated",
 		isolated: true,
 		async exec(input) {
+			expect(input.snapshot).toBe(true);
 			return await runManagedProcess({
 				args: input.args,
 				command: input.command,

@@ -23,6 +23,7 @@ export interface RunnerConfig {
 	 */
 	readonly executor?: () => Promise<SandboxExecutor>;
 	readonly maxOutputBytes: number;
+	readonly snapshot?: boolean;
 	readonly timeoutMs: number;
 	readonly worktreePath: string;
 	/** Whether the sandbox may write inside `worktreePath`. */
@@ -91,6 +92,7 @@ export class CodingRunner {
 				...(this.#config.env === undefined ? {} : { env: this.#config.env }),
 				maxOutputBytes: this.#config.maxOutputBytes,
 				...(options.signal === undefined ? {} : { signal: options.signal }),
+				...(this.#config.snapshot === undefined ? {} : { snapshot: this.#config.snapshot }),
 				timeoutMs,
 				writable: this.#config.writable ?? false,
 			});

@@ -231,6 +231,7 @@ export class PiWorkspaceRunner {
 								allowedCommands: resolved.allowedCommands,
 								executor: async () => executor,
 								maxOutputBytes: resolved.maxOutputBytes,
+								snapshot: executor.isolated,
 								timeoutMs: resolved.timeoutMs,
 								worktreePath: resolved.worktreePath,
 								writable: true,
