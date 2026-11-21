@@ -171,6 +171,44 @@ describe("sticker-meme host integration", () => {
 			expect(imported).toMatchObject({ items: 2, missingMedia: 0 });
 
 			const { durableConversationId } = await createExternalSession(lifecycle);
+			const listPacks = (await lifecycle.pluginHost.invokeTool(
+				"sticker-meme.list_packs",
+				{},
+				{ conversationId: durableConversationId },
+			)) as { ok: true; result: { content: readonly { text: string }[] } };
+			expect(listPacks.ok).toBe(true);
+			const packPayload = decodeToolText(listPacks) as {
+				readonly count: number;
+				readonly packs: readonly { readonly itemCount: number; readonly name: string }[];
+			};
+			expect(packPayload.count).toBe(1);
+			expect(packPayload.packs[0]).toMatchObject({ itemCount: 2, name: "Test pack" });
+
+			const emptySearch = (await lifecycle.pluginHost.invokeTool(
+				"sticker-meme.search",
+				{ query: "nonexistent_synth_query" },
+				{ conversationId: durableConversationId },
+			)) as { ok: true; result: { content: readonly { text: string }[] } };
+			expect(emptySearch.ok).toBe(true);
+			const emptyPayload = decodeToolText(emptySearch) as {
+				readonly availablePacks: readonly { readonly name: string }[];
+				readonly count: number;
+				readonly hint: string;
+			};
+			expect(emptyPayload.count).toBe(0);
+			expect(emptyPayload.availablePacks).toHaveLength(1);
+			expect(emptyPayload.hint).toContain("No stickers matched");
+
+			const turnSections = await lifecycle.contextProvider.renderTurnContext({
+				conversationId: durableConversationId,
+				inputs: [],
+				nowMs: Date.now(),
+				triggers: [],
+			});
+			const stickerSection = turnSections.find((section) => section.key === "stickers");
+			expect(stickerSection).toBeDefined();
+			expect(stickerSection?.text).toContain("Available sticker packs: Test pack (2)");
+
 			const search = (await lifecycle.pluginHost.invokeTool(
 				"sticker-meme.search",
 				{ emotion: "joy", query: "smile" },

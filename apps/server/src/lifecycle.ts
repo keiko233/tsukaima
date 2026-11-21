@@ -480,18 +480,30 @@ export class TsukaimaLifecycle {
 			database: () => this.domainDatabase,
 			logger: this.runtimeLog,
 			policyService: this.conversationPolicy,
-			stickerCaptions: async () => {
+			stickerHints: async () => {
 				if (!(await this.pluginSettings.isEnabled("sticker-meme"))) return undefined;
 				const plugin = this.pluginHost.context("sticker-meme");
 				if (plugin === undefined) return undefined;
 				const result = await this.pluginHost.invokeRpc("sticker-meme.hints", { limit: 3 });
-				if (typeof result !== "object" || result === null || !("captions" in result)) {
+				if (typeof result !== "object" || result === null) {
 					return undefined;
 				}
-				const captions = (result as { readonly captions?: unknown }).captions;
-				return Array.isArray(captions)
-					? captions.filter((entry): entry is string => typeof entry === "string")
+				const record = result as { readonly captions?: unknown; readonly packs?: unknown };
+				const captions = Array.isArray(record.captions)
+					? record.captions.filter((entry): entry is string => typeof entry === "string")
 					: undefined;
+				const packs = Array.isArray(record.packs)
+					? record.packs.flatMap((entry) => {
+							if (typeof entry !== "object" || entry === null) return [];
+							const item = entry as { readonly itemCount?: unknown; readonly name?: unknown };
+							if (typeof item.name !== "string" || typeof item.itemCount !== "number") return [];
+							return [{ itemCount: item.itemCount, name: item.name }];
+						})
+					: undefined;
+				return {
+					...(captions === undefined ? {} : { captions }),
+					...(packs === undefined ? {} : { packs }),
+				};
 			},
 		});
 		this.requestService = new RequestService({

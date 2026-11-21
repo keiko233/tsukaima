@@ -55,9 +55,11 @@ export { StickerRepository, type StickerItemInput, type StickerItemPatch } from 
 export {
 	rankStickerItem,
 	StickerSelectionService,
+	type AvailableStickerPack,
 	type StickerCandidate,
 	type StickerChooseResult,
 	type StickerSearchInput,
+	type StickerSendResolution,
 } from "./selection.ts";
 export { registerStickerRpc } from "./rpc.ts";
 export {
@@ -178,6 +180,7 @@ export const stickerMemePlugin: TsukaimaPlugin = {
 			...(rpcLogger === undefined ? {} : { logger: rpcLogger }),
 			onSettled: () => updateStatus(context, repository),
 			repository,
+			selection,
 		});
 		runtime.disposers.push(
 			context.events.on("message.received", async (payload) => {

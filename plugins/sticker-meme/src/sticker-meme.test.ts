@@ -2186,4 +2186,231 @@ describe("sticker debug logging", () => {
 		);
 		expect(completed?.details).toMatchObject({ durationMs: expect.any(Number) });
 	});
+
+	test("lists available packs, guides empty searches, and supports persona boosting with fallback send", async () => {
+		const fixture = baseFixture();
+		const current = Date.parse("2026-01-01T00:00:00.000Z");
+		const repository = new StickerRepository(fixture.database, { now: () => current });
+		const media = fixture.media;
+		const selection = new StickerSelectionService({
+			audit: { record: async (entry) => void fixture.audits.push(entry) },
+			media,
+			now: () => current,
+			repository,
+			tokenTtlMs: 60_000,
+		});
+
+		// 1. Pack with persona ID and approved items
+		await repository.savePack({
+			id: "pack-alpha",
+			name: "Alpha Pack",
+			personaIds: ["synth-persona"],
+			tags: ["anime", "reaction"],
+		});
+		await seedItem(repository, media, {
+			emotions: ["happy", "joy"],
+			id: "alpha-1",
+			keywords: ["smile"],
+			packId: "pack-alpha",
+			score: 10,
+		});
+		await seedItem(repository, media, {
+			emotions: ["cool"],
+			id: "alpha-2",
+			keywords: ["sunglasses"],
+			packId: "pack-alpha",
+			score: 5,
+		});
+		// Unapproved or invalid items in pack-alpha that should not be counted:
+		await seedItem(repository, media, {
+			id: "alpha-disabled",
+			enabled: false,
+			packId: "pack-alpha",
+		});
+		await seedItem(repository, media, {
+			id: "alpha-revoked",
+			packId: "pack-alpha",
+			revokedAt: new Date(current).toISOString(),
+		});
+		await seedItem(repository, media, {
+			id: "alpha-pending",
+			packId: "pack-alpha",
+			reviewStatus: "pending",
+		});
+
+		// 2. Pack without persona ID (general pack)
+		await repository.savePack({
+			id: "pack-beta",
+			name: "Beta Pack",
+			personaIds: [],
+			tags: ["cats", "animals"],
+		});
+		await seedItem(repository, media, {
+			emotions: ["playful"],
+			id: "beta-1",
+			keywords: ["cat"],
+			packId: "pack-beta",
+			score: 2,
+		});
+
+		// 3. Disabled pack (should not appear in available packs)
+		await repository.savePack({
+			enabled: false,
+			id: "pack-disabled",
+			name: "Disabled Pack",
+		});
+		await seedItem(repository, media, {
+			id: "disabled-item",
+			packId: "pack-disabled",
+		});
+
+		// Verify listAvailablePacks
+		const available = await selection.listAvailablePacks();
+		expect(available).toHaveLength(2);
+		const alpha = available.find((pack) => pack.packId === "pack-alpha");
+		const beta = available.find((pack) => pack.packId === "pack-beta");
+		expect(alpha).toMatchObject({
+			itemCount: 2,
+			name: "Alpha Pack",
+			packId: "pack-alpha",
+			personaIds: ["synth-persona"],
+			tags: ["anime", "reaction"],
+		});
+		expect(alpha?.sampleEmotions).toContain("happy");
+		expect(alpha?.sampleEmotions).toContain("cool");
+		expect(beta).toMatchObject({
+			itemCount: 1,
+			name: "Beta Pack",
+			packId: "pack-beta",
+			personaIds: [],
+			tags: ["cats", "animals"],
+		});
+		expect(available.some((pack) => pack.packId === "pack-disabled")).toBe(false);
+
+		// Register tools and test list_packs tool
+		const context = createPluginContext({
+			grantedPermissions: stickerMemeManifest.permissions,
+			manifest: stickerMemeManifest,
+			pluginId: "sticker-meme",
+		});
+		registerStickerTools(context, selection);
+
+		const listPacksResult = await context.tools.invoke(
+			"sticker-meme.list_packs",
+			{},
+			{ conversationId: "conv-1" },
+		);
+		expect(listPacksResult.ok).toBe(true);
+		if (listPacksResult.ok) {
+			const parsed = JSON.parse(listPacksResult.result.content[0]?.text ?? "{}") as {
+				count: number;
+				packs: readonly { packId: string; itemCount: number }[];
+			};
+			expect(parsed.count).toBe(2);
+			expect(parsed.packs.map((pack) => pack.packId)).toEqual(["pack-alpha", "pack-beta"]);
+		}
+
+		// Test search empty fallback: returns availablePacks and concise hint
+		const emptySearch = await context.tools.invoke(
+			"sticker-meme.search",
+			{ query: "nonexistent_term_xyz" },
+			{ conversationId: "conv-1" },
+		);
+		expect(emptySearch.ok).toBe(true);
+		if (emptySearch.ok) {
+			const parsed = JSON.parse(emptySearch.result.content[0]?.text ?? "{}") as {
+				availablePacks: readonly { packId: string }[];
+				candidates: unknown[];
+				count: number;
+				hint: string;
+			};
+			expect(parsed.count).toBe(0);
+			expect(parsed.candidates).toHaveLength(0);
+			expect(parsed.availablePacks).toHaveLength(2);
+			expect(parsed.hint).toContain("No stickers matched");
+			expect(parsed.hint).toContain("packId");
+		}
+
+		// Test persona/alias matching: querying by persona ID directly matches items in that pack
+		const personaSearch = await selection.search({ query: "synth-persona" });
+		expect(personaSearch.map((candidate) => candidate.itemId)).toContain("alpha-1");
+
+		// Test pack tag matching reliably finds items in that pack
+		const tagSearch = await selection.search({ query: "animals" });
+		expect(tagSearch.map((candidate) => candidate.itemId)).toContain("beta-1");
+
+		// Test send tool with direct match: matchedBy is "query" and no availablePacks
+		const directSend = await context.tools.invoke(
+			"sticker-meme.send",
+			{ query: "smile" },
+			{ conversationId: "conv-1" },
+		);
+		expect(directSend.ok).toBe(true);
+		if (directSend.ok) {
+			const parsed = JSON.parse(directSend.result.content[0]?.text ?? "{}") as {
+				availablePacks?: unknown;
+				itemId: string;
+				matchedBy: string;
+			};
+			expect(parsed.itemId).toBe("alpha-1");
+			expect(parsed.matchedBy).toBe("query");
+			expect(parsed.availablePacks).toBeUndefined();
+		}
+
+		// Test send tool with unmatched query: falls back to top approved stickers with matchedBy: "fallback" and availablePacks
+		const fallbackSend = await context.tools.invoke(
+			"sticker-meme.send",
+			{ query: "completely_unmatched_term" },
+			{ conversationId: "conv-1" },
+		);
+		expect(fallbackSend.ok).toBe(true);
+		if (fallbackSend.ok) {
+			const parsed = JSON.parse(fallbackSend.result.content[0]?.text ?? "{}") as {
+				availablePacks: readonly { packId: string }[];
+				itemId: string;
+				matchedBy: string;
+			};
+			expect(parsed.matchedBy).toBe("fallback");
+			expect(parsed.availablePacks).toHaveLength(2);
+			expect(["alpha-1", "alpha-2", "beta-1"]).toContain(parsed.itemId);
+		}
+
+		// Test hints RPC returning packs alongside captions
+		const rpcHandlers = new Map<string, (input: unknown) => Promise<unknown> | unknown>();
+		const rpcContext = {
+			logger: createLogCapture().logger,
+			rpc: {
+				list: () => [],
+				register: (method: string, handler: (input: unknown) => Promise<unknown> | unknown) => {
+					rpcHandlers.set(method, handler);
+					return () => {};
+				},
+			},
+		} as unknown as PluginContext;
+		const importService = new StickerImportService({
+			media,
+			repository,
+		});
+		const learning = new LearningService({
+			media,
+			repository,
+		});
+		registerStickerRpc(rpcContext, {
+			importService,
+			learning,
+			repository,
+			selection,
+		});
+		const hintsRpc = rpcHandlers.get("hints");
+		expect(hintsRpc).toBeDefined();
+		const hints = (await hintsRpc?.({ limit: 3 })) as {
+			captions: readonly string[];
+			packs: readonly { itemCount: number; name: string }[];
+		};
+		expect(hints.captions.length).toBeGreaterThan(0);
+		expect(hints.packs).toEqual([
+			{ itemCount: 2, name: "Alpha Pack" },
+			{ itemCount: 1, name: "Beta Pack" },
+		]);
+	});
 });

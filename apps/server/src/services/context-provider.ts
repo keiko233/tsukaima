@@ -126,6 +126,13 @@ export interface DrizzleContextProviderOptions {
 	readonly memoryService?: MemoryService;
 	/** Optional bounded sticker captions for the ephemeral turn context. */
 	readonly stickerCaptions?: () => Promise<readonly string[] | undefined>;
+	/** Optional bounded sticker hints (packs + captions) for the ephemeral turn context. */
+	readonly stickerHints?: () => Promise<StickerHintsPayload | undefined>;
+}
+
+export interface StickerHintsPayload {
+	readonly captions?: readonly string[];
+	readonly packs?: readonly { readonly itemCount: number; readonly name: string }[];
 }
 
 const errorMessage = (error: unknown): string =>
@@ -211,6 +218,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	readonly #renderPrompt: DrizzleContextProviderOptions["renderPrompt"];
 	readonly #renderSystem: DrizzleContextProviderOptions["renderSystem"];
 	readonly #stickerCaptions: DrizzleContextProviderOptions["stickerCaptions"];
+	readonly #stickerHints: DrizzleContextProviderOptions["stickerHints"];
 	readonly #timeZone: string | undefined;
 	readonly #turnBudget: number;
 
@@ -218,6 +226,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		this.#renderSystem = options.renderSystem;
 		this.#renderPrompt = options.renderPrompt;
 		this.#stickerCaptions = options.stickerCaptions;
+		this.#stickerHints = options.stickerHints;
 		this.#completeText = options.completeText;
 		this.#database = options.database;
 		this.#logger = options.logger.child("tsukaima::server::context");
@@ -425,10 +434,22 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			}
 		}
 		let stickerHints: string | undefined;
-		if (chat && this.#stickerCaptions !== undefined && remaining > 0) {
+		if (
+			chat &&
+			(this.#stickerHints !== undefined || this.#stickerCaptions !== undefined) &&
+			remaining > 0
+		) {
 			try {
-				const captions = await this.#stickerCaptions();
-				const cleaned = [
+				let hintsPayload: StickerHintsPayload | undefined;
+				if (this.#stickerHints !== undefined) {
+					hintsPayload = await this.#stickerHints();
+				} else if (this.#stickerCaptions !== undefined) {
+					const captions = await this.#stickerCaptions();
+					hintsPayload = captions === undefined ? undefined : { captions };
+				}
+				const captions = hintsPayload?.captions;
+				const packs = hintsPayload?.packs;
+				const cleanedCaptions = [
 					...new Set(
 						(captions ?? [])
 							.map((caption) =>
@@ -440,14 +461,30 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 							.filter((caption) => caption.length > 0),
 					),
 				].slice(0, STICKER_HINT_MAX_ITEMS);
-				if (cleaned.length > 0) {
-					const text = [
+
+				const packOverview =
+					packs !== undefined && packs.length > 0
+						? `Available sticker packs: ${packs.map((pack) => `${pack.name} (${pack.itemCount})`).join(", ")}`
+						: undefined;
+
+				const lines: string[] = [];
+				if (packOverview !== undefined) {
+					lines.push(packOverview);
+				}
+				if (cleanedCaptions.length > 0) {
+					lines.push(
 						STICKER_HINTS_HEADER,
-						...cleaned.map((caption) => `- [表情:${caption}]`),
-					].join("\n");
+						...cleanedCaptions.map((caption) => `- [表情:${caption}]`),
+					);
+				}
+				if (lines.length > 0) {
+					const text = lines.join("\n");
 					if (text.length <= remaining) {
 						stickerHints = text;
 						remaining -= text.length;
+					} else if (packOverview !== undefined && packOverview.length <= remaining) {
+						stickerHints = packOverview;
+						remaining -= packOverview.length;
 					}
 				}
 			} catch (error) {
