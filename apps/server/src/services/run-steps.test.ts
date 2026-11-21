@@ -89,21 +89,6 @@ describe("run steps from durable entries", () => {
 		expect(tools[0]).toMatchObject({ output: "file contents", toolName: "read_file" });
 	});
 
-	test("keeps stored tool output and arguments beyond the old display limits", () => {
-		const input = "a".repeat(600);
-		const output = "b".repeat(3_000);
-		const entries = [
-			userTurn("1"),
-			assistant("2", [call("c1", "inspect", { input })]),
-			toolResult("3", "c1", output),
-			assistant("4", [text("done")]),
-		];
-		expect(runStepsFromEntries(entries, "4")[0]).toMatchObject({
-			argumentsText: JSON.stringify({ input }),
-			output,
-		});
-	});
-
 	test("marks a failing tool and keeps its error text", () => {
 		const entries: StepEntry[] = [
 			userTurn("1"),
@@ -201,7 +186,7 @@ describe("run steps from durable entries", () => {
 		expect(steps.at(-1)).toEqual({ kind: "text", text: "final" });
 	});
 
-	test("clips oversized tool output and arguments", () => {
+	test("preserves full stored tool output and arguments", () => {
 		const entries: StepEntry[] = [
 			userTurn("1"),
 			assistant("2", [call("c1", "big", { body: "x".repeat(5_000) })]),
@@ -210,8 +195,8 @@ describe("run steps from durable entries", () => {
 		];
 		const [tool] = runStepsFromEntries(entries, "4").filter((step) => step.kind === "tool");
 		if (tool?.kind !== "tool") throw new Error("expected a tool step");
-		expect(tool.output.length).toBeLessThan(2_100);
-		expect(tool.argumentsText.length).toBeLessThan(500);
+		expect(tool.output).toBe("y".repeat(50_000));
+		expect(tool.argumentsText).toBe(JSON.stringify({ body: "x".repeat(5_000) }));
 	});
 
 	test("ignores a malformed entry instead of throwing", () => {
