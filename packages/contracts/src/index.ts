@@ -10,12 +10,34 @@ export const conversationKeySchema = z.object({
 	peerId: z.string().min(1).optional(),
 });
 
+/** Upper bound of a stored quote excerpt; rendering may clip further. */
+export const MESSAGE_QUOTE_EXCERPT_MAX_CHARS = 280;
+
+export const messageQuoteSchema = z.object({
+	excerpt: z.string().max(MESSAGE_QUOTE_EXCERPT_MAX_CHARS).optional(),
+	fromSelf: z.boolean().optional(),
+	senderDisplayName: z.string().min(1).optional(),
+	senderPlatformId: z.string().min(1).optional(),
+});
+
+export type MessageQuote = z.infer<typeof messageQuoteSchema>;
+
 export const messageEnvelopeSchema = z.object({
 	channelId: z.string().min(1),
 	channelKind: z.string().min(1),
 	conversationKey: conversationKeySchema,
 	id: z.string().min(1),
-	mentions: z.array(z.object({ id: z.string().min(1).optional(), all: z.boolean().optional() })),
+	mentions: z.array(
+		z.object({
+			id: z.string().min(1).optional(),
+			all: z.boolean().optional(),
+			/**
+			 * Display name the mention resolved to on ingest (channel-supplied or looked up from known
+			 * identities). Model-facing rendering prefers it over the raw platform id.
+			 */
+			label: z.string().min(1).optional(),
+		}),
+	),
 	parts: z.array(messagePartSchema).min(1),
 	raw: z.unknown().optional(),
 	sender: z.object({
@@ -41,6 +63,12 @@ export const messageEnvelopeSchema = z.object({
 		.object({
 			id: z.string().min(1).optional(),
 			replyToEnvelopeId: z.string().min(1).optional(),
+			/**
+			 * The quoted message this envelope replies to, resolved on ingest so model rendering never
+			 * needs channel lookups. Channels may pre-fill it; the router completes it from stored
+			 * history. `fromSelf` marks a reply to the assistant's own message.
+			 */
+			quote: messageQuoteSchema.optional(),
 		})
 		.optional(),
 });

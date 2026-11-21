@@ -34,6 +34,7 @@ import {
 } from "../src/services/context-provider.ts";
 import { ConversationPolicyService } from "../src/services/conversation-policy.ts";
 import { createPromptTools } from "../src/services/prompt-tools.ts";
+import { DEFAULT_PROMPTS } from "../src/services/prompt-defaults.ts";
 import { PromptService } from "../src/services/prompts.ts";
 
 const directories: string[] = [];
@@ -57,7 +58,10 @@ async function openFixture(): Promise<{ database: TsukaimaDatabase; directory: s
 function provider(
 	database: TsukaimaDatabase | (() => TsukaimaDatabase | undefined),
 	overrides: Partial<
-		Pick<DrizzleContextProviderOptions, "budgetChars" | "memoryTopK" | "renderSystem">
+		Pick<
+			DrizzleContextProviderOptions,
+			"budgetChars" | "memoryTopK" | "personaBudgetChars" | "renderSystem"
+		>
 	> = {},
 ): DrizzleContextProvider {
 	return new DrizzleContextProvider({
@@ -358,7 +362,7 @@ describe("DrizzleContextProvider", () => {
 		}
 	});
 
-	test("keeps persona plus memory inside the character budget", async () => {
+	test("keeps persona and memory in separate budgets", async () => {
 		const { database } = await openFixture();
 		try {
 			await seedContextFixture(database);
@@ -367,7 +371,7 @@ describe("DrizzleContextProvider", () => {
 				id: "persona-long",
 				isActive: 1,
 				name: "Long persona",
-				promptJson: JSON.stringify("P".repeat(400)),
+				promptJson: JSON.stringify("P".repeat(600)),
 				summary: "long persona",
 				version: 1,
 			});
@@ -375,15 +379,19 @@ describe("DrizzleContextProvider", () => {
 				.update(personaBindings)
 				.set({ personaId: "persona-long" })
 				.where(eq(personaBindings.conversationId, "session-main"));
-			const context = provider(database, { budgetChars: 200 });
-			const personaText = await context.renderPersona("42");
-			const memoryText = await context.renderMemories("42");
+			const full = provider(database);
+			const intactPersona = await full.renderPersona("42");
+			expect(intactPersona).toBe("P".repeat(600));
+			const tight = provider(database, { budgetChars: 120, personaBudgetChars: 80 });
+			const personaText = await tight.renderPersona("42");
+			const memoryText = await tight.renderMemories("42");
 			if (personaText === undefined || memoryText === undefined) {
 				throw new Error("Expected persona and memory text");
 			}
 			expect(personaText).toContain("truncated");
 			expect(personaText.length).toBeLessThanOrEqual(80);
 			expect(memoryText).toContain("more not shown");
+			expect(memoryText.length).toBeLessThanOrEqual(120);
 			expect(personaText.length + memoryText.length).toBeLessThanOrEqual(200);
 		} finally {
 			database.$client.close();
@@ -544,7 +552,7 @@ describe("context injection end to end", () => {
 			});
 			expect((await run(101, "Coding instructions")).isError).toBeUndefined();
 			expect(await prompts.renderSystem("103")).toBe("Coding instructions");
-			expect(await prompts.renderSystem("101")).toBe("");
+			expect(await prompts.renderSystem("101")).toBe(DEFAULT_PROMPTS["chat-system"]);
 			expect(
 				(
 					await update.execute(

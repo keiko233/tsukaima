@@ -426,12 +426,12 @@ describe("PiDurableConversationHost", () => {
 	test("passes resolved image blocks to vision models and withholds them from text-only models", async () => {
 		const visionContent = await runImageTurnWithVision(true);
 		expect(visionContent).toEqual([
-			{ text: "Tester: look at this", type: "text" },
+			{ text: expect.stringMatching(/^\[\d{2}:\d{2}\] Tester: look at this$/), type: "text" },
 			{ data: "AQID", mimeType: "image/png", type: "image" },
 		]);
 
 		const textOnlyContent = await runImageTurnWithVision(false);
-		expect(textOnlyContent).toBe("Tester: look at this [image]");
+		expect(textOnlyContent).toMatch(/^\[\d{2}:\d{2}\] Tester: look at this \[image\]$/);
 	});
 
 	test("gates images on the conversation agent model instead of the host model", async () => {
@@ -441,7 +441,7 @@ describe("PiDurableConversationHost", () => {
 			hostModelId: "text-model",
 		});
 		expect(content).toEqual([
-			{ text: "Tester: look at this", type: "text" },
+			{ text: expect.stringMatching(/^\[\d{2}:\d{2}\] Tester: look at this$/), type: "text" },
 			{ data: "AQID", mimeType: "image/png", type: "image" },
 		]);
 	});
@@ -459,7 +459,7 @@ describe("PiDurableConversationHost", () => {
 			],
 		});
 		expect(content).toEqual([
-			{ text: "Tester: react to this", type: "text" },
+			{ text: expect.stringMatching(/^\[\d{2}:\d{2}\] Tester: react to this$/), type: "text" },
 			{ data: "AQID", mimeType: "image/webp", type: "image" },
 		]);
 	});
@@ -486,9 +486,9 @@ describe("PiDurableConversationHost", () => {
 			],
 		});
 		expect(content).toEqual([
-			{ text: "Alpha: first caption", type: "text" },
+			{ text: expect.stringMatching(/^\[\d{2}:\d{2}\] Alpha: first caption$/), type: "text" },
 			{ data: "AQID", mimeType: "image/png", type: "image" },
-			{ text: "Beta: second caption", type: "text" },
+			{ text: expect.stringMatching(/^\[\d{2}:\d{2}\] Beta: second caption$/), type: "text" },
 			{ data: "AQID", mimeType: "image/png", type: "image" },
 		]);
 	});
@@ -497,7 +497,12 @@ describe("PiDurableConversationHost", () => {
 		const content = await runImageTurnWithVision(true, {
 			resolveImage: async () => undefined,
 		});
-		expect(content).toEqual([{ text: "Tester: look at this [image unavailable]", type: "text" }]);
+		expect(content).toEqual([
+			{
+				text: expect.stringMatching(/^\[\d{2}:\d{2}\] Tester: look at this \[image unavailable\]$/),
+				type: "text",
+			},
+		]);
 	});
 
 	test("updates existing conversations when setModel switches provider or after reopening storage", async () => {
@@ -689,7 +694,10 @@ describe("PiDurableConversationHost", () => {
 			const userMessages = (observed.at(-1)?.messages ?? [])
 				.filter((message) => message.role === "user")
 				.map((message) => message.content);
-			expect(userMessages).toEqual(["Alpha: look at this", "Beta: what did it say"]);
+			expect(userMessages).toEqual([
+				expect.stringMatching(/^\[\d{2}:\d{2}\] Alpha\(user-0\): look at this$/),
+				expect.stringMatching(/^\[\d{2}:\d{2}\] Beta\(user-1\): what did it say$/),
+			]);
 			await host.close();
 			await storage.close(BACKGROUND_CONTEXT);
 		} finally {

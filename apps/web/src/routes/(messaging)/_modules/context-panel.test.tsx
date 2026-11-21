@@ -63,6 +63,7 @@ const sampleStats: SessionContextStats = {
 		personaTokens: 11_300,
 		policyTokens: 6_100,
 		toolsTokens: 18_700,
+		turnContextTokens: 0,
 	},
 	compacted: true,
 	contextWindow: 1_000_000,

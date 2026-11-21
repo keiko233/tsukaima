@@ -3,8 +3,8 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { MessageEnvelope } from "@tsukaima/contracts";
-import { identities, media, messages, users } from "@tsukaima/db";
+import { durableDocumentKinds, type MessageEnvelope } from "@tsukaima/contracts";
+import { conversations, identities, media, messages, users } from "@tsukaima/db";
 import type { ChannelAdapter, ChannelDiagnostics } from "@tsukaima/sdk";
 import { createApp } from "../src/app.ts";
 import type { ChannelRegistry } from "../src/services/channel-registry.ts";
@@ -254,6 +254,37 @@ describe("ConversationRouter ingestion boundary", () => {
 			expect(rows[0]?.direction).toBe("inbound");
 			expect(rows[0]?.contentText).toBe("hello");
 			expect(lifecycle.processedMessageCount).toBe(1);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("preserves a channel-hydrated quote when the replied message is not stored", async () => {
+		const lifecycle = await createLifecycle();
+		try {
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("Domain database is not ready");
+			const quote = {
+				excerpt: "an earlier note",
+				senderDisplayName: "Quoted Person",
+				senderPlatformId: "10002",
+			};
+			await lifecycle.processEnvelope({
+				...envelope("reply-missing", "what did that mean?"),
+				target: { quote, replyToEnvelopeId: "not-in-retention" },
+			});
+			const [conversation] = await database
+				.select({ durableConversationId: conversations.durableConversationId })
+				.from(conversations)
+				.limit(1);
+			const entries = await lifecycle.conversationHost?.listEntries(
+				conversation?.durableConversationId ?? "",
+			);
+			const window = entries?.find((entry) => entry.kind === durableDocumentKinds.activityWindow);
+			const data = window?.data as
+				| { envelopes?: readonly { target?: { quote?: unknown } }[] }
+				| undefined;
+			expect(data?.envelopes?.[0]?.target?.quote).toEqual(quote);
 		} finally {
 			await lifecycle.stop();
 		}

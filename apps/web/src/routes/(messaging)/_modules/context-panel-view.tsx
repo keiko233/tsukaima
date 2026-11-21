@@ -40,13 +40,16 @@ function localizedSectionLabel(key: string, fallback: string): string {
 		case "tsukaima-policy":
 			return m.context_section_policy();
 		case "tsukaima-memory":
+		case "turn-context/memories":
 			return m.context_section_memories();
 		case "instructions":
 			return m.context_section_instructions();
 		case "system":
 			return m.context_section_system();
 		default:
-			return fallback;
+			return key.startsWith("turn-context/")
+				? m.context_section_turn_context({ name: key.slice("turn-context/".length) })
+				: fallback;
 	}
 }
 
@@ -189,6 +192,11 @@ export function ContextPanelContent({
 						colorClass: "bg-chart-memories",
 						key: "memories",
 						tokens: stats.categories.memoriesTokens,
+					},
+					{
+						colorClass: "bg-chart-turn",
+						key: "turnContext",
+						tokens: stats.categories.turnContextTokens,
 					},
 					{
 						colorClass: "bg-chart-other",
@@ -340,6 +348,18 @@ export function ContextPanelContent({
 									stats.contextWindow,
 								)}
 							/>
+							{stats.categories.turnContextTokens > 0 ? (
+								<BreakdownRow
+									colorClass="bg-chart-turn"
+									dotted
+									label={m.context_category_turn_context()}
+									tokens={stats.categories.turnContextTokens}
+									percentText={formatCategoryPercent(
+										stats.categories.turnContextTokens,
+										stats.contextWindow,
+									)}
+								/>
+							) : null}
 							{stats.categories.otherSystemTokens > 0 ? (
 								<BreakdownRow
 									colorClass="bg-chart-other"

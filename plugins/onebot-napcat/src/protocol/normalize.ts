@@ -5,6 +5,8 @@ import {
 	type ChannelRequest,
 	type MessageEnvelope,
 	type MessagePart,
+	MESSAGE_QUOTE_EXCERPT_MAX_CHARS,
+	type MessageQuote,
 } from "@tsukaima/contracts";
 import type { PluginLogger } from "@tsukaima/sdk";
 import { createSafeLogger, segmentTypeCounts, singleLinePreview } from "../logging.ts";
@@ -427,7 +429,17 @@ type NormalizeOptions = {
 	readonly mentionNameTimeoutMs?: number | undefined;
 	readonly now?: (() => number) | undefined;
 	readonly resolveMentionName?: OneBotMentionNameResolver | undefined;
+	/**
+	 * Look up the message a `reply` segment quotes (NapCat `get_msg`), so the envelope can carry
+	 * its author and an excerpt even when the router has no stored copy. Optional and bounded by
+	 * {@link MAX_QUOTE_LOOKUP_TIMEOUT_MS}; failure leaves only `replyToEnvelopeId`.
+	 */
+	readonly resolveQuotedMessage?:
+		| ((messageId: string) => Promise<MessageQuote | undefined>)
+		| undefined;
 };
+
+export const MAX_QUOTE_LOOKUP_TIMEOUT_MS = 1_500;
 
 const segmentText = (segments: readonly OneBotSegment[]): string =>
 	segments
@@ -682,15 +694,44 @@ const normalizedParts = (
 	return parts;
 };
 
+/**
+ * Mention ids for trigger classification, plus the display label when the platform (or the
+ * mention-name hook) supplied one, so model rendering never has to show a bare QQ id.
+ */
 const mentionList = (segments: readonly OneBotSegment[] | undefined) => {
-	const mentions: Array<{ all?: boolean; id?: string }> = [];
+	const mentions: Array<{ all?: boolean; id?: string; label?: string }> = [];
 	for (const segment of segments ?? []) {
 		if (segment.type !== "at") continue;
 		const qq = asString(segment.data?.qq);
 		if (qq === undefined) continue;
-		mentions.push(qq === "all" ? { all: true } : { id: qq });
+		if (qq === "all") {
+			mentions.push({ all: true });
+			continue;
+		}
+		const label = nonEmpty(asString(segment.data?.name));
+		mentions.push(label === undefined || label === qq ? { id: qq } : { id: qq, label });
 	}
 	return mentions;
+};
+
+const replySegmentId = (segments: readonly OneBotSegment[] | undefined): string | undefined => {
+	const replyId = segments?.find((segment) => segment.type === "reply")?.data?.id;
+	return typeof replyId === "string" || typeof replyId === "number" ? String(replyId) : undefined;
+};
+
+/** Clamp a channel-supplied quote to the contract bounds and drop empty fields. */
+const boundedQuote = (quote: MessageQuote | undefined): MessageQuote | undefined => {
+	if (quote === undefined) return undefined;
+	const excerpt = nonEmpty(quote.excerpt)?.slice(0, MESSAGE_QUOTE_EXCERPT_MAX_CHARS);
+	const senderDisplayName = nonEmpty(quote.senderDisplayName);
+	const senderPlatformId = nonEmpty(quote.senderPlatformId);
+	const bounded: MessageQuote = {
+		...(excerpt === undefined ? {} : { excerpt }),
+		...(quote.fromSelf === true ? { fromSelf: true } : {}),
+		...(senderDisplayName === undefined ? {} : { senderDisplayName }),
+		...(senderPlatformId === undefined ? {} : { senderPlatformId }),
+	};
+	return Object.keys(bounded).length === 0 ? undefined : bounded;
 };
 
 /**
@@ -776,6 +817,11 @@ const buildEnvelope = (
 	event: OneBotEvent,
 	config: { botAccountId: string; channelId: string },
 	parts: MessagePart[],
+	enrichment: {
+		/** Segments after mention-name resolution; defaults to the raw event segments. */
+		readonly segments?: readonly OneBotSegment[];
+		readonly quote?: MessageQuote | undefined;
+	} = {},
 ): MessageEnvelope | undefined => {
 	if (
 		event.post_type !== "message" ||
@@ -788,7 +834,8 @@ const buildEnvelope = (
 	const peerId = event.message_type === "private" ? senderId : asString(event.group_id);
 	if (senderId === undefined || messageId === undefined || peerId === undefined) return undefined;
 	if (parts.length === 0) return undefined;
-	const replyId = event.message?.find((segment) => segment.type === "reply")?.data?.id;
+	const replyId = replySegmentId(event.message);
+	const quote = replyId === undefined ? undefined : boundedQuote(enrichment.quote);
 	const sender =
 		event.message_type === "group" && event.sender?.role !== undefined
 			? {
@@ -810,7 +857,7 @@ const buildEnvelope = (
 				? { groupId: peerId, kind: "group", peerId: senderId }
 				: { kind: "private", peerId },
 		id: messageId,
-		mentions: mentionList(event.message),
+		mentions: mentionList(enrichment.segments ?? event.message),
 		parts,
 		raw: event,
 		sender,
@@ -823,10 +870,32 @@ const buildEnvelope = (
 			receivedAtMs: Date.now(),
 		},
 		target:
-			typeof replyId !== "string" && typeof replyId !== "number"
+			replyId === undefined
 				? undefined
-				: { replyToEnvelopeId: String(replyId) },
+				: { replyToEnvelopeId: replyId, ...(quote === undefined ? {} : { quote }) },
 	};
+};
+
+/** Best-effort quote lookup for a `reply` segment; never blocks ingestion beyond its timeout. */
+const resolvedQuote = async (
+	event: OneBotEvent,
+	options: NormalizeOptions,
+): Promise<MessageQuote | undefined> => {
+	const replyId = replySegmentId(event.message);
+	const resolve = options.resolveQuotedMessage;
+	if (replyId === undefined || resolve === undefined) return undefined;
+	try {
+		return await withTimeout(
+			Promise.resolve(resolve(replyId)),
+			MAX_QUOTE_LOOKUP_TIMEOUT_MS,
+			"quoted message lookup",
+		);
+	} catch (error) {
+		createSafeLogger(options.logger).debug("OneBot quoted message unavailable", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return undefined;
+	}
 };
 
 const chatKeyFor = (event: OneBotEvent): string => {
@@ -876,9 +945,11 @@ export const normalizeOneBotEventAsync = async (
 	}
 	const chatKey = chatKeyFor(event);
 	const parts: MessagePart[] = [];
+	const resolvedSegments: OneBotSegment[] = [];
 	for (const rawSegment of event.message) {
 		const segment =
 			rawSegment.type === "at" ? await resolvedAtSegment(rawSegment, event, options) : rawSegment;
+		resolvedSegments.push(segment);
 		let part = syncPart(segment, logger);
 		if (part === undefined) continue;
 		if (segment.type === "forward") {
@@ -913,7 +984,8 @@ export const normalizeOneBotEventAsync = async (
 		}
 		appendPart(parts, part);
 	}
-	const envelope = buildEnvelope(event, config, parts);
+	const quote = await resolvedQuote(event, options);
+	const envelope = buildEnvelope(event, config, parts, { quote, segments: resolvedSegments });
 	if (envelope === undefined) {
 		logger.debug("OneBot event not ingestable", {
 			partCount: parts.length,

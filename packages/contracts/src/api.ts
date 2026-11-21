@@ -487,6 +487,8 @@ export const sessionContextStatsSchema = z.object({
 		personaTokens: z.number().int().nonnegative(),
 		policyTokens: z.number().int().nonnegative(),
 		toolsTokens: z.number().int().nonnegative(),
+		/** Ephemeral per-request turn context other than recalled memories. */
+		turnContextTokens: z.number().int().nonnegative(),
 	}),
 	compacted: z.boolean(),
 	contextWindow: z.number().int().nonnegative(),
@@ -1539,6 +1541,7 @@ export type PersonaSummary = z.infer<typeof personaSummarySchema>;
 export const promptTextSchema = z.string().max(20_000);
 export const promptKeySchema = z.enum([
 	"chat-system",
+	"chat-compaction",
 	"coding-system",
 	"workspace-task",
 	"sidechat",

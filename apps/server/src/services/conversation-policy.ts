@@ -53,6 +53,45 @@ const parseAliases = (value: string | null): string[] => {
 type PersonaRow = typeof personas.$inferSelect;
 type BindingRow = typeof personaBindings.$inferSelect;
 
+/**
+ * Persona behavior settings stored in `personas.behavior_json`. Imported DSH personas carry
+ * `complete` (the persona is a complete system prompt, so the shared chat base prompt is
+ * omitted) and `includeRuntimeContext` (`false` drops runtime facts such as the clock from the
+ * turn context). Unknown keys are ignored and `null` means "use the default".
+ */
+export interface PersonaBehavior {
+	readonly complete: boolean;
+	readonly includeRuntimeContext: boolean;
+}
+
+export const DEFAULT_PERSONA_BEHAVIOR: PersonaBehavior = {
+	complete: false,
+	includeRuntimeContext: true,
+};
+
+export function parsePersonaBehavior(json: string | null | undefined): PersonaBehavior {
+	if (json === null || json === undefined || json.trim().length === 0) {
+		return DEFAULT_PERSONA_BEHAVIOR;
+	}
+	try {
+		const parsed: unknown = JSON.parse(json);
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+			return DEFAULT_PERSONA_BEHAVIOR;
+		}
+		const record = parsed as Record<string, unknown>;
+		return {
+			complete:
+				typeof record.complete === "boolean" ? record.complete : DEFAULT_PERSONA_BEHAVIOR.complete,
+			includeRuntimeContext:
+				typeof record.includeRuntimeContext === "boolean"
+					? record.includeRuntimeContext
+					: DEFAULT_PERSONA_BEHAVIOR.includeRuntimeContext,
+		};
+	} catch {
+		return DEFAULT_PERSONA_BEHAVIOR;
+	}
+}
+
 const toPersonaSummary = (row: PersonaRow): PersonaSummary => {
 	let prompt = "";
 	try {
@@ -646,10 +685,30 @@ export class ConversationPolicyService {
 		return this.#resolvePersona(this.#db(), session);
 	}
 
+	/** The bound persona together with its stored behavior settings. */
+	async personaProfileForSession(session: {
+		chatKind: string;
+		chatObjectId: string | null;
+		conversationId: string;
+	}): Promise<{ behavior: PersonaBehavior; persona: PersonaSummary } | undefined> {
+		const row = await this.#resolvePersonaRow(this.#db(), session);
+		return row === undefined
+			? undefined
+			: { behavior: parsePersonaBehavior(row.behaviorJson), persona: toPersonaSummary(row) };
+	}
+
 	async #resolvePersona(
 		database: TsukaimaDatabase,
 		session: { chatKind: string; chatObjectId: string | null; conversationId: string },
 	): Promise<PersonaSummary | undefined> {
+		const row = await this.#resolvePersonaRow(database, session);
+		return row === undefined ? undefined : toPersonaSummary(row);
+	}
+
+	async #resolvePersonaRow(
+		database: TsukaimaDatabase,
+		session: { chatKind: string; chatObjectId: string | null; conversationId: string },
+	): Promise<PersonaRow | undefined> {
 		const active = await database
 			.select()
 			.from(personaBindings)
@@ -678,7 +737,7 @@ export class ConversationPolicyService {
 			.where(and(eq(personas.id, binding.personaId), eq(personas.isActive, 1)))
 			.orderBy(desc(personas.version))
 			.limit(1);
-		return persona === undefined ? undefined : toPersonaSummary(persona);
+		return persona;
 	}
 
 	async listPersonas(): Promise<PersonaSummary[]> {

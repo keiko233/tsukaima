@@ -1,24 +1,108 @@
+import type { Context } from "@earendil-works/chord/context";
+import type { Message, UserMessage } from "@earendil-works/pi-ai";
+import { contentText } from "@earendil-works/pi-ai/utils/text";
 import {
+	AgentDoc,
+	CompactionEntry,
+	CompactionTask,
 	defineExtension,
+	GenerationTask,
+	hook,
+	LiveDoc,
+	ResetEntry,
 	section,
+	type CompactionReason,
+	type EntryRecord,
 	type Extension,
+	type HookApi,
+	type ModelRef,
 	type PromptSection,
 	type ToolRegistration,
 } from "@earendil-works/pi-durable";
+import { durableDocumentKinds } from "@tsukaima/contracts";
 
 /**
- * Domain-agnostic seam for the persona and memory prompt sections. The server implements it
- * over Drizzle; `@tsukaima/core` never imports `@tsukaima/db`. Implementations must degrade to
+ * Transient per-turn routing information captured when an input is admitted. It is stored on
+ * the durable activity envelope (so recovery replays the same turn context) but is never
+ * rendered into the durable user message: only the ephemeral turn-context layer reads it.
+ */
+export interface TurnTrigger {
+	readonly classification?: "direct" | "soft" | "ambient";
+	/** Compact model-visible cue; only set for `soft` turns. */
+	readonly cue?: string;
+	/** Prompt-hook text consumed at admission, so a one-shot hook fires exactly once. */
+	readonly promptHooks?: string;
+}
+
+/** One priority-ordered block of the ephemeral turn context. */
+export interface TurnContextSection {
+	/** Stable key, e.g. `clock`, `observation`, `memories`, `prompt-hooks`, `cue`. */
+	readonly key: string;
+	readonly text: string;
+}
+
+export interface TurnContextRequest {
+	readonly conversationId: string;
+	/** Wall clock when the run first rendered its turn context. */
+	readonly nowMs: number;
+	/** Envelope references of the run's own inputs, oldest first. */
+	readonly inputs: readonly TurnContextInput[];
+	/** Trigger info of the run's inputs, oldest first. */
+	readonly triggers: readonly TurnTrigger[];
+}
+
+/** One model input the current run submitted, used to keep it out of the ambient window. */
+export interface TurnContextInput {
+	/** Stored envelope id. */
+	readonly envelopeId?: string;
+	/** Platform message id, when the channel supplied one. */
+	readonly platformMessageId?: string;
+}
+
+export interface ChatCompactionRequest {
+	readonly conversationId: string;
+	readonly reason: CompactionReason;
+	/** Chat-readable rendering of the messages being replaced, oldest first. */
+	readonly transcript: string;
+	/** Summary that headed the context before this compaction, if any. */
+	readonly previousSummary?: string;
+	readonly instructions?: string;
+	/** The model that runs this conversation; summarization should use it. */
+	readonly model?: { readonly modelId: string; readonly providerId: string };
+	readonly signal?: AbortSignal;
+}
+
+/**
+ * Domain-agnostic seam for the Tsukaima prompt context. The server implements it over
+ * Drizzle; `@tsukaima/core` never imports `@tsukaima/db`. Implementations must degrade to
  * `undefined` on any failure so prompt rendering can never break a model run.
+ *
+ * Static sections (`renderSystem`, `renderPersona`, `renderPolicy`) go into `pi.system` and
+ * must stay byte-stable across ordinary turns so provider prefix caches hit. Anything that
+ * changes per turn belongs in {@link renderTurnContext}.
  */
 export interface ContextPromptProvider {
 	renderSystem?(conversationId: string): Promise<string | undefined>;
 	/** Persona text for one durable conversation, or `undefined` when none is bound. */
 	renderPersona(conversationId: string): Promise<string | undefined>;
-	/** Retrieved memory text for one durable conversation, or `undefined` when there is none. */
-	renderMemories(conversationId: string): Promise<string | undefined>;
-	/** Compact identity/conversation contract text rendered between persona and memory. */
+	/** Static, model-actionable behavior rules rendered after the persona. */
 	renderPolicy?(conversationId: string): Promise<string | undefined>;
+	/**
+	 * Ephemeral context for one run (clock, ambient observation window, recalled memories,
+	 * prompt hooks, soft cue). Called at most once per run; the result is attached to each
+	 * model request of that run and never persisted into the transcript. Must be read-only.
+	 */
+	renderTurnContext?(request: TurnContextRequest): Promise<readonly TurnContextSection[]>;
+	/**
+	 * Chat-native compaction summary. Return `undefined` to fall through to pi-durable's default
+	 * (coding) summarizer, which workspace conversations rely on.
+	 */
+	summarizeCompaction?(request: ChatCompactionRequest): Promise<string | undefined>;
+	/**
+	 * Whether this is an ordinary chat surface (`private`, `group`, `webui`). A failed chat
+	 * summary declines compaction instead of falling back to the coding format.
+	 */
+	isChatConversation?(conversationId: string): Promise<boolean>;
 }
 
 /**
@@ -27,34 +111,394 @@ export interface ContextPromptProvider {
  */
 export const CONTEXT_EXTENSION_NAME = "tsukaima-context";
 export const SYSTEM_SECTION_KEY = "tsukaima-system";
-/** Section key for the conversation's persona (rendered before policy and memories). */
+/** Section key for the conversation's persona (rendered before policy). */
 export const PERSONA_SECTION_KEY = "tsukaima-persona";
-/** Section key for the compact conversation policy/trigger contract. */
+/** Section key for the static behavior rules. */
 export const POLICY_SECTION_KEY = "tsukaima-policy";
-/** Section key for the conversation's retrieved memories. */
-export const MEMORY_SECTION_KEY = "tsukaima-memory";
+/** Tag wrapping the ephemeral per-request context block. */
+export const TURN_CONTEXT_TAG = "turn-context";
+/** Inspector key prefix for ephemeral turn sections (`turn-context/<key>`). */
+export const TURN_CONTEXT_SECTION_PREFIX = `${TURN_CONTEXT_TAG}/`;
+/** Turn section key that carries recalled memories; the inspector reports it separately. */
+export const TURN_MEMORIES_KEY = "memories";
+/** Generation-task memo that pins one run's turn context across tool rounds and recovery. */
+export const TURN_CONTEXT_MEMO = "tsukaima.turnContext";
+/** Bound on how far back the hook scans for the current run's inputs. */
+const RUN_INPUT_SCAN_LIMIT = 64;
 
 export interface ContextExtensionOptions {
 	/** Section key overrides, mainly for tests and wrapping experiments. */
 	readonly keys?: {
-		readonly memory?: string;
 		readonly persona?: string;
 		readonly policy?: string;
 	};
+	/** Wall clock; defaults to `Date.now`. */
+	readonly now?: () => number;
+	/**
+	 * Resolve the model that actually runs a conversation from its stored agent model, applying
+	 * the host's fallback rules. Without it chat compaction receives no model hint.
+	 */
+	readonly resolveModel?: (
+		agentModel: ModelRef | undefined,
+	) => { readonly modelId: string; readonly providerId: string } | undefined;
+	/**
+	 * Process-local snapshot cache keyed by conversation and the live run's first entry. A run
+	 * hands its generation task over between tool rounds, so the task memo alone cannot pin it;
+	 * the host also reads this cache from the inspector.
+	 */
+	readonly turnContextCache?: Map<string, TurnContextSnapshot>;
+}
+
+/** Cache key for one live run's ephemeral turn context. */
+export function turnContextCacheKey(conversationId: string | number, runFirst: number): string {
+	return `${conversationId}:${runFirst}`;
+}
+
+/** Keep one snapshot per conversation; older runs can never be inspected as live again. */
+function rememberTurnContext(
+	cache: Map<string, TurnContextSnapshot>,
+	conversationId: string | number,
+	key: string,
+	snapshot: TurnContextSnapshot,
+): TurnContextSnapshot {
+	for (const existing of cache.keys()) {
+		if (existing.startsWith(`${conversationId}:`)) cache.delete(existing);
+	}
+	cache.set(key, snapshot);
+	return snapshot;
+}
+
+export type TurnContextSnapshot = {
+	renderedAtMs: number;
+	sections: { key: string; text: string }[];
+};
+
+/** Turn triggers of one envelope as stored on an activity entry. */
+function envelopeTrigger(envelope: unknown): TurnTrigger | undefined {
+	if (typeof envelope !== "object" || envelope === null) return undefined;
+	const raw = (envelope as { turnContext?: unknown }).turnContext;
+	if (typeof raw === "object" && raw !== null) {
+		const record = raw as Record<string, unknown>;
+		const classification =
+			record.classification === "direct" ||
+			record.classification === "soft" ||
+			record.classification === "ambient"
+				? record.classification
+				: undefined;
+		const cue =
+			typeof record.cue === "string" && record.cue.trim().length > 0 ? record.cue : undefined;
+		const promptHooks =
+			typeof record.promptHooks === "string" && record.promptHooks.trim().length > 0
+				? record.promptHooks
+				: undefined;
+		if (classification !== undefined || cue !== undefined || promptHooks !== undefined) {
+			return {
+				...(classification === undefined ? {} : { classification }),
+				...(cue === undefined ? {} : { cue }),
+				...(promptHooks === undefined ? {} : { promptHooks }),
+			};
+		}
+	}
+	// Windows admitted before Batch 1 carried the old model-visible preamble. Keep pending
+	// windows meaningful across an upgrade, but never render the preamble verbatim.
+	const legacy = (envelope as { triggerContext?: unknown }).triggerContext;
+	return typeof legacy === "string" ? legacyTrigger(legacy) : undefined;
+}
+
+/** Recover routing information from the pre-Batch-1 `Conversation trigger:` preamble. */
+function legacyTrigger(triggerContext: string): TurnTrigger | undefined {
+	const classification = /^-\s*(direct|soft|ambient)\s*$/mu.exec(triggerContext)?.[1];
+	if (classification !== "direct" && classification !== "soft" && classification !== "ambient") {
+		return undefined;
+	}
+	if (classification !== "soft") return { classification };
+	const lines = [
+		/Bot name used without direct address:\s*yes/iu.test(triggerContext)
+			? "Someone mentioned you by name without addressing you directly."
+			: "Nobody addressed you directly; you are just following the chat.",
+	];
+	if (/Another bot is speaking:\s*yes/iu.test(triggerContext)) {
+		lines.push("The latest speaker is another bot.");
+	}
+	const media = /Media\/notice summary:\s*(.+)$/imu.exec(triggerContext)?.[1]?.trim();
+	if (media !== undefined && media.length > 0 && media.toLocaleLowerCase() !== "none") {
+		lines.push(`The latest message is ${media}.`);
+	}
+	lines.push("If joining in would be noise, reply with exactly TSUKAIMA_LURK and nothing else.");
+	return { classification, cue: lines.join("\n") };
+}
+
+/** Envelope identity of one run input, for the observation-window duplicate filter. */
+function envelopeInput(envelope: unknown): TurnContextInput | undefined {
+	if (typeof envelope !== "object" || envelope === null) return undefined;
+	const record = envelope as Record<string, unknown>;
+	const envelopeId = typeof record.id === "string" && record.id.length > 0 ? record.id : undefined;
+	const source =
+		typeof record.source === "object" && record.source !== null
+			? (record.source as Record<string, unknown>)
+			: undefined;
+	const rawPlatformId = source?.messageId;
+	const platformMessageId =
+		typeof rawPlatformId === "string" || typeof rawPlatformId === "number"
+			? String(rawPlatformId)
+			: undefined;
+	if (envelopeId === undefined && platformMessageId === undefined) return undefined;
+	return {
+		...(envelopeId === undefined ? {} : { envelopeId }),
+		...(platformMessageId === undefined ? {} : { platformMessageId }),
+	};
+}
+
+function isFinalAnswer(entry: EntryRecord): boolean {
+	if (entry.kind !== "pi.assistant") return false;
+	return (entry.model ?? []).some(
+		(message) => message.role === "assistant" && message.stopReason !== "toolUse",
+	);
+}
+
+export interface RunInputScanOptions {
+	/** First entry of the live run; entries before it belong to an earlier run. */
+	readonly minEntryId?: number;
 }
 
 /**
- * Turns a {@link ContextPromptProvider} into a pi-durable extension with one section per
- * render call. Sections render before every request, so persona and memory changes are
- * reflected on the next request. Provider failures omit the section.
+ * Envelopes of the current run, oldest first. A run's inputs are the activity-window entries
+ * after the previous run's final answer; tool rounds, steers, and follow-ups in between are
+ * skipped over. `minEntryId` (pi-durable's `LiveRun.first`) draws the boundary after a run
+ * that ended without a final answer, such as a `terminate` round.
+ */
+function runEnvelopes(
+	entriesDescending: readonly EntryRecord[],
+	options: RunInputScanOptions = {},
+): unknown[] {
+	const newestFirst: unknown[] = [];
+	for (const entry of entriesDescending) {
+		if (options.minEntryId !== undefined && entry.id < options.minEntryId) break;
+		if (entry.kind === CompactionEntry.kind || entry.kind === ResetEntry.kind) break;
+		if (isFinalAnswer(entry)) break;
+		if (entry.kind !== durableDocumentKinds.activityWindow) continue;
+		if (entry.model === undefined || entry.model.length === 0) continue;
+		const data = entry.data;
+		if (typeof data !== "object" || data === null || Array.isArray(data)) continue;
+		const envelopes = (data as { envelopes?: unknown }).envelopes;
+		if (!Array.isArray(envelopes)) continue;
+		for (const envelope of envelopes.toReversed()) newestFirst.push(envelope);
+	}
+	return newestFirst.toReversed();
+}
+
+/** Turn triggers of the current run, oldest first. */
+export function collectRunTriggers(
+	entriesDescending: readonly EntryRecord[],
+	options: RunInputScanOptions = {},
+): TurnTrigger[] {
+	return runEnvelopes(entriesDescending, options)
+		.map((envelope) => envelopeTrigger(envelope))
+		.filter((trigger): trigger is TurnTrigger => trigger !== undefined);
+}
+
+/** Envelope identity of the current run's inputs, oldest first. */
+export function collectRunInputs(
+	entriesDescending: readonly EntryRecord[],
+	options: RunInputScanOptions = {},
+): TurnContextInput[] {
+	return runEnvelopes(entriesDescending, options)
+		.map((envelope) => envelopeInput(envelope))
+		.filter((input): input is TurnContextInput => input !== undefined);
+}
+
+/** `<turn-context>` block for a set of sections; `undefined` when there is nothing to say. */
+export function renderTurnContextBlock(
+	sections: readonly TurnContextSection[],
+): string | undefined {
+	const bodies = sections
+		.map((entry) => ({ key: entry.key, text: entry.text.trim() }))
+		.filter((entry) => entry.text.length > 0)
+		.map((entry) => `<${entry.key}>\n${entry.text}\n</${entry.key}>`);
+	if (bodies.length === 0) return undefined;
+	return `<${TURN_CONTEXT_TAG}>\n${bodies.join("\n")}\n</${TURN_CONTEXT_TAG}>`;
+}
+
+/**
+ * Insert the ephemeral block as a user message immediately before the current run's first
+ * input, so it reads as "context, then the new messages" and everything before it stays a
+ * stable cacheable prefix. Tool rounds of the run follow the inputs and keep their order.
+ */
+export function injectTurnContext(
+	messages: readonly Message[],
+	block: string,
+	timestamp: number,
+): Message[] {
+	let index = messages.length;
+	while (index > 0) {
+		const previous = messages[index - 1];
+		if (previous === undefined) break;
+		if (previous.role === "system") break;
+		if (previous.role === "assistant" && previous.stopReason !== "toolUse") break;
+		index -= 1;
+	}
+	// Skip leading tool traffic so the block lands on the first user input of the run.
+	while (index < messages.length && messages[index]?.role !== "user") index += 1;
+	if (index >= messages.length) index = messages.length;
+	const contextMessage: UserMessage = { content: block, role: "user", timestamp };
+	return [...messages.slice(0, index), contextMessage, ...messages.slice(index)];
+}
+
+/** Longest tool-result excerpt a chat compaction transcript keeps. */
+const COMPACTION_TOOL_RESULT_MAX_CHARS = 600;
+/** Longest single chat line a compaction transcript keeps. */
+const COMPACTION_MESSAGE_MAX_CHARS = 2_000;
+const COMPACTION_SUMMARY_PREFIX =
+	"The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
+const COMPACTION_SUMMARY_SUFFIX = "\n</summary>";
+const INLINE_IMAGE_DATA = /data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+/giu;
+const LONG_BASE64_RUN = /[a-z0-9+/]{200,}={0,2}/giu;
+
+function clipCompactionText(text: string, max: number): string {
+	if (text.length <= max) return text;
+	return `${text.slice(0, max - 1)}…`;
+}
+
+/** Drop inline image bytes so a summary prompt never carries raw base64. */
+function sanitizeCompactionText(text: string): string {
+	return text.replace(INLINE_IMAGE_DATA, "[image]").replace(LONG_BASE64_RUN, "[base64 omitted]");
+}
+
+function compactionSummaryOf(message: Message): string | undefined {
+	if (message.role !== "user") return undefined;
+	const text = contentText(message.content);
+	if (!text.startsWith(COMPACTION_SUMMARY_PREFIX)) return undefined;
+	const end = text.lastIndexOf(COMPACTION_SUMMARY_SUFFIX);
+	if (end < COMPACTION_SUMMARY_PREFIX.length) return undefined;
+	const summary = text.slice(COMPACTION_SUMMARY_PREFIX.length, end).trim();
+	return summary.length === 0 ? undefined : summary;
+}
+
+/** The summary that headed `messages`, when the previous compaction produced one. */
+export function previousCompactionSummary(messages: readonly Message[]): string | undefined {
+	for (const message of messages) {
+		const summary = compactionSummaryOf(message);
+		if (summary !== undefined) return summary;
+		if (message.role === "user" || message.role === "assistant") return undefined;
+	}
+	return undefined;
+}
+
+/**
+ * Chat-readable transcript for the compaction summarizer: speaker-prefixed text, tool traffic
+ * reduced to names, oversized tool output clipped, and inline image bytes omitted. A prior
+ * compaction summary is carried separately so it can be folded into the new one.
+ */
+export function chatCompactionTranscript(messages: readonly Message[]): string {
+	const lines: string[] = [];
+	let headConsumed = false;
+	for (const message of messages) {
+		if (!headConsumed && compactionSummaryOf(message) !== undefined) {
+			headConsumed = true;
+			continue;
+		}
+		switch (message.role) {
+			case "system":
+				break;
+			case "user": {
+				const text = sanitizeCompactionText(contentText(message.content)).trim();
+				if (text.length > 0) {
+					lines.push(clipCompactionText(text, COMPACTION_MESSAGE_MAX_CHARS));
+				}
+				break;
+			}
+			case "assistant": {
+				const texts: string[] = [];
+				const tools: string[] = [];
+				for (const block of message.content) {
+					if (block.type === "text" && block.text.trim().length > 0) {
+						texts.push(sanitizeCompactionText(block.text.trim()));
+					} else if (block.type === "toolCall") tools.push(block.name);
+				}
+				if (texts.length > 0) {
+					lines.push(
+						clipCompactionText(`(you): ${texts.join("\n")}`, COMPACTION_MESSAGE_MAX_CHARS),
+					);
+				}
+				if (tools.length > 0) lines.push(`(you used: ${tools.join(", ")})`);
+				break;
+			}
+			case "toolResult": {
+				const text = sanitizeCompactionText(contentText(message.content)).trim();
+				if (text.length === 0) break;
+				const label = message.toolName.length > 0 ? message.toolName : "tool";
+				lines.push(
+					`(result of ${label}): ${clipCompactionText(text, COMPACTION_TOOL_RESULT_MAX_CHARS)}`,
+				);
+				break;
+			}
+		}
+	}
+	return lines.join("\n");
+}
+
+async function turnContextForRun(
+	provider: ContextPromptProvider,
+	api: HookApi,
+	context: Context,
+	now: () => number,
+	cache: Map<string, TurnContextSnapshot> | undefined,
+): Promise<TurnContextSnapshot | undefined> {
+	if (provider.renderTurnContext === undefined) return undefined;
+	const live = await api.snapshot(LiveDoc, api.conversationId, context);
+	const runFirst = live?.run?.first;
+	const cacheKey =
+		runFirst === undefined ? undefined : turnContextCacheKey(api.conversationId, runFirst);
+	const shared = cacheKey === undefined ? undefined : cache?.get(cacheKey);
+	if (shared !== undefined) {
+		return api.memo<TurnContextSnapshot>(TURN_CONTEXT_MEMO, shared, context);
+	}
+	const memoized = await api.memo<TurnContextSnapshot>(TURN_CONTEXT_MEMO, context);
+	if (memoized !== undefined) {
+		if (cache !== undefined && cacheKey !== undefined) {
+			rememberTurnContext(cache, api.conversationId, cacheKey, memoized);
+		}
+		return memoized;
+	}
+	const minEntryId = runFirst;
+	const page = await api.entries(
+		{ order: "descending", ...(minEntryId === undefined ? {} : { minEntryId }) },
+		RUN_INPUT_SCAN_LIMIT,
+		undefined,
+		context,
+	);
+	const nowMs = now();
+	const sections = await provider.renderTurnContext({
+		conversationId: String(api.conversationId),
+		nowMs,
+		inputs: collectRunInputs(page.items),
+		triggers: collectRunTriggers(page.items),
+	});
+	const candidate: TurnContextSnapshot = {
+		renderedAtMs: nowMs,
+		sections: sections.map((entry) => ({ key: entry.key, text: entry.text })),
+	};
+	if (cache !== undefined && cacheKey !== undefined) {
+		rememberTurnContext(cache, api.conversationId, cacheKey, candidate);
+	}
+	// The first memo wins, so a recovered or concurrent hook reuses the pinned snapshot.
+	return api.memo<TurnContextSnapshot>(TURN_CONTEXT_MEMO, candidate, context);
+}
+
+/**
+ * Turns a {@link ContextPromptProvider} into a pi-durable extension: static system sections,
+ * a `beforeRequest` hook that attaches the run's ephemeral turn context to each request only,
+ * and a `beforeCompact` hook that routes chat conversations to a chat-native summarizer.
+ * Provider failures omit the affected context instead of failing the run.
  */
 export function createContextExtension<Tool extends ToolRegistration = ToolRegistration>(
 	provider: ContextPromptProvider,
 	options: ContextExtensionOptions = {},
 ): Extension<Tool> {
+	const now = options.now ?? Date.now;
 	const buildSection = (
 		key: string,
-		render: ContextPromptProvider["renderPersona"],
+		render: (conversationId: string) => Promise<string | undefined>,
 	): PromptSection<Tool> =>
 		section<Tool>(key, async (input, context) => {
 			try {
@@ -86,12 +530,68 @@ export function createContextExtension<Tool extends ToolRegistration = ToolRegis
 							provider.renderPolicy?.(conversationId) ?? Promise.resolve(undefined),
 					),
 				]),
-		buildSection(options.keys?.memory ?? MEMORY_SECTION_KEY, (conversationId) =>
-			provider.renderMemories(conversationId),
-		),
 	];
+	const hooks = [];
+	if (provider.renderTurnContext !== undefined) {
+		hooks.push(
+			hook(GenerationTask, {
+				async beforeRequest(request, api, context) {
+					try {
+						const turn = await turnContextForRun(
+							provider,
+							api,
+							context,
+							now,
+							options.turnContextCache,
+						);
+						if (turn === undefined) return undefined;
+						const block = renderTurnContextBlock(turn.sections);
+						if (block === undefined) return undefined;
+						return { messages: injectTurnContext(request.messages, block, turn.renderedAtMs) };
+					} catch (error) {
+						if (context.abortSignal?.aborted) throw error;
+						return undefined;
+					}
+				},
+			}),
+		);
+	}
+	if (provider.summarizeCompaction !== undefined) {
+		hooks.push(
+			hook(CompactionTask, {
+				async beforeCompact(compaction, api, context) {
+					try {
+						const agent = await api.snapshot(AgentDoc, api.conversationId, context);
+						const model = options.resolveModel?.(agent?.model);
+						const previousSummary = previousCompactionSummary(compaction.messages);
+						const summary = await provider.summarizeCompaction?.({
+							conversationId: String(api.conversationId),
+							reason: compaction.reason,
+							transcript: chatCompactionTranscript(compaction.messages),
+							...(previousSummary === undefined ? {} : { previousSummary }),
+							...(compaction.instructions === undefined
+								? {}
+								: { instructions: compaction.instructions }),
+							...(model === undefined ? {} : { model }),
+							...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
+						});
+						// `undefined` keeps pi-durable's default summarizer (workspace sessions).
+						return summary === undefined || summary.trim().length === 0 ? undefined : { summary };
+					} catch (error) {
+						if (context.abortSignal?.aborted) throw error;
+						// A chat summary that failed must never be replaced by the coding checklist.
+						const chat = await provider
+							.isChatConversation?.(String(api.conversationId))
+							.catch(() => false);
+						return chat === true ? { decline: true } : undefined;
+					}
+				},
+			}),
+		);
+	}
 	return defineExtension<Tool>({
 		name: CONTEXT_EXTENSION_NAME,
 		sections,
+		...(hooks.length === 0 ? {} : { hooks }),
 	});
 }
