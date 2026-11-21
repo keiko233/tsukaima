@@ -35,6 +35,7 @@ import { previewText, type Logger } from "../logging.ts";
 import type { ConversationPacingTracker } from "./conversation-pacing.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
 import { loadMentionLabels } from "./mention-labels.ts";
+import { isValidTimeZone, localParts } from "./schedule-time.ts";
 
 export interface ConversationIngestResult {
 	readonly chatObjectId: string;
@@ -65,6 +66,8 @@ export interface ConversationRouterOptions {
 	 * sees a placeholder.
 	 */
 	readonly ingestMedia?: (part: MessagePart, channelId: string) => Promise<MessagePart>;
+	/** Clock override used for daily session boundaries (defaults to `Date.now`). */
+	readonly now?: () => number;
 	readonly onInboundTrigger?: (durableConversationId: string) => void;
 	readonly pacing?: ConversationPacingTracker;
 	readonly policy?: ConversationPolicyService;
@@ -76,9 +79,39 @@ export interface ConversationRouterOptions {
 		sessionId: string,
 		durableConversationId: string,
 	) => Promise<string | undefined>;
+	/** IANA time zone for daily session boundaries (defaults to the host's local time zone). */
+	readonly timeZone?: string;
 }
 
 export const messageText = messagePartsText;
+
+function resolveRouterTimeZone(configured: string | undefined): string {
+	if (configured !== undefined && isValidTimeZone(configured)) return configured;
+	const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+	return detected !== undefined && isValidTimeZone(detected) ? detected : "UTC";
+}
+
+/** Local calendar date (`YYYY-MM-DD`) used to split external chat sessions by day. */
+export function localDateKey(atMs: number, timeZone: string): string {
+	const safeZone = isValidTimeZone(timeZone) ? timeZone : "UTC";
+	const parts = localParts(atMs, safeZone);
+	return `${String(parts.year).padStart(4, "0")}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+/**
+ * Resolve the local date key of a stored `conversations.created_at` timestamp. Handles both
+ * ISO-8601 strings and SQLite's `CURRENT_TIMESTAMP` (`YYYY-MM-DD HH:MM:SS`, which is UTC).
+ */
+export function sessionDateKey(storedTimestamp: string, timeZone: string): string | undefined {
+	const trimmed = storedTimestamp.trim();
+	if (trimmed.length === 0) return undefined;
+	const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/u.test(trimmed)
+		? `${trimmed.replace(" ", "T")}Z`
+		: trimmed;
+	const parsed = Date.parse(normalized);
+	if (!Number.isFinite(parsed)) return undefined;
+	return localDateKey(parsed, timeZone);
+}
 
 /**
  * Ordering key for the domain timeline. Every row that reaches the timeline must use the same
@@ -124,12 +157,15 @@ export class ConversationRouter {
 	readonly #host: () => PiDurableConversationHost | undefined;
 	readonly #ignoredAuditIntervalMs: number;
 	readonly #logger: Logger;
+	readonly #now: () => number;
 	readonly #onInboundTrigger: ConversationRouterOptions["onInboundTrigger"];
 	readonly #pacing: ConversationPacingTracker | undefined;
 	readonly #policy: ConversationPolicyService | undefined;
 	readonly #promptContext: ConversationRouterOptions["promptContext"];
+	readonly #timeZone: string;
 	readonly #ingesting = new Set<string>();
 	readonly #ignoredAuditAt = new Map<string, number>();
+	readonly #sessionLocks = new Map<string, Promise<void>>();
 	readonly #ingestMedia:
 		| ((part: MessagePart, channelId: string) => Promise<MessagePart>)
 		| undefined;
@@ -149,10 +185,12 @@ export class ConversationRouter {
 		this.#ignoredAuditIntervalMs = options.ignoredAuditIntervalMs ?? 60_000;
 		this.#ingestMedia = options.ingestMedia;
 		this.#logger = options.logger;
+		this.#now = options.now ?? Date.now;
 		this.#onInboundTrigger = options.onInboundTrigger;
 		this.#pacing = options.pacing;
 		this.#policy = options.policy;
 		this.#promptContext = options.promptContext;
+		this.#timeZone = resolveRouterTimeZone(options.timeZone);
 	}
 
 	triggerStats(): {
@@ -1034,75 +1072,201 @@ export class ConversationRouter {
 			chat = await findChatObject();
 		}
 		if (chat === undefined) throw new Error("Failed to resolve chat object");
-		const [receiving] = await database
-			.select()
-			.from(conversations)
-			.where(
-				and(
-					eq(conversations.chatObjectId, chat.id),
-					eq(conversations.isReceiving, 1),
-					eq(conversations.status, "active"),
-				),
-			)
-			.limit(1);
-		if (receiving !== undefined) {
-			return {
-				chatObjectId: chat.id,
-				durableConversationId: receiving.durableConversationId,
-				sessionId: receiving.id,
-			};
-		}
-		const [latest] = await database
-			.select()
-			.from(conversations)
-			.where(and(eq(conversations.chatObjectId, chat.id), eq(conversations.status, "active")))
-			.orderBy(desc(conversations.updatedAt))
-			.limit(1);
-		if (latest !== undefined) {
-			await database
-				.update(conversations)
-				.set({ isReceiving: 1 })
-				.where(eq(conversations.id, latest.id));
-			return {
-				chatObjectId: chat.id,
-				durableConversationId: latest.durableConversationId,
-				sessionId: latest.id,
-			};
-		}
-		const durableConversationId = await host.createConversation();
-		const sessionId = randomUUID();
-		await database
-			.insert(conversations)
-			.values({
+		return this.#withChatSessionLock(chat.id, async () => {
+			const nowMs = this.#now();
+			const nowIso = new Date(nowMs).toISOString();
+			const todayKey = localDateKey(nowMs, this.#timeZone);
+			const [receiving] = await database
+				.select()
+				.from(conversations)
+				.where(
+					and(
+						eq(conversations.chatObjectId, chat.id),
+						eq(conversations.isReceiving, 1),
+						eq(conversations.status, "active"),
+					),
+				)
+				.limit(1);
+			if (receiving !== undefined) {
+				const receivingDay = sessionDateKey(receiving.createdAt, this.#timeZone);
+				if (receivingDay === todayKey) {
+					return {
+						chatObjectId: chat.id,
+						durableConversationId: receiving.durableConversationId,
+						sessionId: receiving.id,
+					};
+				}
+				return this.#openDailySession({
+					channelId: target.channelId,
+					chatObjectId: chat.id,
+					database,
+					host,
+					kind,
+					nowIso,
+					platformConversationId,
+					previous: {
+						durableConversationId: receiving.durableConversationId,
+						id: receiving.id,
+					},
+					todayKey,
+				});
+			}
+			const [latest] = await database
+				.select()
+				.from(conversations)
+				.where(and(eq(conversations.chatObjectId, chat.id), eq(conversations.status, "active")))
+				.orderBy(desc(conversations.updatedAt))
+				.limit(1);
+			if (latest !== undefined) {
+				const latestDay = sessionDateKey(latest.createdAt, this.#timeZone);
+				if (latestDay === todayKey) {
+					await database
+						.update(conversations)
+						.set({ isReceiving: 1 })
+						.where(eq(conversations.id, latest.id));
+					return {
+						chatObjectId: chat.id,
+						durableConversationId: latest.durableConversationId,
+						sessionId: latest.id,
+					};
+				}
+				return this.#openDailySession({
+					channelId: target.channelId,
+					chatObjectId: chat.id,
+					database,
+					host,
+					kind,
+					nowIso,
+					platformConversationId,
+					previous: {
+						durableConversationId: latest.durableConversationId,
+						id: latest.id,
+					},
+					todayKey,
+				});
+			}
+			return this.#openDailySession({
 				channelId: target.channelId,
 				chatObjectId: chat.id,
-				durableConversationId,
-				id: sessionId,
-				isReceiving: 1,
+				database,
+				host,
 				kind,
+				nowIso,
 				platformConversationId,
-				title: "Main",
-			})
-			.onConflictDoNothing();
-		const [created] = await database
-			.select()
-			.from(conversations)
-			.where(eq(conversations.id, sessionId))
-			.limit(1);
-		if (created !== undefined) {
-			return { chatObjectId: chat.id, durableConversationId, sessionId };
+				todayKey,
+			});
+		});
+	}
+
+	async #openDailySession(input: {
+		readonly channelId: string;
+		readonly chatObjectId: string;
+		readonly database: TsukaimaDatabase;
+		readonly host: PiDurableConversationHost;
+		readonly kind: "private" | "group";
+		readonly nowIso: string;
+		readonly platformConversationId: string;
+		readonly previous?: { readonly durableConversationId: string; readonly id: string };
+		readonly todayKey: string;
+	}): Promise<{
+		chatObjectId: string;
+		durableConversationId: string;
+		sessionId: string;
+	}> {
+		const durableConversationId = await input.host.createConversation();
+		let baseline: {
+			readonly method: "llm" | "carry-forward" | "fallback" | "none";
+			readonly seeded: boolean;
+			readonly summaryChars: number;
+		} = { method: "none", seeded: false, summaryChars: 0 };
+		if (input.previous !== undefined) {
+			try {
+				baseline = await input.host.seedConversationBaseline(
+					durableConversationId,
+					input.previous.durableConversationId,
+				);
+			} catch (error) {
+				this.#logger.warn("failed to seed daily session baseline", {
+					chatObjectId: input.chatObjectId,
+					error: error instanceof Error ? error.message : String(error),
+					previousSessionId: input.previous.id,
+				});
+			}
 		}
-		const [winner] = await database
-			.select()
-			.from(conversations)
-			.where(and(eq(conversations.chatObjectId, chat.id), eq(conversations.isReceiving, 1)))
-			.limit(1);
-		if (winner === undefined) throw new Error("Failed to resolve receiving session");
-		return {
-			chatObjectId: chat.id,
-			durableConversationId: winner.durableConversationId,
-			sessionId: winner.id,
-		};
+		const sessionId = randomUUID();
+		input.database.transaction((tx) => {
+			tx.update(conversations)
+				.set({ isReceiving: 0 })
+				.where(
+					and(eq(conversations.chatObjectId, input.chatObjectId), eq(conversations.isReceiving, 1)),
+				)
+				.run();
+			tx.insert(conversations)
+				.values({
+					channelId: input.channelId,
+					chatObjectId: input.chatObjectId,
+					createdAt: input.nowIso,
+					durableConversationId,
+					id: sessionId,
+					isReceiving: 1,
+					kind: input.kind,
+					platformConversationId: input.platformConversationId,
+					title: input.todayKey,
+					updatedAt: input.nowIso,
+				})
+				.run();
+			tx.update(chatObjects)
+				.set({ updatedAt: input.nowIso })
+				.where(eq(chatObjects.id, input.chatObjectId))
+				.run();
+		});
+		if (input.previous !== undefined && this.#policy !== undefined) {
+			await this.#policy.inheritConversationPolicy(input.previous.id, sessionId);
+		}
+		if (input.previous !== undefined) {
+			this.#logger.info("rotated daily conversation session", {
+				baselineMethod: baseline.method,
+				baselineSeeded: baseline.seeded,
+				chatObjectId: input.chatObjectId,
+				dateKey: input.todayKey,
+				previousSessionId: input.previous.id,
+				sessionId,
+			});
+			await this.#audit?.({
+				action: "session.rollover",
+				actorKind: "system",
+				payload: {
+					baselineMethod: baseline.method,
+					baselineSeeded: baseline.seeded,
+					chatObjectId: input.chatObjectId,
+					dateKey: input.todayKey,
+					previousSessionId: input.previous.id,
+				},
+				result: "ok",
+				targetId: sessionId,
+				targetKind: "session",
+			});
+		}
+		return { chatObjectId: input.chatObjectId, durableConversationId, sessionId };
+	}
+
+	async #withChatSessionLock<T>(chatObjectId: string, run: () => Promise<T>): Promise<T> {
+		const prior = this.#sessionLocks.get(chatObjectId) ?? Promise.resolve();
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const tail = prior.then(() => gate);
+		this.#sessionLocks.set(chatObjectId, tail);
+		await prior;
+		try {
+			return await run();
+		} finally {
+			release?.();
+			if (this.#sessionLocks.get(chatObjectId) === tail) {
+				this.#sessionLocks.delete(chatObjectId);
+			}
+		}
 	}
 
 	#requireDatabase(): TsukaimaDatabase {

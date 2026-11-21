@@ -340,4 +340,103 @@ describe("inspectConversationContext", () => {
 			await rm(directory, { force: true, recursive: true });
 		}
 	});
+
+	test("seedConversationBaseline compacts previous session via summarizer, carries forward, and falls back safely", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-baseline-"));
+		try {
+			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
+			const summaryCalls: Array<{ previousSummary?: string; transcript: string }> = [];
+			let shouldFail = false;
+			const host = new PiDurableConversationHost({
+				contextProvider: {
+					renderPersona: async () => "persona",
+					summarizeCompaction: async (request) => {
+						summaryCalls.push({
+							...(request.previousSummary === undefined
+								? {}
+								: { previousSummary: request.previousSummary }),
+							transcript: request.transcript,
+						});
+						if (shouldFail) throw new Error("provider unavailable");
+						return `Baseline summary #${summaryCalls.length}`;
+					},
+				},
+				responses: ["reply-day-1", "reply-day-2"],
+				storage,
+			});
+
+			// Empty source conversation yields no baseline.
+			const emptySource = await host.createConversation();
+			const emptyTarget = await host.createConversation();
+			expect(await host.seedConversationBaseline(emptyTarget, emptySource)).toEqual({
+				method: "none",
+				seeded: false,
+				summaryChars: 0,
+			});
+
+			// Day 1 has real turns -> LLM summarizes into day 2 baseline.
+			const day1 = await host.createConversation();
+			await host.append({
+				conversationId: day1,
+				envelope: envelope("d1-1", "Let's plan the weekend hike"),
+				forceSubmit: true,
+				submittedAtMs: 1,
+			});
+			for (let attempt = 0; attempt < 50; attempt += 1) {
+				const stats = await host.inspectConversationContext(day1);
+				if ((stats?.messageCount ?? 0) >= 2) break;
+				await Bun.sleep(20);
+			}
+
+			const day2 = await host.createConversation();
+			const day2Seed = await host.seedConversationBaseline(day2, day1);
+			expect(day2Seed.seeded).toBe(true);
+			expect(day2Seed.method).toBe("llm");
+			expect(summaryCalls).toHaveLength(1);
+			expect(summaryCalls[0]?.previousSummary).toBeUndefined();
+			expect(summaryCalls[0]?.transcript).toContain("weekend hike");
+			expect((await host.inspectConversationContext(day2))?.messageCount).toBe(1);
+
+			// Day 2 has no new messages -> day 3 carries forward without another LLM call.
+			const day3 = await host.createConversation();
+			const day3Seed = await host.seedConversationBaseline(day3, day2);
+			expect(day3Seed.seeded).toBe(true);
+			expect(day3Seed.method).toBe("carry-forward");
+			expect(summaryCalls).toHaveLength(1);
+
+			// Day 3 gets a new turn -> day 4 passes previousSummary into the summarizer.
+			await host.append({
+				conversationId: day3,
+				envelope: envelope("d3-1", "Remember to bring rain jackets"),
+				forceSubmit: true,
+				submittedAtMs: 2,
+			});
+			for (let attempt = 0; attempt < 50; attempt += 1) {
+				const stats = await host.inspectConversationContext(day3);
+				if ((stats?.messageCount ?? 0) >= 3) break;
+				await Bun.sleep(20);
+			}
+
+			const day4 = await host.createConversation();
+			const day4Seed = await host.seedConversationBaseline(day4, day3);
+			expect(day4Seed.seeded).toBe(true);
+			expect(day4Seed.method).toBe("llm");
+			expect(summaryCalls).toHaveLength(2);
+			expect(summaryCalls[1]?.previousSummary).toBe("Baseline summary #1");
+			expect(summaryCalls[1]?.transcript).toContain("rain jackets");
+
+			// Summarizer failure falls back cleanly instead of throwing.
+			shouldFail = true;
+			const day5 = await host.createConversation();
+			const day5Seed = await host.seedConversationBaseline(day5, day3);
+			expect(day5Seed.seeded).toBe(true);
+			expect(day5Seed.method).toBe("fallback");
+			expect((await host.inspectConversationContext(day5))?.messageCount).toBe(1);
+
+			await host.close();
+			await storage.close(BACKGROUND_CONTEXT);
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
 });

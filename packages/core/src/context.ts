@@ -372,11 +372,56 @@ export function injectTurnContext(
 const COMPACTION_TOOL_RESULT_MAX_CHARS = 600;
 /** Longest single chat line a compaction transcript keeps. */
 const COMPACTION_MESSAGE_MAX_CHARS = 2_000;
+/** Default upper bound for the deterministic baseline fallback when no summarizer is available. */
+const FALLBACK_BASELINE_MAX_CHARS = 4_000;
 const COMPACTION_SUMMARY_PREFIX =
 	"The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
 const COMPACTION_SUMMARY_SUFFIX = "\n</summary>";
 const INLINE_IMAGE_DATA = /data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+/giu;
 const LONG_BASE64_RUN = /[a-z0-9+/]{200,}={0,2}/giu;
+
+/** Wrap a summary in the standard compaction envelope so future compactions fold it cleanly. */
+export function formatCompactionSummary(summary: string): string {
+	return `${COMPACTION_SUMMARY_PREFIX}${summary.trim()}${COMPACTION_SUMMARY_SUFFIX}`;
+}
+
+/**
+ * Deterministic fallback baseline when the LLM compaction summarizer is unavailable or fails.
+ * Preserves any prior summary and the most recent transcript lines within a bounded budget.
+ */
+export function fallbackBaselineSummary(
+	previousSummary: string | undefined,
+	transcript: string,
+	maxChars = FALLBACK_BASELINE_MAX_CHARS,
+): string | undefined {
+	const prev = previousSummary?.trim() ?? "";
+	const body = transcript.trim();
+	if (prev.length === 0 && body.length === 0) return undefined;
+	if (body.length === 0) return prev.length <= maxChars ? prev : clipCompactionText(prev, maxChars);
+	const lines = body
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	const header =
+		prev.length > 0
+			? `${clipCompactionText(prev, Math.floor(maxChars * 0.45))}\n\nRecent excerpts:\n`
+			: "Recent excerpts from previous session:\n";
+	const remaining = Math.max(0, maxChars - header.length);
+	if (remaining === 0) return clipCompactionText(header.trim(), maxChars);
+	const kept: string[] = [];
+	let used = 0;
+	for (let index = lines.length - 1; index >= 0; index -= 1) {
+		const line = lines[index]!;
+		const addition = kept.length === 0 ? line.length : line.length + 1;
+		if (used + addition > remaining) {
+			if (kept.length === 0) kept.push(clipCompactionText(line, remaining));
+			break;
+		}
+		kept.push(line);
+		used += addition;
+	}
+	return `${header}${kept.toReversed().join("\n")}`.trim();
+}
 
 function clipCompactionText(text: string, max: number): string {
 	if (text.length <= max) return text;

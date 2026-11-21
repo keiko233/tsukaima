@@ -48,12 +48,16 @@ import {
 } from "@tsukaima/contracts";
 import type { SqliteStorage } from "@tsukaima/durable";
 import {
+	chatCompactionTranscript,
 	collectRunInputs,
 	collectRunTriggers,
 	createContextExtension,
+	fallbackBaselineSummary,
+	formatCompactionSummary,
 	PERSONA_SECTION_KEY,
 	SYSTEM_SECTION_KEY,
 	POLICY_SECTION_KEY,
+	previousCompactionSummary,
 	renderTurnContextBlock,
 	TURN_CONTEXT_MEMO,
 	TURN_CONTEXT_SECTION_PREFIX,
@@ -664,6 +668,12 @@ export interface CompactConversationResult {
 	readonly compacted: boolean;
 	readonly entryId: string | null;
 	readonly submissionId: string | null;
+}
+
+export interface SeedConversationBaselineResult {
+	readonly method: "llm" | "carry-forward" | "fallback" | "none";
+	readonly seeded: boolean;
+	readonly summaryChars: number;
 }
 
 /**
@@ -2416,6 +2426,95 @@ export class PiDurableConversationHost {
 			trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined,
 			BACKGROUND_CONTEXT,
 		);
+	}
+
+	/**
+	 * Compact the active context of `sourceConversationId` into a baseline summary and seed
+	 * `targetConversationId` with it via reset-with-handoff. Future compactions and rollovers on
+	 * `targetConversationId` recognize the wrapped summary and fold it forward cleanly.
+	 */
+	async seedConversationBaseline(
+		targetConversationId: string,
+		sourceConversationId: string,
+		options: { readonly instructions?: string } = {},
+	): Promise<SeedConversationBaselineResult> {
+		const parsedSource = Number(sourceConversationId);
+		const parsedTarget = Number(targetConversationId);
+		if (!Number.isSafeInteger(parsedSource) || !Number.isSafeInteger(parsedTarget)) {
+			return { method: "none", seeded: false, summaryChars: 0 };
+		}
+		const harness = await this.openHarness();
+		const [source, target] = await Promise.all([
+			harness.conversation(parsedSource as ConversationId, BACKGROUND_CONTEXT),
+			harness.conversation(parsedTarget as ConversationId, BACKGROUND_CONTEXT),
+		]);
+		if (source === undefined || target === undefined) {
+			return { method: "none", seeded: false, summaryChars: 0 };
+		}
+		const [sourceAgent, sourceView] = await Promise.all([
+			source.agent(BACKGROUND_CONTEXT),
+			source.context(BACKGROUND_CONTEXT),
+		]);
+		const previousSummary = previousCompactionSummary(sourceView.messages);
+		const transcript = chatCompactionTranscript(sourceView.messages).trim();
+		if (transcript.length === 0) {
+			if (previousSummary !== undefined && previousSummary.length > 0) {
+				await this.resetConversation(
+					targetConversationId,
+					formatCompactionSummary(previousSummary),
+				);
+				return {
+					method: "carry-forward",
+					seeded: true,
+					summaryChars: previousSummary.length,
+				};
+			}
+			return { method: "none", seeded: false, summaryChars: 0 };
+		}
+
+		const summarize = this.options.contextProvider?.summarizeCompaction;
+		if (summarize !== undefined) {
+			try {
+				const modelRef = this.effectiveModelRef(sourceAgent.model);
+				const instructions =
+					options.instructions?.trim() ||
+					"Produce a concise baseline summary of the previous session so the new session can continue naturally without losing ongoing topics, promises, or relationships.";
+				const summary = await summarize.call(this.options.contextProvider, {
+					conversationId: sourceConversationId,
+					instructions,
+					model: { modelId: modelRef.modelId, providerId: modelRef.provider },
+					reason: "manual",
+					transcript,
+					...(previousSummary === undefined ? {} : { previousSummary }),
+				});
+				const trimmed = summary?.trim();
+				if (trimmed !== undefined && trimmed.length > 0) {
+					await this.resetConversation(targetConversationId, formatCompactionSummary(trimmed));
+					return {
+						method: "llm",
+						seeded: true,
+						summaryChars: trimmed.length,
+					};
+				}
+			} catch (error) {
+				this.logger.warn("Baseline compaction summary failed; falling back to bounded excerpt", {
+					error: error instanceof Error ? error.message : String(error),
+					sourceConversationId,
+					targetConversationId,
+				});
+			}
+		}
+
+		const fallback = fallbackBaselineSummary(previousSummary, transcript);
+		if (fallback === undefined || fallback.length === 0) {
+			return { method: "none", seeded: false, summaryChars: 0 };
+		}
+		await this.resetConversation(targetConversationId, formatCompactionSummary(fallback));
+		return {
+			method: "fallback",
+			seeded: true,
+			summaryChars: fallback.length,
+		};
 	}
 
 	async abortConversation(conversationId: string): Promise<void> {
