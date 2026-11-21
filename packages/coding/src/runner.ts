@@ -2,9 +2,9 @@ import { spawn, type SpawnOptions } from "node:child_process";
 
 /**
  * Baseline environment for host-side command execution. Child processes never inherit the
- * server environment: self-iteration secrets (provider keys, channel tokens, admin credentials)
- * must not be reachable from a spawned command, and every execution site states its own
- * additions explicitly.
+ * server environment: provider keys, channel tokens, and admin credentials must not be
+ * reachable from a spawned command, and every execution site states its own additions
+ * explicitly.
  */
 export const SCRUBBED_COMMAND_ENV: Readonly<Record<string, string>> = Object.freeze({
 	LANG: process.env.LANG ?? "C.UTF-8",

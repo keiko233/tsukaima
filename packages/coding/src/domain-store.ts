@@ -23,7 +23,7 @@ import {
 	type DeploymentProposalInput,
 	type DeploymentProposalStatus,
 } from "./proposal.ts";
-import type { TestRunResult } from "./tools.ts";
+import type { TestRunResult } from "./types.ts";
 import type {
 	CreateDeploymentInput,
 	CreateIterationTaskInput,

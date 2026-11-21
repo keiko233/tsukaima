@@ -43,7 +43,7 @@ describe("DomainCodingStore runtime records", () => {
 			artifacts: [{ kind: "diff", name: "diff", checksum: "abc" }],
 			logs: [{ atMs: 1, level: "info", message: "started" }],
 			status: "in_progress",
-			timeline: [{ atMs: 1, outcome: "success", tool: "self-iteration.worktree" }],
+			timeline: [{ atMs: 1, outcome: "success", tool: "workspace.native.worktree" }],
 			worktreePath: "/tmp/worktree",
 		});
 		expect(updated.status).toBe("in_progress");
@@ -59,7 +59,7 @@ describe("DomainCodingStore runtime records", () => {
 				logs: [expect.objectContaining({ message: "started" })],
 				mode: "patch",
 				status: "in_progress",
-				timeline: [expect.objectContaining({ tool: "self-iteration.worktree" })],
+				timeline: [expect.objectContaining({ tool: "workspace.native.worktree" })],
 				worktreePath: "/tmp/worktree",
 			}),
 		);

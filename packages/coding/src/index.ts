@@ -1,8 +1,5 @@
 export const CODING_API_VERSION = "0.1.0";
 
-/** Host binding consumed by the self-iteration plugin; the server owns the values. */
-export const SELF_ITERATION_HOST_BINDING = "tsukaima.self-iteration.host";
-
 export type {
 	AuditEvent,
 	AuditOutcome,
@@ -25,6 +22,7 @@ export type {
 	TaskNodeKind,
 	TaskNodeStatus,
 	TaskTimelineEntry,
+	TestRunResult,
 } from "./types.ts";
 
 export { CodingRunner, CommandRejectedError } from "./runner.ts";
@@ -87,14 +85,6 @@ export {
 } from "./git.ts";
 export type { GitCliOptions, GitCommandResult, GitExecOptions } from "./git.ts";
 
-export {
-	applyStructuredEdit,
-	EditValidationError,
-	readAllowedTextFile,
-	validateStructuredEdit,
-} from "./edit.ts";
-export type { EditOptions, EditResult, StructuredEdit } from "./edit.ts";
-
 export { sha256Hex } from "./hash.ts";
 
 export { reconcileRestartDeployment } from "./deployment-reconcile.ts";
@@ -106,10 +96,7 @@ export type {
 	RestartDeploymentOutcome,
 } from "./deployment-reconcile.ts";
 
-export { CodingTools, parseDiffOutput, parseTestOutput } from "./tools.ts";
-export type { BuildResult, DiffFileEntry, DiffResult, TestRunResult } from "./tools.ts";
-
-export { ApprovalError, JsonFileApprovalStore } from "./approval.ts";
+export { ApprovalError } from "./approval.ts";
 export type {
 	ApprovalGate,
 	ApprovalRequest,
@@ -123,7 +110,6 @@ export type {
 export {
 	missingProposalFields,
 	normalizeDeploymentProposal,
-	JsonFileProposalStore,
 	ProposalError,
 	validateProposalFields,
 } from "./proposal.ts";
@@ -137,7 +123,7 @@ export type {
 	ProposalEvidenceItem,
 } from "./proposal.ts";
 
-export { NoopReloadController, SupervisedReloadController } from "./reload.ts";
+export { SupervisedReloadController } from "./reload.ts";
 export type {
 	ReloadContext,
 	ReloadController,

@@ -49,6 +49,71 @@ describe("DomainCodingStore", () => {
 		await store.close();
 	});
 
+	test("persists proposal evidence, metadata, and deployment fields", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-coding-"));
+		directories.push(directory);
+		const store = new DomainCodingStore(join(directory, "domain.sqlite"));
+		const proposal = await store.createProposal({
+			artifactMetadata: { builtAtMs: 1, checksum: "artifact", command: "bun run build" },
+			changedFiles: ["src/app.ts"],
+			diff: "--- a/src/app.ts\n+++ b/src/app.ts\n",
+			envChanges: ["TSUKAIMA_EXAMPLE=1"],
+			evidence: {
+				diffChecksum: "a".repeat(64),
+				items: [{ kind: "test", name: "test", provenance: "snapshot" }],
+				snapshotChecksum: "b".repeat(64),
+			},
+			motivation: "Keep the fixture honest",
+			requiresRestart: true,
+			riskAssessment: "low",
+			rollbackNotes: "revert the commit",
+			sourceRevision: "deadbeef",
+			testResult: {
+				exitCode: 0,
+				failed: 0,
+				passed: true,
+				stderr: "",
+				stdout: "ok",
+				total: 1,
+			},
+			taskId: "task-1",
+			title: "Fixture patch",
+		});
+		const loaded = await store.getProposal(proposal.id);
+		expect(loaded).toEqual(
+			expect.objectContaining({
+				artifactMetadata: expect.objectContaining({ checksum: "artifact" }),
+				changedFiles: ["src/app.ts"],
+				envChanges: ["TSUKAIMA_EXAMPLE=1"],
+				evidence: expect.objectContaining({
+					items: [expect.objectContaining({ kind: "test", provenance: "snapshot" })],
+				}),
+				motivation: "Keep the fixture honest",
+				requiresRestart: true,
+				riskAssessment: "low",
+				rollbackNotes: "revert the commit",
+				sourceRevision: "deadbeef",
+				status: "draft",
+				taskId: "task-1",
+				title: "Fixture patch",
+			}),
+		);
+		expect(loaded?.testResult?.passed).toBe(true);
+		await store.createProposal({
+			diff: "other",
+			riskAssessment: "low",
+			rollbackNotes: "revert",
+			taskId: "task-2",
+			title: "Other task",
+		});
+		expect((await store.listProposals("task-1")).map((entry) => entry.id)).toEqual([proposal.id]);
+		expect((await store.listProposals("task-2")).map((entry) => entry.title)).toEqual([
+			"Other task",
+		]);
+		await expect(store.transition("missing", "deploying")).rejects.toThrow(ProposalError);
+		await store.close();
+	});
+
 	test("persists approvals and proposals across store instances", async () => {
 		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-coding-"));
 		directories.push(directory);

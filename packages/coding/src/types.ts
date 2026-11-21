@@ -18,6 +18,16 @@ export interface IterationTaskConstraints {
 	readonly timeoutMs: number;
 }
 
+/** Structured result of one validation command; bound to proposal evidence by checksum. */
+export interface TestRunResult {
+	readonly exitCode: number | null;
+	readonly failed: number;
+	readonly passed: boolean;
+	readonly stderr: string;
+	readonly stdout: string;
+	readonly total: number;
+}
+
 export interface TaskLogEntry {
 	readonly atMs: number;
 	readonly level: "error" | "info" | "warn";
