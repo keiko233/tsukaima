@@ -1,6 +1,7 @@
 import pLimit from "p-limit";
 import type { PluginLogger, PluginMediaApi, PluginMediaRecord } from "@tsukaima/sdk";
 import { createAnimatedConverter, type AnimatedConverter } from "./animated.ts";
+import { gifScreenSize } from "./padding-crop.ts";
 import {
 	clampConcurrency,
 	EMPTY_SEMANTIC_PROFILE,
@@ -29,7 +30,7 @@ import {
 } from "./telegram.ts";
 
 export type TelegramAnimatedFormat = "gif" | "thumbnail";
-export type TelegramVideoFormat = "gif" | "thumbnail" | "webm";
+export type TelegramVideoFormat = "gif" | "thumbnail";
 
 export interface TelegramStickerImportReport extends StickerImportReport {
 	readonly classified: number;
@@ -77,7 +78,7 @@ export interface TelegramStickerImportServiceOptions {
 	readonly repository: StickerRepository;
 }
 
-type SelectedKind = "static" | "tgs" | "thumbnail" | "webm";
+type SelectedKind = "static" | "tgs" | "thumbnail" | "video";
 
 interface SelectedSticker {
 	readonly fallbackFileId?: string;
@@ -93,9 +94,11 @@ interface DownloadedMedia {
 }
 
 interface PreparedMedia extends DownloadedMedia {
-	readonly keyword?: "animated-gif" | "animated-thumbnail" | "video-webm";
+	readonly height?: number;
+	readonly keyword?: "animated-gif" | "animated-thumbnail" | "video-gif";
 	readonly mimeType: string;
 	readonly still: boolean;
+	readonly width?: number;
 }
 
 function telegramItemName(setName: string, index: number): string {
@@ -106,6 +109,19 @@ function telegramItemName(setName: string, index: number): string {
 function stickerMimeType(filePath: string): string {
 	const mime = inferMimeType(filePath);
 	return mime.startsWith("image/") ? mime : "image/webp";
+}
+
+/** Converted GIFs are cropped, so their stored dimensions come from the GIF itself. */
+function gifMedia(bytes: Uint8Array, keyword: "animated-gif" | "video-gif"): PreparedMedia {
+	const size = gifScreenSize(bytes);
+	return {
+		bytes,
+		filePath: "sticker.gif",
+		...(size === undefined ? {} : { height: size.height, width: size.width }),
+		keyword,
+		mimeType: "image/gif",
+		still: false,
+	};
 }
 
 function withTelegramContext(
@@ -122,8 +138,8 @@ function withTelegramContext(
 			? " Still thumbnail of an animated Telegram sticker."
 			: prepared.keyword === "animated-gif"
 				? " Animated GIF."
-				: prepared.keyword === "video-webm"
-					? " Video sticker (webm)."
+				: prepared.keyword === "video-gif"
+					? " Video sticker converted to GIF."
 					: "";
 	return {
 		...profile,
@@ -382,11 +398,11 @@ export class TelegramStickerImportService {
 				}
 				return await this.#media.store({
 					bytes: prepared.bytes,
-					height: entry.sticker.height,
+					height: prepared.height ?? entry.sticker.height,
 					kind: "sticker",
 					mimeType: prepared.mimeType,
 					source: "webui",
-					width: entry.sticker.width,
+					width: prepared.width ?? entry.sticker.width,
 				});
 			})();
 			storeCache.set(hash, created);
@@ -469,7 +485,7 @@ export class TelegramStickerImportService {
 				return;
 			}
 
-			if (primaryDownload && (entry.kind === "tgs" || entry.kind === "webm")) {
+			if (primaryDownload && (entry.kind === "tgs" || entry.kind === "video")) {
 				emit("converting", saved, itemLabel);
 			}
 			let prepared = primaryDownload
@@ -517,14 +533,14 @@ export class TelegramStickerImportService {
 			const common = {
 				enabled: true,
 				hash,
-				height: entry.sticker.height,
+				height: prepared.height ?? entry.sticker.height,
 				id: itemId,
 				mediaId: stored.id,
 				mimeType: prepared.mimeType,
 				name,
 				packId,
 				reviewStatus: options.reviewStatus ?? "approved",
-				width: entry.sticker.width,
+				width: prepared.width ?? entry.sticker.width,
 			} as const;
 			if (heuristicOnly) {
 				emit("classifying", saved, itemLabel);
@@ -665,13 +681,7 @@ export class TelegramStickerImportService {
 		if (entry.kind === "tgs") {
 			try {
 				const bytes = await this.#converter.convertTgs(downloaded.bytes, conversion);
-				return {
-					bytes,
-					filePath: "sticker.gif",
-					keyword: "animated-gif",
-					mimeType: "image/gif",
-					still: false,
-				};
+				return gifMedia(bytes, "animated-gif");
 			} catch (error) {
 				warnings.push(
 					`sticker ${name} TGS conversion failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -684,41 +694,20 @@ export class TelegramStickerImportService {
 			}
 		}
 		const videoFormat = options.videoFormat ?? "gif";
-		if (videoFormat === "webm") {
-			return {
-				...downloaded,
-				keyword: "video-webm",
-				mimeType: "video/webm",
-				still: false,
-			};
-		}
+		if (videoFormat === "thumbnail") return thumbnailMedia(downloaded);
 		try {
-			const bytes = await this.#converter.convertWebm(downloaded.bytes, conversion);
-			if (bytes !== undefined && bytes.byteLength > 0) {
-				return {
-					bytes,
-					filePath: "sticker.gif",
-					keyword: "animated-gif",
-					mimeType: "image/gif",
-					still: false,
-				};
-			}
+			const bytes = await this.#converter.convertVideo(downloaded.bytes, conversion);
+			return gifMedia(bytes, "video-gif");
 		} catch (error) {
 			warnings.push(
-				`sticker ${name} webm conversion failed: ${error instanceof Error ? error.message : String(error)}`,
+				`sticker ${name} video conversion failed: ${error instanceof Error ? error.message : String(error)}`,
 			);
-			this.#logger?.warn("telegram webm conversion failed", {
+			this.#logger?.warn("telegram video conversion failed", {
 				error: logErrorMessage(error),
 				itemName: name,
 			});
+			return undefined;
 		}
-		warnings.push(`sticker ${name} was kept as webm because GIF conversion was unavailable`);
-		return {
-			...downloaded,
-			keyword: "video-webm",
-			mimeType: "video/webm",
-			still: false,
-		};
 	}
 
 	async #classify(
@@ -786,7 +775,7 @@ function selectStickers(
 			: sticker.isAnimated
 				? "tgs"
 				: sticker.isVideo
-					? "webm"
+					? "video"
 					: "static";
 		const primaryFileId = thumbnailOnly ? sticker.thumbnailFileId : sticker.fileId;
 		const fallbackFileId =
@@ -809,17 +798,15 @@ function appendFormatWarnings(
 	options: TelegramStickerImportOptions,
 ): void {
 	const animated = selection.filter((entry) => entry.kind === "tgs").length;
-	const video = selection.filter((entry) => entry.kind === "webm").length;
+	const video = selection.filter((entry) => entry.kind === "video").length;
 	const still = selection.filter((entry) => entry.kind === "thumbnail").length;
 	if (animated > 0) warnings.push(`${animated} animated sticker(s) will be converted to GIF`);
 	if (video > 0) {
 		const format = options.videoFormat ?? "gif";
 		warnings.push(
-			format === "webm"
-				? `${video} video sticker(s) will be kept as webm`
-				: format === "thumbnail"
-					? `${video} video sticker(s) will use still thumbnails`
-					: `${video} video sticker(s) will be converted to GIF (webm fallback)`,
+			format === "thumbnail"
+				? `${video} video sticker(s) will use still thumbnails`
+				: `${video} video sticker(s) will be converted to GIF`,
 		);
 	}
 	if (still > 0) warnings.push(`${still} sticker(s) are configured to use still thumbnails`);

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { gzipSync } from "node:zlib";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { applyPalette, GIFEncoder, quantize } from "gifenc";
 import { readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -19,8 +20,9 @@ import {
 	type PluginMediaStoreInput,
 } from "@tsukaima/sdk";
 import { readZipEntries } from "./archive.ts";
-import { createAnimatedConverter, tgsToGif, webmToGif } from "./animated.ts";
+import { createAnimatedConverter, tgsToGif, videoToGif } from "./animated.ts";
 import { buildAnimatedFrameSheet, isAnimatedWebp } from "./frame-sheet.ts";
+import { flattenOnWhite, gifScreenSize } from "./padding-crop.ts";
 import {
 	normalizeLabels,
 	safeRelativePath,
@@ -680,7 +682,7 @@ describe("sticker selection and send tokens", () => {
 		expect(missingResult?.parts).toEqual([{ text: "[sticker unavailable]", type: "text" }]);
 	});
 
-	test("turns a webm sticker into a video part for OneBot video delivery", async () => {
+	test("keeps legacy video sticker media deliverable as a video part", async () => {
 		const setup = await setupSelection();
 		await seedItem(setup.repository, setup.media, {
 			id: "video-sticker",
@@ -997,7 +999,7 @@ describe("telegram sticker import", () => {
 			{
 				"file-happy": bytes("tgs-happy"),
 				"file-party": bytes("same-sad-image"),
-				"file-praise": bytes("webm-praise"),
+				"file-praise": bytes("video-praise"),
 				"file-sad": bytes("same-sad-image"),
 				"thumb-happy": bytes("happy-thumb"),
 				"thumb-praise": bytes("praise-thumb"),
@@ -1005,8 +1007,8 @@ describe("telegram sticker import", () => {
 		);
 		const fixture = baseFixture();
 		const converter = createAnimatedConverter({
-			tgs: async () => bytes("gif-happy"),
-			webm: async () => bytes("gif-praise"),
+			tgs: async () => tinyGif(40, 20),
+			video: async () => tinyGif(24, 24),
 		});
 		const service = new TelegramStickerImportService({ client, converter, ...fixture });
 		return { ...fixture, client, converter, service };
@@ -1147,6 +1149,7 @@ describe("telegram sticker import", () => {
 		expect(happy?.mimeType).toBe("image/gif");
 		expect(happy?.keywords).toEqual(expect.arrayContaining(["animated-gif"]));
 		expect(happy?.description).toContain("Animated GIF");
+		expect(happy).toMatchObject({ height: 20, width: 40 });
 
 		const second = await setup.service.importReference(providedLink);
 		expect(second).toMatchObject({ deduped: 4, items: 4, missingMedia: 0 });
@@ -1154,7 +1157,7 @@ describe("telegram sticker import", () => {
 		expect(setup.media.storeCalls).toBe(3);
 	});
 
-	test("supports thumbnail-only and raw webm import modes", async () => {
+	test("supports thumbnail-only and GIF video import modes", async () => {
 		const thumbnailSetup = telegramFixture();
 		const thumbnailReport = await thumbnailSetup.service.importReference(providedLink, {
 			animatedFormat: "thumbnail",
@@ -1166,12 +1169,12 @@ describe("telegram sticker import", () => {
 		expect(thumbnailHappy).toMatchObject({ mimeType: "image/webp", enabled: true });
 		expect(thumbnailHappy?.keywords).toEqual(expect.arrayContaining(["animated-thumbnail"]));
 
-		const webmSetup = telegramFixture();
-		await webmSetup.service.importReference(providedLink, { videoFormat: "webm" });
-		const webmItems = await webmSetup.repository.listItems();
-		const video = webmItems.find((item) => item.name.endsWith("-05"));
-		expect(video).toMatchObject({ mimeType: "video/webm", enabled: true });
-		expect(video?.keywords).toEqual(expect.arrayContaining(["video-webm"]));
+		const gifSetup = telegramFixture();
+		await gifSetup.service.importReference(providedLink, { videoFormat: "gif" });
+		const gifItems = await gifSetup.repository.listItems();
+		const video = gifItems.find((item) => item.name.endsWith("-05"));
+		expect(video).toMatchObject({ enabled: true, height: 24, mimeType: "image/gif", width: 24 });
+		expect(video?.keywords).toEqual(expect.arrayContaining(["video-gif"]));
 	});
 
 	test("reports staged import progress and tracks host job snapshots", async () => {
@@ -1437,6 +1440,17 @@ describe("sticker import concurrency", () => {
 	});
 });
 
+/** Minimal solid GIF used by import fixtures, so converted dimensions come from real bytes. */
+function tinyGif(width: number, height: number): Uint8Array {
+	const pixels = new Uint8Array(width * height * 4).fill(255);
+	const palette = quantize(pixels, 256, { format: "rgb565" });
+	const indexed = applyPalette(pixels, palette, "rgb565");
+	const gif = GIFEncoder();
+	gif.writeFrame(indexed, width, height, { delay: 20, palette, repeat: 0 });
+	gif.finish();
+	return gif.bytes();
+}
+
 describe("animated sticker conversion", () => {
 	const lottie = {
 		assets: [],
@@ -1501,48 +1515,39 @@ describe("animated sticker conversion", () => {
 		w: 100,
 	};
 
-	test("renders a gzipped Lottie TGS to an animated GIF", async () => {
+	test("renders a gzipped Lottie TGS to an animated GIF and trims transparent padding", async () => {
 		const tgs = new Uint8Array(gzipSync(Buffer.from(JSON.stringify(lottie))));
 		const gif = await tgsToGif(tgs, { fps: 5, maxFrames: 3, width: 32 });
 		expect(new TextDecoder().decode(gif.slice(0, 6))).toBe("GIF89a");
 		expect(gif.byteLength).toBeGreaterThan(100);
+		const size = gifScreenSize(gif);
+		expect(size).toBeDefined();
+		expect(size?.width).toBeLessThan(32);
+		expect(size?.height).toBeLessThan(32);
+		expect(size?.width).toBeGreaterThan(1);
+		expect(size?.height).toBeGreaterThan(1);
+		const canvasModule = await import("canvas");
+		const decoded = await canvasModule.loadImage(Buffer.from(gif));
+		const frame = new canvasModule.Canvas(decoded.width, decoded.height);
+		const frameContext = frame.getContext("2d");
+		frameContext.drawImage(decoded, 0, 0);
+		const corner = frameContext.getImageData(0, 0, 1, 1).data;
+		expect(corner[0]).toBeGreaterThan(200);
+		expect(corner[1]).toBeGreaterThan(200);
+		expect(corner[2]).toBeGreaterThan(200);
 	});
 
-	const ffmpeg = Bun.which("ffmpeg");
-	test.skipIf(ffmpeg === undefined)(
-		"converts a webm video sticker to GIF with ffmpeg",
-		async () => {
-			const directory = await mkdtemp(join(tmpdir(), "tsukaima-webm-test-"));
-			directories.push(directory);
-			const input = join(directory, "input.webm");
-			const result = await Bun.spawn([
-				ffmpeg as string,
-				"-hide_banner",
-				"-loglevel",
-				"error",
-				"-y",
-				"-f",
-				"lavfi",
-				"-i",
-				"color=c=red:s=32x32:r=5",
-				"-t",
-				"0.4",
-				"-c:v",
-				"libvpx-vp9",
-				"-pix_fmt",
-				"yuva420p",
-				input,
-			]).exited;
-			expect(result).toBe(0);
-			const gif = await webmToGif(new Uint8Array(await Bun.file(input).arrayBuffer()), {
-				fps: 5,
-				maxFrames: 2,
-				width: 32,
-			});
-			expect(gif).toBeDefined();
-			expect(new TextDecoder().decode(gif?.slice(0, 6))).toBe("GIF89a");
-		},
-	);
+	test("flattens transparent pixels onto an opaque white background", () => {
+		const pixels = new Uint8ClampedArray([0, 0, 0, 0, 255, 0, 0, 255, 255, 0, 0, 128]);
+		const flattened = flattenOnWhite(pixels);
+		expect(Array.from(flattened.slice(0, 4))).toEqual([255, 255, 255, 255]);
+		expect(Array.from(flattened.slice(4, 8))).toEqual([255, 0, 0, 255]);
+		expect(flattened[8]).toBeGreaterThan(240);
+		expect(flattened[10]).toBeGreaterThan(100);
+		expect(flattened[10]).toBeLessThan(160);
+		expect(flattened[11]).toBe(255);
+	});
+
 	test("detects animated WebP through the VP8X flags", () => {
 		const animated = new Uint8Array(24);
 		animated.set([0x52, 0x49, 0x46, 0x46], 0);
@@ -1558,6 +1563,56 @@ describe("animated sticker conversion", () => {
 	test("does not build a contact sheet for a still image", async () => {
 		expect(await buildAnimatedFrameSheet(bytes("still"), "image/png")).toBeUndefined();
 	});
+
+	const ffmpeg = Bun.which("ffmpeg");
+	test.skipIf(ffmpeg === undefined)(
+		"converts a transparent video sticker to a cropped GIF with ffmpeg",
+		async () => {
+			const directory = await mkdtemp(join(tmpdir(), "tsukaima-video-test-"));
+			directories.push(directory);
+			const source = join(directory, "source.png");
+			const input = join(directory, "input.webm");
+			const { Canvas } = await import("canvas");
+			const canvas = new Canvas(64, 64);
+			const context = canvas.getContext("2d");
+			context.fillStyle = "#ff0000";
+			context.fillRect(20, 20, 24, 24);
+			await writeFile(source, canvas.toBuffer("image/png"));
+			const result = await Bun.spawn([
+				ffmpeg as string,
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-loop",
+				"1",
+				"-i",
+				source,
+				"-t",
+				"0.4",
+				"-r",
+				"5",
+				"-c:v",
+				"libvpx-vp9",
+				"-pix_fmt",
+				"yuva420p",
+				input,
+			]).exited;
+			expect(result).toBe(0);
+			const gif = await videoToGif(new Uint8Array(await Bun.file(input).arrayBuffer()), {
+				fps: 5,
+				maxFrames: 2,
+				width: 64,
+			});
+			expect(new TextDecoder().decode(gif.slice(0, 6))).toBe("GIF89a");
+			const size = gifScreenSize(gif);
+			expect(size).toBeDefined();
+			expect(size?.width).toBeLessThan(64);
+			expect(size?.height).toBeLessThan(64);
+			expect(size?.width).toBeGreaterThanOrEqual(20);
+			expect(size?.height).toBeGreaterThanOrEqual(20);
+		},
+	);
 
 	test.skipIf(ffmpeg === undefined)(
 		"merges sampled animated frames into one contact sheet",
@@ -2157,10 +2212,10 @@ describe("sticker debug logging", () => {
 		const converter = createAnimatedConverter({
 			logger,
 			tgs: async () => bytes("tgs-gif"),
-			webm: async () => bytes("webm-gif"),
+			video: async () => bytes("video-gif"),
 		});
 		await converter.convertTgs(bytes("tgs"));
-		await converter.convertWebm(bytes("webm"));
+		await converter.convertVideo(bytes("video"));
 		const completed = entries.filter(
 			(entry) =>
 				entry.level === "debug" && entry.message === "animated sticker conversion completed",
@@ -2171,7 +2226,7 @@ describe("sticker debug logging", () => {
 			format: "gif",
 			source: "tgs",
 		});
-		expect(completed[1]?.details).toMatchObject({ format: "gif", source: "webm" });
+		expect(completed[1]?.details).toMatchObject({ format: "gif", source: "video" });
 	});
 
 	test("logs tool invocations with counts", async () => {

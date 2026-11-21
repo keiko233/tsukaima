@@ -399,14 +399,12 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 				let classify = false;
 				if (item.mediaId.length > 0) {
 					const isImage = item.mimeType.startsWith("image/");
-					if (isImage || item.mimeType === "video/webm") {
+					if (isImage) {
 						classify = true;
-						if (isImage) {
-							try {
-								bytes = await mediaApi.readBytes(item.mediaId);
-							} catch {
-								classify = false;
-							}
+						try {
+							bytes = await mediaApi.readBytes(item.mediaId);
+						} catch {
+							classify = false;
 						}
 					}
 				}
@@ -531,7 +529,7 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 				semanticConcurrency: concurrencySetting(record, settings, "semanticConcurrency"),
 				videoFormat: enumValue(
 					normalizeText(record.videoFormat) || normalizeText(settings.telegramVideoFormat, "gif"),
-					["gif", "thumbnail", "webm"] as const,
+					["gif", "thumbnail"] as const,
 					"gif",
 				),
 			});

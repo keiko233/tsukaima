@@ -1,13 +1,14 @@
 import { createRequire } from "node:module";
 import vm from "node:vm";
-import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import type { PluginLogger } from "@tsukaima/sdk";
 import type { Canvas as NodeCanvas } from "canvas";
+import { findFfmpeg, runFfmpegCommand } from "./ffmpeg.ts";
 import { elapsedMs, logErrorMessage } from "./logging.ts";
+import { encodeGifFrames, type RgbaFrame } from "./padding-crop.ts";
 
 export interface AnimatedConversionOptions {
 	/** Output FPS. Defaults to 15 and is capped by the source frame rate. */
@@ -19,12 +20,8 @@ export interface AnimatedConversionOptions {
 }
 
 export interface AnimatedConverter {
-	readonly available: boolean;
 	convertTgs(bytes: Uint8Array, options?: AnimatedConversionOptions): Promise<Uint8Array>;
-	convertWebm(
-		bytes: Uint8Array,
-		options?: AnimatedConversionOptions,
-	): Promise<Uint8Array | undefined>;
+	convertVideo(bytes: Uint8Array, options?: AnimatedConversionOptions): Promise<Uint8Array>;
 }
 
 interface LottieAnimation {
@@ -54,6 +51,7 @@ const MAX_FPS = 30;
 const DEFAULT_MAX_FRAMES = 50;
 const MAX_MAX_FRAMES = 120;
 const MAX_SIZE = 512;
+const FRAME_FILE_PATTERN = /^frame-(\d+)\.png$/u;
 let renderQueue: Promise<unknown> = Promise.resolve();
 let lottieScript: vm.Script | undefined;
 
@@ -110,7 +108,6 @@ export async function tgsToGif(
 		});
 		try {
 			const { Canvas, loadImage } = await import("canvas");
-			const { applyPalette, GIFEncoder, quantize } = await import("gifenc");
 			const animationData = JSON.parse(gunzipSync(bytes).toString("utf8")) as {
 				fr?: number;
 				h?: number;
@@ -177,39 +174,33 @@ export async function tgsToGif(
 					const durationSeconds = totalFrames / sourceFps;
 					const frameCount = Math.max(1, Math.min(maxFrames, Math.round(durationSeconds * fps)));
 					const delay = Math.max(20, Math.round(1000 / fps));
-					const gif = GIFEncoder();
-					for (let frame = 0; frame < frameCount; frame += 1) {
-						const timeSeconds = (frame / frameCount) * durationSeconds;
+					const readFrame = async (index: number): Promise<RgbaFrame> => {
+						const timeSeconds = (index / frameCount) * durationSeconds;
 						animation.goToAndStop(timeSeconds * sourceFps, true);
 						await waitForRender();
 						outputContext.clearRect(0, 0, width, height);
 						outputContext.drawImage(sourceCanvas, 0, 0, width, height);
-						const pixels = outputContext.getImageData(0, 0, width, height).data;
-						const palette = quantize(pixels, 256, {
-							clearAlpha: true,
-							format: "rgba4444",
-							oneBitAlpha: true,
-						});
-						const index = applyPalette(pixels, palette, "rgba4444");
-						const transparentIndex = palette.findIndex((color) => color[3] === 0);
-						gif.writeFrame(index, width, height, {
-							delay,
-							palette,
-							...(frame === 0 ? { repeat: 0 } : {}),
-							...(transparentIndex < 0 ? {} : { transparent: true, transparentIndex }),
-						});
-					}
-					gif.finish();
-					const encoded = gif.bytes();
+						const image = outputContext.getImageData(0, 0, width, height);
+						return { data: image.data, height, width };
+					};
+					const encoded = await encodeGifFrames({
+						delay,
+						frameCount,
+						height,
+						readFrame,
+						width,
+					});
 					logger?.debug("TGS animated sticker conversion completed", {
-						bytes: encoded.byteLength,
+						boundsHeight: encoded.bounds.height,
+						boundsWidth: encoded.bounds.width,
+						bytes: encoded.bytes.byteLength,
 						durationMs: elapsedMs(startedAt),
 						format: "gif",
 						frameCount,
 						height,
 						width,
 					});
-					return encoded;
+					return encoded.bytes;
 				} finally {
 					animation.destroy();
 				}
@@ -227,66 +218,50 @@ export async function tgsToGif(
 	});
 }
 
-function findFfmpeg(ffmpegPath?: string): string | undefined {
-	const configured = ffmpegPath?.trim() || process.env.TSUKAIMA_FFMPEG_PATH?.trim();
-	if (configured !== undefined && configured.length > 0) return configured;
-	return Bun.which("ffmpeg") ?? undefined;
-}
+type CanvasModule = typeof import("canvas");
 
-function run(
-	command: string,
-	args: readonly string[],
-): Promise<{ readonly stderr: string; readonly stdout: string }> {
-	return new Promise((resolve, reject) => {
-		const child = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
-		let stderr = "";
-		child.stderr.on("data", (chunk: Buffer) => {
-			stderr += chunk.toString();
-			if (stderr.length > 8_000) stderr = stderr.slice(-8_000);
-		});
-		child.on("error", reject);
-		child.on("close", (code) => {
-			if (code === 0) resolve({ stderr, stdout: "" });
-			else reject(new Error(`${command} exited with ${code}: ${stderr.trim()}`));
-		});
-	});
+async function readPngFrame(path: string, canvasModule: CanvasModule): Promise<RgbaFrame> {
+	const image = await canvasModule.loadImage(await readFile(path));
+	const canvas = new canvasModule.Canvas(image.width, image.height);
+	const context = canvas.getContext("2d");
+	context.drawImage(image, 0, 0);
+	return {
+		data: context.getImageData(0, 0, image.width, image.height).data,
+		height: image.height,
+		width: image.width,
+	};
 }
 
 /**
- * Convert a Telegram video sticker to GIF when ffmpeg is available. Returning undefined lets the
- * importer fall back to a still thumbnail or the raw webm format.
+ * Telegram video stickers are WebM files with an alpha channel. ffmpeg extracts frames as
+ * RGBA PNGs, then the shared GIF encoder trims the transparent padding and quantizes each frame.
+ * WebM itself is never stored or delivered.
  */
-export async function webmToGif(
+export async function videoToGif(
 	bytes: Uint8Array,
 	options: AnimatedConversionOptions = {},
 	ffmpegPath?: string,
 	logger?: PluginLogger,
-): Promise<Uint8Array | undefined> {
+): Promise<Uint8Array> {
 	const ffmpeg = findFfmpeg(ffmpegPath);
-	if (ffmpeg === undefined) {
-		logger?.debug("ffmpeg unavailable; webm sticker will stay as webm", {
-			bytes: bytes.byteLength,
-		});
-		return undefined;
-	}
+	if (ffmpeg === undefined) throw new Error("ffmpeg is unavailable for video sticker conversion");
 	const startedAt = Date.now();
-	logger?.info("webm animated sticker conversion started", {
+	logger?.info("video animated sticker conversion started", {
 		bytes: bytes.byteLength,
 		fps: options.fps,
 		maxFrames: options.maxFrames,
 		width: options.width,
 	});
-	const directory = await mkdtemp(join(tmpdir(), "tsukaima-sticker-webm-"));
+	const directory = await mkdtemp(join(tmpdir(), "tsukaima-sticker-video-"));
 	try {
 		const input = join(directory, "input.webm");
-		const output = join(directory, "output.gif");
 		await writeFile(input, bytes);
 		const fps = clamp(options.fps, DEFAULT_FPS, 1, MAX_FPS);
 		const maxFrames = clamp(options.maxFrames, DEFAULT_MAX_FRAMES, 1, MAX_MAX_FRAMES);
 		const width = clamp(options.width, 512, 32, MAX_SIZE);
-		const filter = `fps=${fps},scale=${width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=reserve_transparent=1[p];[s1][p]paletteuse=alpha_threshold=128`;
+		const framesPath = join(directory, "frame-%03d.png");
 		try {
-			await run(ffmpeg, [
+			await runFfmpegCommand(ffmpeg, [
 				"-hide_banner",
 				"-loglevel",
 				"error",
@@ -294,43 +269,63 @@ export async function webmToGif(
 				"-i",
 				input,
 				"-vf",
-				filter,
+				`fps=${fps},scale=${width}:-1:flags=lanczos,format=rgba`,
 				"-frames:v",
 				String(maxFrames),
-				"-loop",
-				"0",
 				"-f",
-				"gif",
-				output,
+				"image2",
+				"-start_number",
+				"0",
+				framesPath,
 			]);
 		} catch (error) {
-			logger?.warn("webm animated sticker conversion failed", {
+			logger?.warn("video animated sticker conversion failed", {
 				bytes: bytes.byteLength,
 				durationMs: elapsedMs(startedAt),
 				error: logErrorMessage(error),
 			});
 			throw error;
 		}
-		const result = new Uint8Array(await readFile(output));
-		if (result.byteLength === 0) throw new Error("ffmpeg produced an empty GIF");
-		logger?.debug("webm animated sticker conversion completed", {
-			bytes: result.byteLength,
+		const files = (await readdir(directory))
+			.filter((file) => FRAME_FILE_PATTERN.test(file))
+			.toSorted((left, right) => {
+				const leftIndex = Number(FRAME_FILE_PATTERN.exec(left)?.[1] ?? 0);
+				const rightIndex = Number(FRAME_FILE_PATTERN.exec(right)?.[1] ?? 0);
+				return leftIndex - rightIndex;
+			});
+		if (files.length === 0) throw new Error("ffmpeg produced no video frames");
+		const canvasModule = await import("canvas");
+		const framePaths = files.map((file) => join(directory, file));
+		const probe = await readPngFrame(framePaths[0] as string, canvasModule);
+		const frameHeight = probe.height;
+		const frameWidth = probe.width;
+		const encoded = await encodeGifFrames({
+			delay: Math.max(20, Math.round(1000 / fps)),
+			frameCount: framePaths.length,
+			height: frameHeight,
+			readFrame: async (index) => await readPngFrame(framePaths[index] as string, canvasModule),
+			width: frameWidth,
+		});
+		logger?.debug("video animated sticker conversion completed", {
+			boundsHeight: encoded.bounds.height,
+			boundsWidth: encoded.bounds.width,
+			bytes: encoded.bytes.byteLength,
 			durationMs: elapsedMs(startedAt),
 			format: "gif",
 			fps,
-			maxFrames,
-			width,
+			frameCount: encoded.frameCount,
+			height: frameHeight,
+			width: frameWidth,
 		});
-		return result;
+		return encoded.bytes;
 	} finally {
 		await rm(directory, { force: true, recursive: true });
 	}
 }
 
 export const defaultAnimatedConverter: AnimatedConverter = {
-	available: true,
 	convertTgs: async (bytes, options) => await tgsToGif(bytes, options),
-	convertWebm: async (bytes, options) => await webmToGif(bytes, options),
+	convertVideo: async (bytes, options) => await videoToGif(bytes, options),
 };
 
 export function createAnimatedConverter(
@@ -338,17 +333,16 @@ export function createAnimatedConverter(
 		readonly ffmpegPath?: string;
 		readonly logger?: PluginLogger | undefined;
 		readonly tgs?: (bytes: Uint8Array, options?: AnimatedConversionOptions) => Promise<Uint8Array>;
-		readonly webm?: (
+		readonly video?: (
 			bytes: Uint8Array,
 			options?: AnimatedConversionOptions,
-		) => Promise<Uint8Array | undefined>;
+		) => Promise<Uint8Array>;
 	} = {},
 ): AnimatedConverter {
 	const logger = input.logger;
 	const customTgs = input.tgs;
-	const customWebm = input.webm;
+	const customVideo = input.video;
 	return {
-		available: true,
 		convertTgs: async (bytes, options) => {
 			if (customTgs === undefined) return await tgsToGif(bytes, options, logger);
 			const startedAt = Date.now();
@@ -371,17 +365,17 @@ export function createAnimatedConverter(
 				throw error;
 			}
 		},
-		convertWebm: async (bytes, options) => {
-			if (customWebm === undefined)
-				return await webmToGif(bytes, options, input.ffmpegPath, logger);
+		convertVideo: async (bytes, options) => {
+			if (customVideo === undefined)
+				return await videoToGif(bytes, options, input.ffmpegPath, logger);
 			const startedAt = Date.now();
 			try {
-				const result = await customWebm(bytes, options);
+				const result = await customVideo(bytes, options);
 				logger?.debug("animated sticker conversion completed", {
-					bytes: result?.byteLength ?? 0,
+					bytes: result.byteLength,
 					durationMs: elapsedMs(startedAt),
-					format: result === undefined ? "none" : "gif",
-					source: "webm",
+					format: "gif",
+					source: "video",
 				});
 				return result;
 			} catch (error) {
@@ -389,7 +383,7 @@ export function createAnimatedConverter(
 					durationMs: elapsedMs(startedAt),
 					error: logErrorMessage(error),
 					format: "gif",
-					source: "webm",
+					source: "video",
 				});
 				throw error;
 			}
