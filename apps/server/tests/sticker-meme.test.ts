@@ -134,10 +134,15 @@ describe("sticker-meme host integration", () => {
 			]);
 
 			const imageBytes = new TextEncoder().encode("real-sticker-bytes");
+			const secondImageBytes = new TextEncoder().encode("second-sticker-bytes");
 			const imageBase64 = Buffer.from(imageBytes).toString("base64");
+			const secondImageBase64 = Buffer.from(secondImageBytes).toString("base64");
 			const imported = (await lifecycle.pluginHost.invokeRpc("sticker-meme.packs.importBundle", {
 				dryRun: false,
-				files: [{ dataBase64: imageBase64, path: "stickers/smile.png" }],
+				files: [
+					{ dataBase64: imageBase64, path: "stickers/smile.png" },
+					{ dataBase64: secondImageBase64, path: "stickers/grin.png" },
+				],
 				manifest: {
 					id: "pack-test",
 					items: [
@@ -149,13 +154,21 @@ describe("sticker-meme host integration", () => {
 							mimeType: "image/png",
 							name: "Smile",
 						},
+						{
+							emotions: ["joy"],
+							file: "stickers/grin.png",
+							id: "item-grin",
+							keywords: ["grin"],
+							mimeType: "image/png",
+							name: "Grin",
+						},
 					],
 					name: "Test pack",
 					personaIds: ["tsukaima"],
 					tags: ["greeting"],
 				},
 			})) as { items: number; missingMedia: number };
-			expect(imported).toMatchObject({ items: 1, missingMedia: 0 });
+			expect(imported).toMatchObject({ items: 2, missingMedia: 0 });
 
 			const { durableConversationId } = await createExternalSession(lifecycle);
 			const search = (await lifecycle.pluginHost.invokeTool(
@@ -167,7 +180,7 @@ describe("sticker-meme host integration", () => {
 			const searchPayload = decodeToolText(search) as {
 				readonly candidates: readonly { readonly itemId: string }[];
 			};
-			expect(searchPayload.candidates.map((candidate) => candidate.itemId)).toEqual(["item-smile"]);
+			expect(searchPayload.candidates.map((candidate) => candidate.itemId)).toContain("item-smile");
 
 			const chosen = (await lifecycle.pluginHost.invokeTool(
 				"sticker-meme.choose",
@@ -209,6 +222,44 @@ describe("sticker-meme host integration", () => {
 			const parts = JSON.parse(outbound?.partsJson ?? "[]") as MessagePart[];
 			expect(parts.map((part) => part.type)).toEqual(["text", "sticker", "text"]);
 			expect(outbound?.contentText).not.toContain("[[sticker:");
+
+			const firstSend = await lifecycle.pluginHost.invokeTool(
+				"sticker-meme.send",
+				{ itemId: "item-smile" },
+				{ conversationId: durableConversationId },
+			);
+			const secondSend = await lifecycle.pluginHost.invokeTool(
+				"sticker-meme.send",
+				{ itemId: "item-grin" },
+				{ conversationId: durableConversationId },
+			);
+			if (!firstSend.ok || !secondSend.ok) throw new Error("sticker send unavailable");
+			const firstMarker = (decodeToolText(firstSend) as { inlineMarker: string }).inlineMarker;
+			const secondMarker = (decodeToolText(secondSend) as { inlineMarker: string }).inlineMarker;
+			onebot.actions.length = 0;
+			await lifecycle.replyDispatcher.handleAnswer({
+				activityId: randomUUID(),
+				conversationId: durableConversationId,
+				entryId: "entry-inline-markers",
+				text: `Two\n${firstMarker}\n${secondMarker}`,
+			});
+			expect(segmentsOf(onebot.actions).map((segment) => segment.type)).toEqual([
+				"text",
+				"image",
+				"image",
+			]);
+			const [markerOutbound] = await database
+				.select()
+				.from(messages)
+				.where(
+					and(
+						eq(messages.direction, "outbound"),
+						eq(messages.durableEntryId, "entry-inline-markers"),
+					),
+				)
+				.limit(1);
+			const markerParts = JSON.parse(markerOutbound?.partsJson ?? "[]") as MessagePart[];
+			expect(markerParts.map((part) => part.type)).toEqual(["text", "sticker", "sticker"]);
 
 			onebot.actions.length = 0;
 			await lifecycle.replyDispatcher.handleAnswer({

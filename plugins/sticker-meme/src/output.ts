@@ -191,6 +191,54 @@ export function createStickerReplyTransform(options: StickerOutputOptions) {
 					continue;
 				}
 				if (piece.type === "inline") {
+					// A send-tool call issues a token and returns a matching inline marker. Honour the
+					// explicit send even when its marker is used instead of the opaque directive, so the
+					// per-turn inline cap only limits markers written without a tool call.
+					const tokenBackedItemId = await options.repository.consumeTokenForItemName(
+						piece.query,
+						conversationId,
+					);
+					if (tokenBackedItemId !== undefined) {
+						directiveCount += 1;
+						const item = await options.repository.getItem(tokenBackedItemId);
+						const pack =
+							item === undefined ? undefined : await options.repository.getPack(item.packId);
+						const media =
+							item === undefined || item.mediaId.length === 0
+								? undefined
+								: await options.media.findById(item.mediaId);
+						if (
+							item === undefined ||
+							!item.enabled ||
+							item.revokedAt !== null ||
+							item.reviewStatus !== "approved" ||
+							media === undefined ||
+							pack === undefined ||
+							!pack.enabled
+						) {
+							await reject("item_unavailable", tokenBackedItemId);
+							output.push({ text: "[sticker unavailable]", type: "text" });
+							continue;
+						}
+						output.push(toStickerMessagePart(item));
+						await audit({
+							action: "sticker.transform.sent",
+							actorKind: "plugin",
+							payload: {
+								conversationId,
+								inline: true,
+								itemId: item.id,
+								packId: item.packId,
+								query: piece.query,
+								tokenBacked: true,
+							},
+							result: "ok",
+							targetId: item.id,
+							targetKind: "sticker-item",
+						});
+						resolvedCount += 1;
+						continue;
+					}
 					if (inlineCount >= maxInline) {
 						traceLog(logger, "sticker inline marker capped", {
 							maxInline,

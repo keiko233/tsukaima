@@ -762,6 +762,41 @@ describe("sticker selection and send tokens", () => {
 			expect(payload.inlineMarker).toBe("[表情:fresh]");
 		}
 	});
+
+	test("resolves every inline marker backed by a send-tool token", async () => {
+		const setup = await setupSelection();
+		const transform = createStickerReplyTransform({
+			audit: { record: async (entry) => void setup.audits.push(entry) },
+			media: setup.media,
+			repository: setup.repository,
+			selection: setup.selection,
+		});
+		const first = await setup.selection.resolveForSend({
+			conversationId: "conversation-1",
+			itemId: "fresh",
+		});
+		const second = await setup.selection.resolveForSend({
+			conversationId: "conversation-1",
+			itemId: "spammed",
+		});
+		const transformed = await transform({
+			conversationId: "conversation-1",
+			parts: [{ text: "First [表情:fresh]\nSecond [表情:spammed]", type: "text" }],
+		});
+		expect(transformed?.parts.map((part) => part.type)).toEqual([
+			"text",
+			"sticker",
+			"text",
+			"sticker",
+		]);
+		const stickerParts = transformed?.parts.filter((part) => part.type === "sticker") ?? [];
+		expect(stickerParts.map((part) => part.mediaId)).toEqual([
+			setup.fresh.mediaId,
+			setup.spammed.mediaId,
+		]);
+		expect((await setup.repository.getToken(first.choose.sendToken))?.usedAt).not.toBeNull();
+		expect((await setup.repository.getToken(second.choose.sendToken))?.usedAt).not.toBeNull();
+	});
 });
 
 describe("sticker learning and review", () => {

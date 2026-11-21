@@ -498,6 +498,27 @@ export class StickerRepository {
 		return { itemId };
 	}
 
+	/**
+	 * Consume a token issued for this conversation whose item matches an inline marker caption.
+	 * The `sticker-meme.send` tool returns both a token directive and an inline marker, so a model
+	 * that writes the marker instead of the opaque token must still consume the issued send.
+	 */
+	async consumeTokenForItemName(name: string, conversationId: string): Promise<string | undefined> {
+		const nowIso = new Date(this.#now()).toISOString();
+		const [row] = await this.#database.query<{ token: string }>(
+			`SELECT t.token AS token
+			FROM plugin_sticker_meme_send_tokens t
+			INNER JOIN plugin_sticker_meme_items i ON i.id = t.item_id
+			WHERE t.conversation_id = ? AND t.used_at IS NULL AND t.expires_at > ?
+				AND i.name = ? COLLATE NOCASE
+			ORDER BY t.created_at ASC, t.token ASC
+			LIMIT 1`,
+			[conversationId, nowIso, name],
+		);
+		if (row === undefined) return undefined;
+		return (await this.consumeToken(row.token, conversationId)).itemId;
+	}
+
 	async recordUse(itemId: string): Promise<void> {
 		const nowIso = new Date(this.#now()).toISOString();
 		await this.#database.query(
