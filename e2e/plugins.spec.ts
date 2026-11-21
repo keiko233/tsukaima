@@ -27,13 +27,6 @@ const PLUGINS = [
 		name: "Search and fetch",
 		panel: "Search and fetch",
 	},
-	{
-		control: "Create task",
-		extra: "Approval cards",
-		id: "self-iteration",
-		name: "Self-iteration",
-		panel: "Self-iteration runtime",
-	},
 ] as const;
 
 function captureBrowserErrors(page: Page): string[] {
@@ -62,9 +55,6 @@ test.describe("built-in plugin panels", () => {
 			await expect(page.getByRole("heading", { name: plugin.name, level: 1 })).toBeVisible();
 			await expect(page.getByRole("heading", { name: plugin.panel, level: 2 })).toBeVisible();
 			await expect(page.getByText(plugin.control, { exact: true }).first()).toBeVisible();
-			if ("extra" in plugin) {
-				await expect(page.getByRole("heading", { name: plugin.extra, level: 3 })).toBeVisible();
-			}
 		}
 
 		await page.goto(new URL("/plugins", stack.webUrl).toString());

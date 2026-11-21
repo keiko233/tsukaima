@@ -7,13 +7,11 @@ import oneBotUi from "../../../../plugins/onebot-napcat/src/ui.tsx";
 import openAiUi from "../../../../plugins/openai-compatible/src/ui.tsx";
 import proactiveUi from "../../../../plugins/proactive-scheduler/src/ui.tsx";
 import searchUi from "../../../../plugins/search-fetch/src/ui.tsx";
-import selfIterationUi from "../../../../plugins/self-iteration/src/ui.tsx";
 import stickerUi from "../../../../plugins/sticker-meme/src/ui.tsx";
 import { i18n as oneBotI18n } from "../../../../plugins/onebot-napcat/src/i18n.ts";
 import { i18n as openAiI18n } from "../../../../plugins/openai-compatible/src/i18n.ts";
 import { i18n as proactiveI18n } from "../../../../plugins/proactive-scheduler/src/i18n.ts";
 import { i18n as searchI18n } from "../../../../plugins/search-fetch/src/i18n.ts";
-import { i18n as selfIterationI18n } from "../../../../plugins/self-iteration/src/i18n.ts";
 import { i18n as stickerI18n } from "../../../../plugins/sticker-meme/src/i18n.ts";
 import type { PluginUiModuleDefinition } from "@tsukaima/sdk/ui";
 
@@ -181,27 +179,6 @@ describe("built-in plugin panels", () => {
 		expect(zh).toContain("主动消息调度");
 		expect(zh).toContain("已排期任务");
 		expect(zh).toContain("试运行");
-	});
-
-	test("renders the self-iteration panel in en and zh-cn", () => {
-		const selfIterationPlugin: PluginSummary = {
-			...plugin,
-			id: "self-iteration",
-			name: "self-iteration",
-			permissions: ["ui.panel", "tools.register", "rpc.register", "coding.read", "coding.execute"],
-		};
-		const html = renderPanel(selfIterationUi, selfIterationI18n.bind("en"), selfIterationPlugin);
-		expect(html).toContain("Self-iteration runtime");
-		expect(html).toContain("Coding tasks");
-		expect(html).toContain("Coding policy");
-		expect(html).toContain("Deployment history");
-		expect(html).toContain("Approval cards");
-		const zh = renderPanel(selfIterationUi, selfIterationI18n.bind("zh-cn"), selfIterationPlugin);
-		expect(zh).toContain("自我迭代运行时");
-		expect(zh).toContain("编码任务");
-		expect(zh).toContain("编码策略");
-		expect(zh).toContain("部署历史");
-		expect(zh).toContain("审批卡片");
 	});
 
 	test("renders the sticker-meme library panel in en and zh-cn", () => {

@@ -17,7 +17,6 @@
 		"@tsukaima-plugin/openai-compatible": "workspace:*",
 		"@tsukaima-plugin/proactive-scheduler": "workspace:*",
 		"@tsukaima-plugin/search-fetch": "workspace:*",
-		"@tsukaima-plugin/self-iteration": "workspace:*",
 		"@tsukaima-plugin/sticker-meme": "workspace:*",
 		"@tsukaima/cache": "workspace:*",
 		"@tsukaima/coding": "workspace:*",
