@@ -352,4 +352,59 @@ describe("admitted submission settlement", () => {
 			await rm(directory, { force: true, recursive: true });
 		}
 	});
+
+	test("append with resolveImage does not deadlock when AgentDoc is cold in session cache", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-cold-agentdoc-"));
+		const dbPath = join(directory, "durable.sqlite");
+		const storage1 = await openDurableStorage(dbPath);
+		let conversationId = "";
+		try {
+			const warmAnswers: string[] = [];
+			const host1 = new PiDurableConversationHost({
+				model: createFakeModel({ responses: ["warm answer"] }),
+				onAnswer: (answer) => {
+					warmAnswers.push(answer.text);
+				},
+				resolveImage: async () => undefined,
+				storage: storage1,
+			});
+			conversationId = await host1.createConversation();
+			await host1.append({
+				conversationId,
+				envelope: envelope("warm-1", "synthetic warm turn", "10001"),
+				forceSubmit: true,
+				submittedAtMs: Date.now(),
+			});
+			await waitFor(() => warmAnswers.length === 1);
+			await host1.close();
+		} finally {
+			await storage1.close(BACKGROUND_CONTEXT);
+		}
+
+		// Reopen on a fresh storage/harness so Session's AgentDoc document cache is cold.
+		const storage2 = await openDurableStorage(dbPath);
+		try {
+			const answers: string[] = [];
+			const host2 = new PiDurableConversationHost({
+				model: createFakeModel({ responses: ["cold answer"] }),
+				onAnswer: (answer) => {
+					answers.push(answer.text);
+				},
+				resolveImage: async () => undefined,
+				storage: storage2,
+			});
+			await host2.append({
+				conversationId,
+				envelope: envelope("cold-1", "synthetic cold turn", "10001"),
+				forceSubmit: true,
+				submittedAtMs: Date.now() + 1,
+			});
+			await waitFor(() => answers.length === 1);
+			expect(answers).toEqual(["cold answer"]);
+			await host2.close();
+		} finally {
+			await storage2.close(BACKGROUND_CONTEXT);
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
 });
