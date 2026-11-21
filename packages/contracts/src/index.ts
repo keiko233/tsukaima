@@ -152,6 +152,7 @@ export * from "./memory.ts";
 export * from "./policy.ts";
 export * from "./proactive.ts";
 export * from "./schedules.ts";
+export * from "./social.ts";
 
 export const activityWindowSchema = z.object({
 	activityId: z.string().min(1),

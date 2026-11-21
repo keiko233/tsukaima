@@ -44,6 +44,7 @@ export const DSH_IMPORT_ORDER = [
 	"settings",
 	"tasks",
 	"schedulerStates",
+	"socialProfiles",
 ] as const;
 
 export interface DshSession {
@@ -320,6 +321,29 @@ export interface NormalizedSchedulerState {
 	readonly updatedAtMs: number;
 }
 
+export interface NormalizedSocialProfile {
+	readonly sourceSystem: typeof DSH_SOURCE;
+	readonly sourceId: string;
+	readonly sourceHash: string;
+	readonly conversationId: string;
+	readonly interactions: number;
+	readonly otherFirst: number;
+	readonly selfFirst: number;
+	readonly proactiveSent: number;
+	readonly proactiveAnswered: number;
+	readonly unansweredStreak: number;
+	readonly refusedCount: number;
+	readonly refusedAt: number | null;
+	readonly unansweredAt: number | null;
+	readonly silentUntil: number | null;
+	readonly activeHours: Readonly<Record<string, number>>;
+	readonly level: "L0" | "L1" | "L2";
+	readonly warm: boolean;
+	readonly proactiveToday: number;
+	readonly dayKey: string | null;
+	readonly updatedAtMs: number;
+}
+
 export type NormalizedDatabase = {
 	readonly users: readonly NormalizedUser[];
 	readonly identities: readonly NormalizedIdentity[];
@@ -336,6 +360,7 @@ export type NormalizedDatabase = {
 	readonly stickerPacks: readonly NormalizedStickerPack[];
 	readonly tasks: readonly NormalizedTask[];
 	readonly schedulerStates: readonly NormalizedSchedulerState[];
+	readonly socialProfiles: readonly NormalizedSocialProfile[];
 };
 
 export type RecordCounts = Record<keyof NormalizedDatabase, number>;
@@ -1554,6 +1579,7 @@ export function countRecords(database: NormalizedDatabase): RecordCounts {
 		requests: database.requests.length,
 		schedulerStates: database.schedulerStates.length,
 		settings: database.settings.length,
+		socialProfiles: database.socialProfiles.length,
 		stickerPacks: database.stickerPacks.length,
 		stickers: database.stickers.length,
 		tasks: database.tasks.length,
@@ -1574,6 +1600,7 @@ function emptyRecordCounts(): RecordCounts {
 		requests: 0,
 		schedulerStates: 0,
 		settings: 0,
+		socialProfiles: 0,
 		stickerPacks: 0,
 		stickers: 0,
 		tasks: 0,
@@ -1602,6 +1629,7 @@ function emptyDatabase(): NormalizedDatabase {
 		requests: [],
 		schedulerStates: [],
 		settings: [],
+		socialProfiles: [],
 		stickerPacks: [],
 		stickers: [],
 		tasks: [],
@@ -1820,6 +1848,7 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 	const tasks = new Map<string, NormalizedTask>();
 	const requests = new Map<string, NormalizedRequest>();
 	const schedulerStates = new Map<string, NormalizedSchedulerState>();
+	const socialProfiles = new Map<string, NormalizedSocialProfile>();
 	const decisions: DecisionEntry[] = [];
 	const sessionErrors: SessionParseError[] = [];
 	const warnings: string[] = [];
@@ -2384,6 +2413,22 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 		for (const state of memoryImport.schedulerStates) {
 			schedulerStates.set(state.conversationId, stateFromImported(state));
 		}
+		for (const profile of memoryImport.socialProfiles) {
+			if (conversations.has(profile.conversationId)) {
+				socialProfiles.set(profile.conversationId, {
+					...profile,
+					sourceSystem: DSH_SOURCE,
+				});
+			} else {
+				decisions.push({
+					action: "review",
+					area: "social-profile",
+					reason: "Human profile has no imported conversation to attach to",
+					source: profile.sourceId,
+					target: "social_profiles",
+				});
+			}
+		}
 		decisions.push(...memoryImport.decisions);
 		warnings.push(...memoryImport.warnings);
 	} catch (error) {
@@ -2440,6 +2485,7 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 		requests: [...requests.values()],
 		schedulerStates: [...schedulerStates.values()],
 		settings: [...settings.values()],
+		socialProfiles: [...socialProfiles.values()],
 		stickerPacks: [...stickerPacks.values()],
 		stickers: [...stickers.values()],
 		tasks: [...tasks.values()],

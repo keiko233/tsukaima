@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
 import type { MessageEnvelope } from "@tsukaima/contracts";
 import { conversations, messages } from "@tsukaima/db";
+import { createFakeModel, type ModelPort } from "@tsukaima/core";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	type OneBotTransport,
@@ -69,7 +70,9 @@ const createOneBotTransportSpy = () => {
 	return { actions, connections, createTransport, urls };
 };
 
-async function createLifecycle(options: { onebot?: OneBotTransportFactory } = {}) {
+async function createLifecycle(
+	options: { model?: ModelPort; onebot?: OneBotTransportFactory } = {},
+) {
 	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-reply-"));
 	directories.push(directory);
 	const { lifecycle } = createApp(
@@ -79,11 +82,14 @@ async function createLifecycle(options: { onebot?: OneBotTransportFactory } = {}
 			TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
 			...(options.onebot === undefined ? {} : { TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001" }),
 		},
-		options.onebot === undefined
-			? {}
-			: {
-					pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, options.onebot]]),
-				},
+		{
+			...(options.model === undefined ? {} : { model: options.model }),
+			...(options.onebot === undefined
+				? {}
+				: {
+						pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, options.onebot]]),
+					}),
+		},
 	);
 	await lifecycle.start();
 	const database = lifecycle.domainDatabase;
@@ -176,6 +182,95 @@ describe("reply dispatcher", () => {
 		// The single private message is answered when the activity window flushes (~6s).
 		20_000,
 	);
+
+	test("strips outbound meta-leaks with a warn diagnostic while preserving fenced code", async () => {
+		const onebot = createOneBotTransportSpy();
+		const leaked = [
+			"前文 <turn-context>Local time: 12:00</turn-context> 后文",
+			"```html",
+			"{{persona}} <turn-context>keep this example</turn-context>",
+			"```",
+		].join("\n");
+		const { database, lifecycle } = await createLifecycle({
+			model: createFakeModel({ responses: [leaked] }),
+			onebot: onebot.createTransport,
+		});
+		try {
+			onebot.connections[0]?.emitOpen();
+			await lifecycle.conversationPolicy.update({
+				policy: {
+					humanization: { metaLeakSanitizeEnabled: true },
+					pacing: { replyDelayEnabled: false, sendIntervalMs: 0, stripMarkdown: false },
+				},
+				scope: "global",
+			});
+			await lifecycle.processEnvelope(envelope("meta-leak", "show the template?"));
+			const answer = await waitFor(async () => {
+				const rows = await database
+					.select()
+					.from(messages)
+					.where(
+						and(eq(messages.direction, "outbound"), eq(messages.senderExternalId, "tsukaima")),
+					);
+				return rows.find((row) => row.deliveryStatus === "sent");
+			});
+			expect(answer.contentText).toContain("{{persona}} <turn-context>keep this example");
+			expect(answer.contentText).not.toContain("Local time: 12:00");
+			expect(
+				lifecycle.logs
+					.list({ level: "warn" })
+					.some((entry) => entry.message === "outbound meta-leak sanitized"),
+			).toBe(true);
+		} finally {
+			await lifecycle.stop();
+		}
+	}, 20_000);
+
+	test("shapes reply delay by hour and length and shows a typing indicator in a DM", async () => {
+		const onebot = createOneBotTransportSpy();
+		const { database, lifecycle } = await createLifecycle({
+			model: createFakeModel({ responses: ["ok"] }),
+			onebot: onebot.createTransport,
+		});
+		try {
+			onebot.actions.splice(0);
+			onebot.connections[0]?.emitOpen();
+			await lifecycle.conversationPolicy.update({
+				policy: {
+					humanization: { delayCurveEnabled: true },
+					pacing: {
+						replyDelayEnabled: true,
+						replyDelayMaxMs: 300,
+						sendIntervalMs: 0,
+						typingEnabled: true,
+					},
+				},
+				scope: "global",
+			});
+			const startedAt = Date.now();
+			await lifecycle.processEnvelope(envelope("typing-delay", "hello?"));
+			const answer = await waitFor(async () => {
+				const rows = await database
+					.select()
+					.from(messages)
+					.where(
+						and(eq(messages.direction, "outbound"), eq(messages.senderExternalId, "tsukaima")),
+					);
+				return rows.find((row) => row.deliveryStatus === "sent");
+			});
+			const elapsed = Date.now() - startedAt;
+			expect(elapsed).toBeGreaterThanOrEqual(40);
+			expect(elapsed).toBeLessThan(2_000);
+			expect(answer.contentText).toBe("ok");
+			const typing = onebot.actions.filter((action) => action.action === "set_input_status");
+			expect(typing.map((action) => action.params.event_type)).toEqual(
+				expect.arrayContaining([1, 2]),
+			);
+			expect(typing.every((action) => action.params.user_id === "user-1")).toBe(true);
+		} finally {
+			await lifecycle.stop();
+		}
+	}, 20_000);
 
 	test("persists a local WebUI answer without sending it anywhere", async () => {
 		const onebot = createOneBotTransportSpy();

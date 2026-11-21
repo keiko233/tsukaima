@@ -19,6 +19,7 @@ import {
 	personas,
 	policies,
 	requests,
+	socialProfiles,
 	userAliases,
 	users,
 } from "@tsukaima/db";
@@ -810,6 +811,9 @@ export function createPipeline(target: string, options: PipelineOptions = {}): M
 					for (const task of db.tasks) {
 						record("tasks", task.id, task.sourceId, task.sourceHash);
 					}
+					for (const profile of db.socialProfiles) {
+						record("socialProfiles", profile.conversationId, profile.sourceId, profile.sourceHash);
+					}
 					for (const state of db.schedulerStates) {
 						record("schedulerStates", state.conversationId, state.sourceId, state.sourceHash);
 					}
@@ -920,6 +924,34 @@ export function createPipeline(target: string, options: PipelineOptions = {}): M
 									userId,
 								})),
 							),
+						);
+						await insert(
+							socialProfiles,
+							db.socialProfiles.map((profile) => {
+								const updatedAt = new Date(
+									profile.updatedAtMs > 0 ? profile.updatedAtMs : now(),
+								).toISOString();
+								return {
+									activeHoursJson: JSON.stringify(profile.activeHours),
+									conversationId: profile.conversationId,
+									createdAt: updatedAt,
+									dayKey: profile.dayKey,
+									interactions: profile.interactions,
+									level: profile.level,
+									otherFirst: profile.otherFirst,
+									proactiveAnswered: profile.proactiveAnswered,
+									proactiveSent: profile.proactiveSent,
+									proactiveToday: profile.proactiveToday,
+									refusedAt: profile.refusedAt,
+									refusedCount: profile.refusedCount,
+									selfFirst: profile.selfFirst,
+									silentUntil: profile.silentUntil,
+									unansweredAt: profile.unansweredAt,
+									unansweredStreak: profile.unansweredStreak,
+									updatedAt,
+									warm: profile.warm,
+								};
+							}),
 						);
 						await insert(media, dedupeById([...mediaById.values()]));
 						await insert(messages, db.messages.map(messageRow));

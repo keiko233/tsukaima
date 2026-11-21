@@ -45,9 +45,37 @@ export interface ImportedSchedulerState {
 	readonly sourceHash: string;
 }
 
+/**
+ * DSH `human-profiles.json` record mapped onto Tsukaima's `social_profiles` columns. Kept next to
+ * the legacy scheduler-state mapping because proactive scheduling and social familiarity learn
+ * from the same snapshot but persist to different domains.
+ */
+export interface ImportedSocialProfile {
+	readonly sourceId: string;
+	readonly sourceHash: string;
+	readonly conversationId: string;
+	readonly interactions: number;
+	readonly otherFirst: number;
+	readonly selfFirst: number;
+	readonly proactiveSent: number;
+	readonly proactiveAnswered: number;
+	readonly unansweredStreak: number;
+	readonly refusedCount: number;
+	readonly refusedAt: number | null;
+	readonly unansweredAt: number | null;
+	readonly silentUntil: number | null;
+	readonly activeHours: Readonly<Record<string, number>>;
+	readonly level: "L0" | "L1" | "L2";
+	readonly warm: boolean;
+	readonly proactiveToday: number;
+	readonly dayKey: string | null;
+	readonly updatedAtMs: number;
+}
+
 export interface MemoryImportResult {
 	readonly memories: readonly ImportedMemoryRecord[];
 	readonly schedulerStates: readonly ImportedSchedulerState[];
+	readonly socialProfiles: readonly ImportedSocialProfile[];
 	readonly decisions: readonly DecisionEntry[];
 	readonly warnings: readonly string[];
 	readonly spaces: readonly string[];
@@ -232,18 +260,11 @@ function memoryFromRow(input: {
 	};
 }
 
-function stateFromProfile(
-	key: string,
-	profile: Record<string, unknown>,
-	path: string,
-): ImportedSchedulerState | null {
-	const conversationId = conversationIdForPlatformKey(key);
-	if (conversationId === "") return null;
-	const now = toMs(profile.updatedAt ?? profile.createdAt) ?? Date.now();
+function activeHoursHistogram(profile: Record<string, unknown>): Record<string, number> {
+	const histogram: Record<string, number> = {};
 	const activeHours = Array.isArray(profile.activeHours)
 		? profile.activeHours.filter((value): value is number => typeof value === "number")
 		: [];
-	const histogram: Record<string, number> = {};
 	if (activeHours.length >= 2) {
 		const [start, end] = [activeHours[0]!, activeHours[1]!];
 		if (start <= end) {
@@ -252,9 +273,60 @@ function stateFromProfile(
 			for (let hour = start; hour <= 23; hour += 1) histogram[String(hour)] = 1;
 			for (let hour = 0; hour <= end; hour += 1) histogram[String(hour)] = 1;
 		}
-	} else {
-		for (const hour of activeHours) histogram[String(hour)] = 1;
+	} else if (activeHours.length === 1) {
+		histogram[String(activeHours[0])] = 1;
+	} else if (isRecord(profile.activeHours)) {
+		for (const [hour, count] of Object.entries(profile.activeHours)) {
+			const parsed = number(count);
+			if (parsed !== null && parsed >= 0) histogram[hour] = Math.floor(parsed);
+		}
 	}
+	return histogram;
+}
+
+function socialProfileFromProfile(
+	key: string,
+	profile: Record<string, unknown>,
+	path: string,
+	nowMs: number,
+): ImportedSocialProfile | null {
+	const conversationId = conversationIdForPlatformKey(key);
+	if (conversationId === "") return null;
+	const rawLevel = profile.level;
+	const level: ImportedSocialProfile["level"] =
+		rawLevel === "L2" || rawLevel === 2 ? "L2" : rawLevel === "L1" || rawLevel === 1 ? "L1" : "L0";
+	return {
+		activeHours: activeHoursHistogram(profile),
+		conversationId,
+		dayKey: string(profile.dayKey),
+		interactions: number(profile.interactions) ?? 0,
+		level,
+		otherFirst: number(profile.otherFirst) ?? 0,
+		proactiveAnswered: number(profile.proactiveAnswered) ?? 0,
+		proactiveSent: number(profile.proactiveSent) ?? 0,
+		proactiveToday: number(profile.proactiveToday) ?? 0,
+		refusedAt: toMs(profile.refusedAt),
+		refusedCount: number(profile.refusedCount) ?? 0,
+		selfFirst: number(profile.selfFirst) ?? 0,
+		silentUntil: toMs(profile.silentUntil),
+		sourceHash: sha256String(stableStringify({ key, path, profile })),
+		sourceId: `napcat-human-profile:${key}`,
+		unansweredAt: toMs(profile.unansweredAt),
+		unansweredStreak: number(profile.unansweredStreak) ?? 0,
+		updatedAtMs: toMs(profile.updatedAt) ?? nowMs,
+		warm: profile.warm === true,
+	};
+}
+
+function stateFromProfile(
+	key: string,
+	profile: Record<string, unknown>,
+	path: string,
+): ImportedSchedulerState | null {
+	const conversationId = conversationIdForPlatformKey(key);
+	if (conversationId === "") return null;
+	const now = toMs(profile.updatedAt ?? profile.createdAt) ?? Date.now();
+	const histogram = activeHoursHistogram(profile);
 	const warm = profile.warm === true;
 	const level = number(profile.level) ?? 0;
 	return {
@@ -303,6 +375,7 @@ export async function importDshMemory(
 	const files = await sourceFiles(source);
 	const memories: ImportedMemoryRecord[] = [];
 	const schedulerStates: ImportedSchedulerState[] = [];
+	const socialProfiles: ImportedSocialProfile[] = [];
 	const decisions: DecisionEntry[] = [];
 	const warnings: string[] = [];
 	const spaces = new Set<string>();
@@ -500,7 +573,8 @@ export async function importDshMemory(
 				for (const [key, profile] of Object.entries(profiles)) {
 					if (!isRecord(profile)) continue;
 					const state = stateFromProfile(key, profile, file.path);
-					if (state === null) {
+					const social = socialProfileFromProfile(key, profile, file.path, now());
+					if (state === null || social === null) {
 						decisions.push({
 							action: "review",
 							area: "schedule-proactive",
@@ -510,6 +584,7 @@ export async function importDshMemory(
 						});
 					} else {
 						schedulerStates.push(state);
+						socialProfiles.push(social);
 					}
 				}
 			} catch (error) {
@@ -538,6 +613,7 @@ export async function importDshMemory(
 		decisions,
 		memories: safeMemories,
 		schedulerStates,
+		socialProfiles,
 		spaces: [...spaces].toSorted((left, right) => left.localeCompare(right)),
 		warnings,
 	};

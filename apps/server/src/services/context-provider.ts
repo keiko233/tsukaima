@@ -1,7 +1,10 @@
 import { and, desc, eq, inArray, ne, or, sql, type SQL } from "drizzle-orm";
 import {
+	detectOverusedPhrases,
+	detectRigidRhythm,
 	formatLocalClock,
 	formatLocalDateTime,
+	needsRepetitionRewrite,
 	TURN_MEMORIES_KEY,
 	type ChatCompactionRequest,
 	type ContextPromptProvider,
@@ -401,10 +404,12 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 
 		let crossSession: string | undefined;
 		let consistency: string | undefined;
-		if (chat && session !== undefined && speaker !== undefined && remaining > 0) {
+		let styleAvoid: string | undefined;
+		let rhythmNudge: string | undefined;
+		if (chat && session !== undefined) {
 			try {
 				const policy = await this.#policyService.effectivePolicy(session.sessionId);
-				if (policy.memoryEnabled) {
+				if (speaker !== undefined && remaining > 0 && policy.memoryEnabled) {
 					crossSession = await this.#crossSession(
 						database,
 						session,
@@ -417,8 +422,32 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 						consistency = await this.#qaConsistency(session.sessionId, speaker.text, remaining);
 					}
 				}
+				if (policy.humanization.antiRepetitionEnabled || policy.humanization.rhythmVarietyEnabled) {
+					const replyWindow = Math.max(
+						policy.humanization.antiRepetitionWindow,
+						policy.humanization.rhythmWindow,
+					);
+					const botReplies = await this.#recentOutboundReplies(
+						database,
+						session.sessionId,
+						replyWindow,
+					);
+					if (policy.humanization.antiRepetitionEnabled) {
+						const report = detectOverusedPhrases(
+							botReplies.slice(-policy.humanization.antiRepetitionWindow),
+							{ threshold: policy.humanization.antiRepetitionThreshold },
+						);
+						styleAvoid = report.avoidListText;
+					}
+					if (policy.humanization.rhythmVarietyEnabled) {
+						const rhythm = detectRigidRhythm(botReplies, {
+							window: policy.humanization.rhythmWindow,
+						});
+						rhythmNudge = rhythm.nudgeText;
+					}
+				}
 			} catch (error) {
-				this.#logger.warn("cross-session context unavailable", { error: errorMessage(error) });
+				this.#logger.warn("turn enrichment context unavailable", { error: errorMessage(error) });
 			}
 		}
 
@@ -431,6 +460,8 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		push(TURN_MEMORIES_KEY, recalled);
 		push("cross-session", crossSession);
 		push("consistency", consistency);
+		push("style-avoid", styleAvoid);
+		push("rhythm-nudge", rhythmNudge);
 		push("prompt-hooks", hooks);
 		push("cue", cue);
 		this.#logger.debug("rendered turn context", {
@@ -1052,5 +1083,66 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			used += line.length + 1;
 		}
 		return lines.length > 1 ? lines.join("\n") : undefined;
+	}
+
+	async #recentOutboundReplies(
+		database: TsukaimaDatabase,
+		sessionId: string,
+		limit: number,
+	): Promise<string[]> {
+		const rows = await database
+			.select({ contentText: messages.contentText })
+			.from(messages)
+			.where(
+				and(
+					eq(messages.conversationId, sessionId),
+					eq(messages.direction, "outbound"),
+					ne(messages.kind, "tool"),
+				),
+			)
+			.orderBy(desc(messages.occurredAt), desc(messages.id))
+			.limit(Math.max(1, limit));
+		return rows
+			.toReversed()
+			.map((row) => (row.contentText ?? "").trim())
+			.filter((text) => text.length > 0);
+	}
+
+	/**
+	 * Check whether a newly produced assistant reply severely repeats overused catchphrases from
+	 * recent bot replies, for the optional bounded single-retry rewrite guard.
+	 */
+	async checkRepetitionRewrite(
+		durableConversationId: string,
+		replyText: string,
+	): Promise<{ readonly matched: readonly string[]; readonly rewrite: boolean } | undefined> {
+		const database = this.#database();
+		if (database === undefined) return undefined;
+		const session = await this.#resolveSession(database, durableConversationId);
+		if (session === undefined || session.chatKind === "workspace") return undefined;
+		const policy = await this.#policyService.effectivePolicy(session.sessionId);
+		if (!policy.humanization.repetitionRewriteEnabled) return undefined;
+		const replies = await this.#recentOutboundReplies(
+			database,
+			session.sessionId,
+			policy.humanization.antiRepetitionWindow,
+		);
+		const report = detectOverusedPhrases(replies, {
+			threshold: policy.humanization.antiRepetitionThreshold,
+		});
+		// A single phrase at the threshold is worth avoiding next turn, but only severe repetition
+		// (multiple ticks or well above the threshold) justifies a bounded rewrite of the answer.
+		if (!report.severe) return { matched: [], rewrite: false };
+		return needsRepetitionRewrite(replyText, report.phrases);
+	}
+
+	/** Compact one-line persona anchor used by fast-lane busy interjections. */
+	async personaAnchor(durableConversationId: string): Promise<string> {
+		const profile = await this.#personaProfile(durableConversationId).catch(() => undefined);
+		if (profile === undefined) return "You are Tsukaima, replying naturally in character.";
+		const summary = snippet(profile.persona.summary, 140);
+		return summary.length > 0
+			? `You are ${profile.persona.name} (${summary}).`
+			: `You are ${profile.persona.name}; stay in character.`;
 	}
 }

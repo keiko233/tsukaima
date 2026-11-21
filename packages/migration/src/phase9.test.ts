@@ -726,6 +726,16 @@ describe("DSH memory, meme, schedule, and request importers", () => {
 		expect(result.schedulerStates[0]?.inboundCount).toBe(7);
 		expect(result.schedulerStates[0]?.dailyCount).toBe(2);
 		expect(result.schedulerStates[0]?.activeHoursHistogram["10"]).toBe(1);
+		expect(result.socialProfiles[0]).toMatchObject({
+			conversationId: result.schedulerStates[0]?.conversationId,
+			interactions: 7,
+			level: "L0",
+			proactiveToday: 2,
+			refusedCount: 2,
+			unansweredStreak: 1,
+			warm: true,
+		});
+		expect(result.socialProfiles[0]?.activeHours["10"]).toBe(1);
 	});
 
 	test("keeps memory-space ids unique instead of collapsing live spaces", async () => {
@@ -857,6 +867,28 @@ describe("ordered transactional import, verify, and authoritative rollback", () 
 				"      accessToken: SYNTHETIC-IMPORT-SECRET-DO-NOT-LEAK",
 			].join("\n"),
 		);
+		await fs.mkdir(join(source, "workspace/napcat"), { recursive: true });
+		await fs.writeFile(
+			join(source, "workspace/napcat/human-profiles.json"),
+			JSON.stringify({
+				profiles: {
+					group_20001: {
+						activeHours: [9, 11],
+						dayKey: "2026-01-01",
+						interactions: 12,
+						level: 2,
+						otherFirst: 4,
+						proactiveAnswered: 2,
+						proactiveSent: 3,
+						proactiveToday: 1,
+						refusedAt: "2025-12-30T00:00:00.000Z",
+						refusedCount: 1,
+						selfFirst: 3,
+						warm: true,
+					},
+				},
+			}),
+		);
 		const sourcePaths = [[source, "dsh"]] as SnapshotSource;
 		const databasePath = join(root, "domain.sqlite");
 		const pipeline = createPipeline(`sqlite:${databasePath}`, {
@@ -866,6 +898,7 @@ describe("ordered transactional import, verify, and authoritative rollback", () 
 		const plan = await pipeline.dryRun(sourcePaths);
 		expect(JSON.stringify(plan)).not.toContain("SYNTHETIC-IMPORT-SECRET-DO-NOT-LEAK");
 		expect(plan.importOrder[0]).toBe("users");
+		expect(plan.socialProfiles).toBe(1);
 		const first = await pipeline.import(sourcePaths, { dryRunPlan: plan });
 		const second = await pipeline.import(sourcePaths, { dryRunPlan: plan });
 		expect(second.runId).toBe(first.runId);
@@ -882,6 +915,18 @@ describe("ordered transactional import, verify, and authoritative rollback", () 
 		try {
 			const text = JSON.stringify(database.query("SELECT * FROM policies").all());
 			expect(text).not.toContain("SYNTHETIC-IMPORT-SECRET-DO-NOT-LEAK");
+			const profile = database.query("SELECT * FROM social_profiles LIMIT 1").get() as Record<
+				string,
+				unknown
+			> | null;
+			expect(profile).toMatchObject({
+				conversation_id: "dsh_conversation_napcat-group-group_20001",
+				interactions: 12,
+				level: "L2",
+				proactive_today: 1,
+				refused_count: 1,
+				warm: 1,
+			});
 		} finally {
 			database.close();
 		}

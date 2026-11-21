@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type {
+	ProactiveBubbleGateBridge,
+	SocialFamiliarityLevel,
+	SocialProfileBridge,
+} from "@tsukaima/contracts";
+import type {
 	PluginAuditApi,
 	PluginBackgroundTurnResult,
 	PluginConversationSummary,
@@ -47,10 +52,14 @@ const DEFAULT_PROMPT_MAX_CHARS = 4_000;
 
 export interface ProactiveSchedulerServiceOptions {
 	readonly audit?: PluginAuditApi;
+	/** Optional fail-open pre-model proactive bubble gate (`ConversationGatePort`). */
+	readonly conversationGate?: ProactiveBubbleGateBridge;
 	readonly conversations: PluginConversationsApi;
 	readonly database: PluginDatabaseApi;
 	readonly followUps?: PluginFollowUpsApi;
 	readonly schedules?: PluginSchedulesApi;
+	/** Optional per-conversation social familiarity & hard-gate host bridge. */
+	readonly socialProfiles?: SocialProfileBridge;
 	readonly logger: PluginLogger;
 	readonly now?: () => number;
 	readonly promptMaxChars?: number;
@@ -172,9 +181,11 @@ function gateSummary(gates: readonly GateResult[]): string {
  */
 export class ProactiveSchedulerService {
 	readonly #audit: PluginAuditApi | undefined;
+	readonly #conversationGate: ProactiveBubbleGateBridge | undefined;
 	readonly #conversations: PluginConversationsApi;
 	readonly #followUps: PluginFollowUpsApi | undefined;
 	readonly #schedules: PluginSchedulesApi | undefined;
+	readonly #socialProfiles: SocialProfileBridge | undefined;
 	readonly #logger: PluginLogger;
 	readonly #now: () => number;
 	readonly #promptMaxChars: number;
@@ -187,9 +198,11 @@ export class ProactiveSchedulerService {
 
 	constructor(options: ProactiveSchedulerServiceOptions) {
 		this.#audit = options.audit;
+		this.#conversationGate = options.conversationGate;
 		this.#conversations = options.conversations;
 		this.#followUps = options.followUps;
 		this.#schedules = options.schedules;
+		this.#socialProfiles = options.socialProfiles;
 		this.#logger = options.logger.child?.("service") ?? options.logger;
 		this.#now = options.now ?? Date.now;
 		this.#promptMaxChars = options.promptMaxChars ?? DEFAULT_PROMPT_MAX_CHARS;
@@ -808,10 +821,24 @@ export class ProactiveSchedulerService {
 					continue;
 				}
 				candidates += 1;
+				const socialChecked = await this.#applySocialProfile(
+					conversation.id,
+					policy,
+					conversationPolicy,
+					now,
+				);
+				if (socialChecked.blocked) {
+					skipped += 1;
+					this.#logger.trace("tick candidate blocked by social hard gate", {
+						conversationId: conversation.id,
+						reason: socialChecked.reason ?? "social_blocked",
+					});
+					continue;
+				}
 				const candidate: CandidateContext = {
 					conversation,
 					conversationPolicy,
-					policy,
+					policy: socialChecked.policy,
 					state: state ?? emptyState(conversation.id, now),
 				};
 				const evaluation = this.#evaluateGates(candidate, now, false);
@@ -825,8 +852,12 @@ export class ProactiveSchedulerService {
 					continue;
 				}
 				const result = await this.#deliverProactive(
-					{ ...candidate, gatesForRecord: evaluation.gates },
+					{
+						...candidate,
+						gatesForRecord: [...socialChecked.gates, ...evaluation.gates],
+					},
 					now,
+					socialChecked.level,
 				);
 				if (result.delivered) delivered += 1;
 				else skipped += 1;
@@ -878,11 +909,37 @@ export class ProactiveSchedulerService {
 				this.#conversations.getPolicy(conversation.id),
 				this.#repository.getState(conversation.id),
 			]);
+			if (!policy.enabled) {
+				rows.push({
+					conversationId: conversation.id,
+					dryRun: true,
+					eligible: false,
+					gates: [{ gate: "policy", reason: "disabled", status: "blocked" }],
+					reason: "disabled",
+				});
+				continue;
+			}
+			const socialChecked = await this.#applySocialProfile(
+				conversation.id,
+				policy,
+				conversationPolicy,
+				now,
+			);
+			if (socialChecked.blocked) {
+				rows.push({
+					conversationId: conversation.id,
+					dryRun: true,
+					eligible: false,
+					gates: socialChecked.gates,
+					...(socialChecked.reason === undefined ? {} : { reason: socialChecked.reason }),
+				});
+				continue;
+			}
 			const evaluation = this.#evaluateGates(
 				{
 					conversation,
 					conversationPolicy,
-					policy,
+					policy: socialChecked.policy,
 					state: state ?? emptyState(conversation.id, now),
 				},
 				now,
@@ -892,7 +949,7 @@ export class ProactiveSchedulerService {
 				conversationId: conversation.id,
 				dryRun: true,
 				eligible: !evaluation.blocked,
-				gates: evaluation.gates,
+				gates: [...socialChecked.gates, ...evaluation.gates],
 				...(evaluation.reason === undefined ? {} : { reason: evaluation.reason }),
 			});
 		}
@@ -1338,6 +1395,19 @@ export class ProactiveSchedulerService {
 				taskId: task.id,
 			});
 			await this.#repository.saveState(await this.#deliveredState(state, policy, now, result.text));
+			if (
+				(task.kind === "proactive" || task.kind === "nudge") &&
+				(result.text ?? "").trim().length > 0
+			) {
+				await this.#socialProfiles
+					?.recordProactiveOutcome({
+						conversationId: task.conversationId,
+						delivered: true,
+						nowMs: now,
+						timezoneOffsetMinutes: policy.quietHours.timezoneOffsetMinutes,
+					})
+					.catch(() => undefined);
+			}
 		}
 		return {
 			status: delivered
@@ -1351,12 +1421,124 @@ export class ProactiveSchedulerService {
 		};
 	}
 
+	async #applySocialProfile(
+		conversationId: string,
+		policy: ProactivePolicy,
+		conversationPolicy: CandidateContext["conversationPolicy"],
+		nowMs: number,
+	): Promise<{
+		readonly blocked: boolean;
+		readonly gates: readonly GateResult[];
+		readonly level: SocialFamiliarityLevel;
+		readonly policy: ProactivePolicy;
+		readonly reason?: string;
+	}> {
+		if (this.#socialProfiles === undefined || !conversationPolicy.social.enabled) {
+			return { blocked: false, gates: [], level: "L1", policy };
+		}
+		const check = await this.#socialProfiles.checkProactive({
+			adminBudget: {
+				allowProactive: policy.allowProactive,
+				cooldownMs: policy.cooldownMs,
+				dailyCap: policy.dailyCap,
+				enabled: policy.enabled,
+				hourlyCap: policy.hourlyCap,
+				probability: policy.probability,
+			},
+			conversationId,
+			nowMs,
+			quietHoursBlocked: isQuietHours(policy.quietHours, nowMs),
+			timezoneOffsetMinutes: policy.quietHours.timezoneOffsetMinutes,
+		});
+		if (!check.gate.allowed) {
+			return {
+				blocked: true,
+				gates: [
+					{
+						gate: "social_hard_gate",
+						reason: check.gate.reason,
+						status: "blocked",
+						...(check.gate.detail === undefined ? {} : { detail: check.gate.detail }),
+					},
+				],
+				level: check.level,
+				policy,
+				reason: check.gate.reason,
+			};
+		}
+		const cappedPolicy: ProactivePolicy = {
+			...policy,
+			allowProactive: policy.allowProactive && check.budget.bubbleEnabled,
+			cooldownMs: Math.max(policy.cooldownMs, check.budget.cooldownMs),
+			dailyCap: Math.min(policy.dailyCap, check.budget.dailyCap),
+			hourlyCap: Math.min(policy.hourlyCap, check.budget.hourlyCap),
+			probability: Math.min(policy.probability, check.budget.probability),
+		};
+		return {
+			blocked: false,
+			gates: [
+				{
+					detail: `level=${check.level} dailyCap=${cappedPolicy.dailyCap}`,
+					gate: "social_profile",
+					status: "passed",
+				},
+			],
+			level: check.level,
+			policy: cappedPolicy,
+		};
+	}
+
 	async #deliverProactive(
 		candidate: CandidateContext,
 		now: number,
+		level: SocialFamiliarityLevel = "L1",
 	): Promise<PluginBackgroundTurnResult> {
 		const startedAtMs = this.#now();
 		const recent = await this.#conversations.recentMessages(candidate.conversation.id, 8);
+		// Optional fail-open pre-model proactive bubble gate: `SKIP` avoids invoking the main chat
+		// model and never consumes proactive quota.
+		if (
+			this.#conversationGate !== undefined &&
+			candidate.conversationPolicy.gate.enabled &&
+			candidate.conversationPolicy.gate.proactiveBubble
+		) {
+			const lastActivity =
+				candidate.state.lastMessageAtMs ?? candidate.state.lastInboundAtMs ?? now;
+			const gateDecision = await this.#conversationGate.decideProactiveBubble({
+				conversationId: candidate.conversation.id,
+				conversationKind: candidate.conversation.kind,
+				idleMinutes: Math.max(0, (now - lastActivity) / 60_000),
+				level,
+				recentMessages: recent.map((entry) => ({
+					direction: entry.direction,
+					textPreview: entry.textPreview,
+				})),
+			});
+			if (gateDecision.decision === "SKIP") {
+				await this.#recordDecision({
+					conversationId: candidate.conversation.id,
+					deliveryStatus: "skipped",
+					gateResult: "skipped",
+					gates: [
+						...(candidate.gatesForRecord ?? []),
+						{
+							gate: "conversation_gate",
+							reason: gateDecision.reason ?? "gate_skip",
+							status: "blocked",
+						},
+					],
+					kind: "tick",
+					marker: null,
+					skippedReason: gateDecision.reason ?? "gate_skip",
+					taskId: null,
+				});
+				return {
+					delivered: false,
+					deliveryStatus: "skipped",
+					skippedReason: gateDecision.reason ?? "gate_skip",
+				};
+			}
+		}
 		const prompt =
 			"You are initiating a short, natural follow-up in this conversation. Keep it brief and relevant.";
 		this.#logger.trace("proactive turn submitting", {
@@ -1483,6 +1665,17 @@ export class ProactiveSchedulerService {
 			await this.#repository.saveState(
 				await this.#deliveredState(candidate.state, candidate.policy, now, result.text),
 			);
+			// Consume social proactive quota ONLY when outbound content was actually delivered.
+			if ((result.text ?? "").trim().length > 0) {
+				await this.#socialProfiles
+					?.recordProactiveOutcome({
+						conversationId: candidate.conversation.id,
+						delivered: true,
+						nowMs: now,
+						timezoneOffsetMinutes: candidate.policy.quietHours.timezoneOffsetMinutes,
+					})
+					.catch(() => undefined);
+			}
 		} else {
 			this.#logger.debug("proactive turn not delivered", {
 				conversationId: candidate.conversation.id,

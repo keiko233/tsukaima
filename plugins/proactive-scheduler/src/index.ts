@@ -1,4 +1,10 @@
 import { fileURLToPath } from "node:url";
+import {
+	CONVERSATION_GATE_BINDING,
+	SOCIAL_PROFILE_BINDING,
+	type ProactiveBubbleGateBridge,
+	type SocialProfileBridge,
+} from "@tsukaima/contracts";
 import type { TsukaimaPlugin, PluginContext } from "@tsukaima/sdk";
 import {
 	PROACTIVE_SCHEDULER_RUN_KIND,
@@ -101,13 +107,18 @@ export const proactiveSchedulerPlugin: TsukaimaPlugin = {
 			typeof config.maxPromptChars === "number" && Number.isFinite(config.maxPromptChars)
 				? config.maxPromptChars
 				: undefined;
+		const socialProfiles = context.dependencies?.get<SocialProfileBridge>(SOCIAL_PROFILE_BINDING);
+		const conversationGate =
+			context.dependencies?.get<ProactiveBubbleGateBridge>(CONVERSATION_GATE_BINDING);
 		const service = new ProactiveSchedulerService({
 			...(context.audit === undefined ? {} : { audit: context.audit }),
+			...(conversationGate === undefined ? {} : { conversationGate }),
 			conversations,
 			database,
 			followUps,
 			logger: context.logger,
 			...(maxPromptChars === undefined ? {} : { promptMaxChars: maxPromptChars }),
+			...(socialProfiles === undefined ? {} : { socialProfiles }),
 			...(tickIntervalMs === undefined ? {} : { tickIntervalMs }),
 			...(schedules === undefined ? {} : { schedules }),
 			tasks,
