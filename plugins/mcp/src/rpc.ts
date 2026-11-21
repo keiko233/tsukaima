@@ -5,7 +5,6 @@ import {
 	mcpServerUpdateSchema,
 } from "@tsukaima/contracts";
 import type { PluginContext, PluginRpcHandler } from "@tsukaima/sdk";
-import { MCP_RPC_PREFIX } from "./manifest.ts";
 import type { McpManager } from "./service.ts";
 
 export interface McpRpcOptions {
@@ -19,7 +18,7 @@ export function registerMcpRpc(
 	options: McpRpcOptions = {},
 ): void {
 	const register = (method: string, handler: PluginRpcHandler): void => {
-		context.rpc.register(`${MCP_RPC_PREFIX}${method}`, handler);
+		context.rpc.register(method, handler);
 	};
 	const changed = async <T>(operation: () => Promise<T>): Promise<T> => {
 		const result = await operation();

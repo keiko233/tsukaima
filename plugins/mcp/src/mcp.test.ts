@@ -17,11 +17,12 @@ function makeContext(storage = new LocalStorageBridge()): PluginContext {
 }
 
 function rpc(context: PluginContext, method: string, input?: unknown): Promise<unknown> {
+	const shortName = method.startsWith("mcp.") ? method.slice(4) : method;
 	return (
 		context.rpc as unknown as {
 			invoke(method: string, input?: unknown): Promise<unknown>;
 		}
-	).invoke(method, input);
+	).invoke(shortName, input);
 }
 
 function parseSnapshot(value: unknown): McpServerSnapshot {
