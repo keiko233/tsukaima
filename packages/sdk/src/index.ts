@@ -123,6 +123,7 @@ export type {
 	PluginAuditApi,
 	PluginChannelRegistry,
 	PluginOutboundApi,
+	PluginOutboundConversationSendInput,
 	PluginOutboundInteractionInput,
 	PluginOutboundSendInput,
 	PluginDependencyBag,

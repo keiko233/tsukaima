@@ -191,6 +191,16 @@ export interface PluginOutboundSendInput {
 }
 
 /**
+ * Immediate outbound send addressed by durable conversation instead of a platform target. The
+ * host resolves the session, so the same call works for external channels and WebUI chats.
+ */
+export interface PluginOutboundConversationSendInput {
+	readonly conversationId: string;
+	readonly parts: readonly MessagePart[];
+	readonly options?: SendOptions;
+}
+
+/**
  * A platform interaction that is not a message, for example a poke. The plugin performs the
  * platform call; the host only needs the summary so the interaction stays in durable history.
  */
@@ -208,6 +218,11 @@ export interface PluginOutboundInteractionInput {
  */
 export interface PluginOutboundApi {
 	send(input: PluginOutboundSendInput): Promise<SendResult>;
+	/**
+	 * Send immediately to a durable conversation, ordered on that conversation's outbound lane.
+	 * External chats go over their channel; WebUI sessions are persisted and pushed live.
+	 */
+	sendToConversation(input: PluginOutboundConversationSendInput): Promise<SendResult>;
 	recordInteraction(input: PluginOutboundInteractionInput): Promise<void>;
 }
 

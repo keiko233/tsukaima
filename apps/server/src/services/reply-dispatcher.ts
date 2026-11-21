@@ -501,6 +501,24 @@ export class ReplyDispatcher {
 	}
 
 	/**
+	 * Run a host-owned immediate send on the same per-conversation lane as replies and narrations.
+	 * Unlike a dispatcher delivery, an explicit plugin send is not dropped by a lane cancellation:
+	 * it keeps its slot and ordering, because the plugin already decided to speak.
+	 */
+	runOnOutboundLane<T>(conversationId: string, task: () => Promise<T>): Promise<T> {
+		const previous = this.#outboundLanes.get(conversationId) ?? Promise.resolve();
+		const run = previous.catch(() => undefined).then(task);
+		const tail = run.catch(() => undefined);
+		this.#outboundLanes.set(conversationId, tail);
+		void tail.then(() => {
+			if (this.#outboundLanes.get(conversationId) === tail) {
+				this.#outboundLanes.delete(conversationId);
+			}
+		});
+		return run;
+	}
+
+	/**
 	 * Record text a tool already posted to this conversation's chat during the current turn, so
 	 * a final answer that only repeats it is not sent a second time. `OutboundService` calls this
 	 * after a successful channel send; a later tool round also stops narrating a preamble.

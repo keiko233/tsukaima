@@ -463,6 +463,8 @@ export class TsukaimaLifecycle {
 				// send suppresses a later preamble or a repeated final reply.
 				this.replyDispatcher.noteDirectSendParts(sent.durableConversationId, sent.parts);
 			},
+			runOnOutboundLane: (durableConversationId, task) =>
+				this.replyDispatcher.runOnOutboundLane(durableConversationId, task),
 			router: () => this.conversationRouter,
 		});
 		this.contextProvider = new DrizzleContextProvider({
