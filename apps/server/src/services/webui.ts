@@ -526,15 +526,21 @@ export async function abortSessionRun(
 	const host = lifecycle.conversationHost;
 	if (host === undefined) throw new Error("Conversation host is not ready");
 	const [session] = await database
-		.select({ durableConversationId: conversations.durableConversationId })
+		.select({
+			chatKind: chatObjects.kind,
+			durableConversationId: conversations.durableConversationId,
+		})
 		.from(conversations)
+		.innerJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
 		.where(eq(conversations.id, sessionId))
 		.limit(1);
 	if (session === undefined) throw new Error("Session not found");
-	const cancelledPendingOutput = lifecycle.replyDispatcher.cancelPendingOutput(
-		session.durableConversationId,
-	);
-	await host.abortConversation(session.durableConversationId);
+	const workspaceAborted =
+		session.chatKind === "workspace" ? await lifecycle.workspaceNative.abort(sessionId) : false;
+	const cancelledPendingOutput = workspaceAborted
+		? false
+		: lifecycle.replyDispatcher.cancelPendingOutput(session.durableConversationId);
+	if (!workspaceAborted) await host.abortConversation(session.durableConversationId);
 	await lifecycle.writeAudit({
 		action: "session.abort",
 		actorKind: "user",

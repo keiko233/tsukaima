@@ -387,6 +387,19 @@ export class WorkspaceService {
 	 * Prompt context for the turn that starts a draft. It carries the task contract without
 	 * becoming a second user message in the transcript.
 	 */
+	/** Start the task and record references, returning only bounded per-turn reference context. */
+	async prepareNativeTurn(
+		sessionId: string,
+		input: StartWorkspaceTaskInput,
+	): Promise<{ readonly context: string | undefined; readonly taskId: string }> {
+		const taskId = await this.startTask(sessionId, input);
+		if (input.references !== undefined && input.references.length > 0) {
+			await this.#references.record(sessionId, input.references);
+		}
+		const context = await this.#references.render(sessionId, input.references ?? []);
+		return { context, taskId };
+	}
+
 	async prepareTurn(
 		sessionId: string,
 		input: StartWorkspaceTaskInput,

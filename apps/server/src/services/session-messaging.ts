@@ -10,10 +10,18 @@ import type { PromptHook, PromptHookService } from "./prompt-hooks.ts";
 type ChatKind = "private" | "group" | "webui" | "workspace" | "task" | "plugin";
 
 export interface SessionMessagingOptions {
+	readonly abortWorkspace?: (sessionId: string) => Promise<boolean>;
 	readonly applyToolPolicy?: (sessionId: string, durableConversationId: string) => Promise<void>;
 	readonly audit?: (entry: AuditEntry) => Promise<void> | void;
 	readonly cancelPendingOutput?: (durableConversationId: string) => boolean;
 	readonly database: () => TsukaimaDatabase | undefined;
+	readonly dispatchWorkspace?: (input: {
+		readonly context?: string | undefined;
+		readonly deliveryMode: MessageDeliveryMode;
+		readonly messageId: string;
+		readonly sessionId: string;
+		readonly text: string;
+	}) => Promise<void>;
 	readonly host: () => PiDurableConversationHost | undefined;
 	readonly logger: Logger;
 	readonly hooks: PromptHookService;
@@ -80,10 +88,12 @@ function whenBusy(mode: MessageDeliveryMode): "steer" | "follow-up" {
  * both surfaces get identical semantics and persistence.
  */
 export class SessionMessagingService {
+	readonly #abortWorkspace: SessionMessagingOptions["abortWorkspace"];
 	readonly #applyToolPolicy: SessionMessagingOptions["applyToolPolicy"];
 	readonly #audit: SessionMessagingOptions["audit"];
 	readonly #cancelPendingOutput: SessionMessagingOptions["cancelPendingOutput"];
 	readonly #database: SessionMessagingOptions["database"];
+	readonly #dispatchWorkspace: SessionMessagingOptions["dispatchWorkspace"];
 	readonly #hooks: PromptHookService;
 	readonly #host: SessionMessagingOptions["host"];
 	readonly #logger: Logger;
@@ -92,10 +102,12 @@ export class SessionMessagingService {
 	readonly #prepareTurn: SessionMessagingOptions["prepareTurn"];
 
 	constructor(options: SessionMessagingOptions) {
+		this.#abortWorkspace = options.abortWorkspace;
 		this.#applyToolPolicy = options.applyToolPolicy;
 		this.#audit = options.audit;
 		this.#cancelPendingOutput = options.cancelPendingOutput;
 		this.#database = options.database;
+		this.#dispatchWorkspace = options.dispatchWorkspace;
 		this.#hooks = options.hooks;
 		this.#host = options.host;
 		this.#logger = options.logger.child("tsukaima::server::session-messaging");
@@ -195,8 +207,11 @@ export class SessionMessagingService {
 		const parts: MessagePart[] = [{ text, type: "text" }];
 
 		if (deliveryMode === "interrupt") {
-			this.#cancelPendingOutput?.(session.durableConversationId);
-			await host.abortConversation(session.durableConversationId);
+			const workspaceAborted = (await this.#abortWorkspace?.(session.id)) === true;
+			if (!workspaceAborted) {
+				this.#cancelPendingOutput?.(session.durableConversationId);
+				await host.abortConversation(session.durableConversationId);
+			}
 		}
 		const preparedContext = await this.#prepareTurn?.(session.id, {
 			...(input.references === undefined ? {} : { references: input.references }),
@@ -262,32 +277,45 @@ export class SessionMessagingService {
 				.where(eq(messages.id, id));
 		}
 		try {
-			await host.append({
-				conversationId: session.durableConversationId,
-				envelope: {
-					channelId: "webui",
-					channelKind: "webui",
-					conversationKey: { kind: "webui" },
-					id,
-					mentions: [],
-					parts,
-					sender: {
-						displayName: senderName,
-						id: senderExternalId,
-						isBot: direction === "system",
-						platformId: senderExternalId,
+			if (chat.kind === "workspace" && this.#dispatchWorkspace !== undefined) {
+				const workspaceContext = [attachedContext, hookContext ?? ""]
+					.filter((entry) => entry.trim().length > 0)
+					.join("\n\n");
+				await this.#dispatchWorkspace({
+					...(workspaceContext.length === 0 ? {} : { context: workspaceContext }),
+					deliveryMode,
+					messageId: id,
+					sessionId: session.id,
+					text,
+				});
+			} else {
+				await host.append({
+					conversationId: session.durableConversationId,
+					envelope: {
+						channelId: "webui",
+						channelKind: "webui",
+						conversationKey: { kind: "webui" },
+						id,
+						mentions: [],
+						parts,
+						sender: {
+							displayName: senderName,
+							id: senderExternalId,
+							isBot: direction === "system",
+							platformId: senderExternalId,
+						},
+						source: { messageId: id, receivedAtMs: Date.now(), timestampMs: Date.now() },
 					},
-					source: { messageId: id, receivedAtMs: Date.now(), timestampMs: Date.now() },
-				},
-				forceSubmit: true,
-				...(input.requestId === undefined ? {} : { requestId: input.requestId }),
-				submittedAtMs: Date.now(),
-				...(attachedContext.length === 0 ? {} : { attachedContext }),
-				...(hookContext === undefined || hookContext.trim().length === 0
-					? {}
-					: { turnContext: { classification: "direct" as const, promptHooks: hookContext } }),
-				whenBusy: whenBusy(deliveryMode),
-			});
+					forceSubmit: true,
+					...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+					submittedAtMs: Date.now(),
+					...(attachedContext.length === 0 ? {} : { attachedContext }),
+					...(hookContext === undefined || hookContext.trim().length === 0
+						? {}
+						: { turnContext: { classification: "direct" as const, promptHooks: hookContext } }),
+					whenBusy: whenBusy(deliveryMode),
+				});
+			}
 			await database
 				.update(messages)
 				.set({ deliveryStatus: "accepted", updatedAt: new Date().toISOString() })

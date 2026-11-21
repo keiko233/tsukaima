@@ -25,6 +25,7 @@ import {
 	DomainCodingStore,
 	reconcileRestartDeployment,
 	SELF_ITERATION_HOST_BINDING,
+	WorktreeManager,
 	type DeploymentApplicationVerification,
 	type DeploymentIdentity,
 	type DeploymentProposal,
@@ -161,6 +162,12 @@ import {
 	createWorkspaceToolsExtension,
 } from "./services/workspace-tools.ts";
 import { WorkspaceService } from "./services/workspace.ts";
+import {
+	createPiModelRuntime,
+	isWorkspaceWorktreeCheckout,
+	WORKSPACE_NATIVE_TASK_CONSTRAINTS,
+	WorkspaceNativeRunner,
+} from "./services/workspace-native-runner.ts";
 
 /**
  * Minimum spacing between logged failures for one channel stage and conversation. Detached
@@ -265,6 +272,8 @@ export class TsukaimaLifecycle {
 	readonly upgrades: UpgradeService;
 	readonly workspace: WorkspaceService;
 	readonly workspaceTodos: WorkspaceTodoService;
+	readonly workspaceNative: WorkspaceNativeRunner;
+	private readonly workspaceWorktrees = new Map<string, WorktreeManager>();
 	private currentState: LifecycleState["state"] = "starting";
 	private currentStage = "initialize";
 	private failureReason: string | undefined;
@@ -630,7 +639,100 @@ export class TsukaimaLifecycle {
 				.limit(1);
 			return row?.id;
 		};
+		const workspaceWorktreeRoot = join(config.dataDir, "worktrees");
+		const workspaceSandbox = {
+			repositoryPath: config.repositoryRoot,
+			worktreeRoot: workspaceWorktreeRoot,
+		};
+		const workspaceSandboxProvider =
+			config.codingSandbox === "bubblewrap"
+				? createBubblewrapSandbox(workspaceSandbox)
+				: createHostSandbox(workspaceSandbox);
+		this.workspaceNative = new WorkspaceNativeRunner({
+			agentDirRoot: join(config.dataDir, "workspace-agents"),
+			audit: (entry) => this.writeAudit(entry),
+			database: () => this.domainDatabase,
+			emitAfterReply: (payload) => this.hooks.emitDetached("after.reply", payload),
+			finalizeLiveRun: async (sessionId, entryId) => {
+				await this.liveRuns.finalizeAnswer(sessionId, entryId);
+			},
+			ensureWorktree: async (taskId) => await this.ensureWorkspaceWorktree(taskId),
+			executor: async () => await workspaceSandboxProvider(),
+			gitIdentity: () => readGitIdentity(this.domainDatabase),
+			logger: this.runtimeLog,
+			onLiveRun: (sessionId, durableConversationId, snapshot) => {
+				this.hooks.emitDetached("agent.activity", {
+					...snapshot,
+					conversationId: durableConversationId,
+				});
+				void this.liveRuns.record(sessionId, snapshot).catch((error: unknown) => {
+					this.runtimeLog.warn("failed to store workspace live run state", {
+						error: error instanceof Error ? error.message : String(error),
+						sessionId,
+					});
+				});
+			},
+			// Optional legacy proposal/deployment tools. Native workspace coding, task creation,
+			// and worktree provisioning do not depend on the self-iteration plugin.
+			pluginTools: async (sessionId) => {
+				const policy = await this.conversationPolicy.effectivePolicy(sessionId);
+				if (!policy.capabilities.includes("coding")) return [];
+				return this.pluginHost
+					.tools()
+					.filter((tool) => tool.name.startsWith("self-iteration."))
+					.map((tool) => ({
+						description: tool.description,
+						execute: async (input, context) => {
+							const result = await this.pluginHost.invokeTool(tool.name, input, {
+								chatKind: "workspace",
+								conversationCapabilities: ["coding"],
+								conversationId: context.conversationId,
+								role: "workspace",
+								taskKind: "coding",
+							});
+							if (!result.ok) {
+								throw new Error(
+									"message" in result && result.message !== undefined
+										? result.message
+										: result.reason,
+								);
+							}
+							return { content: [...result.result.content] };
+						},
+						name: tool.name,
+						parameters: tool.parameters,
+					}));
+			},
+			references: workspaceReferences,
+			resolveAgentSettings: async (sessionId) => {
+				const settings = await this.conversationPolicy.agentSettingsForConversation(sessionId);
+				if (settings.model !== null) return settings;
+				const model = this.conversationHost?.defaultModelRef;
+				return model === undefined ? settings : { ...settings, model };
+			},
+			resolveModel: async (ref) => {
+				const port = await this.workspaceModelPort(ref.providerId);
+				return await createPiModelRuntime(port, ref);
+			},
+			repositoryRoot: config.repositoryRoot,
+			sessionDirRoot: join(config.dataDir, "workspace-sessions"),
+			sql: workspaceSql,
+			taskPrompt: (input) =>
+				[
+					"You are the dedicated Tsukaima workspace coding agent.",
+					`Repository root: ${input.repositoryRoot}`,
+					`Coding task id: ${input.taskId}`,
+					`Base revision: ${input.baseRef}`,
+					`Task goal: ${input.goal ?? "(the current user request)"}`,
+					"Work only inside this task worktree. Never commit, push, deploy, restart, inspect host secrets, or edit the live repository. Those actions stay server-side.",
+					"Use the native read/edit/write tools for repository changes. Shell execution, when offered, is allowlisted and runs in a disposable snapshot.",
+					"Keep the workspace todo list current and report the task id, tests, changed files, and blockers.",
+				].join("\n"),
+			todos: this.workspaceTodos,
+			worktreeRoot: workspaceWorktreeRoot,
+		});
 		this.sessionMessaging = new SessionMessagingService({
+			abortWorkspace: async (sessionId) => await this.workspaceNative.abort(sessionId),
 			applyToolPolicy: async (sessionId, durableConversationId) => {
 				const policy = await this.conversationPolicy.effectivePolicy(sessionId);
 				await this.applySessionToolPolicy(durableConversationId, policy);
@@ -639,6 +741,7 @@ export class TsukaimaLifecycle {
 			cancelPendingOutput: (durableConversationId) =>
 				this.replyDispatcher.cancelPendingOutput(durableConversationId),
 			database: () => this.domainDatabase,
+			dispatchWorkspace: async (input) => await this.workspaceNative.dispatch(input),
 			hooks: this.promptHooks,
 			host: () => this.conversationHost,
 			logger: this.runtimeLog,
@@ -651,7 +754,7 @@ export class TsukaimaLifecycle {
 					.where(eq(workspaceSessions.id, sessionId))
 					.limit(1);
 				if (row === undefined) return undefined;
-				const { context } = await this.workspace.prepareTurn(sessionId, {
+				const { context } = await this.workspace.prepareNativeTurn(sessionId, {
 					goal: input.text,
 					...(input.references === undefined ? {} : { references: input.references }),
 				});
@@ -707,18 +810,7 @@ export class TsukaimaLifecycle {
 				await this.applySessionToolPolicy(durableConversationId, policy);
 			},
 			audit: (entry) => this.writeAudit(entry),
-			createTask: async (input) => {
-				const task = await this.pluginHost.invokeRpc("self-iteration.tasks.create", input);
-				if (
-					typeof task === "object" &&
-					task !== null &&
-					"id" in task &&
-					typeof task.id === "string"
-				) {
-					return task.id;
-				}
-				throw new Error("Self-iteration task creation returned no task id");
-			},
+			createTask: async (input) => await this.createWorkspaceTask(input),
 			database: () => this.domainDatabase,
 			host: () => this.conversationHost,
 			logger: this.runtimeLog,
@@ -1340,6 +1432,111 @@ export class TsukaimaLifecycle {
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}
+	}
+
+	/** Workspace task creation owns its durable task row; no plugin RPC is on this path. */
+	private async createWorkspaceTask(input: {
+		readonly baseRef: string;
+		readonly goal: string;
+		readonly sourceConversationId: string;
+	}): Promise<string> {
+		const constraints = {
+			allowedCommands: [...WORKSPACE_NATIVE_TASK_CONSTRAINTS.allowedCommands],
+			maxOutputBytes: WORKSPACE_NATIVE_TASK_CONSTRAINTS.maxOutputBytes,
+			pathAllowlist: [...WORKSPACE_NATIVE_TASK_CONSTRAINTS.pathAllowlist],
+			timeoutMs: WORKSPACE_NATIVE_TASK_CONSTRAINTS.timeoutMs,
+		};
+		const task = await this.codingStore.createTask({
+			baseRef: input.baseRef,
+			constraints,
+			goal: input.goal,
+			mode: "maintenance",
+			sourceConversationId: input.sourceConversationId,
+		});
+		await this.writeAudit({
+			action: "workspace.task.create",
+			actorId: input.sourceConversationId,
+			actorKind: "agent",
+			payload: { baseRef: input.baseRef, goal: input.goal, mode: task.mode },
+			result: "ok",
+			targetId: task.id,
+			targetKind: "coding-task",
+		});
+		return task.id;
+	}
+
+	private async ensureWorkspaceWorktree(taskId: string): Promise<{
+		readonly path: string;
+		readonly baseRef: string;
+		readonly constraints: {
+			readonly allowedCommands: readonly string[];
+			readonly pathAllowlist: readonly string[];
+			readonly maxOutputBytes?: number;
+			readonly timeoutMs?: number;
+		};
+	}> {
+		const task = await this.codingStore.getTask(taskId);
+		if (task === null) throw new Error("workspace_task_not_found");
+		const manager =
+			this.workspaceWorktrees.get(task.id) ??
+			new WorktreeManager({
+				pathAllowlist: task.constraints.pathAllowlist,
+				repositoryPath: this.config.repositoryRoot,
+				worktreeRoot: join(this.config.dataDir, "worktrees"),
+			});
+		this.workspaceWorktrees.set(task.id, manager);
+		const path = task.worktreePath ?? manager.pathFor(task.id);
+		const checkoutExists = await isWorkspaceWorktreeCheckout(path);
+		if (!checkoutExists) {
+			await manager.create(task.id, task.baseRef);
+		}
+		if (task.worktreePath === undefined || !checkoutExists) {
+			const latest = (await this.codingStore.getTask(task.id)) ?? task;
+			await this.codingStore.updateTask(task.id, {
+				timeline: [
+					...latest.timeline,
+					{
+						atMs: Date.now(),
+						detail: path,
+						outcome: "success" as const,
+						tool: "workspace.native.worktree",
+					},
+				],
+				status: "in_progress",
+				worktreePath: path,
+			});
+		}
+		return { baseRef: task.baseRef, constraints: task.constraints, path };
+	}
+
+	private async workspaceModelPort(providerId: string): Promise<ModelPort> {
+		if (this.modelOverride?.providerId === providerId) return this.modelOverride;
+		const provider = this.pluginHost.modelProvider(providerId);
+		if (provider !== undefined) {
+			try {
+				if ((await provider.isConfigured?.()) !== false) {
+					return (await provider.createPort({
+						onMessage: (message) => {
+							this.modelUsageLedger.record(
+								message as Parameters<typeof this.modelUsageLedger.record>[0],
+								"basic-chat",
+							);
+						},
+					})) as ModelPort;
+				}
+			} catch (error) {
+				this.runtimeLog.warn("workspace model provider unavailable; using host fallback", {
+					error: error instanceof Error ? error.message : String(error),
+					providerId,
+				});
+			}
+		}
+		if (this.modelOverride !== undefined) return this.modelOverride;
+		return createFakeModel({
+			onMessage: (message) => {
+				this.modelUsageLedger.record(message, "basic-chat");
+			},
+		});
 	}
 
 	private transition(stage: string, state: LifecycleState["state"] = "starting"): void {
@@ -2357,6 +2554,7 @@ export class TsukaimaLifecycle {
 		this.pluginTasks.stop();
 		this.schedules.stop();
 		this.replyDispatcher.stopPendingReconciliation();
+		await this.workspaceNative.dispose();
 		await this.pluginHost.stop();
 		await this.conversationHost?.close();
 		await this.liveRuns.close();
