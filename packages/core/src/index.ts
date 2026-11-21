@@ -58,6 +58,7 @@ export {
 	type DurableConversationHostOptions,
 	type InspectConversationContextOptions,
 	type LiveRunSnapshot,
+	type SeedConversationBaselineResult,
 } from "./conversation-host.ts";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 export type { Extension as DurableExtension } from "@earendil-works/pi-durable";
@@ -84,6 +85,8 @@ export {
 	collectRunInputs,
 	collectRunTriggers,
 	createContextExtension,
+	fallbackBaselineSummary,
+	formatCompactionSummary,
 	injectTurnContext,
 	previousCompactionSummary,
 	renderTurnContextBlock,

@@ -421,4 +421,44 @@ describe("WebUI chat and session service", () => {
 			await lifecycle.stop();
 		}
 	});
+
+	test("seeds baseline context and inherits policy when opening a new session under an existing chat", async () => {
+		const lifecycle = await createLifecycle();
+		try {
+			const chat = await createLocalChat(lifecycle, {
+				sessionTitle: "Day 1",
+				title: "Baseline chat",
+			});
+			await sendMessage(lifecycle, {
+				sessionId: chat.sessionId,
+				target: "tsukaima",
+				text: "Remember that we agreed to meet on Friday.",
+			});
+			await waitFor(async () => {
+				const rows = await listMessages(lifecycle, chat.sessionId);
+				return rows.some((message) => message.senderKind === "assistant") ? rows : undefined;
+			});
+
+			const currentPolicy = await lifecycle.conversationPolicy.effectivePolicy(chat.sessionId);
+			await lifecycle.conversationPolicy.update({
+				conversationId: chat.sessionId,
+				policy: {
+					...currentPolicy,
+					trigger: { ...currentPolicy.trigger, keywords: ["friday-check"] },
+				},
+				scope: "conversation",
+			});
+
+			const nextSession = await createSession(lifecycle, chat.chatId, "Day 2");
+			const nextStats = await getSessionContextStats(lifecycle, nextSession.id);
+			expect(nextStats).not.toBeNull();
+			expect(nextStats!.messageCount).toBe(1);
+			expect(nextStats!.categories.messagesTokens).toBeGreaterThan(0);
+
+			const inheritedPolicy = await lifecycle.conversationPolicy.effectivePolicy(nextSession.id);
+			expect(inheritedPolicy.trigger.keywords).toEqual(["friday-check"]);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
 });

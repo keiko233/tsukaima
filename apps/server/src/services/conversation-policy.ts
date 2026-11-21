@@ -345,6 +345,34 @@ export class ConversationPolicyService {
 	}
 
 	/**
+	 * Copy an active conversation-scoped policy override to a newly opened session under the same
+	 * chat so per-chat settings survive daily rollover or manual session creation.
+	 */
+	async inheritConversationPolicy(
+		sourceConversationId: string,
+		targetConversationId: string,
+	): Promise<boolean> {
+		if (sourceConversationId === targetConversationId) return false;
+		const source = await this.conversationRevision(sourceConversationId);
+		if (source === undefined) return false;
+		const existing = await this.conversationRevision(targetConversationId);
+		if (existing !== undefined) return false;
+		const now = nowIso();
+		await this.#db()
+			.insert(policies)
+			.values({
+				conversationId: targetConversationId,
+				createdAt: now,
+				id: randomUUID(),
+				isActive: 1,
+				policyJson: JSON.stringify(source.policy),
+				scope: "conversation",
+				updatedAt: now,
+			});
+		return true;
+	}
+
+	/**
 	 * Agent model and effort for one conversation. A conversation override wins, then the
 	 * matching runtime default (workspace vs. chat), then the active provider's default.
 	 * `null` deliberately resets the durable agent setting to that final fallback.

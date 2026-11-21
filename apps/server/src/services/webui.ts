@@ -581,7 +581,20 @@ export async function createSession(
 		.limit(1);
 	if (chat === undefined) throw new Error("Chat object not found");
 	if (chat.status !== "active") throw new Error("Chat object is archived");
+	const [previous] = await database
+		.select({
+			durableConversationId: conversations.durableConversationId,
+			id: conversations.id,
+		})
+		.from(conversations)
+		.where(and(eq(conversations.chatObjectId, chat.id), eq(conversations.status, "active")))
+		.orderBy(desc(conversations.isReceiving), desc(conversations.updatedAt))
+		.limit(1);
 	const durableConversationId = await host.createConversation();
+	const baseline =
+		previous === undefined
+			? { method: "none" as const, seeded: false, summaryChars: 0 }
+			: await host.seedConversationBaseline(durableConversationId, previous.durableConversationId);
 	const id = randomUUID();
 	const now = new Date().toISOString();
 	await database.insert(conversations).values({
@@ -596,10 +609,18 @@ export async function createSession(
 		title: title.trim(),
 		updatedAt: now,
 	});
+	if (previous !== undefined) {
+		await lifecycle.conversationPolicy.inheritConversationPolicy(previous.id, id);
+	}
 	await database.update(chatObjects).set({ updatedAt: now }).where(eq(chatObjects.id, chat.id));
 	await lifecycle.writeAudit({
 		action: "session.create",
-		payload: { chatObjectId },
+		payload: {
+			baselineMethod: baseline.method,
+			baselineSeeded: baseline.seeded,
+			chatObjectId,
+			...(previous === undefined ? {} : { previousSessionId: previous.id }),
+		},
 		result: "ok",
 		targetId: id,
 		targetKind: "session",
