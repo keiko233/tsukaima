@@ -29,6 +29,13 @@ export interface RunnerConfig {
 	readonly writable?: boolean;
 }
 
+export interface ExecOptions {
+	/** Aborting kills the command's whole process group, the same way a timeout does. */
+	readonly signal?: AbortSignal;
+	/** Per-call timeout; defaults to the runner's configured timeout. */
+	readonly timeoutMs?: number;
+}
+
 export interface CommandResult {
 	readonly args: readonly string[];
 	/** True when an abort signal stopped the command; the process tree was killed. */
@@ -62,13 +69,18 @@ export class CodingRunner {
 		return this.#config.worktreePath;
 	}
 
-	async exec(command: string, args: readonly string[] = []): Promise<CommandResult> {
+	async exec(
+		command: string,
+		args: readonly string[] = [],
+		options: ExecOptions = {},
+	): Promise<CommandResult> {
 		if (command.includes("/") || command.includes("\\")) {
 			throw new CommandRejectedError(command);
 		}
 		if (!this.#config.allowedCommands.includes(command)) {
 			throw new CommandRejectedError(command);
 		}
+		const timeoutMs = options.timeoutMs ?? this.#config.timeoutMs;
 
 		if (this.#config.executor !== undefined) {
 			const executor = await this.#config.executor();
@@ -78,7 +90,8 @@ export class CodingRunner {
 				cwd: this.#config.worktreePath,
 				...(this.#config.env === undefined ? {} : { env: this.#config.env }),
 				maxOutputBytes: this.#config.maxOutputBytes,
-				timeoutMs: this.#config.timeoutMs,
+				...(options.signal === undefined ? {} : { signal: options.signal }),
+				timeoutMs,
 				writable: this.#config.writable ?? false,
 			});
 		}
@@ -89,7 +102,8 @@ export class CodingRunner {
 			cwd: this.#config.worktreePath,
 			env: this.#config.env ?? SCRUBBED_COMMAND_ENV,
 			maxOutputBytes: this.#config.maxOutputBytes,
-			timeoutMs: this.#config.timeoutMs,
+			...(options.signal === undefined ? {} : { signal: options.signal }),
+			timeoutMs,
 		});
 	}
 }

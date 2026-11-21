@@ -29,7 +29,7 @@ export type {
 
 export { CodingRunner, CommandRejectedError } from "./runner.ts";
 export { runManagedProcess, SCRUBBED_COMMAND_ENV } from "./runner.ts";
-export type { CommandResult, ManagedProcessOptions, RunnerConfig } from "./runner.ts";
+export type { CommandResult, ExecOptions, ManagedProcessOptions, RunnerConfig } from "./runner.ts";
 
 export {
 	ANALYSIS_MOUNT,
@@ -147,3 +147,24 @@ export type {
 } from "./reload.ts";
 
 export { DomainCodingStore } from "./domain-store.ts";
+
+export {
+	createPiWorkspaceRunner,
+	GOVERNED_SHELL_MAX_COMMAND_LENGTH,
+	GovernedShellError,
+	parseGovernedShellCommand,
+	PiWorkspaceRunner,
+	PiWorkspaceRunnerError,
+	PI_WORKSPACE_DEFAULT_MAX_FILE_BYTES,
+	PI_WORKSPACE_DEFAULT_MAX_OUTPUT_BYTES,
+	PI_WORKSPACE_DEFAULT_MAX_WRITE_BYTES,
+	PI_WORKSPACE_DEFAULT_TIMEOUT_MS,
+} from "./pi-workspace-runner.ts";
+export type {
+	GovernedShellCommand,
+	PiWorkspaceNativeToolName,
+	PiWorkspaceRunOptions,
+	PiWorkspaceRunResult,
+	PiWorkspaceRunnerConfig,
+	PiWorkspaceRunnerErrorCode,
+} from "./pi-workspace-runner.ts";
