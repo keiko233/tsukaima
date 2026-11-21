@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import {
@@ -186,11 +187,55 @@ function sseFetchWithHeaders(headers: Record<string, string>) {
 		fetch(input, { ...init, headers: { ...init?.headers, ...headers } });
 }
 
+function splitCommandLine(input: string): string[] {
+	const tokens: string[] = [];
+	let current = "";
+	let quote: "'" | '"' | null = null;
+	for (const char of input.trim()) {
+		if (quote !== null) {
+			if (char === quote) quote = null;
+			else current += char;
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			quote = char;
+			continue;
+		}
+		if (/\s/u.test(char)) {
+			if (current.length > 0) {
+				tokens.push(current);
+				current = "";
+			}
+			continue;
+		}
+		current += char;
+	}
+	if (current.length > 0) tokens.push(current);
+	return tokens;
+}
+
+function resolveStdioCommand(
+	command: string,
+	args: readonly string[] | undefined,
+): { readonly command: string; readonly args: string[] } {
+	const trimmed = command.trim();
+	const explicitArgs = args === undefined ? [] : [...args];
+	if (!/\s/u.test(trimmed) || existsSync(trimmed)) {
+		return { command: trimmed, args: explicitArgs };
+	}
+	const [executable, ...inlineArgs] = splitCommandLine(trimmed);
+	return {
+		command: executable ?? trimmed,
+		args: [...inlineArgs, ...explicitArgs],
+	};
+}
+
 function transportFor(config: McpTransport): Transport {
 	if (config.type === "stdio") {
+		const resolved = resolveStdioCommand(config.command, config.args);
 		return new StdioClientTransport({
-			args: config.args ?? [],
-			command: config.command,
+			args: resolved.args,
+			command: resolved.command,
 			...(config.cwd === undefined ? {} : { cwd: config.cwd }),
 			env: { ...getDefaultEnvironment(), ...config.env },
 			stderr: "ignore",

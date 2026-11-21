@@ -217,4 +217,28 @@ describe("mcp plugin", () => {
 			await mcpPlugin.teardown?.(context);
 		}
 	});
+
+	test("splits inline command arguments when args are omitted", async () => {
+		const context = makeContext();
+		await mcpPlugin.setup(context);
+		try {
+			const created = parseSnapshot(
+				await rpc(
+					context,
+					"mcp.create",
+					createInput({
+						id: "synthetic-inline",
+						transport: {
+							command: `"${process.execPath}" "${FIXTURE}"`,
+							type: "stdio",
+						},
+					}),
+				),
+			);
+			expect(created.state).toBe("connected");
+			expect(created.tools.length).toBe(4);
+		} finally {
+			await mcpPlugin.teardown?.(context);
+		}
+	});
 });
