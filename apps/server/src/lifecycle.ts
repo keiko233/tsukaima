@@ -672,37 +672,8 @@ export class TsukaimaLifecycle {
 					});
 				});
 			},
-			// Optional legacy proposal/deployment tools. Native workspace coding, task creation,
-			// and worktree provisioning do not depend on the self-iteration plugin.
-			pluginTools: async (sessionId) => {
-				const policy = await this.conversationPolicy.effectivePolicy(sessionId);
-				if (!policy.capabilities.includes("coding")) return [];
-				return this.pluginHost
-					.tools()
-					.filter((tool) => tool.name.startsWith("self-iteration."))
-					.map((tool) => ({
-						description: tool.description,
-						execute: async (input, context) => {
-							const result = await this.pluginHost.invokeTool(tool.name, input, {
-								chatKind: "workspace",
-								conversationCapabilities: ["coding"],
-								conversationId: context.conversationId,
-								role: "workspace",
-								taskKind: "coding",
-							});
-							if (!result.ok) {
-								throw new Error(
-									"message" in result && result.message !== undefined
-										? result.message
-										: result.reason,
-								);
-							}
-							return { content: [...result.result.content] };
-						},
-						name: tool.name,
-						parameters: tool.parameters,
-					}));
-			},
+			authorizeCoding: async (sessionId) =>
+				(await this.conversationPolicy.effectivePolicy(sessionId)).capabilities.includes("coding"),
 			references: workspaceReferences,
 			resolveAgentSettings: async (sessionId) => {
 				const settings = await this.conversationPolicy.agentSettingsForConversation(sessionId);
@@ -716,7 +687,6 @@ export class TsukaimaLifecycle {
 			},
 			repositoryRoot: config.repositoryRoot,
 			sessionDirRoot: join(config.dataDir, "workspace-sessions"),
-			sql: workspaceSql,
 			taskPrompt: (input) =>
 				[
 					"You are the dedicated Tsukaima workspace coding agent.",

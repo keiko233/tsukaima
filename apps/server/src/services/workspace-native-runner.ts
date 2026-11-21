@@ -30,7 +30,6 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { Logger } from "../logging.ts";
 import type { WorkspaceReferenceService } from "./workspace-references.ts";
-import type { WorkspaceSqlService } from "./workspace-sql.ts";
 import type { WorkspaceTodoService } from "./workspace-todos.ts";
 import type { GitIdentity } from "./git-identity.ts";
 
@@ -111,9 +110,7 @@ export interface WorkspaceNativeRunnerOptions {
 		durableConversationId: string,
 		snapshot: LiveRunSnapshot,
 	) => void;
-	readonly pluginTools?: (
-		sessionId: string,
-	) => Promise<readonly NativePluginTool[]> | readonly NativePluginTool[];
+	readonly authorizeCoding: (sessionId: string) => Promise<boolean>;
 	readonly references: WorkspaceReferenceService;
 	readonly resolveAgentSettings: (sessionId: string) => Promise<ConversationAgentSettings>;
 	readonly resolveModel: (ref: {
@@ -122,7 +119,6 @@ export interface WorkspaceNativeRunnerOptions {
 	}) => Promise<{ readonly model: Model<Api>; readonly runtime: ModelRuntime }>;
 	readonly repositoryRoot: string;
 	readonly sessionDirRoot: string;
-	readonly sql: WorkspaceSqlService;
 	readonly taskPrompt: (input: {
 		readonly baseRef: string;
 		readonly goal: string | null;
@@ -131,16 +127,6 @@ export interface WorkspaceNativeRunnerOptions {
 	}) => string;
 	readonly todos: WorkspaceTodoService;
 	readonly worktreeRoot: string;
-}
-
-export interface NativePluginTool {
-	readonly description: string;
-	readonly name: string;
-	readonly parameters: Record<string, unknown>;
-	execute(
-		input: Record<string, unknown>,
-		context: { readonly conversationId: string },
-	): Promise<{ readonly content: readonly { readonly text: string; readonly type: "text" }[] }>;
 }
 
 interface PipeMessageBlock {
@@ -345,8 +331,10 @@ export class WorkspaceNativeRunner {
 
 	async dispatch(input: WorkspaceNativeDispatchInput): Promise<void> {
 		await this.#withLock(input.sessionId, async () => {
+			if (!(await this.#options.authorizeCoding(input.sessionId))) {
+				throw new Error("Workspace coding capability is disabled");
+			}
 			const context = await this.#context(input.sessionId);
-			await this.#options.ensureWorktree(context.taskId);
 			const native = await this.#ensureSession(context);
 			const prompt = this.#composePrompt(input.text, input.context);
 			if (native.activeRun !== undefined) {
@@ -437,11 +425,7 @@ export class WorkspaceNativeRunner {
 
 	async #ensureSession(context: WorkspaceContext): Promise<NativeSession> {
 		const agentSettings = await this.#options.resolveAgentSettings(context.sessionId);
-		const pluginTools = [...((await this.#options.pluginTools?.(context.sessionId)) ?? [])];
-		const signature = JSON.stringify({
-			agentSettings,
-			pluginTools: pluginTools.map((tool) => tool.name),
-		});
+		const signature = JSON.stringify(agentSettings);
 		const existing = this.#sessions.get(context.sessionId);
 		if (existing !== undefined && existing.agentSettingsSignature === signature) {
 			return existing;
@@ -474,7 +458,7 @@ export class WorkspaceNativeRunner {
 					taskId: context.taskId,
 				}),
 			],
-			additionalTools: this.#additionalTools(context, pluginTools),
+			additionalTools: this.#additionalTools(context),
 			executor: async () => executor,
 			...(worktreeTask.constraints.maxOutputBytes === undefined
 				? {}
@@ -532,11 +516,8 @@ export class WorkspaceNativeRunner {
 		return attached.length === 0 ? text : `${attached}\n\n${text}`;
 	}
 
-	#additionalTools(
-		context: WorkspaceContext,
-		pluginTools: readonly NativePluginTool[],
-	): ToolDefinition[] {
-		const tools: ToolDefinition[] = [
+	#additionalTools(context: WorkspaceContext): ToolDefinition[] {
+		return [
 			defineTool({
 				description:
 					"Replace the workspace todo list. Use this to keep a multi-step coding plan visible; at most one item may be in_progress.",
@@ -592,35 +573,6 @@ export class WorkspaceNativeRunner {
 			}),
 			defineTool({
 				description:
-					"Inspect the allowlisted domain database schema. Call this before writing a db_query.",
-				execute: async (_id, args) =>
-					toolResult(await this.#options.sql.schema(recordOf(args).table as string | undefined)),
-				label: "Database schema",
-				name: "db_schema",
-				parameters: Type.Object({ table: Type.Optional(Type.String()) }),
-			}),
-			defineTool({
-				description:
-					"Run one read-only SELECT/WITH (or EXPLAIN QUERY PLAN) query against allowlisted workspace, coding, audit, schedule, and prompt-hook tables. Results are capped at 500 rows and 256 KiB.",
-				execute: async (_id, args) => {
-					const input = recordOf(args);
-					const params = Array.isArray(input.params) ? input.params : undefined;
-					return toolResult(
-						await this.#options.sql.query({
-							...(params === undefined ? {} : { params }),
-							sql: String(input.sql ?? ""),
-						}),
-					);
-				},
-				label: "Database query",
-				name: "db_query",
-				parameters: Type.Object({
-					params: Type.Optional(Type.Array(Type.Unknown())),
-					sql: Type.String(),
-				}),
-			}),
-			defineTool({
-				description:
 					"Read bounded context from a conversation the user referenced in this workspace.",
 				execute: async (_id, args) => {
 					const input = recordOf(args);
@@ -656,35 +608,7 @@ export class WorkspaceNativeRunner {
 				name: "workspace_git_identity",
 				parameters: Type.Object({}),
 			}),
-			defineTool({
-				description:
-					"Search extra governed workspace tools. This native session already exposes its available tools directly.",
-				execute: async () => toolResult({ tools: [] }),
-				label: "Tool search",
-				name: "tool_search",
-				parameters: Type.Object({ query: Type.Optional(Type.String()) }),
-			}),
 		];
-		// Optional legacy proposal/deployment tools. The native workspace tools above work when
-		// the self-iteration plugin is absent or has been removed at runtime.
-		for (const pluginTool of pluginTools) {
-			if (pluginTool.name === "self-iteration.upstream") continue;
-			tools.push(
-				defineTool({
-					description: pluginTool.description,
-					execute: async (_id, args) => {
-						const output = await pluginTool.execute(recordOf(args), {
-							conversationId: context.durableConversationId,
-						});
-						return { content: [...output.content], details: undefined };
-					},
-					label: pluginTool.name,
-					name: pluginTool.name.replace(/[.:]/gu, "_"),
-					parameters: Type.Unsafe(pluginTool.parameters),
-				}),
-			);
-		}
-		return tools;
 	}
 
 	#startRun(native: NativeSession, context: WorkspaceContext, prompt: string): void {

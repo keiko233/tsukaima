@@ -243,7 +243,9 @@ describe("workspace native Pi integration", () => {
 		expect(await fs.readFile(join(repo, "src", "app.ts"), "utf-8")).toContain("'old'");
 		expect(requests[0]).toContain("edit");
 		expect(requests[0]).not.toContain("bash");
-		expect(requests[0]).not.toContain("self-iteration_upstream");
+		expect(requests[0]?.some((name) => name.startsWith("self-iteration"))).toBe(false);
+		expect(requests[0]).not.toContain("db_query");
+		expect(requests[0]).not.toContain("tool_search");
 	}, 60_000);
 
 	test("abort stops an active native run and a repeated message id is idempotent", async () => {
