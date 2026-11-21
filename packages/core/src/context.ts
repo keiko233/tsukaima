@@ -52,7 +52,7 @@ export interface TurnContextSection {
 
 export interface TurnContextRequest {
 	readonly conversationId: string;
-	/** Wall clock when the run first rendered its turn context. */
+	/** Wall clock when the context was rendered. */
 	readonly nowMs: number;
 	/** Envelope references of the run's own inputs, oldest first. */
 	readonly inputs: readonly TurnContextInput[];
@@ -66,6 +66,8 @@ export interface TurnContextInput {
 	readonly envelopeId?: string;
 	/** Platform message id, when the channel supplied one. */
 	readonly platformMessageId?: string;
+	/** Latest input text for recall when the incoming transcript row has not landed yet. */
+	readonly text?: string;
 }
 
 export interface ChatCompactionRequest {
@@ -97,11 +99,12 @@ export interface ContextPromptProvider {
 	/** Static, model-actionable behavior rules rendered after the persona. */
 	renderPolicy?(conversationId: string): Promise<string | undefined>;
 	/**
-	 * Ephemeral context for one run (clock, ambient observation window, recalled memories,
-	 * prompt hooks, soft cue). Called at most once per run; the result is attached to each
-	 * model request of that run and never persisted into the transcript. Must be read-only.
+	 * Ephemeral context (clock, recent chat, recalled memories, prompt hooks, soft cue).
+	 * Attached to model requests without adding an entry to the transcript. Must be read-only.
 	 */
 	renderTurnContext?(request: TurnContextRequest): Promise<readonly TurnContextSection[]>;
+	/** Read fresh context before each model request, including tool rounds and retries. */
+	readonly refreshTurnContext?: boolean;
 	/**
 	 * Chat-native compaction summary. Return `undefined` to fall through to pi-durable's default
 	 * (coding) summarizer, which workspace conversations rely on.
@@ -247,6 +250,21 @@ function envelopeInput(envelope: unknown): TurnContextInput | undefined {
 			? (record.source as Record<string, unknown>)
 			: undefined;
 	const rawPlatformId = source?.messageId;
+	const text = Array.isArray(record.parts)
+		? record.parts
+				.flatMap((part: unknown) =>
+					typeof part === "object" &&
+					part !== null &&
+					"type" in part &&
+					part.type === "text" &&
+					"text" in part &&
+					typeof part.text === "string"
+						? [part.text]
+						: [],
+				)
+				.join("\n")
+				.trim()
+		: "";
 	const platformMessageId =
 		typeof rawPlatformId === "string" || typeof rawPlatformId === "number"
 			? String(rawPlatformId)
@@ -255,6 +273,7 @@ function envelopeInput(envelope: unknown): TurnContextInput | undefined {
 	return {
 		...(envelopeId === undefined ? {} : { envelopeId }),
 		...(platformMessageId === undefined ? {} : { platformMessageId }),
+		...(text.length === 0 ? {} : { text }),
 	};
 }
 
@@ -518,11 +537,14 @@ async function turnContextForRun(
 	const runFirst = live?.run?.first;
 	const cacheKey =
 		runFirst === undefined ? undefined : turnContextCacheKey(api.conversationId, runFirst);
-	const shared = cacheKey === undefined ? undefined : cache?.get(cacheKey);
+	const refresh = provider.refreshTurnContext === true;
+	const shared = refresh || cacheKey === undefined ? undefined : cache?.get(cacheKey);
 	if (shared !== undefined) {
 		return api.memo<TurnContextSnapshot>(TURN_CONTEXT_MEMO, shared, context);
 	}
-	const memoized = await api.memo<TurnContextSnapshot>(TURN_CONTEXT_MEMO, context);
+	const memoized = refresh
+		? undefined
+		: await api.memo<TurnContextSnapshot>(TURN_CONTEXT_MEMO, context);
 	if (memoized !== undefined) {
 		if (cache !== undefined && cacheKey !== undefined) {
 			rememberTurnContext(cache, api.conversationId, cacheKey, memoized);
@@ -550,6 +572,7 @@ async function turnContextForRun(
 	if (cache !== undefined && cacheKey !== undefined) {
 		rememberTurnContext(cache, api.conversationId, cacheKey, candidate);
 	}
+	if (refresh) return candidate;
 	// The first memo wins, so a recovered or concurrent hook reuses the pinned snapshot.
 	return api.memo<TurnContextSnapshot>(TURN_CONTEXT_MEMO, candidate, context);
 }

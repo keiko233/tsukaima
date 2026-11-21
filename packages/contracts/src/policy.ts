@@ -413,6 +413,7 @@ export const conversationGatePolicySchema = z
 		timeoutMs: z.number().int().min(100).max(30_000).default(1_500),
 		burstCompletion: z.boolean().default(true),
 		undirectedGroupReply: z.boolean().default(true),
+		ambientGroupReply: z.boolean().default(false),
 		proactiveBubble: z.boolean().default(true),
 		circuitBreakerThreshold: z.number().int().min(1).max(20).default(3),
 		circuitBreakerCooldownMs: z.number().int().min(1_000).max(600_000).default(60_000),
@@ -422,6 +423,7 @@ export const conversationGatePolicySchema = z
 export type ConversationGatePolicy = z.infer<typeof conversationGatePolicySchema>;
 
 export const defaultConversationGatePolicy: ConversationGatePolicy = {
+	ambientGroupReply: false,
 	burstCompletion: true,
 	circuitBreakerCooldownMs: 60_000,
 	circuitBreakerThreshold: 3,
@@ -754,6 +756,7 @@ const conversationGatePolicyPatchSchema = z
 		timeoutMs: z.number().int().min(100).max(30_000).optional(),
 		burstCompletion: z.boolean().optional(),
 		undirectedGroupReply: z.boolean().optional(),
+		ambientGroupReply: z.boolean().optional(),
 		proactiveBubble: z.boolean().optional(),
 		circuitBreakerThreshold: z.number().int().min(1).max(20).optional(),
 		circuitBreakerCooldownMs: z.number().int().min(1_000).max(600_000).optional(),

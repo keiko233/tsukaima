@@ -135,10 +135,11 @@ describe("Batch 1 acceptance: stable static prompt", () => {
 	});
 });
 
-describe("Batch 1 acceptance: one turn-context render per tool run", () => {
-	test("renders ephemeral context once while the model takes two tool rounds", async () => {
+describe("Batch 1 acceptance: ephemeral context across tool rounds", () => {
+	test.each([false, true])("honors context refresh %s", async (refresh) => {
 		let renderCount = 0;
 		const provider: ContextPromptProvider = {
+			refreshTurnContext: refresh,
 			renderPersona: async () => "PERSONA",
 			renderTurnContext: async () => {
 				renderCount += 1;
@@ -238,7 +239,10 @@ describe("Batch 1 acceptance: one turn-context render per tool run", () => {
 		);
 		expect(answers).toEqual(["final answer"]);
 		expect(requests).toHaveLength(3);
-		expect(renderCount).toBe(1);
+		expect(renderCount).toBe(refresh ? 3 : 1);
+		for (const [index, request] of requests.entries()) {
+			expect(JSON.stringify(request)).toContain(`CLOCK-${refresh ? index + 1 : 1}`);
+		}
 	});
 });
 

@@ -20,7 +20,7 @@ import {
 	messages,
 	type TsukaimaDatabase,
 } from "@tsukaima/db";
-import { previewText, type Logger } from "../logging.ts";
+import type { Logger } from "../logging.ts";
 import {
 	ConversationPolicyService,
 	DEFAULT_PERSONA_BEHAVIOR,
@@ -41,15 +41,14 @@ export const DEFAULT_PERSONA_BUDGET_CHARS = 12_000;
  * recalled memories). Clock, prompt hooks, and the soft cue are budget-exempt core blocks.
  */
 export const DEFAULT_TURN_BUDGET_CHARS = 6_000;
-/** Messages in the ambient group observation window. */
+/** Messages in the recent chat window. */
 const DEFAULT_OBSERVATION_LIMIT = 20;
 const OBSERVATION_SNIPPET_LIMIT = 200;
 /** Output budget of one chat compaction summary. */
 const COMPACTION_MAX_TOKENS = 2_048;
 const DEFAULT_MEMORY_TOP_K = 10;
 /**
- * Latest messages used only as the lexical recall query seed. They are never rendered: the
- * named, timestamped observation window (Batch 1) is the model-visible recent context.
+ * Number of latest messages used as the lexical recall query seed.
  */
 const RECALL_QUERY_MESSAGE_LIMIT = 6;
 const MEMORY_SNIPPET_LIMIT = 180;
@@ -60,6 +59,8 @@ const WARM_HEADER = "Conversation state:";
 const QA_HEADER = "You answered similar questions here before; stay consistent:";
 const LONG_TERM_HEADER = "Known memories, most relevant first:";
 const OBSERVATION_HEADER = "Recent messages in this group, oldest first (you = your own messages):";
+const CHAT_OBSERVATION_HEADER =
+	"Recent messages in this chat, oldest first (you = your own messages):";
 const SELF_LABEL = "(you)";
 /** One canonical speaker of the current run, used for cross-session and consistency lookup. */
 interface RunSpeaker {
@@ -197,6 +198,7 @@ export interface ContextInspectionDetails {
 }
 
 export class DrizzleContextProvider implements ContextPromptProvider {
+	readonly refreshTurnContext = true;
 	readonly #completeText: DrizzleContextProviderOptions["completeText"];
 	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #logger: Logger;
@@ -343,6 +345,10 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			this.#logger.warn("turn context session unavailable", { error: errorMessage(error) });
 		}
 		const chat = session !== undefined && session.chatKind !== "workspace";
+		const chatHistory =
+			session?.chatKind === "group" ||
+			session?.chatKind === "private" ||
+			session?.chatKind === "webui";
 
 		const clock =
 			chat && behavior.includeRuntimeContext
@@ -365,7 +371,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 
 		let remaining = this.#turnBudget;
 		let observation: string | undefined;
-		if (chat && session?.chatKind === "group") {
+		if (chatHistory && session !== undefined) {
 			try {
 				const ownInputs = new Set<string>();
 				for (const input of request.inputs ?? []) {
@@ -374,8 +380,8 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				}
 				observation = await this.#observationWindow(
 					database,
-					session.sessionId,
-					remaining,
+					session,
+					Math.floor(remaining * 0.75),
 					ownInputs,
 				);
 				remaining -= observation?.length ?? 0;
@@ -392,9 +398,13 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			}
 		}
 		let recalled: string | undefined;
-		if (session !== undefined && remaining > 0) {
+		if (chat && session !== undefined && remaining > 0) {
 			try {
-				const collected = await this.#collectMemories(request.conversationId, session);
+				const collected = await this.#collectMemories(
+					request.conversationId,
+					session,
+					request.inputs,
+				);
 				if (collected !== undefined && collected.enabled) {
 					recalled = this.#format(
 						{ ranked: collected.longTerm, warm: collected.warm?.state },
@@ -408,7 +418,6 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			} catch (error) {
 				this.#logger.warn("memory context unavailable", { error: errorMessage(error) });
 			}
-			remaining -= recalled?.length ?? 0;
 		}
 		let stickerHints: string | undefined;
 		if (chat && this.#stickerCaptions !== undefined && remaining > 0) {
@@ -455,6 +464,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 						policy,
 						speaker,
 						request.nowMs,
+						remaining,
 					);
 					remaining -= crossSession?.length ?? 0;
 					if (policy.memoryConsolidation.qaRecallEnabled && remaining > 0) {
@@ -711,24 +721,27 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	}
 
 	/**
-	 * Named, timestamped window of the latest group messages (ambient included), newest lines
+	 * Named, timestamped window of the latest chat messages (ambient included), newest lines
 	 * kept first when the budget runs out. The assistant's own messages carry a self marker, and
 	 * the run's own newly submitted inputs are filtered so the model never sees them twice.
 	 */
 	async #observationWindow(
 		database: TsukaimaDatabase,
-		sessionId: string,
+		session: { chatKind: string; sessionId: string },
 		budget: number,
 		excludeIds: ReadonlySet<string>,
 	): Promise<string | undefined> {
 		const rows = await this.#recentMessages(
 			database,
-			sessionId,
+			session.sessionId,
 			this.#observationLimit + excludeIds.size,
 		);
+		const group = session.chatKind === "group";
+		const header = group ? OBSERVATION_HEADER : CHAT_OBSERVATION_HEADER;
 		let observePokes = false;
 		try {
-			observePokes = (await this.#policyService.effectivePolicy(sessionId)).notices.pokeObserve;
+			observePokes =
+				group && (await this.#policyService.effectivePolicy(session.sessionId)).notices.pokeObserve;
 		} catch {}
 		const visible = rows
 			.filter((row) => {
@@ -745,7 +758,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			})
 			.slice(-this.#observationLimit);
 		const lines: string[] = [];
-		let used = OBSERVATION_HEADER.length + 1;
+		let used = header.length + 1;
 		for (const row of visible.toReversed()) {
 			const text = snippet(row.contentText ?? "", OBSERVATION_SNIPPET_LIMIT);
 			if (text.length === 0) continue;
@@ -754,7 +767,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				? `[${formatLocalClock(at, this.#timeZoneOptions())}] `
 				: "";
 			const speaker =
-				row.direction === "outbound"
+				row.direction === "outbound" && row.senderExternalId !== "webui-admin"
 					? SELF_LABEL
 					: observationSpeaker(row.senderDisplayName, row.senderExternalId);
 			const msgRef =
@@ -769,12 +782,13 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			used += line.length + 1;
 		}
 		if (lines.length === 0) return undefined;
-		return [OBSERVATION_HEADER, ...lines.toReversed()].join("\n");
+		return [header, ...lines.toReversed()].join("\n");
 	}
 
 	async #collectMemories(
 		durableConversationId: string,
 		resolvedSession?: { chatKind: string; chatObjectId: string | null; sessionId: string },
+		inputs: TurnContextRequest["inputs"] = [],
 	) {
 		const database = this.#database();
 		if (database === undefined) return undefined;
@@ -794,13 +808,17 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				: await this.#memoryService.warmState(session.sessionId);
 		const scopeFilter = await this.#scopeFilter(database, session, policy);
 		const query = [
-			...recent.map((row) => row.contentText ?? ""),
-			...(warm?.state?.topics ?? []),
-		].join("\n");
+			...new Set([
+				...inputs.slice(-RECALL_QUERY_MESSAGE_LIMIT).map((input) => snippet(input.text ?? "", 600)),
+				...recent.map((row) => snippet(row.contentText ?? "", 600)),
+				...(warm?.state?.topics ?? []),
+			]),
+		]
+			.filter(Boolean)
+			.join("\n");
 		this.#logger.trace("collecting memories for context", {
 			durableConversationId,
 			hasScopeFilter: scopeFilter !== undefined,
-			queryPreview: previewText(query),
 			recentCount: recent.length,
 			sessionId: session?.sessionId,
 		});
@@ -957,8 +975,15 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				senderUserId: messages.senderUserId,
 			})
 			.from(messages)
-			.where(and(eq(messages.conversationId, sessionId), ne(messages.kind, "tool"), restoreWindow))
-			.orderBy(desc(messages.occurredAt))
+			.where(
+				and(
+					eq(messages.conversationId, sessionId),
+					ne(messages.kind, "tool"),
+					ne(messages.kind, "reply-lurk"),
+					restoreWindow,
+				),
+			)
+			.orderBy(desc(messages.occurredAt), desc(messages.id))
 			.limit(limit);
 		return recent.toReversed();
 	}
@@ -1023,14 +1048,20 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		sessionId: string,
 		request: TurnContextRequest,
 	): Promise<RunSpeakers> {
-		const envelopeIds = request.inputs
-			.map((input) => input.envelopeId)
-			.filter((id): id is string => id !== undefined);
-		const platformIds = request.inputs
-			.map((input) => input.platformMessageId)
-			.filter((id): id is string => id !== undefined);
-		if (envelopeIds.length === 0 && platformIds.length === 0) {
-			return { name: undefined, speakers: [], text: "", userId: undefined };
+		const inputIds = [
+			...new Set(
+				request.inputs.flatMap((input) =>
+					[input.envelopeId, input.platformMessageId].filter(
+						(id): id is string => id !== undefined,
+					),
+				),
+			),
+		];
+		const inputText = request.inputs.flatMap((input) =>
+			input.text === undefined ? [] : [input.text],
+		);
+		if (inputIds.length === 0) {
+			return { name: undefined, speakers: [], text: inputText.join("\n"), userId: undefined };
 		}
 		const rows = await database
 			.select({
@@ -1043,10 +1074,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				and(
 					eq(messages.conversationId, sessionId),
 					eq(messages.direction, "inbound"),
-					or(
-						envelopeIds.length === 0 ? undefined : inArray(messages.id, envelopeIds),
-						platformIds.length === 0 ? undefined : inArray(messages.platformMessageId, platformIds),
-					),
+					or(inArray(messages.id, inputIds), inArray(messages.platformMessageId, inputIds)),
 				),
 			)
 			.orderBy(desc(messages.occurredAt))
@@ -1065,10 +1093,13 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		return {
 			name: newest?.senderDisplayName?.trim() || undefined,
 			speakers,
-			text: rows
-				.map((row) => row.contentText ?? "")
-				.toReversed()
-				.join("\n"),
+			text:
+				inputText.length > 0
+					? inputText.join("\n")
+					: rows
+							.map((row) => row.contentText ?? "")
+							.toReversed()
+							.join("\n"),
 			userId: newest?.senderUserId ?? undefined,
 		};
 	}
@@ -1079,10 +1110,11 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		policy: ConversationPolicy,
 		speaker: RunSpeakers,
 		nowMs: number,
+		budget: number,
 	): Promise<string | undefined> {
 		if (speaker.speakers.length === 0) return undefined;
 		const blocks: string[] = [];
-		let remaining = policy.crossSession.maxChars;
+		let remaining = Math.min(budget, policy.crossSession.maxChars);
 		for (const entry of speaker.speakers) {
 			if (remaining <= 0) break;
 			const entries = await queryCrossSession(database, {

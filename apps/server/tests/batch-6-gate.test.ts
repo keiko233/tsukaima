@@ -111,6 +111,43 @@ async function outboundCount(
 }
 
 describe("Batch 6 pre-model gate acceptance", () => {
+	test("an opted-in idle group can start a soft turn only after a positive decision", async () => {
+		let decisions = 0;
+		const lifecycle = await createLifecycle(
+			{
+				decideBurstCompletion: async () => ({ decision: "SEND", source: "fallback" }),
+				decideProactiveBubble: async () => ({ decision: "SHOULD", source: "fallback" }),
+				decideUndirectedGroupReply: async () => {
+					decisions += 1;
+					return decisions === 1
+						? { decision: "REPLY", source: "fallback" }
+						: { decision: "REPLY", source: "gate" };
+				},
+			},
+			() => {},
+		);
+		try {
+			const group = await createGroupSession(lifecycle);
+			await enableGate(lifecycle, group.sessionId);
+			await lifecycle.conversationPolicy.update({
+				conversationId: group.sessionId,
+				policy: { gate: { ambientGroupReply: true } },
+				scope: "conversation",
+			});
+			const fallback = await lifecycle.conversationRouter.ingest(
+				groupEnvelope("idle-fallback", "Any ideas?"),
+			);
+			const reply = await lifecycle.conversationRouter.ingest(
+				groupEnvelope("idle-reply", "What else could help?"),
+			);
+			expect(fallback.classification).toBe("ambient");
+			expect(reply.classification).toBe("soft");
+			expect(decisions).toBe(2);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
 	test("an undirected group SKIP never invokes the main chat model", async () => {
 		let modelCalls = 0;
 		const decisions: string[] = [];

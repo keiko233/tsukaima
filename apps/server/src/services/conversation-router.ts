@@ -312,14 +312,19 @@ export class ConversationRouter {
 				selfAliases,
 				...(replyTarget === undefined ? {} : { replyTarget }),
 			});
-			// Optional fail-open pre-model gate for undirected group messages: when the gate returns
-			// `SKIP`, downgrade to `ambient` before `host.append` so the main chat model is never invoked.
+			// A gate may veto a soft trigger. Idle group chatter requires an explicit REPLY from
+			// the configured model, so an unavailable model cannot wake an idle group.
 			let effectiveTrigger = trigger;
 			let replyGate: InboundReplyDecision["gate"];
 			const gate = this.#conversationGate?.();
+			const classifyAmbient =
+				policy.gate.ambientGroupReply &&
+				!recentlyActive &&
+				trigger.classification === "ambient" &&
+				trigger.reason === "group context only";
 			if (
 				message.conversationKey.kind === "group" &&
-				trigger.classification === "soft" &&
+				(trigger.classification === "soft" || classifyAmbient) &&
 				!trigger.aliasMentioned &&
 				policy.gate.enabled &&
 				policy.gate.undirectedGroupReply &&
@@ -333,17 +338,17 @@ export class ConversationRouter {
 					})
 					.from(messages)
 					.where(
-						and(eq(messages.conversationId, target.sessionId), ne(messages.kind, "reply-lurk")),
+						and(eq(messages.conversationId, target.sessionId), ne(messages.direction, "system")),
 					)
 					.orderBy(desc(messages.occurredAt), desc(messages.id))
 					.limit(6);
 				const recentContext = recentRows
 					.toReversed()
+					.filter((row) => (row.contentText ?? "").trim().length > 0)
 					.map((row) => {
 						const who = row.direction === "outbound" ? "(you)" : (row.senderDisplayName ?? "user");
 						return `${who}: ${(row.contentText ?? "").trim()}`;
-					})
-					.filter((line) => line.length > 0);
+					});
 				const gateDecision = await gate.decideUndirectedGroupReply({
 					conversationId: target.sessionId,
 					messageText: messageText(message.parts),
@@ -352,7 +357,17 @@ export class ConversationRouter {
 					senderName: message.sender.displayName,
 				});
 				replyGate = gateDecision;
-				if (gateDecision.decision === "SKIP") {
+				if (
+					gateDecision.decision === "REPLY" &&
+					gateDecision.source === "gate" &&
+					classifyAmbient
+				) {
+					effectiveTrigger = {
+						...trigger,
+						classification: "soft",
+						reason: "group reply gate invited a response",
+					};
+				} else if (gateDecision.decision === "SKIP") {
 					effectiveTrigger = {
 						...trigger,
 						classification: "ambient",

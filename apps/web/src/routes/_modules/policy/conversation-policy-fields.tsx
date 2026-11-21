@@ -1066,6 +1066,11 @@ export function PolicyGateFields({ draft, onChange }: PolicyFieldsProps) {
 				onChange={(value) => updateGate({ undirectedGroupReply: value })}
 			/>
 			<Toggle
+				checked={draft.gate.ambientGroupReply}
+				label={m.policy_gate_ambient_group()}
+				onChange={(value) => updateGate({ ambientGroupReply: value })}
+			/>
+			<Toggle
 				checked={draft.gate.proactiveBubble}
 				label={m.policy_gate_proactive_bubble()}
 				onChange={(value) => updateGate({ proactiveBubble: value })}

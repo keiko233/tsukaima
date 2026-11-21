@@ -107,6 +107,16 @@ on a provider other than the one serving conversations; usage is recorded under 
 An unknown or unavailable configured model falls back to the active model, and a failed or
 timed-out classification always means `wait`.
 
+The Sidechat and conversation gate selectors also accept native decision models.
+`gemini-decision-1` uses Gemini Decisions with `GEMINI_API_KEY`.
+`jev-latest` and pinned Jev model IDs use TypeSafe System One with `TYPESAFE_API_KEY`.
+These models return a choice and confidence. The conversation model generates the reply.
+
+Set the defaults in WebUI Settings or choose per-session overrides in Conversation Policy.
+The gate model defaults to the selected Sidechat model. To let the gate consider joining an
+idle group, enable the gate, undirected group replies, and the idle-group option in its policy.
+Only a positive classifier result starts a soft turn in an idle group.
+
 ## Usage and limits
 
 - Store token/cost usage per conversation, capability, plugin, and model.

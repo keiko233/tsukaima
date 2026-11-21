@@ -166,6 +166,7 @@ mock.module("@/paraglide/messages", () => ({
 		policy_gate_model: () => "Gate model override",
 		policy_gate_model_default: () => "Use the gate default",
 		policy_gate_proactive_bubble: () => "Gate proactive bubbles (SHOULD/SKIP)",
+		policy_gate_ambient_group: () => "Consider joining idle group chats",
 		policy_gate_timeout: () => "Gate timeout (ms)",
 		policy_gate_undirected_group: () => "Gate undirected group replies (REPLY/SKIP)",
 		policy_humanization_anti_repetition: () => "Dynamic overused-phrase avoid-list",
@@ -185,7 +186,8 @@ mock.module("@/paraglide/messages", () => ({
 		policy_social_unanswered_silence_hours: () => "Unanswered silence window (hours)",
 		policy_social_unanswered_threshold: () => "Unanswered streak threshold",
 		policy_sidechat_interject_enabled: () => "Fast-lane busy interjection",
-		policy_sidechat_interject_hint: () => "Only urgent direct messages while a long turn is working.",
+		policy_sidechat_interject_hint: () =>
+			"Only urgent direct messages while a long turn is working.",
 		policy_section_generation: () => "Generation",
 		policy_generation_hint: () => "Sampling overrides for OpenAI-compatible requests.",
 		policy_length_truncation: () => "When the output limit is reached",

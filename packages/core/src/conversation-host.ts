@@ -2662,8 +2662,8 @@ export class PiDurableConversationHost {
 		const turnSections = new Map<string, string>();
 		const contextProvider = this.options.contextProvider;
 		if (contextProvider !== undefined) {
-			// A live run reuses the snapshot pinned on its generation task; rendering a fresh one
-			// would show context the model is not actually seeing. Otherwise this is the next run.
+			// Show the last context attached to the live run. When idle, render what the next
+			// request would see instead.
 			const liveRunFirst = liveState?.run?.first;
 			const cachedPinned =
 				liveRunFirst === undefined

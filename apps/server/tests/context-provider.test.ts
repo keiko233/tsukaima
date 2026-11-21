@@ -448,6 +448,35 @@ describe("DrizzleContextProvider", () => {
 		}
 	});
 
+	test("injects private chat history and recalls from the latest input before its row exists", async () => {
+		const { database } = await openFixture();
+		try {
+			await seedContextFixture(database);
+			await insertMemory(database, {
+				id: "matching-new-input",
+				importance: 0.1,
+				scope: "global",
+				summary: "The zebrafalcon project uses a blue marker.",
+			});
+			await insertMemory(database, {
+				id: "unrelated-input",
+				importance: 1,
+				scope: "global",
+				summary: "An unrelated high priority observation.",
+			});
+			const sections = await provider(database, { memoryTopK: 1 }).renderTurnContext({
+				conversationId: "42",
+				inputs: [{ envelopeId: "not-yet-in-transcript", text: "zebrafalcon project" }],
+				nowMs: Date.now(),
+				triggers: [],
+			});
+			expect(sections.find((section) => section.key === "observation")?.text).toContain("matcha");
+			expect(sections.find((section) => section.key === "memories")?.text).toContain("blue marker");
+		} finally {
+			database.$client.close();
+		}
+	});
+
 	test("degrades to undefined without a database or when the database fails", async () => {
 		const missing = provider(() => undefined);
 		expect(await missing.renderPersona("42")).toBeUndefined();
