@@ -1436,6 +1436,7 @@ export class TsukaimaLifecycle {
 	}
 
 	private async ensureWorkspaceWorktree(taskId: string): Promise<{
+		readonly analysisOnly: boolean;
 		readonly path: string;
 		readonly baseRef: string;
 		readonly constraints: {
@@ -1476,7 +1477,12 @@ export class TsukaimaLifecycle {
 				worktreePath: path,
 			});
 		}
-		return { baseRef: task.baseRef, constraints: task.constraints, path };
+		return {
+			analysisOnly: task.mode === "analysis",
+			baseRef: task.baseRef,
+			constraints: task.constraints,
+			path,
+		};
 	}
 
 	private async workspaceModelPort(providerId: string): Promise<ModelPort> {

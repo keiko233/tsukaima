@@ -247,7 +247,7 @@ describe("workspace native Pi integration", () => {
 		expect(requests[0]).not.toContain("db_query");
 		expect(requests[0]).not.toContain("tool_search");
 		const context = await getSessionContextStats(lifecycle, workspace.sessionId);
-		expect(context?.tools.map((tool) => tool.name).sort()).toEqual([...requests[0]!].sort());
+		expect(context?.tools.map((tool) => tool.name).toSorted()).toEqual(requests[0]?.toSorted());
 		expect(context?.personaName).toBeNull();
 		expect(context?.usedTokens).toBeGreaterThan(0);
 	}, 60_000);
@@ -291,6 +291,25 @@ describe("workspace native Pi integration", () => {
 		);
 		expect((await nativeAnswers(database, workspace.sessionId)).length).toBeLessThanOrEqual(1);
 	}, 60_000);
+
+	test("resumes a stored analysis-only task without write or shell tools", async () => {
+		const { lifecycle } = await start();
+		const workspace = await lifecycle.workspace.create({ goal: "Inspect the fixture." });
+		const database = lifecycle.domainDatabase;
+		if (database === undefined || workspace.taskId === null) throw new Error("Workspace not ready");
+		await database
+			.update(codingTasks)
+			.set({ mode: "analysis" })
+			.where(eq(codingTasks.id, workspace.taskId));
+		await lifecycle.sessionMessaging.sendAgentMessage({
+			sessionId: workspace.sessionId,
+			text: "Inspect the fixture.",
+		});
+		const stats = await getSessionContextStats(lifecycle, workspace.sessionId);
+		const tools = stats?.tools.map(({ name }) => name);
+		expect(tools).toContain("read");
+		for (const name of ["bash", "edit", "write"]) expect(tools).not.toContain(name);
+	});
 	test("keeps the native Pi session across a restart and continues the transcript", async () => {
 		const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-native-restart-"));
 		directories.push(root);

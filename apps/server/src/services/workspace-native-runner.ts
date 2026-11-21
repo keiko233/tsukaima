@@ -71,6 +71,7 @@ export async function createPiModelRuntime(
 }
 
 export interface WorkspaceTaskWorktree {
+	readonly analysisOnly: boolean;
 	readonly path: string;
 	readonly baseRef: string;
 	readonly constraints: {
@@ -514,9 +515,11 @@ export class WorkspaceNativeRunner {
 		const sessionFile = join(sessionDir, "session.jsonl");
 		const worktreeTask = await this.#options.ensureWorktree(context.taskId);
 		const executor = await this.#options.executor();
-		const nativeTools: readonly PiWorkspaceNativeToolName[] = executor.isolated
-			? ["read", "bash", "edit", "write"]
-			: ["read", "edit", "write"];
+		const nativeTools: readonly PiWorkspaceNativeToolName[] = worktreeTask.analysisOnly
+			? ["read"]
+			: executor.isolated
+				? ["read", "bash", "edit", "write"]
+				: ["read", "edit", "write"];
 		const runner = await createPiWorkspaceRunner({
 			agentDir,
 			allowedCommands: worktreeTask.constraints.allowedCommands,
