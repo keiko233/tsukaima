@@ -126,7 +126,7 @@ export interface WorkspaceNativeRunnerOptions {
 		readonly goal: string | null;
 		readonly repositoryRoot: string;
 		readonly taskId: string;
-	}) => string;
+	}) => Promise<string> | string;
 	readonly todos: WorkspaceTodoService;
 	readonly worktreeRoot: string;
 }
@@ -524,7 +524,7 @@ export class WorkspaceNativeRunner {
 			agentDir,
 			allowedCommands: worktreeTask.constraints.allowedCommands,
 			appendPrompt: [
-				this.#options.taskPrompt({
+				await this.#options.taskPrompt({
 					baseRef: context.baseRef,
 					goal: context.goal,
 					repositoryRoot: context.repositoryRoot,

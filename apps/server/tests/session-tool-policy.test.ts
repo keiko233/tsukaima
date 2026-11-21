@@ -9,7 +9,6 @@ import {
 	WORKSPACE_TOOL_NAMES,
 } from "../src/services/workspace-tools.ts";
 
-const codingTools = ["self-iteration.analyze", "self-iteration.propose"];
 const proactiveTools = ["proactive-scheduler.schedule"];
 const chatSurfaceOmitted = ["sticker-meme.codingOnly"];
 const codingSurfaceOmitted = ["memory.recall"];
@@ -17,7 +16,6 @@ const base = {
 	agentAccess: true,
 	chatSurfaceOmitted,
 	codingSurfaceOmitted,
-	codingTools,
 	proactiveTools,
 	readFailed: false,
 };
@@ -36,11 +34,7 @@ const omitted = (input: Partial<Parameters<typeof computeOmittedSessionTools>[0]
 describe("computeOmittedSessionTools parity", () => {
 	test("webui keeps host session tools and prompt tools but never coding tools", () => {
 		const tools = omitted({ kind: "webui" });
-		for (const name of [
-			...codingTools,
-			...CODING_AGENT_TOOL_NAMES,
-			...WORKSPACE_CODING_TOOL_NAMES,
-		]) {
+		for (const name of [...CODING_AGENT_TOOL_NAMES, ...WORKSPACE_CODING_TOOL_NAMES]) {
 			expect(tools.has(name)).toBe(true);
 		}
 		for (const name of ["workspace_spawn", ...SCHEDULE_TOOL_NAMES, ...proactiveTools]) {
@@ -70,7 +64,6 @@ describe("computeOmittedSessionTools parity", () => {
 
 	test("workspace requires coding capability and omits workspace_spawn only", () => {
 		const withoutCoding = omitted({ capabilities: [], kind: "workspace" });
-		for (const name of codingTools) expect(withoutCoding.has(name)).toBe(true);
 		for (const name of [...CODING_AGENT_TOOL_NAMES, ...WORKSPACE_CODING_TOOL_NAMES]) {
 			expect(withoutCoding.has(name)).toBe(true);
 		}
@@ -79,7 +72,6 @@ describe("computeOmittedSessionTools parity", () => {
 		expect(withoutCoding.has("sticker-meme.codingOnly")).toBe(false);
 
 		const withCoding = omitted({ capabilities: ["coding"], kind: "workspace" });
-		for (const name of codingTools) expect(withCoding.has(name)).toBe(false);
 		for (const name of [...CODING_AGENT_TOOL_NAMES, ...WORKSPACE_CODING_TOOL_NAMES]) {
 			expect(withCoding.has(name)).toBe(false);
 		}
@@ -99,7 +91,6 @@ describe("computeOmittedSessionTools parity", () => {
 				expect(tools.has(name)).toBe(true);
 			}
 			for (const name of PROMPT_TOOL_NAMES) expect(tools.has(name)).toBe(true);
-			for (const name of codingTools) expect(tools.has(name)).toBe(true);
 		}
 	});
 });

@@ -24,7 +24,6 @@ import {
 	createHostSandbox,
 	DomainCodingStore,
 	reconcileRestartDeployment,
-	SELF_ITERATION_HOST_BINDING,
 	WorktreeManager,
 	type DeploymentApplicationVerification,
 	type DeploymentIdentity,
@@ -136,7 +135,6 @@ import { PROMPT_TOOL_NAMES, createPromptTools } from "./services/prompt-tools.ts
 import { PromptService } from "./services/prompts.ts";
 import {
 	RestartCoordinator,
-	RestartReloadController,
 	type RestartIntent,
 	type RestartSettlementOutcome,
 } from "./services/restart-coordinator.ts";
@@ -687,16 +685,14 @@ export class TsukaimaLifecycle {
 			},
 			repositoryRoot: config.repositoryRoot,
 			sessionDirRoot: join(config.dataDir, "workspace-sessions"),
-			taskPrompt: (input) =>
+			taskPrompt: async (input) =>
 				[
 					"You are the dedicated Tsukaima workspace coding agent.",
 					`Repository root: ${input.repositoryRoot}`,
 					`Coding task id: ${input.taskId}`,
 					`Base revision: ${input.baseRef}`,
 					`Task goal: ${input.goal ?? "(the current user request)"}`,
-					"Work only inside this task worktree. Never commit, push, deploy, restart, inspect host secrets, or edit the live repository. Those actions stay server-side.",
-					"Use the native read/edit/write tools for repository changes. Shell execution, when offered, is allowlisted and runs in a disposable snapshot.",
-					"Keep the workspace todo list current and report the task id, tests, changed files, and blockers.",
+					await this.prompts.render("workspace-task"),
 				].join("\n"),
 			todos: this.workspaceTodos,
 			worktreeRoot: workspaceWorktreeRoot,
@@ -774,7 +770,6 @@ export class TsukaimaLifecycle {
 			schedules: this.schedules,
 		});
 		this.workspace = new WorkspaceService({
-			taskPrompt: () => this.prompts.render("workspace-task"),
 			applyToolPolicy: async (sessionId, durableConversationId) => {
 				const policy = await this.conversationPolicy.effectivePolicy(sessionId);
 				await this.applySessionToolPolicy(durableConversationId, policy);
@@ -1014,43 +1009,6 @@ export class TsukaimaLifecycle {
 					},
 				}),
 			);
-		}
-		if (!pluginBindings.has(SELF_ITERATION_HOST_BINDING)) {
-			const worktreeRoot = join(config.dataDir, "worktrees");
-			const sandboxOptions = {
-				repositoryPath: config.repositoryRoot,
-				worktreeRoot,
-			};
-			pluginBindings.set(SELF_ITERATION_HOST_BINDING, {
-				// The runtime never applies a diff and cannot derive the artifact a deployer built.
-				// Reporting the running identity still lets an operator's verified reload settle;
-				// without a recorded approved identity the deployment fails closed instead.
-				healthCheck: async () => ({ checkedAtMs: Date.now(), ok: this.ready }),
-				gitIdentity: () => readGitIdentity(this.domainDatabase),
-				reload: new RestartReloadController(this.restartCoordinator),
-				repositoryRoot: config.repositoryRoot,
-				runningIdentity: () => this.runningDeploymentIdentity(),
-				sandbox:
-					config.codingSandbox === "bubblewrap"
-						? createBubblewrapSandbox(sandboxOptions)
-						: createHostSandbox(sandboxOptions),
-				store: this.codingStore,
-				worktreeRoot,
-			});
-		}
-		// The Workspace owns the task binding, so the coding plugin resolves model-call tasks through
-		// this domain service even when a host supplies its own self-iteration binding.
-		const selfIterationBinding = pluginBindings.get(SELF_ITERATION_HOST_BINDING);
-		if (
-			typeof selfIterationBinding === "object" &&
-			selfIterationBinding !== null &&
-			!("workspaceTaskFor" in selfIterationBinding)
-		) {
-			pluginBindings.set(SELF_ITERATION_HOST_BINDING, {
-				...selfIterationBinding,
-				workspaceTaskFor: (conversationId: string) =>
-					this.workspace.taskIdForConversation(conversationId),
-			});
 		}
 		this.pluginHost = new PluginHost({
 			audit: (entry) => this.writeAudit(entry),
@@ -1322,7 +1280,7 @@ export class TsukaimaLifecycle {
 	 * - WebUI chats can control workspaces, hooks, and host schedules, but never receive coding tools.
 	 * - Authorized IM chats (`private`/`group` with `policy.workspaceDelegationEnabled === true`)
 	 *   receive `IM_WORKSPACE_DELEGATION_TOOL_NAMES` (eagerly accessible), while strictly never
-	 *   receiving `self-iteration.*`, `CODING_AGENT_TOOL_NAMES`, or `WORKSPACE_CODING_TOOL_NAMES`.
+	 *   receiving `CODING_AGENT_TOOL_NAMES` or `WORKSPACE_CODING_TOOL_NAMES`.
 	 * - IM chats receive the unified host `SCHEDULE_TOOL_NAMES` family and never the conflicting
 	 *   `proactive-scheduler.*` model tools.
 	 * - Workspaces require an explicit `coding` capability and receive repo tools only then.
@@ -1337,7 +1295,6 @@ export class TsukaimaLifecycle {
 		const database = this.domainDatabase;
 		const host = this.conversationHost;
 		if (database === undefined || host === undefined) return;
-		const codingTools = this.pluginHost.modelToolNames("self-iteration");
 		const proactiveTools = this.pluginHost.modelToolNames("proactive-scheduler");
 		let kind: string | undefined;
 		let readFailed = false;
@@ -1388,7 +1345,6 @@ export class TsukaimaLifecycle {
 			capabilities: policy.capabilities,
 			chatSurfaceOmitted: host.modelToolNamesNotForSurface("chat"),
 			codingSurfaceOmitted: host.modelToolNamesNotForSurface("coding"),
-			codingTools,
 			kind,
 			proactiveTools,
 			readFailed,

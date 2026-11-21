@@ -221,7 +221,6 @@ describe("plugin host", () => {
 				"onebot-napcat",
 				"memory",
 				"proactive-scheduler",
-				"self-iteration",
 				"search-fetch",
 				"sticker-meme",
 				"fake-channel",

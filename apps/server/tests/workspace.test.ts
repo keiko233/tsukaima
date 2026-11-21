@@ -272,19 +272,15 @@ describe("workspace sessions", () => {
 		expect(parentTools).toContain("workspace_spawn");
 		expect(parentTools).toContain("session_lookup");
 		expect(parentTools).toContain("tool_search");
-		const selfIterationTools = lifecycle.pluginHost.modelToolNames("self-iteration");
-		expect(parentTools?.some((name) => selfIterationTools.includes(name))).toBe(false);
 		expect(workspaceTools).toContain("workspace_status");
 		expect(workspaceTools).toContain("workspace_git_identity");
 		expect(workspaceTools).not.toContain("workspace_spawn");
 		expect(workspaceTools).not.toContain("session_lookup");
-		expect(workspaceTools?.some((name) => selfIterationTools.includes(name))).toBe(true);
 		expect(workspaceTools).toContain("todo_write");
 		expect(workspaceTools).toContain("db_query");
 		expect(parentTools).not.toContain("workspace_git_identity");
 		expect(parentTools).not.toContain("todo_write");
 		expect(parentTools).not.toContain("db_query");
-		expect(workspaceTools?.some((name) => selfIterationTools.includes(name))).toBe(true);
 		expect(workspaceTools).not.toContain("search");
 
 		const found = await lifecycle.sessionMessaging.searchSessions("Admin chat");

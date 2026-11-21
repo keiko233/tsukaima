@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, isNull, or } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import type {
 	MessageDeliveryMode,
 	ThinkingLevel,
@@ -22,7 +22,6 @@ import {
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
-import { DEFAULT_PROMPTS } from "./prompt-defaults.ts";
 import type { SessionMessagingService } from "./session-messaging.ts";
 import type { WorkspaceReferenceService } from "./workspace-references.ts";
 import type { WorkspaceTodoService } from "./workspace-todos.ts";
@@ -32,7 +31,6 @@ const WORKSPACE_CAPABILITIES = ["coding"];
 const DEFAULT_WORKSPACE_TITLE = "New workspace";
 
 export interface WorkspaceServiceOptions {
-	readonly taskPrompt?: () => Promise<string>;
 	readonly applyToolPolicy?: (sessionId: string, durableConversationId: string) => Promise<void>;
 	readonly audit?: (entry: AuditEntry) => Promise<void> | void;
 	readonly createTask: (input: {
@@ -110,28 +108,6 @@ function parseTags(value: string): string[] {
 	}
 }
 
-function workspacePrompt(
-	input: {
-		baseRef: string;
-		goal: string;
-		repositoryRoot: string;
-		taskId: string;
-	},
-	instructions: string,
-): string {
-	return [
-		"You are the dedicated workspace agent for a Tsukaima self-upgrade task.",
-		`Repository root: ${input.repositoryRoot}`,
-		`Coding task id: ${input.taskId}`,
-		`Base revision: ${input.baseRef}`,
-		"",
-		"Goal:",
-		input.goal,
-		"",
-		instructions,
-	].join("\n");
-}
-
 /**
  * Owns workspace sessions and their coding-task metadata.
  *
@@ -140,7 +116,6 @@ function workspacePrompt(
  * and injects the workspace brief into that same turn.
  */
 export class WorkspaceService {
-	readonly #taskPrompt: WorkspaceServiceOptions["taskPrompt"];
 	readonly #applyToolPolicy: WorkspaceServiceOptions["applyToolPolicy"];
 	readonly #audit: WorkspaceServiceOptions["audit"];
 	readonly #createTask: WorkspaceServiceOptions["createTask"];
@@ -155,7 +130,6 @@ export class WorkspaceService {
 	readonly #starting = new Map<string, Promise<string>>();
 
 	constructor(options: WorkspaceServiceOptions) {
-		this.#taskPrompt = options.taskPrompt;
 		this.#applyToolPolicy = options.applyToolPolicy;
 		this.#audit = options.audit;
 		this.#createTask = options.createTask;
@@ -397,40 +371,6 @@ export class WorkspaceService {
 			await this.#references.record(sessionId, input.references);
 		}
 		const context = await this.#references.render(sessionId, input.references ?? []);
-		return { context, taskId };
-	}
-
-	async prepareTurn(
-		sessionId: string,
-		input: StartWorkspaceTaskInput,
-	): Promise<{ readonly context: string; readonly taskId: string }> {
-		const taskId = await this.startTask(sessionId, input);
-		// Reference rows are recorded once per turn, after the task exists, so a failed first
-		// message leaves the workspace as a draft that the user can retry.
-		if (input.references !== undefined && input.references.length > 0) {
-			await this.#references.record(sessionId, input.references);
-		}
-		const [workspace] = await this.#db()
-			.select()
-			.from(workspaceSessions)
-			.where(eq(workspaceSessions.id, sessionId))
-			.limit(1);
-		if (workspace === undefined) throw new Error("workspace_not_found");
-		const referenceContext = await this.#references.render(sessionId, input.references ?? []);
-		const context = [
-			workspacePrompt(
-				{
-					baseRef: workspace.baseRef,
-					goal: input.goal,
-					repositoryRoot: workspace.repositoryRoot,
-					taskId,
-				},
-				(await this.#taskPrompt?.()) ?? DEFAULT_PROMPTS["workspace-task"],
-			),
-			referenceContext,
-		]
-			.filter((entry): entry is string => entry !== undefined)
-			.join("\n\n");
 		return { context, taskId };
 	}
 
@@ -702,25 +642,6 @@ export class WorkspaceService {
 			sessionId: input.sessionId,
 			ok: true,
 		};
-	}
-
-	/**
-	 * Coding task bound to a durable conversation, read by the coding plugin's model tools.
-	 * `undefined` means the conversation is not a workspace; `null` is a draft with no task yet.
-	 */
-	async taskIdForConversation(conversationId: string): Promise<string | null | undefined> {
-		const [row] = await this.#db()
-			.select({ taskId: workspaceSessions.taskId })
-			.from(conversations)
-			.innerJoin(workspaceSessions, eq(workspaceSessions.id, conversations.id))
-			.where(
-				or(
-					eq(conversations.durableConversationId, conversationId),
-					eq(conversations.id, conversationId),
-				),
-			)
-			.limit(1);
-		return row === undefined ? undefined : row.taskId;
 	}
 
 	async listTodos(sessionId: string): Promise<WorkspaceTodo[]> {

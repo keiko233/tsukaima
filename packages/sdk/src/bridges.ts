@@ -969,7 +969,6 @@ export function allocateModelToolNames(
 const STATIC_TOOL_PREFIXES = [
 	"proactive-scheduler",
 	"openai-compatible",
-	"self-iteration",
 	"onebot-napcat",
 	"sticker-meme",
 	"search-fetch",

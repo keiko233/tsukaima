@@ -14,7 +14,6 @@ export interface ComputeOmittedSessionToolsInput {
 	/** `host.modelToolNamesNotForSurface("chat")`. */
 	readonly chatSurfaceOmitted: readonly string[];
 	readonly codingSurfaceOmitted: readonly string[];
-	readonly codingTools: readonly string[];
 	readonly kind: string | undefined;
 	readonly proactiveTools: readonly string[];
 	/** True when the conversation kind could not be read; forces fail-closed omissions. */
@@ -41,7 +40,6 @@ export function computeOmittedSessionTools(
 	const codingAllowed =
 		!readFailed && input.kind === "workspace" && input.capabilities.includes("coding");
 	if (!codingAllowed) {
-		for (const name of input.codingTools) removed.add(name);
 		for (const name of CODING_AGENT_TOOL_NAMES) removed.add(name);
 		for (const name of WORKSPACE_CODING_TOOL_NAMES) removed.add(name);
 	}

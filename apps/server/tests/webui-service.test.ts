@@ -392,10 +392,6 @@ describe("WebUI chat and session service", () => {
 			expect(withoutCoding.memories.enabled).toBe(true);
 			expect(withoutCoding.memories.items).toHaveLength(0);
 			expect(withoutCoding.memories.recentCount).toBeGreaterThanOrEqual(1);
-			const codingTools = lifecycle.pluginHost.modelToolNames("self-iteration");
-			for (const toolName of codingTools) {
-				expect(withoutCoding.tools.some((tool) => tool.name === toolName)).toBe(false);
-			}
 			expect(withoutCoding.tools.some((tool) => tool.name === "workspace_git_identity")).toBe(
 				false,
 			);
@@ -412,9 +408,6 @@ describe("WebUI chat and session service", () => {
 			const withCoding = await getSessionContextStats(lifecycle, chat.sessionId);
 			expect(withCoding).not.toBeNull();
 			if (withCoding === null) throw new Error("Expected context stats with coding");
-			if (codingTools.length > 0) {
-				expect(withCoding.tools.some((tool) => codingTools.includes(tool.name))).toBe(false);
-			}
 			expect(withCoding.tools.some((tool) => tool.name === "workspace_spawn")).toBe(true);
 			expect(withCoding.tools.some((tool) => tool.name === "workspace_git_identity")).toBe(false);
 		} finally {

@@ -429,7 +429,6 @@ export async function getSessionContextStats(
 		sessionId,
 		session.durableConversationId,
 	);
-	const codingTools = lifecycle.pluginHost.modelToolNames("self-iteration");
 	const proactiveTools = lifecycle.pluginHost.modelToolNames("proactive-scheduler");
 	const kind = session.chatKind ?? session.sessionKind;
 	// Same pure helper the lifecycle uses to write the durable model-tool filter, so the
@@ -439,7 +438,6 @@ export async function getSessionContextStats(
 		capabilities: policy.capabilities,
 		chatSurfaceOmitted: host.modelToolNamesNotForSurface("chat"),
 		codingSurfaceOmitted: host.modelToolNamesNotForSurface("coding"),
-		codingTools,
 		kind,
 		proactiveTools,
 		workspaceDelegationEnabled: policy.workspaceDelegationEnabled === true,

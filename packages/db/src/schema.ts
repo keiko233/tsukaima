@@ -820,8 +820,8 @@ export const codingDeployments = sqliteTable(
 
 /**
  * A workspace is the execution-facing side of a chat object: one durable conversation whose
- * agent owns a coding task and can inspect or patch the running repository through the
- * governed self-iteration tools. The conversation and chat object are ordinary session rows so
+ * agent owns a coding task and can inspect or patch the running repository through native Pi
+ * workspace tools. The conversation and chat object are ordinary session rows so
  * transcripts, live runs, and queue/interrupt semantics stay shared with chat.
  */
 export const workspaceSessions = sqliteTable(

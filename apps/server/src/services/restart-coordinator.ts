@@ -468,8 +468,8 @@ export class RestartCoordinator {
 }
 
 /**
- * Reload adapter for the governed self-iteration deployment flow. A reload request becomes a
- * durable countdown instead of an immediate process kill, so chats can finish or reserve work.
+ * Reload adapter for the governed deployment flow. A reload request becomes a durable
+ * countdown instead of an immediate process kill, so chats can finish or reserve work.
  */
 export class RestartReloadController implements ReloadController {
 	readonly #coordinator: RestartCoordinator;
@@ -497,7 +497,7 @@ export class RestartReloadController implements ReloadController {
 			},
 			mode: "update",
 			reason: context.reason,
-			requestedBy: "self-iteration",
+			requestedBy: "deployment",
 		});
 		return {
 			deferred: true,

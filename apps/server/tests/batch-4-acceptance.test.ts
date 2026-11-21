@@ -514,7 +514,7 @@ describe("IM-to-workspace delegation acceptance", () => {
 		).toBe(true);
 	});
 
-	test("coding, database, hook, and self-iteration tools are denied and audited from IM", async () => {
+	test("coding, database, and hook tools are denied and audited from IM", async () => {
 		const { lifecycle } = await createHarness();
 		const session = await seedImSession(lifecycle, {
 			messages: [{ senderExternalId: "10002" }],
@@ -545,17 +545,6 @@ describe("IM-to-workspace delegation acceptance", () => {
 			);
 			expect(result.isError).toBe(true);
 			expect(resultText(result)).toContain("im_tool_not_permitted");
-		}
-		const selfIteration = await lifecycle.pluginHost.invokeTool(
-			"self-iteration.analyze",
-			{ action: "read", path: "src/app.ts" },
-			{ conversationId: session.durableConversationId },
-		);
-		expect(selfIteration.ok).toBe(false);
-		if (selfIteration.ok === false) {
-			expect(["unauthorized", "task_kind_denied", "permission_denied"]).toContain(
-				selfIteration.reason,
-			);
 		}
 
 		const database = lifecycle.domainDatabase;
@@ -589,15 +578,6 @@ describe("IM-to-workspace delegation acceptance", () => {
 				),
 			).toBe(true);
 		}
-		expect(
-			audits.some(
-				(row) =>
-					row.action === "plugin-tool.denied" &&
-					row.result === "denied" &&
-					row.actorId === "10002" &&
-					auditPayload(row).tool === "self-iteration.analyze",
-			),
-		).toBe(true);
 	});
 });
 

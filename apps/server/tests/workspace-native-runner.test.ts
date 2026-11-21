@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { DomainCodingStore } from "@tsukaima/coding";
 import {
 	createFakeModel,
 	createOpenAICompatibleModelPort,
@@ -160,6 +161,7 @@ describe("workspace native Pi integration", () => {
 		const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-native-tools-"));
 		directories.push(root);
 		const repo = await fixtureRepository(root);
+		const requestBodies: string[] = [];
 		const requests: string[][] = [];
 		const model = createOpenAICompatibleModelPort(
 			{
@@ -172,6 +174,7 @@ describe("workspace native Pi integration", () => {
 					};
 					const offered = (body.tools ?? []).map((tool) => tool.function?.name ?? "");
 					requests.push(offered);
+					requestBodies.push(JSON.stringify(body.messages ?? []));
 					const last = body.messages?.at(-1);
 					if (last?.role === "user" && offered.includes("edit")) {
 						return Response.json({
@@ -250,6 +253,11 @@ describe("workspace native Pi integration", () => {
 		expect(context?.tools.map((tool) => tool.name).toSorted()).toEqual(requests[0]?.toSorted());
 		expect(context?.personaName).toBeNull();
 		expect(context?.usedTokens).toBeGreaterThan(0);
+		expect(requests[0]).not.toContain("db_schema");
+		expect(requests[0]).not.toContain("propose");
+		expect(requests[0]).not.toContain("check");
+		expect(requestBodies.join("\n")).not.toContain("self-iteration");
+		expect(requestBodies.join("\n")).not.toContain("db_query");
 	}, 60_000);
 
 	test("abort stops an active native run and a repeated message id is idempotent", async () => {
@@ -356,5 +364,91 @@ describe("workspace native Pi integration", () => {
 		]);
 		const after = (await fs.readFile(sessionFile, "utf-8")).trim().split("\n").length;
 		expect(after).toBeGreaterThan(before);
+	}, 60_000);
+	test("denies a native workspace turn after the coding capability is withdrawn", async () => {
+		const { lifecycle } = await start();
+		const workspace = await lifecycle.workspace.create({
+			goal: "Keep the capability check honest.",
+			requestedBy: "test-admin",
+		});
+		await lifecycle.conversationPolicy.update({
+			conversationId: workspace.sessionId,
+			policy: { capabilities: [] },
+			scope: "conversation",
+		});
+		const database = lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("Database not ready");
+		await expect(
+			lifecycle.sessionMessaging.sendAgentMessage({
+				sessionId: workspace.sessionId,
+				source: "webui",
+				text: "Change the fixture.",
+			}),
+		).rejects.toThrow("Workspace coding capability is disabled");
+		await Bun.sleep(50);
+		expect(await nativeAnswers(database, workspace.sessionId)).toHaveLength(0);
+	}, 60_000);
+
+	test("keeps legacy coding task and proposal rows readable through the workspace", async () => {
+		const { lifecycle } = await start();
+		const database = lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("Database not ready");
+		const store = new DomainCodingStore(() => database);
+		const legacy = await store.createTask({
+			baseRef: "HEAD",
+			constraints: {
+				allowedCommands: ["bun"],
+				maxOutputBytes: 8_192,
+				pathAllowlist: ["src"],
+				timeoutMs: 5_000,
+			},
+			goal: "Legacy proposal task",
+			mode: "proposal",
+			sourceConversationId: "workspace:legacy",
+		});
+		await store.updateTask(legacy.id, { status: "awaiting_approval" });
+		const proposal = await store.createProposal({
+			changedFiles: ["src/app.ts"],
+			diff: "--- a/src/app.ts\n+++ b/src/app.ts\n",
+			motivation: "Legacy fixture",
+			riskAssessment: "low",
+			rollbackNotes: "revert",
+			taskId: legacy.id,
+			title: "Legacy proposal",
+		});
+		await store.transitionProposal(proposal.id, "pending_approval");
+		await store.createDeployment({
+			createdBy: "admin",
+			proposalId: proposal.id,
+			rollbackPlan: "revert",
+			sourceRevision: "deadbeef",
+			status: "pending",
+			taskId: legacy.id,
+		});
+
+		const workspace = await lifecycle.workspace.create({
+			goal: "Read legacy rows.",
+			requestedBy: "test-admin",
+		});
+		await database
+			.update(workspaceSessions)
+			.set({ taskId: legacy.id })
+			.where(eq(workspaceSessions.id, workspace.sessionId));
+
+		const status = await lifecycle.workspace.status({ sessionId: workspace.sessionId });
+		expect(status.taskId).toBe(legacy.id);
+		expect(status.status).toBe("awaiting_approval");
+		expect(status.proposals).toEqual([
+			expect.objectContaining({
+				changedFiles: ["src/app.ts"],
+				id: proposal.id,
+				status: "pending_approval",
+				title: "Legacy proposal",
+			}),
+		]);
+
+		const detail = await lifecycle.workspace.get(workspace.sessionId);
+		expect(detail?.proposals.map((entry) => entry.id)).toEqual([proposal.id]);
+		expect(detail?.workspace.taskStatus).toBe("awaiting_approval");
 	}, 60_000);
 });
