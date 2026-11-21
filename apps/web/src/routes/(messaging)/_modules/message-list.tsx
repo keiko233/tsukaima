@@ -379,6 +379,19 @@ export function MessageList({
 	}, [loadingOlder]);
 
 	const count = messages.length + (liveRun === undefined ? 0 : 1);
+	// Assistant bubbles that appeared while this run was working: narration, immediate
+	// stickers/files, and flushed stream lines. The live preview hides their text so the same
+	// line never renders twice inside the in-flight message.
+	const deliveredTexts =
+		liveRun === undefined
+			? []
+			: messages.flatMap((message) => {
+					if (message.senderKind !== "assistant") return [];
+					const occurredAtMs = Date.parse(message.occurredAt);
+					if (!Number.isFinite(occurredAtMs) || occurredAtMs < liveRun.startedAtMs) return [];
+					const text = message.contentText.trim();
+					return text.length === 0 ? [] : [text];
+				});
 	const virtualizer = useVirtualizer({
 		// The transcript is chat-shaped: newest content lives at the bottom. `anchorTo` keeps the
 		// row under the reader pinned when an older page is prepended, and follows the live edge
@@ -449,7 +462,12 @@ export function MessageList({
 								>
 									{message === undefined ? (
 										liveRun === undefined ? null : (
-											<LiveRunMessage markdown={markdown} now={now} run={liveRun} />
+											<LiveRunMessage
+												deliveredTexts={deliveredTexts}
+												markdown={markdown}
+												now={now}
+												run={liveRun}
+											/>
 										)
 									) : (
 										<MessageRow

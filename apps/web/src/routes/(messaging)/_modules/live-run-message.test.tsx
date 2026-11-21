@@ -47,8 +47,8 @@ function run(overrides: Partial<LiveRunState> = {}): LiveRunState {
 // load, and the virtual module does not exist under Bun's test runner.
 const { LiveRunMessage } = await import("./live-run-message");
 
-const render = (state: LiveRunState, now = 5_000) =>
-	renderToStaticMarkup(<LiveRunMessage now={now} run={state} />);
+const render = (state: LiveRunState, now = 5_000, deliveredTexts: readonly string[] = []) =>
+	renderToStaticMarkup(<LiveRunMessage deliveredTexts={deliveredTexts} now={now} run={state} />);
 
 describe("LiveRunMessage", () => {
 	// A run that has not streamed a token yet must still be visible: this is the state that
@@ -63,6 +63,19 @@ describe("LiveRunMessage", () => {
 		const html = render(run({ partialText: "The answer streams" }));
 		expect(html).toContain("The answer streams");
 		expect(html).toContain("思考中");
+	});
+
+	test("hides text already delivered as its own mid-turn bubble", () => {
+		const html = render(run({ partialText: "First line\nSecond line" }), 5_000, ["First line"]);
+		expect(html).not.toContain("First line");
+		expect(html).toContain("Second line");
+
+		const complete = render(run({ partialText: "First line" }), 5_000, ["First line"]);
+		expect(complete).not.toContain("First line");
+
+		// A mention inside a longer line is not a delivered prefix and stays visible.
+		const mentioned = render(run({ partialText: "Say hello now" }), 5_000, ["hello"]);
+		expect(mentioned).toContain("Say hello now");
 	});
 
 	test("renders workspace output as Markdown without loading external images", () => {

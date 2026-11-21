@@ -136,11 +136,45 @@ function StepRow({ step, now, markdown }: { step: RunStep; now: number; markdown
 	}
 }
 
+/**
+ * Hide text that already arrived as its own transcript bubble from the live preview.
+ *
+ * A mid-turn narration, an immediate sticker caption, or a flushed stream line is persisted and
+ * rendered before the run settles; the same text still sits in `partialText`, so the preview
+ * would show it twice. Only whole-line prefixes are removed, never an arbitrary substring.
+ */
+export function stripDeliveredPreview(partial: string, delivered: readonly string[]): string {
+	let remaining = partial;
+	let changed = true;
+	while (changed) {
+		changed = false;
+		const candidateText = remaining.trimStart();
+		for (const text of delivered) {
+			const candidate = text.trim();
+			if (candidate.length === 0) continue;
+			if (candidateText === candidate) {
+				remaining = "";
+				changed = true;
+				break;
+			}
+			if (!candidateText.startsWith(candidate)) continue;
+			const next = candidateText.charAt(candidate.length);
+			if (next !== "" && !/\s/u.test(next)) continue;
+			remaining = candidateText.slice(candidate.length).replace(/^\s+/u, "");
+			changed = true;
+			break;
+		}
+	}
+	return remaining;
+}
+
 export interface LiveRunMessageProps {
 	run: LiveRunState;
 	markdown?: boolean;
 	/** Wall clock at render time, so the elapsed label ticks with the transcript. */
 	now: number;
+	/** Text already delivered as its own bubble during this run, hidden from the preview. */
+	deliveredTexts?: readonly string[];
 }
 
 /**
@@ -153,10 +187,18 @@ export interface LiveRunMessageProps {
  * and tool calls; the current request adds its partial thinking, draft tool calls, and running
  * tools below them. A slow model therefore reads as model call #1 working, not a hung bot.
  */
-export function LiveRunMessage({ run, now, markdown = false }: LiveRunMessageProps) {
+export function LiveRunMessage({
+	run,
+	now,
+	markdown = false,
+	deliveredTexts = [],
+}: LiveRunMessageProps) {
 	const [collapsed, setCollapsed] = useState(false);
 	const working = !run.settled && run.failure === undefined;
-	const partial = run.partialText ?? "";
+	const rawPartial = run.partialText ?? "";
+	// Mid-turn narration, stickers, and streamed lines already render as transcript bubbles.
+	// Strip that delivered prefix so the live preview never repeats what the reader just read.
+	const partial = stripDeliveredPreview(rawPartial, deliveredTexts);
 	const thinking = run.partialThinking ?? "";
 	const elapsed = elapsedSeconds(run.startedAtMs, now);
 	const steps = run.steps ?? [];
@@ -164,7 +206,7 @@ export function LiveRunMessage({ run, now, markdown = false }: LiveRunMessagePro
 	const tools = run.tools;
 	// A failed run keeps the partial in the bubble. The timeline also records it as the final
 	// round's text step, so hide that duplicate while keeping earlier rounds' preambles.
-	const visibleSteps = steps.filter((step) => step.kind !== "text" || step.text !== partial);
+	const visibleSteps = steps.filter((step) => step.kind !== "text" || step.text !== rawPartial);
 	const hasActivity =
 		visibleSteps.length > 0 || thinking.length > 0 || draftTools.length > 0 || tools.length > 0;
 	const expanded = working || !collapsed;
