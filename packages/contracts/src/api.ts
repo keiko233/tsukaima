@@ -53,6 +53,20 @@ export const channelStateSchema = z.string();
 
 // ─── WebUI view models ───────────────────────────────────────────────────────
 
+export const inboundReplyDecisionSchema = z.object({
+	cooldownMs: z.number().nonnegative(),
+	gate: z
+		.object({
+			confidence: z.number().min(0).max(1).optional(),
+			decision: z.enum(["REPLY", "SKIP"]),
+			reason: z.string().optional(),
+			source: z.enum(["gate", "fallback"]),
+		})
+		.optional(),
+	reason: z.string(),
+});
+export type InboundReplyDecision = z.infer<typeof inboundReplyDecisionSchema>;
+
 export const messageSummarySchema = z.object({
 	contentText: z.string(),
 	deliveryStatus: deliveryStatusSchema,
@@ -69,6 +83,7 @@ export const messageSummarySchema = z.object({
 	parts: z.array(messagePartSchema),
 	platformMessageId: z.string().nullable(),
 	replyToMessageId: z.string().nullable(),
+	replyDecision: inboundReplyDecisionSchema.optional(),
 	senderDisplayName: z.string(),
 	senderExternalId: z.string().nullable(),
 	senderKind: z.enum(["human", "bot", "assistant", "system"]),

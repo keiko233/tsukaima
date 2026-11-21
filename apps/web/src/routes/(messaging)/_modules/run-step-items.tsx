@@ -45,8 +45,9 @@ function toolRows(step: Extract<RunStep, { kind: "tool" }>, index: number): RunS
  * The answer text is skipped: it renders in the message bubble, and repeating it here would show
  * the same sentence twice.
  */
-export function toStepRows(steps: readonly RunStep[]): RunStepRow[] {
+export function toStepRows(steps: readonly RunStep[], answerText?: string): RunStepRow[] {
 	const rows: RunStepRow[] = [];
+	const lastText = steps.findLastIndex((step) => step.kind === "text");
 	// A plain answer is not a process worth expanding. Model-call rows only add value when the
 	// turn also reasoned, ran a tool, or failed.
 	const showModelCalls = steps.some(
@@ -90,6 +91,9 @@ export function toStepRows(steps: readonly RunStep[]): RunStepRow[] {
 				rows.push({ body: step.detail, id: `failure-body-${index}`, isError: true, label: null });
 				return;
 			case "text":
+				if (index !== lastText || (answerText !== undefined && step.text !== answerText)) {
+					rows.push({ body: step.text, id: `text-${index}`, label: m.run_step_text() });
+				}
 				return;
 		}
 	});

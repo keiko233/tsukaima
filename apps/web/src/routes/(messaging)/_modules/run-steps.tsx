@@ -18,14 +18,22 @@ import { toStepRows } from "./run-step-items";
  * Rendered as its own rows rather than through the shared `AgentActivity`: that component lays
  * rows out left-aligned inside a full-width block, and this transcript is right-aligned.
  */
-export function RunSteps({ entryId, sessionId }: { entryId: string; sessionId: string }) {
+export function RunSteps({
+	answerText,
+	entryId,
+	sessionId,
+}: {
+	answerText?: string;
+	entryId: string;
+	sessionId: string;
+}) {
 	const [open, setOpen] = useState(false);
 	const query = useQuery({
 		...orpc.admin.sessions.runSteps.queryOptions({ input: { entryId, sessionId } }),
 		enabled: open,
 	});
 
-	const rows = toStepRows(query.data?.steps ?? []);
+	const rows = toStepRows(query.data?.steps ?? [], answerText);
 	const duration = query.data?.durationSeconds;
 
 	// Nothing to expand for a plain answer with no tool rounds and no reasoning: a disclosure

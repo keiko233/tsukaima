@@ -86,7 +86,9 @@ function partLabel(part: MessageSummary["parts"][number]): string {
 		case "image":
 			return part.previewText ? `${m.message_image()} · ${part.previewText}` : m.message_image();
 		case "sticker":
-			return part.previewText ? `${m.message_sticker()} · ${part.previewText}` : m.message_sticker();
+			return part.previewText
+				? `${m.message_sticker()} · ${part.previewText}`
+				: m.message_sticker();
 		case "audio":
 			return part.transcript?.trim()
 				? `Voice · ${part.transcript.trim()}`
@@ -259,20 +261,59 @@ function MessageRow({
 				)}
 				{/* Steps come first: they explain the answer rather than trailing it. */}
 				{assistant && message.durableEntryId !== null ? (
-					<RunSteps entryId={message.durableEntryId} sessionId={sessionId} />
+					<RunSteps
+						answerText={message.contentText}
+						entryId={message.durableEntryId}
+						sessionId={sessionId}
+					/>
 				) : null}
-				<MessageBubble
-					variant={assistant ? "ghost" : "soft"}
-					className={cn("max-w-full", self && "items-end")}
-				>
-					<MessageBubbleContent
-						className={cn(
-							assistant ? "max-w-[46rem]" : "max-w-[min(32rem,80%)] rounded-lg px-2.5 py-1.5",
-						)}
+				{message.kind === "reply-lurk" ? (
+					<p className="text-xs text-muted-foreground">{m.reply_decision_lurk()}</p>
+				) : (
+					<MessageBubble
+						variant={assistant ? "ghost" : "soft"}
+						className={cn("max-w-full", self && "items-end")}
 					>
-						<MessageBody message={message} />
-					</MessageBubbleContent>
-				</MessageBubble>
+						<MessageBubbleContent
+							className={cn(
+								assistant ? "max-w-[46rem]" : "max-w-[min(32rem,80%)] rounded-lg px-2.5 py-1.5",
+							)}
+						>
+							<MessageBody message={message} />
+						</MessageBubbleContent>
+					</MessageBubble>
+				)}
+				{message.replyDecision ? (
+					<details className="max-w-full px-0.5 text-xs text-muted-foreground">
+						<summary className="cursor-pointer">
+							{message.triggerClassification === "ambient"
+								? m.reply_decision_ambient()
+								: m.reply_decision_show()}
+						</summary>
+						<ul className="mt-1 space-y-1 ps-3">
+							<li>{m.reply_decision_trigger({ reason: message.replyDecision.reason })}</li>
+							{message.replyDecision.gate ? (
+								<li>
+									{message.replyDecision.gate.source === "fallback"
+										? m.reply_decision_gate_fallback()
+										: message.replyDecision.gate.decision === "SKIP"
+											? m.reply_decision_gate_skip()
+											: m.reply_decision_gate_reply()}
+									{message.replyDecision.gate.reason ? (
+										<div>{message.replyDecision.gate.reason}</div>
+									) : null}
+								</li>
+							) : null}
+							{message.replyDecision.cooldownMs > 0 ? (
+								<li>
+									{m.reply_decision_cooldown({
+										seconds: Math.ceil(message.replyDecision.cooldownMs / 1000),
+									})}
+								</li>
+							) : null}
+						</ul>
+					</details>
+				) : null}
 				{self ? (
 					<MessageFooter className="min-h-4 px-0.5 text-[10px]">
 						<span className={deliveryClass(message.deliveryStatus)}>
@@ -328,8 +369,7 @@ export function MessageList({
 		estimateSize: (index) => (index === messages.length ? 140 : 76),
 		followOnAppend: "auto",
 		gap: 10,
-		getItemKey: (index) =>
-			messages[index]?.id ?? `live-run:${liveRun?.startedAtMs ?? "none"}`,
+		getItemKey: (index) => messages[index]?.id ?? `live-run:${liveRun?.startedAtMs ?? "none"}`,
 		getScrollElement: () => viewportRef.current,
 		overscan: 8,
 		paddingEnd: 14,
@@ -377,10 +417,7 @@ export function MessageList({
 						<p className="mt-2.5 text-[12.5px] font-medium">{m.messages_empty()}</p>
 					</div>
 				) : (
-					<div
-						className="relative w-full"
-						style={{ height: `${virtualizer.getTotalSize()}px` }}
-					>
+					<div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
 						{virtualizer.getVirtualItems().map((virtualItem) => {
 							const message = messages[virtualItem.index];
 							return (
@@ -392,7 +429,9 @@ export function MessageList({
 									style={{ transform: `translateY(${virtualItem.start}px)` }}
 								>
 									{message === undefined ? (
-										liveRun === undefined ? null : <LiveRunMessage now={now} run={liveRun} />
+										liveRun === undefined ? null : (
+											<LiveRunMessage now={now} run={liveRun} />
+										)
 									) : (
 										<MessageRow
 											grouped={

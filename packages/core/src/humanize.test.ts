@@ -55,6 +55,14 @@ describe("humanize: overused phrase detection", () => {
 });
 
 describe("humanize: meta-leak sanitizer", () => {
+	test("removes tool error bodies from replies and incomplete streamed output", () => {
+		expect(
+			sanitizeOutboundMetaLeaks("First\n<error>Error: synthetic tool failure</error>\nSecond").text,
+		).toBe("First\n\nSecond");
+		expect(sanitizeOutboundMetaLeaks("First\n<error>Error: synthetic").text).toBe("First");
+		expect(sanitizeOutboundMetaLeaks("```xml\n<error>example</error>\n```").modified).toBe(false);
+	});
+
 	test("strips leaked template tags, placeholders, and instruction echoes", () => {
 		const result = sanitizeOutboundMetaLeaks(
 			[

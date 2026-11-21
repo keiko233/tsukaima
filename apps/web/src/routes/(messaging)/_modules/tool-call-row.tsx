@@ -5,6 +5,7 @@ import { type ReactNode, useId, useMemo, useState } from "react";
 import { AgentCode, type AgentCodeLanguage } from "@tsukaima/ui/components/agents/agent-code";
 import { AgentDisclosure } from "@tsukaima/ui/components/agents/agent-disclosure";
 import { cn } from "@tsukaima/ui/lib/utils";
+import { m } from "@/paraglide/messages";
 
 export interface ToolCallRowProps {
 	/** Compact single-line JSON of the call arguments, shown truncated in the header. */
@@ -99,14 +100,17 @@ export function ToolCallRow({ argumentsText, badge, isError, output, toolName }:
 							<div className="my-1.5 border-t border-border/60" />
 						) : null}
 						{result.length > 0 ? (
-							<p
-								className={cn(
-									"whitespace-pre-wrap break-words",
-									isError ? "text-destructive" : "text-muted-foreground/80",
-								)}
-							>
-								{result}
-							</p>
+							<>
+								<div className="text-muted-foreground">{m.run_step_text()}</div>
+								<pre
+									className={cn(
+										"max-h-80 overflow-auto whitespace-pre-wrap break-words",
+										isError ? "text-destructive" : "text-muted-foreground/80",
+									)}
+								>
+									{result}
+								</pre>
+							</>
 						) : null}
 					</div>
 				</AgentDisclosure>

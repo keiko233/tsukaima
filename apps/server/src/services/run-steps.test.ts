@@ -89,6 +89,21 @@ describe("run steps from durable entries", () => {
 		expect(tools[0]).toMatchObject({ output: "file contents", toolName: "read_file" });
 	});
 
+	test("keeps stored tool output and arguments beyond the old display limits", () => {
+		const input = "a".repeat(600);
+		const output = "b".repeat(3_000);
+		const entries = [
+			userTurn("1"),
+			assistant("2", [call("c1", "inspect", { input })]),
+			toolResult("3", "c1", output),
+			assistant("4", [text("done")]),
+		];
+		expect(runStepsFromEntries(entries, "4")[0]).toMatchObject({
+			argumentsText: JSON.stringify({ input }),
+			output,
+		});
+	});
+
 	test("marks a failing tool and keeps its error text", () => {
 		const entries: StepEntry[] = [
 			userTurn("1"),

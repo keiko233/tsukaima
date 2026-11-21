@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import {
 	buildTurnCue,
 	classifyConversationTrigger,
@@ -8,7 +8,12 @@ import {
 	type ResolvedReplyTarget,
 	type TurnTrigger,
 } from "@tsukaima/core";
-import type { ConversationPolicy, MessagePart, MessageQuote } from "@tsukaima/contracts";
+import type {
+	ConversationPolicy,
+	InboundReplyDecision,
+	MessagePart,
+	MessageQuote,
+} from "@tsukaima/contracts";
 import {
 	channelNoticeSchema,
 	conversationPolicySchema,
@@ -310,6 +315,7 @@ export class ConversationRouter {
 			// Optional fail-open pre-model gate for undirected group messages: when the gate returns
 			// `SKIP`, downgrade to `ambient` before `host.append` so the main chat model is never invoked.
 			let effectiveTrigger = trigger;
+			let replyGate: InboundReplyDecision["gate"];
 			const gate = this.#conversationGate?.();
 			if (
 				message.conversationKey.kind === "group" &&
@@ -326,7 +332,9 @@ export class ConversationRouter {
 						senderDisplayName: messages.senderDisplayName,
 					})
 					.from(messages)
-					.where(eq(messages.conversationId, target.sessionId))
+					.where(
+						and(eq(messages.conversationId, target.sessionId), ne(messages.kind, "reply-lurk")),
+					)
 					.orderBy(desc(messages.occurredAt), desc(messages.id))
 					.limit(6);
 				const recentContext = recentRows
@@ -343,6 +351,7 @@ export class ConversationRouter {
 					recentContext,
 					senderName: message.sender.displayName,
 				});
+				replyGate = gateDecision;
 				if (gateDecision.decision === "SKIP") {
 					effectiveTrigger = {
 						...trigger,
@@ -404,6 +413,7 @@ export class ConversationRouter {
 				target.sessionId,
 				reply?.quote,
 			);
+			let cooldownMs = 0;
 			if (effectiveTrigger.classification !== "ambient") {
 				// Only a direct address interrupts in-flight output. A `soft` message is chatter the
 				// bot merely follows and must not cut a multi-bubble reply short.
@@ -419,8 +429,7 @@ export class ConversationRouter {
 						sessionId: target.sessionId,
 					});
 				}
-				const cooldownMs =
-					this.#pacing?.remainingCooldownMs(target.durableConversationId, policy) ?? 0;
+				cooldownMs = this.#pacing?.remainingCooldownMs(target.durableConversationId, policy) ?? 0;
 				messageLog.debug("appending turn to durable conversation", {
 					classification: effectiveTrigger.classification,
 					collectOnly: cooldownMs > 0,
@@ -443,6 +452,16 @@ export class ConversationRouter {
 			await this.#persistInbound(database, {
 				classification: effectiveTrigger.classification,
 				envelope: hydratedMessage,
+				replyDecision: {
+					cooldownMs,
+					gate: replyGate,
+					reason:
+						trigger.reason === "group context only" && recentlyActive && !recentActivity
+							? escalation === "off"
+								? "recent activity escalation disabled"
+								: "recent activity escalation throttled"
+							: trigger.reason,
+				},
 				sender,
 				target,
 			});
@@ -646,6 +665,7 @@ export class ConversationRouter {
 		input: {
 			classification: "ambient" | "direct" | "soft";
 			envelope: MessageEnvelope;
+			replyDecision: InboundReplyDecision;
 			sender: { displayName: string; userId: string };
 			target: { chatObjectId: string; sessionId: string };
 		},
@@ -669,7 +689,7 @@ export class ConversationRouter {
 				occurredAt,
 				partsJson: JSON.stringify(parts),
 				platformMessageId: message.source.messageId ?? message.id,
-				rawRefJson: JSON.stringify(message),
+				rawRefJson: JSON.stringify({ ...message, replyDecision: input.replyDecision }),
 				...(message.target?.replyToEnvelopeId === undefined
 					? {}
 					: { replyToMessageId: message.target.replyToEnvelopeId }),

@@ -1050,10 +1050,35 @@ export class ReplyDispatcher {
 			return { deliveryStatus: "skipped", reason: "already_dispatched" };
 		}
 
+		let policy: ConversationPolicy = defaultConversationPolicy;
+		try {
+			policy = (await this.#policy?.effectivePolicy(session.sessionId)) ?? policy;
+		} catch (error) {
+			this.#logger.warn("reply pacing policy unavailable", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+
 		// `shownThisTurn` and `turnToolSends` were snapshotted at entry; the final answer may still
 		// repeat a narration or a tool-delivered text from this same turn.
-		const lurk = extractLurkMarker(answer.text);
+		const lurk = extractLurkMarker(
+			this.#sanitizeOutboundText(answer.text, policy, answer.conversationId, answer.entryId),
+		);
 		if (lurk.lurk) {
+			const now = new Date(this.#now()).toISOString();
+			await this.#insertOutbound(database, {
+				chatObjectId: session.chatId,
+				conversationId: session.sessionId,
+				direction: "system",
+				durableEntryId: answer.entryId,
+				id: randomUUID(),
+				ingestedAt: now,
+				kind: "reply-lurk",
+				occurredAt: now,
+				senderDisplayName: "Tsukaima",
+				senderExternalId: "tsukaima",
+				updatedAt: now,
+			});
 			this.#pacing?.recordLurk(answer.conversationId);
 			await this.#audit({
 				action: "message.lurk",
@@ -1110,14 +1135,6 @@ export class ReplyDispatcher {
 			});
 		}
 
-		let policy: ConversationPolicy = defaultConversationPolicy;
-		try {
-			policy = (await this.#policy?.effectivePolicy(session.sessionId)) ?? policy;
-		} catch (error) {
-			this.#logger.warn("reply pacing policy unavailable", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
 		const transformed = await this.#transformReply({
 			channelId: session.channelId,
 			chatKind: session.chatKind,

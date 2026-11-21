@@ -249,6 +249,10 @@ const META_LEAK_RULES: readonly MetaLeakRule[] = [
 		pattern: /<system-reminder\b[^>]*>[\s\S]*?<\/system-reminder>/giu,
 	},
 	{
+		name: "tool-error-block",
+		pattern: /<error\b[^>]*>[\s\S]*?(?:<\/error\s*>|$)/giu,
+	},
+	{
 		name: "thinking-block",
 		pattern:
 			/<(?:think|thought|thinking)(?::[^>\s]+)?\b[^>]*>[\s\S]*?<\/(?:think|thought|thinking)(?::[^>\s]+)?\s*>/giu,

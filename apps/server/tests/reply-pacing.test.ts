@@ -11,7 +11,7 @@ import {
 	type OneBotTransportFactory,
 } from "@tsukaima-plugin/onebot-napcat";
 import { createApp } from "../src/app.ts";
-import { createLocalChat } from "../src/services/webui.ts";
+import { createLocalChat, listMessages } from "../src/services/webui.ts";
 
 const directories: string[] = [];
 
@@ -146,6 +146,15 @@ describe("lurk suppression and humanlike output pacing", () => {
 				.from(messages)
 				.where(and(eq(messages.direction, "outbound"), eq(messages.durableEntryId, "entry-lurk")));
 			expect(outbound).toHaveLength(0);
+			expect(await listMessages(lifecycle, chat.sessionId)).toContainEqual(
+				expect.objectContaining({
+					contentText: "",
+					direction: "system",
+					durableEntryId: "entry-lurk",
+					kind: "reply-lurk",
+					senderKind: "assistant",
+				}),
+			);
 			const audits = await database.select().from(auditLog);
 			expect(audits.some((row) => row.action === "message.lurk" && row.result === "ok")).toBe(true);
 		} finally {
