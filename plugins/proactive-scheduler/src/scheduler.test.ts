@@ -1283,3 +1283,119 @@ describe("proactive quiet-hours deferral", () => {
 		).toBe("completed");
 	});
 });
+
+describe("scheduled proactive social gates and host schedule identity", () => {
+	test("a scheduled proactive task blocked by the social hard gate never runs the turn", async () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const social = new FakeSocialProfiles();
+		social.gateReason = "refusal_cooldown";
+		const { conversations, service, tasks } = await setup(now, true, {
+			socialProfiles: social,
+		});
+		const task = await service.createTask({
+			conversationId: "c1",
+			delayMs: 0,
+			kind: "proactive",
+			prompt: "Synthetic scheduled proactive",
+		});
+		const host = tasks.tasks.get(task.taskId);
+		if (host === undefined) throw new Error("host task missing");
+		await service.runHostTask(host);
+		expect(conversations.turns).toHaveLength(0);
+		expect(social.recorded).toHaveLength(0);
+		expect((await service.repository.getTask(task.id))?.status).toBe("skipped");
+	});
+
+	test("a scheduled nudge also respects the social hard gate", async () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const social = new FakeSocialProfiles();
+		social.gateReason = "self_ratio_high";
+		const { conversations, service, tasks } = await setup(now, true, {
+			socialProfiles: social,
+		});
+		const task = await service.createTask({
+			conversationId: "c1",
+			delayMs: 0,
+			kind: "nudge",
+			prompt: "Synthetic scheduled nudge",
+		});
+		const host = tasks.tasks.get(task.taskId);
+		if (host === undefined) throw new Error("host task missing");
+		await service.runHostTask(host);
+		expect(conversations.turns).toHaveLength(0);
+		expect((await service.repository.getTask(task.id))?.status).toBe("skipped");
+	});
+
+	test("delivery via a channel tool counts as proactive delivery for quota", async () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const social = new FakeSocialProfiles();
+		const { conversations, service } = await setup(now, true, { socialProfiles: social });
+		await service.repository.saveState({
+			...emptyState("c1", now),
+			inboundCount: 10,
+			lastMessageAtMs: now - 30 * 60_000,
+			warmness: 0.9,
+		});
+		conversations.defaultResult = {
+			delivered: true,
+			deliveredViaTool: true,
+			deliveryStatus: "suppressed",
+			skippedReason: "already_sent_via_tool",
+			text: "",
+		};
+		await service.runTick();
+		expect(social.recorded).toEqual([
+			expect.objectContaining({ conversationId: "c1", delivered: true }),
+		]);
+	});
+
+	test("a user-requested reminder stays exempt from the proactive social gate", async () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0);
+		const social = new FakeSocialProfiles();
+		social.gateReason = "refusal_cooldown";
+		const { conversations, service, tasks } = await setup(now, true, {
+			socialProfiles: social,
+		});
+		const task = await service.createTask({
+			conversationId: "c1",
+			delayMs: 0,
+			kind: "remind",
+			prompt: "Synthetic user-requested reminder",
+		});
+		const host = tasks.tasks.get(task.taskId);
+		if (host === undefined) throw new Error("host task missing");
+		await service.runHostTask(host);
+		expect(conversations.turns).toHaveLength(1);
+		expect(social.recorded).toHaveLength(0);
+	});
+
+	test("host schedules are addressable by the id returned from createTask and list as scheduled", async () => {
+		const { clock, schedules } = await setup();
+		const conversations = new FakeConversations();
+		conversations.add("c1");
+		const hosted = new ProactiveSchedulerService({
+			conversations,
+			database: new TestDatabase(),
+			logger: createRecordingLogger([]),
+			now: () => clock.now,
+			schedules,
+			tasks: new FakeTasks(),
+		});
+		const task = await hosted.createTask({
+			conversationId: "c1",
+			delayMs: 60_000,
+			kind: "remind",
+			prompt: "Synthetic host-schedule reminder",
+		});
+		const scheduleId = schedules.rows[0]?.id;
+		if (scheduleId === undefined) throw new Error("host schedule missing");
+		expect(task.id).toBe(scheduleId);
+		const listed = await hosted.listTasks({ status: "scheduled" });
+		expect(listed.map((entry) => entry.id)).toContain(scheduleId);
+		const found = await hosted.getTask(task.id);
+		if (found === undefined) throw new Error("hosted task not found by id");
+		expect(found.task.id).toBe(scheduleId);
+		const cancelled = await hosted.cancelTask(task.id, "synthetic-admin");
+		expect(cancelled).toMatchObject({ id: scheduleId, status: "cancelled" });
+	});
+});

@@ -72,6 +72,16 @@ function weekday(date: { day: number; month: number; year: number }): number {
 	return new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay();
 }
 
+/** Zone offset in minutes at an absolute instant (`local - UTC`). */
+function offsetMinutesAt(atMs: number, timeZone: string): number {
+	const parts = localParts(atMs, timeZone);
+	return (
+		(Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute) -
+			Math.floor(atMs / MINUTE_MS) * MINUTE_MS) /
+		MINUTE_MS
+	);
+}
+
 /**
  * Convert a local wall-clock time to an absolute instant. A wall time may be missing
  * (spring-forward) or repeated (fall-back). Repeated times use the earlier instant; a missing
@@ -103,11 +113,13 @@ export function zonedTimeToUtc(
 	}
 	if (candidates.size > 0) return Math.min(...candidates);
 
+	// The wall time is in a spring-forward gap. Scanning around the raw `localAsUtc` misses the
+	// gap on zones far from UTC, so center the scan on an offset-adjusted anchor instead.
+	// Zone offsets are bounded by ±14 h, so ±3 h..+6 h around the anchor covers the gap while
+	// still finding the first valid local minute after it.
 	const requestedMinute = time.hour * 60 + time.minute;
-	for (
-		let candidate = localAsUtc - 3 * 60 * MINUTE_MS;
-		candidate <= localAsUtc + 6 * 60 * MINUTE_MS;
-	) {
+	const anchor = localAsUtc - offsetMinutesAt(localAsUtc, timeZone) * MINUTE_MS;
+	for (let candidate = anchor - 3 * 60 * MINUTE_MS; candidate <= anchor + 6 * 60 * MINUTE_MS;) {
 		const actual = localParts(candidate, timeZone);
 		if (
 			actual.year === date.year &&

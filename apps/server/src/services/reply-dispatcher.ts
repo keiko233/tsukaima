@@ -405,10 +405,13 @@ export class ReplyDispatcher {
 	readonly #directSendThisTurn = new Map<string, true>();
 	readonly #lastNarrationAtMs = new Map<string, number>();
 	/**
-	 * Recent tool-delivered sends per session (`onebot-napcat.send`), used to suppress duplicate
-	 * final assistant text while still delivering standalone media/sticker parts.
+	 * Tool-delivered text (`onebot-napcat.send`) for the current turn, keyed by durable
+	 * conversation id. A final answer repeating it is suppressed while standalone media/sticker
+	 * parts still go out. `handleAnswer` consumes it synchronously at entry and `beginTurn` clears
+	 * it, so a later turn that legitimately says the same thing is never suppressed by an older
+	 * turn.
 	 */
-	readonly #turnToolSends = new Map<string, { readonly atMs: number; readonly texts: string[] }>();
+	readonly #turnToolSends = new Map<string, string[]>();
 	#legacyIntentReported = false;
 	#reconcileTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -524,10 +527,25 @@ export class ReplyDispatcher {
 		return this.#directSendThisTurn.get(durableConversationId) === true;
 	}
 
-	/** The next turn starts with nothing shown and no direct-send suppression. */
+	/**
+	 * Reset all per-turn dispatcher state when a turn is admitted. Without this, state from a
+	 * previous turn (tool sends, shown narrations, last narration instant) would leak into the
+	 * next turn and wrongly suppress a legitimate repeated reply.
+	 */
+	beginTurn(durableConversationId: string): void {
+		this.#endTurn(durableConversationId);
+		this.#lastNarrationAtMs.delete(durableConversationId);
+	}
+
+	/**
+	 * The turn is over: nothing shown or sent by tools carries into the next turn. `beginTurn`
+	 * calls this for an idle new turn; `handleAnswer` performs the same clear synchronously at
+	 * entry, before its first await, so it can never wipe a newer turn that started meanwhile.
+	 */
 	#endTurn(durableConversationId: string): void {
 		this.#shownThisTurn.delete(durableConversationId);
 		this.#directSendThisTurn.delete(durableConversationId);
+		this.#turnToolSends.delete(durableConversationId);
 	}
 
 	/**
@@ -540,11 +558,42 @@ export class ReplyDispatcher {
 	 * await so the narration always precedes the final answer of the same turn.
 	 */
 	handleNarration(narration: ConversationNarration): Promise<ReplyDeliveryOutcome | undefined> {
+		// Record the shown text synchronously, before the lane item can start. `handleAnswer`
+		// runs outside the lane and may otherwise see a queued-but-unstarted narration as absent
+		// and send the final answer's repeated prefix twice.
+		const recorded = this.#recordNarrationShown(narration);
 		return this.#runOutboundLane(
 			narration.conversationId,
 			() => this.#handleNarrationNow(narration),
-			async () => ({ deliveryStatus: "skipped", reason: "cancelled" }),
-		);
+			async (): Promise<ReplyDeliveryOutcome | undefined> => ({
+				deliveryStatus: "skipped",
+				reason: "cancelled",
+			}),
+		).then((outcome) => {
+			// Narration is not owed when it is skipped (disabled, rate limited, direct-send), so
+			// the answer must not treat it as already shown.
+			if (outcome?.deliveryStatus === "skipped") this.#rollbackNarrationShown(narration, recorded);
+			return outcome;
+		});
+	}
+
+	#recordNarrationShown(narration: ConversationNarration): string | undefined {
+		const text = narration.text.trim();
+		if (text.length === 0) return undefined;
+		const shown = this.#shownThisTurn.get(narration.conversationId) ?? [];
+		shown.push(text);
+		this.#shownThisTurn.set(narration.conversationId, shown);
+		return text;
+	}
+
+	#rollbackNarrationShown(narration: ConversationNarration, recorded: string | undefined): void {
+		if (recorded === undefined) return;
+		const shown = this.#shownThisTurn.get(narration.conversationId);
+		if (shown === undefined) return;
+		const index = shown.lastIndexOf(recorded);
+		if (index < 0) return;
+		shown.splice(index, 1);
+		if (shown.length === 0) this.#shownThisTurn.delete(narration.conversationId);
 	}
 
 	async #handleNarrationNow(
@@ -566,19 +615,26 @@ export class ReplyDispatcher {
 			.orderBy(desc(conversations.updatedAt))
 			.limit(1);
 		if (session === undefined) return { deliveryStatus: "skipped", reason: "no_domain_session" };
-		if (this.hasDirectSendThisTurn(narration.conversationId)) {
+		// A length-prefix narration is owed content from a truncated answer, not an optional
+		// preamble: it must be delivered even after a direct send, with narration disabled, or
+		// inside the minimum interval. Dropping it loses text the reader never receives.
+		const owed = narration.kind === "length-prefix";
+		if (!owed && this.hasDirectSendThisTurn(narration.conversationId)) {
 			return { deliveryStatus: "skipped", reason: "direct-send" };
 		}
 		let policy: ConversationPolicy = defaultConversationPolicy;
 		try {
 			policy = (await this.#policy?.effectivePolicy(session.sessionId)) ?? policy;
 		} catch {}
-		if (!policy.pacing.narrationEnabled) return { deliveryStatus: "skipped", reason: "disabled" };
-		// Narration is a courtesy, not owed content: when two rounds produce preambles too close
-		// together, drop the later one instead of delaying the actual tool work.
+		if (!owed && !policy.pacing.narrationEnabled) {
+			return { deliveryStatus: "skipped", reason: "disabled" };
+		}
+		// Preamble narration is a courtesy: when two rounds produce preambles too close together,
+		// drop the later one instead of delaying the actual tool work.
 		const nowMs = this.#now();
 		const lastNarrationAtMs = this.#lastNarrationAtMs.get(narration.conversationId);
 		if (
+			!owed &&
 			lastNarrationAtMs !== undefined &&
 			nowMs - lastNarrationAtMs < policy.pacing.narrationMinIntervalMs
 		) {
@@ -622,9 +678,6 @@ export class ReplyDispatcher {
 			.returning({ id: messages.id });
 		if (inserted.length === 0) return { deliveryStatus: "skipped", reason: "duplicate" };
 		this.#lastNarrationAtMs.set(narration.conversationId, nowMs);
-		const shown = this.#shownThisTurn.get(narration.conversationId) ?? [];
-		shown.push(prepared.text.trim());
-		this.#shownThisTurn.set(narration.conversationId, shown);
 		this.#logger.debug("narration accepted", {
 			conversationId: narration.conversationId,
 			kind: narration.kind,
@@ -825,21 +878,13 @@ export class ReplyDispatcher {
 	 * turn so `handleAnswer` can suppress duplicate final text while preserving standalone media.
 	 */
 	recordTurnToolSend(input: {
-		readonly atMs?: number;
-		readonly durableConversationId?: string;
-		readonly hasMedia?: boolean;
-		readonly sessionId: string;
+		readonly durableConversationId: string;
 		readonly text: string;
 	}): void {
 		const trimmed = input.text.trim();
 		if (trimmed.length === 0) return;
-		const now = input.atMs ?? this.#now();
-		const existing = this.#turnToolSends.get(input.sessionId);
-		const texts =
-			existing !== undefined && now - existing.atMs < 60_000
-				? [...existing.texts, trimmed]
-				: [trimmed];
-		this.#turnToolSends.set(input.sessionId, { atMs: now, texts });
+		const existing = this.#turnToolSends.get(input.durableConversationId) ?? [];
+		this.#turnToolSends.set(input.durableConversationId, [...existing, trimmed]);
 	}
 
 	/**
@@ -940,6 +985,20 @@ export class ReplyDispatcher {
 	}
 
 	async handleAnswer(answer: ConversationAnswer): Promise<ReplyDeliveryOutcome | undefined> {
+		// Capture and consume this turn's presentation state synchronously, before the first
+		// await. A newer turn may be admitted and start narrating while this call is reading the
+		// database; clearing the live maps after that await would wipe the newer turn's state.
+		// A recovered answer belongs to an older, not-live turn, so it must neither read nor clear
+		// the state an active live turn is still recording.
+		const recovered = answer.recovered === true;
+		const shownThisTurn = recovered ? undefined : this.#shownText(answer.conversationId);
+		const turnToolSends = recovered ? undefined : this.#turnToolSends.get(answer.conversationId);
+		if (!recovered) {
+			this.#shownThisTurn.delete(answer.conversationId);
+			this.#directSendThisTurn.delete(answer.conversationId);
+			this.#turnToolSends.delete(answer.conversationId);
+			this.#lastNarrationAtMs.delete(answer.conversationId);
+		}
 		const database = this.#database();
 		if (database === undefined) return undefined;
 		const [session] = await database
@@ -991,9 +1050,10 @@ export class ReplyDispatcher {
 			return { deliveryStatus: "skipped", reason: "already_dispatched" };
 		}
 
+		// `shownThisTurn` and `turnToolSends` were snapshotted at entry; the final answer may still
+		// repeat a narration or a tool-delivered text from this same turn.
 		const lurk = extractLurkMarker(answer.text);
 		if (lurk.lurk) {
-			this.#endTurn(answer.conversationId);
 			this.#pacing?.recordLurk(answer.conversationId);
 			await this.#audit({
 				action: "message.lurk",
@@ -1018,9 +1078,7 @@ export class ReplyDispatcher {
 			return { deliveryStatus: "suppressed", reason: "lurk", text: lurk.text };
 		}
 
-		const stripped = stripNarratedPrefix(this.#shownText(answer.conversationId), lurk.text);
-		// The turn is over either way; the next turn starts with nothing shown.
-		this.#endTurn(answer.conversationId);
+		const stripped = stripNarratedPrefix(shownThisTurn, lurk.text);
 		if (stripped.duplicate) {
 			this.#logger.debug("assistant answer repeats text already shown this turn", {
 				conversationId: answer.conversationId,
@@ -1070,18 +1128,9 @@ export class ReplyDispatcher {
 			sessionId: session.sessionId,
 			text: answerText,
 		});
-		const recentToolSend = this.#turnToolSends.get(session.sessionId);
-		this.#turnToolSends.delete(session.sessionId);
 		let effectiveTransformedParts = transformed.parts;
-		if (
-			recentToolSend !== undefined &&
-			this.#now() - recentToolSend.atMs < 60_000 &&
-			recentToolSend.texts.length > 0
-		) {
-			effectiveTransformedParts = suppressDuplicateTextParts(
-				transformed.parts,
-				recentToolSend.texts,
-			);
+		if (turnToolSends !== undefined && turnToolSends.length > 0) {
+			effectiveTransformedParts = suppressDuplicateTextParts(transformed.parts, turnToolSends);
 			if (effectiveTransformedParts.length === 0) {
 				this.#logger.info("assistant final text suppressed after channel tool send", {
 					conversationId: answer.conversationId,

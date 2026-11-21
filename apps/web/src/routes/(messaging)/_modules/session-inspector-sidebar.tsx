@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@tsukaima/ui/component
 import { orpc } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
+import { toPolicyPatch } from "../../_modules/policy/policy-patch";
 import { ContextPanel } from "./context-panel";
 import { WorkspaceInspectorTabs } from "./workspace-inspector";
 import { SessionCommandsView, type CommandFeedback } from "./session-commands-view";
@@ -335,7 +336,7 @@ export function SessionInspectorSidebar({
 		if (draft === undefined) return;
 		savePolicy.mutate({
 			conversationId: sessionId,
-			policy: draft,
+			policy: toPolicyPatch(draft),
 			scope: "conversation",
 		});
 	};

@@ -399,3 +399,44 @@ describe("Batch 6 social familiarity profile", () => {
 		expect(rows).toHaveLength(1);
 	});
 });
+
+describe("Batch 6 social profile concurrent mutation serialization", () => {
+	test("a concurrent refusal burst never loses refusedAt, silentUntil, or counts", async () => {
+		const fixture = await setup();
+		await seedConversation(fixture.database, { id: "session-burst" });
+		await seedProfile(fixture.social, "session-burst", {
+			...closeProfile,
+			level: "L2",
+		});
+		const timezoneOffsetMinutes = 480;
+		const normals = Array.from({ length: 8 }, (_, index) =>
+			fixture.social.recordInbound({
+				conversationId: "session-burst",
+				nowMs: fixedNow,
+				text: `synthetic burst message ${index}`,
+				timezoneOffsetMinutes,
+			}),
+		);
+		// The refusal is enqueued last: without per-conversation serialization an earlier
+		// normal-message write could land after it and wipe the cooldown.
+		const refusal = fixture.social.recordInbound({
+			conversationId: "session-burst",
+			nowMs: fixedNow,
+			text: "别烦我了",
+			timezoneOffsetMinutes,
+		});
+		const [normalProfiles, refusalProfile] = await Promise.all([Promise.all(normals), refusal]);
+		const final = await fixture.social.getProfile("session-burst");
+		expect(final).toMatchObject({
+			refusedAt: fixedNow,
+			refusedCount: 1,
+			silentUntil: fixedNow + 48 * 3_600_000,
+			unansweredStreak: 0,
+		});
+		expect(final?.interactions).toBe(closeProfile.interactions! + 9);
+		// The local-time histogram uses the caller-supplied offset (UTC+8 -> 20:00).
+		expect(final?.activeHours["20"]).toBe(9);
+		expect(refusalProfile?.refusedAt).toBe(fixedNow);
+		expect(normalProfiles.every((profile) => profile !== undefined)).toBe(true);
+	});
+});

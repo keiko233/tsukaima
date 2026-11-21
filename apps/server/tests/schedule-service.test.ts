@@ -435,3 +435,94 @@ describe("durable schedules", () => {
 		}
 	});
 });
+
+describe("durable schedules: deferral and recurrence validation", () => {
+	test("a cancellation that lands during quiet-hours deferral settles the occurrence as skipped", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-schedules-defer-"));
+		const database = await seed(directory);
+		let now = Date.parse("2026-11-17T00:00:00.000Z");
+		let scheduleId = "";
+		const service = new ScheduleService({
+			audit: async () => undefined,
+			database: () => database,
+			executor: {
+				async execute() {
+					// The operator cancels while the turn is running; the deferred settlement must
+					// not flip the schedule back to active.
+					await service.cancel(scheduleId);
+					return {
+						deferredUntilMs: now + 60_000,
+						result: { deferred: true },
+						status: "deferred" as const,
+					};
+				},
+			},
+			logger,
+			now: () => now,
+		});
+		try {
+			const created = await service.create({
+				actionKind: "agent_turn",
+				ownerId: "test-admin",
+				ownerKind: "user",
+				prompt: "Synthetic deferred reminder",
+				recurrence: { at: "2026-11-17T00:01:00.000Z", kind: "once" },
+				respectQuietHours: true,
+				source: "test",
+				targetSessionId: "session-1",
+				timeZone: "UTC",
+				title: "Synthetic deferred schedule",
+			});
+			scheduleId = created.id;
+			now = Date.parse("2026-11-17T00:01:01.000Z");
+			await service.tick();
+			const [schedule] = await database
+				.select()
+				.from(schedules)
+				.where(eq(schedules.id, scheduleId));
+			if (schedule === undefined) throw new Error("schedule missing");
+			expect(schedule.status).toBe("cancelled");
+			const occurrences = await database
+				.select()
+				.from(scheduleOccurrences)
+				.where(eq(scheduleOccurrences.scheduleId, scheduleId));
+			expect(occurrences.map((row) => row.status)).toEqual(["skipped"]);
+		} finally {
+			database.$client.close();
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("create rejects a malformed recurrence instead of persisting it", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-schedules-validation-"));
+		const database = await seed(directory);
+		let now = Date.parse("2026-11-17T00:00:00.000Z");
+		const service = new ScheduleService({
+			audit: async () => undefined,
+			database: () => database,
+			executor: new RecordingExecutor(),
+			logger,
+			now: () => now,
+		});
+		try {
+			await expect(
+				service.create({
+					actionKind: "agent_turn",
+					ownerId: "test-admin",
+					ownerKind: "user",
+					prompt: "Synthetic invalid recurrence",
+					recurrence: { everyMs: 1_000, kind: "interval" } as never,
+					source: "test",
+					targetSessionId: "session-1",
+					timeZone: "UTC",
+					title: "Synthetic invalid schedule",
+				}),
+			).rejects.toThrow();
+			const rows = await database.select().from(schedules);
+			expect(rows).toHaveLength(0);
+		} finally {
+			database.$client.close();
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+});

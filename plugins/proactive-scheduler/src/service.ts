@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
 	ProactiveBubbleGateBridge,
 	SocialFamiliarityLevel,
@@ -354,9 +353,11 @@ export class ProactiveSchedulerService {
 			query.status === undefined
 				? undefined
 				: new Set(Array.isArray(query.status) ? query.status : [query.status]);
+		// Map host rows to task status first: filtering the contract status (`active`) against
+		// task vocabulary (`scheduled`) before the mapping drops every active host schedule.
 		const mapped = hosted
-			.filter((task) => statuses === undefined || statuses.has(task.status))
-			.map(scheduleToTask);
+			.map(scheduleToTask)
+			.filter((task) => statuses === undefined || statuses.has(task.status));
 		return [...mapped, ...local];
 	}
 
@@ -491,7 +492,9 @@ export class ProactiveSchedulerService {
 				createdByKind: createdBy.kind,
 				dedupeKey: schedule.id,
 				dueWindowMs: null,
-				id: randomUUID(),
+				// The host schedule id is the task id: getTask/cancelTask look up host schedules
+				// by the same id, so an ephemeral UUID here would be unfindable.
+				id: schedule.id,
 				kind: parsed.kind,
 				lastError: null,
 				maxAttempts,
@@ -1106,7 +1109,7 @@ export class ProactiveSchedulerService {
 		}
 		const dueExpired =
 			claimed.dueWindowMs !== null && now > claimed.scheduledForMs + claimed.dueWindowMs;
-		const policy = await this.#repository.effectivePolicy(claimed.conversationId);
+		let policy = await this.#repository.effectivePolicy(claimed.conversationId);
 		const gate = this.#scheduledGate(claimed, policy, now);
 		this.#logger.trace("scheduled task claimed", {
 			attempts: claimed.attempts,
@@ -1193,6 +1196,69 @@ export class ProactiveSchedulerService {
 				return { logs: [`skipped ${reason}`], outcome: { reason, skipped: true } };
 			}
 			return { logs: [`skipped ${reason}`], outcome: { reason, skipped: true }, stop: true };
+		}
+		// Scheduled proactive/nudge turns are model-initiated utterances and must pass the same
+		// hard social gates as tick-driven bubbles. A blocked gate skips the turn entirely; only
+		// user-requested `remind`/`workflow` tasks stay exempt.
+		if (
+			this.#socialProfiles !== undefined &&
+			(claimed.kind === "proactive" || claimed.kind === "nudge")
+		) {
+			let conversationPolicy: CandidateContext["conversationPolicy"] | undefined;
+			try {
+				conversationPolicy = await this.#conversations.getPolicy(claimed.conversationId);
+			} catch (error) {
+				this.#logger.warn("scheduled proactive conversation policy read failed", {
+					conversationId: claimed.conversationId,
+					error: errorMessage(error),
+					taskId: claimed.id,
+				});
+			}
+			const social =
+				conversationPolicy === undefined
+					? {
+							blocked: true,
+							gates: [
+								{
+									gate: "social_hard_gate",
+									reason: "policy_unavailable",
+									status: "blocked" as const,
+								},
+							],
+							policy,
+							reason: "policy_unavailable",
+						}
+					: await this.#applySocialProfile(claimed.conversationId, policy, conversationPolicy, now);
+			if (social.blocked) {
+				const reason = social.reason ?? "social_blocked";
+				this.#logger.debug("scheduled proactive task blocked by social hard gate", {
+					conversationId: claimed.conversationId,
+					kind: claimed.kind,
+					reason,
+					taskId: claimed.id,
+				});
+				await this.#recordDecision({
+					conversationId: claimed.conversationId,
+					deliveryStatus: "skipped",
+					gateResult: "skipped",
+					gates: social.gates,
+					kind: claimed.kind,
+					marker: null,
+					skippedReason: reason,
+					taskId: claimed.id,
+				});
+				await this.#repository.updateTask(claimed.id, {
+					lastError: reason,
+					status: claimed.repeat === null ? "skipped" : "scheduled",
+				});
+				if (claimed.repeat !== null) {
+					const next = this.#nextRepeat(claimed, now, reason);
+					await this.#repository.updateTask(claimed.id, next);
+					return { logs: [`skipped ${reason}`], outcome: { reason, skipped: true } };
+				}
+				return { logs: [`skipped ${reason}`], outcome: { reason, skipped: true }, stop: true };
+			}
+			policy = social.policy;
 		}
 		try {
 			const state =
@@ -1455,7 +1521,7 @@ export class ProactiveSchedulerService {
 			await this.#repository.saveState(await this.#deliveredState(state, policy, now, result.text));
 			if (
 				(task.kind === "proactive" || task.kind === "nudge") &&
-				(result.text ?? "").trim().length > 0
+				(result.deliveredViaTool === true || (result.text ?? "").trim().length > 0)
 			) {
 				await this.#socialProfiles
 					?.recordProactiveOutcome({
@@ -1724,7 +1790,7 @@ export class ProactiveSchedulerService {
 				await this.#deliveredState(candidate.state, candidate.policy, now, result.text),
 			);
 			// Consume social proactive quota ONLY when outbound content was actually delivered.
-			if ((result.text ?? "").trim().length > 0) {
+			if (result.deliveredViaTool === true || (result.text ?? "").trim().length > 0) {
 				await this.#socialProfiles
 					?.recordProactiveOutcome({
 						conversationId: candidate.conversation.id,

@@ -27,6 +27,7 @@ import {
 	type ModelRef,
 	type RunFailure,
 	type Submission,
+	type SubmissionId,
 	type ToolRegistration,
 	type UserInput,
 } from "@earendil-works/pi-durable";
@@ -87,6 +88,37 @@ import type { BusyArbiter, BusyArbitrationResult } from "./busy-arbiter.ts";
 import type { ConversationGatePort } from "./gate.ts";
 import { shouldInterject, type FastLaneInterjector, type FastLaneReply } from "./interject.ts";
 import { shouldCloseActivityWindow } from "./index.ts";
+
+/** Platform id of the triggering envelope's sender, tolerant of stored JSON shapes. */
+function senderExternalId(envelope: StoredEnvelope | undefined): string | undefined {
+	const sender = envelope?.sender;
+	if (typeof sender !== "object" || sender === null) return undefined;
+	const platformId =
+		"platformId" in sender && typeof sender.platformId === "string" ? sender.platformId : undefined;
+	if (platformId !== undefined && platformId.trim().length > 0) return platformId;
+	const id = "id" in sender && typeof sender.id === "string" ? sender.id : undefined;
+	return id !== undefined && id.trim().length > 0 ? id : undefined;
+}
+
+/**
+ * Sender that triggered an admitted batch, or `undefined` when the batch mixes speakers.
+ *
+ * Binding a mixed batch to the last speaker would let that speaker's admin status authorize
+ * tools on behalf of everyone in the window, so a mixed batch deliberately fails closed.
+ */
+function triggerSenderExternalId(envelopes: readonly StoredEnvelope[]): string | undefined {
+	let trigger: string | undefined;
+	for (const envelope of envelopes) {
+		const sender = senderExternalId(envelope);
+		if (sender === undefined) return undefined;
+		if (trigger === undefined) {
+			trigger = sender;
+			continue;
+		}
+		if (sender !== trigger) return undefined;
+	}
+	return trigger;
+}
 
 type StoredEnvelope = JsonObject & {
 	readonly id: string;
@@ -433,6 +465,18 @@ export interface DurableConversationHostOptions {
 	 * replay, so the expectation records `kind: "background"`.
 	 */
 	readonly onBackgroundTurnAdmitted?: (turn: AdmittedTurn) => Promise<void> | void;
+	/**
+	 * Called exactly once when an admitted submission reaches a terminal state: a dispatched
+	 * answer, empty final text, an interrupted/aborted run, `unanswered`, or a refused submit.
+	 * Consumers key their per-submission state (the turn-bound sender) by
+	 * `submissionRequestId`, so this is their only cleanup signal. Errors are logged, never
+	 * retried.
+	 */
+	readonly onSubmissionSettled?: (event: {
+		readonly conversationId: string;
+		readonly preserveReplyState?: boolean;
+		readonly submissionRequestId: string;
+	}) => void;
 	readonly policy?: ActivityAggregationPolicy;
 	/** Shared execution lock; defaults to the host-wide lock. */
 	readonly executionLock?: ConversationExecutionLock;
@@ -475,10 +519,27 @@ export interface AdmittedTurn {
 	/** Durable activity id (`<conversationId>:activity`). */
 	readonly activityId: string;
 	readonly conversationId: string;
+	/**
+	 * Platform id of the sender whose message completed the window and triggered this submission.
+	 * The host binds it to the active turn so tool authorization never consults a later ambient
+	 * message that arrived while the turn was running. Absent for background turns.
+	 */
+	readonly senderExternalId?: string;
 	/** Conversation-scoped durable submission request id. */
 	readonly submissionRequestId: string;
 	/** Background-turn origin metadata; absent for ordinary chat turns. */
 	readonly origin?: BackgroundTurnOrigin;
+	/**
+	 * True when the conversation already had a working run when this turn was admitted (a steer
+	 * or follow-up joining it). Consumers must not reset per-turn presentation state for such a
+	 * turn: the working run still owns it.
+	 */
+	readonly midRun?: boolean;
+	/**
+	 * Busy handling the submission was admitted with. `steer` joins the active run, so a steer
+	 * from a different speaker makes the whole run mixed-speaker and must fail closed.
+	 */
+	readonly whenBusy?: "steer" | "follow-up";
 }
 
 /**
@@ -1075,6 +1136,9 @@ export class PiDurableConversationHost {
 			deferredWhileWorking = true;
 		}
 		const activeSinceMs = this.activeRunSince(input.conversationId);
+		// The run this submission joins is already working, so its per-turn presentation state
+		// belongs to that run and must not be reset when this admission is observed.
+		const midRun = activeSinceMs !== undefined;
 		const disposition = busyDisposition(activeSinceMs, input.submittedAtMs, this.steerGraceMs);
 		const whenBusy =
 			input.whenBusy ??
@@ -1113,59 +1177,74 @@ export class PiDurableConversationHost {
 			envelopePreview: previewText(this.envelopeToText(input.envelope)),
 			messageId: input.envelope.id,
 		});
-		const submissionId = await conversation.commit(async (tx) => {
-			const receipt = await tx.doc(messageReceiptDoc, conversationId, input.envelope.id, {
-				activityId,
-				acceptedAtMs: input.submittedAtMs,
-				messageId: input.envelope.id,
-			});
-			receipt.activityId = activityId;
-			receipt.acceptedAtMs = input.submittedAtMs;
-			receipt.messageId = input.envelope.id;
-			const document = await tx.doc(activityWindowDoc, conversationId, activityId, {
-				conversationId,
-				envelopes: nextEnvelopes,
-				openedAtMs: input.submittedAtMs,
-			});
-			document.envelopes = nextEnvelopes;
-			document.openedAtMs = shouldOpen ? input.submittedAtMs : window.openedAtMs;
-			document.status = shouldSubmit ? "submitted" : "collecting";
-			const entry = {
-				kind: durableDocumentKinds.activityWindow,
-				data: {
+		// The request id is deterministic, so it can be hoisted out of the commit closure: the
+		// settlement hook needs the exact id even when the commit itself throws.
+		const requestId = input.requestId ?? activitySubmissionRequestId(activityId, input.envelope.id);
+		const triggerSenderId = shouldSubmit ? triggerSenderExternalId(nextEnvelopes) : undefined;
+		let admitted = false;
+		let submissionId: SubmissionId;
+		try {
+			submissionId = await conversation.commit(async (tx) => {
+				const receipt = await tx.doc(messageReceiptDoc, conversationId, input.envelope.id, {
 					activityId,
-					envelopes: nextEnvelopes,
-				},
-			};
-			const requestId =
-				input.requestId ?? activitySubmissionRequestId(activityId, input.envelope.id);
-			if (shouldSubmit) {
-				// Persist the reply expectation before the durable submission exists. A crash after
-				// the answer commits but before any observer runs is then still recoverable, and a
-				// turn can never start without a durable record that its reply is owed.
-				await this.options.onTurnAdmitted?.({
-					activityId,
-					conversationId: input.conversationId,
-					submissionRequestId: requestId,
+					acceptedAtMs: input.submittedAtMs,
+					messageId: input.envelope.id,
 				});
-			}
-			return conversation.submit(
-				tx,
-				shouldSubmit
-					? {
-							type: "input",
-							content: await this.envelopesToInput(nextEnvelopes, conversation),
-							entry,
-							requestId,
-							whenBusy: whenBusy === "follow-up" ? "followUp" : whenBusy,
-						}
-					: {
-							type: "write",
-							entry,
-							requestId: `${activityId}:${input.envelope.id}`,
-						},
-			);
-		}, BACKGROUND_CONTEXT);
+				receipt.activityId = activityId;
+				receipt.acceptedAtMs = input.submittedAtMs;
+				receipt.messageId = input.envelope.id;
+				const document = await tx.doc(activityWindowDoc, conversationId, activityId, {
+					conversationId,
+					envelopes: nextEnvelopes,
+					openedAtMs: input.submittedAtMs,
+				});
+				document.envelopes = nextEnvelopes;
+				document.openedAtMs = shouldOpen ? input.submittedAtMs : window.openedAtMs;
+				document.status = shouldSubmit ? "submitted" : "collecting";
+				const entry = {
+					kind: durableDocumentKinds.activityWindow,
+					data: {
+						activityId,
+						envelopes: nextEnvelopes,
+					},
+				};
+				if (shouldSubmit) {
+					// Persist the reply expectation before the durable submission exists. A crash after
+					// the answer commits but before any observer runs is then still recoverable, and a
+					// turn can never start without a durable record that its reply is owed.
+					admitted = true;
+					await this.options.onTurnAdmitted?.({
+						activityId,
+						conversationId: input.conversationId,
+						...(triggerSenderId === undefined ? {} : { senderExternalId: triggerSenderId }),
+						...(midRun ? { midRun } : {}),
+						submissionRequestId: requestId,
+						whenBusy,
+					});
+				}
+				return conversation.submit(
+					tx,
+					shouldSubmit
+						? {
+								type: "input",
+								content: await this.envelopesToInput(nextEnvelopes, conversation),
+								entry,
+								requestId,
+								whenBusy: whenBusy === "follow-up" ? "followUp" : whenBusy,
+							}
+						: {
+								type: "write",
+								entry,
+								requestId: `${activityId}:${input.envelope.id}`,
+							},
+				);
+			}, BACKGROUND_CONTEXT);
+		} catch (error) {
+			// The turn was announced before the durable submission existed. A refused submit must
+			// never leave the announced binding (or its reply expectation) behind.
+			if (admitted) this.settleAdmittedSubmission(input.conversationId, requestId);
+			throw error;
+		}
 		if (shouldOpen) {
 			this.emitActivityEvent({
 				activityId,
@@ -1188,7 +1267,13 @@ export class PiDurableConversationHost {
 			this.scheduleActivityFlush(input.conversationId, pacing.burstSettleMs);
 		} else {
 			this.trackSubmission(input.conversationId, String(submissionId));
-			this.observeAnswer(harness, input.conversationId, submission, String(submissionId));
+			this.observeAnswer(
+				harness,
+				input.conversationId,
+				submission,
+				String(submissionId),
+				requestId,
+			);
 		}
 		return {
 			activityId,
@@ -1207,10 +1292,12 @@ export class PiDurableConversationHost {
 		conversationId: string,
 		submission: Submission | undefined,
 		submissionId?: string,
+		submissionRequestId?: string,
 	): void {
 		const onAnswer = this.options.onAnswer;
 		if (submission === undefined) {
 			if (submissionId !== undefined) this.untrackSubmission(conversationId, submissionId);
+			this.settleAdmittedSubmission(conversationId, submissionRequestId);
 			this.logger.debug("Conversation answer observation skipped", {
 				conversationId,
 				reason: "no-submission",
@@ -1221,18 +1308,37 @@ export class PiDurableConversationHost {
 		const startedAt = performance.now();
 		this.watchLiveRun(harness, conversationId);
 		void (async () => {
+			let settledNotified = false;
+			const notifySettled = (preserveReplyState?: boolean) => {
+				if (settledNotified) return;
+				settledNotified = true;
+				this.settleAdmittedSubmission(conversationId, submissionRequestId, preserveReplyState);
+			};
 			try {
 				const settled = await submission.wait(BACKGROUND_CONTEXT);
-				if (onAnswer === undefined) return;
-				if (settled.type !== "input" || settled.status !== "done") return;
+				if (onAnswer === undefined || settled.type !== "input" || settled.status !== "done") {
+					notifySettled();
+					return;
+				}
 				const answerId = settled.answer;
 				const entry = await harness.commit((tx) => tx.entry(answerId), BACKGROUND_CONTEXT);
-				if (entry === undefined) return;
+				if (entry === undefined) {
+					notifySettled();
+					return;
+				}
 				const text = assistantEntryText(entry);
-				if (text === undefined) return;
+				if (text === undefined) {
+					notifySettled();
+					return;
+				}
+				// Release the submission's sender binding before `await onAnswer(...)` runs slow
+				// channel pacing/sends, so a queued follow-up run that starts immediately cannot
+				// inherit the previous turn's authorization. Preserve per-turn reply dedup state so
+				// `handleAnswer` can consume it synchronously before its first await.
+				notifySettled(true);
 				const truncated = assistantEntryStopReason(entry) === "length";
 				const activityId = activityIdFromSubmissionRequestId(settled.requestId ?? "");
-				const submissionRequestId = settled.requestId;
+				const answerSubmissionRequestId = settled.requestId;
 				const entryId = String(answerId);
 				this.logger.debug("Conversation answer observed", {
 					activityId,
@@ -1250,7 +1356,9 @@ export class PiDurableConversationHost {
 					activityId,
 					conversationId,
 					entryId,
-					...(submissionRequestId === undefined ? {} : { submissionRequestId }),
+					...(answerSubmissionRequestId === undefined
+						? {}
+						: { submissionRequestId: answerSubmissionRequestId }),
 					text,
 					...(truncated ? { truncated } : {}),
 				});
@@ -1262,9 +1370,35 @@ export class PiDurableConversationHost {
 					submissionId,
 				});
 			} finally {
+				// Safety net for throws before `notifySettled`: every outcome must release the
+				// submission's per-turn state.
+				notifySettled();
 				if (submissionId !== undefined) this.untrackSubmission(conversationId, submissionId);
 			}
 		})();
+	}
+
+	/** Announce that an admitted submission reached a terminal state; listener errors never throw. */
+	private settleAdmittedSubmission(
+		conversationId: string,
+		submissionRequestId: string | undefined,
+		preserveReplyState?: boolean,
+	): void {
+		if (submissionRequestId === undefined) return;
+		try {
+			this.options.onSubmissionSettled?.({
+				conversationId,
+				...(preserveReplyState === true ? { preserveReplyState: true } : {}),
+				submissionRequestId,
+			});
+		} catch (error) {
+			if (this.closed) return;
+			this.logger.error("Failed to settle admitted submission", {
+				conversationId,
+				error,
+				submissionRequestId,
+			});
+		}
 	}
 
 	/**
@@ -1506,6 +1640,9 @@ export class PiDurableConversationHost {
 					? await harness.snapshot(LiveDoc, numericId, BACKGROUND_CONTEXT)
 					: undefined;
 			const working = live?.run !== undefined && live.run.inputs.length > 0;
+			// A steer or follow-up admitted into a run that is already working must not reset the
+			// presentation state that run still owns.
+			const midRun = this.activeRunSince(conversationId) !== undefined || working;
 			let whenBusy: "steer" | "follow-up" =
 				busyDisposition(this.activeRunSince(conversationId), now, this.steerGraceMs) === "steer" &&
 				policy.steerWhenBusy === "steer"
@@ -1692,36 +1829,48 @@ export class PiDurableConversationHost {
 				this.clearBusyHold(conversationId);
 			}
 
-			const submissionId = await conversation.commit(async (tx) => {
-				const document = await tx.doc(activityWindowDoc, numericId, activityId, {
-					conversationId: numericId,
-					envelopes,
-					openedAtMs: window.openedAtMs,
-				});
-				document.envelopes = envelopes;
-				document.status = "submitted";
-				document.closedAtMs = Date.now();
-				const entry = {
-					kind: durableDocumentKinds.activityWindow,
-					data: {
-						activityId,
+			const requestId = activitySubmissionRequestId(activityId, envelopes[0]?.id ?? "window");
+			const triggerSenderId = triggerSenderExternalId(envelopes);
+			let admitted = false;
+			let submissionId: SubmissionId;
+			try {
+				submissionId = await conversation.commit(async (tx) => {
+					const document = await tx.doc(activityWindowDoc, numericId, activityId, {
+						conversationId: numericId,
 						envelopes,
-					},
-				};
-				const requestId = activitySubmissionRequestId(activityId, envelopes[0]?.id ?? "window");
-				await this.options.onTurnAdmitted?.({
-					activityId,
-					conversationId,
-					submissionRequestId: requestId,
-				});
-				return conversation.submit(tx, {
-					content: await this.envelopesToInput(envelopes, conversation),
-					entry,
-					requestId,
-					type: "input",
-					whenBusy: whenBusy === "steer" ? "steer" : "followUp",
-				});
-			}, BACKGROUND_CONTEXT);
+						openedAtMs: window.openedAtMs,
+					});
+					document.envelopes = envelopes;
+					document.status = "submitted";
+					document.closedAtMs = Date.now();
+					const entry = {
+						kind: durableDocumentKinds.activityWindow,
+						data: {
+							activityId,
+							envelopes,
+						},
+					};
+					await this.options.onTurnAdmitted?.({
+						activityId,
+						conversationId,
+						...(triggerSenderId === undefined ? {} : { senderExternalId: triggerSenderId }),
+						...(midRun ? { midRun } : {}),
+						submissionRequestId: requestId,
+						whenBusy,
+					});
+					admitted = true;
+					return conversation.submit(tx, {
+						content: await this.envelopesToInput(envelopes, conversation),
+						entry,
+						requestId,
+						type: "input",
+						whenBusy: whenBusy === "steer" ? "steer" : "followUp",
+					});
+				}, BACKGROUND_CONTEXT);
+			} catch (error) {
+				if (admitted) this.settleAdmittedSubmission(conversationId, requestId);
+				throw error;
+			}
 			this.emitActivityEvent({
 				activityId,
 				conversationId,
@@ -1739,7 +1888,7 @@ export class PiDurableConversationHost {
 				whenBusy,
 			});
 			this.trackSubmission(conversationId, String(submissionId));
-			this.observeAnswer(harness, conversationId, submission, String(submissionId));
+			this.observeAnswer(harness, conversationId, submission, String(submissionId), requestId);
 		}
 	}
 
@@ -2044,63 +2193,82 @@ export class PiDurableConversationHost {
 			});
 			throw new Error("Background turn prompt must not be empty");
 		}
-		const submissionId = await conversation.commit(async (tx) => {
-			// Record the reply expectation before admitting the turn, so a crash after the answer
-			// commits but before this caller sees it is recoverable. A rejected expectation aborts
-			// the turn: a reply must never be produced without a durable record that it is owed.
-			await this.options.onBackgroundTurnAdmitted?.({
-				activityId,
-				conversationId: input.conversationId,
-				...(input.origin === undefined ? {} : { origin: input.origin }),
-				submissionRequestId: requestId,
-			});
-			return conversation.submit(tx, {
-				content,
-				entry: {
-					kind: durableDocumentKinds.activityWindow,
-					data: {
-						activityId,
-						backgroundKind: input.kind,
-						requestId,
+		const midRun =
+			this.activeRunSince(input.conversationId) !== undefined ||
+			(await this.runIsWorking(harness, numericId));
+		let admitted = false;
+		let submissionId: SubmissionId;
+		try {
+			submissionId = await conversation.commit(async (tx) => {
+				// Record the reply expectation before admitting the turn, so a crash after the answer
+				// commits but before this caller sees it is recoverable. A rejected expectation aborts
+				// the turn: a reply must never be produced without a durable record that it is owed.
+				admitted = true;
+				await this.options.onBackgroundTurnAdmitted?.({
+					activityId,
+					conversationId: input.conversationId,
+					...(midRun ? { midRun } : {}),
+					...(input.origin === undefined ? {} : { origin: input.origin }),
+					submissionRequestId: requestId,
+				});
+				return conversation.submit(tx, {
+					content,
+					entry: {
+						kind: durableDocumentKinds.activityWindow,
+						data: {
+							activityId,
+							backgroundKind: input.kind,
+							requestId,
+						},
 					},
-				},
-				requestId,
-				type: "input",
-			});
-		}, BACKGROUND_CONTEXT);
-		const submission = await harness.submission(submissionId, BACKGROUND_CONTEXT);
-		const settled = await submission?.wait(BACKGROUND_CONTEXT);
-		if (settled === undefined || settled.type !== "input" || settled.status !== "done") {
-			this.logger.warn("Background turn did not settle", {
+					requestId,
+					type: "input",
+				});
+			}, BACKGROUND_CONTEXT);
+		} catch (error) {
+			// A refused submit must not leave the announced background binding behind.
+			if (admitted) this.settleAdmittedSubmission(input.conversationId, requestId);
+			throw error;
+		}
+		try {
+			const submission = await harness.submission(submissionId, BACKGROUND_CONTEXT);
+			const settled = await submission?.wait(BACKGROUND_CONTEXT);
+			if (settled === undefined || settled.type !== "input" || settled.status !== "done") {
+				this.logger.warn("Background turn did not settle", {
+					conversationId: input.conversationId,
+					durationMs: Math.round(performance.now() - startedAt),
+					requestId,
+					status: settled?.status,
+				});
+				throw new Error("Background turn did not settle successfully");
+			}
+			const entry = await harness.commit((tx) => tx.entry(settled.answer), BACKGROUND_CONTEXT);
+			const text = entry === undefined ? "" : (assistantEntryText(entry) ?? "");
+			const entryId = String(settled.answer);
+			this.logger.debug("Background turn done", {
 				conversationId: input.conversationId,
 				durationMs: Math.round(performance.now() - startedAt),
+				entryId,
 				requestId,
-				status: settled?.status,
+				status: settled.status,
 			});
-			throw new Error("Background turn did not settle successfully");
+			this.logger.trace("Background turn answer preview", {
+				answerPreview: previewText(text),
+				conversationId: input.conversationId,
+				entryId,
+			});
+			return {
+				activityId,
+				entryId,
+				requestId,
+				submissionRequestId: requestId,
+				text,
+			};
+		} finally {
+			// The turn is settled (answered, empty, or failed); its background binding must not
+			// authorize anything in a later turn.
+			this.settleAdmittedSubmission(input.conversationId, requestId);
 		}
-		const entry = await harness.commit((tx) => tx.entry(settled.answer), BACKGROUND_CONTEXT);
-		const text = entry === undefined ? "" : (assistantEntryText(entry) ?? "");
-		const entryId = String(settled.answer);
-		this.logger.debug("Background turn done", {
-			conversationId: input.conversationId,
-			durationMs: Math.round(performance.now() - startedAt),
-			entryId,
-			requestId,
-			status: settled.status,
-		});
-		this.logger.trace("Background turn answer preview", {
-			answerPreview: previewText(text),
-			conversationId: input.conversationId,
-			entryId,
-		});
-		return {
-			activityId,
-			entryId,
-			requestId,
-			submissionRequestId: requestId,
-			text,
-		};
 	}
 
 	async listEntries(conversationId: string, limit = 500): Promise<EntryRecord[]> {

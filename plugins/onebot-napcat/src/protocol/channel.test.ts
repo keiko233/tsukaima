@@ -397,3 +397,26 @@ test("passes request decisions through the transport", async () => {
 	sockets[0]?.respond({ echo: "echo-1", retcode: 0 });
 	await Promise.all([friend, group]);
 });
+
+test("listGroups and listFriends accept numeric platform ids", async () => {
+	const { channel, sent, sockets } = await createChannel();
+	const groups = channel.listGroups();
+	const groupRequest = sent[0] as { action: string; echo: string };
+	expect(groupRequest.action).toBe("get_group_list");
+	sockets[0]?.respond({
+		data: [{ group_id: 555, group_name: "Numeric group" }],
+		echo: groupRequest.echo,
+		retcode: 0,
+	});
+	expect(await groups).toEqual([{ groupId: "555", title: "Numeric group" }]);
+
+	const friends = channel.listFriends();
+	const friendRequest = sent[1] as { action: string; echo: string };
+	expect(friendRequest.action).toBe("get_friend_list");
+	sockets[0]?.respond({
+		data: [{ nickname: "Numeric friend", user_id: 10_001 }],
+		echo: friendRequest.echo,
+		retcode: 0,
+	});
+	expect(await friends).toEqual([{ title: "Numeric friend", userId: "10001" }]);
+});

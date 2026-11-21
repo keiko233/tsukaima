@@ -505,3 +505,53 @@ describe("proactive-scheduler host integration", () => {
 		}
 	});
 });
+
+describe("plugin background turn delivered-via-tool mapping", () => {
+	test("an already-sent-via-tool suppression is reported as delivered for proactive accounting", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-proactive-tool-"));
+		directories.push(directory);
+		const lifecycle = createLifecycle(directory, ["好的"]);
+		await lifecycle.start();
+		try {
+			const conversation = await createConversation(lifecycle, "tool-delivered");
+			spyOn(lifecycle.replyDispatcher, "handleAnswer").mockResolvedValue({
+				deliveryStatus: "suppressed",
+				reason: "already_sent_via_tool",
+				text: "好的",
+			});
+			const pluginConversations = lifecycle.pluginConversations.forPlugin("proactive-scheduler", [
+				"conversation.read",
+				"channel.send",
+			]);
+			const result = await pluginConversations.submitBackgroundTurn({
+				conversationId: conversation.conversationId,
+				kind: "proactive",
+				prompt: "Synthetic proactive turn",
+			});
+			expect(result).toMatchObject({
+				delivered: true,
+				deliveredViaTool: true,
+				deliveryStatus: "suppressed",
+				skippedReason: "already_sent_via_tool",
+			});
+			spyOn(lifecycle.replyDispatcher, "handleAnswer").mockResolvedValue({
+				deliveryStatus: "suppressed",
+				reason: "already_shown",
+				text: "",
+			});
+			const shown = await pluginConversations.submitBackgroundTurn({
+				conversationId: conversation.conversationId,
+				kind: "proactive",
+				prompt: "Synthetic proactive turn two",
+			});
+			expect(shown).toMatchObject({
+				delivered: true,
+				deliveredViaTool: true,
+				deliveryStatus: "suppressed",
+				skippedReason: "already_shown",
+			});
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+});

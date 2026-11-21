@@ -378,7 +378,7 @@ describe("Batch 5 acceptance: warm state quality", () => {
 			llmEnabled: () => true,
 		});
 		await seedUsers(fixture.database, ["synthetic-user"]);
-		await seedConversation(fixture.database, { id: "session-user-fact" });
+		await seedConversation(fixture.database, { id: "session-user-fact", kind: "group" });
 		await seedMessage(fixture.database, {
 			conversationId: "session-user-fact",
 			id: "user-fact-message",
@@ -708,5 +708,85 @@ describe("Batch 5 acceptance: QA consistency", () => {
 		expect(english.map((entry) => entry.answer)).toContain("Friday at 10:00.");
 		const chinese = await memory.recallAnsweredQuestions("session-qa", "发布会几点开始？");
 		expect(chinese.map((entry) => entry.answer)).toContain("在周五上午十点。");
+	});
+});
+
+describe("Batch 5 acceptance: private-to-group memory isolation", () => {
+	test("a fact consolidated from a private chat is never promoted into group context", async () => {
+		const fixture = await setup({
+			complete: async () =>
+				JSON.stringify({
+					memories: [
+						{
+							confidence: 0.9,
+							importance: 0.7,
+							kind: "preference",
+							subject: "synthetic-user",
+							summary: "Prefers jasmine tea",
+						},
+					],
+					state: {
+						people: [
+							{
+								aliases: [],
+								key: "synthetic-user",
+								name: "Synthetic speaker",
+								notes: ["Likes jasmine tea"],
+							},
+						],
+						summary: "Synthetic speaker joined.",
+						topics: ["tea"],
+					},
+				}),
+			llmEnabled: () => true,
+		});
+		await seedUsers(fixture.database, ["synthetic-user"]);
+		await seedConversation(fixture.database, {
+			id: "session-private-fact",
+			kind: "private",
+			title: "Synthetic private chat",
+		});
+		await seedMessage(fixture.database, {
+			conversationId: "session-private-fact",
+			id: "private-fact-message",
+			senderDisplayName: "Synthetic speaker",
+			senderUserId: "synthetic-user",
+			text: "I really like jasmine tea.",
+		});
+		await fixture.memory.consolidateConversation("session-private-fact");
+		const rows = await fixture.database.select().from(memories);
+		const stored = rows.find((row) => row.summary === "Prefers jasmine tea");
+		expect(stored).toMatchObject({
+			conversationId: "session-private-fact",
+			scope: "conversation",
+			visibility: "private",
+		});
+		expect(stored?.subjectUserId).toBe("synthetic-user");
+
+		// The same speaker is an active participant in a group chat, so a wrongly promoted
+		// user-scope fact would be visible there under the default policy.
+		await seedConversation(fixture.database, {
+			id: "session-group-context",
+			kind: "group",
+			title: "Synthetic group",
+		});
+		await seedMessage(fixture.database, {
+			conversationId: "session-group-context",
+			id: "group-context-message",
+			senderDisplayName: "Synthetic speaker",
+			senderUserId: "synthetic-user",
+			text: "Same speaker here.",
+		});
+		const context = new DrizzleContextProvider({
+			budgetChars: 1_200,
+			database: () => fixture.database,
+			logger,
+			memoryService: memoryService(fixture),
+			policyService: fixture.policy,
+		});
+		const rendered = await context.renderMemories("durable-session-group-context");
+		// No group-visible memory means no section at all; the private fact must never surface.
+		expect(rendered ?? "").not.toContain("Prefers jasmine tea");
+		expect(rendered ?? "").not.toContain("jasmine");
 	});
 });

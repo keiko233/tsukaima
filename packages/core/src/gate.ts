@@ -287,10 +287,20 @@ export class FailOpenConversationGate implements ConversationGatePort {
 		}
 		const controller = new AbortController();
 		const boundedTimeoutMs = Math.max(100, timeoutMs);
-		const timer = setTimeout(() => controller.abort(), boundedTimeoutMs);
-		timer.unref?.();
+		let timedOut = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		// Race the driver against the timeout instead of relying on it to honour `AbortSignal`.
+		// A driver that never settles (or ignores abort) must still fail open within `timeoutMs`.
+		const timeout = new Promise<never>((_resolve, reject) => {
+			timer = setTimeout(() => {
+				timedOut = true;
+				controller.abort();
+				reject(new Error("gate timeout"));
+			}, boundedTimeoutMs);
+			timer.unref?.();
+		});
 		try {
-			const result = await call(controller.signal);
+			const result = await Promise.race([call(controller.signal), timeout]);
 			const latencyMs = Math.max(0, this.#now() - startedAt);
 			if (result === undefined) {
 				this.#breaker.recordFailure(this.#now());
@@ -310,11 +320,12 @@ export class FailOpenConversationGate implements ConversationGatePort {
 			};
 		} catch (error) {
 			const latencyMs = Math.max(0, this.#now() - startedAt);
-			const reason = controller.signal.aborted
-				? "timeout"
-				: error instanceof Error
-					? error.message
-					: String(error);
+			const reason =
+				timedOut || controller.signal.aborted
+					? "timeout"
+					: error instanceof Error
+						? error.message
+						: String(error);
 			this.#breaker.recordFailure(this.#now());
 			this.#onFallback?.({ kind, reason });
 			return {
@@ -324,7 +335,7 @@ export class FailOpenConversationGate implements ConversationGatePort {
 				source: "fallback",
 			};
 		} finally {
-			clearTimeout(timer);
+			if (timer !== undefined) clearTimeout(timer);
 		}
 	}
 }

@@ -90,6 +90,23 @@ const DESCRIPTORS = {
 export type OneBotActionMethod = keyof typeof DESCRIPTORS;
 export const ONEBOT_ACTION_METHODS = Object.keys(DESCRIPTORS) as readonly OneBotActionMethod[];
 
+/** Methods that address a conversation explicitly and therefore need the cross-chat policy gate. */
+const CROSS_CHAT_METHODS: ReadonlySet<OneBotActionMethod> = new Set([
+	"send",
+	"sendForward",
+	"forwardMessage",
+	"react",
+	"readHistory",
+	"setTyping",
+	"poke",
+	"listGroupFiles",
+	"fetchGroupFile",
+	"uploadGroupFile",
+]);
+
+/** Hard cap for image bytes returned inside a tool result (base64 expands them ~4/3). */
+const MAX_VIEW_IMAGE_BYTES = 5 * 1024 * 1024;
+
 const parseJsonIfString = (value: unknown): unknown => {
 	if (typeof value !== "string") return value;
 	const trimmed = value.trim();
@@ -536,40 +553,17 @@ export class OneBotActionFacade {
 		if (!adapter.capabilities().includes(descriptor.capability)) {
 			return `capability-missing:${descriptor.capability}`;
 		}
-		if (
-			actor.actorKind === "agent" &&
-			(method === "send" ||
-				method === "sendForward" ||
-				method === "forwardMessage" ||
-				method === "readHistory" ||
-				method === "setTyping")
-		) {
+		if (actor.actorKind === "agent" && CROSS_CHAT_METHODS.has(method)) {
+			let target: OutboundTarget;
 			try {
-				const target = asTarget(input.target, input, actor);
-				const isCrossChat =
-					actor.platformConversationId !== undefined &&
-					(target.platformConversationId !== actor.platformConversationId ||
-						(actor.chatKind !== undefined && target.kind !== actor.chatKind));
-				if (isCrossChat && this.#conversations !== undefined) {
-					const list = await this.#conversations.list();
-					const match = list.find(
-						(entry) =>
-							entry.kind === target.kind &&
-							entry.platformConversationId === target.platformConversationId,
-					);
-					if (match?.muted === true) return "cross-chat-target-muted";
-					if (match !== undefined) {
-						const policy = await this.#conversations.getPolicy(match.id);
-						const access =
-							target.kind === "group" ? policy.trigger.groupAccess : policy.trigger.privateAccess;
-						if (!policy.enabled || access === "disabled") {
-							return "cross-chat-target-disabled";
-						}
-					}
-				}
+				target = this.#crossChatTarget(method, input, actor);
 			} catch {
-				// Let #execute surface specific validation errors when target cannot be resolved.
+				// Never continue into execution with an unparseable target: the cross-chat check
+				// could be skipped and the action would reach an unauthorized chat.
+				return "cross-chat-target-invalid";
 			}
+			const denial = await this.#crossChatDenial(target, actor);
+			if (denial !== undefined) return denial;
 		}
 		const settings = this.#getSettings();
 		const admin = this.#isAdmin(settings, actor);
@@ -598,6 +592,79 @@ export class OneBotActionFacade {
 		if (actor.trustedAdmin === true) return true;
 		if (actor.actorId === undefined) return false;
 		return (settings.adminUsers ?? []).includes(actor.actorId);
+	}
+
+	/**
+	 * Conversation an action addresses. `poke` and group-file methods carry a member/file id,
+	 * not a conversation, so they must not be parsed by `asTarget`.
+	 */
+	#crossChatTarget(
+		method: OneBotActionMethod,
+		input: Record<string, unknown>,
+		actor: OneBotActionActor,
+	): OutboundTarget {
+		if (method === "poke") return this.#resolvePokeTarget(input, actor).target;
+		if (
+			method === "listGroupFiles" ||
+			method === "fetchGroupFile" ||
+			method === "uploadGroupFile"
+		) {
+			return {
+				channelId: actor.channelId ?? "onebot",
+				kind: "group",
+				platformConversationId: resolveGroupId(input, actor),
+			};
+		}
+		return asTarget(input.target, input, actor);
+	}
+
+	#isCrossChat(target: OutboundTarget, actor: OneBotActionActor): boolean {
+		return (
+			actor.platformConversationId !== undefined &&
+			(target.platformConversationId !== actor.platformConversationId ||
+				(actor.chatKind !== undefined && target.kind !== actor.chatKind))
+		);
+	}
+
+	/**
+	 * Policy gate for an explicit cross-chat target. Unknown targets are denied unless the
+	 * caller's own effective policy authorizes the destination; DB/policy failures fail closed.
+	 */
+	async #crossChatDenial(
+		target: OutboundTarget,
+		actor: OneBotActionActor,
+	): Promise<string | undefined> {
+		if (!this.#isCrossChat(target, actor)) return undefined;
+		const conversations = this.#conversations;
+		if (conversations === undefined) return "cross-chat-target-denied";
+		try {
+			const list = await conversations.list();
+			const match = list.find(
+				(entry) =>
+					entry.kind === target.kind &&
+					entry.platformConversationId === target.platformConversationId,
+			);
+			if (match?.muted === true) return "cross-chat-target-muted";
+			const policy =
+				match !== undefined
+					? await conversations.getPolicy(match.id)
+					: actor.conversationId === undefined
+						? undefined
+						: await conversations.getPolicy(actor.conversationId);
+			if (policy === undefined) return "cross-chat-target-unknown";
+			const access =
+				target.kind === "group" ? policy.trigger.groupAccess : policy.trigger.privateAccess;
+			if (!policy.enabled || access === "disabled") return "cross-chat-target-disabled";
+			if (
+				access === "allowlist" &&
+				!policy.trigger.allowlist.includes(target.platformConversationId)
+			) {
+				return "cross-chat-target-not-allowed";
+			}
+			return undefined;
+		} catch {
+			return "cross-chat-target-denied";
+		}
 	}
 
 	#targetId(
@@ -730,6 +797,9 @@ export class OneBotActionFacade {
 				}
 				if (this.#outbound !== undefined) {
 					return await this.#outbound.send({
+						...(actor.conversationId === undefined
+							? {}
+							: { originConversationId: actor.conversationId }),
 						parts,
 						target,
 						...(reply === undefined ? {} : { options: { replyToPlatformMessageId: reply } }),
@@ -999,18 +1069,30 @@ export class OneBotActionFacade {
 				if (requestedKind !== undefined && entry.kind !== requestedKind) continue;
 				const platformId = entry.platformConversationId ?? undefined;
 				if (platformId === undefined || platformId.length === 0) continue;
-				seen.add(`${entry.kind}:${platformId}`);
-				if (entry.muted === true) continue;
+				const key = `${entry.kind}:${platformId}`;
+				// Only skipped entries are marked seen; an allowed entry must reach `addTarget`
+				// or it can never appear in the result.
+				if (entry.muted === true) {
+					seen.add(key);
+					continue;
+				}
 				try {
 					const policy = await this.#conversations.getPolicy(entry.id);
 					const isCurrentEntry =
 						currentChat?.kind === entry.kind && currentChat.platformConversationId === platformId;
 					if (isCurrentEntry || discoveryPolicy === undefined) discoveryPolicy = policy;
-					if (!policyAllowsTarget(policy, entry.kind, platformId)) continue;
+					if (!policyAllowsTarget(policy, entry.kind, platformId)) {
+						seen.add(key);
+						continue;
+					}
 				} catch {
+					seen.add(key);
 					continue;
 				}
-				if (!matchesQuery(entry.title, platformId)) continue;
+				if (!matchesQuery(entry.title, platformId)) {
+					seen.add(key);
+					continue;
+				}
 				addTarget({
 					channelId: entry.channelId ?? adapter.id,
 					conversationId: entry.id,
@@ -1120,6 +1202,8 @@ export class OneBotActionFacade {
 	}> {
 		const channel = adapter.channel;
 		if (channel === undefined) throw new Error("channel-unavailable");
+		const conversations = this.#conversations;
+		if (conversations === undefined) throw new Error("image-scope-unavailable");
 		const requestedMessageId = pickMessageId(input, [
 			"messageId",
 			"message_id",
@@ -1130,41 +1214,80 @@ export class OneBotActionFacade {
 		const requestedFile = toIdString(
 			input.file ?? input.channelRef ?? input.url ?? input.sourceUrl,
 		);
-		let resolvedPart: Extract<MessagePart, { type: "image" | "sticker" }> | undefined;
-		let resolvedPlatformMessageId = requestedMessageId;
-
-		if (
-			requestedMediaId === undefined &&
-			requestedSha === undefined &&
-			requestedFile === undefined &&
-			this.#conversations !== undefined &&
-			actor.conversationId !== undefined
-		) {
-			const recent = await this.#conversations.recentMessages(actor.conversationId, 25);
-			const candidates = recent.toReversed();
-			for (const message of candidates) {
-				if (
-					requestedMessageId !== undefined &&
-					message.platformMessageId !== requestedMessageId &&
-					message.id !== requestedMessageId
-				) {
-					continue;
-				}
-				const imagePart = (message.parts ?? []).find(
-					(part): part is Extract<MessagePart, { type: "image" | "sticker" }> =>
-						part.type === "image" || part.type === "sticker",
+		const hasExplicitReference =
+			requestedMediaId !== undefined || requestedSha !== undefined || requestedFile !== undefined;
+		// Every lookup is scoped to the current conversation, or to an explicitly authorized
+		// cross-chat target. Arbitrary media ids/URLs are never resolved without a message
+		// reference in that scope.
+		const scopeIds: string[] = [];
+		if (actor.conversationId !== undefined) scopeIds.push(actor.conversationId);
+		if (input.target !== undefined) {
+			let target: OutboundTarget;
+			try {
+				target = asTarget(input.target, input, actor);
+			} catch {
+				throw new Error("cross-chat-target-invalid");
+			}
+			if (this.#isCrossChat(target, actor)) {
+				const denial = await this.#crossChatDenial(target, actor);
+				if (denial !== undefined) throw new Error(denial);
+				const match = (await conversations.list()).find(
+					(entry) =>
+						entry.kind === target.kind &&
+						entry.platformConversationId === target.platformConversationId,
 				);
-				if (imagePart !== undefined) {
-					resolvedPart = imagePart;
-					resolvedPlatformMessageId =
-						resolvedPlatformMessageId ?? message.platformMessageId ?? undefined;
-					break;
-				}
+				if (match === undefined) throw new Error("cross-chat-target-unknown");
+				if (!scopeIds.includes(match.id)) scopeIds.push(match.id);
 			}
 		}
+		if (scopeIds.length === 0) throw new Error("image-scope-unavailable");
+		const scopedMessages: readonly {
+			readonly id: string;
+			readonly parts?: readonly MessagePart[];
+			readonly platformMessageId?: string | null;
+		}[] = (
+			await Promise.all(
+				scopeIds.map((conversationId) => conversations.recentMessages(conversationId, 50)),
+			)
+		)
+			.flat()
+			.toReversed();
+		const referenceMatches = (
+			part: Extract<MessagePart, { type: "image" | "sticker" }>,
+		): boolean => {
+			if (requestedMediaId !== undefined && part.mediaId === requestedMediaId) return true;
+			if (requestedSha !== undefined && part.sha256 === requestedSha) return true;
+			if (requestedFile !== undefined) {
+				return part.channelRef === requestedFile || part.sourceUrl === requestedFile;
+			}
+			return false;
+		};
+		const messageMatches = (message: (typeof scopedMessages)[number]): boolean =>
+			requestedMessageId === undefined ||
+			message.platformMessageId === requestedMessageId ||
+			message.id === requestedMessageId;
+		let resolvedPart: Extract<MessagePart, { type: "image" | "sticker" }> | undefined;
+		let resolvedPlatformMessageId = requestedMessageId;
+		for (const message of scopedMessages) {
+			if (!messageMatches(message)) continue;
+			const candidates = (message.parts ?? []).filter(
+				(part): part is Extract<MessagePart, { type: "image" | "sticker" }> =>
+					part.type === "image" || part.type === "sticker",
+			);
+			const imagePart = hasExplicitReference ? candidates.find(referenceMatches) : candidates[0];
+			if (imagePart === undefined) continue;
+			resolvedPart = imagePart;
+			resolvedPlatformMessageId = message.platformMessageId ?? message.id;
+			break;
+		}
+		if (resolvedPart === undefined && hasExplicitReference) {
+			throw new Error(
+				"Requested image is not referenced by a message in this conversation; pass a recent [msg:<id>], mediaId, or sha256 from this chat",
+			);
+		}
 
-		const mediaId = requestedMediaId ?? resolvedPart?.mediaId;
-		const sha256 = requestedSha ?? resolvedPart?.sha256;
+		const mediaId = resolvedPart?.mediaId;
+		const sha256 = resolvedPart?.sha256;
 		const mimeType = resolvedPart?.mimeType ?? "image/png";
 		const partType = resolvedPart?.type ?? "image";
 
@@ -1177,6 +1300,9 @@ export class OneBotActionFacade {
 						: undefined;
 			if (record !== undefined) {
 				const bytes = await this.#media.readBytes(record.id);
+				if (bytes.byteLength > MAX_VIEW_IMAGE_BYTES) {
+					throw new Error("Image exceeds the viewImage size cap");
+				}
 				return {
 					data: Buffer.from(bytes).toString("base64"),
 					mediaId: record.id,
@@ -1194,28 +1320,24 @@ export class OneBotActionFacade {
 			}
 		}
 
-		const fallbackPart: Extract<MessagePart, { type: "image" | "sticker" }> | undefined =
-			resolvedPart ??
-			(requestedFile !== undefined
-				? /^https?:\/\//iu.test(requestedFile)
-					? { sourceUrl: requestedFile, type: "image" }
-					: { channelRef: requestedFile, type: "image" }
-				: undefined);
-		if (fallbackPart !== undefined) {
-			const bytes = await channel.fetchMedia(fallbackPart);
+		if (resolvedPart !== undefined) {
+			const bytes = await channel.fetchMedia(resolvedPart);
 			if (bytes !== undefined) {
+				if (bytes.byteLength > MAX_VIEW_IMAGE_BYTES) {
+					throw new Error("Image exceeds the viewImage size cap");
+				}
 				return {
 					data: Buffer.from(bytes).toString("base64"),
-					...(fallbackPart.mediaId === undefined ? {} : { mediaId: fallbackPart.mediaId }),
-					mimeType: fallbackPart.mimeType ?? mimeType,
-					partType: fallbackPart.type,
+					...(resolvedPart.mediaId === undefined ? {} : { mediaId: resolvedPart.mediaId }),
+					mimeType: resolvedPart.mimeType ?? mimeType,
+					partType: resolvedPart.type,
 					...(resolvedPlatformMessageId === undefined
 						? {}
 						: { platformMessageId: resolvedPlatformMessageId }),
-					...(fallbackPart.previewText === undefined
+					...(resolvedPart.previewText === undefined
 						? {}
-						: { previewText: fallbackPart.previewText }),
-					...(fallbackPart.sha256 === undefined ? {} : { sha256: fallbackPart.sha256 }),
+						: { previewText: resolvedPart.previewText }),
+					...(resolvedPart.sha256 === undefined ? {} : { sha256: resolvedPart.sha256 }),
 					sizeBytes: bytes.byteLength,
 				};
 			}

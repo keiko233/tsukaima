@@ -101,6 +101,14 @@ const recordOf = (value: unknown): Record<string, unknown> | undefined =>
 const stringOf = (value: unknown): string | undefined =>
 	typeof value === "string" && value.length > 0 ? value : undefined;
 
+/** Numeric ids are common in NapCat payloads; accept finite numbers as well as strings. */
+const idStringOf = (value: unknown): string | undefined =>
+	typeof value === "string" && value.length > 0
+		? value
+		: typeof value === "number" && Number.isFinite(value)
+			? String(value)
+			: undefined;
+
 const decodeBase64 = (value: string, bare: boolean): Uint8Array | undefined => {
 	let text = value.trim();
 	if (text.startsWith("base64://")) text = text.slice("base64://".length);
@@ -605,7 +613,7 @@ export class OneBotChannel {
 					: [];
 		return raw.flatMap((entry) => {
 			const item = recordOf(entry);
-			const groupId = stringOf(item?.group_id) ?? stringOf(item?.groupId);
+			const groupId = idStringOf(item?.group_id) ?? idStringOf(item?.groupId);
 			if (groupId === undefined) return [];
 			const title =
 				stringOf(item?.group_name)?.trim() ??
@@ -628,7 +636,7 @@ export class OneBotChannel {
 					: [];
 		return raw.flatMap((entry) => {
 			const item = recordOf(entry);
-			const userId = stringOf(item?.user_id) ?? stringOf(item?.userId);
+			const userId = idStringOf(item?.user_id) ?? idStringOf(item?.userId);
 			if (userId === undefined) return [];
 			const title =
 				stringOf(item?.remark)?.trim() ??

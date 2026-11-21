@@ -290,3 +290,80 @@ describe("reply.transform hook", () => {
 		}
 	});
 });
+
+const stickerTailPlugin: TsukaimaPlugin = {
+	manifest: pluginManifestSchema.parse({
+		apiVersion: "1",
+		kind: "first-party",
+		name: "sticker-tail-transform",
+		permissions: ["reply.transform"],
+		version: "0.1.0",
+	}),
+	setup(context) {
+		context.events.on("reply.transform", (payload) => {
+			const input = payload as { readonly text: string };
+			return {
+				parts: [
+					{ text: input.text, type: "text" as const },
+					{ channelRef: "inline-sticker", type: "sticker" as const },
+				],
+				text: input.text,
+			};
+		});
+	},
+};
+
+describe("reply.transform inline sticker with tool-deduplicated text", () => {
+	test("keeps the inline sticker while suppressing the already-sent text", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-reply-sticker-"));
+		directories.push(directory);
+		adapter.sent.length = 0;
+		const { lifecycle } = createApp(
+			{ TSUKAIMA_DATA_DIR: directory, TSUKAIMA_PORT: "7420" },
+			{ plugins: [channelPlugin, stickerTailPlugin] },
+		);
+		await lifecycle.start();
+		try {
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("domain database missing");
+			await database.insert(chatObjects).values({
+				channelId: "fake",
+				id: "chat-1",
+				kind: "private",
+				platformConversationId: "peer-1",
+				title: "Fake chat",
+			});
+			await database.insert(conversations).values({
+				channelId: "fake",
+				chatObjectId: "chat-1",
+				durableConversationId: "durable-1",
+				id: "session-1",
+				isReceiving: 1,
+				kind: "private",
+				platformConversationId: "peer-1",
+				title: "Fake session",
+			});
+			lifecycle.replyDispatcher.beginTurn("durable-1");
+			lifecycle.replyDispatcher.recordTurnToolSend({
+				durableConversationId: "durable-1",
+				text: "好的",
+			});
+			const outcome = await lifecycle.replyDispatcher.handleAnswer({
+				activityId: randomUUID(),
+				conversationId: "durable-1",
+				entryId: "entry-sticker-tail",
+				text: "好的",
+			});
+			expect(outcome?.deliveryStatus).toBe("sent");
+			const [outbound] = await database
+				.select()
+				.from(messages)
+				.where(eq(messages.direction, "outbound"));
+			const parts = JSON.parse(outbound?.partsJson ?? "[]") as MessagePart[];
+			expect(parts).toEqual([{ channelRef: "inline-sticker", type: "sticker" }]);
+			expect(adapter.sent.at(-1)).toEqual([{ channelRef: "inline-sticker", type: "sticker" }]);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+});

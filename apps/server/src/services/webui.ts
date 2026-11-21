@@ -31,13 +31,7 @@ import {
 	type MentionLabelScope,
 } from "./mention-labels.ts";
 import { collectRunSteps } from "./run-steps.ts";
-import { PROMPT_TOOL_NAMES } from "./prompt-tools.ts";
-import {
-	IM_WORKSPACE_DELEGATION_TOOL_NAMES,
-	WORKSPACE_CODING_TOOL_NAMES,
-	WORKSPACE_TOOL_NAMES,
-} from "./workspace-tools.ts";
-import { CODING_AGENT_TOOL_NAMES } from "./coding-agent-tools.ts";
+import { computeOmittedSessionTools } from "./session-tool-policy.ts";
 
 type ChatKind = "private" | "group" | "webui" | "workspace" | "task" | "plugin";
 
@@ -416,25 +410,18 @@ export async function getSessionContextStats(
 	const codingTools = lifecycle.pluginHost.modelToolNames("self-iteration");
 	const proactiveTools = lifecycle.pluginHost.modelToolNames("proactive-scheduler");
 	const kind = session.chatKind ?? session.sessionKind;
-	const isImChat = kind === "private" || kind === "group";
-	const codingAllowed = kind === "workspace" && policy.capabilities.includes("coding");
-	const imDelegationAllowed = isImChat && policy.workspaceDelegationEnabled === true;
-	const imDelegationSet = new Set<string>(IM_WORKSPACE_DELEGATION_TOOL_NAMES);
-	const omittedWorkspaceTools =
-		kind === "webui" || kind === "workspace"
-			? []
-			: imDelegationAllowed
-				? WORKSPACE_TOOL_NAMES.filter((name) => !imDelegationSet.has(name))
-				: [...WORKSPACE_TOOL_NAMES];
-	const omittedTools = [
-		...(codingAllowed ? [] : codingTools),
-		...(codingAllowed ? [] : [...CODING_AGENT_TOOL_NAMES, ...WORKSPACE_CODING_TOOL_NAMES]),
-		...omittedWorkspaceTools,
-		...(isImChat ? proactiveTools : []),
-		...((kind === "webui" || codingAllowed) && lifecycle.prompts.agentAccess()
-			? []
-			: PROMPT_TOOL_NAMES),
-	];
+	// Same pure helper the lifecycle uses to write the durable model-tool filter, so the
+	// Context Inspector preview can never disagree with the tools actually offered.
+	const omittedTools = computeOmittedSessionTools({
+		agentAccess: lifecycle.prompts.agentAccess(),
+		capabilities: policy.capabilities,
+		chatSurfaceOmitted: host.modelToolNamesNotForSurface("chat"),
+		codingSurfaceOmitted: host.modelToolNamesNotForSurface("coding"),
+		codingTools,
+		kind,
+		proactiveTools,
+		workspaceDelegationEnabled: policy.workspaceDelegationEnabled === true,
+	});
 	const [inspection, contextDetails] = await Promise.all([
 		host.inspectConversationContext(session.durableConversationId, { omittedTools }),
 		lifecycle.contextProvider.inspectContext(session.durableConversationId),

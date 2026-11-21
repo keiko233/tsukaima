@@ -74,6 +74,11 @@ export interface PluginHostOptions {
 	 * `undefined` or an unknown role is treated as non-workspace: coding tools stay withheld.
 	 */
 	readonly conversationRole?: (conversationId: string) => Promise<string | undefined>;
+	/**
+	 * Sender bound to the active turn by the host. Authoritative for IM admin checks so a later
+	 * ambient group message cannot upgrade a non-admin caller's privileges.
+	 */
+	readonly turnSender?: (conversationId: string) => string | null | undefined;
 	readonly hooks: HookBus;
 	readonly logger: Logger;
 	readonly onModelMessage?: (message: unknown, pluginId: string) => void;
@@ -168,9 +173,14 @@ export class PluginHost {
 		| ((conversationId: string) => Promise<readonly string[]>)
 		| undefined;
 	readonly #conversationRole: ((conversationId: string) => Promise<string | undefined>) | undefined;
+	readonly #turnSender: ((conversationId: string) => string | null | undefined) | undefined;
 	readonly #plugins = new Map<string, TsukaimaPlugin>();
-	/** Plugins installed via manifest-only registration (no runtime code module attached). */
-	readonly #manifestOnlyPlugins = new Set<string>();
+	/**
+	 * Plugin ids with an attached runtime module. Positive tracking (rather than a negative
+	 * "manifest-only" set) is what upgrade/downgrade checks read, so a host restart that clears
+	 * process memory cannot accidentally treat a manifest-only plugin as executable.
+	 */
+	readonly #runtimeModules = new Set<string>();
 	readonly #modelProviders = new Map<string, PluginModelProvider>();
 	readonly #modelProviderOwners = new Map<string, string>();
 	readonly #prepared = new Set<string>();
@@ -200,6 +210,7 @@ export class PluginHost {
 		this.#schedules = options.schedules;
 		this.#conversationCapabilities = options.conversationCapabilities;
 		this.#conversationRole = options.conversationRole;
+		this.#turnSender = options.turnSender;
 		this.#hooks = options.hooks;
 		this.#logger = options.logger.child("tsukaima::server::plugins");
 		this.#requests = options.requests;
@@ -568,6 +579,7 @@ export class PluginHost {
 				platformConversationId: context.platformConversationId,
 				role: context.role,
 				senderPlatformId: context.senderPlatformId,
+				turnBoundSender: conversation === undefined ? undefined : this.#turnSender?.(conversation),
 				userId: context.userId,
 			},
 			settings: this.settings,
@@ -652,6 +664,8 @@ export class PluginHost {
 		await this.#loadLifecycleStates();
 		for (const plugin of this.#options.plugins) {
 			const manifest = plugin.manifest;
+			// Built-in/configured plugins are constructor-supplied runtime modules.
+			this.#runtimeModules.add(manifest.name);
 			this.settings.registerManifest(manifest);
 			this.#plugins.set(manifest.name, plugin);
 			if (this.#prepared.has(manifest.name)) continue;
@@ -783,11 +797,14 @@ export class PluginHost {
 	 * declarations without an executable runtime module.
 	 */
 	#assertRuntimeSupported(manifest: PluginManifest, hasRuntime: boolean): void {
-		if (hasRuntime || manifest.kind === "builtin") return;
+		if (hasRuntime) return;
+		// Any manifest that declares active runtime capabilities needs executable code, regardless
+		// of `kind`. A builtin-labelled manifest without a runtime module would otherwise appear
+		// installed while contributing zero tools, channels, or providers.
 		if (manifest.tools.length > 0) {
 			const declared = manifest.tools.map((tool) => tool.name).join(", ");
 			throw new PluginLifecycleError(
-				`Plugin ${manifest.name} declares ${manifest.tools.length} tool(s) (${declared}), but dynamic installation of non-builtin tool-bearing plugins is not supported without a host runtime module (worker tool-schema registration is not wired). Install a manifest-only plugin without tools or bundle the plugin into the host runtime.`,
+				`Plugin ${manifest.name} declares ${manifest.tools.length} tool(s) (${declared}), but it has no executable host runtime module (worker tool-schema registration is not wired). Install a manifest-only plugin without runtime capabilities or bundle the plugin into the host runtime.`,
 			);
 		}
 	}
@@ -815,14 +832,14 @@ export class PluginHost {
 		this.settings.registerManifest(manifest);
 		const plugin: TsukaimaPlugin = options.plugin ?? { manifest, setup() {} };
 		if (options.plugin === undefined) {
-			this.#manifestOnlyPlugins.add(manifest.name);
+			this.#runtimeModules.delete(manifest.name);
 			this.#logger.info("manifest-only plugin registered (no executable tool runtime)", {
 				kind: manifest.kind,
 				pluginId: manifest.name,
 				version: manifest.version,
 			});
 		} else {
-			this.#manifestOnlyPlugins.delete(manifest.name);
+			this.#runtimeModules.add(manifest.name);
 		}
 		this.#plugins.set(manifest.name, plugin);
 		const installed = this.#registry.get(manifest.name);
@@ -841,7 +858,7 @@ export class PluginHost {
 		options: PluginLifecycleUpgradeOptions = {},
 	): Promise<PluginHostEntry> {
 		const manifest = await this.#registry.loadManifest(input);
-		this.#assertRuntimeSupported(manifest, !this.#manifestOnlyPlugins.has(pluginId));
+		this.#assertRuntimeSupported(manifest, this.#runtimeModules.has(pluginId));
 		await this.#lifecycle.upgrade(pluginId, manifest, options);
 		this.#syncManifest(pluginId);
 		await this.#persistLifecycleState(pluginId);
@@ -854,7 +871,7 @@ export class PluginHost {
 		options: PluginLifecycleUpgradeOptions = {},
 	): Promise<PluginHostEntry> {
 		const manifest = await this.#registry.loadManifest(input);
-		this.#assertRuntimeSupported(manifest, !this.#manifestOnlyPlugins.has(pluginId));
+		this.#assertRuntimeSupported(manifest, this.#runtimeModules.has(pluginId));
 		await this.#lifecycle.downgrade(pluginId, manifest, options);
 		this.#syncManifest(pluginId);
 		await this.#persistLifecycleState(pluginId);
@@ -882,7 +899,7 @@ export class PluginHost {
 		await this.#lifecycle.uninstall(pluginId, options);
 		await this.#stopPlugin(pluginId);
 		this.#plugins.delete(pluginId);
-		this.#manifestOnlyPlugins.delete(pluginId);
+		this.#runtimeModules.delete(pluginId);
 		this.#contexts.delete(pluginId);
 		this.#prepared.delete(pluginId);
 		const database = this.#database?.();
