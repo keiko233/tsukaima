@@ -153,10 +153,15 @@ Tool rules:
 5. Tools must return structured errors, not throw raw exceptions to the model.
 
 The model never sees the dotted name. OpenAI-compatible providers only accept
-`^[a-zA-Z0-9_-]{1,64}$`, so `createPluginToolsExtension()` publishes
-`providerSafeToolName("<pluginId>.<tool>")` — the name sanitized and suffixed with a short
-deterministic hash. The extension still invokes the original name, so routing, permission checks,
-and audit records use the author-facing name.
+`^[a-zA-Z0-9_-]{1,64}$`, so `createPluginToolsExtension()` allocates a concise model-facing name
+from the canonical `<pluginId>.<tool>` id. A unique action segment becomes the bare name
+(`memory.recall` → `recall`). A real collision keeps the namespaced provider-safe form
+(`onebot-napcat_send` and `sticker-meme_send` both expose `send`), and a collision with a built-in
+tool is resolved the same way. Explicit `shortName` / `aliases` declarations can pin a preferred
+stamp or preserve a historical name. The extension still invokes the canonical id, so routing,
+permission checks, discovery filters, and audit records use the author-facing name. Historical
+provider-safe, hash-suffixed, canonical, and declared alias names remain resolvable for persisted
+allowlists and stored tool filters.
 
 Tools are **lazy by default**. A lazy tool stays out of the request until the model calls the
 host `tool_search` tool, which loads matches into `modelTools` for the rest of the conversation

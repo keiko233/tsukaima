@@ -221,10 +221,10 @@ Batches 2, 3, and 5 can proceed in parallel once Batch 1 lands.
     `react`, `listTargets`, `sticker-meme.send` (and `search`), `search-fetch.web` / `fetch`,
     `memory.recall` / `save`, and active scheduling tools. Keep destructive group-admin,
     account-management, and diagnostic tools deferred behind `tool_search`.
-  - Simplify `providerSafeToolName` in `packages/sdk/src/bridges.ts` so clean names (e.g.
-    `onebot_napcat__send` or `memory__save`) avoid opaque 8-char hash suffixes unless truncation
-    or collision requires disambiguation; keep backward compatibility for existing allowlists and
-    audit logs.
+  - Allocate model-facing names in `packages/sdk/src/bridges.ts` from the canonical tool id:
+    unique action names stay short, real collisions keep the namespaced provider-safe form, and
+    opaque 8-char hash suffixes are reserved for truncation or a remaining collision. Keep
+    backward compatibility for existing allowlists, stored filters, and audit logs.
   - Ensure a transient DB read error in `applySessionToolPolicy` does not wipe a conversation's
     tool allowlist to `[]` permanently without recovery on the next turn.
 - **Current-chat and message-ID addressing in `ToolInvocationContext`.**

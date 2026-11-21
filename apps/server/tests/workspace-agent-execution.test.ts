@@ -15,7 +15,6 @@ import {
 	type TsukaimaDatabase,
 } from "@tsukaima/db";
 import { probeBubblewrapSandbox } from "@tsukaima/coding";
-import { providerSafeToolName } from "@tsukaima/sdk";
 import { loadConfig } from "../src/config.ts";
 import { TsukaimaLifecycle } from "../src/lifecycle.ts";
 import { writeGitIdentity } from "../src/services/git-identity.ts";
@@ -38,15 +37,15 @@ afterEach(async () => {
 });
 
 const TOOL = {
-	analyze: providerSafeToolName("self-iteration.analyze"),
-	build: providerSafeToolName("self-iteration.build"),
-	diff: providerSafeToolName("self-iteration.diff"),
-	edit: providerSafeToolName("self-iteration.edit"),
-	propose: providerSafeToolName("self-iteration.propose"),
-	status: providerSafeToolName("self-iteration.status"),
-	test: providerSafeToolName("self-iteration.test"),
-	upstream: providerSafeToolName("self-iteration.upstream"),
-	worktree: providerSafeToolName("self-iteration.worktree"),
+	analyze: "analyze",
+	build: "build",
+	diff: "diff",
+	edit: "edit",
+	propose: "propose",
+	status: "status",
+	test: "test",
+	upstream: "upstream",
+	worktree: "worktree",
 } as const;
 
 const GIT_IDENTITY_TOOL = "workspace_git_identity";
@@ -348,8 +347,8 @@ describe("Workspace agent execution (batch 2 isolation)", () => {
 			toolNames(request).includes(TOOL.analyze),
 		);
 		if (first === undefined) throw new Error("no workspace request offered coding tools");
-		expect(toolNames(first)).toContain(providerSafeToolName("self-iteration.exec"));
-		expect(toolNames(first)).toContain(providerSafeToolName("self-iteration.check"));
+		expect(toolNames(first)).toContain("exec");
+		expect(toolNames(first)).toContain("check");
 	}, 60_000);
 
 	test("a workspace turn offers core tools upfront and completes edit, test, and proposal through the bound task", async () => {
@@ -667,9 +666,10 @@ describe("Workspace agent execution (batch 2 isolation)", () => {
 		const next = await waitFor(() =>
 			model.observed.requests.length > requestsBefore ? model.observed.requests.at(-1) : undefined,
 		);
-		expect(toolNames(next).some((name) => name.startsWith("self-iteration_"))).toBe(false);
+		const codingTools = lifecycle.pluginHost.modelToolNames("self-iteration");
+		expect(toolNames(next).some((name) => codingTools.includes(name))).toBe(false);
 		const inspection = await lifecycle.conversationHost?.inspectConversationContext(durable);
-		expect(inspection?.tools.some((tool) => tool.name.startsWith("self-iteration_"))).toBe(false);
+		expect(inspection?.tools.some((tool) => codingTools.includes(tool.name))).toBe(false);
 	}, 60_000);
 
 	test("the context inspector agrees with the first model request about eager and deferred tools", async () => {

@@ -895,6 +895,26 @@ function toLiveRunSnapshot(
 	};
 }
 
+/** Tool registrations may carry earlier model-facing names for state written before a rename. */
+type ToolWithAliases = ToolRegistration & {
+	readonly aliases?: readonly string[];
+	readonly canonicalName?: string;
+};
+
+function toolNamesFor(tool: ToolRegistration): readonly string[] {
+	const aliases = (tool as ToolWithAliases).aliases;
+	return aliases === undefined || aliases.length === 0 ? [tool.name] : [tool.name, ...aliases];
+}
+
+function toolAnswersTo(tool: ToolRegistration, name: string): boolean {
+	return tool.name === name || (tool as ToolWithAliases).aliases?.includes(name) === true;
+}
+
+function namesIncludeTool(names: Iterable<string>, tool: ToolRegistration): boolean {
+	for (const name of names) if (toolAnswersTo(tool, name)) return true;
+	return false;
+}
+
 export class PiDurableConversationHost {
 	private harness?: DurableHarness;
 	private model: ModelPort;
@@ -927,6 +947,8 @@ export class PiDurableConversationHost {
 	private readonly extensions = new Map<string, Extension>();
 	private readonly dynamicExtensions = new Set<string>();
 	private readonly extensionsEnsured = new Set<string>();
+	/** Conversations whose stored tool filters were checked against renamed aliases this process. */
+	private readonly toolNamesNormalized = new Set<string>();
 	private readonly modelsEnsured = new Set<string>();
 	private readonly modelToolsSignatures = new Map<string, string>();
 	/** In-flight activity flushes, so `close()` can wait for them before storage goes away. */
@@ -2884,20 +2906,29 @@ export class PiDurableConversationHost {
 			for (const tool of extension.tools ?? []) {
 				if (tool.callers !== undefined && !tool.callers.includes("model")) continue;
 				if (Array.isArray(agentState?.tools)) {
-					if (!agentState.tools.includes(tool.name)) continue;
-				} else if (agentState?.tools?.remove.includes(tool.name)) {
+					if (!namesIncludeTool(agentState.tools, tool)) continue;
+				} else if (
+					agentState?.tools !== undefined &&
+					namesIncludeTool(agentState.tools.remove, tool)
+				) {
 					continue;
 				}
 				const modelTools = agentState?.modelTools;
 				if (Array.isArray(modelTools)) {
-					if (!modelTools.includes(tool.name)) continue;
+					if (!namesIncludeTool(modelTools, tool)) continue;
 					offeredMap.set(tool.name, tool);
 					continue;
 				}
-				if (modelTools?.remove?.includes(tool.name) || omittedWhenUnsynced.has(tool.name)) {
+				if (
+					(modelTools?.remove !== undefined && namesIncludeTool(modelTools.remove, tool)) ||
+					omittedWhenUnsynced.has(tool.name)
+				) {
 					continue;
 				}
-				if (tool.deferred === true && !modelTools?.add?.includes(tool.name)) {
+				if (
+					tool.deferred === true &&
+					!(modelTools?.add !== undefined && namesIncludeTool(modelTools.add, tool))
+				) {
 					deferredMap.set(tool.name, tool);
 				} else {
 					offeredMap.set(tool.name, tool);
@@ -3079,9 +3110,12 @@ export class PiDurableConversationHost {
 				}
 				const removeNames = new Set(options.remove);
 				const snapshotTools = this.registry.snapshot().tools();
-				const byName = new Map(snapshotTools.map(({ tool }) => [tool.name, tool]));
+				const byName = new Map<string, ToolRegistration>();
+				for (const { tool } of snapshotTools) {
+					for (const name of toolNamesFor(tool)) byName.set(name, tool);
+				}
 				const registrations = snapshotTools
-					.filter(({ tool }) => removeNames.has(tool.name))
+					.filter(({ tool }) => namesIncludeTool(removeNames, tool))
 					.map(({ tool }) => tool);
 				// `tool_search` records loaded tools in `modelTools.add`; rewriting the filter
 				// must keep them, or every turn would unload what the model already discovered.
@@ -3091,8 +3125,8 @@ export class PiDurableConversationHost {
 				const modelTools =
 					Array.isArray(storedModelTools) && storedModelTools.length > 0
 						? storedModelTools.flatMap((name) => {
-								const tool = removeNames.has(name) ? undefined : byName.get(name);
-								return tool === undefined ? [] : [tool];
+								const tool = byName.get(name);
+								return tool === undefined || namesIncludeTool(removeNames, tool) ? [] : [tool];
 							})
 						: {
 								remove: registrations,
@@ -3154,7 +3188,7 @@ export class PiDurableConversationHost {
 				const registrations = this.registry
 					.snapshot()
 					.tools()
-					.filter(({ tool }) => allow.has(tool.name))
+					.filter(({ tool }) => namesIncludeTool(allow, tool))
 					.map(({ tool }) => tool);
 				await conversation.configure(
 					{ modelTools: registrations, tools: registrations },
@@ -3216,6 +3250,8 @@ export class PiDurableConversationHost {
 		}
 		this.dynamicExtensions.clear();
 		for (const name of incoming.keys()) this.dynamicExtensions.add(name);
+		// New registrations can add aliases, so the next append must re-check persisted filters.
+		this.toolNamesNormalized.clear();
 	}
 
 	/**
@@ -3241,6 +3277,98 @@ export class PiDurableConversationHost {
 					extension: extension.name,
 				});
 			}
+		}
+		await this.normalizeStoredToolNames(conversation, durableId);
+	}
+
+	/**
+	 * Rewrite stored tool filters from earlier model-facing aliases to the current allocated names.
+	 * Authorization stays canonical: this only maps names pi-durable already persisted, so an
+	 * upgraded process does not silently drop a loaded deferred tool or an explicit allowlist.
+	 */
+	private async normalizeStoredToolNames(
+		conversation: Conversation,
+		durableId: string,
+	): Promise<void> {
+		if (this.toolNamesNormalized.has(durableId)) return;
+		this.toolNamesNormalized.add(durableId);
+		try {
+			const harness = await this.openHarness();
+			const numericId = Number(durableId) as ConversationId;
+			const state = await harness.snapshot(AgentDoc, numericId, BACKGROUND_CONTEXT);
+			if (state === undefined) return;
+			const byName = new Map<string, ToolRegistration>();
+			for (const { tool } of this.registry.snapshot().tools()) {
+				for (const name of toolNamesFor(tool)) byName.set(name, tool);
+			}
+			let changed = false;
+			const normalize = (name: string): string => {
+				const current = byName.get(name)?.name;
+				if (current === undefined || current === name) return name;
+				changed = true;
+				return current;
+			};
+			const unique = (names: readonly string[]): string[] => [...new Set(names.map(normalize))];
+			const toolsNames: string[] | { remove: string[] } | undefined =
+				state.tools === undefined
+					? undefined
+					: Array.isArray(state.tools)
+						? unique(state.tools)
+						: unique(state.tools.remove);
+			const modelToolsNames: string[] | { remove?: string[]; add?: string[] } | undefined =
+				state.modelTools === undefined
+					? undefined
+					: Array.isArray(state.modelTools)
+						? unique(state.modelTools)
+						: {
+								...(state.modelTools.remove === undefined
+									? {}
+									: { remove: unique(state.modelTools.remove) }),
+								...(state.modelTools.add === undefined
+									? {}
+									: { add: unique(state.modelTools.add) }),
+							};
+			if (!changed) return;
+			const registrations = (names: readonly string[]): ToolRegistration[] =>
+				names.flatMap((name) => {
+					const tool = byName.get(name);
+					return tool === undefined ? [] : [tool];
+				});
+			let tools: ToolRegistration[] | { remove: ToolRegistration[] } | undefined;
+			if (toolsNames !== undefined) {
+				if (Array.isArray(toolsNames)) tools = registrations(toolsNames);
+				else
+					tools = {
+						remove: registrations((toolsNames as { remove: string[] }).remove),
+					};
+			}
+			let modelTools:
+				| ToolRegistration[]
+				| { remove?: ToolRegistration[]; add?: ToolRegistration[] }
+				| undefined;
+			if (modelToolsNames !== undefined) {
+				if (Array.isArray(modelToolsNames)) modelTools = registrations(modelToolsNames);
+				else {
+					const filter = modelToolsNames as { remove?: string[]; add?: string[] };
+					modelTools = {
+						...(filter.remove === undefined ? {} : { remove: registrations(filter.remove) }),
+						...(filter.add === undefined ? {} : { add: registrations(filter.add) }),
+					};
+				}
+			}
+			await conversation.configure(
+				{
+					...(tools === undefined ? {} : { tools }),
+					...(modelTools === undefined ? {} : { modelTools }),
+				},
+				BACKGROUND_CONTEXT,
+			);
+		} catch (error) {
+			this.toolNamesNormalized.delete(durableId);
+			this.logger.error("Failed to normalize stored tool names", {
+				conversationId: durableId,
+				error,
+			});
 		}
 	}
 

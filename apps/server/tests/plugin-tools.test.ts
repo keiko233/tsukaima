@@ -9,7 +9,6 @@ import { BACKGROUND_CONTEXT, openDurableStorage } from "@tsukaima/durable";
 import {
 	createPluginToolsExtension,
 	pluginManifestSchema,
-	providerSafeToolName,
 	type TsukaimaPlugin,
 } from "@tsukaima/sdk";
 import type { MessageEnvelope } from "@tsukaima/contracts";
@@ -19,7 +18,7 @@ import { builtinPlugins } from "../src/plugins/builtin.ts";
 
 const directories: string[] = [];
 /** The model sees a provider-safe alias; plugin routing and audit keep the original name. */
-const SAFE_ECHO_TOOL_NAME = providerSafeToolName("fake-tools.echo");
+const SAFE_ECHO_TOOL_NAME = "echo";
 
 afterEach(async () => {
 	await Promise.all(

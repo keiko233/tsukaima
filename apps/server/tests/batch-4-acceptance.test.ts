@@ -472,9 +472,9 @@ describe("IM-to-workspace delegation acceptance", () => {
 				"schedule_cancel",
 			]),
 		);
-		expect(enabledNames).not.toContain("proactive-scheduler_schedule");
-		expect(enabledNames).not.toContain("proactive-scheduler_list");
-		expect(enabledNames).not.toContain("proactive-scheduler_cancel");
+		expect(enabledNames).not.toContain("schedule");
+		expect(enabledNames).not.toContain("list");
+		expect(enabledNames).not.toContain("cancel");
 
 		await lifecycle.conversationPolicy.update({
 			conversationId: session.sessionId,

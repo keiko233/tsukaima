@@ -132,6 +132,7 @@ export {
 	withConversationLock,
 } from "./execution-lock.ts";
 export { createFakeModel, createSlowStreamingModel, type ModelPort } from "./model.ts";
+export { TOOL_SEARCH_TOOL_NAME } from "@earendil-works/pi-durable/tool-search";
 export { createFallbackCoreLogger, previewText, type CoreLogger } from "./logger.ts";
 export {
 	DEFAULT_REQUEST_TIMEOUT_MS,

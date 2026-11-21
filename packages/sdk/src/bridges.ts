@@ -242,10 +242,14 @@ export class LocalToolBridge {
 		const declaration = this.#declarations.get(tool.name);
 		const lazy = tool.lazy ?? tool.policy?.lazy ?? declaration?.lazy;
 		const surface = tool.surface ?? tool.policy?.surface ?? declaration?.surface;
+		const shortName = tool.shortName ?? declaration?.shortName;
+		const aliases = [...(tool.aliases ?? []), ...(declaration?.aliases ?? [])];
 		this.#tools.set(tool.name, {
 			...tool,
 			...(lazy === undefined ? {} : { lazy }),
 			...(surface === undefined ? {} : { surface }),
+			...(shortName === undefined ? {} : { shortName }),
+			...(aliases.length === 0 ? {} : { aliases }),
 		});
 	}
 
@@ -809,6 +813,158 @@ export function providerSafeToolName(
 	return legacyProviderSafeToolName(toolName);
 }
 
+export type ModelToolNameEntry =
+	| string
+	| {
+			readonly name: string;
+			/** Preferred short name; it wins over an automatically derived action name. */
+			readonly shortName?: string;
+			/** Earlier or alternative model-facing names kept resolvable for this tool. */
+			readonly aliases?: readonly string[];
+			readonly canonicalName?: string;
+	  };
+
+/** Provider function names are `^[a-zA-Z0-9_-]{1,64}$`, shared by OpenAI-compatible APIs. */
+const MODEL_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/u;
+
+function modelToolEntryName(entry: ModelToolNameEntry): string {
+	return typeof entry === "string" ? entry : entry.name;
+}
+
+function safeName(value: string): string {
+	return value.replace(/[^a-zA-Z0-9_-]/gu, "_") || "tool";
+}
+
+/** A short name that fits the provider limit, or `undefined` when it needs truncation. */
+function safeShortName(value: string | undefined): string | undefined {
+	if (value === undefined) return undefined;
+	const candidate = safeName(value.trim());
+	return MODEL_TOOL_NAME_PATTERN.test(candidate) ? candidate : undefined;
+}
+
+/** Last segment of a namespaced id, the natural model-facing shorthand. */
+function derivedShortName(canonical: string): string | undefined {
+	return safeShortName(canonical.slice(canonical.lastIndexOf(".") + 1));
+}
+
+/** All model-facing names that historically resolve to this canonical tool. */
+export function providerToolNameAliases(entry: ModelToolNameEntry): readonly string[] {
+	const canonical = modelToolEntryName(entry);
+	const explicit = typeof entry === "string" ? [] : [entry.shortName, ...(entry.aliases ?? [])];
+	return [
+		...new Set(
+			[
+				canonical,
+				providerSafeToolName(canonical),
+				legacyProviderSafeToolName(canonical),
+				...explicit.flatMap((name) =>
+					name === undefined || name.trim() === "" ? [] : [name.trim(), safeName(name.trim())],
+				),
+			].filter((name) => name.length > 0),
+		),
+	];
+}
+
+/**
+ * Allocate one provider-safe model-facing name per canonical tool. A short last segment is used
+ * only when no other tool in the catalog would claim it; real collisions fall back to the
+ * namespaced name, then to the legacy hash suffix. `reservedNames` (built-in tools such as
+ * `tool_search`) and explicit aliases keep their stable names and force namespace fallback.
+ *
+ * Canonical names never change: they remain the routing, policy, audit, and authorization ids.
+ */
+export function allocateModelToolNames(
+	entries: Iterable<ModelToolNameEntry>,
+	options: { readonly reservedNames?: Iterable<string> } = {},
+): Map<string, string> {
+	const catalog = [...entries].map((entry) => {
+		const canonical = modelToolEntryName(entry);
+		const explicitShort = typeof entry === "string" ? undefined : safeShortName(entry.shortName);
+		return { canonical, explicitShort, entry };
+	});
+	const reserved = new Set<string>();
+	for (const name of options.reservedNames ?? []) {
+		const trimmed = name.trim();
+		if (trimmed !== "") reserved.add(trimmed);
+	}
+	/** Explicit names belong to their canonical owner; another tool must not take them. */
+	const owned = new Map<string, Set<string>>();
+	const own = (name: string | undefined, canonical: string): void => {
+		if (name === undefined || name === "") return;
+		const owners = owned.get(name) ?? new Set<string>();
+		owners.add(canonical);
+		owned.set(name, owners);
+	};
+	for (const { canonical, explicitShort, entry } of catalog) {
+		own(explicitShort, canonical);
+		if (typeof entry !== "string") {
+			for (const alias of entry.aliases ?? []) {
+				const trimmed = alias.trim();
+				if (trimmed !== "") own(safeName(trimmed), canonical);
+			}
+		}
+	}
+	const assigned = new Map<string, string>();
+	const claimed = new Set<string>();
+	const blocked = (name: string, claimants: ReadonlySet<string>): boolean => {
+		if (reserved.has(name) || claimed.has(name)) return true;
+		const owners = owned.get(name);
+		if (owners === undefined) return false;
+		for (const owner of owners) if (!claimants.has(owner)) return true;
+		return false;
+	};
+	const remaining = catalog.filter((entry) => entry.canonical.length > 0);
+	const assignRound = (
+		candidateFor: (entry: (typeof catalog)[number]) => string | undefined,
+		priorityFor: (entry: (typeof catalog)[number]) => number = () => 0,
+	): void => {
+		const groups = new Map<
+			string,
+			{ readonly priority: number; readonly entries: (typeof catalog)[number][] }
+		>();
+		for (const entry of remaining) {
+			if (assigned.has(entry.canonical)) continue;
+			const candidate = candidateFor(entry);
+			if (candidate === undefined) continue;
+			const group = groups.get(candidate) ?? { entries: [], priority: Number.POSITIVE_INFINITY };
+			group.entries.push(entry);
+			groups.set(candidate, {
+				entries: group.entries,
+				priority: Math.min(group.priority, priorityFor(entry)),
+			});
+		}
+		for (const [candidate, group] of groups) {
+			const winners = group.entries.filter((entry) => priorityFor(entry) === group.priority);
+			if (winners.length !== 1) continue;
+			const winner = winners[0]!;
+			if (blocked(candidate, new Set(group.entries.map((entry) => entry.canonical)))) continue;
+			assigned.set(winner.canonical, candidate);
+			claimed.add(candidate);
+		}
+	};
+	assignRound(
+		(entry) => entry.explicitShort ?? derivedShortName(entry.canonical),
+		(entry) => (entry.explicitShort === undefined ? 1 : 0),
+	);
+	assignRound(
+		(entry) => providerSafeToolName(entry.canonical),
+		() => 1,
+	);
+	assignRound(
+		(entry) => legacyProviderSafeToolName(entry.canonical),
+		() => 2,
+	);
+	// Only a 32-bit hash collision between distinct names can reach this round. Salt the hash
+	// until a free name exists rather than failing the whole extension install.
+	for (let salt = 2; remaining.some((entry) => !assigned.has(entry.canonical)); salt += 1) {
+		assignRound(
+			(entry) => legacyProviderSafeToolName(`${entry.canonical}#${salt}`),
+			() => 3,
+		);
+	}
+	return assigned;
+}
+
 /**
  * Known built-in plugin prefixes. A provider-safe name replaces `.` with `_`, so without a
  * tool catalog a multi-word plugin id (`onebot-napcat_send`) is ambiguous with a tool id that
@@ -832,24 +988,30 @@ const STATIC_TOOL_PREFIXES = [
  */
 export function resolveToolName(
 	name: string,
-	tools?: Iterable<PluginTool | string>,
+	tools?: Iterable<ModelToolNameEntry>,
 ): string | undefined {
 	const trimmed = name.trim();
 	if (trimmed.length === 0) return undefined;
 	if (tools !== undefined) {
-		for (const entry of tools) {
+		const catalog = [...tools];
+		const allocated = allocateModelToolNames(catalog);
+		const matches = new Set<string>();
+		for (const entry of catalog) {
 			const canonical = typeof entry === "string" ? entry : entry.name;
 			if (
 				canonical === trimmed ||
+				allocated.get(canonical) === trimmed ||
+				providerToolNameAliases(entry).includes(trimmed) ||
 				providerSafeToolName(canonical) === trimmed ||
 				legacyProviderSafeToolName(canonical) === trimmed ||
 				canonical.replace(/\./gu, "__").replace(/-/gu, "_") ===
 					trimmed.replace(/\./gu, "__").replace(/-/gu, "_")
 			) {
-				return canonical;
+				matches.add(canonical);
 			}
 		}
-		return undefined;
+		// A historical short name is only safe to resolve while exactly one tool answers to it.
+		return matches.size === 1 ? [...matches][0] : undefined;
 	}
 	const strippedLegacy = trimmed.replace(/_[0-9a-f]{8}$/u, "");
 	if (strippedLegacy.includes(".")) return strippedLegacy;
@@ -901,6 +1063,11 @@ export interface PluginToolsExtensionOptions {
 		  ) => ToolPolicyAccessContext | Promise<ToolPolicyAccessContext>);
 	/** Model-visibility filter; defaults to the tool policy's `visibility === "model"`. */
 	readonly filter?: (tool: PluginTool) => boolean;
+	/**
+	 * Built-in model tool names that plugin shorthands must not shadow. The server passes the
+	 * prompt, workspace, schedule, coding, and `tool_search` names; standalone embedders may omit it.
+	 */
+	readonly reservedNames?: readonly string[] | (() => readonly string[]);
 }
 
 type PluginToolSource = () => readonly PluginTool[];
@@ -972,7 +1139,7 @@ export function createPluginToolsExtension(
 	const registrations = new Map<
 		string,
 		{
-			readonly disambiguate: boolean;
+			readonly modelName: string;
 			readonly tool: PluginTool;
 			readonly registration: PluginToolRegistration;
 		}
@@ -1006,9 +1173,9 @@ export function createPluginToolsExtension(
 			? options.policyContext(tool, context)
 			: (options.policyContext ?? {});
 
-	const registrationFor = (tool: PluginTool, disambiguate = false): PluginToolRegistration => {
+	const registrationFor = (tool: PluginTool, modelName: string): PluginToolRegistration => {
 		const existing = registrations.get(tool.name);
-		if (existing?.tool === tool && existing.disambiguate === disambiguate) {
+		if (existing?.tool === tool && existing.modelName === modelName) {
 			return existing.registration;
 		}
 		const resolvedPolicy = resolveToolPolicy(tool);
@@ -1257,10 +1424,12 @@ export function createPluginToolsExtension(
 					release?.();
 				}
 			},
-			name: providerSafeToolName(tool.name, { disambiguate }),
+			name: modelName,
 			parameters: tool.parameters,
+			canonicalName: tool.name,
+			aliases: providerToolNameAliases(tool),
 		};
-		registrations.set(tool.name, { disambiguate, registration, tool });
+		registrations.set(tool.name, { modelName, registration, tool });
 		return registration;
 	};
 
@@ -1276,7 +1445,6 @@ export function createPluginToolsExtension(
 			}
 			const names = new Set<string>();
 			const filtered: PluginTool[] = [];
-			const safeNameCounts = new Map<string, number>();
 			for (const tool of current) {
 				if (names.has(tool.name)) {
 					warn(options.logger, `duplicate plugin tool name ${tool.name}`);
@@ -1287,14 +1455,15 @@ export function createPluginToolsExtension(
 				}
 				names.add(tool.name);
 				filtered.push(tool);
-				const cleanName = providerSafeToolName(tool.name);
-				safeNameCounts.set(cleanName, (safeNameCounts.get(cleanName) ?? 0) + 1);
 			}
-			const tools = filtered.map((tool) => {
-				const cleanName = providerSafeToolName(tool.name);
-				const disambiguate = (safeNameCounts.get(cleanName) ?? 0) > 1;
-				return registrationFor(tool, disambiguate);
-			});
+			const reservedNames =
+				typeof options.reservedNames === "function"
+					? options.reservedNames()
+					: (options.reservedNames ?? []);
+			const allocated = allocateModelToolNames(filtered, { reservedNames });
+			const tools = filtered.map((tool) =>
+				registrationFor(tool, allocated.get(tool.name) ?? providerSafeToolName(tool.name)),
+			);
 			for (const name of registrations.keys()) {
 				if (!names.has(name)) registrations.delete(name);
 			}

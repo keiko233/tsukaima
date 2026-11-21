@@ -45,6 +45,10 @@ export const pluginManifestSchema = z.object({
 				lazy: z.boolean().optional(),
 				/** Conversation surface this tool belongs to. Defaults to `both`. */
 				surface: z.enum(["chat", "coding", "both"]).optional(),
+				/** Preferred model-facing shorthand; collisions fall back to the namespaced name. */
+				shortName: z.string().trim().min(1).max(64).optional(),
+				/** Earlier or alternative model-facing names that must keep resolving. */
+				aliases: z.array(z.string().trim().min(1).max(128)).max(8).optional(),
 			}),
 		)
 		.max(128)

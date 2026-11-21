@@ -3,12 +3,14 @@ import {
 	LocalModelRegistry,
 	LocalToolBridge,
 	LocalUiBridge,
+	allocateModelToolNames,
 	createConsolePluginLogger,
 	createPluginContext,
 	createPluginToolsExtension,
 	legacyProviderSafeToolName,
 	normalizePluginLogger,
 	providerSafeToolName,
+	providerToolNameAliases,
 	resolveToolName,
 } from "./bridges.ts";
 import { CURATED_EAGER_CHAT_TOOLS, resolveToolPolicyAccess } from "./policy.ts";
@@ -219,7 +221,7 @@ describe("plugin sdk", () => {
 
 		const registration = extension.tools[0];
 		expect(registration).toBeDefined();
-		expect(registration?.name).toBe(providerSafeToolName("sample.echo"));
+		expect(registration?.name).toBe("echo");
 		expect(registration?.name).toMatch(/^[a-zA-Z0-9_-]{1,64}$/u);
 		expect(registration?.description).toBe("Echo text");
 		expect(registration?.parameters).toEqual(tool.parameters);
@@ -458,7 +460,44 @@ describe("plugin sdk", () => {
 		expect(extension.tools).toEqual([]);
 	});
 
-	test("uses clean provider-safe tool names by default, disambiguates collisions, and resolves legacy names", () => {
+	test("allocates concise shorthand names, namespacing only real collisions", () => {
+		expect(allocateModelToolNames(["memory.recall", "search-fetch.web"]).get("memory.recall")).toBe(
+			"recall",
+		);
+		expect(
+			allocateModelToolNames(["memory.recall", "search-fetch.web"]).get("search-fetch.web"),
+		).toBe("web");
+
+		// Both `send` tools collide, so both keep the namespaced provider-safe name.
+		const sends = allocateModelToolNames(["onebot-napcat.send", "sticker-meme.send"]);
+		expect(sends.get("onebot-napcat.send")).toBe("onebot-napcat_send");
+		expect(sends.get("sticker-meme.send")).toBe("sticker-meme_send");
+
+		// A real collision with a built-in tool also falls back to the namespace.
+		const reserved = allocateModelToolNames(["demo.tool_search", "demo.search"], {
+			reservedNames: ["tool_search"],
+		});
+		expect(reserved.get("demo.tool_search")).toBe("demo_tool_search");
+		expect(reserved.get("demo.search")).toBe("search");
+
+		// An explicit shorthand wins over an automatic one and forces the other side to namespace.
+		const explicit = allocateModelToolNames([
+			{ name: "alpha.send", shortName: "send" },
+			{ name: "beta.send" },
+		]);
+		expect(explicit.get("alpha.send")).toBe("send");
+		expect(explicit.get("beta.send")).toBe("beta_send");
+
+		// Duplicate explicit shorthands are ambiguous; neither silently wins.
+		const duplicate = allocateModelToolNames([
+			{ name: "alpha.send", shortName: "send" },
+			{ name: "beta.send", shortName: "send" },
+		]);
+		expect(duplicate.get("alpha.send")).toBe("alpha_send");
+		expect(duplicate.get("beta.send")).toBe("beta_send");
+	});
+
+	test("keeps canonical names and historical aliases for legacy names and allowlists", () => {
 		expect(providerSafeToolName("onebot-napcat.send")).toBe("onebot-napcat_send");
 		expect(providerSafeToolName("sticker-meme.send")).toBe("sticker-meme_send");
 		expect(providerSafeToolName("memory.save")).toBe("memory_save");
@@ -473,6 +512,12 @@ describe("plugin sdk", () => {
 		expect(resolveToolName(legacyProviderSafeToolName("onebot-napcat.send"), catalog)).toBe(
 			"onebot-napcat.send",
 		);
+		expect(resolveToolName("memory.save", ["memory.save"])).toBe("memory.save");
+		expect(resolveToolName("save", ["memory.save"])).toBe("memory.save");
+		expect(resolveToolName("send", catalog)).toBeUndefined();
+		const aliased = [{ aliases: ["legacy_echo"], name: "demo.echo", shortName: "echo" }];
+		expect(resolveToolName("legacy_echo", aliased)).toBe("demo.echo");
+		expect(resolveToolName("echo", aliased)).toBe("demo.echo");
 
 		// Without a catalog the static fallback still understands both the hyphenated clean name
 		// and the underscore alias of multi-word plugin ids, plus legacy hash suffixes.
@@ -513,5 +558,13 @@ describe("plugin sdk", () => {
 				conversationAllowedTools: ["onebot-napcat_send"],
 			}).allowed,
 		).toBe(true);
+		// The allocator's chosen model name and an explicitly declared alias also authorize.
+		expect(
+			resolveToolPolicyAccess(sendTool, {
+				conversationAllowedTools: ["send"],
+				toolNameAliases: ["send"],
+			}).allowed,
+		).toBe(true);
+		expect(providerToolNameAliases(sendTool)).toContain("onebot-napcat_send");
 	});
 });

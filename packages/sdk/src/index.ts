@@ -143,6 +143,7 @@ export {
 	type KnownModelCapability,
 } from "./model-capabilities.ts";
 export {
+	allocateModelToolNames,
 	completePluginModel,
 	createConsolePluginLogger,
 	createPluginContext,
@@ -159,6 +160,8 @@ export {
 	normalizePluginLogger,
 	PLUGIN_TOOLS_EXTENSION_NAME,
 	providerSafeToolName,
+	providerToolNameAliases,
 	resolveToolName,
+	type ModelToolNameEntry,
 	type PluginToolsExtensionOptions,
 } from "./bridges.ts";

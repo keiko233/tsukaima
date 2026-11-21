@@ -103,8 +103,10 @@ This file is the cross-session handoff record. Update it whenever implementation
   `context.tools`; `createPluginToolsExtension()` adapts them to pi-durable registrations and the
   host installs one extension alongside the persona/memory sections. Permission denial and plugin
   errors become `isError` tool results instead of throwing, and every invocation writes an audit
-  row. The model-facing name is `providerSafeToolName()` because OpenAI-compatible providers reject
-  the `.` in the author-facing `<pluginId>.<tool>` name; routing and audit keep the original name.
+  row. The model-facing name is allocated from the canonical `<pluginId>.<tool>` id: the action
+  segment is used when unique, and the namespaced provider-safe form is kept when two tools collide
+  (`onebot-napcat_send` / `sticker-meme_send`). Routing and audit keep the canonical name, and
+  historical provider-safe or hash-suffixed names still resolve for persisted allowlists.
 - Live updates use `GET /events/stream` (SSE) and require the admin session cookie exactly like
   oRPC. It publishes `snapshot`, `heartbeat`, `message.received`, `activity.opened`,
   `activity.closed`, `before.reply`, `after.reply`, and the live agent run frames `run.state` and

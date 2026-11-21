@@ -1,4 +1,8 @@
-import { legacyProviderSafeToolName, providerSafeToolName } from "./bridges.ts";
+import {
+	legacyProviderSafeToolName,
+	providerSafeToolName,
+	providerToolNameAliases,
+} from "./bridges.ts";
 import { hasPermission, type PluginPermission } from "./permissions.ts";
 import type { PluginTool, ToolInvocationContext, ToolPolicy, ToolSurface } from "./types.ts";
 
@@ -57,6 +61,8 @@ export interface ToolPolicyAccessContext extends ToolInvocationContext {
 	readonly toolAllowlist?: readonly string[];
 	/** Conversation policy allowlist (`pacing.allowedTools`). */
 	readonly conversationAllowedTools?: readonly string[];
+	/** Allocated model-facing names for the tool, including its historical aliases. */
+	readonly toolNameAliases?: readonly string[];
 	/** Channel capabilities for the current conversation. */
 	readonly channelCapabilities?: readonly string[];
 	/** Current execution surface; absent means no surface restriction. */
@@ -70,7 +76,11 @@ export interface ToolPolicyDecision {
 	readonly reason?: string;
 }
 
-function allowlistMatches(toolName: string, allowlist: readonly string[]): boolean {
+function allowlistMatches(
+	toolName: string,
+	allowlist: readonly string[],
+	aliases: readonly string[] = [],
+): boolean {
 	const cleanSafe = providerSafeToolName(toolName);
 	const legacySafe = legacyProviderSafeToolName(toolName);
 	const doubleUnderscore = toolName.replace(/\./gu, "__").replace(/-/gu, "_");
@@ -80,6 +90,7 @@ function allowlistMatches(toolName: string, allowlist: readonly string[]): boole
 			entry === toolName ||
 			entry === cleanSafe ||
 			entry === legacySafe ||
+			aliases.includes(entry) ||
 			entry.replace(/\./gu, "__").replace(/-/gu, "_") === doubleUnderscore
 		) {
 			return true;
@@ -129,10 +140,12 @@ export function resolveToolPolicyAccess(
 		}
 	}
 
+	const aliases = new Set([...providerToolNameAliases(tool), ...(context.toolNameAliases ?? [])]);
+
 	// 2. Global/plugin tool allowlist.
 	if (
 		context.toolAllowlist !== undefined &&
-		!allowlistMatches(tool.name, [...context.toolAllowlist])
+		!allowlistMatches(tool.name, [...context.toolAllowlist], [...aliases])
 	) {
 		return deny("tool_not_allowlisted");
 	}
@@ -140,7 +153,7 @@ export function resolveToolPolicyAccess(
 	// 3. Conversation policy + channel capability match.
 	if (
 		context.conversationAllowedTools !== undefined &&
-		!allowlistMatches(tool.name, [...context.conversationAllowedTools])
+		!allowlistMatches(tool.name, [...context.conversationAllowedTools], [...aliases])
 	) {
 		return deny("conversation_tool_denied");
 	}

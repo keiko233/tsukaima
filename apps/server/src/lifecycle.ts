@@ -6,6 +6,7 @@ import {
 	ModelPolicyRouter,
 	ModelUsageLedger,
 	PiDurableConversationHost,
+	TOOL_SEARCH_TOOL_NAME,
 	composeInterjectPrompt,
 	createFakeModel,
 	type ActivityWindowEvent,
@@ -130,7 +131,7 @@ import { ReplyExpectationStore } from "./services/reply-expectations.ts";
 import { SidechatService, resolveSidechatTarget } from "./services/sidechat.ts";
 import { LiveRunCache } from "./services/live-run-cache.ts";
 import { PromptHookService } from "./services/prompt-hooks.ts";
-import { createPromptTools } from "./services/prompt-tools.ts";
+import { PROMPT_TOOL_NAMES, createPromptTools } from "./services/prompt-tools.ts";
 import { PromptService } from "./services/prompts.ts";
 import {
 	RestartCoordinator,
@@ -143,16 +144,20 @@ import { RequestService } from "./services/request-service.ts";
 import { RepositoryService } from "./services/repository-service.ts";
 import { ScheduleExecutionService } from "./services/schedule-executor.ts";
 import { ScheduleService } from "./services/schedule-service.ts";
-import { createScheduleToolsExtension } from "./services/schedule-tools.ts";
+import { SCHEDULE_TOOL_NAMES, createScheduleToolsExtension } from "./services/schedule-tools.ts";
 import { SessionMessagingService } from "./services/session-messaging.ts";
 import { UpgradeService } from "./services/upgrade-service.ts";
 import { createVideoFrameExtractor } from "./services/video-frames.ts";
-import { createCodingAgentToolsExtension } from "./services/coding-agent-tools.ts";
+import {
+	CODING_AGENT_TOOL_NAMES,
+	createCodingAgentToolsExtension,
+} from "./services/coding-agent-tools.ts";
 import { WorkspaceReferenceService } from "./services/workspace-references.ts";
 import { WorkspaceSqlService } from "./services/workspace-sql.ts";
 import { WorkspaceTodoService } from "./services/workspace-todos.ts";
 import {
 	IM_WORKSPACE_DELEGATION_TOOL_NAMES,
+	WORKSPACE_TOOL_NAMES,
 	createWorkspaceToolsExtension,
 } from "./services/workspace-tools.ts";
 import { WorkspaceService } from "./services/workspace.ts";
@@ -163,6 +168,20 @@ import { WorkspaceService } from "./services/workspace.ts";
  * breakage immediately.
  */
 const INBOUND_FAILURE_LOG_INTERVAL_MS = 60_000;
+
+/**
+ * Model names owned by built-in host extensions. Plugin shorthands must not shadow these, and
+ * the plugin host and plugin-tools extension must allocate from the same reserved set.
+ */
+function reservedModelToolNames(): readonly string[] {
+	return [
+		TOOL_SEARCH_TOOL_NAME,
+		...PROMPT_TOOL_NAMES,
+		...SCHEDULE_TOOL_NAMES,
+		...CODING_AGENT_TOOL_NAMES,
+		...WORKSPACE_TOOL_NAMES,
+	];
+}
 
 export interface LifecycleOptions {
 	/** Optional scheduled backup/restore drill override; disabled unless configured. */
@@ -979,6 +998,7 @@ export class TsukaimaLifecycle {
 			media: this.media,
 			outbound: this.outbound,
 			pluginDatabases: this.pluginDatabases,
+			reservedToolNames: reservedModelToolNames,
 			onModelMessage: (message, pluginId) => {
 				this.modelUsageLedger.record(
 					message as Parameters<typeof this.modelUsageLedger.record>[0],
@@ -1623,7 +1643,8 @@ export class TsukaimaLifecycle {
 			},
 			// Only canonical channel chat-send tools count: `workspace_send` and
 			// `sticker-meme_send` are not direct sends and must not suppress the final answer.
-			isDirectSendTool: (toolName) => isDirectSendToolName(toolName),
+			isDirectSendTool: (toolName) =>
+				isDirectSendToolName(this.pluginHost.resolveModelToolName(toolName) ?? toolName),
 			hasDirectSend: (conversationId) => this.replyDispatcher.hasDirectSendThisTurn(conversationId),
 			resolveImage: async (part) => {
 				if (part.type !== "image") return undefined;
@@ -1692,6 +1713,7 @@ export class TsukaimaLifecycle {
 								});
 							},
 							policyContext: (tool, context) => this.pluginHost.toolPolicyContext(tool, context),
+							reservedNames: reservedModelToolNames,
 							trace: (message, fields) => {
 								toolLog.trace(message, fields);
 							},

@@ -36,7 +36,7 @@ freedom, prompt-cache efficiency, IM tool ergonomics, semantic memory, and human
 
 ## Global contracts and conventions
 
-- **Tool namespacing**: Plugin tools are registered under `<pluginId>.<action>` (matching `LocalToolBridge`), and mapped to provider-compatible names via `providerSafeToolName()`.
+- **Tool namespacing**: Plugin tools are registered under `<pluginId>.<action>` (matching `LocalToolBridge`). The model sees an allocated short, provider-safe name; namespacing is added only when two tools really collide. Routing, policy, discovery, and audit keep the canonical id.
 - **Shared conversation serialization**: Inbound activity runs, steering/follow-ups, outbound pacing, and background proactive turns on the same conversation must acquire the same per-conversation execution lock.
 - **Policy ownership**: Channel plugins own transport and platform actions only; access gating (`open`/`allowlist`/`disabled`), aliases, peer bots, and reply pacing live in the core conversation policy engine.
 

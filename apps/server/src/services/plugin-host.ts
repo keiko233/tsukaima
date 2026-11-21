@@ -1,10 +1,13 @@
 import {
+	allocateModelToolNames,
 	completePluginModel,
 	createPluginContext,
 	collectPluginModels,
 	hasPermission,
 	LocalStorageBridge,
 	providerSafeToolName,
+	resolveToolName,
+	resolveToolPolicy,
 	type AuditEntry,
 	type TsukaimaPlugin,
 	type PluginContext,
@@ -94,6 +97,11 @@ export interface PluginHostOptions {
 	readonly migrations?: MigrationRegistry;
 	/** Host-owned outbound path so plugin sends land in durable history. */
 	readonly outbound?: OutboundService;
+	/**
+	 * Built-in model tool names that plugin shorthands must not shadow. Must match the value the
+	 * plugin-tools extension receives so both sides allocate the same model-facing names.
+	 */
+	readonly reservedToolNames?: readonly string[] | (() => readonly string[]);
 	readonly pluginDatabases?: PluginDatabaseProvider;
 	readonly storage?: PluginStorageStore;
 	readonly tasks?: PluginTaskService;
@@ -195,6 +203,7 @@ export class PluginHost {
 	readonly #media: MediaService | undefined;
 	readonly #migrations: MigrationRegistry | undefined;
 	readonly #outbound: OutboundService | undefined;
+	readonly #reservedToolNames: readonly string[] | (() => readonly string[]) | undefined;
 	readonly #pluginDatabases: PluginDatabaseProvider | undefined;
 	readonly #storage: PluginStorageStore | undefined;
 	readonly #tasks: PluginTaskService | undefined;
@@ -222,6 +231,7 @@ export class PluginHost {
 		this.#media = options.media;
 		this.#migrations = options.migrations;
 		this.#outbound = options.outbound;
+		this.#reservedToolNames = options.reservedToolNames;
 		this.#pluginDatabases = options.pluginDatabases;
 		this.#storage = options.storage;
 		this.#tasks = options.tasks;
@@ -568,6 +578,7 @@ export class PluginHost {
 	}> {
 		const owner = this.#toolOwner(tool.name);
 		const manifest = owner === undefined ? undefined : this.#plugins.get(owner)?.manifest;
+		const modelName = this.#modelToolNames().get(tool.name);
 		const conversation = context.conversationId;
 		const caller = await resolveImCallerContext({
 			conversationId: conversation,
@@ -622,6 +633,7 @@ export class PluginHost {
 			(conversationCapabilities?.includes("coding") === true ? "coding" : undefined);
 		return {
 			grantedPermissions: manifest?.permissions ?? [],
+			...(modelName === undefined ? {} : { toolNameAliases: [modelName] }),
 			...(context.allowedTools === undefined
 				? {}
 				: { conversationAllowedTools: context.allowedTools }),
@@ -642,11 +654,38 @@ export class PluginHost {
 		};
 	}
 
-	/** Provider-safe model tool names owned by one plugin, used for per-conversation filters. */
+	/** Allocated model-facing names for every started plugin tool, keyed by canonical name. */
+	#modelToolNames(): Map<string, string> {
+		const reservedNames =
+			typeof this.#reservedToolNames === "function"
+				? this.#reservedToolNames()
+				: (this.#reservedToolNames ?? []);
+		const tools = this.tools().filter((tool) => resolveToolPolicy(tool).visibility === "model");
+		return allocateModelToolNames(tools, { reservedNames });
+	}
+
+	/** Model-facing names owned by one plugin, used for per-conversation filters. */
 	modelToolNames(pluginId: string): readonly string[] {
 		const context = this.#contexts.get(pluginId);
 		if (context === undefined) return [];
-		return context.tools.list().map((tool) => providerSafeToolName(tool.name));
+		const allocated = this.#modelToolNames();
+		return context.tools
+			.list()
+			.map((tool) => allocated.get(tool.name) ?? providerSafeToolName(tool.name));
+	}
+
+	/**
+	 * Canonical name for a model-facing tool name. Accepts the allocated shorthand and every
+	 * historical alias, but refuses an ambiguous historical shorthand.
+	 */
+	resolveModelToolName(name: string): string | undefined {
+		const trimmed = name.trim();
+		if (trimmed === "") return undefined;
+		const allocated = this.#modelToolNames();
+		for (const [canonical, modelName] of allocated) {
+			if (modelName === trimmed) return canonical;
+		}
+		return resolveToolName(trimmed, this.tools());
 	}
 
 	#toolOwner(name: string): string | undefined {

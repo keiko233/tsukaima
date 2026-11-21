@@ -8,7 +8,6 @@ import { createHostSandbox, DomainCodingStore, type ReloadController } from "@ts
 import { createOpenAICompatibleModelPort } from "@tsukaima/core";
 import { conversations, runtimeRestarts } from "@tsukaima/db";
 import type { MessageEnvelope } from "@tsukaima/contracts";
-import { providerSafeToolName } from "@tsukaima/sdk";
 import { SELF_ITERATION_HOST_BINDING } from "@tsukaima-plugin/self-iteration";
 import { loadConfig } from "../src/config.ts";
 import { TsukaimaLifecycle } from "../src/lifecycle.ts";
@@ -176,8 +175,8 @@ describe("self-iteration runtime", () => {
 			expect(normal.ignored).toBe(false);
 			await waitFor(() => (requests.length >= 1 ? true : undefined));
 			const normalTools = requests[0]?.tools?.map((tool) => tool.function?.name ?? "") ?? [];
-			expect(normalTools).not.toContain(providerSafeToolName("self-iteration.analyze"));
-			expect(normalTools).not.toContain(providerSafeToolName("self-iteration.worktree"));
+			expect(normalTools).not.toContain("analyze");
+			expect(normalTools).not.toContain("worktree");
 			expect(normalTools.some((name) => name.includes("self_iteration"))).toBe(false);
 
 			const database = lifecycle.domainDatabase;
@@ -196,8 +195,8 @@ describe("self-iteration runtime", () => {
 			await lifecycle.conversationRouter.ingest(envelope("coding-1"));
 			await waitFor(() => (requests.length >= 2 ? true : undefined));
 			const codingTools = requests[1]?.tools?.map((tool) => tool.function?.name ?? "") ?? [];
-			expect(codingTools).not.toContain(providerSafeToolName("self-iteration.analyze"));
-			expect(codingTools).not.toContain(providerSafeToolName("self-iteration.edit"));
+			expect(codingTools).not.toContain("analyze");
+			expect(codingTools).not.toContain("edit");
 			expect(codingTools.some((name) => name.includes("self_iteration"))).toBe(false);
 
 			// Background/proactive turns reach the same conversation, so a stale capability grant

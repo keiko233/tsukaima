@@ -667,6 +667,17 @@ export interface PluginTool {
 	readonly lazy?: boolean;
 	/** Conversation surface this tool belongs to. Defaults to `"both"`. */
 	readonly surface?: ToolSurface;
+	/**
+	 * Preferred model-facing shorthand. The canonical `name` still authorizes, audits, and
+	 * dispatches the call. When this name would collide with another model tool, the allocator
+	 * falls back to the namespaced name instead of silently choosing a loser.
+	 */
+	readonly shortName?: string;
+	/**
+	 * Additional model-facing names that still resolve to this tool. Use them for names an
+	 * earlier release exposed or for a stable shorthand that must survive catalog changes.
+	 */
+	readonly aliases?: readonly string[];
 	/** Host-enforced execution policy. Defaults are model-visible, 30s, 4 concurrent. */
 	policy?: Partial<ToolPolicy>;
 	execute(
@@ -703,6 +714,10 @@ export interface PluginToolRegistration {
 	name: string;
 	description: string;
 	parameters: Record<string, unknown>;
+	/** Canonical author-facing name used by routing, policy, and audit. */
+	readonly canonicalName?: string;
+	/** Earlier model-facing names that still resolve to this registration. */
+	readonly aliases?: readonly string[];
 	/** Set for tools the model must load through `tool_search` first. */
 	readonly deferred?: true;
 	readonly surface?: ToolSurface;

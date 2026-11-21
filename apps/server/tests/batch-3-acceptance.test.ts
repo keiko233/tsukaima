@@ -245,31 +245,31 @@ describe("Batch 3 acceptance", () => {
 		expect(offered).toEqual(
 			expect.arrayContaining([
 				"onebot-napcat_send",
-				"onebot-napcat_readHistory",
-				"onebot-napcat_viewImage",
-				"onebot-napcat_poke",
-				"onebot-napcat_react",
-				"onebot-napcat_listTargets",
+				"readHistory",
+				"viewImage",
+				"poke",
+				"react",
+				"listTargets",
 				"sticker-meme_send",
-				"sticker-meme_search",
-				"search-fetch_web",
-				"search-fetch_fetch",
-				"memory_recall",
-				"memory_save",
+				"search",
+				"web",
+				"fetch",
+				"recall",
+				"save",
 				"schedule_create",
 				"schedule_list",
 				"schedule_cancel",
 			]),
 		);
-		expect(offered).not.toContain("proactive-scheduler_schedule");
+		expect(offered).not.toContain("schedule");
 		for (const deferred of [
-			"onebot-napcat_groupBan",
-			"onebot-napcat_groupKick",
-			"onebot-napcat_rawAction",
-			"onebot-napcat_deleteMessage",
-			"onebot-napcat_setProfile",
-			"onebot-napcat_lookupMessage",
-			"self-iteration_analyze",
+			"groupBan",
+			"groupKick",
+			"rawAction",
+			"deleteMessage",
+			"setProfile",
+			"lookupMessage",
+			"analyze",
 		]) {
 			expect(offered).not.toContain(deferred);
 		}
@@ -655,7 +655,8 @@ describe("Batch 3 acceptance", () => {
 		const inspection = await host.inspectConversationContext(session.durableConversationId);
 		const names = inspection?.tools.map((tool) => tool.name) ?? [];
 		expect(names).toContain(providerSafeToolName("onebot-napcat.send"));
-		expect(names).toContain(providerSafeToolName("memory.recall"));
+		// `memory_recall` in the persisted allowlist still resolves to the new short name.
+		expect(names).toContain("recall");
 		expect(names).not.toContain("workspace_spawn");
 		expect(names.length).toBeGreaterThan(0);
 	});

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { LocalToolBridge, createPluginToolsExtension, providerSafeToolName } from "./bridges.ts";
+import { LocalToolBridge, createPluginToolsExtension } from "./bridges.ts";
 import { DEFAULT_TOOL_POLICY, resolveToolPolicy, resolveToolPolicyAccess } from "./policy.ts";
 import { pluginManifestSchema } from "./manifest.ts";
 import type { AuditEntry } from "./host.ts";
@@ -213,11 +213,11 @@ describe("tool policy", () => {
 		expect(extension.tools).toEqual([
 			expect.objectContaining({
 				deferred: true,
-				name: providerSafeToolName("demo.lazy"),
+				name: "lazy",
 				surface: "coding",
 			}),
 			expect.objectContaining({
-				name: providerSafeToolName("demo.eager"),
+				name: "eager",
 				surface: "chat",
 			}),
 		]);
@@ -237,6 +237,8 @@ describe("tool policy", () => {
 					name: "demo.coding",
 					parameters: {},
 					requiredPermissions: ["conversation.read"],
+					shortName: "coding",
+					aliases: ["demo_coding"],
 					surface: "coding",
 				},
 				{
@@ -254,7 +256,13 @@ describe("tool policy", () => {
 		bridge.register(tool({ name: "demo.coding", requiredPermissions: ["conversation.read"] }));
 		bridge.register(tool({ name: "demo.chat", requiredPermissions: ["conversation.read"] }));
 		expect(bridge.list()).toEqual([
-			expect.objectContaining({ lazy: true, name: "demo.coding", surface: "coding" }),
+			expect.objectContaining({
+				aliases: ["demo_coding"],
+				lazy: true,
+				name: "demo.coding",
+				shortName: "coding",
+				surface: "coding",
+			}),
 			expect.objectContaining({ lazy: false, name: "demo.chat", surface: "chat" }),
 		]);
 

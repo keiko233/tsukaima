@@ -63,7 +63,8 @@ server code importing plugin internals.
 ## Tool naming, permissions, and policy
 
 Preserve `LocalToolBridge`'s `<pluginId>.<action>` namespacing rule: every plugin tool registers
-as `<pluginId>.<action>` and continues mapping to providers via `providerSafeToolName()`.
+as `<pluginId>.<action>`. The model-facing name is a concise provider-safe shorthand, with the
+namespaced provider-safe form retained only for real collisions and historical aliases.
 Update `pluginPermissionSchema` in `packages/sdk/src/manifest.ts` to validate new host scopes
 (`tasks.*`, `ui.approval-card`, `coding.*`, `storage.global`, `conversation.read`, and `*` if
 retained) consistent with `packages/sdk/src/permissions.ts`.
