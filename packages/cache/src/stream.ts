@@ -3,6 +3,8 @@ import type { KeyvCache } from "./keyv-cache.ts";
 export interface CacheStreamOptions {
 	/** Retained events per stream. Old events leave from the front. Default 200. */
 	readonly maxEvents?: number;
+	/** Total serialized byte budget. Old events leave from the front. Default 256 KiB. */
+	readonly maxBytes?: number;
 	/** Time to live for the whole stream, refreshed by every append. Omit for no expiry. */
 	readonly ttlMs?: number;
 }
@@ -20,6 +22,12 @@ interface StreamRecord {
 }
 
 const DEFAULT_MAX_EVENTS = 200;
+const DEFAULT_MAX_BYTES = 256 * 1024;
+const textEncoder = new TextEncoder();
+
+function serializedBytes(value: unknown): number {
+	return textEncoder.encode(JSON.stringify(value)).byteLength;
+}
 
 /**
  * A bounded append-only log on top of Keyv, the "Redis Stream" shape a live run needs.
@@ -33,12 +41,14 @@ export class CacheStream {
 	readonly #cache: KeyvCache;
 	readonly #key: string;
 	readonly #maxEvents: number;
+	readonly #maxBytes: number;
 	readonly #ttlMs: number | undefined;
 
 	constructor(cache: KeyvCache, name: string, options: CacheStreamOptions = {}) {
 		this.#cache = cache;
 		this.#key = `stream:${name}`;
 		this.#maxEvents = Math.max(1, Math.floor(options.maxEvents ?? DEFAULT_MAX_EVENTS));
+		this.#maxBytes = Math.max(1, Math.floor(options.maxBytes ?? DEFAULT_MAX_BYTES));
 		this.#ttlMs = options.ttlMs;
 	}
 
@@ -53,7 +63,14 @@ export class CacheStream {
 				seq: record.nextSeq,
 				value,
 			};
-			const events = [...record.events, event as CacheStreamEvent].slice(-this.#maxEvents);
+			let events = [...record.events, event as CacheStreamEvent].slice(-this.#maxEvents);
+			// The whole log is one cache value, so an unbounded patch would keep the SQLite row
+			// large forever. Drop the oldest events until the serialized log fits the budget. A
+			// single oversized event is not retained at all: the latest state key remains the
+			// authoritative snapshot, while this stream is only for incremental replay.
+			while (events.length > 0 && serializedBytes(events) > this.#maxBytes) {
+				events = events.slice(1);
+			}
 			await this.#cache.set(
 				this.#key,
 				{ events, nextSeq: event.seq + 1 } satisfies StreamRecord,

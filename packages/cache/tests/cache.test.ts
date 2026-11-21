@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -84,6 +85,25 @@ describe("KeyvCache", () => {
 		expect(await second.get("durable")).toEqual({ ok: true });
 	});
 
+	test("configures the sqlite cache for incremental auto-vacuum", async () => {
+		const directory = await temporaryDirectory();
+		const path = join(directory, "cache.sqlite");
+		const first = new KeyvCache({ path });
+		await first.set("ephemeral", "x".repeat(100_000));
+		await first.delete("ephemeral");
+		await first.close();
+		const database = new Database(path);
+		try {
+			const row = database.query("PRAGMA auto_vacuum").get() as { auto_vacuum: number };
+			expect(row.auto_vacuum).toBe(2);
+		} finally {
+			database.close();
+		}
+		const second = new KeyvCache({ path });
+		caches.push(second);
+		expect(await second.get("ephemeral")).toBeUndefined();
+	});
+
 	test("publishes process-local bus events by exact channel and prefix", async () => {
 		const cache = await temporaryCache();
 		const exact: string[] = [];
@@ -95,6 +115,20 @@ describe("KeyvCache", () => {
 		await cache.publish("other", "three");
 		expect(exact).toEqual(["one"]);
 		expect(prefixed).toEqual(["one", "two"]);
+	});
+
+	test("append-only stream drops the oldest events when it exceeds its byte budget", async () => {
+		const cache = await temporaryCache();
+		const stream = cache.stream("run:2:events", { maxBytes: 700, maxEvents: 10 });
+		for (let index = 0; index < 8; index += 1) await stream.append("v".repeat(100));
+		const events = await stream.read(0, 10);
+		expect(events.length).toBeLessThan(8);
+		expect(Buffer.byteLength(JSON.stringify(events), "utf8")).toBeLessThanOrEqual(700);
+
+		// A single event that alone exceeds the budget is not retained; the latest state key
+		// remains the authoritative snapshot for reconnect replay.
+		await stream.append("z".repeat(1_000));
+		expect(await stream.length()).toBe(0);
 	});
 
 	test("append-only stream caps old events and resumes from a sequence", async () => {

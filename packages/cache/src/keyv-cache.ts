@@ -44,6 +44,10 @@ export class KeyvCache {
 	readonly #defaultTtlMs: number | undefined;
 	readonly #onError: ((error: unknown) => void) | undefined;
 	readonly #locks = new Map<string, Promise<void>>();
+	readonly #sqlite: KeyvSqlite | undefined;
+	readonly #ready: Promise<void>;
+	#maintenanceTimer: ReturnType<typeof setInterval> | undefined;
+	#maintaining = false;
 	readonly #stats = {
 		deletes: 0,
 		errors: 0,
@@ -66,6 +70,7 @@ export class KeyvCache {
 			},
 		});
 		const keyvOptions = { namespace: this.#namespace };
+		let sqlite: KeyvSqlite | undefined;
 		if (options.path === undefined) {
 			this.#keyv = new Keyv(keyvOptions);
 		} else {
@@ -78,7 +83,14 @@ export class KeyvCache {
 				uri: `sqlite://${options.path}`,
 				wal: true,
 			});
+			sqlite = store;
 			this.#keyv = new Keyv({ ...keyvOptions, store });
+		}
+		this.#sqlite = sqlite;
+		this.#ready = sqlite === undefined ? Promise.resolve() : this.#configureSqlite(sqlite);
+		if (sqlite !== undefined) {
+			this.#maintenanceTimer = setInterval(() => void this.#maintainSqlite(), 60_000);
+			this.#maintenanceTimer.unref?.();
 		}
 		this.#keyv.on("error", (error: unknown) => {
 			this.#stats.errors += 1;
@@ -86,7 +98,45 @@ export class KeyvCache {
 		});
 	}
 
+	/**
+	 * Put the cache database in incremental auto-vacuum mode once. A database created before
+	 * this change needs one VACUUM so freed pages stop accumulating in the freelist.
+	 */
+	async #configureSqlite(sqlite: KeyvSqlite): Promise<void> {
+		try {
+			const rows = await sqlite.query("PRAGMA auto_vacuum");
+			const mode = Number((rows[0] as { auto_vacuum?: unknown } | undefined)?.auto_vacuum ?? 0);
+			// 0 = NONE, 1 = FULL, 2 = INCREMENTAL. A database from before this change needs one
+			// VACUUM after switching modes; later opens skip the rewrite.
+			if (mode !== 2) {
+				await sqlite.query("PRAGMA auto_vacuum = INCREMENTAL");
+				await sqlite.query("VACUUM");
+			}
+			await sqlite.query("PRAGMA incremental_vacuum");
+			await sqlite.query("PRAGMA wal_checkpoint(PASSIVE)");
+		} catch (error) {
+			this.#stats.errors += 1;
+			this.#onError?.(error);
+		}
+	}
+
+	async #maintainSqlite(): Promise<void> {
+		if (this.#maintaining || this.#sqlite === undefined) return;
+		this.#maintaining = true;
+		try {
+			await this.#ready;
+			await this.#sqlite.query("PRAGMA incremental_vacuum");
+			await this.#sqlite.query("PRAGMA wal_checkpoint(PASSIVE)");
+		} catch (error) {
+			this.#stats.errors += 1;
+			this.#onError?.(error);
+		} finally {
+			this.#maintaining = false;
+		}
+	}
+
 	async get<T>(key: string): Promise<T | undefined> {
+		await this.#ready;
 		this.#stats.gets += 1;
 		const value = (await this.#keyv.get(key)) as T | undefined;
 		if (value === undefined) this.#stats.misses += 1;
@@ -95,6 +145,7 @@ export class KeyvCache {
 	}
 
 	async set<T>(key: string, value: T, options: CacheSetOptions = {}): Promise<void> {
+		await this.#ready;
 		this.#stats.sets += 1;
 		const ttlMs = options.ttlMs ?? this.#defaultTtlMs;
 		if (ttlMs === undefined || ttlMs <= 0) await this.#keyv.set(key, value);
@@ -102,10 +153,12 @@ export class KeyvCache {
 	}
 
 	async has(key: string): Promise<boolean> {
+		await this.#ready;
 		return await this.#keyv.has(key);
 	}
 
 	async delete(key: string): Promise<boolean> {
+		await this.#ready;
 		this.#stats.deletes += 1;
 		return await this.#keyv.delete(key);
 	}
@@ -140,6 +193,7 @@ export class KeyvCache {
 
 	/** Logical keys in this cache, optionally filtered by prefix. */
 	async keys(prefix?: string): Promise<readonly string[]> {
+		await this.#ready;
 		const keys: string[] = [];
 		for await (const [key] of this.#keyv.iterator()) {
 			if (typeof key !== "string") continue;
@@ -151,6 +205,7 @@ export class KeyvCache {
 
 	/** Delete every key, or every key with `prefix`. */
 	async clear(prefix?: string): Promise<void> {
+		await this.#ready;
 		if (prefix === undefined) {
 			await this.#keyv.clear();
 			return;
@@ -188,6 +243,20 @@ export class KeyvCache {
 	}
 
 	async close(): Promise<void> {
+		if (this.#maintenanceTimer !== undefined) {
+			clearInterval(this.#maintenanceTimer);
+			this.#maintenanceTimer = undefined;
+		}
+		await this.#ready;
+		if (this.#sqlite !== undefined) {
+			try {
+				await this.#sqlite.query("PRAGMA incremental_vacuum");
+				await this.#sqlite.query("PRAGMA wal_checkpoint(PASSIVE)");
+			} catch (error) {
+				this.#stats.errors += 1;
+				this.#onError?.(error);
+			}
+		}
 		await this.#keyv.disconnect();
 	}
 
