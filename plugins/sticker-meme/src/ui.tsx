@@ -182,7 +182,7 @@ interface ProgressResponse {
 
 type SemanticMode = "auto" | "heuristic" | "vision";
 type TelegramAnimatedFormat = "gif" | "thumbnail";
-type TelegramVideoFormat = "gif" | "thumbnail" | "webm";
+type TelegramVideoFormat = "gif" | "thumbnail";
 
 const CUSTOM_MODEL_OPTION = "__custom__";
 
@@ -1432,7 +1432,6 @@ function StickerPanel() {
 								}
 							>
 								<option value="gif">{t.t("telegram_video_gif")}</option>
-								<option value="webm">{t.t("telegram_video_webm")}</option>
 								<option value="thumbnail">{t.t("telegram_video_thumbnail")}</option>
 							</select>
 						</Field>

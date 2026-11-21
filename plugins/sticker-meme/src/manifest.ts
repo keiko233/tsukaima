@@ -142,8 +142,8 @@ export const stickerMemeManifest: PluginManifest = pluginManifestSchema.parse({
 			},
 			telegramVideoFormat: {
 				description:
-					"gif uses ffmpeg when available and falls back to webm; webm keeps the original video; thumbnail uses a still image.",
-				enum: ["gif", "thumbnail", "webm"],
+					"gif converts video stickers to an auto-cropped animated GIF (requires ffmpeg); thumbnail uses a still image.",
+				enum: ["gif", "thumbnail"],
 				title: "Video sticker format",
 				type: "string",
 			},

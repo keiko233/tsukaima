@@ -22,7 +22,7 @@ export {
 	createAnimatedConverter,
 	defaultAnimatedConverter,
 	tgsToGif,
-	webmToGif,
+	videoToGif,
 	type AnimatedConversionOptions,
 	type AnimatedConverter,
 } from "./animated.ts";

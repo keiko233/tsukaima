@@ -76,13 +76,15 @@ Static stickers are stored as WebP/PNG.
 
 Animated TGS stickers are decoded from gzipped Lottie JSON with `lottie-web`, rendered through
 `canvas`/`jsdom`, and encoded as animated GIF with `gifenc` so QQ receives a format it supports.
-Video stickers use ffmpeg when available to produce GIF and fall back to the original WebM
-(`video/webm`) otherwise; the reply transform turns WebM items into OneBot `video` parts.
-Administrators can choose GIF or still-thumbnail import per format. Masks and custom emoji are
-skipped.
+Video stickers are decoded by ffmpeg into RGBA frames and encoded through the same GIF pipeline;
+WebM is never stored or delivered, and a failed conversion falls back to the Telegram still
+thumbnail. Both conversions trim the union of every frame's transparent (or opaque black) padding
+and flatten the result onto white, because chat clients render GIF transparency and the sticker
+canvas as a black frame. Administrators can choose GIF or still-thumbnail import per format.
+Masks and custom emoji are skipped.
 
 Importing and semantic classification are decoupled pipelines. Media import (download,
-TGS/WebM conversion, SHA-256 dedupe, media storage, and the initial item upsert) runs in a
+TGS/video conversion, SHA-256 dedupe, media storage, and the initial item upsert) runs in a
 bounded worker pool (`importConcurrency`, default 4) while semantic classification runs in its
 own bounded pool (`semanticConcurrency`, default 4). The semantic pool starts classifying each
 item as soon as its media is stored, so it overlaps with the remaining downloads instead of
@@ -108,9 +110,11 @@ description. Administrators can select a specific host-registered model (`semant
 `semanticModel` via `context.models`) or configure custom OpenAI-compatible credentials
 (`semanticBaseUrl`, `semanticApiKey`, `semanticModel`) for vision refinement. Vision output is
 restricted to the same taxonomy, merged with the heuristic profile, and never stores a local
-path or raw URL. Administrators can switch models and re-run classification for a pack from the
-panel. Reclassification runs its own bounded worker pool and can execute at the same time as an
-import.
+path or raw URL. Animated GIF/WebP media is sampled into a single frame contact sheet before the
+vision request, and the prompt states that the image merges frames of one animation, so providers
+that reject animated inputs can still classify the motion. Administrators can switch models and
+re-run classification for a pack from the panel. Reclassification runs its own bounded worker
+pool and can execute at the same time as an import.
 
 Progress tracking keeps one job per running or recently settled operation. The `progress` RPC
 returns `{ active, jobs }`, where `active` is the most relevant job and `jobs` lists every
