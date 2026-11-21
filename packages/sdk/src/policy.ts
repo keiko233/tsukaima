@@ -20,6 +20,7 @@ export const CURATED_EAGER_CHAT_TOOLS: ReadonlySet<string> = new Set([
 	"onebot-napcat.listTargets",
 	"sticker-meme.send",
 	"sticker-meme.search",
+	"sticker-meme.list_packs",
 	"memory.recall",
 	"memory.save",
 	"memory.update",

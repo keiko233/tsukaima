@@ -37,6 +37,23 @@ export interface StickerCandidate {
 	readonly width: number | null;
 }
 
+export interface AvailableStickerPack {
+	readonly itemCount: number;
+	readonly name: string;
+	readonly packId: string;
+	readonly personaIds: readonly string[];
+	readonly sampleEmotions: readonly string[];
+	readonly tags: readonly string[];
+}
+
+export interface StickerSendResolution {
+	readonly availablePacks?: readonly AvailableStickerPack[];
+	readonly choose: StickerChooseResult;
+	readonly item: StickerItem;
+	readonly matchedBy: "query" | "fallback";
+	readonly pack: StickerPack;
+}
+
 export interface StickerChooseResult {
 	readonly conversationId: string;
 	readonly directive: string;
@@ -89,7 +106,7 @@ const canonicalEmotion = (value: string): string => {
 	return EMOTION_ALIASES.get(key) ?? key;
 };
 
-/** Resolve a pack reference by id, display name, or tag; partial names also match. */
+/** Resolve a pack reference by id, display name, tag, or persona; partial names also match. */
 function resolvePackFilter(
 	packs: readonly StickerPack[],
 	reference: string,
@@ -99,10 +116,20 @@ function resolvePackFilter(
 	const matches = (pack: StickerPack, exact: boolean): boolean => {
 		const name = normalizeLabel(pack.name);
 		const tags = pack.tags.map(normalizeLabel);
+		const personaIds = pack.personaIds.map(normalizeLabel);
 		if (exact) {
-			return pack.id === reference || name === normalized || tags.includes(normalized);
+			return (
+				pack.id === reference ||
+				name === normalized ||
+				tags.includes(normalized) ||
+				personaIds.includes(normalized)
+			);
 		}
-		return name.includes(normalized) || tags.some((tag) => tag.includes(normalized));
+		return (
+			name.includes(normalized) ||
+			tags.some((tag) => tag.includes(normalized)) ||
+			personaIds.some((id) => id.includes(normalized))
+		);
 	};
 	const exact = packs.filter((pack) => matches(pack, true));
 	const matched = exact.length > 0 ? exact : packs.filter((pack) => matches(pack, false));
@@ -168,6 +195,7 @@ export function rankStickerItem(
 	const keywords = item.keywords.map(normalizeLabel);
 	const labels = item.semantic.labels.map(normalizeLabel);
 	const packTags = pack.tags.map(normalizeLabel);
+	const packPersonaIds = pack.personaIds.map(normalizeLabel);
 	const haystacks = [
 		name,
 		description,
@@ -176,6 +204,7 @@ export function rankStickerItem(
 		...keywords,
 		...labels,
 		...packTags,
+		...packPersonaIds,
 	];
 	const matched = tokens.filter((token) => haystacks.some((value) => value.includes(token)));
 	if (tokens.length > 0 && matched.length === 0) return undefined;
@@ -206,16 +235,40 @@ export function rankStickerItem(
 		if (semanticDescription.includes(token)) current = Math.max(current, 18);
 		if (packName === token) current = Math.max(current, 180);
 		else if (packName.includes(token)) current = Math.max(current, 120);
+		if (packTags.includes(token)) current = Math.max(current, 140);
 		else if (packTags.some((tag) => tag.includes(token))) {
 			current = Math.max(current, 60);
 		}
+		if (packPersonaIds.includes(token)) current = Math.max(current, 160);
+		else if (packPersonaIds.some((id) => id.includes(token))) {
+			current = Math.max(current, 80);
+		}
 		tokenScore += current;
+	}
+	const normalizedQuery = input.query !== undefined ? normalizeLabel(input.query) : undefined;
+	if (normalizedQuery !== undefined && normalizedQuery.length > 0) {
+		if (
+			packName === normalizedQuery ||
+			packName.replace(/-/gu, "") === normalizedQuery.replace(/-/gu, "")
+		) {
+			tokenScore += 100;
+		} else if (packName.includes(normalizedQuery)) {
+			tokenScore += 50;
+		}
+		if (packTags.includes(normalizedQuery)) {
+			tokenScore += 80;
+		}
+		if (packPersonaIds.includes(normalizedQuery)) {
+			tokenScore += 90;
+		}
 	}
 	// Several distinct terms matching is stronger evidence than one synonym hitting.
 	score += Math.min(400, tokenScore);
 	if (emotions.size > 0) score += 40;
 	if (input.personaId !== undefined) {
-		score += pack.personaIds.includes(input.personaId) ? 25 : 5;
+		score += pack.personaIds.includes(input.personaId) ? 50 : 5;
+	} else if (pack.personaIds.length > 0) {
+		score += 10;
 	}
 	if (item.lastUsedAt === null) {
 		score += 20;
@@ -482,24 +535,120 @@ export class StickerSelectionService {
 	}
 
 	/**
+	 * Lists all enabled sticker packs with item counts, tags, persona IDs, and sample emotions.
+	 * Only counts enabled, approved, non-revoked items backed by real media.
+	 */
+	async listAvailablePacks(): Promise<readonly AvailableStickerPack[]> {
+		const packList = await this.#repository.listPacks();
+		const enabledPacks = packList.filter((pack) => pack.enabled);
+		const allItems = await this.#repository.listItems();
+		const mediaCache = new Map<string, boolean>();
+
+		const hasMedia = async (mediaId: string): Promise<boolean> => {
+			if (mediaId.length === 0) return false;
+			const cached = mediaCache.get(mediaId);
+			if (cached !== undefined) return cached;
+			const found = (await this.#media.findById(mediaId)) !== undefined;
+			mediaCache.set(mediaId, found);
+			return found;
+		};
+
+		const result: AvailableStickerPack[] = [];
+		for (const pack of enabledPacks) {
+			const packItems = allItems.filter((item) => item.packId === pack.id);
+			const emotionsSet = new Set<string>();
+			let validCount = 0;
+
+			for (const item of packItems) {
+				if (!item.enabled || item.revokedAt !== null || item.reviewStatus !== "approved") {
+					continue;
+				}
+				if (!(await hasMedia(item.mediaId))) {
+					continue;
+				}
+				validCount += 1;
+				for (const emotion of item.emotions) {
+					const trimmed = emotion.trim();
+					if (trimmed.length > 0) emotionsSet.add(trimmed);
+				}
+			}
+
+			result.push({
+				itemCount: validCount,
+				name: sanitizeModelText(pack.name),
+				packId: pack.id,
+				personaIds: [...pack.personaIds],
+				sampleEmotions: [...emotionsSet].slice(0, 5),
+				tags: [...pack.tags],
+			});
+		}
+		return result;
+	}
+
+	/**
 	 * Single-step sticker selection for `sticker-meme.send`: resolves the best matching approved
 	 * item (or an explicit `itemId`), issues a conversation-bound token/directive, and returns the
 	 * full item metadata so the tool can either send immediately or return the directive.
+	 * When the explicit query returns no matches, falls back to available stickers and returns
+	 * `matchedBy: "fallback"` along with `availablePacks`.
 	 */
 	async resolveForSend(
 		input: StickerSearchInput & { readonly itemId?: string; readonly conversationId: string },
-	): Promise<{
-		readonly choose: StickerChooseResult;
-		readonly item: StickerItem;
-		readonly pack: StickerPack;
-	}> {
-		const choose = await this.choose(input);
-		const item = await this.#repository.getItem(choose.itemId);
-		const pack = item === undefined ? undefined : await this.#repository.getPack(item.packId);
-		if (item === undefined || pack === undefined) {
-			throw new Error("Resolved sticker item is no longer available");
+	): Promise<StickerSendResolution> {
+		const startedAt = Date.now();
+		const conversationId = input.conversationId.trim();
+		if (conversationId.length === 0) {
+			throw new Error("A conversation is required to choose a sticker");
 		}
-		return { choose, item, pack };
+		let item: StickerItem | undefined;
+		let pack: StickerPack | undefined;
+		let matchedBy: "query" | "fallback" = "query";
+		let availablePacks: readonly AvailableStickerPack[] | undefined;
+
+		if (input.itemId !== undefined) {
+			item = await this.#repository.getItem(input.itemId);
+			if (item !== undefined) pack = await this.#repository.getPack(item.packId);
+		} else {
+			const [best] = await this.search({ ...input, limit: 1 });
+			if (best !== undefined) {
+				item = await this.#repository.getItem(best.itemId);
+				if (item !== undefined) pack = await this.#repository.getPack(item.packId);
+			} else {
+				matchedBy = "fallback";
+				const fallbackCandidates =
+					input.personaId !== undefined
+						? await this.search({ limit: 1, personaId: input.personaId })
+						: [];
+				const fallbackBest = fallbackCandidates[0] ?? (await this.search({ limit: 1 }))[0];
+				if (fallbackBest !== undefined) {
+					item = await this.#repository.getItem(fallbackBest.itemId);
+					if (item !== undefined) pack = await this.#repository.getPack(item.packId);
+					availablePacks = await this.listAvailablePacks();
+				}
+			}
+		}
+
+		if (item === undefined || pack === undefined) {
+			await this.#recordDenied(conversationId, "not_found", input.itemId);
+			this.#logger?.debug("sticker choose failed", {
+				durationMs: elapsedMs(startedAt),
+				reason: "not_found",
+			});
+			throw new Error("No sticker candidate matched");
+		}
+
+		const choose = await this.choose({
+			conversationId,
+			itemId: item.id,
+		});
+
+		return {
+			...(availablePacks === undefined ? {} : { availablePacks }),
+			choose,
+			item,
+			matchedBy,
+			pack,
+		};
 	}
 
 	async #selectable(item: StickerItem, pack: StickerPack): Promise<string | undefined> {

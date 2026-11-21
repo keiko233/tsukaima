@@ -65,6 +65,7 @@ function provider(
 			| "personaBudgetChars"
 			| "renderSystem"
 			| "stickerCaptions"
+			| "stickerHints"
 			| "turnBudgetChars"
 		>
 	> = {},
@@ -510,6 +511,62 @@ describe("DrizzleContextProvider", () => {
 				triggers: [],
 			});
 			expect(tight.find((section) => section.key === "stickers")).toBeUndefined();
+		} finally {
+			database.$client.close();
+		}
+	});
+
+	test("renders sticker packs overview alongside ready-to-copy captions in turn context", async () => {
+		const { database } = await openFixture();
+		try {
+			await database.insert(conversations).values({
+				durableConversationId: "sticker-hints-packs",
+				id: "session-sticker-hints-packs",
+				kind: "private",
+				title: "Sticker hints packs",
+				updatedAt: new Date().toISOString(),
+			});
+			const context = provider(database, {
+				stickerHints: async () => ({
+					captions: ["开心", "点赞"],
+					packs: [
+						{ itemCount: 120, name: "Alpha Pack" },
+						{ itemCount: 59, name: "Beta Pack" },
+					],
+				}),
+				turnBudgetChars: 500,
+			});
+			const sections = await context.renderTurnContext({
+				conversationId: "sticker-hints-packs",
+				inputs: [],
+				nowMs: Date.now(),
+				triggers: [],
+			});
+			const stickerSection = sections.find((section) => section.key === "stickers");
+			expect(stickerSection).toBeDefined();
+			expect(stickerSection?.text).toContain(
+				"Available sticker packs: Alpha Pack (120), Beta Pack (59)",
+			);
+			expect(stickerSection?.text).toContain("[表情:开心]");
+			expect(stickerSection?.text).toContain("[表情:点赞]");
+
+			// Test when only packs are available without captions
+			const packsOnlyContext = provider(database, {
+				stickerHints: async () => ({
+					packs: [{ itemCount: 42, name: "Solo Pack" }],
+				}),
+				turnBudgetChars: 500,
+			});
+			const packsOnlySections = await packsOnlyContext.renderTurnContext({
+				conversationId: "sticker-hints-packs",
+				inputs: [],
+				nowMs: Date.now(),
+				triggers: [],
+			});
+			const packsOnlySection = packsOnlySections.find((section) => section.key === "stickers");
+			expect(packsOnlySection).toBeDefined();
+			expect(packsOnlySection?.text).toBe("Available sticker packs: Solo Pack (42)");
+			expect(packsOnlySection?.text).not.toContain("Ready-to-copy");
 		} finally {
 			database.$client.close();
 		}

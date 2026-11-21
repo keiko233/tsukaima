@@ -51,7 +51,43 @@ export function registerStickerTools(
 	const log = logger ?? context.logger;
 	context.tools.register({
 		description:
-			"Search approved, enabled stickers by semantic text, emotion, persona, pack name/id, or tags. Space- or comma-separated query terms are treated as alternatives (OR). Newly imported packs are available immediately; omit filters to browse the most relevant stickers first.",
+			"List all available, enabled sticker packs in the library with their packId, name, itemCount, tags, personaIds, and sampleEmotions. All enabled packs in the library are approved for use in chat (unless explicitly restricted to a different personaId). Use this tool to discover packs before searching or when a search returns no items.",
+		async execute() {
+			const startedAt = Date.now();
+			traceLog(log, "sticker tool invoked", {
+				tool: "sticker-meme.list_packs",
+			});
+			const packs = await selection.listAvailablePacks();
+			log.debug("sticker tool completed", {
+				durationMs: elapsedMs(startedAt),
+				packCount: packs.length,
+				tool: "sticker-meme.list_packs",
+			});
+			return text(
+				JSON.stringify({
+					count: packs.length,
+					packs,
+				}),
+			);
+		},
+		lazy: false,
+		name: "sticker-meme.list_packs",
+		parameters: {
+			properties: {},
+			type: "object",
+		},
+		policy: {
+			lazy: false,
+			maxConcurrent: 4,
+			maxPayloadBytes: 4_096,
+			surface: "chat",
+			timeoutMs: 10_000,
+		},
+		requiredPermissions: ["media.read"],
+	});
+	context.tools.register({
+		description:
+			"Search approved, enabled stickers by semantic text, emotion, persona, pack name/id, or tags. Space- or comma-separated query terms are treated as alternatives (OR). All enabled packs in the library are approved for use in chat (unless explicitly restricted to a different personaId). Newly imported packs are available immediately; omit filters or use sticker-meme.list_packs to browse available packs.",
 		async execute(input) {
 			const startedAt = Date.now();
 			const search = searchInput(input);
@@ -65,6 +101,17 @@ export function registerStickerTools(
 				durationMs: elapsedMs(startedAt),
 				tool: "sticker-meme.search",
 			});
+			if (candidates.length === 0) {
+				const availablePacks = await selection.listAvailablePacks();
+				return text(
+					JSON.stringify({
+						availablePacks,
+						candidates: [],
+						count: 0,
+						hint: "No stickers matched the search criteria. All enabled sticker packs in the library are approved for chat use. Try browsing by packId, emotion, or omitting filters to view available stickers.",
+					}),
+				);
+			}
 			return text(
 				JSON.stringify({
 					candidates,
@@ -107,7 +154,7 @@ export function registerStickerTools(
 	});
 	context.tools.register({
 		description:
-			"Select and prepare (or directly send) the best matching approved sticker in one step by query, emotion, itemId, packId, or tags. Returns a ready-to-use [[sticker:<token>]] directive (or inline [表情:<query>] marker) so you do not need a separate sticker-meme_search -> sticker-meme_choose two-step round.",
+			"Select and prepare (or directly send) the best matching approved sticker in one step by query, emotion, itemId, packId, or tags. All enabled packs in the library are approved for use in chat (unless explicitly restricted to a different personaId). Use sticker-meme_list_packs or omit filters to browse available packs. Returns a ready-to-use [[sticker:<token>]] directive (or inline [表情:<query>] marker) so you do not need a separate sticker-meme_search -> sticker-meme_choose two-step round.",
 		async execute(input, invocation) {
 			const startedAt = Date.now();
 			const conversationId = invocation.conversationId;
@@ -126,7 +173,7 @@ export function registerStickerTools(
 				itemId: itemId ?? null,
 				tool: "sticker-meme.send",
 			});
-			const { choose, item, pack } = await selection.resolveForSend({
+			const { availablePacks, choose, item, matchedBy, pack } = await selection.resolveForSend({
 				...search,
 				conversationId,
 				...(itemId === undefined ? {} : { itemId }),
@@ -134,6 +181,7 @@ export function registerStickerTools(
 			log.debug("sticker tool completed", {
 				chosenId: choose.itemId,
 				durationMs: elapsedMs(startedAt),
+				matchedBy,
 				tokenIssued: true,
 				tool: "sticker-meme.send",
 			});
@@ -141,9 +189,11 @@ export function registerStickerTools(
 				JSON.stringify({
 					...choose,
 					inlineMarker: `[表情:${item.name}]`,
+					matchedBy,
 					name: item.name,
 					packId: pack.id,
 					packName: pack.name,
+					...(availablePacks === undefined ? {} : { availablePacks }),
 				}),
 			);
 		},

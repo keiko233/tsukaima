@@ -18,6 +18,7 @@ import {
 } from "./import-service.ts";
 import { StickerProgressTracker } from "./progress.ts";
 import type { StickerRepository } from "./repository.ts";
+import type { StickerSelectionService } from "./selection.ts";
 import {
 	isVisionCapablePluginModel,
 	resolveSemanticClassifier,
@@ -33,6 +34,7 @@ interface ServiceBag {
 	readonly logger?: PluginLogger | undefined;
 	readonly onSettled?: () => Promise<void>;
 	readonly repository: StickerRepository;
+	readonly selection?: StickerSelectionService;
 }
 
 function resultCounts(result: unknown): Record<string, number> {
@@ -158,7 +160,7 @@ function asItemPatch(input: Record<string, unknown>) {
 
 /** Registers the admin/WebUI procedure surface. The host adds the plugin-id namespace. */
 export function registerStickerRpc(context: PluginContext, services: ServiceBag): void {
-	const { importService, learning, onSettled, repository } = services;
+	const { importService, learning, onSettled, repository, selection } = services;
 	const logger = services.logger ?? context.logger;
 	const rpc = {
 		list(): readonly { readonly method: string }[] {
@@ -636,7 +638,36 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		const record = recordValue(input);
 		const limit = asNumber(record.limit) ?? 3;
 		const hints = await repository.listCaptionHints(limit);
-		return { captions: hints.map((hint) => hint.caption) };
+		let packs: Array<{ name: string; itemCount: number }> = [];
+		if (selection !== undefined) {
+			const available = await selection.listAvailablePacks();
+			packs = available
+				.filter((pack) => pack.itemCount > 0)
+				.slice(0, 10)
+				.map((pack) => ({ itemCount: pack.itemCount, name: pack.name }));
+		} else {
+			const packList = await repository.listPacks();
+			const items = await repository.listItems();
+			packs = packList
+				.filter((pack) => pack.enabled)
+				.map((pack) => ({
+					itemCount: items.filter(
+						(item) =>
+							item.packId === pack.id &&
+							item.enabled &&
+							item.revokedAt === null &&
+							item.reviewStatus === "approved" &&
+							item.mediaId.length > 0,
+					).length,
+					name: pack.name,
+				}))
+				.filter((pack) => pack.itemCount > 0)
+				.slice(0, 10);
+		}
+		return {
+			captions: hints.map((hint) => hint.caption),
+			packs,
+		};
 	});
 
 	rpc.register("items.update", async (input) => {
