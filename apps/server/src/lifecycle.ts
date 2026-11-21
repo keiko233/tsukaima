@@ -707,9 +707,20 @@ export class TsukaimaLifecycle {
 				await this.applySessionToolPolicy(durableConversationId, policy);
 			},
 			audit: (entry) => this.writeAudit(entry),
+			createTask: async (input) => {
+				const task = await this.pluginHost.invokeRpc("self-iteration.tasks.create", input);
+				if (
+					typeof task === "object" &&
+					task !== null &&
+					"id" in task &&
+					typeof task.id === "string"
+				) {
+					return task.id;
+				}
+				throw new Error("Self-iteration task creation returned no task id");
+			},
 			database: () => this.domainDatabase,
 			host: () => this.conversationHost,
-			invokePluginRpc: (method, input) => this.pluginHost.invokeRpc(method, input),
 			logger: this.runtimeLog,
 			messaging: this.sessionMessaging,
 			policy: this.conversationPolicy,

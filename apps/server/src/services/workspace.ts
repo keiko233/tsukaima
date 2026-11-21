@@ -35,9 +35,13 @@ export interface WorkspaceServiceOptions {
 	readonly taskPrompt?: () => Promise<string>;
 	readonly applyToolPolicy?: (sessionId: string, durableConversationId: string) => Promise<void>;
 	readonly audit?: (entry: AuditEntry) => Promise<void> | void;
+	readonly createTask: (input: {
+		readonly baseRef: string;
+		readonly goal: string;
+		readonly sourceConversationId: string;
+	}) => Promise<string>;
 	readonly database: () => TsukaimaDatabase | undefined;
 	readonly host: () => PiDurableConversationHost | undefined;
-	readonly invokePluginRpc: (method: string, input: unknown) => Promise<unknown>;
 	readonly logger: Logger;
 	readonly messaging: SessionMessagingService;
 	readonly policy: ConversationPolicyService;
@@ -139,9 +143,9 @@ export class WorkspaceService {
 	readonly #taskPrompt: WorkspaceServiceOptions["taskPrompt"];
 	readonly #applyToolPolicy: WorkspaceServiceOptions["applyToolPolicy"];
 	readonly #audit: WorkspaceServiceOptions["audit"];
+	readonly #createTask: WorkspaceServiceOptions["createTask"];
 	readonly #database: WorkspaceServiceOptions["database"];
 	readonly #host: WorkspaceServiceOptions["host"];
-	readonly #invokePluginRpc: WorkspaceServiceOptions["invokePluginRpc"];
 	readonly #logger: Logger;
 	readonly #messaging: SessionMessagingService;
 	readonly #policy: ConversationPolicyService;
@@ -154,9 +158,9 @@ export class WorkspaceService {
 		this.#taskPrompt = options.taskPrompt;
 		this.#applyToolPolicy = options.applyToolPolicy;
 		this.#audit = options.audit;
+		this.#createTask = options.createTask;
 		this.#database = options.database;
 		this.#host = options.host;
-		this.#invokePluginRpc = options.invokePluginRpc;
 		this.#logger = options.logger.child("tsukaima::server::workspace");
 		this.#messaging = options.messaging;
 		this.#policy = options.policy;
@@ -320,21 +324,11 @@ export class WorkspaceService {
 			.limit(1);
 		if (workspace === undefined) throw new Error("workspace_not_found");
 		if (workspace.taskId !== null) return workspace.taskId;
-		const taskResult = await this.#invokePluginRpc("self-iteration.tasks.create", {
+		const taskId = await this.#createTask({
 			baseRef: workspace.baseRef,
 			goal,
 			sourceConversationId: workspace.parentSessionId ?? "workspace:webui",
 		});
-		const taskId =
-			typeof taskResult === "object" &&
-			taskResult !== null &&
-			"id" in taskResult &&
-			typeof taskResult.id === "string"
-				? taskResult.id
-				: undefined;
-		if (taskId === undefined) {
-			throw new Error("Self-iteration task creation returned no task id");
-		}
 		const title = titleFromGoal(goal);
 		const now = new Date().toISOString();
 		const tags = normalizeTags(parseTags(workspace.tagsJson));
