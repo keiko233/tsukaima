@@ -1,5 +1,10 @@
 import { and, desc, eq, ne, or } from "drizzle-orm";
-import { consumeProactiveMarkers, type ConversationPolicy } from "@tsukaima/contracts";
+import {
+	consumeProactiveMarkers,
+	messagePartSchema,
+	type ConversationPolicy,
+	type MessagePart,
+} from "@tsukaima/contracts";
 import {
 	withConversationLock,
 	type ConversationExecutionLock,
@@ -192,21 +197,27 @@ export class PluginConversationService {
 				kind: messages.kind,
 				occurredAt: messages.occurredAt,
 				partsJson: messages.partsJson,
+				platformMessageId: messages.platformMessageId,
 				senderDisplayName: messages.senderDisplayName,
 			})
 			.from(messages)
 			.where(and(eq(messages.conversationId, targetConversationId), ne(messages.kind, "tool")))
 			.orderBy(desc(messages.occurredAt))
 			.limit(bounded);
-		return rows.toReversed().map((row) => ({
-			direction: row.direction,
-			deliveryStatus: row.deliveryStatus ?? null,
-			id: row.id,
-			kind: row.kind,
-			occurredAt: row.occurredAt,
-			senderDisplayName: row.senderDisplayName ?? null,
-			textPreview: previewOf(row.contentText, row.partsJson),
-		}));
+		return rows.toReversed().map((row) => {
+			const parts = parseParts(row.partsJson);
+			return {
+				direction: row.direction,
+				deliveryStatus: row.deliveryStatus ?? null,
+				id: row.id,
+				kind: row.kind,
+				occurredAt: row.occurredAt,
+				...(parts.length === 0 ? {} : { parts }),
+				platformMessageId: row.platformMessageId ?? null,
+				senderDisplayName: row.senderDisplayName ?? null,
+				textPreview: previewOf(row.contentText, row.partsJson),
+			};
+		});
 	}
 
 	async #submitBackgroundTurn(
@@ -487,6 +498,20 @@ export class PluginConversationService {
 			targetId: input.taskId ?? conversationId,
 			targetKind: input.taskId === undefined ? "conversation" : "proactive-task",
 		});
+	}
+}
+
+function parseParts(partsJson: string | null): readonly MessagePart[] {
+	if (partsJson === null) return [];
+	try {
+		const parsed = JSON.parse(partsJson) as unknown;
+		if (!Array.isArray(parsed)) return [];
+		return parsed.flatMap((entry) => {
+			const checked = messagePartSchema.safeParse(entry);
+			return checked.success ? [checked.data] : [];
+		});
+	} catch {
+		return [];
 	}
 }
 

@@ -60,7 +60,12 @@ function provider(
 	overrides: Partial<
 		Pick<
 			DrizzleContextProviderOptions,
-			"budgetChars" | "memoryTopK" | "personaBudgetChars" | "renderSystem"
+			| "budgetChars"
+			| "memoryTopK"
+			| "personaBudgetChars"
+			| "renderSystem"
+			| "stickerCaptions"
+			| "turnBudgetChars"
 		>
 	> = {},
 ): DrizzleContextProvider {
@@ -393,6 +398,51 @@ describe("DrizzleContextProvider", () => {
 			expect(memoryText).toContain("more not shown");
 			expect(memoryText.length).toBeLessThanOrEqual(120);
 			expect(personaText.length + memoryText.length).toBeLessThanOrEqual(200);
+		} finally {
+			database.$client.close();
+		}
+	});
+
+	test("bounds ready-to-copy sticker captions to three and respects the turn budget", async () => {
+		const { database } = await openFixture();
+		try {
+			await database.insert(conversations).values({
+				durableConversationId: "sticker-hints",
+				id: "session-sticker-hints",
+				kind: "private",
+				title: "Sticker hints",
+				updatedAt: new Date().toISOString(),
+			});
+			const captions = ["开心", "难过", "点赞", "不要出现", "[" + "长".repeat(80) + "]", "开心"];
+			const sections = await provider(database, {
+				stickerCaptions: async () => captions,
+				turnBudgetChars: 400,
+			}).renderTurnContext({
+				conversationId: "sticker-hints",
+				inputs: [],
+				nowMs: Date.now(),
+				triggers: [],
+			});
+			const stickerSection = sections.find((section) => section.key === "stickers");
+			expect(stickerSection).toBeDefined();
+			const markerLines = (stickerSection?.text ?? "")
+				.split("\n")
+				.filter((line) => line.startsWith("- [表情:"));
+			expect(markerLines).toHaveLength(3);
+			expect(stickerSection?.text).toContain("[表情:开心]");
+			expect(stickerSection?.text).not.toContain("不要出现");
+			expect(stickerSection?.text.length ?? 0).toBeLessThanOrEqual(400);
+
+			const tight = await provider(database, {
+				stickerCaptions: async () => captions,
+				turnBudgetChars: 40,
+			}).renderTurnContext({
+				conversationId: "sticker-hints",
+				inputs: [],
+				nowMs: Date.now(),
+				triggers: [],
+			});
+			expect(tight.find((section) => section.key === "stickers")).toBeUndefined();
 		} finally {
 			database.$client.close();
 		}

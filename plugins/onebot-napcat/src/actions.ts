@@ -1,10 +1,12 @@
-import { messagePartSchema, type MessagePart } from "@tsukaima/contracts";
+import { messagePartSchema, type ConversationPolicy, type MessagePart } from "@tsukaima/contracts";
 import type {
 	AuditEntry,
 	ChannelCapability,
 	OutboundTarget,
 	PluginAuditApi,
+	PluginConversationsApi,
 	PluginLogger,
+	PluginMediaApi,
 	PluginOutboundApi,
 } from "@tsukaima/sdk";
 import type { OneBotChannelAdapter } from "./adapter.ts";
@@ -14,6 +16,11 @@ import { createSafeLogger } from "./logging.ts";
 export type OneBotActionActor = {
 	readonly actorId?: string;
 	readonly actorKind?: "user" | "agent" | "plugin" | "system";
+	readonly channelId?: string;
+	readonly chatKind?: string;
+	readonly conversationId?: string;
+	readonly platformConversationId?: string;
+	readonly senderPlatformId?: string;
 	/** WebUI RPCs are already authenticated by the host and count as an administrator. */
 	readonly trustedAdmin?: boolean;
 };
@@ -32,6 +39,7 @@ const DESCRIPTORS = {
 	},
 	deleteMessage: { capability: "interact", targetKind: "message" },
 	fetchGroupFile: { capability: "read-media", targetKind: "group-file" },
+	forwardMessage: { capability: "send", targetKind: "conversation" },
 	groupBan: { capability: "group-manage", destructive: "group-manage", targetKind: "group-member" },
 	groupKick: {
 		capability: "group-manage",
@@ -57,6 +65,7 @@ const DESCRIPTORS = {
 	},
 	groupWholeBan: { capability: "group-manage", destructive: "group-manage", targetKind: "group" },
 	listGroupFiles: { capability: "read-media", targetKind: "group" },
+	listTargets: { capability: "read-info", targetKind: "conversation" },
 	lookupMessage: { capability: "read-info", targetKind: "message" },
 	markRead: { capability: "read-info", targetKind: "message" },
 	poke: { capability: "interact", targetKind: "user" },
@@ -75,6 +84,7 @@ const DESCRIPTORS = {
 	setProfile: { capability: "group-manage", destructive: "self-manage", targetKind: "account" },
 	setTyping: { capability: "interact", targetKind: "conversation" },
 	uploadGroupFile: { capability: "upload", targetKind: "group-file" },
+	viewImage: { capability: "read-media", targetKind: "media" },
 } as const satisfies Record<string, ActionDescriptor>;
 
 export type OneBotActionMethod = keyof typeof DESCRIPTORS;
@@ -109,12 +119,26 @@ const toIdString = (value: unknown): string | undefined => {
 	return undefined;
 };
 
+/** Strip optional `[msg:<id>]` or `msg:<id>` reference wrappers from model-supplied message IDs. */
+const cleanMessageId = (value: string): string => {
+	const match = /^\[?msg:([^\]]+)\]?$/iu.exec(value.trim());
+	return match?.[1]?.trim() ?? value.trim();
+};
+
 const pickId = (record: Record<string, unknown>, keys: readonly string[]): string | undefined => {
 	for (const key of keys) {
 		const value = toIdString(record[key]);
 		if (value !== undefined) return value;
 	}
 	return undefined;
+};
+
+const pickMessageId = (
+	record: Record<string, unknown>,
+	keys: readonly string[] = ["messageId", "message_id", "platformMessageId", "id"],
+): string | undefined => {
+	const raw = pickId(record, keys);
+	return raw === undefined ? undefined : cleanMessageId(raw);
 };
 
 const asString = (value: unknown, label: string): string => {
@@ -186,7 +210,11 @@ const resolveKind = (
 	return undefined;
 };
 
-const asTarget = (value: unknown, rootInput?: Record<string, unknown>): OutboundTarget => {
+const asTarget = (
+	value: unknown,
+	rootInput?: Record<string, unknown>,
+	actor?: OneBotActionActor,
+): OutboundTarget => {
 	const root = rootInput ?? asRecord(value);
 	const paramsRecord = asRecord(root.params);
 	const effectiveRoot = Object.keys(paramsRecord).length > 0 ? { ...paramsRecord, ...root } : root;
@@ -195,7 +223,10 @@ const asTarget = (value: unknown, rootInput?: Record<string, unknown>): Outbound
 		const colon = parseTargetColon(rawTarget);
 		if (colon !== undefined) {
 			return {
-				channelId: typeof effectiveRoot.channelId === "string" ? effectiveRoot.channelId : "onebot",
+				channelId:
+					typeof effectiveRoot.channelId === "string"
+						? effectiveRoot.channelId
+						: (actor?.channelId ?? "onebot"),
 				kind: colon.kind,
 				platformConversationId: colon.platformConversationId,
 			};
@@ -240,11 +271,17 @@ const asTarget = (value: unknown, rootInput?: Record<string, unknown>): Outbound
 			]) !== undefined
 		) {
 			kind = "private";
+		} else if (
+			(actor?.chatKind === "private" || actor?.chatKind === "group") &&
+			actor.platformConversationId !== undefined
+		) {
+			kind = actor.chatKind;
 		}
 	}
 	if (kind !== "private" && kind !== "group") {
 		throw new Error("target.kind must be private or group");
 	}
+	const fallbackPlatformId = actor?.chatKind === kind ? actor.platformConversationId : undefined;
 	const platformConversationId =
 		kind === "group"
 			? (pickId(record, [
@@ -267,7 +304,8 @@ const asTarget = (value: unknown, rootInput?: Record<string, unknown>): Outbound
 					"chatId",
 					"chat_id",
 					"id",
-				]))
+				]) ??
+				fallbackPlatformId)
 			: (pickId(record, [
 					"platformConversationId",
 					"userId",
@@ -295,17 +333,60 @@ const asTarget = (value: unknown, rootInput?: Record<string, unknown>): Outbound
 					"chat_id",
 					"qq",
 					"id",
-				]));
+				]) ??
+				fallbackPlatformId);
 	return {
 		channelId:
 			typeof record.channelId === "string"
 				? record.channelId
 				: typeof effectiveRoot.channelId === "string"
 					? effectiveRoot.channelId
-					: "onebot",
+					: (actor?.channelId ?? "onebot"),
 		kind,
 		platformConversationId: asString(platformConversationId, "target.platformConversationId"),
 	};
+};
+
+const resolveGroupId = (input: Record<string, unknown>, actor?: OneBotActionActor): string => {
+	const explicit =
+		pickId(input, ["groupId", "group_id"]) ??
+		pickId(asRecord(input.target), ["groupId", "group_id", "platformConversationId", "id"]);
+	const fallback = actor?.chatKind === "group" ? actor.platformConversationId : undefined;
+	return asString(explicit ?? fallback, "groupId");
+};
+
+const normalizeCandidatePart = (raw: unknown): unknown => {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
+	const record = { ...(raw as Record<string, unknown>) };
+	if (
+		record.sourceUrl === undefined &&
+		typeof record.url === "string" &&
+		record.url.trim().length > 0
+	) {
+		record.sourceUrl = record.url.trim();
+	}
+	delete record.url;
+	if (typeof record.sourceUrl === "string" && !/^https?:\/\//iu.test(record.sourceUrl)) {
+		if (record.channelRef === undefined) {
+			record.channelRef = record.sourceUrl;
+		}
+		delete record.sourceUrl;
+	}
+	if (
+		record.fileName === undefined &&
+		typeof record.name === "string" &&
+		record.name.trim().length > 0
+	) {
+		record.fileName = record.name.trim();
+	}
+	delete record.name;
+	if (
+		record.type === "file" &&
+		(typeof record.fileName !== "string" || record.fileName.trim().length === 0)
+	) {
+		record.fileName = "attachment";
+	}
+	return record;
 };
 
 const asParts = (value: unknown, rootInput?: Record<string, unknown>): MessagePart[] => {
@@ -332,8 +413,9 @@ const asParts = (value: unknown, rootInput?: Record<string, unknown>): MessagePa
 			: parsedValue;
 	if (!Array.isArray(list)) throw new Error("parts must be an array");
 	return list.map((part, index) => {
-		const candidate =
-			typeof part === "string" ? { text: part, type: "text" } : parseJsonIfString(part);
+		const candidate = normalizeCandidatePart(
+			typeof part === "string" ? { text: part, type: "text" } : parseJsonIfString(part),
+		);
 		const parsed = messagePartSchema.safeParse(candidate);
 		if (!parsed.success) {
 			throw new Error(
@@ -346,9 +428,11 @@ const asParts = (value: unknown, rootInput?: Record<string, unknown>): MessagePa
 
 export interface OneBotActionFacadeOptions {
 	readonly audit: PluginAuditApi | undefined;
+	readonly conversations?: PluginConversationsApi;
 	readonly getAdapter: () => OneBotChannelAdapter | undefined;
 	readonly getSettings: () => OneBotPluginConfig;
 	readonly logger: PluginLogger;
+	readonly media?: PluginMediaApi;
 	/**
 	 * Host-owned outbound path. Without it a send leaves no durable history, so the WebUI never
 	 * shows it; tests that only assert transport traffic can omit it.
@@ -366,16 +450,20 @@ export type OneBotActionResult =
  */
 export class OneBotActionFacade {
 	readonly #audit: PluginAuditApi | undefined;
+	readonly #conversations: PluginConversationsApi | undefined;
 	readonly #getAdapter: () => OneBotChannelAdapter | undefined;
 	readonly #getSettings: () => OneBotPluginConfig;
 	readonly #logger: PluginLogger;
+	readonly #media: PluginMediaApi | undefined;
 	readonly #outbound: PluginOutboundApi | undefined;
 
 	constructor(options: OneBotActionFacadeOptions) {
 		this.#audit = options.audit;
+		this.#conversations = options.conversations;
 		this.#getAdapter = options.getAdapter;
 		this.#getSettings = options.getSettings;
 		this.#logger = createSafeLogger(options.logger);
+		this.#media = options.media;
 		this.#outbound = options.outbound;
 	}
 
@@ -386,7 +474,7 @@ export class OneBotActionFacade {
 	): Promise<OneBotActionResult> {
 		const descriptor = DESCRIPTORS[method];
 		const data = asRecord(input);
-		const targetId = this.#targetId(method, data);
+		const targetId = this.#targetId(method, data, actor);
 		const action = `onebot-napcat.${method}`;
 		const startedAtMs = Date.now();
 		this.#logger.trace("OneBot action invoked", {
@@ -401,14 +489,14 @@ export class OneBotActionFacade {
 			this.#logCompletion(action, method, targetId, startedAtMs, "channel-unavailable");
 			return { ok: false, reason: "channel-unavailable" };
 		}
-		const denial = this.#authorize(descriptor, method, data, actor);
+		const denial = await this.#authorize(descriptor, method, data, actor);
 		if (denial !== undefined) {
 			await this.#recordDenied(action, descriptor, actor, targetId, denial);
 			this.#logCompletion(action, method, targetId, startedAtMs, denial);
 			return { ok: false, reason: denial };
 		}
 		try {
-			const result = await this.#execute(adapter, method, data);
+			const result = await this.#execute(adapter, method, data, actor);
 			await this.#record(action, descriptor, actor, targetId, "ok");
 			this.#logCompletion(action, method, targetId, startedAtMs);
 			return { ok: true, result };
@@ -437,16 +525,51 @@ export class OneBotActionFacade {
 		});
 	}
 
-	#authorize(
+	async #authorize(
 		descriptor: ActionDescriptor,
 		method: OneBotActionMethod,
 		input: Record<string, unknown>,
 		actor: OneBotActionActor,
-	): string | undefined {
+	): Promise<string | undefined> {
 		const adapter = this.#getAdapter();
 		if (adapter === undefined) return "channel-unavailable";
 		if (!adapter.capabilities().includes(descriptor.capability)) {
 			return `capability-missing:${descriptor.capability}`;
+		}
+		if (
+			actor.actorKind === "agent" &&
+			(method === "send" ||
+				method === "sendForward" ||
+				method === "forwardMessage" ||
+				method === "readHistory" ||
+				method === "setTyping")
+		) {
+			try {
+				const target = asTarget(input.target, input, actor);
+				const isCrossChat =
+					actor.platformConversationId !== undefined &&
+					(target.platformConversationId !== actor.platformConversationId ||
+						(actor.chatKind !== undefined && target.kind !== actor.chatKind));
+				if (isCrossChat && this.#conversations !== undefined) {
+					const list = await this.#conversations.list();
+					const match = list.find(
+						(entry) =>
+							entry.kind === target.kind &&
+							entry.platformConversationId === target.platformConversationId,
+					);
+					if (match?.muted === true) return "cross-chat-target-muted";
+					if (match !== undefined) {
+						const policy = await this.#conversations.getPolicy(match.id);
+						const access =
+							target.kind === "group" ? policy.trigger.groupAccess : policy.trigger.privateAccess;
+						if (!policy.enabled || access === "disabled") {
+							return "cross-chat-target-disabled";
+						}
+					}
+				}
+			} catch {
+				// Let #execute surface specific validation errors when target cannot be resolved.
+			}
 		}
 		const settings = this.#getSettings();
 		const admin = this.#isAdmin(settings, actor);
@@ -477,28 +600,35 @@ export class OneBotActionFacade {
 		return (settings.adminUsers ?? []).includes(actor.actorId);
 	}
 
-	#targetId(method: OneBotActionMethod, input: Record<string, unknown>): string | undefined {
+	#targetId(
+		method: OneBotActionMethod,
+		input: Record<string, unknown>,
+		actor: OneBotActionActor = {},
+	): string | undefined {
 		if (method === "rawAction") return toIdString(input.action);
 		if (
 			method === "send" ||
 			method === "sendForward" ||
+			method === "forwardMessage" ||
 			method === "readHistory" ||
 			method === "setTyping"
 		) {
 			try {
-				return asTarget(input.target, input).platformConversationId;
+				return asTarget(input.target, input, actor).platformConversationId;
 			} catch {
 				const target = asRecord(input.target);
-				return pickId(target, [
-					"platformConversationId",
-					"id",
-					"targetId",
-					"target_id",
-					"userId",
-					"user_id",
-					"groupId",
-					"group_id",
-				]);
+				return (
+					pickId(target, [
+						"platformConversationId",
+						"id",
+						"targetId",
+						"target_id",
+						"userId",
+						"user_id",
+						"groupId",
+						"group_id",
+					]) ?? actor.platformConversationId
+				);
 			}
 		}
 		if (method === "poke") {
@@ -510,38 +640,89 @@ export class OneBotActionFacade {
 				colon?.userId;
 			if (userId !== undefined) return userId;
 			try {
-				return asTarget(input.target, input).platformConversationId;
+				return asTarget(input.target, input, actor).platformConversationId;
 			} catch {
-				return undefined;
+				return actor.senderPlatformId ?? actor.actorId ?? actor.platformConversationId;
 			}
 		}
-		return pickId(input, [
-			"groupId",
-			"group_id",
-			"userId",
-			"user_id",
-			"messageId",
-			"message_id",
-			"platformMessageId",
-			"fileId",
-			"file_id",
-		]);
+		return (
+			pickMessageId(input, ["messageId", "message_id", "platformMessageId"]) ??
+			pickId(input, [
+				"groupId",
+				"group_id",
+				"userId",
+				"user_id",
+				"mediaId",
+				"sha256",
+				"fileId",
+				"file_id",
+			]) ??
+			actor.platformConversationId
+		);
+	}
+
+	#resolvePokeTarget(
+		input: Record<string, unknown>,
+		actor: OneBotActionActor,
+	): { readonly target: OutboundTarget; readonly userId: string } {
+		const targetRecord = asRecord(input.target);
+		const colon = typeof input.target === "string" ? parseTargetColon(input.target) : undefined;
+		const explicitKind = resolveKind(targetRecord, input) ?? colon?.kind;
+		const explicitGroupId =
+			pickId(targetRecord, ["groupId", "group_id"]) ??
+			pickId(input, ["groupId", "group_id"]) ??
+			(colon?.kind === "group" ? colon.platformConversationId : undefined);
+		const explicitUserId =
+			pickId(input, ["userId", "user_id", "qq"]) ??
+			pickId(targetRecord, ["userId", "user_id", "qq"]) ??
+			colon?.userId;
+		if (
+			explicitKind === undefined &&
+			explicitGroupId === undefined &&
+			input.target === undefined &&
+			actor.chatKind === "group" &&
+			actor.platformConversationId !== undefined
+		) {
+			const target: OutboundTarget = {
+				channelId: actor.channelId ?? "onebot",
+				kind: "group",
+				platformConversationId: actor.platformConversationId,
+			};
+			const poked =
+				explicitUserId ??
+				pickId(input, ["targetId", "target_id", "id"]) ??
+				actor.senderPlatformId ??
+				actor.actorId;
+			return { target, userId: asString(poked, "userId") };
+		}
+		const target = asTarget(input.target, input, actor);
+		const userId =
+			explicitUserId ??
+			(target.kind === "private"
+				? target.platformConversationId
+				: (pickId(input, ["targetId", "target_id", "id"]) ??
+					pickId(targetRecord, ["targetId", "target_id", "id"]) ??
+					actor.senderPlatformId ??
+					actor.actorId));
+		return { target, userId: asString(userId, "userId") };
 	}
 
 	async #execute(
 		adapter: OneBotChannelAdapter,
 		method: OneBotActionMethod,
 		input: Record<string, unknown>,
+		actor: OneBotActionActor = {},
 	): Promise<unknown> {
 		const channel = adapter.channel;
 		if (channel === undefined) throw new Error("channel-unavailable");
 		switch (method) {
 			case "send": {
-				const target = asTarget(input.target, input);
+				const target = asTarget(input.target, input, actor);
 				const parts = asParts(input.parts, input);
-				const reply = toIdString(
+				const replyRaw = toIdString(
 					input.replyToPlatformMessageId ?? input.reply_to_message_id ?? input.replyToMessageId,
 				);
+				const reply = replyRaw === undefined ? undefined : cleanMessageId(replyRaw);
 				if (asBoolean(input.forward)) {
 					const result = await channel.sendForward(target, parts);
 					await this.#recordInteraction(target, "forward", parts);
@@ -561,16 +742,45 @@ export class OneBotActionFacade {
 				);
 			}
 			case "sendForward": {
-				const target = asTarget(input.target, input);
+				const target = asTarget(input.target, input, actor);
 				const parts = asParts(input.parts, input);
 				const result = await channel.sendForward(target, parts);
 				await this.#recordInteraction(target, "forward", parts);
 				return result;
 			}
+			case "forwardMessage": {
+				const target = asTarget(input.target, input, actor);
+				const rawList = Array.isArray(input.messageIds)
+					? input.messageIds
+					: Array.isArray(input.message_ids)
+						? input.message_ids
+						: [];
+				const singleId = pickMessageId(input, [
+					"messageId",
+					"message_id",
+					"platformMessageId",
+					"id",
+				]);
+				const messageIds = [
+					...(singleId === undefined ? [] : [singleId]),
+					...rawList
+						.map((entry) => toIdString(entry))
+						.filter((entry): entry is string => entry !== undefined)
+						.map((entry) => cleanMessageId(entry)),
+				];
+				const uniqueIds = [...new Set(messageIds)];
+				const result = await channel.forwardMessage(target, uniqueIds);
+				await this.#recordInteraction(target, "forward");
+				return result;
+			}
+			case "listTargets":
+				return await this.#listTargets(adapter, input, actor);
+			case "viewImage":
+				return await this.#viewImage(adapter, input, actor);
 			case "lookupMessage":
 				return channel.lookupMessage(
 					asString(
-						pickId(input, ["platformMessageId", "messageId", "message_id", "id"]),
+						pickMessageId(input, ["platformMessageId", "messageId", "message_id", "id"]),
 						"platformMessageId",
 					),
 				);
@@ -579,68 +789,73 @@ export class OneBotActionFacade {
 				const limit = limitRaw === undefined ? undefined : asNumber(limitRaw, "limit");
 				const sinceMs =
 					input.sinceMs === undefined ? undefined : asNumber(input.sinceMs, "sinceMs");
-				return channel.readHistory(asTarget(input.target, input), {
+				const items = await channel.readHistory(asTarget(input.target, input, actor), {
 					...(limit === undefined ? {} : { limit }),
 					...(sinceMs === undefined ? {} : { sinceMs }),
 				});
+				return items.map((item) => ({
+					...item,
+					ref: `[msg:${item.platformMessageId}]`,
+				}));
 			}
 			case "poke": {
-				const target = asTarget(input.target, input);
-				const targetRecord = asRecord(input.target);
-				const colon = typeof input.target === "string" ? parseTargetColon(input.target) : undefined;
-				const userId =
-					pickId(input, ["userId", "user_id", "qq"]) ??
-					pickId(targetRecord, ["userId", "user_id", "qq"]) ??
-					colon?.userId ??
-					(target.kind === "private"
-						? target.platformConversationId
-						: (pickId(input, ["targetId", "target_id", "id"]) ??
-							pickId(targetRecord, ["targetId", "target_id", "id"])));
-				const poked = asString(userId, "userId");
+				const { target, userId: poked } = this.#resolvePokeTarget(input, actor);
 				const result = await channel.poke(target, poked);
 				await this.#recordInteraction(target, "poke", undefined, poked);
 				return result;
 			}
 			case "react":
 				return channel.react(
-					asString(pickId(input, ["messageId", "message_id", "platformMessageId"]), "messageId"),
+					asString(
+						pickMessageId(input, ["messageId", "message_id", "platformMessageId"]),
+						"messageId",
+					),
 					asString(pickId(input, ["emojiId", "emoji_id", "emoji"]), "emojiId"),
 					asBoolean(input.set, true),
 				);
 			case "setTyping":
-				return channel.setTyping(asTarget(input.target, input), asBoolean(input.typing, true));
+				return channel.setTyping(
+					asTarget(input.target, input, actor),
+					asBoolean(input.typing, true),
+				);
 			case "deleteMessage":
 				return channel.deleteMessage(
-					asString(pickId(input, ["messageId", "message_id", "platformMessageId"]), "messageId"),
+					asString(
+						pickMessageId(input, ["messageId", "message_id", "platformMessageId"]),
+						"messageId",
+					),
 				);
 			case "markRead":
 				return channel.markRead(
-					asString(pickId(input, ["messageId", "message_id", "platformMessageId"]), "messageId"),
+					asString(
+						pickMessageId(input, ["messageId", "message_id", "platformMessageId"]),
+						"messageId",
+					),
 				);
 			case "listGroupFiles":
-				return channel.listGroupFiles(asString(pickId(input, ["groupId", "group_id"]), "groupId"));
+				return channel.listGroupFiles(resolveGroupId(input, actor));
 			case "fetchGroupFile":
 				return channel.fetchGroupFile(
-					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					resolveGroupId(input, actor),
 					asString(pickId(input, ["fileId", "file_id"]), "fileId"),
 					input.busid === undefined ? undefined : asNumber(input.busid, "busid"),
 				);
 			case "uploadGroupFile":
 				return channel.uploadGroupFile(
-					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					resolveGroupId(input, actor),
 					asString(input.file, "file"),
 					asString(input.name, "name"),
 					asStringOptional(input.folder),
 				);
 			case "deleteGroupFile":
 				return channel.deleteGroupFile(
-					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					resolveGroupId(input, actor),
 					asString(pickId(input, ["fileId", "file_id"]), "fileId"),
 					input.busid === undefined ? undefined : asNumber(input.busid, "busid"),
 				);
 			case "groupBan":
 				return channel.groupBan(
-					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					resolveGroupId(input, actor),
 					asString(pickId(input, ["userId", "user_id", "qq"]), "userId"),
 					asNumber(
 						input.durationSeconds ?? input.duration_seconds ?? input.duration,
@@ -648,41 +863,38 @@ export class OneBotActionFacade {
 					),
 				);
 			case "groupWholeBan":
-				return channel.groupWholeBan(
-					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
-					asBoolean(input.enable, true),
-				);
+				return channel.groupWholeBan(resolveGroupId(input, actor), asBoolean(input.enable, true));
 			case "groupKick":
 				return channel.groupKick(
-					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					resolveGroupId(input, actor),
 					asString(pickId(input, ["userId", "user_id", "qq"]), "userId"),
 					asBoolean(input.rejectAddRequest ?? input.reject_add_request),
 				);
 			case "groupSetAdmin":
 				return channel.groupSetAdmin(
-					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					resolveGroupId(input, actor),
 					asString(pickId(input, ["userId", "user_id", "qq"]), "userId"),
 					asBoolean(input.enable, true),
 				);
 			case "groupSetCard":
 				return channel.groupSetCard(
-					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					resolveGroupId(input, actor),
 					asString(pickId(input, ["userId", "user_id", "qq"]), "userId"),
 					asString(input.card, "card"),
 				);
 			case "groupSetName":
 				return channel.groupSetName(
-					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					resolveGroupId(input, actor),
 					asString(input.groupName ?? input.group_name ?? input.name, "groupName"),
 				);
 			case "groupLeave":
 				return channel.groupLeave(
-					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					resolveGroupId(input, actor),
 					asBoolean(input.dismiss ?? input.is_dismiss),
 				);
 			case "groupSetSpecialTitle":
 				return channel.groupSetSpecialTitle(
-					asString(pickId(input, ["groupId", "group_id"]), "groupId"),
+					resolveGroupId(input, actor),
 					asString(pickId(input, ["userId", "user_id", "qq"]), "userId"),
 					asString(input.title ?? input.special_title ?? input.specialTitle, "title"),
 				);
@@ -705,6 +917,312 @@ export class OneBotActionFacade {
 			case "rawAction":
 				return channel.rawAction(asString(input.action, "action"), asRecord(input.params));
 		}
+	}
+
+	async #listTargets(
+		adapter: OneBotChannelAdapter,
+		input: Record<string, unknown>,
+		actor: OneBotActionActor,
+	): Promise<{
+		readonly currentChat?: {
+			readonly channelId: string;
+			readonly kind: "private" | "group";
+			readonly platformConversationId: string;
+		};
+		readonly targets: readonly {
+			readonly channelId: string;
+			readonly conversationId?: string;
+			readonly isCurrent: boolean;
+			readonly kind: "private" | "group";
+			readonly platformConversationId: string;
+			readonly title: string;
+		}[];
+	}> {
+		const requestedKind =
+			input.kind === "private" || input.kind === "group" ? input.kind : undefined;
+		const query = typeof input.query === "string" ? input.query.trim().toLowerCase() : "";
+		const limit = Math.min(
+			100,
+			Math.max(1, input.limit === undefined ? 50 : asNumber(input.limit, "limit")),
+		);
+		const currentChat:
+			| {
+					readonly channelId: string;
+					readonly kind: "private" | "group";
+					readonly platformConversationId: string;
+			  }
+			| undefined =
+			(actor.chatKind === "private" || actor.chatKind === "group") &&
+			actor.platformConversationId !== undefined
+				? {
+						channelId: actor.channelId ?? adapter.id,
+						kind: actor.chatKind,
+						platformConversationId: actor.platformConversationId,
+					}
+				: undefined;
+		interface TargetSummary {
+			readonly channelId: string;
+			readonly conversationId?: string;
+			readonly isCurrent: boolean;
+			readonly kind: "private" | "group";
+			readonly platformConversationId: string;
+			readonly title: string;
+		}
+		type PolicyView = ConversationPolicy;
+		const policyAllowsTarget = (
+			policy: PolicyView,
+			kind: "private" | "group",
+			id: string,
+		): boolean => {
+			if (!policy.enabled) return false;
+			const access = kind === "group" ? policy.trigger.groupAccess : policy.trigger.privateAccess;
+			if (access === "disabled") return false;
+			return access !== "allowlist" || policy.trigger.allowlist.includes(id);
+		};
+		const matchesQuery = (title: string, id: string): boolean =>
+			query.length === 0 || title.toLowerCase().includes(query) || id.toLowerCase().includes(query);
+
+		const targets: TargetSummary[] = [];
+		const seen = new Set<string>();
+		const addTarget = (target: TargetSummary): boolean => {
+			const key = `${target.kind}:${target.platformConversationId}`;
+			if (seen.has(key) || targets.length >= limit) return false;
+			seen.add(key);
+			targets.push(target);
+			return true;
+		};
+		let discoveryPolicy: PolicyView | undefined;
+		if (this.#conversations !== undefined) {
+			const list = await this.#conversations.list();
+			for (const entry of list) {
+				if (entry.kind !== "private" && entry.kind !== "group") continue;
+				if (requestedKind !== undefined && entry.kind !== requestedKind) continue;
+				const platformId = entry.platformConversationId ?? undefined;
+				if (platformId === undefined || platformId.length === 0) continue;
+				seen.add(`${entry.kind}:${platformId}`);
+				if (entry.muted === true) continue;
+				try {
+					const policy = await this.#conversations.getPolicy(entry.id);
+					const isCurrentEntry =
+						currentChat?.kind === entry.kind && currentChat.platformConversationId === platformId;
+					if (isCurrentEntry || discoveryPolicy === undefined) discoveryPolicy = policy;
+					if (!policyAllowsTarget(policy, entry.kind, platformId)) continue;
+				} catch {
+					continue;
+				}
+				if (!matchesQuery(entry.title, platformId)) continue;
+				addTarget({
+					channelId: entry.channelId ?? adapter.id,
+					conversationId: entry.id,
+					isCurrent:
+						currentChat?.kind === entry.kind && currentChat.platformConversationId === platformId,
+					kind: entry.kind,
+					platformConversationId: platformId,
+					title: entry.title || `${entry.kind}:${platformId}`,
+				});
+			}
+		}
+		if (
+			discoveryPolicy === undefined &&
+			this.#conversations !== undefined &&
+			actor.conversationId !== undefined
+		) {
+			try {
+				discoveryPolicy = await this.#conversations.getPolicy(actor.conversationId);
+			} catch {}
+		}
+		// The active chat is always a valid implicit target, even before its domain row exists.
+		if (
+			currentChat !== undefined &&
+			!targets.some((target) => target.isCurrent) &&
+			targets.length < limit
+		) {
+			seen.add(`${currentChat.kind}:${currentChat.platformConversationId}`);
+			targets.push({
+				channelId: currentChat.channelId,
+				isCurrent: true,
+				kind: currentChat.kind,
+				platformConversationId: currentChat.platformConversationId,
+				title: `${currentChat.kind}:${currentChat.platformConversationId}`,
+			});
+		}
+		// NapCat may know about allowed chats Tsukaima has not seen yet. Only include discovery
+		// results that are authorized by the same policy that governs the current conversation;
+		// without a readable policy the list stays fail-closed.
+		if (targets.length < limit) {
+			const channel = adapter.channel;
+			if (channel !== undefined) {
+				if (requestedKind !== "private") {
+					try {
+						for (const group of await channel.listGroups()) {
+							if (discoveryPolicy === undefined) break;
+							if (!matchesQuery(group.title, group.groupId)) continue;
+							if (!policyAllowsTarget(discoveryPolicy, "group", group.groupId)) continue;
+							addTarget({
+								channelId: adapter.id,
+								isCurrent:
+									currentChat?.kind === "group" &&
+									currentChat.platformConversationId === group.groupId,
+								kind: "group",
+								platformConversationId: group.groupId,
+								title: group.title,
+							});
+						}
+					} catch (error) {
+						this.#logger.debug("OneBot group discovery failed", {
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
+				}
+				if (requestedKind !== "group" && targets.length < limit) {
+					try {
+						for (const friend of await channel.listFriends()) {
+							if (discoveryPolicy === undefined) break;
+							if (!matchesQuery(friend.title, friend.userId)) continue;
+							if (!policyAllowsTarget(discoveryPolicy, "private", friend.userId)) continue;
+							addTarget({
+								channelId: adapter.id,
+								isCurrent:
+									currentChat?.kind === "private" &&
+									currentChat.platformConversationId === friend.userId,
+								kind: "private",
+								platformConversationId: friend.userId,
+								title: friend.title,
+							});
+						}
+					} catch (error) {
+						this.#logger.debug("OneBot friend discovery failed", {
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
+				}
+			}
+		}
+		return {
+			...(currentChat === undefined ? {} : { currentChat }),
+			targets,
+		};
+	}
+
+	async #viewImage(
+		adapter: OneBotChannelAdapter,
+		input: Record<string, unknown>,
+		actor: OneBotActionActor,
+	): Promise<{
+		readonly data: string;
+		readonly mediaId?: string;
+		readonly mimeType: string;
+		readonly partType: "image" | "sticker";
+		readonly platformMessageId?: string;
+		readonly previewText?: string;
+		readonly sha256?: string;
+		readonly sizeBytes: number;
+	}> {
+		const channel = adapter.channel;
+		if (channel === undefined) throw new Error("channel-unavailable");
+		const requestedMessageId = pickMessageId(input, [
+			"messageId",
+			"message_id",
+			"platformMessageId",
+		]);
+		const requestedMediaId = toIdString(input.mediaId ?? input.media_id);
+		const requestedSha = toIdString(input.sha256);
+		const requestedFile = toIdString(
+			input.file ?? input.channelRef ?? input.url ?? input.sourceUrl,
+		);
+		let resolvedPart: Extract<MessagePart, { type: "image" | "sticker" }> | undefined;
+		let resolvedPlatformMessageId = requestedMessageId;
+
+		if (
+			requestedMediaId === undefined &&
+			requestedSha === undefined &&
+			requestedFile === undefined &&
+			this.#conversations !== undefined &&
+			actor.conversationId !== undefined
+		) {
+			const recent = await this.#conversations.recentMessages(actor.conversationId, 25);
+			const candidates = recent.toReversed();
+			for (const message of candidates) {
+				if (
+					requestedMessageId !== undefined &&
+					message.platformMessageId !== requestedMessageId &&
+					message.id !== requestedMessageId
+				) {
+					continue;
+				}
+				const imagePart = (message.parts ?? []).find(
+					(part): part is Extract<MessagePart, { type: "image" | "sticker" }> =>
+						part.type === "image" || part.type === "sticker",
+				);
+				if (imagePart !== undefined) {
+					resolvedPart = imagePart;
+					resolvedPlatformMessageId =
+						resolvedPlatformMessageId ?? message.platformMessageId ?? undefined;
+					break;
+				}
+			}
+		}
+
+		const mediaId = requestedMediaId ?? resolvedPart?.mediaId;
+		const sha256 = requestedSha ?? resolvedPart?.sha256;
+		const mimeType = resolvedPart?.mimeType ?? "image/png";
+		const partType = resolvedPart?.type ?? "image";
+
+		if (this.#media !== undefined && (mediaId !== undefined || sha256 !== undefined)) {
+			const record =
+				mediaId !== undefined
+					? await this.#media.findById(mediaId)
+					: sha256 !== undefined
+						? await this.#media.findBySha(sha256)
+						: undefined;
+			if (record !== undefined) {
+				const bytes = await this.#media.readBytes(record.id);
+				return {
+					data: Buffer.from(bytes).toString("base64"),
+					mediaId: record.id,
+					mimeType: record.mimeType || mimeType,
+					partType,
+					...(resolvedPlatformMessageId === undefined
+						? {}
+						: { platformMessageId: resolvedPlatformMessageId }),
+					...(resolvedPart?.previewText === undefined
+						? {}
+						: { previewText: resolvedPart.previewText }),
+					sha256: record.sha256,
+					sizeBytes: bytes.byteLength,
+				};
+			}
+		}
+
+		const fallbackPart: Extract<MessagePart, { type: "image" | "sticker" }> | undefined =
+			resolvedPart ??
+			(requestedFile !== undefined
+				? /^https?:\/\//iu.test(requestedFile)
+					? { sourceUrl: requestedFile, type: "image" }
+					: { channelRef: requestedFile, type: "image" }
+				: undefined);
+		if (fallbackPart !== undefined) {
+			const bytes = await channel.fetchMedia(fallbackPart);
+			if (bytes !== undefined) {
+				return {
+					data: Buffer.from(bytes).toString("base64"),
+					...(fallbackPart.mediaId === undefined ? {} : { mediaId: fallbackPart.mediaId }),
+					mimeType: fallbackPart.mimeType ?? mimeType,
+					partType: fallbackPart.type,
+					...(resolvedPlatformMessageId === undefined
+						? {}
+						: { platformMessageId: resolvedPlatformMessageId }),
+					...(fallbackPart.previewText === undefined
+						? {}
+						: { previewText: fallbackPart.previewText }),
+					...(fallbackPart.sha256 === undefined ? {} : { sha256: fallbackPart.sha256 }),
+					sizeBytes: bytes.byteLength,
+				};
+			}
+		}
+		throw new Error(
+			"Requested image or sticker could not be resolved; pass a recent [msg:<id>], mediaId, or sha256 from this chat",
+		);
 	}
 
 	/**
@@ -786,6 +1304,7 @@ export const ONEBOT_ACTION_PERMISSIONS: Record<OneBotActionMethod, readonly stri
 	deleteGroupFile: ["channel.manage"],
 	deleteMessage: ["channel.interact"],
 	fetchGroupFile: ["channel.manage", "conversation.read"],
+	forwardMessage: ["channel.send"],
 	groupBan: ["channel.manage"],
 	groupKick: ["channel.manage"],
 	groupLeave: ["channel.manage"],
@@ -795,6 +1314,7 @@ export const ONEBOT_ACTION_PERMISSIONS: Record<OneBotActionMethod, readonly stri
 	groupSetSpecialTitle: ["channel.manage"],
 	groupWholeBan: ["channel.manage"],
 	listGroupFiles: ["channel.manage", "conversation.read"],
+	listTargets: ["conversation.read"],
 	lookupMessage: ["conversation.read"],
 	markRead: ["conversation.read"],
 	poke: ["channel.interact"],
@@ -809,4 +1329,5 @@ export const ONEBOT_ACTION_PERMISSIONS: Record<OneBotActionMethod, readonly stri
 	setProfile: ["channel.manage"],
 	setTyping: ["channel.interact"],
 	uploadGroupFile: ["channel.manage"],
+	viewImage: ["media.read", "conversation.read"],
 };

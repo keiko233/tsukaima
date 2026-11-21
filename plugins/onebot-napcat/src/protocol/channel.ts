@@ -521,6 +521,37 @@ export class OneBotChannel {
 				);
 	}
 
+	async forwardMessage(target: OutboundTarget, messageIds: readonly string[]): Promise<unknown> {
+		if (messageIds.length === 0) {
+			throw new Error("At least one messageId is required to forward");
+		}
+		if (messageIds.length === 1) {
+			const messageId = messageIds[0]!;
+			return target.kind === "group"
+				? this.action("forward_group_single_msg", {
+						group_id: target.platformConversationId,
+						message_id: messageId,
+					})
+				: this.action("forward_friend_single_msg", {
+						message_id: messageId,
+						user_id: target.platformConversationId,
+					});
+		}
+		const nodes = messageIds.map((id) => ({
+			data: { id },
+			type: "node",
+		}));
+		return target.kind === "group"
+			? this.action("send_group_forward_msg", {
+					group_id: target.platformConversationId,
+					messages: nodes,
+				})
+			: this.action("send_private_forward_msg", {
+					messages: nodes,
+					user_id: target.platformConversationId,
+				});
+	}
+
 	async lookupMessage(platformMessageId: string): Promise<ChannelHistoryItem | undefined> {
 		const data = await this.readAction("get_msg", { message_id: platformMessageId });
 		return historyItem(data);
@@ -542,7 +573,7 @@ export class OneBotChannel {
 			const reference = part.channelRef ?? part.sourceUrl;
 			if (reference === undefined) return undefined;
 			data = await this.readAction("get_image", { file: reference }, timeoutMs);
-		} else if (part.type === "file") {
+		} else if (part.type === "file" || part.type === "video") {
 			const reference = part.channelRef ?? part.sourceUrl;
 			if (reference === undefined) return undefined;
 			data = await this.readAction(
@@ -559,6 +590,53 @@ export class OneBotChannel {
 			throw new Error("Inbound media exceeds the channel media size cap");
 		}
 		return bytes;
+	}
+
+	/** Discover the groups NapCat already knows. Used to supplement policy-filtered targets. */
+	async listGroups(): Promise<readonly { readonly groupId: string; readonly title: string }[]> {
+		const data = await this.readAction("get_group_list", {});
+		const record = recordOf(data);
+		const raw = Array.isArray(data)
+			? data
+			: Array.isArray(record?.groups)
+				? record.groups
+				: Array.isArray(record?.data)
+					? record.data
+					: [];
+		return raw.flatMap((entry) => {
+			const item = recordOf(entry);
+			const groupId = stringOf(item?.group_id) ?? stringOf(item?.groupId);
+			if (groupId === undefined) return [];
+			const title =
+				stringOf(item?.group_name)?.trim() ??
+				stringOf(item?.groupName)?.trim() ??
+				`group:${groupId}`;
+			return [{ groupId, title }];
+		});
+	}
+
+	/** Discover friends known to NapCat. Used to supplement policy-filtered targets. */
+	async listFriends(): Promise<readonly { readonly title: string; readonly userId: string }[]> {
+		const data = await this.readAction("get_friend_list", {});
+		const record = recordOf(data);
+		const raw = Array.isArray(data)
+			? data
+			: Array.isArray(record?.friends)
+				? record.friends
+				: Array.isArray(record?.data)
+					? record.data
+					: [];
+		return raw.flatMap((entry) => {
+			const item = recordOf(entry);
+			const userId = stringOf(item?.user_id) ?? stringOf(item?.userId);
+			if (userId === undefined) return [];
+			const title =
+				stringOf(item?.remark)?.trim() ??
+				stringOf(item?.nickname)?.trim() ??
+				stringOf(item?.nickName)?.trim() ??
+				`private:${userId}`;
+			return [{ title, userId }];
+		});
 	}
 
 	async readHistory(

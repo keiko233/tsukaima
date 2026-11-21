@@ -13,6 +13,7 @@ import { registerStickerTools } from "./tools.ts";
 
 export {
 	STICKER_MEME_DIRECTIVE_PATTERN,
+	STICKER_MEME_INLINE_MARKER_PATTERN,
 	STICKER_MEME_PLUGIN_ID,
 	STICKER_MEME_RPC_PREFIX,
 	stickerMemeManifest,
@@ -166,6 +167,7 @@ export const stickerMemePlugin: TsukaimaPlugin = {
 			logger: outputLogger,
 			media,
 			repository,
+			selection,
 		});
 		const runtime: StickerRuntime = { disposers: [] };
 		runtimes.set(context, runtime);

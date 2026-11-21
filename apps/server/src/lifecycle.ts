@@ -47,7 +47,12 @@ import {
 	type AuditEntry,
 	type TsukaimaPlugin,
 } from "@tsukaima/sdk";
-import { ONEBOT_MENTION_NAME_BINDING } from "@tsukaima-plugin/onebot-napcat";
+import {
+	ONEBOT_AUDIO_TRANSCRIBE_BINDING,
+	ONEBOT_CHANNEL_KIND,
+	ONEBOT_MENTION_NAME_BINDING,
+	ONEBOT_VIDEO_FRAME_EXTRACTOR_BINDING,
+} from "@tsukaima-plugin/onebot-napcat";
 import {
 	MigrationRegistry,
 	PluginDatabaseStore,
@@ -136,6 +141,7 @@ import { SCHEDULE_TOOL_NAMES } from "./services/schedule-tools.ts";
 import { createScheduleToolsExtension } from "./services/schedule-tools.ts";
 import { SessionMessagingService } from "./services/session-messaging.ts";
 import { UpgradeService } from "./services/upgrade-service.ts";
+import { createVideoFrameExtractor } from "./services/video-frames.ts";
 import {
 	CODING_AGENT_TOOL_NAMES,
 	createCodingAgentToolsExtension,
@@ -274,6 +280,8 @@ export class TsukaimaLifecycle {
 	 * buffer. Keyed by stage + conversation key.
 	 */
 	private readonly inboundFailureLoggedAt = new Map<string, number>();
+	/** Last resolved conversation kind per durable conversation id, for transient DB read resilience. */
+	private readonly sessionKindByDurableId = new Map<string, string>();
 	private activeProviderId: string | undefined;
 	/** Provider/model catalog signature; a change invalidates per-conversation model refs. */
 	private modelPortSignature: string | undefined;
@@ -398,6 +406,16 @@ export class TsukaimaLifecycle {
 			logger: this.runtimeLog,
 			onDirectSend: (durableConversationId, text) =>
 				this.replyDispatcher.noteDirectSend(durableConversationId, text),
+			onToolSend: (sent) => {
+				if (sent.pluginId === "onebot-napcat") {
+					this.replyDispatcher?.recordTurnToolSend({
+						durableConversationId: sent.durableConversationId,
+						hasMedia: sent.hasMedia,
+						sessionId: sent.sessionId,
+						text: sent.text,
+					});
+				}
+			},
 			router: () => this.conversationRouter,
 		});
 		this.contextProvider = new DrizzleContextProvider({
@@ -426,6 +444,19 @@ export class TsukaimaLifecycle {
 			database: () => this.domainDatabase,
 			logger: this.runtimeLog,
 			policyService: this.conversationPolicy,
+			stickerCaptions: async () => {
+				if (!(await this.pluginSettings.isEnabled("sticker-meme"))) return undefined;
+				const plugin = this.pluginHost.context("sticker-meme");
+				if (plugin === undefined) return undefined;
+				const result = await this.pluginHost.invokeRpc("sticker-meme.hints", { limit: 3 });
+				if (typeof result !== "object" || result === null || !("captions" in result)) {
+					return undefined;
+				}
+				const captions = (result as { readonly captions?: unknown }).captions;
+				return Array.isArray(captions)
+					? captions.filter((entry): entry is string => typeof entry === "string")
+					: undefined;
+			},
 		});
 		this.requestService = new RequestService({
 			audit: (entry) => this.writeAudit(entry),
@@ -728,6 +759,104 @@ export class TsukaimaLifecycle {
 			ONEBOT_MENTION_NAME_BINDING,
 			createMentionIdentityStore(() => this.conversationRouter),
 		);
+		if (!pluginBindings.has(ONEBOT_AUDIO_TRANSCRIBE_BINDING)) {
+			// Default speech-to-text seam routed through registered plugin model providers.
+			pluginBindings.set(
+				ONEBOT_AUDIO_TRANSCRIBE_BINDING,
+				async (input: {
+					readonly audio?: Uint8Array;
+					readonly mimeType?: string;
+					readonly sourceUrl?: string;
+				}) => {
+					if (input.audio === undefined) return undefined;
+					for (const provider of this.pluginHost.modelProviders()) {
+						try {
+							const transcribe =
+								provider.transcribeAudio !== undefined
+									? (req: { readonly audio: Uint8Array; readonly mimeType?: string }) =>
+											provider.transcribeAudio!(req)
+									: provider.audioTranscribe !== undefined
+										? (req: { readonly audio: Uint8Array; readonly mimeType?: string }) =>
+												provider.audioTranscribe!.transcribeAudio(req)
+										: undefined;
+							if (transcribe === undefined) continue;
+							const result = await transcribe({
+								audio: input.audio,
+								...(input.mimeType === undefined ? {} : { mimeType: input.mimeType }),
+							});
+							const text = result.text.trim();
+							if (text.length > 0) return text;
+						} catch (error) {
+							this.runtimeLog.debug("OneBot audio transcription failed; degrading gracefully", {
+								error: error instanceof Error ? error.message : String(error),
+								providerId: provider.id,
+							});
+						}
+					}
+					return undefined;
+				},
+			);
+		}
+		if (!pluginBindings.has(ONEBOT_VIDEO_FRAME_EXTRACTOR_BINDING)) {
+			// Bounded ffmpeg keyframes through the OneBot sidecar or the guarded host fetch. A missing
+			// binary, unsupported codec, timeout, or private URL degrades to no frames so the video
+			// part itself still reaches the model.
+			pluginBindings.set(
+				ONEBOT_VIDEO_FRAME_EXTRACTOR_BINDING,
+				createVideoFrameExtractor({
+					logger: this.runtimeLog,
+					resolveBytes: async (input) => {
+						const channel = this.channels
+							.list()
+							.find(
+								(adapter) =>
+									adapter.kind === ONEBOT_CHANNEL_KIND && adapter.fetchMedia !== undefined,
+							);
+						if (channel?.fetchMedia !== undefined) {
+							try {
+								const bytes = await channel.fetchMedia({
+									...(input.channelRef === undefined ? {} : { channelRef: input.channelRef }),
+									...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
+									...(input.mimeType === undefined ? {} : { mimeType: input.mimeType }),
+									...(input.sourceUrl === undefined ? {} : { sourceUrl: input.sourceUrl }),
+									type: "video",
+								});
+								if (bytes !== undefined && bytes.byteLength > 0) return bytes;
+							} catch (error) {
+								this.runtimeLog.debug("OneBot video bytes unavailable through channel", {
+									error: error instanceof Error ? error.message : String(error),
+								});
+							}
+						}
+						if (input.sourceUrl === undefined || !/^https?:\/\//iu.test(input.sourceUrl)) {
+							return undefined;
+						}
+						try {
+							const stored = await this.media.storeFromUrl(input.sourceUrl, {
+								kind: "video",
+								source: "channel",
+							});
+							return await this.media.readBytes(stored.sha256);
+						} catch (error) {
+							this.runtimeLog.debug("OneBot video URL could not be fetched for frames", {
+								error: error instanceof Error ? error.message : String(error),
+							});
+							return undefined;
+						}
+					},
+					storeFrame: async (bytes, frame) => {
+						const stored = await this.media.store({
+							bytes,
+							kind: "image",
+							metadata: { derivedFrom: "video", frameIndex: frame.index },
+							mimeType: frame.mimeType,
+							source: "channel",
+						});
+						return { mediaId: stored.id, sha256: stored.sha256 };
+					},
+				}),
+			);
+		}
 		if (!pluginBindings.has(SELF_ITERATION_HOST_BINDING)) {
 			const worktreeRoot = join(config.dataDir, "worktrees");
 			const sandboxOptions = {
@@ -1045,33 +1174,53 @@ export class TsukaimaLifecycle {
 		const codingAgentTools = [...CODING_AGENT_TOOL_NAMES];
 		const removed = new Set<string>();
 		let kind: string | undefined;
-		try {
+		let readFailed = false;
+		const queryKind = async (): Promise<string | undefined> => {
 			const [row] = await database
 				.select({ chatKind: chatObjects.kind, sessionKind: conversations.kind })
 				.from(conversations)
 				.leftJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
 				.where(eq(conversations.durableConversationId, durableConversationId))
 				.limit(1);
-			kind = row?.chatKind ?? row?.sessionKind;
-		} catch (error) {
-			// Fail closed: without the domain row the execution role is unknown, so the turn runs
-			// with no model tools instead of inheriting whatever the conversation had.
-			this.runtimeLog.warn("conversation tool policy read failed; disabling model tools", {
-				durableConversationId,
-				error: error instanceof Error ? error.message : String(error),
-			});
-			await host.setModelToolAllowlist(durableConversationId, []);
-			return;
+			return row?.chatKind ?? row?.sessionKind;
+		};
+		try {
+			kind = await queryKind();
+		} catch {
+			// Retry once on transient SQLite busy/read failure before falling back.
+			try {
+				kind = await queryKind();
+			} catch (retryError) {
+				readFailed = true;
+				kind = this.sessionKindByDurableId.get(durableConversationId);
+				this.runtimeLog.warn(
+					kind === undefined
+						? "conversation tool policy read failed; applying fail-closed chat tool filter"
+						: "conversation tool policy read failed; reusing cached conversation kind",
+					{
+						cachedKind: kind ?? null,
+						durableConversationId,
+						error: retryError instanceof Error ? retryError.message : String(retryError),
+					},
+				);
+			}
+		}
+		if (kind !== undefined && !readFailed) {
+			this.sessionKindByDurableId.set(durableConversationId, kind);
 		}
 		const surface = kind === "workspace" ? "coding" : "chat";
 		for (const name of host.modelToolNamesNotForSurface(surface)) removed.add(name);
-		const codingAllowed = kind === "workspace" && policy.capabilities.includes("coding");
+		// Fail closed on a transient read error: never grant coding or prompt mutation tools when the
+		// live domain row could not be read, but keep standard non-coding chat tools intact instead
+		// of permanently wiping the durable allowlist to `[]`.
+		const codingAllowed =
+			!readFailed && kind === "workspace" && policy.capabilities.includes("coding");
 		if (!codingAllowed) {
 			for (const name of codingTools) removed.add(name);
 			for (const name of codingAgentTools) removed.add(name);
 			for (const name of WORKSPACE_CODING_TOOL_NAMES) removed.add(name);
 		}
-		if (kind === "webui") {
+		if (kind === "webui" && !readFailed) {
 			// A chat may spawn/control workspaces but never edit code in its own turn.
 			for (const name of codingTools) removed.add(name);
 		} else if (kind === "workspace") {
@@ -1081,18 +1230,15 @@ export class TsukaimaLifecycle {
 			for (const name of sessionTools) removed.add(name);
 		}
 		try {
-			if ((!codingAllowed && kind !== "webui") || !this.prompts.agentAccess()) {
+			if (readFailed || (!codingAllowed && kind !== "webui") || !this.prompts.agentAccess()) {
 				for (const name of PROMPT_TOOL_NAMES) removed.add(name);
 			}
 			await host.updateToolAccess(durableConversationId, { remove: [...removed] });
 		} catch (error) {
-			// Narrowing the filter failed, so drop to an empty allowlist. This is best effort: the
-			// caller still proceeds, but the turn cannot reach a privileged tool.
-			this.runtimeLog.warn("conversation tool policy sync failed; disabling model tools", {
+			this.runtimeLog.warn("conversation tool policy sync failed", {
 				durableConversationId,
 				error: error instanceof Error ? error.message : String(error),
 			});
-			await host.setModelToolAllowlist(durableConversationId, []);
 		}
 	}
 

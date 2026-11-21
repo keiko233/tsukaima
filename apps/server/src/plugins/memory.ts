@@ -231,7 +231,7 @@ function recallTool(context: PluginContext, log: PluginLogger): PluginTool {
 			},
 			type: "object",
 		},
-		policy: { lazy: true, maxPayloadBytes: 8_192, surface: "both", timeoutMs: 20_000 },
+		policy: { lazy: false, maxPayloadBytes: 8_192, surface: "both", timeoutMs: 20_000 },
 		requiredPermissions: ["memory.read"],
 	};
 }
@@ -324,7 +324,7 @@ function saveTool(context: PluginContext, log: PluginLogger): PluginTool {
 			required: ["summary"],
 			type: "object",
 		},
-		policy: { lazy: true, maxPayloadBytes: 16_384, surface: "both", timeoutMs: 20_000 },
+		policy: { lazy: false, maxPayloadBytes: 16_384, surface: "both", timeoutMs: 20_000 },
 		requiredPermissions: ["memory.write"],
 	};
 }

@@ -223,6 +223,47 @@ export class StickerRepository {
 		await this.#database.query("DELETE FROM plugin_sticker_meme_packs WHERE id = ?", [id]);
 	}
 
+	/**
+	 * Bounded ready-to-copy captions for the ephemeral chat context. Only approved, enabled items
+	 * backed by real media are eligible, and the query is capped so prompt rendering stays cheap.
+	 */
+	async listCaptionHints(limit = 3): Promise<
+		readonly {
+			readonly caption: string;
+			readonly id: string;
+			readonly name: string;
+			readonly packId: string;
+		}[]
+	> {
+		const bounded = Math.max(1, Math.min(10, Math.floor(limit)));
+		const rows = await this.#database.query<{
+			caption: string;
+			id: string;
+			name: string;
+			pack_id: string;
+		}>(
+			`SELECT i.id AS id, i.name AS name, i.pack_id AS pack_id,
+				COALESCE(NULLIF(TRIM(i.name), ''), NULLIF(TRIM(i.description), '')) AS caption
+			FROM plugin_sticker_meme_items i
+			INNER JOIN plugin_sticker_meme_packs p ON p.id = i.pack_id
+			WHERE i.enabled = 1
+				AND i.revoked_at IS NULL
+				AND i.review_status = 'approved'
+				AND i.media_id <> ''
+				AND p.enabled = 1
+				AND COALESCE(NULLIF(TRIM(i.name), ''), NULLIF(TRIM(i.description), '')) <> ''
+			ORDER BY i.score DESC, i.use_count ASC, i.name COLLATE NOCASE, i.id
+			LIMIT ?`,
+			[bounded],
+		);
+		return rows.map((row) => ({
+			caption: row.caption,
+			id: row.id,
+			name: row.name,
+			packId: row.pack_id,
+		}));
+	}
+
 	async listItems(packId?: string): Promise<readonly StickerItem[]> {
 		const rows =
 			packId === undefined
@@ -455,6 +496,16 @@ export class StickerRepository {
 			[nowIso, nowIso, itemId],
 		);
 		return { itemId };
+	}
+
+	async recordUse(itemId: string): Promise<void> {
+		const nowIso = new Date(this.#now()).toISOString();
+		await this.#database.query(
+			`UPDATE plugin_sticker_meme_items SET
+				use_count = use_count + 1, last_used_at = ?, updated_at = ?
+			WHERE id = ?`,
+			[nowIso, nowIso, itemId],
+		);
 	}
 
 	async getToken(token: string): Promise<

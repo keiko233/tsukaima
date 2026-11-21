@@ -128,6 +128,155 @@ export function stripNarratedPrefix(
 	return { duplicate: substantive === 0, text: substantive === 0 ? "" : remainder };
 }
 
+const DEDUP_PUNCTUATION = /[。.!！?？…~～,，;；:：]/u;
+const DEDUP_BOUNDARY_START = /^[\s。.!！?？…~～,，;；:：]/u;
+const DEDUP_BOUNDARY_ONLY = /^[\s。.!！?？…~～,，;；:：]*$/u;
+const SENTENCE_SEGMENT = /[^。！？!?;；\r\n]+[。！？!?;；]?/gu;
+
+const normalizeForDedup = (text: string): string =>
+	text.replace(/\s+/gu, " ").trim().toLocaleLowerCase();
+
+const stemForDedup = (text: string): string => {
+	const normalized = normalizeForDedup(text);
+	let end = normalized.length;
+	while (end > 0 && DEDUP_PUNCTUATION.test(normalized.charAt(end - 1))) end -= 1;
+	while (end > 0 && normalized.charAt(end - 1) === " ") end -= 1;
+	return normalized.slice(0, end);
+};
+
+interface TextDedupContext {
+	readonly combined: string;
+	readonly normalizedSent: ReadonlySet<string>;
+	readonly originalCandidates: readonly string[];
+	readonly stems: ReadonlySet<string>;
+}
+
+const isDuplicateFragment = (fragment: string, context: TextDedupContext): boolean => {
+	const normalized = normalizeForDedup(fragment);
+	if (normalized.length === 0) return true;
+	const stem = stemForDedup(fragment);
+	if (context.normalizedSent.has(normalized) || context.stems.has(stem)) return true;
+	if (normalized === context.combined) return true;
+	for (const candidate of context.normalizedSent) {
+		if (
+			normalized.startsWith(candidate) &&
+			DEDUP_BOUNDARY_ONLY.test(normalized.slice(candidate.length))
+		) {
+			return true;
+		}
+		if (
+			candidate.startsWith(normalized) &&
+			DEDUP_BOUNDARY_ONLY.test(candidate.slice(normalized.length))
+		) {
+			return true;
+		}
+	}
+	return false;
+};
+
+const stripDuplicatePrefix = (line: string, context: TextDedupContext): string | undefined => {
+	const lower = line.toLocaleLowerCase();
+	for (const candidate of context.originalCandidates) {
+		const lowerCandidate = candidate.toLocaleLowerCase();
+		if (!lower.startsWith(lowerCandidate)) continue;
+		const rest = line.slice(candidate.length);
+		if (rest.length > 0 && !DEDUP_BOUNDARY_START.test(rest)) continue;
+		const remainder = rest.replace(DEDUP_BOUNDARY_START, "").trim();
+		return remainder.length === 0 ? undefined : remainder;
+	}
+	for (const candidate of context.normalizedSent) {
+		if (candidate.length < 2 || !lower.startsWith(candidate)) continue;
+		const rest = line.slice(candidate.length);
+		if (rest.length > 0 && !DEDUP_BOUNDARY_START.test(rest)) continue;
+		const remainder = rest.replace(DEDUP_BOUNDARY_START, "").trim();
+		if (remainder.length > 0) return remainder;
+	}
+	return undefined;
+};
+
+const dedupeTextLine = (line: string, context: TextDedupContext): string | undefined => {
+	const trimmed = line.trim();
+	if (trimmed.length === 0) return undefined;
+	if (isDuplicateFragment(trimmed, context)) return undefined;
+	const stripped = stripDuplicatePrefix(trimmed, context);
+	if (stripped !== undefined) return stripped;
+	const segments = [...trimmed.matchAll(SENTENCE_SEGMENT)]
+		.map((match) => match[0].trim())
+		.filter((segment) => segment.length > 0);
+	if (segments.length > 1) {
+		const kept = segments.filter((segment) => !isDuplicateFragment(segment, context));
+		const joined = kept.join("").trim();
+		if (joined !== trimmed) return joined.length === 0 ? undefined : joined;
+	}
+	return trimmed;
+};
+
+/**
+ * Drop text already delivered by `onebot-napcat.send` in this turn, matching exact parts,
+ * repeated lines, and duplicated prefixes. Media/sticker parts always survive, and genuinely
+ * new text inside a partially duplicated line is kept.
+ */
+export function suppressDuplicateTextParts(
+	parts: readonly MessagePart[],
+	sentTexts: readonly string[],
+): MessagePart[] {
+	const originals = [
+		...new Set(sentTexts.map((entry) => entry.trim()).filter((entry) => entry.length > 0)),
+	]
+		.flatMap((entry) => [entry, ...entry.split(/\r?\n/u).map((line) => line.trim())])
+		.filter((entry) => entry.length > 0)
+		.toSorted((left, right) => right.length - left.length);
+	const normalizedSent = new Set<string>();
+	const stems = new Set<string>();
+	for (const entry of sentTexts) {
+		const entryNormalized = normalizeForDedup(entry);
+		if (entryNormalized.length > 0) {
+			normalizedSent.add(entryNormalized);
+			stems.add(stemForDedup(entry));
+		}
+		for (const line of entry.split(/\r?\n/u)) {
+			const lineNormalized = normalizeForDedup(line);
+			if (lineNormalized.length === 0) continue;
+			normalizedSent.add(lineNormalized);
+			stems.add(stemForDedup(line));
+		}
+	}
+	const combined = normalizeForDedup(sentTexts.join(" "));
+	const context: TextDedupContext = {
+		combined,
+		normalizedSent,
+		originalCandidates: originals,
+		stems,
+	};
+	const finalText = normalizeForDedup(
+		parts
+			.filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
+			.map((part) => part.text)
+			.join(" "),
+	);
+	if (
+		finalText.length > 0 &&
+		(finalText === combined || normalizedSent.has(finalText) || stems.has(stemForDedup(finalText)))
+	) {
+		return parts.filter((part) => part.type !== "text");
+	}
+	const output: MessagePart[] = [];
+	for (const part of parts) {
+		if (part.type !== "text") {
+			output.push(part);
+			continue;
+		}
+		const keptLines: string[] = [];
+		for (const line of part.text.split(/\r?\n/u)) {
+			const deduped = dedupeTextLine(line, context);
+			if (deduped !== undefined) keptLines.push(deduped);
+		}
+		const text = keptLines.join("\n").trim();
+		if (text.length > 0) output.push({ text, type: "text" });
+	}
+	return output;
+}
+
 export interface ReplyDispatcherOptions {
 	readonly audit: (entry: AuditEntry) => Promise<void>;
 	readonly channels: ChannelRegistry;
@@ -255,6 +404,11 @@ export class ReplyDispatcher {
 	/** Conversations where a tool already posted text during the current turn. */
 	readonly #directSendThisTurn = new Map<string, true>();
 	readonly #lastNarrationAtMs = new Map<string, number>();
+	/**
+	 * Recent tool-delivered sends per session (`onebot-napcat.send`), used to suppress duplicate
+	 * final assistant text while still delivering standalone media/sticker parts.
+	 */
+	readonly #turnToolSends = new Map<string, { readonly atMs: number; readonly texts: string[] }>();
 	#legacyIntentReported = false;
 	#reconcileTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -667,6 +821,28 @@ export class ReplyDispatcher {
 	}
 
 	/**
+	 * Record an outbound send delivered by a channel tool (`onebot-napcat.send`) during an active
+	 * turn so `handleAnswer` can suppress duplicate final text while preserving standalone media.
+	 */
+	recordTurnToolSend(input: {
+		readonly atMs?: number;
+		readonly durableConversationId?: string;
+		readonly hasMedia?: boolean;
+		readonly sessionId: string;
+		readonly text: string;
+	}): void {
+		const trimmed = input.text.trim();
+		if (trimmed.length === 0) return;
+		const now = input.atMs ?? this.#now();
+		const existing = this.#turnToolSends.get(input.sessionId);
+		const texts =
+			existing !== undefined && now - existing.atMs < 60_000
+				? [...existing.texts, trimmed]
+				: [trimmed];
+		this.#turnToolSends.set(input.sessionId, { atMs: now, texts });
+	}
+
+	/**
 	 * Settle an expectation whose turn was intentionally suppressed before any send.
 	 *
 	 * Background turns decide suppression outside the dispatcher (proactive markers, empty
@@ -894,8 +1070,40 @@ export class ReplyDispatcher {
 			sessionId: session.sessionId,
 			text: answerText,
 		});
+		const recentToolSend = this.#turnToolSends.get(session.sessionId);
+		this.#turnToolSends.delete(session.sessionId);
+		let effectiveTransformedParts = transformed.parts;
+		if (
+			recentToolSend !== undefined &&
+			this.#now() - recentToolSend.atMs < 60_000 &&
+			recentToolSend.texts.length > 0
+		) {
+			effectiveTransformedParts = suppressDuplicateTextParts(
+				transformed.parts,
+				recentToolSend.texts,
+			);
+			if (effectiveTransformedParts.length === 0) {
+				this.#logger.info("assistant final text suppressed after channel tool send", {
+					conversationId: answer.conversationId,
+					entryId: answer.entryId,
+					sessionId: session.sessionId,
+				});
+				await this.#settleIntent(database, session.sessionId, answer.entryId);
+				await this.#settleExpectation(
+					answer,
+					session.sessionId,
+					"suppressed",
+					"already_sent_via_tool",
+				);
+				return {
+					deliveryStatus: "suppressed",
+					reason: "already_sent_via_tool",
+					text: lurk.text,
+				};
+			}
+		}
 		const sanitizedParts = this.#sanitizeOutboundParts(
-			transformed.parts,
+			effectiveTransformedParts,
 			policy,
 			answer.conversationId,
 			answer.entryId,

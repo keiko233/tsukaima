@@ -447,6 +447,61 @@ export class StickerSelectionService {
 		};
 	}
 
+	/**
+	 * Deterministic inline sticker resolution for `[表情:描述]` / `[sticker:描述]` markers.
+	 * Matches the top approved, enabled sticker by query or emotion and records its usage.
+	 */
+	async resolveInline(
+		query: string,
+		options?: { readonly personaId?: string },
+	): Promise<StickerItem | undefined> {
+		const trimmed = query.trim();
+		if (trimmed.length === 0) return undefined;
+		// Try matching as a general query first, then fall back to emotion-only matching if needed.
+		let [best] = await this.search({
+			limit: 1,
+			...(options?.personaId === undefined ? {} : { personaId: options.personaId }),
+			query: trimmed,
+		});
+		if (best === undefined) {
+			[best] = await this.search({
+				emotion: trimmed,
+				limit: 1,
+				...(options?.personaId === undefined ? {} : { personaId: options.personaId }),
+			});
+		}
+		if (best === undefined) return undefined;
+		const item = await this.#repository.getItem(best.itemId);
+		if (item === undefined) return undefined;
+		const pack = await this.#repository.getPack(item.packId);
+		if (pack === undefined || (await this.#selectable(item, pack)) !== undefined) {
+			return undefined;
+		}
+		await this.#repository.recordUse(item.id);
+		return item;
+	}
+
+	/**
+	 * Single-step sticker selection for `sticker-meme.send`: resolves the best matching approved
+	 * item (or an explicit `itemId`), issues a conversation-bound token/directive, and returns the
+	 * full item metadata so the tool can either send immediately or return the directive.
+	 */
+	async resolveForSend(
+		input: StickerSearchInput & { readonly itemId?: string; readonly conversationId: string },
+	): Promise<{
+		readonly choose: StickerChooseResult;
+		readonly item: StickerItem;
+		readonly pack: StickerPack;
+	}> {
+		const choose = await this.choose(input);
+		const item = await this.#repository.getItem(choose.itemId);
+		const pack = item === undefined ? undefined : await this.#repository.getPack(item.packId);
+		if (item === undefined || pack === undefined) {
+			throw new Error("Resolved sticker item is no longer available");
+		}
+		return { choose, item, pack };
+	}
+
 	async #selectable(item: StickerItem, pack: StickerPack): Promise<string | undefined> {
 		if (!pack.enabled) return "pack_disabled";
 		if (!item.enabled) return "item_disabled";

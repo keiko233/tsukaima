@@ -779,15 +779,99 @@ class ToolSemaphore {
 export const PLUGIN_TOOLS_EXTENSION_NAME = "tsukaima-plugin-tools";
 
 /**
- * OpenAI-compatible providers only accept function names matching `^[a-zA-Z0-9_-]{1,64}$`.
- * Plugin tools are namespaced `<pluginId>.<tool>`, so the model-facing name is sanitized and
- * suffixed with a short deterministic hash. The extension still invokes the original name, so
- * plugin routing, permission checks, and audit records are unchanged.
+ * Legacy hash-suffixed provider-safe name (`<sanitized>_<8hex>`). Kept for backward
+ * compatibility with persisted allowlists, transcripts, and collision disambiguation.
  */
-export function providerSafeToolName(toolName: string): string {
+export function legacyProviderSafeToolName(toolName: string): string {
 	const suffix = `_${fnv1aHex(toolName)}`;
 	const base = toolName.replace(/[^a-zA-Z0-9_-]/gu, "_") || "tool";
 	return `${base.slice(0, 64 - suffix.length)}${suffix}`;
+}
+
+/**
+ * OpenAI-compatible providers only accept function names matching `^[a-zA-Z0-9_-]{1,64}$`.
+ * Clean `<pluginId>.<tool>` names map directly to `<pluginId>_<tool>` without an opaque 8-char
+ * hash suffix unless truncation (`> 64` chars), unusual characters, or explicit collision
+ * disambiguation requires the deterministic hash suffix.
+ */
+export function providerSafeToolName(
+	toolName: string,
+	options?: { readonly disambiguate?: boolean },
+): string {
+	const base = toolName.replace(/[^a-zA-Z0-9_-]/gu, "_") || "tool";
+	if (
+		options?.disambiguate !== true &&
+		base.length <= 64 &&
+		/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/u.test(toolName)
+	) {
+		return base;
+	}
+	return legacyProviderSafeToolName(toolName);
+}
+
+/**
+ * Known built-in plugin prefixes. A provider-safe name replaces `.` with `_`, so without a
+ * tool catalog a multi-word plugin id (`onebot-napcat_send`) is ambiguous with a tool id that
+ * itself contains underscores. Matching known prefixes first keeps the static fallback stable
+ * for the built-in tool families while still supporting arbitrary third-party names below.
+ */
+const STATIC_TOOL_PREFIXES = [
+	"proactive-scheduler",
+	"openai-compatible",
+	"self-iteration",
+	"onebot-napcat",
+	"sticker-meme",
+	"search-fetch",
+	"memory",
+] as const;
+
+/**
+ * Resolve a canonical tool name (`onebot-napcat.send`), clean provider-safe name
+ * (`onebot-napcat_send`), double-underscore alias (`onebot_napcat__send`), or legacy
+ * hash-suffixed name (`onebot-napcat_send_9fa1ce39`) back to the canonical tool name.
+ */
+export function resolveToolName(
+	name: string,
+	tools?: Iterable<PluginTool | string>,
+): string | undefined {
+	const trimmed = name.trim();
+	if (trimmed.length === 0) return undefined;
+	if (tools !== undefined) {
+		for (const entry of tools) {
+			const canonical = typeof entry === "string" ? entry : entry.name;
+			if (
+				canonical === trimmed ||
+				providerSafeToolName(canonical) === trimmed ||
+				legacyProviderSafeToolName(canonical) === trimmed ||
+				canonical.replace(/\./gu, "__").replace(/-/gu, "_") ===
+					trimmed.replace(/\./gu, "__").replace(/-/gu, "_")
+			) {
+				return canonical;
+			}
+		}
+		return undefined;
+	}
+	const strippedLegacy = trimmed.replace(/_[0-9a-f]{8}$/u, "");
+	if (strippedLegacy.includes(".")) return strippedLegacy;
+	for (const prefix of STATIC_TOOL_PREFIXES) {
+		const variants = [prefix, prefix.replace(/-/gu, "_")];
+		for (const variant of variants) {
+			for (const delimiter of ["__", "_"]) {
+				if (!strippedLegacy.startsWith(`${variant}${delimiter}`)) continue;
+				const tool = strippedLegacy.slice(variant.length + delimiter.length);
+				if (tool.length > 0) return `${prefix}.${tool}`;
+			}
+		}
+	}
+	if (strippedLegacy.includes("__")) {
+		const [prefix, ...rest] = strippedLegacy.split("__");
+		if (prefix && rest.length > 0) return `${prefix.replace(/_/gu, "-")}.${rest.join("_")}`;
+	}
+	const underscoreIndex = strippedLegacy.indexOf("_");
+	if (underscoreIndex > 0 && !strippedLegacy.includes(".")) {
+		return `${strippedLegacy.slice(0, underscoreIndex)}.${strippedLegacy.slice(underscoreIndex + 1)}`;
+	}
+	return strippedLegacy;
 }
 
 function fnv1aHex(value: string): string {
@@ -870,7 +954,11 @@ export function createPluginToolsExtension(
 ): PluginToolsExtension {
 	const registrations = new Map<
 		string,
-		{ readonly tool: PluginTool; readonly registration: PluginToolRegistration }
+		{
+			readonly disambiguate: boolean;
+			readonly tool: PluginTool;
+			readonly registration: PluginToolRegistration;
+		}
 	>();
 
 	const audit = async (entry: AuditEntry): Promise<void> => {
@@ -901,9 +989,11 @@ export function createPluginToolsExtension(
 			? options.policyContext(tool, context)
 			: (options.policyContext ?? {});
 
-	const registrationFor = (tool: PluginTool): PluginToolRegistration => {
+	const registrationFor = (tool: PluginTool, disambiguate = false): PluginToolRegistration => {
 		const existing = registrations.get(tool.name);
-		if (existing?.tool === tool) return existing.registration;
+		if (existing?.tool === tool && existing.disambiguate === disambiguate) {
+			return existing.registration;
+		}
 		const resolvedPolicy = resolveToolPolicy(tool);
 		const registration: PluginToolRegistration = {
 			description: tool.description,
@@ -948,6 +1038,18 @@ export function createPluginToolsExtension(
 					invocationContext.allowedTools;
 				const effectiveInvocationContext: ToolInvocationContext = {
 					...invocationContext,
+					...(resolvedPolicyContext.platformConversationId === undefined
+						? {}
+						: { platformConversationId: resolvedPolicyContext.platformConversationId }),
+					...(resolvedPolicyContext.chatKind === undefined
+						? {}
+						: { chatKind: resolvedPolicyContext.chatKind }),
+					...(resolvedPolicyContext.channelId === undefined
+						? {}
+						: { channelId: resolvedPolicyContext.channelId }),
+					...(resolvedPolicyContext.senderPlatformId === undefined
+						? {}
+						: { senderPlatformId: resolvedPolicyContext.senderPlatformId }),
 					...(resolvedPolicyContext.userId === undefined
 						? {}
 						: { userId: resolvedPolicyContext.userId }),
@@ -1075,7 +1177,17 @@ export function createPluginToolsExtension(
 						tool: tool.name,
 					});
 					return {
-						output: outcome.result.content.map((part) => ({ text: part.text, type: "text" })),
+						output: [
+							...outcome.result.content.map((part) => ({
+								text: part.text,
+								type: "text" as const,
+							})),
+							...(outcome.result.images ?? []).map((image) => ({
+								data: image.data,
+								mimeType: image.mimeType,
+								type: "image" as const,
+							})),
+						],
 					};
 				} catch (error) {
 					const message = errorText(error);
@@ -1108,10 +1220,10 @@ export function createPluginToolsExtension(
 					release?.();
 				}
 			},
-			name: providerSafeToolName(tool.name),
+			name: providerSafeToolName(tool.name, { disambiguate }),
 			parameters: tool.parameters,
 		};
-		registrations.set(tool.name, { registration, tool });
+		registrations.set(tool.name, { disambiguate, registration, tool });
 		return registration;
 	};
 
@@ -1126,7 +1238,8 @@ export function createPluginToolsExtension(
 				return [];
 			}
 			const names = new Set<string>();
-			const tools: PluginToolRegistration[] = [];
+			const filtered: PluginTool[] = [];
+			const safeNameCounts = new Map<string, number>();
 			for (const tool of current) {
 				if (names.has(tool.name)) {
 					warn(options.logger, `duplicate plugin tool name ${tool.name}`);
@@ -1136,8 +1249,15 @@ export function createPluginToolsExtension(
 					continue;
 				}
 				names.add(tool.name);
-				tools.push(registrationFor(tool));
+				filtered.push(tool);
+				const cleanName = providerSafeToolName(tool.name);
+				safeNameCounts.set(cleanName, (safeNameCounts.get(cleanName) ?? 0) + 1);
 			}
+			const tools = filtered.map((tool) => {
+				const cleanName = providerSafeToolName(tool.name);
+				const disambiguate = (safeNameCounts.get(cleanName) ?? 0) > 1;
+				return registrationFor(tool, disambiguate);
+			});
 			for (const name of registrations.keys()) {
 				if (!names.has(name)) registrations.delete(name);
 			}

@@ -215,7 +215,7 @@ export function registerProactiveSchedulerTools(
 		},
 		policy: {
 			conversationAllowlist: true,
-			lazy: true,
+			lazy: false,
 			maxConcurrent: 2,
 			maxPayloadBytes: 16_384,
 			surface: "both",
@@ -268,7 +268,7 @@ export function registerProactiveSchedulerTools(
 		},
 		policy: {
 			conversationAllowlist: true,
-			lazy: true,
+			lazy: false,
 			maxConcurrent: 4,
 			maxPayloadBytes: 4_096,
 			surface: "both",
@@ -331,7 +331,7 @@ export function registerProactiveSchedulerTools(
 		policy: {
 			conversationAllowlist: true,
 			destructive: true,
-			lazy: true,
+			lazy: false,
 			maxConcurrent: 2,
 			maxPayloadBytes: 4_096,
 			surface: "both",

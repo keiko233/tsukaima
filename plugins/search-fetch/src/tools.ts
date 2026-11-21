@@ -168,7 +168,7 @@ export function registerSearchFetchTools(
 			type: "object",
 		},
 		policy: {
-			lazy: true,
+			lazy: false,
 			maxConcurrent: 2,
 			maxPayloadBytes: 2_048,
 			surface: "both",
@@ -381,7 +381,7 @@ export function registerSearchFetchTools(
 		},
 		policy: {
 			conversationAllowlist: true,
-			lazy: true,
+			lazy: false,
 			maxConcurrent: 2,
 			maxPayloadBytes: 4_096,
 			surface: "both",

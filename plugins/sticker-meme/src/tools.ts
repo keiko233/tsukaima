@@ -97,13 +97,86 @@ export function registerStickerTools(
 			type: "object",
 		},
 		policy: {
-			lazy: true,
+			lazy: false,
 			maxConcurrent: 4,
 			maxPayloadBytes: 4_096,
 			surface: "chat",
 			timeoutMs: 10_000,
 		},
 		requiredPermissions: ["media.read"],
+	});
+	context.tools.register({
+		description:
+			"Select and prepare (or directly send) the best matching approved sticker in one step by query, emotion, itemId, packId, or tags. Returns a ready-to-use [[sticker:<token>]] directive (or inline [表情:<query>] marker) so you do not need a separate search -> choose two-step round.",
+		async execute(input, invocation) {
+			const startedAt = Date.now();
+			const conversationId = invocation.conversationId;
+			if (conversationId === undefined || conversationId.trim().length === 0) {
+				log.debug("sticker tool rejected", {
+					durationMs: elapsedMs(startedAt),
+					reason: "missing_conversation",
+					tool: "sticker-meme.send",
+				});
+				return text("A conversation is required to send a sticker.");
+			}
+			const itemId = asString(input, "itemId");
+			const search = searchInput(input);
+			traceLog(log, "sticker tool invoked", {
+				...search,
+				itemId: itemId ?? null,
+				tool: "sticker-meme.send",
+			});
+			const { choose, item, pack } = await selection.resolveForSend({
+				...search,
+				conversationId,
+				...(itemId === undefined ? {} : { itemId }),
+			});
+			log.debug("sticker tool completed", {
+				chosenId: choose.itemId,
+				durationMs: elapsedMs(startedAt),
+				tokenIssued: true,
+				tool: "sticker-meme.send",
+			});
+			return text(
+				JSON.stringify({
+					...choose,
+					inlineMarker: `[表情:${item.name}]`,
+					name: item.name,
+					packId: pack.id,
+					packName: pack.name,
+				}),
+			);
+		},
+		lazy: false,
+		name: "sticker-meme.send",
+		parameters: {
+			properties: {
+				emotion: {
+					description:
+						"Emotion id or natural-language alias, for example happy or 开心. Comma-separate to allow any of several.",
+					type: "string",
+				},
+				itemId: { type: "string" },
+				packId: { type: "string" },
+				personaId: { type: "string" },
+				query: {
+					description:
+						"Any of several names, characters, emotions, or keywords. Separate alternatives with spaces or commas.",
+					type: "string",
+				},
+				tags: { items: { type: "string" }, type: "array" },
+			},
+			type: "object",
+		},
+		policy: {
+			conversationAllowlist: true,
+			lazy: false,
+			maxConcurrent: 4,
+			maxPayloadBytes: 4_096,
+			surface: "chat",
+			timeoutMs: 15_000,
+		},
+		requiredPermissions: ["media.read", "conversation.read"],
 	});
 	context.tools.register({
 		description:

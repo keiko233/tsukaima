@@ -1,5 +1,29 @@
+import { legacyProviderSafeToolName, providerSafeToolName } from "./bridges.ts";
 import { hasPermission, type PluginPermission } from "./permissions.ts";
 import type { PluginTool, ToolInvocationContext, ToolPolicy, ToolSurface } from "./types.ts";
+
+/**
+ * High-frequency IM chat tools loaded eagerly (`lazy: false`) so ordinary turns do not waste a
+ * `tool_search` discovery round. Destructive group-admin, account-management, and rare
+ * diagnostic tools remain deferred (`lazy: true`).
+ */
+export const CURATED_EAGER_CHAT_TOOLS: ReadonlySet<string> = new Set([
+	"onebot-napcat.send",
+	"onebot-napcat.readHistory",
+	"onebot-napcat.viewImage",
+	"onebot-napcat.poke",
+	"onebot-napcat.react",
+	"onebot-napcat.listTargets",
+	"sticker-meme.send",
+	"sticker-meme.search",
+	"search-fetch.web",
+	"search-fetch.fetch",
+	"memory.recall",
+	"memory.save",
+	"proactive-scheduler.schedule",
+	"proactive-scheduler.list",
+	"proactive-scheduler.cancel",
+]);
 
 export const DEFAULT_TOOL_POLICY: ToolPolicy = Object.freeze({
 	lazy: true,
@@ -12,10 +36,11 @@ export const DEFAULT_TOOL_POLICY: ToolPolicy = Object.freeze({
 /** Fill safe defaults for a tool registration that omitted `policy`. */
 export function resolveToolPolicy(tool: PluginTool): ToolPolicy {
 	const policy = tool.policy ?? {};
+	const defaultLazy = !CURATED_EAGER_CHAT_TOOLS.has(tool.name);
 	return {
 		...DEFAULT_TOOL_POLICY,
 		...policy,
-		lazy: tool.lazy ?? policy.lazy ?? policy.deferred ?? true,
+		lazy: tool.lazy ?? policy.lazy ?? policy.deferred ?? defaultLazy,
 		maxConcurrent: Math.max(
 			1,
 			Math.floor(policy.maxConcurrent ?? DEFAULT_TOOL_POLICY.maxConcurrent),
@@ -46,8 +71,19 @@ export interface ToolPolicyDecision {
 }
 
 function allowlistMatches(toolName: string, allowlist: readonly string[]): boolean {
+	const cleanSafe = providerSafeToolName(toolName);
+	const legacySafe = legacyProviderSafeToolName(toolName);
+	const doubleUnderscore = toolName.replace(/\./gu, "__").replace(/-/gu, "_");
 	return allowlist.some((entry) => {
-		if (entry === "*" || entry === toolName) return true;
+		if (
+			entry === "*" ||
+			entry === toolName ||
+			entry === cleanSafe ||
+			entry === legacySafe ||
+			entry.replace(/\./gu, "__").replace(/-/gu, "_") === doubleUnderscore
+		) {
+			return true;
+		}
 		if (entry.endsWith(".*")) return toolName.startsWith(`${entry.slice(0, -2)}.`);
 		return false;
 	});
