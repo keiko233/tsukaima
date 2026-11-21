@@ -92,7 +92,9 @@ export function buildUndirectedGroupPrompt(
 	const recent = (input.recentContext ?? []).slice(-6).map((line) => `- ${clip(line)}`);
 	return [
 		"Decide whether the assistant should join this undirected group message or stay quiet.",
-		"Choose SKIP unless the assistant is clearly invited by context or has something genuinely helpful to add.",
+		input.requireDirectAddress
+			? "Choose REPLY only if the latest speaker is addressing the assistant. Second-person wording is a clue, not proof. Choose SKIP when they address someone else or the addressee is unclear."
+			: "Choose SKIP unless the assistant is clearly invited by context or has something genuinely helpful to add.",
 		...(recent.length > 0 ? ["Recent group context:", ...recent] : []),
 		`Latest message from ${clip(input.senderName, 60)}: ${clip(input.messageText)}`,
 		...(structured

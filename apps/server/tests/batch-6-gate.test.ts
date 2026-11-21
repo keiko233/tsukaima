@@ -111,6 +111,42 @@ async function outboundCount(
 }
 
 describe("Batch 6 pre-model gate acceptance", () => {
+	test("checks implicit address in an idle group without enabling ambient replies", async () => {
+		const addressed: (boolean | undefined)[] = [];
+		const lifecycle = await createLifecycle(
+			{
+				decideBurstCompletion: async () => ({ decision: "SEND", source: "fallback" }),
+				decideProactiveBubble: async () => ({ decision: "SHOULD", source: "fallback" }),
+				decideUndirectedGroupReply: async (input) => {
+					addressed.push(input.requireDirectAddress);
+					return addressed.length === 1
+						? { decision: "SKIP", source: "gate" }
+						: { decision: "REPLY", source: "gate" };
+				},
+			},
+			() => {},
+		);
+		try {
+			const group = await createGroupSession(lifecycle);
+			await enableGate(lifecycle, group.sessionId);
+			const ambient = await lifecycle.conversationRouter.ingest(
+				groupEnvelope("idle-news", "今天的活动开始了。"),
+			);
+			const other = await lifecycle.conversationRouter.ingest(
+				groupEnvelope("idle-other-addressee", "小林，你带了纸笔吗？"),
+			);
+			const direct = await lifecycle.conversationRouter.ingest(
+				groupEnvelope("idle-bot-addressee", "你能帮我整理这段笔记吗？"),
+			);
+			expect(ambient.classification).toBe("ambient");
+			expect(other.classification).toBe("ambient");
+			expect(direct.classification).toBe("soft");
+			expect(addressed).toEqual([true, true]);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
 	test("an opted-in idle group can start a soft turn only after a positive decision", async () => {
 		let decisions = 0;
 		const lifecycle = await createLifecycle(

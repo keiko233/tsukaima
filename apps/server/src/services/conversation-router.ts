@@ -317,9 +317,15 @@ export class ConversationRouter {
 			let effectiveTrigger = trigger;
 			let replyGate: InboundReplyDecision["gate"];
 			const gate = this.#conversationGate?.();
+			const text = messageText(message.parts);
+			const couldAddressBot =
+				!trigger.peerBotSpeaking &&
+				message.mentions.length === 0 &&
+				message.source.replyToEnvelopeId === undefined &&
+				/(?:[你您妳]|\b(?:you|your|yours)\b)/iu.test(text);
+			const allowAmbientReply = policy.gate.ambientGroupReply && !recentlyActive;
 			const classifyAmbient =
-				policy.gate.ambientGroupReply &&
-				!recentlyActive &&
+				(allowAmbientReply || couldAddressBot) &&
 				trigger.classification === "ambient" &&
 				trigger.reason === "group context only";
 			if (
@@ -351,9 +357,10 @@ export class ConversationRouter {
 					});
 				const gateDecision = await gate.decideUndirectedGroupReply({
 					conversationId: target.sessionId,
-					messageText: messageText(message.parts),
+					messageText: text,
 					policy: policy.gate,
 					recentContext,
+					...(classifyAmbient && !allowAmbientReply ? { requireDirectAddress: true } : {}),
 					senderName: message.sender.displayName,
 				});
 				replyGate = gateDecision;
@@ -475,7 +482,9 @@ export class ConversationRouter {
 							? escalation === "off"
 								? "recent activity escalation disabled"
 								: "recent activity escalation throttled"
-							: trigger.reason,
+							: classifyAmbient && effectiveTrigger.classification === "soft"
+								? effectiveTrigger.reason
+								: trigger.reason,
 				},
 				sender,
 				target,

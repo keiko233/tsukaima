@@ -30,6 +30,7 @@ export interface UndirectedGroupGateInput {
 	readonly messageText: string;
 	readonly policy: ConversationGatePolicy;
 	readonly recentContext?: readonly string[];
+	readonly requireDirectAddress?: boolean;
 	readonly senderName: string;
 }
 
