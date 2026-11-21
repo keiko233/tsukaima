@@ -246,7 +246,7 @@ describe("upstream upgrade service", () => {
 		expect(git(local, ["show", "HEAD:VERSION"]).trim()).toBe("1.0.0");
 	});
 
-	test("finalizes a verified workspace proposal and preserves the merge identity", async () => {
+	test("finalizes a verified workspace proposal once and preserves the merge identity", async () => {
 		const { coding, database, local, seed, service, restarts } = await repository();
 		await writeGitIdentity(database, {
 			email: "synthetic-bot@example.test",
@@ -263,8 +263,13 @@ describe("upstream upgrade service", () => {
 		const started = await service.start({ autoFinalize: true });
 		expect(started.upgrade.status).toBe("ready");
 		const taskId = started.workspace?.taskId ?? "";
-		const finalized = await service.finalize();
-		expect(finalized.restart.mode).toBe("update");
+		const attempts = await Promise.allSettled([
+			service.finalize({ upgradeId: started.upgrade.id }),
+			service.finalize({ upgradeId: started.upgrade.id }),
+		]);
+		const completed = attempts.filter((attempt) => attempt.status === "fulfilled");
+		expect(completed).toHaveLength(1);
+		expect(completed[0]?.value.restart.mode).toBe("update");
 		expect(restarts).toHaveLength(1);
 		expect(git(local, ["merge-base", "--is-ancestor", "origin/main", "HEAD"]).trim()).toBe("");
 		expect(git(local, ["show", "HEAD:VERSION"]).trim()).toBe("1.4.0");

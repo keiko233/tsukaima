@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { RestartStatus, UpgradeCheck, UpgradeRecord } from "@tsukaima/contracts";
 import {
 	gitCredentialEnvironment,
@@ -382,17 +382,19 @@ export class UpgradeService {
 			throw new Error(`upgrade_not_finalizable:${row.status}`);
 		}
 		const requestedBy = input.requestedBy ?? "webui-admin";
-		// Workspace rows are approved by re-deriving and matching the exact worktree snapshot before
-		// any live git command. A pending proposal becomes `approved` only after those checks pass;
-		// a completed task without a verifiable proposal never replaces the live checkout.
-		const review =
-			row.mode === "workspace" ? await this.#reviewWorkspace(row, requestedBy) : undefined;
+		const review = row.mode === "workspace" ? await this.#reviewWorkspace(row) : undefined;
 		const now = Date.now();
-		await database
+		const [claimed] = await database
 			.update(runtimeUpgrades)
 			.set({ error: null, status: "merging", updatedAtMs: now })
-			.where(eq(runtimeUpgrades.id, row.id));
+			.where(and(eq(runtimeUpgrades.id, row.id), eq(runtimeUpgrades.status, row.status)))
+			.returning({ id: runtimeUpgrades.id });
+		if (claimed === undefined) throw new Error("upgrade_already_finalizing");
 		try {
+			if (review !== undefined) {
+				await this.#assertLiveCheckout(row);
+				await this.#approveWorkspaceReview(row, requestedBy, review);
+			}
 			await this.#merge(row, requestedBy, review);
 			const restart = await this.#restart.schedule({
 				delaySeconds: DEFAULT_UPGRADE_DELAY_SECONDS,
@@ -728,9 +730,9 @@ export class UpgradeService {
 
 	/**
 	 * Re-derive the worktree snapshot and match it against a reviewable proposal. Nothing in the
-	 * live checkout changes here; a pending proposal is marked approved only after every check.
+	 * live checkout changes here.
 	 */
-	async #reviewWorkspace(row: UpgradeRow, requestedBy: string): Promise<WorkspaceReview> {
+	async #reviewWorkspace(row: UpgradeRow): Promise<WorkspaceReview> {
 		if (row.workspaceSessionId === null) throw new Error("upgrade_workspace_missing");
 		if (row.taskId === null) throw new Error("upgrade_workspace_task_missing");
 		const status = await this.#workspace.status({ sessionId: row.workspaceSessionId });
@@ -776,6 +778,14 @@ export class UpgradeService {
 		const proposal = matching.reduce((latest, candidate) =>
 			candidate.updatedAtMs > latest.updatedAtMs ? candidate : latest,
 		);
+		return { branchName, proposal, worktreeHead };
+	}
+
+	async #approveWorkspaceReview(
+		row: UpgradeRow,
+		requestedBy: string,
+		{ proposal, worktreeHead }: WorkspaceReview,
+	): Promise<void> {
 		if (proposal.status === "pending_approval") {
 			await this.#coding.transitionProposal(proposal.id, "approved");
 			await this.#auditRecord({
@@ -783,7 +793,7 @@ export class UpgradeService {
 				actorId: requestedBy,
 				actorKind: "user",
 				payload: {
-					diffChecksum: evidence.diffChecksum,
+					diffChecksum: proposal.diffChecksum,
 					proposalId: proposal.id,
 					sourceRevision: worktreeHead,
 				},
@@ -797,7 +807,6 @@ export class UpgradeService {
 			upgradeId: row.id,
 			worktreeHead,
 		});
-		return { branchName, proposal, worktreeHead };
 	}
 
 	async #workspaceEvidence(
@@ -922,6 +931,7 @@ export class UpgradeService {
 		// Merge the exact commit that was reviewed, not a branch ref that a concurrent workspace
 		// turn could have moved after the snapshot check.
 		const identityArgs = gitIdentityArgs(await readGitIdentity(this.#db()));
+		await this.#assertLiveCheckout(row);
 		const merge = await this.#git(
 			[
 				...identityArgs,
