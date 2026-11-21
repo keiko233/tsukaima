@@ -132,6 +132,10 @@ describe("Batch 6 pre-model gate acceptance", () => {
 			const ambient = await lifecycle.conversationRouter.ingest(
 				groupEnvelope("idle-news", "今天的活动开始了。"),
 			);
+			const quoted = await lifecycle.conversationRouter.ingest({
+				...groupEnvelope("idle-quoted", "你带了纸笔吗？"),
+				target: { replyToEnvelopeId: "idle-news" },
+			});
 			const other = await lifecycle.conversationRouter.ingest(
 				groupEnvelope("idle-other-addressee", "小林，你带了纸笔吗？"),
 			);
@@ -139,6 +143,7 @@ describe("Batch 6 pre-model gate acceptance", () => {
 				groupEnvelope("idle-bot-addressee", "你能帮我整理这段笔记吗？"),
 			);
 			expect(ambient.classification).toBe("ambient");
+			expect(quoted.classification).toBe("ambient");
 			expect(other.classification).toBe("ambient");
 			expect(direct.classification).toBe("soft");
 			expect(addressed).toEqual([true, true]);

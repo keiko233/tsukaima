@@ -321,7 +321,7 @@ export class ConversationRouter {
 			const couldAddressBot =
 				!trigger.peerBotSpeaking &&
 				message.mentions.length === 0 &&
-				message.source.replyToEnvelopeId === undefined &&
+				message.target?.replyToEnvelopeId === undefined &&
 				/(?:[你您妳]|\b(?:you|your|yours)\b)/iu.test(text);
 			const allowAmbientReply = policy.gate.ambientGroupReply && !recentlyActive;
 			const classifyAmbient =
