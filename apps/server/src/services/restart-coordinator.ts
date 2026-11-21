@@ -37,6 +37,11 @@ export interface RestartCoordinatorOptions {
 		intent: RestartIntent,
 		outcome: RestartSettlementOutcome,
 	) => Promise<void> | void;
+	/**
+	 * Run before executing an update restart. If this throws, the restart is aborted,
+	 * marked failed, and the handler is not called.
+	 */
+	readonly prepareUpdate?: ((intent: RestartIntent) => Promise<void>) | undefined;
 }
 
 type RestartRow = typeof runtimeRestarts.$inferSelect;
@@ -92,6 +97,7 @@ export class RestartCoordinator {
 	readonly #logger: Logger;
 	readonly #now: () => number;
 	readonly #onSettled: RestartCoordinatorOptions["onSettled"];
+	readonly #prepareUpdate: ((intent: RestartIntent) => Promise<void>) | undefined;
 	#handler: ((intent: RestartIntent) => Promise<void> | void) | undefined;
 	#timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -102,6 +108,7 @@ export class RestartCoordinator {
 		this.#logger = options.logger.child("tsukaima::server::restart");
 		this.#now = options.now ?? Date.now;
 		this.#onSettled = options.onSettled;
+		this.#prepareUpdate = options.prepareUpdate;
 	}
 
 	#db(): TsukaimaDatabase {
@@ -404,6 +411,12 @@ export class RestartCoordinator {
 				reason: intent.reason,
 				restartId: id,
 			});
+			if (intent.mode === "update" && this.#prepareUpdate !== undefined) {
+				this.#logger.info("installing dependencies before update restart", {
+					restartId: id,
+				});
+				await this.#prepareUpdate(intent);
+			}
 			await this.#handler(intent);
 			await this.#hooks.cancelByDedupeKey(`runtime-restart:${id}`, "restart executed");
 			await database
@@ -418,13 +431,23 @@ export class RestartCoordinator {
 	async #markFailed(id: string, reason: string): Promise<void> {
 		const now = this.#now();
 		const row = await this.#row(id);
+		const existingMeta = row === undefined ? {} : parseMetadata(row.metadataJson);
+		const updatedMeta = JSON.stringify({ ...existingMeta, error: reason });
 		await this.#db()
 			.update(runtimeRestarts)
-			.set({ completedAtMs: now, status: "failed", updatedAtMs: now })
+			.set({
+				completedAtMs: now,
+				metadataJson: updatedMeta,
+				status: "failed",
+				updatedAtMs: now,
+			})
 			.where(eq(runtimeRestarts.id, id));
 		await this.#hooks.cancelByDedupeKey(`runtime-restart:${id}`, reason);
 		if (row !== undefined) {
-			await this.#settle({ ...row, status: "failed", completedAtMs: now }, "interrupted");
+			await this.#settle(
+				{ ...row, completedAtMs: now, metadataJson: updatedMeta, status: "failed" },
+				"interrupted",
+			);
 		}
 		this.#logger.error("runtime restart failed", { error: reason, restartId: id });
 	}
