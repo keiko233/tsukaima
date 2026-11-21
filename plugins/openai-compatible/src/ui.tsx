@@ -38,6 +38,12 @@ function stringValue(value: unknown): string {
 	return typeof value === "string" ? value : "";
 }
 
+function optionalNumber(raw: string, minimum: number, maximum: number): number | undefined {
+	const value = raw.trim().length === 0 ? Number.NaN : Number(raw);
+	if (!Number.isFinite(value)) return undefined;
+	return Math.min(maximum, Math.max(minimum, value));
+}
+
 function CapabilityButton({
 	active,
 	label,
@@ -68,8 +74,15 @@ function ModelCard({
 	const t = usePluginI18n();
 	const [contextWindow, setContextWindow] = useState(String(model.contextWindow));
 	const [maxOutputTokens, setMaxOutputTokens] = useState(String(model.maxOutputTokens));
+	const [temperature, setTemperature] = useState(model.temperature?.toString() ?? "");
+	const [topP, setTopP] = useState(model.topP?.toString() ?? "");
+	const [stopSequences, setStopSequences] = useState((model.stop ?? []).join(", "));
+	const [requestTimeoutMs, setRequestTimeoutMs] = useState(
+		model.requestTimeoutMs?.toString() ?? "",
+	);
 	const [customCapabilities, setCustomCapabilities] = useState(model.capabilities.join(", "));
 	const capabilitiesKey = model.capabilities.join("\u0000");
+	const stopKey = (model.stop ?? []).join("\u0000");
 	const capabilities = modelCapabilities(model).filter(
 		(capability) => !model.capabilities.includes(capability),
 	);
@@ -77,8 +90,52 @@ function ModelCard({
 	useEffect(() => {
 		setContextWindow(String(model.contextWindow));
 		setMaxOutputTokens(String(model.maxOutputTokens));
+		setTemperature(model.temperature?.toString() ?? "");
+		setTopP(model.topP?.toString() ?? "");
+		setStopSequences((model.stop ?? []).join(", "));
+		setRequestTimeoutMs(model.requestTimeoutMs?.toString() ?? "");
 		setCustomCapabilities(model.capabilities.join(", "));
-	}, [capabilitiesKey, model.contextWindow, model.maxOutputTokens]);
+	}, [
+		capabilitiesKey,
+		model.contextWindow,
+		model.maxOutputTokens,
+		model.temperature,
+		model.topP,
+		model.requestTimeoutMs,
+		stopKey,
+	]);
+
+	const updateTemperature = (raw: string) => {
+		const value = optionalNumber(raw, 0, 2);
+		const { temperature: _previous, ...rest } = model;
+		setTemperature(value === undefined ? "" : String(value));
+		onChange(value === undefined ? rest : { ...rest, temperature: value });
+	};
+	const updateTopP = (raw: string) => {
+		const value = optionalNumber(raw, 0.01, 1);
+		const { topP: _previous, ...rest } = model;
+		setTopP(value === undefined ? "" : String(value));
+		onChange(value === undefined ? rest : { ...rest, topP: value });
+	};
+	const updateStopSequences = (raw: string) => {
+		const values = [
+			...new Set(
+				raw
+					.split(",")
+					.map((entry) => entry.trim())
+					.filter((entry) => entry.length > 0),
+			),
+		].slice(0, 4);
+		const { stop: _previous, ...rest } = model;
+		setStopSequences(values.join(", "));
+		onChange(values.length === 0 ? rest : { ...rest, stop: values });
+	};
+	const updateRequestTimeout = (raw: string) => {
+		const value = optionalNumber(raw, 1_000, 600_000);
+		const { requestTimeoutMs: _previous, ...rest } = model;
+		setRequestTimeoutMs(value === undefined ? "" : String(value));
+		onChange(value === undefined ? rest : { ...rest, requestTimeoutMs: Math.round(value) });
+	};
 
 	return (
 		<div className="rounded-xl border border-border bg-background/40 p-3">
@@ -207,6 +264,45 @@ function ModelCard({
 								onChange({ ...model, maxOutputTokens: value });
 							}}
 							onChange={setMaxOutputTokens}
+						/>
+					</Field>
+					<Field label={t.t("temperature")}>
+						<Input
+							type="number"
+							min={0}
+							max={2}
+							step={0.05}
+							value={temperature}
+							onBlur={() => updateTemperature(temperature)}
+							onChange={setTemperature}
+						/>
+					</Field>
+					<Field label={t.t("top_p")}>
+						<Input
+							type="number"
+							min={0.01}
+							max={1}
+							step={0.01}
+							value={topP}
+							onBlur={() => updateTopP(topP)}
+							onChange={setTopP}
+						/>
+					</Field>
+					<Field hint={t.t("stop_sequences_hint")} label={t.t("stop_sequences")}>
+						<Input
+							value={stopSequences}
+							onBlur={() => updateStopSequences(stopSequences)}
+							onChange={setStopSequences}
+						/>
+					</Field>
+					<Field hint={t.t("request_timeout_hint")} label={t.t("request_timeout")}>
+						<Input
+							type="number"
+							min={1_000}
+							max={600_000}
+							value={requestTimeoutMs}
+							onBlur={() => updateRequestTimeout(requestTimeoutMs)}
+							onChange={setRequestTimeoutMs}
 						/>
 					</Field>
 					<Field

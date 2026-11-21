@@ -127,6 +127,19 @@ function snippet(text: string, limit: number): string {
 	return text.replace(/\s+/gu, " ").trim().slice(0, limit);
 }
 
+/** Raw notice metadata identifies a poke addressed to the bot. */
+function isSelfPokeNotice(rawRefJson: string | null): boolean {
+	if (rawRefJson === null) return false;
+	try {
+		const parsed: unknown = JSON.parse(rawRefJson);
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+		const notice = parsed as { isSelfTarget?: unknown; noticeType?: unknown };
+		return notice.noticeType === "poke" && notice.isSelfTarget === true;
+	} catch {
+		return false;
+	}
+}
+
 function observationSpeaker(displayName: string | null, platformId: string | null): string {
 	const name = displayName?.trim() || platformId?.trim() || "Unknown";
 	const id = platformId?.trim();
@@ -628,11 +641,22 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			sessionId,
 			this.#observationLimit + excludeIds.size,
 		);
+		let observePokes = false;
+		try {
+			observePokes = (await this.#policyService.effectivePolicy(sessionId)).notices.pokeObserve;
+		} catch {}
 		const visible = rows
 			.filter((row) => {
-				if (excludeIds.size === 0) return true;
-				if (row.id.length > 0 && excludeIds.has(row.id)) return false;
-				return row.platformMessageId === null || !excludeIds.has(row.platformMessageId);
+				if (excludeIds.size > 0) {
+					if (row.id.length > 0 && excludeIds.has(row.id)) return false;
+					if (row.platformMessageId !== null && excludeIds.has(row.platformMessageId)) {
+						return false;
+					}
+				}
+				if (row.direction !== "system") return true;
+				// A self-poke is the only system notice the model may observe, and only while the
+				// conversation policy enables poke observation.
+				return observePokes && row.kind === "notice" && isSelfPokeNotice(row.rawRefJson);
 			})
 			.slice(-this.#observationLimit);
 		const lines: string[] = [];
@@ -799,8 +823,10 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			contentText: string | null;
 			direction: string;
 			id: string;
+			kind: string;
 			occurredAt: string;
 			platformMessageId: string | null;
+			rawRefJson: string | null;
 			senderDisplayName: string | null;
 			senderExternalId: string | null;
 		}[]
@@ -830,8 +856,10 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				contentText: messages.contentText,
 				direction: messages.direction,
 				id: messages.id,
+				kind: messages.kind,
 				occurredAt: messages.occurredAt,
 				platformMessageId: messages.platformMessageId,
+				rawRefJson: messages.rawRefJson,
 				senderDisplayName: messages.senderDisplayName,
 				senderExternalId: messages.senderExternalId,
 			})

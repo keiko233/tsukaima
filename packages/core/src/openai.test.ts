@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-ai";
 import {
 	createOpenAICompatibleStreams,
+	OpenAIRequestTimeoutError,
 	type ModelCapability,
 	ModelPolicyRouter,
 	ModelUsageLedger,
@@ -450,6 +451,126 @@ describe("OpenAI-compatible provider", () => {
 				role: "user",
 			},
 		]);
+	});
+
+	test("serializes temperature, top_p, and stop from request options and model defaults", async () => {
+		const fetch = mock(async () => textResponse()) as unknown as FetchMock;
+		const streams = createOpenAICompatibleStreams(
+			{
+				apiKey: "test-key",
+				baseUrl: "https://model.example/v1",
+				fetch: fetch as unknown as FetchFunction,
+			},
+			[{ modelId: model.id, stop: ["MODEL-END"], temperature: 0.4, topP: 0.8 }],
+		);
+		for await (const event of streams.stream(
+			model,
+			normalizeContext({ messages: [{ content: "hi", role: "user", timestamp: 1 }] }),
+			{ samplingParams: { stop: ["REQUEST-STOP"], top_p: 0.9 }, temperature: 0.6 },
+		)) {
+			void event;
+		}
+		const request = (fetch.mock.calls[0] as [string, RequestInit])[1];
+		const body = JSON.parse(request.body as string);
+		expect(body.temperature).toBe(0.6);
+		expect(body.top_p).toBe(0.9);
+		expect(body.stop).toEqual(["REQUEST-STOP"]);
+
+		for await (const event of streams.stream(
+			model,
+			normalizeContext({ messages: [{ content: "again", role: "user", timestamp: 1 }] }),
+		)) {
+			void event;
+		}
+		const defaults = JSON.parse(
+			((fetch.mock.calls[1] as [string, RequestInit])[1].body as string) ?? "{}",
+		);
+		expect(defaults.temperature).toBe(0.4);
+		expect(defaults.top_p).toBe(0.8);
+		expect(defaults.stop).toEqual(["MODEL-END"]);
+	});
+
+	test("aborts headers that never arrive and reports an OpenAIRequestTimeoutError", async () => {
+		let abortReason: unknown;
+		const fetch = mock(async (_input: string, init?: RequestInit) => {
+			init?.signal?.addEventListener(
+				"abort",
+				() => {
+					abortReason = init.signal?.reason;
+				},
+				{ once: true },
+			);
+			return await new Promise<Response>(() => {});
+		}) as unknown as FetchMock;
+		const streams = createOpenAICompatibleStreams(
+			{
+				apiKey: "test-key",
+				baseUrl: "https://model.example/v1",
+				fetch: fetch as unknown as FetchFunction,
+			},
+			[{ modelId: model.id, requestTimeoutMs: 20 }],
+		);
+		const startedAt = Date.now();
+		const events = await expectErrorStream(streams.stream);
+		expect(Date.now() - startedAt).toBeLessThan(1_000);
+		expect(abortReason).toBeInstanceOf(OpenAIRequestTimeoutError);
+		expect(abortReason).toMatchObject({ phase: "response", timeoutMs: 20 });
+		expect(events.at(-1)).toMatchObject({
+			error: {
+				errorMessage: expect.stringContaining("timed out after 20ms"),
+				stopReason: "error",
+			},
+			reason: "error",
+		});
+	});
+
+	test("aborts a stalled SSE stream and reports a retryable timeout", async () => {
+		let abortReason: unknown;
+		const encoder = new TextEncoder();
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(
+					encoder.encode(sseData({ choices: [{ delta: { content: "partial answer" } }] })),
+				);
+			},
+		});
+		const fetch = mock(async (_input: string, init?: RequestInit) => {
+			init?.signal?.addEventListener(
+				"abort",
+				() => {
+					abortReason = init.signal?.reason;
+				},
+				{ once: true },
+			);
+			return new Response(body, { headers: { "content-type": "text/event-stream" } });
+		}) as unknown as FetchMock;
+		const streams = createOpenAICompatibleStreams(
+			{
+				apiKey: "test-key",
+				baseUrl: "https://model.example/v1",
+				fetch: fetch as unknown as FetchFunction,
+			},
+			[{ modelId: model.id, requestTimeoutMs: 20 }],
+		);
+		const events = [];
+		for await (const event of streams.stream(
+			model,
+			normalizeContext({ messages: [{ content: "hi", role: "user", timestamp: 1 }] }),
+		)) {
+			events.push(event);
+		}
+		expect(abortReason).toBeInstanceOf(OpenAIRequestTimeoutError);
+		expect(abortReason).toMatchObject({ phase: "stream", timeoutMs: 20 });
+		expect(
+			events.some((event) => event.type === "text_delta" && event.delta === "partial answer"),
+		).toBe(true);
+		expect(events.at(-1)).toMatchObject({
+			error: {
+				errorMessage: expect.stringContaining("stalled for 20ms"),
+				stopReason: "error",
+			},
+			reason: "error",
+		});
 	});
 
 	test("accounts for input, output, cache-read, and routed usage", () => {

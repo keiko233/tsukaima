@@ -222,6 +222,29 @@ export function PolicyPacingFields({ draft, onChange }: PolicyFieldsProps) {
 				</Field>
 			</div>
 
+			<div className="grid grid-cols-2 gap-2.5">
+				<Field label={m.policy_active_burst_window()}>
+					<input
+						type="number"
+						min={0}
+						className={fieldClass}
+						value={draft.pacing.activeBurstWindowMs}
+						onChange={(event) => updatePacing({ activeBurstWindowMs: Number(event.target.value) })}
+					/>
+				</Field>
+				<Field label={m.policy_narration_interval()}>
+					<input
+						type="number"
+						min={0}
+						className={fieldClass}
+						value={draft.pacing.narrationMinIntervalMs}
+						onChange={(event) =>
+							updatePacing({ narrationMinIntervalMs: Number(event.target.value) })
+						}
+					/>
+				</Field>
+			</div>
+
 			<Field label={m.policy_max_immediate()}>
 				<input
 					type="number"
@@ -235,6 +258,19 @@ export function PolicyPacingFields({ draft, onChange }: PolicyFieldsProps) {
 			</Field>
 
 			<div className="space-y-2 border-t border-border/60 pt-2.5">
+				<Toggle
+					checked={draft.pacing.directFlushEnabled}
+					label={m.policy_direct_flush()}
+					onChange={(value) => updatePacing({ directFlushEnabled: value })}
+				/>
+				<p className="text-[11px] leading-4 text-muted-foreground">
+					{m.policy_direct_flush_hint()}
+				</p>
+				<Toggle
+					checked={draft.pacing.narrationEnabled}
+					label={m.policy_narration()}
+					onChange={(value) => updatePacing({ narrationEnabled: value })}
+				/>
 				<Toggle
 					checked={draft.pacing.typingEnabled}
 					label={m.policy_typing()}
@@ -405,6 +441,98 @@ export function PolicySidechatFields({
 					/>
 				</Field>
 			</div>
+		</>
+	);
+}
+
+export function PolicyGenerationFields({ draft, onChange }: PolicyFieldsProps) {
+	const updateGeneration = (patch: Partial<ConversationPolicy["generation"]>) => {
+		onChange((current) => ({
+			...current,
+			generation: { ...current.generation, ...patch },
+		}));
+	};
+	const updateOptionalNumber = (key: "temperature" | "topP", raw: string) => {
+		onChange((current) => {
+			const next = { ...current.generation };
+			const parsed = raw.trim().length === 0 ? undefined : Number(raw);
+			if (parsed === undefined || !Number.isFinite(parsed)) delete next[key];
+			else next[key] = parsed;
+			return { ...current, generation: next };
+		});
+	};
+	return (
+		<>
+			<p className="text-[11px] leading-4 text-muted-foreground">{m.policy_generation_hint()}</p>
+			<div className="grid grid-cols-2 gap-2.5">
+				<Field label={m.policy_length_truncation()}>
+					<select
+						className={fieldClass}
+						value={draft.generation.lengthTruncation}
+						onChange={(event) =>
+							updateGeneration({
+								lengthTruncation: event.target
+									.value as ConversationPolicy["generation"]["lengthTruncation"],
+							})
+						}
+					>
+						<option value="continue">{m.policy_length_truncation_continue()}</option>
+						<option value="surface">{m.policy_length_truncation_surface()}</option>
+					</select>
+				</Field>
+				<Field label={m.policy_max_length_continuations()}>
+					<input
+						type="number"
+						min={0}
+						max={3}
+						className={fieldClass}
+						value={draft.generation.maxLengthContinuations}
+						onChange={(event) =>
+							updateGeneration({ maxLengthContinuations: Number(event.target.value) })
+						}
+					/>
+				</Field>
+			</div>
+			<div className="grid grid-cols-2 gap-2.5">
+				<Field label={m.policy_temperature()}>
+					<input
+						type="number"
+						min={0}
+						max={2}
+						step={0.05}
+						className={fieldClass}
+						value={draft.generation.temperature ?? ""}
+						placeholder="0.7"
+						onChange={(event) => updateOptionalNumber("temperature", event.target.value)}
+					/>
+				</Field>
+				<Field label={m.policy_top_p()}>
+					<input
+						type="number"
+						min={0.01}
+						max={1}
+						step={0.01}
+						className={fieldClass}
+						value={draft.generation.topP ?? ""}
+						placeholder="1"
+						onChange={(event) => updateOptionalNumber("topP", event.target.value)}
+					/>
+				</Field>
+			</div>
+			<Field label={m.policy_stop_sequences()} hint={m.policy_stop_sequences_hint()}>
+				<textarea
+					className={textareaClass}
+					value={(draft.generation.stop ?? []).join("\n")}
+					onChange={(event) => {
+						const values = event.target.value
+							.split(/\n/u)
+							.map((entry) => entry.trim())
+							.filter((entry) => entry.length > 0)
+							.slice(0, 4);
+						updateGeneration({ stop: values.length === 0 ? undefined : values });
+					}}
+				/>
+			</Field>
 		</>
 	);
 }

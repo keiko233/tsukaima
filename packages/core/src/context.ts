@@ -22,6 +22,15 @@ import {
 import { durableDocumentKinds } from "@tsukaima/contracts";
 
 /**
+ * Durable user message pi-durable appends when an answer stopped on its output token limit and
+ * the chat run requests an automatic continuation. It stays in the transcript because the model
+ * needs it as the instruction it is continuing from; activity-window scans ignore it, and
+ * {@link isFinalAnswer} treats the cut answer before it as non-final for turn-context purposes.
+ */
+export const LENGTH_CONTINUATION_PROMPT =
+	"Your previous message was cut off by the output limit. Continue exactly where it stopped, without repeating anything.";
+
+/**
  * Transient per-turn routing information captured when an input is admitted. It is stored on
  * the durable activity envelope (so recovery replays the same turn context) but is never
  * rendered into the durable user message: only the ephemeral turn-context layer reads it.
@@ -249,11 +258,26 @@ function envelopeInput(envelope: unknown): TurnContextInput | undefined {
 	};
 }
 
-function isFinalAnswer(entry: EntryRecord): boolean {
-	if (entry.kind !== "pi.assistant") return false;
-	return (entry.model ?? []).some(
-		(message) => message.role === "assistant" && message.stopReason !== "toolUse",
+/** True when an entry is the durable user instruction for a `length` continuation. */
+function isContinuationInput(entry: EntryRecord | undefined): boolean {
+	if (entry?.model === undefined) return false;
+	return entry.model.some(
+		(message) =>
+			message.role === "user" && contentText(message.content).trim() === LENGTH_CONTINUATION_PROMPT,
 	);
+}
+
+/**
+ * Whether an entry ended its run. A `length` answer followed by the continuation prompt is a cut
+ * prefix, not the run's final answer, so the run's original inputs stay visible to turn context.
+ * Once continuation is exhausted (no newer continuation prompt), the length answer is final.
+ */
+function isFinalAnswer(entry: EntryRecord, newerEntry: EntryRecord | undefined): boolean {
+	if (entry.kind !== "pi.assistant") return false;
+	const answer = (entry.model ?? []).findLast((message) => message.role === "assistant");
+	if (answer?.role !== "assistant") return false;
+	if (answer.stopReason === "length" && isContinuationInput(newerEntry)) return false;
+	return answer.stopReason !== "toolUse";
 }
 
 export interface RunInputScanOptions {
@@ -272,10 +296,10 @@ function runEnvelopes(
 	options: RunInputScanOptions = {},
 ): unknown[] {
 	const newestFirst: unknown[] = [];
-	for (const entry of entriesDescending) {
+	for (const [index, entry] of entriesDescending.entries()) {
 		if (options.minEntryId !== undefined && entry.id < options.minEntryId) break;
 		if (entry.kind === CompactionEntry.kind || entry.kind === ResetEntry.kind) break;
-		if (isFinalAnswer(entry)) break;
+		if (isFinalAnswer(entry, entriesDescending[index - 1])) break;
 		if (entry.kind !== durableDocumentKinds.activityWindow) continue;
 		if (entry.model === undefined || entry.model.length === 0) continue;
 		const data = entry.data;

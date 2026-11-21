@@ -1,4 +1,8 @@
-import type { ConversationPacingPolicy, MessagePart } from "@tsukaima/contracts";
+import type {
+	ConversationPacingPolicy,
+	MessagePart,
+	TriggerClassification,
+} from "@tsukaima/contracts";
 
 /** Split fenced code blocks without breaking them, then treat each non-empty line as a unit. */
 export function splitOnNewlines(text: string): string[] {
@@ -193,6 +197,65 @@ export function boundedReplyDelayMs(
 	if (!pacing.replyDelayEnabled || pacing.replyDelayMaxMs <= 0) return 0;
 	const value = Math.max(0, Math.min(1, random()));
 	return Math.round(value * pacing.replyDelayMaxMs);
+}
+
+/** Sentence-final punctuation that makes a short message read as complete. */
+const TERMINAL_PUNCTUATION = /[.!?。！？…~～]["'”’」』)）\]]*$/u;
+/** A trailing emoji reads as the end of a short IM sentence ("ok 😊"). */
+const TERMINAL_EMOJI = /\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*$/u;
+/** Common CJK sentence particles that close a short question or statement without punctuation. */
+const TERMINAL_PARTICLE = /[吗呢嘛]["'”’」』)）\]]*$/u;
+
+export interface DirectFlushInput {
+	readonly classification: TriggerClassification | undefined;
+	readonly pacing: Pick<
+		ConversationPacingPolicy,
+		"activeBurstWindowMs" | "burstLongMessageThreshold" | "directFlushEnabled"
+	>;
+	/** Local observation time of the previous message in the open window, if any. */
+	readonly previousMessageAtMs: number | undefined;
+	/** Local observation time of this message. */
+	readonly submittedAtMs: number;
+	readonly text: string;
+}
+
+export type DirectFlushDecision =
+	| { readonly flush: true; readonly reason: "terminal-punctuation" | "long-message" }
+	| {
+			readonly flush: false;
+			readonly reason: "disabled" | "not-direct" | "active-burst" | "incomplete";
+	  };
+
+/**
+ * Decide whether a direct message may skip the burst settle window.
+ *
+ * A direct address that already reads as complete (terminal punctuation, trailing emoji, a CJK
+ * closing particle, or at least `burstLongMessageThreshold` characters) is submitted at once,
+ * unless the sender is still typing in quick succession: a previous message inside
+ * `activeBurstWindowMs` keeps the normal settle/max-wait merge so a rapid burst still becomes
+ * one turn.
+ */
+export function directFlushDecision(input: DirectFlushInput): DirectFlushDecision {
+	if (!input.pacing.directFlushEnabled) return { flush: false, reason: "disabled" };
+	if (input.classification !== "direct") return { flush: false, reason: "not-direct" };
+	if (
+		input.previousMessageAtMs !== undefined &&
+		input.submittedAtMs - input.previousMessageAtMs <= input.pacing.activeBurstWindowMs
+	) {
+		return { flush: false, reason: "active-burst" };
+	}
+	const text = input.text.trim();
+	if (text.length >= input.pacing.burstLongMessageThreshold) {
+		return { flush: true, reason: "long-message" };
+	}
+	if (
+		TERMINAL_PUNCTUATION.test(text) ||
+		TERMINAL_EMOJI.test(text) ||
+		TERMINAL_PARTICLE.test(text)
+	) {
+		return { flush: true, reason: "terminal-punctuation" };
+	}
+	return { flush: false, reason: "incomplete" };
 }
 
 /** Steer while a run is still in its grace window, then queue a follow-up. */

@@ -111,6 +111,19 @@ export {
 	type TurnFormatOptions,
 } from "./turn-format.ts";
 export {
+	CHAT_RUN_EXTENSION_NAME,
+	LENGTH_CONTINUATION_PROMPT,
+	assistantMessageText,
+	assistantToolNames,
+	createChatRunExtension,
+	narrationCandidate,
+	runKindFromEntries,
+	samplingOverrides,
+	type ChatRunExtensionOptions,
+	type ChatRunKind,
+	type ConversationNarration,
+} from "./run-hooks.ts";
+export {
 	ConversationExecutionLock,
 	defaultConversationExecutionLock,
 	withConversationLock,
@@ -118,7 +131,9 @@ export {
 export { createFakeModel, createSlowStreamingModel, type ModelPort } from "./model.ts";
 export { createFallbackCoreLogger, previewText, type CoreLogger } from "./logger.ts";
 export {
+	DEFAULT_REQUEST_TIMEOUT_MS,
 	ModelPolicyRouter,
+	OpenAIRequestTimeoutError,
 	ModelUsageLedger,
 	createOpenAICompatibleProvider,
 	createOpenAICompatibleModelPort,
@@ -147,10 +162,13 @@ export {
 export {
 	boundedReplyDelayMs,
 	busyDisposition,
+	directFlushDecision,
 	prepareOutboundParts,
 	prepareOutboundText,
 	splitOnNewlines,
 	stripMarkdownFormatting,
+	type DirectFlushDecision,
+	type DirectFlushInput,
 	type PreparedOutput,
 	type PreparedPartsOutput,
 } from "./output-pacing.ts";

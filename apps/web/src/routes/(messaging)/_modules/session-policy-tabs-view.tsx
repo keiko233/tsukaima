@@ -11,6 +11,7 @@ import { m } from "@/paraglide/messages";
 import {
 	Field,
 	PolicyCompactionFields,
+	PolicyGenerationFields,
 	PolicyPacingFields,
 	PolicySidechatFields,
 	Toggle,
@@ -127,6 +128,9 @@ export function PolicyTriggerTabView({
 	const updateTrigger = (patch: Partial<ConversationPolicy["trigger"]>) => {
 		onChange((current) => ({ ...current, trigger: { ...current.trigger, ...patch } }));
 	};
+	const updateNotices = (patch: Partial<ConversationPolicy["notices"]>) => {
+		onChange((current) => ({ ...current, notices: { ...current.notices, ...patch } }));
+	};
 
 	return (
 		<PolicyTabShell
@@ -238,6 +242,60 @@ export function PolicyTriggerTabView({
 						onChange={(value) => updateTrigger({ replyToBotCounts: value })}
 					/>
 
+					<div className="grid grid-cols-2 gap-2.5">
+						<Field label={m.policy_recent_activity()} hint={m.policy_recent_activity_hint()}>
+							<select
+								className={fieldClass}
+								value={draft.trigger.recentActivityEscalation}
+								onChange={(event) =>
+									updateTrigger({
+										recentActivityEscalation: event.target
+											.value as ConversationPolicy["trigger"]["recentActivityEscalation"],
+									})
+								}
+							>
+								<option value="off">{m.recent_activity_off()}</option>
+								<option value="throttled">{m.recent_activity_throttled()}</option>
+								<option value="always">{m.recent_activity_always()}</option>
+							</select>
+						</Field>
+						<Field label={m.policy_recent_activity_interval()}>
+							<input
+								type="number"
+								min={0}
+								className={fieldClass}
+								value={draft.trigger.recentActivityMinIntervalMs}
+								onChange={(event) =>
+									updateTrigger({ recentActivityMinIntervalMs: Number(event.target.value) })
+								}
+							/>
+						</Field>
+					</div>
+
+					<div className="space-y-2 border-t border-border/60 pt-2.5">
+						<Toggle
+							checked={draft.notices.pokeObserve}
+							label={m.policy_poke_observe()}
+							onChange={(value) => updateNotices({ pokeObserve: value })}
+						/>
+						<Toggle
+							checked={draft.notices.pokeWake}
+							label={m.policy_poke_wake()}
+							onChange={(value) => updateNotices({ pokeWake: value })}
+						/>
+						<Field label={m.policy_poke_cooldown()}>
+							<input
+								type="number"
+								min={0}
+								className={fieldClass}
+								value={draft.notices.pokeWakeCooldownMs}
+								onChange={(event) =>
+									updateNotices({ pokeWakeCooldownMs: Number(event.target.value) })
+								}
+							/>
+						</Field>
+					</div>
+
 					<Field label={m.policy_allowlist()} hint={m.policy_allowlist_hint()}>
 						<textarea
 							className={textareaClass}
@@ -311,6 +369,13 @@ export function PolicyPacingTabView({
 							{m.policy_section_compaction()}
 						</h3>
 						<PolicyCompactionFields draft={draft} onChange={onChange} />
+					</div>
+
+					<div className="space-y-2 border-t border-border/60 pt-2.5">
+						<h3 className="text-xs font-semibold text-foreground">
+							{m.policy_section_generation()}
+						</h3>
+						<PolicyGenerationFields draft={draft} onChange={onChange} />
 					</div>
 				</>
 			)}

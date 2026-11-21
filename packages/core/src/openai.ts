@@ -43,6 +43,85 @@ export interface OpenAICompatibleModelConfig {
 	readonly reasoningLevels?: readonly OpenAICompatibleReasoningLevel[];
 	readonly defaultReasoningLevel?: OpenAICompatibleReasoningLevel;
 	readonly supportsTools?: boolean;
+	/** Sampling defaults for this model; request options and conversation policy override them. */
+	readonly temperature?: number;
+	readonly topP?: number;
+	readonly stop?: readonly string[];
+	/**
+	 * Longest wait for response headers and longest silent gap inside a streamed response.
+	 * Defaults to {@link DEFAULT_REQUEST_TIMEOUT_MS}. A timeout fails the attempt with a
+	 * retryable error instead of an abort, so pi-durable's retry policy takes over.
+	 */
+	readonly requestTimeoutMs?: number;
+}
+
+/** Default header and stream-idle timeout for OpenAI-compatible requests. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+
+/** A request that waited too long for headers or for the next stream chunk. */
+export class OpenAIRequestTimeoutError extends Error {
+	override readonly name = "OpenAIRequestTimeoutError";
+	constructor(
+		readonly timeoutMs: number,
+		readonly phase: "response" | "stream",
+	) {
+		super(
+			phase === "response"
+				? `OpenAI-compatible request timed out after ${timeoutMs}ms waiting for a response`
+				: `OpenAI-compatible stream stalled for ${timeoutMs}ms`,
+		);
+	}
+}
+
+/**
+ * Abort controller for one request that fires when the caller aborts or when no progress was
+ * seen for `timeoutMs`. `touch()` re-arms the idle timer after each received chunk.
+ */
+function createRequestWatchdog(timeoutMs: number, parent: AbortSignal | undefined) {
+	const controller = new AbortController();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timedOut: OpenAIRequestTimeoutError | undefined;
+	const onParentAbort = () => controller.abort(parent?.reason);
+	if (parent?.aborted === true) controller.abort(parent.reason);
+	else parent?.addEventListener("abort", onParentAbort, { once: true });
+	const touch = (phase: "response" | "stream") => {
+		if (timer !== undefined) clearTimeout(timer);
+		if (timeoutMs <= 0 || controller.signal.aborted) return;
+		timer = setTimeout(() => {
+			timedOut = new OpenAIRequestTimeoutError(timeoutMs, phase);
+			controller.abort(timedOut);
+		}, timeoutMs);
+		timer.unref?.();
+	};
+	return {
+		signal: controller.signal,
+		touch,
+		timedOut: () => timedOut,
+		dispose: () => {
+			if (timer !== undefined) clearTimeout(timer);
+			parent?.removeEventListener("abort", onParentAbort);
+		},
+	};
+}
+
+/** Run one body read, rejecting as soon as `signal` aborts even if the body never settles. */
+function readWithSignal<R>(read: () => Promise<R>, signal: AbortSignal | undefined): Promise<R> {
+	if (signal === undefined) return read();
+	if (signal.aborted) return Promise.reject(signal.reason);
+	return new Promise((resolve, reject) => {
+		const onAbort = () => reject(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+		read().then(
+			(result) => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(result);
+			},
+			(error: unknown) => {
+				signal.removeEventListener("abort", onAbort);
+				reject(error);
+			},
+		);
+	});
 }
 
 export type OpenAICompatibleInputModality = "text" | "image";
@@ -73,6 +152,9 @@ interface OpenAIRequest {
 	readonly messages: readonly OpenAIMessage[];
 	readonly max_completion_tokens?: number;
 	readonly reasoning_effort?: OpenAICompatibleReasoningLevel;
+	readonly temperature?: number;
+	readonly top_p?: number;
+	readonly stop?: readonly string[];
 	readonly stream?: true;
 	readonly stream_options?: { readonly include_usage: true };
 	readonly tools?: readonly OpenAITool[];
@@ -205,7 +287,10 @@ function usageFromPayload(payload: OpenAIResponse["usage"]): Usage {
 }
 
 /** Raw `data:` payloads of a server-sent event response, in arrival order. */
-async function* readSseData(response: Response): AsyncGenerator<string> {
+async function* readSseData(
+	response: Response,
+	progress?: { readonly signal: AbortSignal; readonly onChunk: () => void },
+): AsyncGenerator<string> {
 	const body = response.body;
 	if (body === null) return;
 	const reader = body.getReader();
@@ -214,8 +299,9 @@ async function* readSseData(response: Response): AsyncGenerator<string> {
 	let data: string[] = [];
 	try {
 		while (true) {
-			const { done, value } = await reader.read();
+			const { done, value } = await readWithSignal(() => reader.read(), progress?.signal);
 			if (done) break;
+			progress?.onChunk();
 			buffer += decoder.decode(value, { stream: true });
 			let newline = buffer.indexOf("\n");
 			while (newline >= 0) {
@@ -498,6 +584,7 @@ async function consumeOpenAIStream(
 	response: Response,
 	output: AssistantMessageEventStream,
 	timestamp: number,
+	progress?: { readonly signal: AbortSignal; readonly onChunk: () => void },
 ): Promise<AssistantMessage> {
 	const content: AssistantMessage["content"] = [];
 	const base: AssistantMessage = {
@@ -568,7 +655,7 @@ async function consumeOpenAIStream(
 		return text;
 	};
 
-	for await (const data of readSseData(response)) {
+	for await (const data of readSseData(response, progress)) {
 		if (data.trim() === "[DONE]") break;
 		let chunk: OpenAIStreamChunk;
 		try {
@@ -682,6 +769,34 @@ async function consumeOpenAIStream(
 	};
 }
 
+/**
+ * Sampling fields for one request: pi-ai request options win over the model's configured
+ * defaults. `samplingParams.top_p`/`stop` come from pi-ai's pass-through sampling map.
+ *
+ * Sampling is explicit operator intent, so reasoning models keep it too. Some providers reject
+ * `temperature`/`top_p` together with `reasoning_effort`; forwarding the configured values lets
+ * that surface as a clear provider error instead of silently ignoring a saved setting.
+ */
+function requestSampling(
+	modelConfig: OpenAICompatibleModelConfig | undefined,
+	options: SimpleStreamOptions | undefined,
+): Pick<OpenAIRequest, "temperature" | "top_p" | "stop"> {
+	const params = options?.samplingParams;
+	const paramTopP = typeof params?.top_p === "number" ? params.top_p : undefined;
+	const paramStop =
+		Array.isArray(params?.stop) && params.stop.every((value) => typeof value === "string")
+			? (params.stop as string[])
+			: undefined;
+	const temperature = options?.temperature ?? modelConfig?.temperature;
+	const topP = paramTopP ?? modelConfig?.topP;
+	const stop = paramStop ?? modelConfig?.stop;
+	return {
+		...(temperature === undefined ? {} : { temperature }),
+		...(topP === undefined ? {} : { top_p: topP }),
+		...(stop === undefined || stop.length === 0 ? {} : { stop }),
+	};
+}
+
 export function createOpenAICompatibleStreams(
 	config: OpenAICompatibleConfig,
 	modelConfigs: readonly OpenAICompatibleModelConfig[] = [],
@@ -701,6 +816,7 @@ export function createOpenAICompatibleStreams(
 		const timestamp = Date.now();
 		const logger = config.logger;
 		const providerId = config.providerId ?? requestModel.provider;
+		let watchdog: ReturnType<typeof createRequestWatchdog> | undefined;
 		queueMicrotask(async () => {
 			try {
 				const modelConfig = configs.get(requestModel.id);
@@ -733,15 +849,25 @@ export function createOpenAICompatibleStreams(
 					requestModel.reasoning === true
 						? (requestOptions?.reasoning ?? modelConfig?.defaultReasoningLevel)
 						: undefined;
-				const request: OpenAIRequest = {
+				const sampling = requestSampling(modelConfig, requestOptions);
+				const baseRequest: OpenAIRequest = {
 					model: requestModel.id,
 					messages,
 					max_completion_tokens: maxOutputTokens,
 					...(reasoningEffort === undefined ? {} : { reasoning_effort: reasoningEffort }),
+					...sampling,
 					stream: true,
 					stream_options: { include_usage: true },
 					...(tools.length > 0 ? { tools, tool_choice: requestOptions?.toolChoice ?? "auto" } : {}),
 				};
+				// `onPayload` carries pi-durable's `beforeProviderRequest` hooks (per-conversation
+				// sampling overrides), so it sees the final body and may replace it.
+				const replaced = await requestOptions?.onPayload?.(baseRequest, requestModel);
+				const request = (replaced ?? baseRequest) as OpenAIRequest;
+				const timeoutMs =
+					requestOptions?.timeoutMs ?? modelConfig?.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+				watchdog = createRequestWatchdog(timeoutMs, requestOptions?.signal);
+				const activeWatchdog = watchdog;
 				logger?.debug("OpenAI-compatible chat completion requested", {
 					providerId,
 					modelId: requestModel.id,
@@ -749,6 +875,7 @@ export function createOpenAICompatibleStreams(
 					toolCount: tools.length,
 					maxOutputTokens,
 					reasoningEffort,
+					timeoutMs,
 				});
 				const lastMessage = messages.findLast(
 					(message) => message.role === "user" || message.role === "tool",
@@ -763,18 +890,35 @@ export function createOpenAICompatibleStreams(
 				});
 				let response: Response;
 				try {
-					response = await fetchImplementation(url, {
-						body: JSON.stringify(request),
-						headers: {
-							accept: "text/event-stream",
-							authorization: `Bearer ${apiKeyFromOptions}`,
-							"content-type": "application/json",
-						},
-						method: "POST",
-						...(requestOptions?.signal === undefined ? {} : { signal: requestOptions.signal }),
-					});
+					activeWatchdog.touch("response");
+					// Race the fetch against the watchdog as well: a test double or an adapter that
+					// ignores the abort signal must not wedge the run after headers never arrive.
+					response = await readWithSignal(
+						() =>
+							fetchImplementation(url, {
+								body: JSON.stringify(request),
+								headers: {
+									accept: "text/event-stream",
+									authorization: `Bearer ${apiKeyFromOptions}`,
+									"content-type": "application/json",
+								},
+								method: "POST",
+								signal: activeWatchdog.signal,
+							}),
+						activeWatchdog.signal,
+					);
 				} catch (error) {
 					const durationMs = Math.round(performance.now() - startedAt);
+					const timedOut = activeWatchdog.timedOut();
+					if (timedOut !== undefined) {
+						logger?.warn("OpenAI-compatible request timed out", {
+							providerId,
+							modelId: requestModel.id,
+							durationMs,
+							timeoutMs,
+						});
+						throw timedOut;
+					}
 					if (error instanceof Error && error.name === "AbortError") {
 						logger?.debug("OpenAI-compatible request aborted", {
 							providerId,
@@ -821,6 +965,12 @@ export function createOpenAICompatibleStreams(
 					},
 				});
 				let assistant: AssistantMessage;
+				const progress = {
+					signal: activeWatchdog.signal,
+					onChunk: () => activeWatchdog.touch("stream"),
+				};
+				// The body may stall as well as the headers; keep the idle timer armed until it ends.
+				activeWatchdog.touch("stream");
 				if (contentType.includes("json") || response.body === null) {
 					// Some compatible servers ignore `stream: true`; keep the full-body path so a
 					// provider that cannot stream still produces a usable answer.
@@ -855,8 +1005,15 @@ export function createOpenAICompatibleStreams(
 					assistant = { ...buildAssistantMessage(requestModel, payload), timestamp };
 					replayAssistantMessage(assistant, output);
 				} else {
-					assistant = await consumeOpenAIStream(requestModel, response, output, timestamp);
+					assistant = await consumeOpenAIStream(
+						requestModel,
+						response,
+						output,
+						timestamp,
+						progress,
+					);
 				}
+				activeWatchdog.dispose();
 				config.onMessage?.(assistant);
 				const texts: string[] = [];
 				const thinkingTexts: string[] = [];
@@ -895,7 +1052,11 @@ export function createOpenAICompatibleStreams(
 					message: assistant,
 				});
 				output.end(assistant);
-			} catch (error) {
+			} catch (caught) {
+				// A stalled stream rejects with whatever the body reader saw; report the timeout so the
+				// attempt fails as retryable rather than looking like a caller abort.
+				const error = watchdog?.timedOut() ?? caught;
+				watchdog?.dispose();
 				const message = errorAssistantMessage(
 					requestModel,
 					error instanceof Error ? error : new Error(String(error)),

@@ -2,6 +2,10 @@ import type { ConversationPolicy } from "@tsukaima/contracts";
 
 type ConversationPacingState = {
 	lurkAtMs?: number;
+	/** Last undirected message promoted to a `soft` turn by recent activity. */
+	softEscalationAtMs?: number;
+	/** Last turn started by a poke notice. */
+	noticeWakeAtMs?: number;
 	lastReplyAtMs?: number;
 	replyTimestampsMs: number[];
 };
@@ -42,6 +46,32 @@ export class ConversationPacingTracker {
 			...(state.replyTimestampsMs.length === 0 ? [0] : state.replyTimestampsMs),
 		);
 		return latest > 0 && nowMs - latest <= Math.max(0, windowMs);
+	}
+
+	/**
+	 * Whether the `throttled` recent-activity budget allows another `soft` escalation now.
+	 * Peek only; call {@link recordSoftEscalation} once a message was actually promoted.
+	 */
+	softEscalationAvailable(
+		conversationId: string,
+		minIntervalMs: number,
+		nowMs = Date.now(),
+	): boolean {
+		const last = this.#state.get(conversationId)?.softEscalationAtMs;
+		return last === undefined || nowMs - last >= Math.max(0, minIntervalMs);
+	}
+
+	recordSoftEscalation(conversationId: string, nowMs = Date.now()): void {
+		this.#entry(conversationId).softEscalationAtMs = nowMs;
+	}
+
+	/** Consume the poke-wake cooldown; `false` while a previous wake is still cooling down. */
+	takeNoticeWake(conversationId: string, cooldownMs: number, nowMs = Date.now()): boolean {
+		const state = this.#entry(conversationId);
+		const last = state.noticeWakeAtMs;
+		if (last !== undefined && nowMs - last < Math.max(0, cooldownMs)) return false;
+		state.noticeWakeAtMs = nowMs;
+		return true;
 	}
 
 	/** Remaining cooldown/rate-limit time, or 0 when a model run may flush immediately. */

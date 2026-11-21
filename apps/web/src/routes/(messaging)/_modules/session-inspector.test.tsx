@@ -141,10 +141,34 @@ mock.module("@/paraglide/messages", () => ({
 		policy_reply_delay: () => "Bounded reply delay",
 		policy_reply_delay_max: () => "Reply delay limit (ms)",
 		policy_reply_to_bot: () => "Replying to the bot counts as direct",
+		policy_active_burst_window: () => "Active burst window (ms)",
+		policy_direct_flush: () => "Send complete direct messages without waiting",
+		policy_direct_flush_hint: () => "A complete direct message skips the settle window.",
+		policy_narration: () => "Send text written before a tool call right away",
+		policy_narration_interval: () => "Minimum narration interval (ms)",
+		policy_poke_cooldown: () => "Poke reply cooldown (ms)",
+		policy_poke_observe: () => "Let the model see pokes",
+		policy_poke_wake: () => "Reply when someone pokes the bot",
+		policy_recent_activity: () => "Joining in after recent activity",
+		policy_recent_activity_hint: () => "Undirected group messages after recent activity.",
+		policy_recent_activity_interval: () => "Minimum join-in interval (ms)",
+		recent_activity_always: () => "Every message",
+		recent_activity_off: () => "Off: only when addressed",
+		recent_activity_throttled: () => "Throttled",
 		policy_reset_draft: () => "Discard",
 		policy_revision_active: () => "Active",
 		policy_save: () => "Save policy",
 		policy_save_persona: () => "Save persona aliases",
+		policy_section_generation: () => "Generation",
+		policy_generation_hint: () => "Sampling overrides for OpenAI-compatible requests.",
+		policy_length_truncation: () => "When the output limit is reached",
+		policy_length_truncation_continue: () => "Continue automatically",
+		policy_length_truncation_surface: () => "Send the cut text and record truncation",
+		policy_max_length_continuations: () => "Maximum automatic continuations",
+		policy_temperature: () => "Temperature",
+		policy_top_p: () => "Top P",
+		policy_stop_sequences: () => "Stop sequences",
+		policy_stop_sequences_hint: () => "One per line, up to four.",
 		policy_section_compaction: () => "Context compaction",
 		policy_section_pacing: () => "Aggregation and pacing",
 		policy_section_persona: () => "Persona binding",
@@ -366,6 +390,10 @@ describe("SessionInspectorSidebar views", () => {
 		expect(html).toContain("Conservative");
 		expect(html).toContain("Balanced");
 		expect(html).toContain("Aggressive");
+		expect(html).toContain("Generation");
+		expect(html).toContain("Temperature");
+		expect(html).toContain("Top P");
+		expect(html).toContain("Stop sequences");
 		expect(html).not.toContain("Unsaved changes");
 	});
 
