@@ -242,13 +242,16 @@ export class LocalToolBridge {
 		const declaration = this.#declarations.get(tool.name);
 		const lazy = tool.lazy ?? tool.policy?.lazy ?? declaration?.lazy;
 		const surface = tool.surface ?? tool.policy?.surface ?? declaration?.surface;
-		const shortName = tool.shortName ?? declaration?.shortName;
+		const shortName =
+			tool.modelName ?? tool.shortName ?? declaration?.modelName ?? declaration?.shortName;
+		const modelName = tool.modelName ?? declaration?.modelName;
 		const aliases = [...(tool.aliases ?? []), ...(declaration?.aliases ?? [])];
 		this.#tools.set(tool.name, {
 			...tool,
 			...(lazy === undefined ? {} : { lazy }),
 			...(surface === undefined ? {} : { surface }),
 			...(shortName === undefined ? {} : { shortName }),
+			...(modelName === undefined ? {} : { modelName }),
 			...(aliases.length === 0 ? {} : { aliases }),
 		});
 	}
@@ -823,6 +826,8 @@ export type ModelToolNameEntry =
 			readonly name: string;
 			/** Preferred short name; it wins over an automatically derived action name. */
 			readonly shortName?: string;
+			/** Explicit model-facing name. Alias for shortName. */
+			readonly modelName?: string;
 			/** Earlier or alternative model-facing names kept resolvable for this tool. */
 			readonly aliases?: readonly string[];
 			readonly canonicalName?: string;
@@ -854,7 +859,8 @@ function derivedShortName(canonical: string): string | undefined {
 /** All model-facing names that historically resolve to this canonical tool. */
 export function providerToolNameAliases(entry: ModelToolNameEntry): readonly string[] {
 	const canonical = modelToolEntryName(entry);
-	const explicit = typeof entry === "string" ? [] : [entry.shortName, ...(entry.aliases ?? [])];
+	const explicit =
+		typeof entry === "string" ? [] : [entry.modelName, entry.shortName, ...(entry.aliases ?? [])];
 	return [
 		...new Set(
 			[
@@ -870,10 +876,11 @@ export function providerToolNameAliases(entry: ModelToolNameEntry): readonly str
 }
 
 /**
- * Allocate one provider-safe model-facing name per canonical tool. A short last segment is used
- * only when no other tool in the catalog would claim it; real collisions fall back to the
- * namespaced name, then to the legacy hash suffix. `reservedNames` (built-in tools such as
- * `tool_search`) and explicit aliases keep their stable names and force namespace fallback.
+ * Allocate one provider-safe model-facing name per canonical tool. Clean namespaced names
+ * (`providerSafeToolName`) are used by default; an explicit `modelName` or `shortName` is honored
+ * when deliberately set. Real collisions fall back to the legacy hash suffix. `reservedNames`
+ * (built-in tools such as `tool_search`) and explicit aliases keep their stable names and force
+ * fallback.
  *
  * Canonical names never change: they remain the routing, policy, audit, and authorization ids.
  */
@@ -883,7 +890,8 @@ export function allocateModelToolNames(
 ): Map<string, string> {
 	const catalog = [...entries].map((entry) => {
 		const canonical = modelToolEntryName(entry);
-		const explicitShort = typeof entry === "string" ? undefined : safeShortName(entry.shortName);
+		const rawShort = typeof entry === "string" ? undefined : (entry.modelName ?? entry.shortName);
+		const explicitShort = safeShortName(rawShort);
 		return { canonical, explicitShort, entry };
 	});
 	const reserved = new Set<string>();
@@ -942,8 +950,8 @@ export function allocateModelToolNames(
 		}
 	};
 	assignRound(
-		(entry) => entry.explicitShort ?? derivedShortName(entry.canonical),
-		(entry) => (entry.explicitShort === undefined ? 1 : 0),
+		(entry) => entry.explicitShort,
+		() => 0,
 	);
 	assignRound(
 		(entry) => providerSafeToolName(entry.canonical),
@@ -992,15 +1000,20 @@ export function resolveToolName(
 	if (tools !== undefined) {
 		const catalog = [...tools];
 		const allocated = allocateModelToolNames(catalog);
+		for (const entry of catalog) {
+			const canonical = typeof entry === "string" ? entry : entry.name;
+			if (canonical === trimmed || allocated.get(canonical) === trimmed) {
+				return canonical;
+			}
+		}
 		const matches = new Set<string>();
 		for (const entry of catalog) {
 			const canonical = typeof entry === "string" ? entry : entry.name;
 			if (
-				canonical === trimmed ||
-				allocated.get(canonical) === trimmed ||
 				providerToolNameAliases(entry).includes(trimmed) ||
 				providerSafeToolName(canonical) === trimmed ||
 				legacyProviderSafeToolName(canonical) === trimmed ||
+				derivedShortName(canonical) === trimmed ||
 				canonical.replace(/\./gu, "__").replace(/-/gu, "_") ===
 					trimmed.replace(/\./gu, "__").replace(/-/gu, "_")
 			) {

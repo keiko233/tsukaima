@@ -1,6 +1,7 @@
 import type { ConversationPolicy, MemoryScope, MemoryStatus } from "@tsukaima/contracts";
 import {
 	pluginManifestSchema,
+	providerSafeToolName,
 	type TsukaimaPlugin,
 	type PluginContext,
 	type PluginLogger,
@@ -65,8 +66,9 @@ interface ResolvedMemoryTool {
 }
 
 function allowlistMatches(toolName: string, allowlist: readonly string[]): boolean {
+	const cleanSafe = providerSafeToolName(toolName);
 	return allowlist.some((entry) => {
-		if (entry === "*" || entry === toolName) return true;
+		if (entry === "*" || entry === toolName || entry === cleanSafe) return true;
 		if (entry.endsWith(".*")) return toolName.startsWith(`${entry.slice(0, -2)}.`);
 		return false;
 	});

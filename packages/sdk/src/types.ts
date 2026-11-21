@@ -675,6 +675,8 @@ export interface PluginTool {
 	 * falls back to the namespaced name instead of silently choosing a loser.
 	 */
 	readonly shortName?: string;
+	/** Explicit model-facing name. When specified, the allocator honors it in Round 1. */
+	readonly modelName?: string;
 	/**
 	 * Additional model-facing names that still resolve to this tool. Use them for names an
 	 * earlier release exposed or for a stable shorthand that must survive catalog changes.

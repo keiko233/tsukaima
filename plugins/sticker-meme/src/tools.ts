@@ -107,7 +107,7 @@ export function registerStickerTools(
 	});
 	context.tools.register({
 		description:
-			"Select and prepare (or directly send) the best matching approved sticker in one step by query, emotion, itemId, packId, or tags. Returns a ready-to-use [[sticker:<token>]] directive (or inline [表情:<query>] marker) so you do not need a separate search -> choose two-step round.",
+			"Select and prepare (or directly send) the best matching approved sticker in one step by query, emotion, itemId, packId, or tags. Returns a ready-to-use [[sticker:<token>]] directive (or inline [表情:<query>] marker) so you do not need a separate sticker-meme_search -> sticker-meme_choose two-step round.",
 		async execute(input, invocation) {
 			const startedAt = Date.now();
 			const conversationId = invocation.conversationId;

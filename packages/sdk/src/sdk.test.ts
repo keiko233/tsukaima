@@ -221,7 +221,7 @@ describe("plugin sdk", () => {
 
 		const registration = extension.tools[0];
 		expect(registration).toBeDefined();
-		expect(registration?.name).toBe("echo");
+		expect(registration?.name).toBe("sample_echo");
 		expect(registration?.name).toMatch(/^[a-zA-Z0-9_-]{1,64}$/u);
 		expect(registration?.description).toBe("Echo text");
 		expect(registration?.parameters).toEqual(tool.parameters);
@@ -460,33 +460,40 @@ describe("plugin sdk", () => {
 		expect(extension.tools).toEqual([]);
 	});
 
-	test("allocates concise shorthand names, namespacing only real collisions", () => {
+	test("allocates clear namespaced names by default and honors explicit model names", () => {
 		expect(allocateModelToolNames(["memory.recall", "memory.save"]).get("memory.recall")).toBe(
-			"recall",
+			"memory_recall",
 		);
 		expect(allocateModelToolNames(["memory.recall", "memory.save"]).get("memory.save")).toBe(
-			"save",
+			"memory_save",
 		);
 
-		// Both `send` tools collide, so both keep the namespaced provider-safe name.
+		// Tools keep clear namespaced names
 		const sends = allocateModelToolNames(["onebot-napcat.send", "sticker-meme.send"]);
 		expect(sends.get("onebot-napcat.send")).toBe("onebot-napcat_send");
 		expect(sends.get("sticker-meme.send")).toBe("sticker-meme_send");
 
-		// A real collision with a built-in tool also falls back to the namespace.
+		// A real collision with a built-in tool falls back to the legacy hash name.
 		const reserved = allocateModelToolNames(["demo.tool_search", "demo.search"], {
-			reservedNames: ["tool_search"],
+			reservedNames: ["demo_tool_search"],
 		});
-		expect(reserved.get("demo.tool_search")).toBe("demo_tool_search");
-		expect(reserved.get("demo.search")).toBe("search");
+		expect(reserved.get("demo.tool_search")).toBe(legacyProviderSafeToolName("demo.tool_search"));
+		expect(reserved.get("demo.search")).toBe("demo_search");
 
-		// An explicit shorthand wins over an automatic one and forces the other side to namespace.
+		// An explicit shorthand / modelName wins when deliberately set
 		const explicit = allocateModelToolNames([
 			{ name: "alpha.send", shortName: "send" },
 			{ name: "beta.send" },
 		]);
 		expect(explicit.get("alpha.send")).toBe("send");
 		expect(explicit.get("beta.send")).toBe("beta_send");
+
+		const explicitModel = allocateModelToolNames([
+			{ modelName: "send", name: "alpha.send" },
+			{ name: "beta.send" },
+		]);
+		expect(explicitModel.get("alpha.send")).toBe("send");
+		expect(explicitModel.get("beta.send")).toBe("beta_send");
 
 		// Duplicate explicit shorthands are ambiguous; neither silently wins.
 		const duplicate = allocateModelToolNames([

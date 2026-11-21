@@ -47,6 +47,8 @@ export const pluginManifestSchema = z.object({
 				surface: z.enum(["chat", "coding", "both"]).optional(),
 				/** Preferred model-facing shorthand; collisions fall back to the namespaced name. */
 				shortName: z.string().trim().min(1).max(64).optional(),
+				/** Explicit model-facing name; honors in Round 1 of model tool name allocation. */
+				modelName: z.string().trim().min(1).max(64).optional(),
 				/** Earlier or alternative model-facing names that must keep resolving. */
 				aliases: z.array(z.string().trim().min(1).max(128)).max(8).optional(),
 			}),
