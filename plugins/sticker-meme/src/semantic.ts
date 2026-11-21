@@ -9,6 +9,7 @@ import {
 	sanitizeModelText,
 	type StickerSemanticProfile,
 } from "./domain.ts";
+import { buildAnimatedFrameSheet, isAnimatedImage, type FrameSheet } from "./frame-sheet.ts";
 
 export type SemanticKind = "emotion" | "intent" | "tone";
 
@@ -643,6 +644,11 @@ export interface VisionSemanticOptions {
 	readonly onError?: "fallback" | "throw";
 	readonly providerId?: string;
 	readonly timeoutMs?: number;
+	/** Replaces animated stickers with a frame contact sheet before the vision request. */
+	readonly frameSheet?: (input: {
+		readonly bytes: Uint8Array;
+		readonly mimeType: string;
+	}) => Promise<FrameSheet | undefined>;
 	/** Test seam or host-model bridge. When absent the optional `openai` SDK is loaded lazily. */
 	readonly complete?: (request: {
 		readonly base64: string;
@@ -675,7 +681,7 @@ function parseVisionJson(content: string): unknown {
 	}
 }
 
-function promptForVision(input: StickerSemanticInput): string {
+function promptForVision(input: StickerSemanticInput, animationFrameCount = 0): string {
 	const allowedIds = STICKER_SEMANTIC_CATEGORIES.map((category) => category.id).join(", ");
 	return [
 		"You classify Telegram stickers for a chat assistant's semantic sticker search.",
@@ -683,9 +689,20 @@ function promptForVision(input: StickerSemanticInput): string {
 		`Allowed labels: ${allowedIds}.`,
 		"Use only allowed labels. Give 1-5 labels. description must be one short English sentence.",
 		"Include useful English and Chinese keywords when they fit.",
+		...(animationFrameCount > 1
+			? [
+					`The attached image is a single contact sheet merged from ${animationFrameCount} frames sampled across ONE animated sticker. Read the frames left-to-right, top-to-bottom as a time sequence and describe the whole motion, not just one frame.`,
+				]
+			: []),
 		`Pack title: ${sanitizeModelText(input.title ?? "") || "(unknown)"}.`,
 		`Telegram emoji: ${input.emoji ?? "(none)"}.`,
 	].join("\n");
+}
+
+interface VisionImage {
+	readonly bytes: Uint8Array;
+	readonly frameCount: number;
+	readonly mimeType: string;
 }
 
 export class VisionSemanticClassifier implements StickerSemanticClassifier {
@@ -697,6 +714,10 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 	readonly #model: string;
 	readonly #onError: "fallback" | "throw";
 	readonly #timeoutMs: number;
+	readonly #frameSheet: (input: {
+		readonly bytes: Uint8Array;
+		readonly mimeType: string;
+	}) => Promise<FrameSheet | undefined>;
 	readonly #complete:
 		| ((request: {
 				readonly base64: string;
@@ -715,6 +736,12 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 		this.#model = options.model;
 		this.#onError = options.onError ?? "fallback";
 		this.#timeoutMs = Math.max(5_000, options.timeoutMs ?? 60_000);
+		this.#frameSheet =
+			options.frameSheet ??
+			(async (input) =>
+				await buildAnimatedFrameSheet(input.bytes, input.mimeType, {
+					logger: options.logger,
+				}));
 		this.#complete = options.complete;
 		this.name =
 			options.providerId === undefined
@@ -745,7 +772,8 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 			title: input.title ?? null,
 		});
 		try {
-			const content = await this.#request(input, base);
+			const image = await this.#prepareImage(input.bytes, input.mimeType);
+			const content = await this.#request(input, base, image);
 			const parsed = visionResponseSchema.safeParse(parseVisionJson(content));
 			if (!parsed.success) throw new Error("Vision classifier returned invalid JSON");
 			const allowed = (values: readonly string[] | undefined): string[] =>
@@ -799,11 +827,37 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 		}
 	}
 
-	async #request(input: StickerSemanticInput, base: StickerSemanticProfile): Promise<string> {
-		const mimeType = input.mimeType ?? "image/webp";
-		const base64 = Buffer.from(input.bytes ?? new Uint8Array()).toString("base64");
+	async #prepareImage(bytes: Uint8Array, mimeType: string): Promise<VisionImage> {
+		if (!isAnimatedImage(mimeType, bytes)) {
+			return { bytes, frameCount: 0, mimeType };
+		}
+		try {
+			const sheet = await this.#frameSheet({ bytes, mimeType });
+			if (sheet === undefined) return { bytes, frameCount: 0, mimeType };
+			this.#logger?.debug?.("animated sticker frame sheet prepared", {
+				frameCount: sheet.frameCount,
+				mimeType,
+				sheetBytes: sheet.bytes.byteLength,
+			});
+			return { bytes: sheet.bytes, frameCount: sheet.frameCount, mimeType: sheet.mimeType };
+		} catch (error) {
+			this.#logger?.warn("animated sticker frame sheet failed; using the original media", {
+				error: error instanceof Error ? error.message : String(error),
+				mimeType,
+			});
+			return { bytes, frameCount: 0, mimeType };
+		}
+	}
+
+	async #request(
+		input: StickerSemanticInput,
+		base: StickerSemanticProfile,
+		image: VisionImage,
+	): Promise<string> {
+		const mimeType = image.mimeType;
+		const base64 = Buffer.from(image.bytes).toString("base64");
 		const imageDataUrl = `data:${mimeType};base64,${base64}`;
-		const prompt = promptForVision(input);
+		const prompt = promptForVision(input, image.frameCount);
 		this.#logger?.trace?.("vision provider request started", {
 			hostModel: this.#complete !== undefined,
 			mimeType,

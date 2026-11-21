@@ -20,6 +20,7 @@ import {
 } from "@tsukaima/sdk";
 import { readZipEntries } from "./archive.ts";
 import { createAnimatedConverter, tgsToGif, webmToGif } from "./animated.ts";
+import { buildAnimatedFrameSheet, isAnimatedWebp } from "./frame-sheet.ts";
 import {
 	normalizeLabels,
 	safeRelativePath,
@@ -1542,6 +1543,58 @@ describe("animated sticker conversion", () => {
 			expect(new TextDecoder().decode(gif?.slice(0, 6))).toBe("GIF89a");
 		},
 	);
+	test("detects animated WebP through the VP8X flags", () => {
+		const animated = new Uint8Array(24);
+		animated.set([0x52, 0x49, 0x46, 0x46], 0);
+		animated.set([0x57, 0x45, 0x42, 0x50], 8);
+		animated.set([0x56, 0x50, 0x38, 0x58], 12);
+		animated[20] = 0x02;
+		expect(isAnimatedWebp(animated)).toBe(true);
+		animated[20] = 0x00;
+		expect(isAnimatedWebp(animated)).toBe(false);
+		expect(isAnimatedWebp(new Uint8Array(3))).toBe(false);
+	});
+
+	test("does not build a contact sheet for a still image", async () => {
+		expect(await buildAnimatedFrameSheet(bytes("still"), "image/png")).toBeUndefined();
+	});
+
+	test.skipIf(ffmpeg === undefined)(
+		"merges sampled animated frames into one contact sheet",
+		async () => {
+			const directory = await mkdtemp(join(tmpdir(), "tsukaima-sheet-test-"));
+			directories.push(directory);
+			const input = join(directory, "input.gif");
+			const result = await Bun.spawn([
+				ffmpeg as string,
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-f",
+				"lavfi",
+				"-i",
+				"testsrc=size=48x48:rate=5",
+				"-t",
+				"0.8",
+				input,
+			]).exited;
+			expect(result).toBe(0);
+			const sheet = await buildAnimatedFrameSheet(
+				new Uint8Array(await Bun.file(input).arrayBuffer()),
+				"image/gif",
+				{ maxFrames: 6 },
+			);
+			expect(sheet).toBeDefined();
+			expect(sheet?.mimeType).toBe("image/png");
+			expect(sheet?.frameCount).toBeGreaterThanOrEqual(2);
+			expect(sheet?.frameCount).toBeLessThanOrEqual(6);
+			expect(new TextDecoder().decode(sheet?.bytes.slice(1, 4))).toBe("PNG");
+			const { loadImage } = await import("canvas");
+			const image = await loadImage(Buffer.from(sheet?.bytes ?? new Uint8Array()));
+			expect(image.width).toBeGreaterThan(48);
+		},
+	);
 });
 
 describe("sticker semantic classification", () => {
@@ -1585,6 +1638,53 @@ describe("sticker semantic classification", () => {
 		expect(profile.emotions).not.toContain("not-a-real-label");
 		expect(profile.description).toBe("A sad character cries at the viewer.");
 		expect(profile.model).toBe("vision-test");
+	});
+
+	test("sends one merged contact sheet for animated stickers and says so in the prompt", async () => {
+		const requests: Array<{ imageDataUrl: string; mimeType: string; prompt: string }> = [];
+		const classifier = new VisionSemanticClassifier({
+			apiKey: "test-key",
+			complete: async (request) => {
+				requests.push({
+					imageDataUrl: request.imageDataUrl,
+					mimeType: request.mimeType,
+					prompt: request.prompt,
+				});
+				return JSON.stringify({ description: "A character waves.", labels: ["happy"] });
+			},
+			frameSheet: async () => ({
+				bytes: bytes("sheet-png"),
+				frameCount: 6,
+				mimeType: "image/png",
+			}),
+			model: "vision-test",
+		});
+		const profile = await classifier.classify({
+			bytes: bytes("animated-gif"),
+			mimeType: "image/gif",
+			title: "Animated pack",
+		});
+		expect(profile.source).toBe("merged");
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.mimeType).toBe("image/png");
+		expect(requests[0]?.imageDataUrl.startsWith("data:image/png;base64,")).toBe(true);
+		expect(requests[0]?.prompt).toContain("contact sheet merged from 6 frames");
+		expect(requests[0]?.prompt).toContain("left-to-right, top-to-bottom");
+	});
+
+	test("keeps a still image untouched for vision requests", async () => {
+		let frameSheetCalls = 0;
+		const classifier = new VisionSemanticClassifier({
+			apiKey: "test-key",
+			complete: async () => JSON.stringify({ labels: ["happy"] }),
+			frameSheet: async () => {
+				frameSheetCalls += 1;
+				return { bytes: bytes("sheet"), frameCount: 4, mimeType: "image/png" };
+			},
+			model: "vision-test",
+		});
+		await classifier.classify({ bytes: bytes("still-webp"), mimeType: "image/webp" });
+		expect(frameSheetCalls).toBe(0);
 	});
 
 	test("falls back to heuristic when vision is not configured", async () => {
