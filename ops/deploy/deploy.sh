@@ -213,7 +213,7 @@ set_env TSUKAIMA_IMAGE "$image"
 set_env TSUKAIMA_VERSION "$image_version"
 set_env TSUKAIMA_COMMIT "$commit"
 # Only an operator who applied a reviewed proposal knows its approved-patch checksum. Without it
-# a deferred self-iteration deployment cannot prove the patch is live and settles
+# a deferred deployment cannot prove the patch is live and settles
 # `manual_apply_required`; a plain commit deploy leaves this empty on purpose.
 set_env TSUKAIMA_PATCH_SHA256 "${TSUKAIMA_PATCH_SHA256:-}"
 set_env TSUKAIMA_DEPLOYER "$DEPLOYER"

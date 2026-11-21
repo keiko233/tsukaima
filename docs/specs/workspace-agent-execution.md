@@ -1,5 +1,9 @@
 # Workspace agent execution
 
+> Historical: the self-iteration plugin and its model tools were removed. Current Workspace
+> execution uses the native Pi runner: Pi defaults plus a small additive prompt and the approved
+> `todo_write`, `todo_list`, `session_context`, and `workspace_git_identity` tools.
+
 ## Outcome
 
 A WebUI Workspace can inspect its base revision, edit its task worktree, run relevant checks,
@@ -9,7 +13,7 @@ approval governs deployment, restart, backup, and rollback.
 
 ## Batch 1 — Tool exposure and task binding
 
-- Offer `self-iteration.analyze`, `worktree`, `edit`, `test`, `build`, `diff`, `propose`,
+- Offer `read`, `edit`, `write`, and the approved workspace tools,
   and `status` upfront in authorized Workspace turns. Keep upstream merges and infrequently
   used diagnostics discoverable on demand. Preserve other plugins' loading defaults.
 - Derive the task for model calls from the durable conversation's Workspace binding. Accept
@@ -35,7 +39,7 @@ capability withdrawal, and the existing IM and WebUI chat execution and discover
   to record command outcomes, exit codes, bounded output, timeouts, and cancellation. Keep
   existing test and build tools compatible.
 - Put executor mechanics in `packages/coding` and Workspace task operations in
-  `plugins/self-iteration`. Probe the isolated executor and expose an actionable unavailable
+  the native Pi workspace runner. Probe the isolated executor and expose an actionable unavailable
   reason through the existing status or inspector flow.
 - Provide an upfront Workspace exec tool when the executor can enforce isolation. Give Bash
   a disposable snapshot of the task source and writable scratch space for pipelines and

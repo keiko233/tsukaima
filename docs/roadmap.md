@@ -3,7 +3,7 @@
 ## Phase 0 — Design lock
 
 - [x] Capture requirements and decisions.
-- [x] Define runtime, domain model, plugin, migration, and self-iteration architecture.
+- [x] Define runtime, domain model, plugin, migration, and workspace architecture.
 - [ ] Review documents and adjust open points.
 
 ## Phase 1 — Core skeleton

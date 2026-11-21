@@ -165,5 +165,5 @@ Marketplace is separate; local/admin-managed first.
 
 ## Acceptance
 
-Memory/persona/sticker/search/proactive/self-iteration can be true plugins, and the server does
+Memory/persona/sticker/search/proactive can be true plugins, and the server does
 not import their internals.

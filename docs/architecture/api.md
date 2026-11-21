@@ -521,7 +521,7 @@ before its prompt. When the deadline arrives the process stops gracefully, write
 `$TSUKAIMA_DATA_DIR/restart-intent.json`, and exits with code 75. A host supervisor performs the
 image/container update and restart; the runtime does not receive Docker or host-shell access.
 
-A self-iteration reload is a deferred update: the deployment row stays `scheduled` until boot
+A deployment reload is a deferred update: the deployment row stays `scheduled` until boot
 recovery sees the `executing` intent (or an interrupted/cancelled one) and settles it, so the
 deployment history never reports an unfinished restart as deployed.
 

@@ -10,7 +10,7 @@ This file is the cross-session handoff record. Update it whenever implementation
 - Current phase: implementation-spec Phases 0–9 and the Release Readiness checklist are complete.
   The closed reply loop, oRPC contract layer, ingest boundary, persona/memory injection, admin
   authentication, plugin host, feature plugins (`onebot-napcat`, `openai-compatible`,
-  `sticker-meme`, `proactive-scheduler`, `search-fetch`, `self-iteration`), DSH migration kit,
+  `sticker-meme`, `proactive-scheduler`, `search-fetch`), DSH migration kit,
   Playwright WebUI E2E suite, secret scanning, and backup/restore drills all exist. Remaining
   work is operational: run the real DSH snapshot/import/verify/rollback and cut NapCat over.
 - Post-cutover chat agent runtime refactor (`docs/specs/chat-agent-runtime-refactor.md`, Batches 1–6)
@@ -34,7 +34,7 @@ This file is the cross-session handoff record. Update it whenever implementation
   steering/follow-up submission, deterministic fake model, OpenAI-compatible provider,
   capability routing, and usage accounting.
   - `plugins/onebot-napcat/src/protocol`: outbound WebSocket channel, NapCat event normalization, private/group send actions, access-token headers, reconnect backoff, and action timeouts. The former `packages/onebot` workspace was folded into the plugin, so the protocol implementation ships only with its only consumer.
-  - `packages/coding`: self-iteration runner, worktree policy, test/build/diff tools, DB-backed approval/proposal stores, and local reload controller.
+  - `packages/coding`: native Pi workspace runner, worktree policy, sandboxed command execution, DB-backed coding task/proposal/approval/deployment stores, and reload controller.
   - `packages/migration`: DSH snapshot inspection, session/persona/memory/sticker/settings normalization, compression hook, dry-run/import/verify/rollback pipeline.
   - `packages/sdk` and `packages/plugin-registry`: plugin manifest validation, permissions, tool/hook/UI bridges, runtime context, channel/settings/requests/audit host surfaces, install/upgrade/downgrade/quarantine lifecycle, plugin-owned migration registry, durable task/storage contracts, tool policy, declarative UI registry, and the mature Bun Worker protocol (handshake, cancellation, streamed logs/progress, host-mediated storage/audit, bounded restart, timeout/backpressure).
   - `plugins/onebot-napcat`: built-in channel plugin that owns the OneBot channel lifecycle, settings, diagnostics, and request resolution.
@@ -182,7 +182,7 @@ This file is the cross-session handoff record. Update it whenever implementation
   `TSUKAIMA_BACKUP_DRILL_INTERVAL_MS`; it is disabled by default and in tests.
 - `docs/operations/runbook.md` documents deployment prerequisites, secrets, NapCat setup,
   `/healthz`/`/readyz`, the offline DSH snapshot → dry-run → import → verify → rollback workflow,
-  scheduled drills, and supervised self-iteration reload recovery.
+  scheduled drills, and supervised deployment reload recovery.
 
 ## Confirmed decisions
 
@@ -214,7 +214,7 @@ This file is the cross-session handoff record. Update it whenever implementation
 - `docs/architecture/runtime.md`
 - `docs/architecture/domain-model.md`
 - `docs/architecture/plugins.md`
-- `docs/architecture/self-iteration.md`
+- `docs/architecture/workspace-and-hooks.md`
 - `docs/architecture/web-ui.md`
 - `docs/architecture/model-routing.md`
 - `docs/architecture/tech-stack.md`
@@ -237,7 +237,7 @@ Current position:
 
 - Do not adopt Cordis RC as a core dependency.
 - Do not treat DSH plugins as Cordis-compatible packages.
-- Use Pi concepts for the coding/self-iteration plane.
+- Use Pi concepts for the coding workspace plane.
 - Use Chord only as a design reference for versioned API packages, workers, reload, and UI registries.
 - Keep bot plugin APIs in the Tsukaima SDK with explicit permissions and policy.
 
@@ -251,7 +251,7 @@ These are implementation-level decisions, not blockers for starting scaffolding:
 4. Exact model policy seed values for Magpie and the OpenAI-compatible deployment.
 5. Exact WebUI route/procedure surface.
 6. Exact DSH session format parser behavior for every field type.
-7. Exact self-iteration approval form and audit record shape.
+7. Exact deployment approval form and audit record shape.
 
 ## Implementation status
 
@@ -263,7 +263,7 @@ These are implementation-level decisions, not blockers for starting scaffolding:
 - Phase 5: `sticker-meme` Telegram sticker-set import (including TGS-to-GIF rendering and WebM support), semantic preprocessing (emoji/title heuristics with an optional vision model), panel-managed bot token, review, selection, send tokens, transforms, and panel are implemented. Local directory/ZIP/DSH imports remain for migration.
 - Phase 6: `search-fetch` multi-provider routing, SSRF-hardened fetching, cache, redaction, tools, and panel are implemented.
 - Phase 7: `proactive-scheduler` durable tasks, gates, decisions, tools, and panel are implemented.
-- Phase 8: `self-iteration` runtime, coding tasks/proposals/approvals, supervised reload, deployments, rollback, tools, and panel are implemented.
+- Phase 8: governed workspace coding tasks/proposals/approvals, supervised reload, deployments, and rollback are implemented. The legacy self-iteration plugin and its model tools were removed; native Pi workspace execution is the only coding surface.
 - Phase 9: offline DSH v4 snapshot, parsers, normalize/dry-run/import/verify/rollback pipeline, migration CLI, and backup/restore rollback are implemented. A real read-only snapshot → dry-run → import → verify rehearsal passed against an isolated lab database; the live DSH cutover has not been executed.
 - Deployment Readiness: `messages.activity_id` and duplicated RPC schemas are removed, the
   Playwright WebUI E2E suite exists, the GitHub Actions test workflow enforces checks and tests,
@@ -309,7 +309,7 @@ The implementation phases are done. Remaining work is operational:
    conversation policies per group.
 3. **Scheduled operations**: enable `TSUKAIMA_BACKUP_DRILL_INTERVAL_MS` in production and alert on
    failed drill reports; run `bun run check:secrets` before every deploy.
-4. **Ongoing review**: use the self-iteration approval/deployment flow for every runtime change.
+4. **Ongoing review**: use the deployment approval flow for every runtime change.
 
 The full built-in plugin inventory and migration order are tracked in
 `docs/architecture/builtin-plugin-migration.md`.

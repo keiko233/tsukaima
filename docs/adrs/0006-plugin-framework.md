@@ -19,7 +19,7 @@ DSH uses a vendored Cordis fork and host-specific plugin APIs, so DSH plugins ar
 Implement a small Tsukaima plugin SDK:
 
 1. `pi-durable` remains the conversation/task authority.
-2. Pi concepts are used for coding/self-iteration and MCP/provider/tool registration.
+2. Pi concepts are used for coding workspaces and MCP/provider/tool registration.
 3. Bot plugin lifecycle, storage, UI, policy, and permissions are defined by Tsukaima.
 4. Borrow Cordis concepts for lifecycle/config/event modes/isolation/reload without depending on Cordis.
 5. Borrow Chord concepts for API versioning, worker isolation, reload semantics, registries, and data-only UI contributions.

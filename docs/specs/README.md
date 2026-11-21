@@ -12,8 +12,8 @@ boundary, required behavior, contract changes, migration concerns, and acceptanc
 4. When reality changes a decision, update the spec and, when architectural, add an ADR.
 5. Cross-cutting status remains in `docs/project-state.md`; don't duplicate progress here.
 
-The [Workspace agent execution spec](workspace-agent-execution.md) follows the initial
-self-iteration rollout and defines three independently reviewable implementation batches.
+The [Workspace agent execution spec](workspace-agent-execution.md) defines the native Pi
+workspace roll-out and its independently reviewable implementation batches.
 
 The [Chat agent runtime refactor spec](chat-agent-runtime-refactor.md) follows the post-cutover
 DSH parity audit and defines six independently reviewable implementation batches restoring chat
@@ -31,7 +31,6 @@ freedom, prompt-cache efficiency, IM tool ergonomics, semantic memory, and human
 | 5 | [Sticker and meme](sticker-meme.md) | Restores learned expression behavior. |
 | 6 | [Search and fetch](search-fetch.md) | Adds factual grounding and third-party tools. |
 | 7 | [Proactive and scheduled messages](proactive-scheduler.md) | Restores nudges, reminders, and supervised proactive turns. |
-| 8 | [Self-iteration runtime](self-iteration-runtime.md) | Connects the existing coding library to chat/admin surfaces. |
 | 9 | [Migration compatibility](migration-compatibility.md) | Required before importing the actual DSH deployment. |
 
 ## Global contracts and conventions

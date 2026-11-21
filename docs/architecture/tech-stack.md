@@ -28,7 +28,7 @@ packages/
   cache/        Keyv TTL cache, live-run event stream, and plugin cache
   db/           Drizzle schema and migrations
   onebot/       OneBot/NapCat adapter
-  coding/       self-iteration runtime policies and tools
+  coding/       governed workspace runtime policies and tools
   migration/    DSH migration domain logic
 tools/
   migration/    Bun CLI entry

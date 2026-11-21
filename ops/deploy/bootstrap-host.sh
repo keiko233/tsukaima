@@ -215,7 +215,7 @@ if [[ "$ENABLE_CADDY" == "1" && -n "$CADDYFILE" && -f "$CADDYFILE" ]]; then
 fi
 
 # Installing dependencies is the slowest part of a first deploy. Prepare the dependency image now
-# so every later deploy (and every self-iteration reload) finds it ready.
+# so every later deploy (and every deployment reload) finds it ready.
 if [[ "$SKIP_PREPARE_DEPS" != "1" ]] && [[ -f "$ROOT/repo/ops/deploy/prepare-deps.sh" ]]; then
 	echo "Preparing the dependency image (bun install runs once per lockfile change)..."
 	if deps_image="$(REPO="$ROOT/repo" bash "$ROOT/repo/ops/deploy/prepare-deps.sh")"; then

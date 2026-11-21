@@ -26,8 +26,8 @@ mention need the same durable prompt injection.
    - The first user message starts the task and derives the title and tags; creation itself does
      not require a prompt.
    - The workspace agent runs with the `coding` capability and the
-     `self-iteration.*` repository tools.
-   - Chat sessions never receive `self-iteration.*` coding tools.
+     workspace repository tools.
+   - Chat sessions never receive workspace coding tools.
 
 2. Give chat a narrow control surface.
    - Host-owned tools: `workspace_spawn`, `workspace_status`, `workspace_send`,

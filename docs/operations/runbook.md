@@ -3,7 +3,7 @@
 This runbook is the operator-facing companion to the architecture documents. It covers the
 deployment-readiness items: prerequisites, secret configuration, NapCat connectivity,
 health checks, the offline DSH migration workflow, scheduled backup/restore drills, and supervised
-self-iteration reload recovery.
+deployment reload recovery.
 
 Related documents:
 
@@ -256,7 +256,7 @@ Deployment flow:
 Recovery after a failed or interrupted reload:
 
 1. Check `GET /healthz`; a `failed`/`maintenance` state or a missing `/readyz` means traffic must stop.
-2. Read the deployment record (pre-check, reload, post-check, rollback) on the self-iteration panel.
+2. Read the deployment record (pre-check, reload, post-check, rollback) in the deployment history.
 3. If a rollback was recorded, confirm the server is running the previous revision, then verify
    `/readyz` and a read-only conversation before resuming traffic.
 4. If no rollback was recorded, redeploy the last known-good revision from its proposal, or restore

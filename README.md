@@ -14,7 +14,7 @@ data.
 - Durable conversations and background tasks with crash recovery.
 - Cross-session memory scoped by user, conversation, persona, and project.
 - Multi-model routing through Magpie with explicit per-capability model policy.
-- A specialized self-iteration runtime that can patch, test, build, and propose deployment changes.
+- A governed workspace agent that can inspect, patch, test, and build repository changes in a task worktree.
 - An IM-style WebUI for conversations, tasks, plugin panels, and administration.
 - OneBot v11 integration through outbound WebSocket connections to NapCat.
 

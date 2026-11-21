@@ -19,7 +19,7 @@ services:
       TSUKAIMA_CODING_SANDBOX: ${TSUKAIMA_CODING_SANDBOX:-host}
       TSUKAIMA_TRUSTED_ORIGINS: ${TSUKAIMA_TRUSTED_ORIGINS:-}
       TSUKAIMA_TRUSTED_PROXIES: ${TSUKAIMA_TRUSTED_PROXIES:-172.16.0.0/12}
-      # Artifact evidence for self-iteration deployment verification. The patch checksum must be
+      # Artifact evidence for governed deployment verification. The patch checksum must be
       # derived from the built image's content (not copied from the proposal), otherwise a
       # restarted deployment stays `manual_apply_required` by design.
       TSUKAIMA_COMMIT: ${TSUKAIMA_COMMIT:-}

@@ -8,7 +8,7 @@ Related documents:
 
 - [Production runbook](runbook.md)
 - [Privacy and synthetic data](privacy.md)
-- [Self-iteration architecture](../architecture/self-iteration.md)
+- [Workspace and hooks architecture](../architecture/workspace-and-hooks.md)
 - [Quality gates](quality.md)
 
 ## 1. Topology
@@ -216,9 +216,9 @@ docker compose \
 If a schema migration must be undone, stop the container, restore the matching data archive, and
 start the previous image. Never restore data under a newer schema.
 
-## 7. Self-iteration boundary
+## 7. Workspace and deployment boundary
 
-The container runs the self-iteration plugin in proposal/worktree mode. The image includes the
+The container runs the native Pi workspace agent in worktree mode. The image includes the
 repository `.git` at `/app`, and worktrees live under `/data/worktrees`; each new worktree gets a
 `node_modules` symlink back to the image install. It has `git`, `bun`, and `ripgrep`, but no Docker
 socket and no host checkout, so a proposal cannot replace the running image.
@@ -250,9 +250,9 @@ upstream `VERSION`, and the chosen path:
 
 - A clean checkout with no local commits merges with `--ff-only` and schedules the standard
   one-minute update restart.
-- A checkout with local commits creates a governed `proposal` workspace. The workspace merges the
-  upstream ref inside its worktree using `self-iteration.upstream`, and finalize merges that
-  branch back with `--no-ff` after a proposal exists.
+- A checkout with local commits creates a governed `proposal` workspace. The workspace agent
+  merges the upstream ref inside its worktree and finalize merges that branch back with `--no-ff`
+  after a proposal exists.
 - Uncommitted changes are never merged automatically. Commit or discard them first.
 
 Finalize verifies that the upstream commit is an ancestor of the live `HEAD` before scheduling the

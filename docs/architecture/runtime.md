@@ -4,7 +4,7 @@
 
 - `tsukaima-server`: Bun process containing HTTP API, WebSocket gateway for WebUI, channel runtime, agent runner, and scheduler.
 - `plugin-worker`: Bun worker/subprocess for selected third-party or long-running plugins.
-- `coding-runner`: subprocess or sandboxed environment for self-iteration jobs.
+- `coding-runner`: subprocess or sandboxed environment for governed workspace jobs.
 - `migration-kit`: Bun CLI used before and during cutover.
 
 All persistent reads and writes go through storage services; workers do not share mutable SQLite handles except through the host API.

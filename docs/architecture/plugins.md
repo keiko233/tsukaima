@@ -62,7 +62,7 @@ Required permission groups:
 | cache.publish | Publish to the plugin cache channel namespace |
 | ui.panel | Add WebUI panels |
 | secrets.read.<name> | Read one named secret |
-| coding.execute | Use self-iteration tools |
+| coding.execute | Use governed workspace coding tools |
 | deploy.propose | Create deployment proposals |
 
 Permissions are declared, reviewed in admin UI, and audited. A plugin cannot silently expand permissions.
@@ -109,7 +109,6 @@ Planned first-party set:
 - `proactive`: scheduled, idle, and event-driven outbound campaigns.
 - `qq-interactions`: grouped OneBot capabilities such as poke, reactions, member info, and group history.
 - `admin`: session inspection, conversation reset, purge, plugin control.
-- `self-iteration`: coding tasks, repository worktrees, tests, and deployment proposals.
 
 Feature parity with DSH plugins is tracked in [docs/migration/dsh.md](../migration/dsh.md).
 

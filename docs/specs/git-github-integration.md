@@ -186,13 +186,13 @@ deployment repository's branch protection still applies to the user's token.
   coding sessions.
 - **Writes** (push, branch delete, PR create or merge, release) require an `ApprovalGate` record and
   emit an audit entry through the existing `writeAudit` surface. The approval UI reuses the
-  self-iteration approval card pattern.
+  deployment approval card pattern.
 - **Policy**, a default-deny list in `settings.policies`: allowed remote names, allowed branch
   prefixes, protected branches (`main` plus the upgrade remote default branch), and `allowPush`
   (default false; the operator enables it once because this deployment needs push).
 - **Chat separation**: git and GitHub tools register coding-scoped
   (`allowedTaskKinds: ["coding"]`, `requiredConversationCapabilities: ["coding"]`) exactly like
-  `plugins/self-iteration`. Ordinary IM conversations never receive them.
+  the native Pi workspace runner. Ordinary IM conversations never receive them.
 - **Model-supplied input** (branch names, refs, PR titles and bodies, search strings) is validated
   with the existing `assertSafeBaseRef`-style rules and length caps before it reaches git or HTTP.
 - **Sandbox**: GitHub and git calls run host-side, outside bubblewrap, with the scrubbed env, the

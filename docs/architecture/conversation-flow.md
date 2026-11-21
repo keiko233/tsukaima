@@ -246,7 +246,7 @@ The runner must:
 - support steering during a run
 - persist compaction when necessary
 
-The chat-facing agent is not a coding agent by default. Coding tools appear only in coding or self-iteration conversations/tasks.
+The chat-facing agent is not a coding agent by default. Coding tools appear only in coding workspace conversations/tasks.
 
 Both chat and coding use lazy tool loading: plugin and host tools are deferred by default and
 become visible only after `tool_search` loads them. Tools also declare a `surface` (`chat`,

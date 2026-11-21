@@ -88,10 +88,10 @@ ENV NODE_ENV=production \
 
 # Ownership is applied during the copy: a separate `chown -R /app` rewrote the whole tree into
 # another layer, which doubled the image and cost ~25 s per build. `bun` stays able to write
-# /app/.git so governed self-iteration worktrees keep working.
+# /app/.git so governed workspace worktrees keep working.
 COPY --from=build --chown=bun:bun /app/node_modules /app/node_modules
 COPY --from=build --chown=bun:bun /runtime /app
-# /app itself keeps the WORKDIR owner, and a governed self-iteration reload has to create or
+# /app itself keeps the WORKDIR owner, and a governed deployment reload has to create or
 # replace working-tree entries there. The tree below it already came in as bun:bun.
 RUN mkdir -p /data && chown bun:bun /app /data
 USER bun

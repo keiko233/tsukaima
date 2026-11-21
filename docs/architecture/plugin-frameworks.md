@@ -36,7 +36,7 @@ Risks:
 
 Pi coding-agent extensions provide a mature agent-side extension API: tools, commands, flags, lifecycle events, custom providers, MCP registration, custom message/entry rendering, and session state through custom entries.
 
-Tsukaima uses Pi concepts in the coding/self-iteration plane, but Pi is not the bot plugin framework:
+Tsukaima uses Pi concepts in the coding workspace plane, but Pi is not the bot plugin framework:
 
 | Pi concept | Tsukaima use |
 | --- | --- |

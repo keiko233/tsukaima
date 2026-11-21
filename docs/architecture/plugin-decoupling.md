@@ -95,7 +95,6 @@ plugins/             # built-in plugins, each its own workspace package
   sticker-meme/
   search/
   proactive/
-  self-iteration/
   chaos/             # dev-only, disabled by default
 tools/               # CLIs (migration runner stays here)
 ```
@@ -208,7 +207,6 @@ Ordered by how much is in the core today (most entangled first).
 | --- | --- | --- | --- | --- |
 | `onebot-napcat` | `plugins/onebot-napcat` (protocol code in `src/protocol`) | channel lifecycle, settings, diagnostics, envelope/request ingestion, request resolution, outbound send | `channels`, `conversation.ingest`, `requests`, `settings`, `audit`, `hooks` | A/B |
 | `openai-compatible` | `lifecycle.createModelPort`, `remote-models.ts`, `config.openAi*`, `runtime-settings.openAi*` | provider construction, model listing, usage recording | `models.registerProvider`, `settings` | C |
-| `self-iteration` | `packages/coding` (lib) | runner, worktree policy, proposal store, reload controller → add tools + RPC + UI panel | `tools`, `rpc`, `audit`, `tasks` | D |
 | `memory` | not implemented (`docs/architecture/memory.md`) | scoped storage, retrieval, extraction, recall tool | `memory` API + table ownership | D |
 | `persona` | migration-only | persona load/version/prompt sections | `persona` API | D |
 | `sticker-meme` | not implemented | sticker packs, tagging, auto-selection | `channel.send`, storage | D |
@@ -296,10 +294,9 @@ Phase B shipped with these deviations from the sketch above:
 
 ### Phase D — Register the remaining feature libraries
 
-1. Register `coding` as `self-iteration` (tools + RPC + panel).
-2. Build `memory`, `persona`, `sticker-meme`, `search`, `proactive` as plugins with the
+1. Build `memory`, `persona`, `sticker-meme`, `search`, `proactive` as plugins with the
    plugin-owned migration path from §6.1.
-3. Move `chaos` behind a dev-only manifest.
+2. Move `chaos` behind a dev-only manifest.
 
 ### Phase E — Cleanup
 

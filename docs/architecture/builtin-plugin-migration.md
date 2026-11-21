@@ -96,28 +96,7 @@ Target:
 The persona prompt section is part of the model context contract. Moving it to a plugin must
 preserve the exact section name and rendering order until a deliberate migration changes it.
 
-### 3.4 `self-iteration`
-
-Current location:
-
-- `packages/coding`
-- `coding_approvals` and `coding_proposals` tables
-- no server registration or WebUI surface
-
-Current behavior: the library is tested but not reachable from chat or the admin API.
-
-Target:
-
-- `plugins/self-iteration`
-- tools for worktree creation, test/build/diff, proposal creation
-- approval-card UI
-- RPC namespace for proposals
-- audit and task graph integration
-
-This is the largest remaining plugin, but it should not move until the host has plugin RPC and
-task surfaces.
-
-### 3.5 `sticker-meme`
+### 3.4 `sticker-meme`
 
 Current location:
 
@@ -132,7 +111,7 @@ Target:
 - learned sticker candidates
 - admin review for learned content
 
-### 3.6 `search`
+### 3.5 `search`
 
 Current location:
 
@@ -146,7 +125,7 @@ Target:
 - model-facing search/fetch tools
 - result caching and source metadata
 
-### 3.7 `proactive`
+### 3.6 `proactive`
 
 Current location:
 
@@ -160,7 +139,7 @@ Target:
 - outbound campaign records
 - admin controls and per-conversation opt-in
 
-### 3.8 `chaos`
+### 3.7 `chaos`
 
 Current location:
 
@@ -205,12 +184,12 @@ screens may be contributed by plugins, but core admin authorization and audit st
 | `settings.get/onChange` | all plugins | done |
 | `requests.persist` | `onebot-napcat` | done |
 | `audit.record` | all state-changing plugins | done |
-| `tools.register/list/invoke` | memory, search, sticker, self-iteration | done |
+| `tools.register/list/invoke` | memory, search, sticker | done |
 | `events.on/emit` | all hook plugins | done |
 | `ui.register/list` | all UI plugins | registry exists, WebUI not consuming |
 | `models.registerProvider` | `openai-compatible` | done |
-| `rpc.register` | self-iteration, memory review, plugin panels | done (host bridge; WebUI calls `admin/plugins/rpc`) |
-| `tasks.create` | proactive, self-iteration | missing |
+| `rpc.register` | memory review, plugin panels | done (host bridge; WebUI calls `admin/plugins/rpc`) |
+| `tasks.create` | proactive | missing |
 | `storage.conversation/global` | memory, sticker, plugins | bridge exists but host wiring is limited |
 | plugin-owned migrations | any plugin with tables | missing |
 
@@ -223,12 +202,11 @@ Recommended order, each step keeping `bun run check` green:
 2. **Plugin UI registry consumption** — generic manifest metadata and JSON-schema config forms are
    rendered. Named panels/approval cards still need a host component registry.
 3. **`models.registerProvider` + `plugins/openai-compatible`** — the second real built-in plugin.
-4. **Plugin RPC registration** — needed before self-iteration and memory review can be plugins.
+4. **Plugin RPC registration** — needed before memory review can be a plugin.
 5. **`plugins/memory` and `plugins/persona`** — preserve prompt section names and behavior.
 6. **`plugins/sticker-meme`, `plugins/search`, `plugins/proactive`** — new features with no
    existing runtime to preserve.
-7. **`plugins/self-iteration`** — largest, depends on RPC, UI, approvals, and task surfaces.
-8. **Optional `plugins/migration` panel** — never required for cutover.
+7. **Optional `plugins/migration` panel** — never required for cutover.
 
 ## 6. Definition of done for "all built-ins under plugins/"
 

@@ -5,7 +5,7 @@
 Tsukaima separates conversation from repository execution:
 
 - **Chat** is the user-facing reasoning and coordination surface.
-- **Workspace** is a governed repository agent with a coding task and self-iteration tools.
+- **Workspace** is a governed repository agent with a coding task and native Pi coding tools.
 - **Prompt hooks** inject durable operational context before a turn or reserve work for after a
   restart.
 
@@ -58,20 +58,21 @@ Workspace-control tools:
   server-owned Git identity service. It is offered only to coding Workspaces, never chat or IM,
   and never reads `.git` configuration, credentials, or raw database rows.
 
-Coding tools (`self-iteration.*`) are offered to a Workspace turn in two tiers. `analyze`,
-`worktree`, `edit`, `test`, `build`, `diff`, `propose`, and `status` are offered in the first
-request. `upstream` stays deferred and loads through `tool_search`. Every call is bound to the
-Workspace's durable task before it runs:
+The native Pi workspace runner owns coding execution. Each turn gets the Pi defaults for the
+task worktree plus a small additive prompt and these approved tools:
 
-- The task comes from the durable conversation's workspace row, never from the model. A supplied
-  `taskId` is accepted only when it equals that binding; a mismatch is denied and audited, and a
-  missing binding (a draft with no task) fails the call with `task_binding_missing`.
-- Model calls never create tasks. Admin RPC callers keep their existing `taskId`/`goal` behavior.
-- Read-only inspection before any edit reads the task's base revision from the committed tree.
-- The first edit, a validation command, or `self-iteration.worktree` provisions the task worktree.
-  Concurrent first calls share one creation, and a retry adopts the checkout at the task path.
-- Capability and role are checked on every invocation, so a coding call from a turn whose
-  `coding` capability was withdrawn is rejected even if the tool was discovered earlier.
+- `read`, `edit`, and `write` are the native Pi file tools. `bash` is added only when the
+  server-owned executor reports isolated execution.
+- `todo_write`, `todo_list`, `session_context`, and `workspace_git_identity` are host-owned
+  additions. They never expose SQL, deployment, restart, or plugin-model tools.
+
+Every turn is bound to the Workspace's durable task before it runs:
+
+- The task comes from the workspace row, never from the model.
+- Read-only work uses the task worktree. Concurrent first turns share one creation, and a restart
+  reopens the same checkout and Pi session.
+- Capability and role are checked before dispatch, so a turn whose `coding` capability was
+  withdrawn is rejected before the model or a tool runs.
 
 The chat model is instructed to spawn a workspace for a concrete bug, feature, optimization, or
 self-discovered improvement. It does not claim the code is changed until the workspace reports a
@@ -83,9 +84,6 @@ Workspace-only coding-agent tools:
   explicitly referenced in this turn.
 - `todo_write({ items })` replaces the workspace checklist; at most one item may be in progress.
 - `todo_list()` returns the current checklist.
-- `db_schema({ table? })` lists allowlisted tables and columns.
-- `db_query({ sql, params? })` runs one read-only `SELECT`/`WITH` query against an allowlisted
-  table set, capped at 200 rows and 64 KiB.
 
 The coding-agent extension is installed process-wide but filtered out for chat, IM, task, and
 plugin sessions in `applySessionToolPolicy`.
@@ -112,7 +110,7 @@ first and counts commits on both sides.
 | Checkout state | Upgrade path |
 | --- | --- |
 | Clean, no local commits | Merge `origin/<branch>` with `--ff-only`, then schedule the update restart |
-| Local commits | Create a `proposal` workspace; the agent merges with `self-iteration.upstream` and proposes the result |
+| Local commits | Create a `proposal` workspace; the agent merges the upstream ref in its worktree and records the result |
 | Uncommitted changes | No automatic merge; commit or discard them first |
 
 Finalizing an upgrade re-checks that the upstream target commit is an ancestor of `HEAD`, then
@@ -211,7 +209,7 @@ Recovery rules:
   an unknown, active, or unparsable file is left in place for the operator.
 
 The model and workspace cannot invoke Docker or the host deployer. `RestartReloadController`
-maps an approved self-iteration reload into a deferred update intent; the actual version switch
+maps an approved deployment reload into a deferred update intent; the actual version switch
 remains a host responsibility.
 
 ## API and UI

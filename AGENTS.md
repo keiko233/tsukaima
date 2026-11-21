@@ -32,7 +32,7 @@ Targeted tests are preferred while iterating, for example:
 
 ```sh
 bun test apps/server/tests/lifecycle.test.ts
-bun test plugins/self-iteration/src/service.test.ts
+bun test apps/server/tests/workspace-native-runner.test.ts
 ```
 
 WebUI build and route-tree generation:

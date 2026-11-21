@@ -24,7 +24,6 @@ This document set is the durable design record for Tsukaima. Each file is meant 
 | [Plugin decoupling plan](plugin-decoupling.md) | Host seam, `plugins/*` workspace, and the phase plan for moving core features into plugins |
 | [Memory](memory.md) | Scopes, schema, retrieval pipeline, extraction policy, and admin review |
 | [Model routing](model-routing.md) | Capability policies, provider registration, selection order, and usage accounting |
-| [Self-iteration](self-iteration.md) | Coding workflow, policy gates, deployment proposals, and rollback |
 | [WebUI](web-ui.md) | Admin console layout and interaction model |
 | [Technology stack](tech-stack.md) | Full library choices, workspace layout, and dependency policy |
 | [Quality gates](../operations/quality.md) | Lint, format, commits, tests, scopes, and dependency review |

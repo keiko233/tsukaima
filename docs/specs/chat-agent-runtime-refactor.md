@@ -52,7 +52,7 @@ the DSH baseline:
 ## Architectural invariants
 
 - Keep `packages/contracts` as the single source of truth for all RPC and policy wire schemas.
-- Keep ordinary IM turns free of repository-mutating coding tools (`self-iteration.*`, shell,
+- Keep ordinary IM turns free of repository-mutating coding tools (workspace coding tools, shell,
   repo edit/exec). Chat-to-workspace delegation uses governed session tools only.
 - Preserve durable at-most-once reply delivery, reply expectations, crash recovery, and audit
   logging on privileged or destructive actions.
@@ -288,7 +288,7 @@ Batches 2, 3, and 5 can proceed in parallel once Batch 1 lands.
     authorized IM conversations (controlled by explicit conversation/admin policy, e.g.
     `workspaceDelegationEnabled` or trusted admin speaker) receive `workspace_spawn`,
     `workspace_status`, `workspace_send`, and `session_lookup`, while **never** receiving
-    `self-iteration.*`, `CODING_AGENT_TOOL_NAMES`, or `WORKSPACE_CODING_TOOL_NAMES`.
+    workspace coding tools, `CODING_AGENT_TOOL_NAMES`, or `WORKSPACE_CODING_TOOL_NAMES`.
   - Audit every workspace spawn/send initiated from an IM conversation with caller identity and
     origin session metadata, and deny unauthorized non-admin speakers fail-closed.
 - **Unify scheduling for IM.**
