@@ -22,10 +22,10 @@ const PLUGINS = [
 		panel: "Proactive scheduler",
 	},
 	{
-		control: "Run test query",
-		id: "search-fetch",
-		name: "Search and fetch",
-		panel: "Search and fetch",
+		control: "Add server",
+		id: "mcp",
+		name: "MCP servers",
+		panel: "MCP servers",
 	},
 ] as const;
 

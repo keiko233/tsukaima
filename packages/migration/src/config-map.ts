@@ -58,8 +58,8 @@ const AREA_DEFINITIONS: Readonly<Record<DshConfigArea, AreaDefinition>> = {
 		target: "plugin.proactive-scheduler",
 	},
 	search: {
-		reason: "Maps search providers to the search-fetch plugin",
-		target: "plugin.search-fetch",
+		reason: "Maps search providers to the MCP server plugin",
+		target: "plugin.mcp",
 	},
 	"trigger-pacing": {
 		reason: "Maps trigger, pacing, burst, and media behavior to conversation policy",

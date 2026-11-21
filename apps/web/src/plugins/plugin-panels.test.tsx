@@ -2,16 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PluginI18n } from "@tsukaima/sdk/i18n";
 import { PluginPanelProvider, type PluginSummary } from "@tsukaima/sdk/ui";
+import mcpUi from "../../../../plugins/mcp/src/ui.tsx";
 import { oneBotNapCatManifest } from "../../../../plugins/onebot-napcat/src/manifest.ts";
 import oneBotUi from "../../../../plugins/onebot-napcat/src/ui.tsx";
 import openAiUi from "../../../../plugins/openai-compatible/src/ui.tsx";
 import proactiveUi from "../../../../plugins/proactive-scheduler/src/ui.tsx";
-import searchUi from "../../../../plugins/search-fetch/src/ui.tsx";
 import stickerUi from "../../../../plugins/sticker-meme/src/ui.tsx";
+import { i18n as mcpI18n } from "../../../../plugins/mcp/src/i18n.ts";
 import { i18n as oneBotI18n } from "../../../../plugins/onebot-napcat/src/i18n.ts";
 import { i18n as openAiI18n } from "../../../../plugins/openai-compatible/src/i18n.ts";
 import { i18n as proactiveI18n } from "../../../../plugins/proactive-scheduler/src/i18n.ts";
-import { i18n as searchI18n } from "../../../../plugins/search-fetch/src/i18n.ts";
 import { i18n as stickerI18n } from "../../../../plugins/sticker-meme/src/i18n.ts";
 import type { PluginUiModuleDefinition } from "@tsukaima/sdk/ui";
 
@@ -143,27 +143,6 @@ describe("built-in plugin panels", () => {
 		expect(html.indexOf("onebot-napcat")).toBe(-1);
 	});
 
-	test("renders the search-fetch panel in en and zh-cn", () => {
-		const searchPlugin: PluginSummary = {
-			...plugin,
-			config: {},
-			id: "search-fetch",
-			name: "search-fetch",
-			permissions: ["ui.panel", "tools", "network.search", "network.fetch"],
-			secretKeys: ["braveApiKey", "serperApiKey", "tavilyApiKey"],
-		};
-		const html = renderPanel(searchUi, searchI18n.bind("en"), searchPlugin);
-		expect(html).toContain("Search and fetch");
-		expect(html).toContain("Providers");
-		expect(html).toContain("Routing policy");
-		expect(html).toContain("Test query");
-		const zh = renderPanel(searchUi, searchI18n.bind("zh-cn"), searchPlugin);
-		expect(zh).toContain("搜索与抓取");
-		expect(zh).toContain("提供商");
-		expect(zh).toContain("路由策略");
-		expect(zh).toContain("测试查询");
-	});
-
 	test("renders the proactive-scheduler panel in en and zh-cn", () => {
 		const proactivePlugin: PluginSummary = {
 			...plugin,
@@ -179,6 +158,23 @@ describe("built-in plugin panels", () => {
 		expect(zh).toContain("主动消息调度");
 		expect(zh).toContain("已排期任务");
 		expect(zh).toContain("试运行");
+	});
+
+	test("renders the MCP server panel in en and zh-cn", () => {
+		const mcpPlugin: PluginSummary = {
+			...plugin,
+			id: "mcp",
+			name: "mcp",
+			permissions: ["ui.panel", "tools", "audit.write", "storage.global"],
+		};
+		const html = renderPanel(mcpUi, mcpI18n.bind("en"), mcpPlugin);
+		expect(html).toContain("MCP servers");
+		expect(html).toContain("Add MCP server");
+		expect(html).toContain("Loading MCP servers…");
+		const zh = renderPanel(mcpUi, mcpI18n.bind("zh-cn"), mcpPlugin);
+		expect(zh).toContain("MCP 服务器");
+		expect(zh).toContain("添加 MCP 服务器");
+		expect(zh).toContain("正在加载 MCP 服务器…");
 	});
 
 	test("renders the sticker-meme library panel in en and zh-cn", () => {

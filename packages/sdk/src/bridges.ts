@@ -257,6 +257,10 @@ export class LocalToolBridge {
 		return [...this.#tools.values()];
 	}
 
+	unregister(name: string): void {
+		this.#tools.delete(name);
+	}
+
 	async invoke(
 		name: string,
 		input: Record<string, unknown>,
@@ -971,7 +975,6 @@ const STATIC_TOOL_PREFIXES = [
 	"openai-compatible",
 	"onebot-napcat",
 	"sticker-meme",
-	"search-fetch",
 	"memory",
 ] as const;
 

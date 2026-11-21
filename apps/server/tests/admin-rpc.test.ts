@@ -139,8 +139,8 @@ describe("admin RPC", () => {
 				{ config: {}, id: "onebot-napcat", secretsSet: [] },
 				{ config: {}, id: "memory", secretsSet: [] },
 				{ config: {}, id: "proactive-scheduler", secretsSet: [] },
-				{ config: {}, id: "search-fetch", secretsSet: [] },
 				{ config: {}, id: "sticker-meme", secretsSet: [] },
+				{ config: {}, id: "mcp", secretsSet: [] },
 			],
 		});
 		const updatedSettings = await request("admin/settings/update", { logLevel: "debug" });
@@ -151,8 +151,8 @@ describe("admin RPC", () => {
 				{ config: {}, id: "onebot-napcat", secretsSet: [] },
 				{ config: {}, id: "memory", secretsSet: [] },
 				{ config: {}, id: "proactive-scheduler", secretsSet: [] },
-				{ config: {}, id: "search-fetch", secretsSet: [] },
 				{ config: {}, id: "sticker-meme", secretsSet: [] },
+				{ config: {}, id: "mcp", secretsSet: [] },
 			],
 		});
 		expect(lifecycle.logLevel).toBe("debug");

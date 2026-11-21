@@ -1,7 +1,7 @@
+import { mcpPlugin } from "@tsukaima-plugin/mcp";
 import { oneBotNapCatPlugin } from "@tsukaima-plugin/onebot-napcat";
 import { openAiCompatiblePlugin } from "@tsukaima-plugin/openai-compatible";
 import { proactiveSchedulerPlugin } from "@tsukaima-plugin/proactive-scheduler";
-import { searchFetchPlugin } from "@tsukaima-plugin/search-fetch";
 import { stickerMemePlugin } from "@tsukaima-plugin/sticker-meme";
 import type { TsukaimaPlugin } from "@tsukaima/sdk";
 import { memoryPlugin } from "./memory.ts";
@@ -15,6 +15,6 @@ export const builtinPlugins: readonly TsukaimaPlugin[] = [
 	oneBotNapCatPlugin,
 	memoryPlugin,
 	proactiveSchedulerPlugin,
-	searchFetchPlugin,
 	stickerMemePlugin,
+	mcpPlugin,
 ];

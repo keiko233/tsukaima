@@ -221,8 +221,8 @@ describe("plugin host", () => {
 				"onebot-napcat",
 				"memory",
 				"proactive-scheduler",
-				"search-fetch",
 				"sticker-meme",
+				"mcp",
 				"fake-channel",
 			]);
 			expect(plugins[1]).toEqual(

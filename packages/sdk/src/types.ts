@@ -131,6 +131,8 @@ export interface PluginToolRegistry {
 		context?: ToolInvocationContext,
 	): Promise<PluginToolInvocationResult>;
 	register(tool: PluginTool): void;
+	/** Remove a tool registered by this plugin, e.g. after its upstream server disconnects. */
+	unregister(name: string): void;
 	list(): readonly PluginTool[];
 }
 

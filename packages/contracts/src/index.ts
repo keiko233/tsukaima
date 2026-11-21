@@ -148,6 +148,7 @@ export const channelMessageSchema = z.object({
 
 export type ChannelMessage = z.infer<typeof channelMessageSchema>;
 
+export * from "./mcp.ts";
 export * from "./memory.ts";
 export * from "./policy.ts";
 export * from "./proactive.ts";
