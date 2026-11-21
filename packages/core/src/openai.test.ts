@@ -356,6 +356,7 @@ describe("OpenAI-compatible provider", () => {
 					completion_tokens: 14,
 					completion_tokens_details: { reasoning_tokens: 4 },
 					prompt_tokens: 19,
+					prompt_tokens_details: { cached_tokens: 12 },
 				},
 			}),
 		) as unknown as FetchMock;
@@ -404,7 +405,7 @@ describe("OpenAI-compatible provider", () => {
 					{ thinking: "Considered the options.", type: "thinking" },
 					{ text: "Final answer", type: "text" },
 				],
-				usage: { reasoning: 4 },
+				usage: { cacheRead: 12, input: 7, output: 14, reasoning: 4, totalTokens: 33 },
 			},
 		});
 	});

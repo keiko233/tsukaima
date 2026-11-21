@@ -277,11 +277,9 @@ function usage(input: number, output: number, cacheRead: number): Usage {
 
 /** Provider usage object to an assistant usage record; streamed providers may only send it at the end. */
 function usageFromPayload(payload: OpenAIResponse["usage"]): Usage {
-	const base = usage(
-		payload?.prompt_tokens ?? 0,
-		payload?.completion_tokens ?? 0,
-		payload?.prompt_tokens_details?.cached_tokens ?? 0,
-	);
+	const promptTokens = payload?.prompt_tokens ?? 0;
+	const cachedTokens = Math.min(promptTokens, payload?.prompt_tokens_details?.cached_tokens ?? 0);
+	const base = usage(promptTokens - cachedTokens, payload?.completion_tokens ?? 0, cachedTokens);
 	const reasoning = payload?.completion_tokens_details?.reasoning_tokens;
 	return reasoning === undefined ? base : { ...base, reasoning };
 }
