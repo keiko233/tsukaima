@@ -29,6 +29,7 @@ async function setup(
 			intent: RestartIntent,
 			outcome: "cancelled" | "completed" | "interrupted",
 		) => void;
+		readonly prepareUpdate?: (intent: RestartIntent) => Promise<void>;
 	} = {},
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "tsukaima-restart-"));
@@ -42,6 +43,7 @@ async function setup(
 		hooks,
 		logger,
 		...(options.onSettled === undefined ? {} : { onSettled: options.onSettled }),
+		...(options.prepareUpdate === undefined ? {} : { prepareUpdate: options.prepareUpdate }),
 	});
 	const chatId = randomUUID();
 	const sessionId = randomUUID();
@@ -322,6 +324,91 @@ describe("restart coordinator", () => {
 		// Replaying on another boot is safe: settlement is idempotent.
 		await coordinator.recover();
 		expect(settled.filter((entry) => entry.id === "terminal-before-settlement")).toHaveLength(2);
+		coordinator.close();
+		hooks.close();
+		database.$client.close();
+	});
+
+	test("runs prepareUpdate before handler when mode is update", async () => {
+		const events: string[] = [];
+		const { coordinator, database, hooks } = await setup({
+			prepareUpdate: async (intent) => {
+				events.push(`prepare:${intent.mode}`);
+			},
+		});
+		const handled = new Promise<RestartIntent>((resolve) => {
+			coordinator.setHandler((intent) => {
+				events.push(`handler:${intent.mode}`);
+				resolve(intent);
+			});
+		});
+		await coordinator.schedule({
+			delayMs: 20,
+			mode: "update",
+			reason: "update test",
+		});
+		await handled;
+		expect(events).toEqual(["prepare:update", "handler:update"]);
+		await waitForStatus(coordinator, "completed");
+		coordinator.close();
+		hooks.close();
+		database.$client.close();
+	});
+
+	test("does not run prepareUpdate when mode is restart", async () => {
+		const events: string[] = [];
+		const { coordinator, database, hooks } = await setup({
+			prepareUpdate: async (intent) => {
+				events.push(`prepare:${intent.mode}`);
+			},
+		});
+		const handled = new Promise<RestartIntent>((resolve) => {
+			coordinator.setHandler((intent) => {
+				events.push(`handler:${intent.mode}`);
+				resolve(intent);
+			});
+		});
+		await coordinator.schedule({
+			delayMs: 20,
+			mode: "restart",
+			reason: "restart test",
+		});
+		await handled;
+		expect(events).toEqual(["handler:restart"]);
+		await waitForStatus(coordinator, "completed");
+		coordinator.close();
+		hooks.close();
+		database.$client.close();
+	});
+
+	test("aborts restart and marks status failed if prepareUpdate throws", async () => {
+		const settled: Array<{ readonly id: string; readonly outcome: string }> = [];
+		let handlerCalled = false;
+		const { coordinator, database, hooks, sessionId } = await setup({
+			onSettled: (intent, outcome) => settled.push({ id: intent.id, outcome }),
+			prepareUpdate: async () => {
+				throw new Error("Dependency installation failed");
+			},
+		});
+		coordinator.setHandler(() => {
+			handlerCalled = true;
+		});
+		const scheduled = await coordinator.schedule({
+			delayMs: 20,
+			mode: "update",
+			reason: "failing update",
+		});
+		await waitForStatus(coordinator, "failed");
+		expect(handlerCalled).toBe(false);
+		expect(settled).toContainEqual({ id: scheduled.id, outcome: "interrupted" });
+		const status = await coordinator.status();
+		expect(status?.status).toBe("failed");
+		const rows = await database
+			.select()
+			.from(runtimeRestarts)
+			.where(eq(runtimeRestarts.id, scheduled.id));
+		expect(rows[0]?.metadataJson).toContain("Dependency installation failed");
+		expect(await hooks.renderContext(sessionId)).toBeUndefined();
 		coordinator.close();
 		hooks.close();
 		database.$client.close();

@@ -129,6 +129,7 @@ import { GitHubService } from "./services/github-service.ts";
 import { ReplyExpectationStore } from "./services/reply-expectations.ts";
 import { SidechatService, resolveSidechatTarget } from "./services/sidechat.ts";
 import { LiveRunCache } from "./services/live-run-cache.ts";
+import { DependencyInstaller } from "./services/dependency-installer.ts";
 import { PromptHookService } from "./services/prompt-hooks.ts";
 import { PROMPT_TOOL_NAMES, createPromptTools } from "./services/prompt-tools.ts";
 import { PromptService } from "./services/prompts.ts";
@@ -198,6 +199,8 @@ export interface LifecycleOptions {
 		| undefined;
 	/** Process environment, used for plugin `configEnv` fallbacks. */
 	readonly env?: Record<string, string | undefined>;
+	/** Optional dependency installer override (used in tests). */
+	readonly dependencyInstaller?: DependencyInstaller | undefined;
 	readonly logger?: Logger;
 	/** Test or embedding override for the model catalog and provider. */
 	readonly model?: ModelPort | undefined;
@@ -265,6 +268,7 @@ export class TsukaimaLifecycle {
 	readonly repository: RepositoryService;
 	readonly schedules: ScheduleService;
 	readonly restartCoordinator: RestartCoordinator;
+	readonly dependencyInstaller: DependencyInstaller;
 	readonly sessionMessaging: SessionMessagingService;
 	readonly upgrades: UpgradeService;
 	readonly workspace: WorkspaceService;
@@ -378,12 +382,21 @@ export class TsukaimaLifecycle {
 			database: () => this.domainDatabase,
 			logger: this.runtimeLog,
 		});
+		this.dependencyInstaller =
+			options?.dependencyInstaller ??
+			new DependencyInstaller({
+				logger: this.runtimeLog,
+				repositoryRoot: config.repositoryRoot,
+			});
 		this.restartCoordinator = new RestartCoordinator({
 			audit: (entry) => this.writeAudit(entry),
 			database: () => this.domainDatabase,
 			hooks: this.promptHooks,
 			logger: this.runtimeLog,
 			onSettled: (intent, outcome) => this.reconcileRestartSettlement(intent, outcome),
+			prepareUpdate: async (_intent) => {
+				await this.dependencyInstaller.install();
+			},
 		});
 		this.channels = new ChannelRegistry({
 			onEnvelope: (channelId, envelope) => {
@@ -814,6 +827,7 @@ export class TsukaimaLifecycle {
 			coding: this.codingStore,
 			database: () => this.domainDatabase,
 			defaultRemote: config.upgradeRemote,
+			dependencyInstaller: this.dependencyInstaller,
 			ensureWorktree: async (taskId) => await this.ensureWorkspaceWorktree(taskId),
 			logger: this.runtimeLog,
 			repositoryRoot: config.repositoryRoot,
@@ -1198,6 +1212,12 @@ export class TsukaimaLifecycle {
 		return this.restartCoordinator.status();
 	}
 
+	async installDependencies(
+		options: { readonly signal?: AbortSignal | undefined } = {},
+	): Promise<void> {
+		await this.dependencyInstaller.install(options);
+	}
+
 	/**
 	 * Settle the deployment that owned a restart intent once the intent reaches a terminal
 	 * state. A deployment stays `scheduled` until this runs, so history never reports an
@@ -1213,21 +1233,25 @@ export class TsukaimaLifecycle {
 		outcome: RestartSettlementOutcome,
 	): Promise<void> {
 		const deploymentId = intent.metadata.deploymentId;
-		if (typeof deploymentId !== "string" || deploymentId.length === 0) return;
-		const result = await reconcileRestartDeployment(this.codingStore, {
-			atMs: Date.now(),
-			deploymentId,
-			outcome,
-			verify: (input) => this.verifyDeploymentApplication(input),
-		});
-		this.runtimeLog.info("restart settlement reconciled", {
-			deploymentId,
-			outcome,
-			proposalId: result?.proposal?.id,
-			restartId: intent.id,
-			status: result?.deployment.status ?? "missing",
-			updated: result?.updated ?? false,
-		});
+		if (typeof deploymentId === "string" && deploymentId.length > 0) {
+			const result = await reconcileRestartDeployment(this.codingStore, {
+				atMs: Date.now(),
+				deploymentId,
+				outcome,
+				verify: (input) => this.verifyDeploymentApplication(input),
+			});
+			this.runtimeLog.info("restart settlement reconciled", {
+				deploymentId,
+				outcome,
+				proposalId: result?.proposal?.id,
+				restartId: intent.id,
+				status: result?.deployment.status ?? "missing",
+				updated: result?.updated ?? false,
+			});
+		}
+		if (outcome === "interrupted") {
+			await this.upgrades?.failRestart(intent.id, intent.reason);
+		}
 	}
 
 	/**

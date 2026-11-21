@@ -16,6 +16,7 @@ import {
 import { runtimeUpgrades, type TsukaimaDatabase } from "@tsukaima/db";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
+import type { DependencyInstaller } from "./dependency-installer.ts";
 import { gitIdentityArgs, readGitIdentity } from "./git-identity.ts";
 import type { WorkspaceService } from "./workspace.ts";
 
@@ -37,6 +38,7 @@ export interface UpgradeServiceOptions {
 	readonly coding: UpgradeCodingStore;
 	readonly database: () => TsukaimaDatabase | undefined;
 	readonly defaultRemote: string;
+	readonly dependencyInstaller?: DependencyInstaller | undefined;
 	/** Reuse the lifecycle's governed task worktree rather than creating a second worktree policy. */
 	readonly ensureWorktree: (taskId: string) => Promise<UpgradeTaskWorktree>;
 	readonly logger: Logger;
@@ -140,6 +142,7 @@ export class UpgradeService {
 	readonly #coding: UpgradeServiceOptions["coding"];
 	readonly #database: UpgradeServiceOptions["database"];
 	readonly #defaultRemote: string;
+	readonly #dependencyInstaller: DependencyInstaller | undefined;
 	readonly #ensureWorktree: UpgradeServiceOptions["ensureWorktree"];
 	readonly #gitCli: GitCli;
 	readonly #logger: Logger;
@@ -154,6 +157,7 @@ export class UpgradeService {
 		this.#coding = options.coding;
 		this.#database = options.database;
 		this.#defaultRemote = options.defaultRemote;
+		this.#dependencyInstaller = options.dependencyInstaller;
 		this.#ensureWorktree = options.ensureWorktree;
 		this.#gitCli = new GitCli({ repositoryPath: options.repositoryRoot });
 		this.#logger = options.logger.child("tsukaima::server::upgrade");
@@ -396,6 +400,21 @@ export class UpgradeService {
 				await this.#approveWorkspaceReview(row, requestedBy, review);
 			}
 			await this.#merge(row, requestedBy, review);
+			if (this.#dependencyInstaller !== undefined) {
+				try {
+					await this.#dependencyInstaller.install();
+				} catch (installError) {
+					const message =
+						installError instanceof Error ? installError.message : String(installError);
+					this.#logger.error("dependency installation failed during upgrade finalization", {
+						error: message,
+						upgradeId: row.id,
+					});
+					throw new Error(`upgrade_install_dependencies_failed:${message}`, {
+						cause: installError,
+					});
+				}
+			}
 			const restart = await this.#restart.schedule({
 				delaySeconds: DEFAULT_UPGRADE_DELAY_SECONDS,
 				mode: "update",
@@ -508,6 +527,30 @@ export class UpgradeService {
 		}
 	}
 
+	async failRestart(restartId: string, reason: string): Promise<void> {
+		const database = this.#db();
+		const now = Date.now();
+		const updated = await database
+			.update(runtimeUpgrades)
+			.set({
+				completedAtMs: now,
+				error: `restart failed: ${reason}`,
+				status: "failed",
+				updatedAtMs: now,
+			})
+			.where(
+				and(eq(runtimeUpgrades.restartId, restartId), eq(runtimeUpgrades.status, "restarting")),
+			)
+			.returning({ id: runtimeUpgrades.id });
+		if (updated.length > 0) {
+			this.#logger.warn("upgrade marked failed after restart failed", {
+				reason,
+				restartId,
+				upgradeIds: updated.map((r) => r.id),
+			});
+		}
+	}
+
 	async #fastForward(row: UpgradeRow, requestedBy: string): Promise<UpgradeRecord> {
 		const database = this.#db();
 		const merge = await this.#git(["merge", "--ff-only", row.targetCommit]);
@@ -540,6 +583,29 @@ export class UpgradeService {
 			version: version || row.targetVersion,
 		});
 		if (row.autoFinalize) {
+			if (this.#dependencyInstaller !== undefined) {
+				try {
+					await this.#dependencyInstaller.install();
+				} catch (installError) {
+					const message =
+						installError instanceof Error ? installError.message : String(installError);
+					this.#logger.error("dependency installation failed during fast-forward upgrade", {
+						error: message,
+						upgradeId: row.id,
+					});
+					await database
+						.update(runtimeUpgrades)
+						.set({
+							error: `upgrade_install_dependencies_failed:${message}`,
+							status: "failed",
+							updatedAtMs: Date.now(),
+						})
+						.where(eq(runtimeUpgrades.id, row.id));
+					throw new Error(`upgrade_install_dependencies_failed:${message}`, {
+						cause: installError,
+					});
+				}
+			}
 			const restart = await this.#restart.schedule({
 				delaySeconds: DEFAULT_UPGRADE_DELAY_SECONDS,
 				mode: "update",
