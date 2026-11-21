@@ -10,6 +10,8 @@ import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import {
 	PolicyCompactionFields,
+	PolicyCrossSessionFields,
+	PolicyMemoryConsolidationFields,
 	PolicyPacingFields,
 	PolicySidechatFields,
 } from "../../_modules/policy/conversation-policy-fields";
@@ -120,6 +122,16 @@ export function PolicyDefaultsCard() {
 			...current,
 			compaction: structuredClone(defaultConversationPolicy.compaction),
 		}));
+	const resetCrossSession = () =>
+		change((current) => ({
+			...current,
+			crossSession: structuredClone(defaultConversationPolicy.crossSession),
+		}));
+	const resetMemoryConsolidation = () =>
+		change((current) => ({
+			...current,
+			memoryConsolidation: structuredClone(defaultConversationPolicy.memoryConsolidation),
+		}));
 
 	const save = () => {
 		if (draft === undefined) return;
@@ -164,6 +176,19 @@ export function PolicyDefaultsCard() {
 						<section className="space-y-2.5 border-t border-border/60 pt-3">
 							<SectionHeader onReset={resetCompaction} title={m.policy_section_compaction()} />
 							<PolicyCompactionFields draft={draft} onChange={change} />
+						</section>
+
+						<section className="space-y-2.5 border-t border-border/60 pt-3">
+							<SectionHeader onReset={resetCrossSession} title={m.policy_section_cross_session()} />
+							<PolicyCrossSessionFields draft={draft} onChange={change} />
+						</section>
+
+						<section className="space-y-2.5 border-t border-border/60 pt-3">
+							<SectionHeader
+								onReset={resetMemoryConsolidation}
+								title={m.policy_section_memory_consolidation()}
+							/>
+							<PolicyMemoryConsolidationFields draft={draft} onChange={change} />
 						</section>
 
 						<div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3">

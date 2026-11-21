@@ -436,9 +436,17 @@ export class TsukaimaLifecycle {
 		});
 		this.memory = new MemoryService({
 			audit: (entry) => this.writeAudit(entry),
-			complete: (prompt, modelId) => this.completeMemoryPrompt(prompt, modelId),
+			complete: (prompt, modelId, signal) => this.completeMemoryPrompt(prompt, modelId, signal),
 			database: () => this.domainDatabase,
+			defaultModelId: async () =>
+				this.domainDatabase === undefined
+					? undefined
+					: (await readRuntimeSettings(this.domainDatabase)).memoryModelId,
 			embed: (texts) => this.embedMemoryTexts(texts),
+			embeddingModelId: async () => {
+				const [model] = await this.pluginHost.listModels({ capability: "embedding" });
+				return model?.id;
+			},
 			extractionPrompt: () => this.prompts.render("memory-extraction"),
 			llmEnabled: () => this.memoryModel !== undefined && this.memoryModel.providerId !== "fake",
 			logger: this.runtimeLog,
@@ -453,12 +461,13 @@ export class TsukaimaLifecycle {
 		this.followUpIntents = new FollowUpIntentStore({
 			database: () => this.domainDatabase,
 		});
+		// Background memory work is one idle-debounced consolidation job per conversation. Both
+		// lifecycle events only note activity (no model call); the debounce coalesces them.
 		this.hooks.on("after.reply", (payload) => {
 			if (typeof payload !== "object" || payload === null) return;
 			const sessionId = (payload as { sessionId?: unknown }).sessionId;
 			if (typeof sessionId !== "string") return;
-			void this.memory.scheduleExtraction({ conversationId: sessionId });
-			void this.memory.scheduleCompaction({ conversationId: sessionId });
+			void this.memory.noteConversationActivity({ conversationId: sessionId });
 		});
 		this.replyDispatcher = new ReplyDispatcher({
 			audit: (entry) => this.writeAudit(entry),
@@ -1473,6 +1482,7 @@ export class TsukaimaLifecycle {
 	private async completeMemoryPrompt(
 		prompt: string,
 		modelId?: string,
+		signal?: AbortSignal,
 	): Promise<string | undefined> {
 		const model = this.memoryModel;
 		if (model === undefined) return undefined;
@@ -1489,6 +1499,7 @@ export class TsukaimaLifecycle {
 		});
 		const response = await model.models.completeSimple(selected, {
 			messages: [{ content: prompt, role: "user", timestamp: Date.now() }],
+			...(signal === undefined ? {} : { signal }),
 		});
 		const text = response.content
 			.filter(
@@ -1728,11 +1739,7 @@ export class TsukaimaLifecycle {
 			envelopeCount: event.envelopeCount,
 		});
 		if (event.type === "closed") {
-			void this.memory.scheduleExtraction({
-				activityId: event.activityId,
-				durableConversationId: event.conversationId,
-			});
-			void this.memory.scheduleCompaction({ durableConversationId: event.conversationId });
+			void this.memory.noteConversationActivity({ durableConversationId: event.conversationId });
 		}
 	}
 

@@ -284,7 +284,7 @@ describe("DrizzleContextProvider", () => {
 		}
 	});
 
-	test("keeps imported tool output out of the recent conversation window", async () => {
+	test("does not surface imported tool output through memory recall", async () => {
 		const { database } = await openFixture();
 		try {
 			await seedContextFixture(database);
@@ -299,8 +299,8 @@ describe("DrizzleContextProvider", () => {
 				})),
 			);
 			const text = await provider(database).renderMemories("42");
-			expect(text).toContain("I love matcha drinks");
-			expect(text).not.toContain("SYNTHETIC-TOOL-RESULT");
+			expect(text).toContain("MARKER-MEMBER");
+			expect(text ?? "").not.toContain("SYNTHETIC-TOOL-RESULT");
 		} finally {
 			database.$client.close();
 		}
@@ -327,8 +327,8 @@ describe("DrizzleContextProvider", () => {
 				occurredAt: now,
 			});
 			const text = await provider(database).renderMemories("45");
-			// The workspace's own recent transcript remains visible, but chat-scoped recall does not.
-			expect(text).toContain("matcha drinks");
+			// Workspace sessions are an isolated execution surface: no chat memory section at all.
+			expect(text).toBeUndefined();
 			expect(text ?? "").not.toContain("MARKER-GLOBAL");
 			expect(text ?? "").not.toContain("MARKER-MEMBER");
 			expect(text ?? "").not.toContain("MARKER-CONVERSATION");

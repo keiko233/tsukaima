@@ -285,6 +285,8 @@ export const messages = sqliteTable(
 		uniqueIndex("messages_durable_entry_unique").on(table.conversationId, table.durableEntryId),
 		index("messages_conversation_time_idx").on(table.conversationId, table.occurredAt),
 		index("messages_sender_idx").on(table.senderUserId),
+		// Cross-session recency: the current speaker's latest messages across conversations.
+		index("messages_sender_time_idx").on(table.senderUserId, table.occurredAt),
 	],
 );
 
@@ -553,6 +555,29 @@ export const memories = sqliteTable(
 		index("memories_content_idx").on(table.summary),
 	],
 );
+
+/**
+ * Durable cursor of the background semantic memory consolidation for one conversation. The
+ * watermark marks the last settled message folded into the warm state; `pendingSince` and
+ * `pendingMessages` drive the idle debounce, and the failure columns bound retries of one batch
+ * (identified by `failedBatchKey`) so a malformed model output is dropped instead of looping.
+ */
+export const memoryConsolidationState = sqliteTable("memory_consolidation_state", {
+	conversationId: text("conversation_id")
+		.primaryKey()
+		.references(() => conversations.id, { onDelete: "cascade" }),
+	createdAt: text("created_at").notNull().default(now),
+	droppedBatches: integer("dropped_batches").notNull().default(0),
+	failedBatchKey: text("failed_batch_key"),
+	failureCount: integer("failure_count").notNull().default(0),
+	lastError: text("last_error"),
+	lastRunAt: text("last_run_at"),
+	pendingMessages: integer("pending_messages").notNull().default(0),
+	pendingSince: text("pending_since"),
+	updatedAt: text("updated_at").notNull().default(now),
+	watermarkMessageId: text("watermark_message_id"),
+	watermarkOccurredAt: text("watermark_occurred_at"),
+});
 
 export const plugins = sqliteTable(
 	"plugins",

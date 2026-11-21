@@ -639,3 +639,161 @@ export function PolicyCompactionFields({ draft, onChange }: PolicyFieldsProps) {
 		</>
 	);
 }
+
+export function PolicyCrossSessionFields({ draft, onChange }: PolicyFieldsProps) {
+	const updateCrossSession = (patch: Partial<ConversationPolicy["crossSession"]>) => {
+		onChange((current) => ({
+			...current,
+			crossSession: { ...current.crossSession, ...patch },
+		}));
+	};
+	return (
+		<>
+			<Toggle
+				checked={draft.crossSession.enabled}
+				label={m.policy_cross_session_enabled()}
+				onChange={(value) => updateCrossSession({ enabled: value })}
+			/>
+			<p className="text-[11px] leading-4 text-muted-foreground">{m.policy_cross_session_hint()}</p>
+			<div className="grid grid-cols-3 gap-2.5">
+				<Field label={m.policy_cross_session_window()}>
+					<input
+						type="number"
+						min={1}
+						className={fieldClass}
+						value={draft.crossSession.windowMinutes}
+						onChange={(event) => updateCrossSession({ windowMinutes: Number(event.target.value) })}
+					/>
+				</Field>
+				<Field label={m.policy_cross_session_entries()}>
+					<input
+						type="number"
+						min={0}
+						className={fieldClass}
+						value={draft.crossSession.maxEntries}
+						onChange={(event) => updateCrossSession({ maxEntries: Number(event.target.value) })}
+					/>
+				</Field>
+				<Field label={m.policy_cross_session_chars()}>
+					<input
+						type="number"
+						min={0}
+						className={fieldClass}
+						value={draft.crossSession.maxChars}
+						onChange={(event) => updateCrossSession({ maxChars: Number(event.target.value) })}
+					/>
+				</Field>
+			</div>
+			<Field hint={m.policy_cross_session_private_hint()} label={m.policy_cross_session_private()}>
+				<select
+					className={fieldClass}
+					value={draft.crossSession.privateToGroup}
+					onChange={(event) =>
+						updateCrossSession({
+							privateToGroup: event.target
+								.value as ConversationPolicy["crossSession"]["privateToGroup"],
+						})
+					}
+				>
+					<option value="none">{m.policy_cross_session_privacy_none()}</option>
+					<option value="indicator">{m.policy_cross_session_privacy_indicator()}</option>
+					<option value="text">{m.policy_cross_session_privacy_text()}</option>
+				</select>
+			</Field>
+		</>
+	);
+}
+
+export function PolicyMemoryConsolidationFields({ draft, onChange }: PolicyFieldsProps) {
+	const updateConsolidation = (patch: Partial<ConversationPolicy["memoryConsolidation"]>) => {
+		onChange((current) => ({
+			...current,
+			memoryConsolidation: { ...current.memoryConsolidation, ...patch },
+		}));
+	};
+	return (
+		<>
+			<p className="text-[11px] leading-4 text-muted-foreground">
+				{m.policy_memory_consolidation_hint()}
+			</p>
+			<div className="grid grid-cols-2 gap-2.5">
+				<Field label={m.policy_memory_consolidation_idle()}>
+					<input
+						type="number"
+						min={0}
+						className={fieldClass}
+						value={draft.memoryConsolidation.idleMs}
+						onChange={(event) => updateConsolidation({ idleMs: Number(event.target.value) })}
+					/>
+				</Field>
+				<Field label={m.policy_memory_consolidation_min_messages()}>
+					<input
+						type="number"
+						min={1}
+						className={fieldClass}
+						value={draft.memoryConsolidation.minNewMessages}
+						onChange={(event) =>
+							updateConsolidation({ minNewMessages: Number(event.target.value) })
+						}
+					/>
+				</Field>
+				<Field label={m.policy_memory_consolidation_max_delay()}>
+					<input
+						type="number"
+						min={0}
+						className={fieldClass}
+						value={draft.memoryConsolidation.maxDelayMs}
+						onChange={(event) => updateConsolidation({ maxDelayMs: Number(event.target.value) })}
+					/>
+				</Field>
+				<Field label={m.policy_memory_consolidation_batch()}>
+					<input
+						type="number"
+						min={1}
+						className={fieldClass}
+						value={draft.memoryConsolidation.maxBatchMessages}
+						onChange={(event) =>
+							updateConsolidation({ maxBatchMessages: Number(event.target.value) })
+						}
+					/>
+				</Field>
+				<Field label={m.policy_memory_consolidation_failures()}>
+					<input
+						type="number"
+						min={1}
+						className={fieldClass}
+						value={draft.memoryConsolidation.maxFailures}
+						onChange={(event) => updateConsolidation({ maxFailures: Number(event.target.value) })}
+					/>
+				</Field>
+				<Field label={m.policy_memory_consolidation_summary()}>
+					<input
+						type="number"
+						min={100}
+						className={fieldClass}
+						value={draft.memoryConsolidation.summaryMaxChars}
+						onChange={(event) =>
+							updateConsolidation({ summaryMaxChars: Number(event.target.value) })
+						}
+					/>
+				</Field>
+				<Field label={m.policy_memory_consolidation_people()}>
+					<input
+						type="number"
+						min={0}
+						className={fieldClass}
+						value={draft.memoryConsolidation.maxPersonCards}
+						onChange={(event) =>
+							updateConsolidation({ maxPersonCards: Number(event.target.value) })
+						}
+					/>
+				</Field>
+			</div>
+			<Toggle
+				checked={draft.memoryConsolidation.qaRecallEnabled}
+				label={m.policy_memory_consolidation_qa()}
+				onChange={(value) => updateConsolidation({ qaRecallEnabled: value })}
+			/>
+		</>
+	);
+}

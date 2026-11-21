@@ -222,13 +222,27 @@ describe("background extraction", () => {
 			tasks,
 		});
 		memory.registerTaskHandlers(tasks);
+		await policy.update({
+			policy: { memoryConsolidation: { idleMs: 0, minNewMessages: 1 } },
+			scope: "global",
+		});
 		await seedSession(database, { id: "session-extract", messageCount: 3 });
+		await database.insert(messages).values({
+			contentText: "TODO: buy beans tomorrow",
+			conversationId: "session-extract",
+			direction: "inbound",
+			id: "session-extract-extra-todo",
+			kind: "onebot-v11",
+			occurredAt: "2026-11-13T00:00:03.000Z",
+			senderUserId: null,
+		});
 		await memory.scheduleExtraction({ conversationId: "session-extract" });
 		expect(await tasks.tick()).toBeGreaterThan(0);
 		const rows = await database
 			.select()
 			.from(memories)
 			.where(eq(memories.conversationId, "session-extract"));
+		expect(rows.some((row) => row.kind === "summary")).toBe(true);
 		expect(rows.some((row) => row.kind === "preference" && row.summary.includes("matcha"))).toBe(
 			true,
 		);
@@ -379,13 +393,16 @@ describe("additive compaction", () => {
 		expect(first.memory?.kind).toBe("summary");
 		const evidence = JSON.parse(first.memory?.evidenceJson ?? "{}");
 		expect(evidence).toMatchObject({
-			compactedThroughMessageId: "session-compact-message-6",
-			messageCount: 7,
+			compactedThroughMessageId: "session-compact-message-26",
+			messageCount: 27,
+			model: "deterministic",
+			promptVersion: "memory-consolidate-v2",
 		});
-		expect(Array.isArray(evidence.decisions)).toBe(true);
-		expect(Array.isArray(evidence.todos)).toBe(true);
-		expect(Array.isArray(evidence.openThreads)).toBe(true);
-		expect(typeof evidence.topic).toBe("string");
+		expect(evidence.decisions).toBeUndefined();
+		expect(evidence.todos).toBeUndefined();
+		expect(evidence.openThreads).toBeUndefined();
+		expect(evidence.topic).toBeUndefined();
+		expect(evidence.state).toMatchObject({ version: 2 });
 		const raw = await database
 			.select()
 			.from(messages)
@@ -396,5 +413,29 @@ describe("additive compaction", () => {
 		expect(second.memory?.id).toBe(first.memory?.id);
 		const summaries = await database.select().from(memories).where(eq(memories.kind, "summary"));
 		expect(summaries).toHaveLength(1);
+	});
+
+	test("honors throughMessageId and keeps the watermark at the requested message", async () => {
+		const { database, memory } = await setup();
+		await seedSession(database, { id: "session-through", messageCount: 9 });
+		const capped = await memory.compactSession({
+			conversationId: "session-through",
+			throughMessageId: "session-through-message-3",
+		});
+		expect(capped.created).toBe(true);
+		const evidence = JSON.parse(capped.memory?.evidenceJson ?? "{}");
+		expect(evidence).toMatchObject({
+			compactedThroughMessageId: "session-through-message-3",
+			messageCount: 4,
+		});
+		expect(
+			await memory.compactSession({
+				conversationId: "session-through",
+				throughMessageId: "missing",
+			}),
+		).toEqual({
+			created: false,
+			memory: capped.memory,
+		});
 	});
 });

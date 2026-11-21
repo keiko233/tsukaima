@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { memories, openDomainDatabase } from "@tsukaima/db";
+import { memories, openDomainDatabase, policies } from "@tsukaima/db";
 import { createPipeline, inspectDshSnapshot, normalizeSnapshot } from "./index.ts";
+import { crossSessionPolicyPatchFromDsh } from "./config-map.ts";
 
 const testRoot = join(import.meta.dir, "../../../.test-data/migration-kit");
 let snapshotRoot: string;
@@ -149,6 +150,55 @@ describe("DSH migration kit", () => {
 		);
 		const result = await normalizeSnapshot([[snapshotRoot, "snapshot"]]);
 		expect(result.database.settings[0]?.secretsDetected).toEqual(["$.accessToken"]);
+	});
+
+	test("maps DSH cross-session settings onto the global conversation policy", async () => {
+		await fs.mkdir(join(snapshotRoot, "home/.dsh/profiles/web"), { recursive: true });
+		await fs.writeFile(
+			join(snapshotRoot, "home/.dsh/profiles/web/cordis.patch.yml"),
+			[
+				"plugins:",
+				"  dsh-napcat:",
+				"    config:",
+				"      crossSessionEnabled: true",
+				"      crossRecentMinutes: 90",
+				"      crossRecentLimit: 3",
+				"      crossInjectMaxChars: 480",
+				"      crossPrivateToGroup: false",
+			].join("\n"),
+		);
+		const source: [[string, string]] = [[snapshotRoot, "snapshot"]];
+		const normalized = await normalizeSnapshot(source);
+		const patch = crossSessionPolicyPatchFromDsh(
+			normalized.config.flatMap((entry) => entry.leaves),
+		);
+		expect(patch).toEqual({
+			enabled: true,
+			maxChars: 480,
+			maxEntries: 3,
+			privateToGroup: "none",
+			windowMinutes: 90,
+		});
+		const pipeline = createPipeline(`sqlite:${join(testRoot, "cross-session.sqlite")}`);
+		const plan = await pipeline.dryRun(source);
+		await pipeline.import(source, { dryRunPlan: plan });
+		const importedDatabase = await openDomainDatabase(join(testRoot, "cross-session.sqlite"));
+		try {
+			const rows = await importedDatabase.select().from(policies);
+			const global = rows.find(
+				(row) => row.scope === "global" && row.policyJson.includes('"crossSession":'),
+			);
+			expect(global).toBeDefined();
+			const policy = JSON.parse(global?.policyJson ?? "{}");
+			expect(policy.crossSession).toMatchObject({
+				maxChars: 480,
+				maxEntries: 3,
+				privateToGroup: "none",
+				windowMinutes: 90,
+			});
+		} finally {
+			importedDatabase.$client.close();
+		}
 	});
 
 	test("imports, verifies, and rolls back through the domain database", async () => {

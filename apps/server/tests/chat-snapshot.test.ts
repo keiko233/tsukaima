@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
 import type { ChatSnapshotPreview, ChatSnapshotRow } from "@tsukaima/contracts";
-import { auditLog, chatSnapshots, conversations, memories, messages } from "@tsukaima/db";
+import {
+	auditLog,
+	chatSnapshots,
+	conversations,
+	memories,
+	memoryConsolidationState,
+	messages,
+} from "@tsukaima/db";
 import { createApp } from "../src/app.ts";
 import { signIn } from "./test-auth.ts";
 
@@ -137,6 +144,11 @@ describe("admin chat snapshot RPC", () => {
 					revokedAt: new Date().toISOString(),
 				})
 				.where(eq(memories.id, "memory-conv-active"));
+			await database.insert(memoryConsolidationState).values({
+				conversationId: "session-snapshot-1",
+				watermarkMessageId: "snapshot-msg-later",
+				watermarkOccurredAt: "2026-11-14T00:00:02.000Z",
+			});
 
 			const applied = await request<{ ok: true; undoSnapshotId: string }>(
 				"admin/chatSnapshot/apply",
@@ -156,6 +168,11 @@ describe("admin chat snapshot RPC", () => {
 				status: "active",
 				revokedAt: null,
 			});
+			const consolidationState = await database
+				.select()
+				.from(memoryConsolidationState)
+				.where(eq(memoryConsolidationState.conversationId, "session-snapshot-1"));
+			expect(consolidationState).toHaveLength(0);
 
 			// Apply marked the snapshot and captured an undo checkpoint.
 			const rows = await database.select().from(chatSnapshots);

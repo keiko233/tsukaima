@@ -171,6 +171,14 @@ export function mergeConversationPolicy(
 	if (generationPatch?.temperature === null) delete generation.temperature;
 	if (generationPatch?.topP === null) delete generation.topP;
 	if (generationPatch?.stop === null) delete generation.stop;
+	const crossSession = mergeSection<ConversationPolicy["crossSession"]>(
+		base.crossSession,
+		patch.crossSession,
+	);
+	const memoryConsolidation = mergeSection<ConversationPolicy["memoryConsolidation"]>(
+		base.memoryConsolidation,
+		patch.memoryConsolidation,
+	);
 	const memoryExtractModel =
 		patch.memoryExtractModel === null
 			? undefined
@@ -214,7 +222,9 @@ export function mergeConversationPolicy(
 		...(patch.version === undefined ? {} : { version: patch.version }),
 		...(patch.capabilities === undefined ? {} : { capabilities: patch.capabilities }),
 		compaction,
+		crossSession,
 		generation,
+		memoryConsolidation,
 		notices,
 		pacing,
 		sidechat,
