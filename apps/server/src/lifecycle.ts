@@ -66,6 +66,7 @@ import {
 	CONVERSATION_GATE_BINDING,
 	SOCIAL_PROFILE_BINDING,
 	messagePartsText,
+	skillsTurnContextResultSchema,
 	type ChannelNotice,
 	type ChannelRequest,
 	type MessageEnvelope,
@@ -517,6 +518,14 @@ export class TsukaimaLifecycle {
 					...(captions === undefined ? {} : { captions }),
 					...(packs === undefined ? {} : { packs }),
 				};
+			},
+			skillCatalog: async (surface) => {
+				if (!(await this.pluginSettings.isEnabled("skills"))) return undefined;
+				const plugin = this.pluginHost.context("skills");
+				if (plugin === undefined) return undefined;
+				const raw = await this.pluginHost.invokeRpc("skills.turnContext", { surface });
+				const parsed = skillsTurnContextResultSchema.safeParse(raw);
+				return parsed.success ? parsed.data.text : undefined;
 			},
 		});
 		this.requestService = new RequestService({

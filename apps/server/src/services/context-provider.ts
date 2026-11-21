@@ -11,7 +11,12 @@ import {
 	type TurnContextRequest,
 	type TurnContextSection,
 } from "@tsukaima/core";
-import type { ConversationPolicy, PersonaSummary, WarmStatePayload } from "@tsukaima/contracts";
+import {
+	SKILLS_TURN_CONTEXT_MAX_CHARS,
+	type ConversationPolicy,
+	type PersonaSummary,
+	type WarmStatePayload,
+} from "@tsukaima/contracts";
 import {
 	chatSnapshots,
 	conversationMembers,
@@ -128,6 +133,8 @@ export interface DrizzleContextProviderOptions {
 	readonly stickerCaptions?: () => Promise<readonly string[] | undefined>;
 	/** Optional bounded sticker hints (packs + captions) for the ephemeral turn context. */
 	readonly stickerHints?: () => Promise<StickerHintsPayload | undefined>;
+	/** Optional pre-rendered Agent Skills catalog for the turn's execution surface. */
+	readonly skillCatalog?: (surface: "chat" | "workspace") => Promise<string | undefined>;
 }
 
 export interface StickerHintsPayload {
@@ -217,6 +224,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	readonly #policyService: ConversationPolicyService;
 	readonly #renderPrompt: DrizzleContextProviderOptions["renderPrompt"];
 	readonly #renderSystem: DrizzleContextProviderOptions["renderSystem"];
+	readonly #skillCatalog: DrizzleContextProviderOptions["skillCatalog"];
 	readonly #stickerCaptions: DrizzleContextProviderOptions["stickerCaptions"];
 	readonly #stickerHints: DrizzleContextProviderOptions["stickerHints"];
 	readonly #timeZone: string | undefined;
@@ -224,6 +232,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 
 	constructor(options: DrizzleContextProviderOptions) {
 		this.#renderSystem = options.renderSystem;
+		this.#skillCatalog = options.skillCatalog;
 		this.#renderPrompt = options.renderPrompt;
 		this.#stickerCaptions = options.stickerCaptions;
 		this.#stickerHints = options.stickerHints;
@@ -492,6 +501,22 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			}
 		}
 
+		let skillCatalog: string | undefined;
+		if (this.#skillCatalog !== undefined) {
+			try {
+				const surface = session?.chatKind === "workspace" ? "workspace" : "chat";
+				const rendered = await this.#skillCatalog(surface);
+				if (rendered !== undefined && rendered.trim().length > 0) {
+					skillCatalog =
+						rendered.length > SKILLS_TURN_CONTEXT_MAX_CHARS
+							? rendered.slice(0, SKILLS_TURN_CONTEXT_MAX_CHARS)
+							: rendered;
+				}
+			} catch (error) {
+				this.#logger.debug("skill catalog unavailable", { error: errorMessage(error) });
+			}
+		}
+
 		let crossSession: string | undefined;
 		let consistency: string | undefined;
 		let styleAvoid: string | undefined;
@@ -554,6 +579,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		push("style-avoid", styleAvoid);
 		push("rhythm-nudge", rhythmNudge);
 		push("stickers", stickerHints);
+		push("skills", skillCatalog);
 		push("prompt-hooks", hooks);
 		push("cue", cue);
 		this.#logger.debug("rendered turn context", {

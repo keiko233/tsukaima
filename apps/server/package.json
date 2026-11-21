@@ -17,6 +17,7 @@
 		"@tsukaima-plugin/onebot-napcat": "workspace:*",
 		"@tsukaima-plugin/openai-compatible": "workspace:*",
 		"@tsukaima-plugin/proactive-scheduler": "workspace:*",
+		"@tsukaima-plugin/skills": "workspace:*",
 		"@tsukaima-plugin/sticker-meme": "workspace:*",
 		"@tsukaima/cache": "workspace:*",
 		"@tsukaima/coding": "workspace:*",

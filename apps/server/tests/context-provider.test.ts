@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { MessageEnvelope } from "@tsukaima/contracts";
+import { SKILLS_TURN_CONTEXT_MAX_CHARS, type MessageEnvelope } from "@tsukaima/contracts";
 import {
 	PiDurableConversationHost,
 	createFakeModel,
@@ -64,6 +64,7 @@ function provider(
 			| "memoryTopK"
 			| "personaBudgetChars"
 			| "renderSystem"
+			| "skillCatalog"
 			| "stickerCaptions"
 			| "stickerHints"
 			| "turnBudgetChars"
@@ -567,6 +568,75 @@ describe("DrizzleContextProvider", () => {
 			expect(packsOnlySection).toBeDefined();
 			expect(packsOnlySection?.text).toBe("Available sticker packs: Solo Pack (42)");
 			expect(packsOnlySection?.text).not.toContain("Ready-to-copy");
+		} finally {
+			database.$client.close();
+		}
+	});
+
+	test("renders a budget-exempt Agent Skills catalog per execution surface", async () => {
+		const { database } = await openFixture();
+		try {
+			await database.insert(conversations).values([
+				{
+					durableConversationId: "skills-chat",
+					id: "session-skills-chat",
+					kind: "private",
+					title: "Skills chat",
+					updatedAt: new Date().toISOString(),
+				},
+				{
+					durableConversationId: "skills-workspace",
+					id: "session-skills-workspace",
+					kind: "workspace",
+					title: "Skills workspace",
+					updatedAt: new Date().toISOString(),
+				},
+			]);
+			const surfaces: string[] = [];
+			const chatSections = await provider(database, {
+				skillCatalog: async (surface) => {
+					surfaces.push(surface);
+					return "<chat-skill-catalog>";
+				},
+				turnBudgetChars: 1,
+			}).renderTurnContext({
+				conversationId: "skills-chat",
+				inputs: [],
+				nowMs: Date.now(),
+				triggers: [],
+			});
+			expect(surfaces).toEqual(["chat"]);
+			expect(chatSections.find((section) => section.key === "skills")?.text).toBe(
+				"<chat-skill-catalog>",
+			);
+
+			const workspaceSections = await provider(database, {
+				skillCatalog: async (surface) => {
+					surfaces.push(surface);
+					return "x".repeat(SKILLS_TURN_CONTEXT_MAX_CHARS + 50);
+				},
+			}).renderTurnContext({
+				conversationId: "skills-workspace",
+				inputs: [],
+				nowMs: Date.now(),
+				triggers: [],
+			});
+			expect(surfaces).toEqual(["chat", "workspace"]);
+			expect(workspaceSections.find((section) => section.key === "skills")?.text.length).toBe(
+				SKILLS_TURN_CONTEXT_MAX_CHARS,
+			);
+
+			const failed = await provider(database, {
+				skillCatalog: async () => {
+					throw new Error("synthetic catalog failure");
+				},
+			}).renderTurnContext({
+				conversationId: "skills-chat",
+				inputs: [],
+				nowMs: Date.now(),
+				triggers: [],
+			});
+			expect(failed.find((section) => section.key === "skills")).toBeUndefined();
 		} finally {
 			database.$client.close();
 		}

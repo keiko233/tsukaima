@@ -15,6 +15,8 @@ import {
 	type OneBotTransport,
 } from "@tsukaima-plugin/onebot-napcat";
 import { createApp } from "../src/app.ts";
+import { CODING_AGENT_TOOL_NAMES } from "../src/services/coding-agent-tools.ts";
+import { computeOmittedSessionTools } from "../src/services/session-tool-policy.ts";
 import { DEFAULT_PROMPTS } from "../src/services/prompt-defaults.ts";
 import { signIn } from "./test-auth.ts";
 
@@ -141,6 +143,7 @@ describe("admin RPC", () => {
 				{ config: {}, id: "proactive-scheduler", secretsSet: [] },
 				{ config: {}, id: "sticker-meme", secretsSet: [] },
 				{ config: {}, id: "mcp", secretsSet: [] },
+				{ config: {}, id: "skills", secretsSet: [] },
 			],
 		});
 		const updatedSettings = await request("admin/settings/update", { logLevel: "debug" });
@@ -153,6 +156,7 @@ describe("admin RPC", () => {
 				{ config: {}, id: "proactive-scheduler", secretsSet: [] },
 				{ config: {}, id: "sticker-meme", secretsSet: [] },
 				{ config: {}, id: "mcp", secretsSet: [] },
+				{ config: {}, id: "skills", secretsSet: [] },
 			],
 		});
 		expect(lifecycle.logLevel).toBe("debug");
@@ -501,5 +505,21 @@ describe("admin conversation policy and persona RPC", () => {
 		} finally {
 			await lifecycle.stop();
 		}
+	});
+
+	test("IM chat policy keeps Agent Skills tools and still removes coding tools", () => {
+		const removed = computeOmittedSessionTools({
+			agentAccess: true,
+			capabilities: [],
+			chatSurfaceOmitted: [],
+			codingSurfaceOmitted: [],
+			kind: "group",
+			proactiveTools: [],
+			readFailed: false,
+			workspaceDelegationEnabled: false,
+		});
+		expect(removed).not.toContain("load_skill");
+		expect(removed).not.toContain("read_skill_resource");
+		for (const name of CODING_AGENT_TOOL_NAMES) expect(removed).toContain(name);
 	});
 });

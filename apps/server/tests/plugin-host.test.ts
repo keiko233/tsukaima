@@ -223,6 +223,7 @@ describe("plugin host", () => {
 				"proactive-scheduler",
 				"sticker-meme",
 				"mcp",
+				"skills",
 				"fake-channel",
 			]);
 			expect(plugins[1]).toEqual(
@@ -407,6 +408,13 @@ describe("plugin host", () => {
 			expect(napcatTools).toContain("onebot-napcat_poke");
 			expect(napcatTools).toContain("onebot-napcat_react");
 			expect(napcatTools).toContain("onebot-napcat_listTargets");
+
+			const skillTools = lifecycle.pluginHost.modelToolNames("skills");
+			expect(skillTools).toEqual(["load_skill", "read_skill_resource"]);
+			expect(lifecycle.pluginHost.resolveModelToolName("load_skill")).toBe("skills.load");
+			expect(lifecycle.pluginHost.resolveModelToolName("read_skill_resource")).toBe(
+				"skills.read_resource",
+			);
 
 			// Backward-compatible resolution
 			expect(lifecycle.pluginHost.resolveModelToolName("memory_save")).toBe("memory.save");
