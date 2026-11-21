@@ -1181,6 +1181,12 @@ export class PiDurableConversationHost {
 		// settlement hook needs the exact id even when the commit itself throws.
 		const requestId = input.requestId ?? activitySubmissionRequestId(activityId, input.envelope.id);
 		const triggerSenderId = shouldSubmit ? triggerSenderExternalId(nextEnvelopes) : undefined;
+		// Resolve input content (which may snapshot AgentDoc or read media) before entering
+		// `conversation.commit`: `Session.snapshot` enqueues onto the same serialized Session line
+		// on cache miss and would self-deadlock inside a commit callback.
+		const inputContent = shouldSubmit
+			? await this.envelopesToInput(nextEnvelopes, conversation)
+			: undefined;
 		let admitted = false;
 		let submissionId: SubmissionId;
 		try {
@@ -1224,10 +1230,10 @@ export class PiDurableConversationHost {
 				}
 				return conversation.submit(
 					tx,
-					shouldSubmit
+					inputContent !== undefined
 						? {
 								type: "input",
-								content: await this.envelopesToInput(nextEnvelopes, conversation),
+								content: inputContent,
 								entry,
 								requestId,
 								whenBusy: whenBusy === "follow-up" ? "followUp" : whenBusy,
@@ -1831,6 +1837,7 @@ export class PiDurableConversationHost {
 
 			const requestId = activitySubmissionRequestId(activityId, envelopes[0]?.id ?? "window");
 			const triggerSenderId = triggerSenderExternalId(envelopes);
+			const inputContent = await this.envelopesToInput(envelopes, conversation);
 			let admitted = false;
 			let submissionId: SubmissionId;
 			try {
@@ -1860,7 +1867,7 @@ export class PiDurableConversationHost {
 					});
 					admitted = true;
 					return conversation.submit(tx, {
-						content: await this.envelopesToInput(envelopes, conversation),
+						content: inputContent,
 						entry,
 						requestId,
 						type: "input",
