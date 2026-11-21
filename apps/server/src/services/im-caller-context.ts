@@ -1,0 +1,162 @@
+import { and, desc, eq, or, sql } from "drizzle-orm";
+import {
+	chatObjects,
+	conversations as conversationsTable,
+	messages as messagesTable,
+	type TsukaimaDatabase,
+} from "@tsukaima/db";
+import type { PluginSettingsStore } from "./plugin-settings.ts";
+
+export interface ImCallerContextOverrides {
+	readonly channelId?: string | undefined;
+	readonly chatKind?: string | undefined;
+	readonly isAdmin?: boolean | undefined;
+	readonly platformConversationId?: string | undefined;
+	readonly role?: string | undefined;
+	readonly senderPlatformId?: string | undefined;
+	readonly userId?: string | undefined;
+}
+
+export interface ResolvedImCallerContext {
+	readonly channelId?: string;
+	readonly chatKind?: string;
+	readonly domainConversationId?: string;
+	readonly isAdmin?: boolean;
+	readonly platformConversationId?: string;
+	readonly role?: string;
+	readonly senderPlatformId?: string;
+	readonly userId?: string;
+}
+
+export interface ResolveImCallerContextInput {
+	readonly conversationId: string | undefined;
+	readonly database: TsukaimaDatabase | undefined;
+	readonly overrides?: ImCallerContextOverrides;
+	readonly settings: PluginSettingsStore;
+}
+
+/**
+ * Shared fail-closed caller and trusted-admin resolver used by both `PluginHost` and
+ * `workspace-tools` so IM authorization never drifts between plugin tools and host tools.
+ *
+ * The caller identity comes from the latest persisted inbound message (rowid is the final
+ * tiebreaker for same-millisecond turns), never from a client-supplied override. A missing row,
+ * unreadable settings, or malformed admin list leaves `isAdmin` undefined so callers fail closed.
+ */
+export async function resolveImCallerContext(
+	input: ResolveImCallerContextInput,
+): Promise<ResolvedImCallerContext> {
+	const overrides = input.overrides ?? {};
+	const conversation = input.conversationId;
+	let resolvedChannelId =
+		overrides.channelId ??
+		(conversation !== undefined && conversation.includes(":")
+			? (conversation.split(":")[0] ?? "")
+			: undefined);
+	let resolvedDomainConversationId: string | undefined;
+	let resolvedPlatformConversationId = overrides.platformConversationId;
+	let resolvedChatKind = overrides.chatKind;
+	let resolvedSenderPlatformId = overrides.senderPlatformId;
+	let resolvedUserId = overrides.userId;
+	let resolvedIsAdmin = overrides.isAdmin;
+	let resolvedRole = overrides.role;
+
+	const database = input.database;
+	if (conversation !== undefined && database !== undefined) {
+		try {
+			const [row] = await database
+				.select({ chat: chatObjects, conversation: conversationsTable })
+				.from(conversationsTable)
+				.leftJoin(chatObjects, eq(chatObjects.id, conversationsTable.chatObjectId))
+				.where(
+					or(
+						eq(conversationsTable.durableConversationId, conversation),
+						eq(conversationsTable.id, conversation),
+					),
+				)
+				.limit(1);
+			if (row !== undefined) {
+				resolvedDomainConversationId = row.conversation.id;
+				resolvedChannelId = row.conversation.channelId ?? row.chat?.channelId ?? resolvedChannelId;
+				resolvedChatKind = resolvedChatKind ?? row.chat?.kind ?? row.conversation.kind;
+				resolvedPlatformConversationId =
+					resolvedPlatformConversationId ??
+					row.conversation.platformConversationId ??
+					row.chat?.platformConversationId ??
+					undefined;
+				if (resolvedUserId === undefined || resolvedSenderPlatformId === undefined) {
+					if (row.conversation.kind === "private") {
+						const privatePeerId =
+							row.conversation.platformConversationId ??
+							row.chat?.platformConversationId ??
+							undefined;
+						resolvedUserId = resolvedUserId ?? privatePeerId;
+						resolvedSenderPlatformId = resolvedSenderPlatformId ?? privatePeerId;
+					}
+					if (resolvedUserId === undefined || resolvedSenderPlatformId === undefined) {
+						const [latestInbound] = await database
+							.select({ senderExternalId: messagesTable.senderExternalId })
+							.from(messagesTable)
+							.where(
+								and(
+									eq(messagesTable.conversationId, row.conversation.id),
+									eq(messagesTable.direction, "inbound"),
+								),
+							)
+							.orderBy(
+								desc(messagesTable.occurredAt),
+								desc(messagesTable.ingestedAt),
+								desc(sql`${messagesTable}.rowid`),
+							)
+							.limit(1);
+						if (
+							typeof latestInbound?.senderExternalId === "string" &&
+							latestInbound.senderExternalId.trim().length > 0
+						) {
+							const trimmedSender = latestInbound.senderExternalId.trim();
+							resolvedUserId = resolvedUserId ?? trimmedSender;
+							resolvedSenderPlatformId = resolvedSenderPlatformId ?? trimmedSender;
+						}
+					}
+				}
+			}
+		} catch {}
+	}
+
+	if (resolvedIsAdmin === undefined && resolvedUserId !== undefined) {
+		try {
+			const onebotSettings = await input.settings.read("onebot-napcat");
+			const adminUsers = Array.isArray(
+				(onebotSettings as { adminUsers?: unknown } | undefined)?.adminUsers,
+			)
+				? (onebotSettings as { adminUsers: unknown[] }).adminUsers
+						.filter((entry): entry is string => typeof entry === "string")
+						.map((entry) => entry.trim())
+						.filter((entry) => entry.length > 0)
+				: [];
+			if (adminUsers.includes(resolvedUserId)) {
+				resolvedIsAdmin = true;
+				resolvedRole = resolvedRole ?? "admin";
+			}
+		} catch {}
+	}
+
+	return {
+		...(resolvedChannelId === undefined || resolvedChannelId.length === 0
+			? {}
+			: { channelId: resolvedChannelId }),
+		...(resolvedChatKind === undefined ? {} : { chatKind: resolvedChatKind }),
+		...(resolvedDomainConversationId === undefined
+			? {}
+			: { domainConversationId: resolvedDomainConversationId }),
+		...(resolvedIsAdmin === undefined ? {} : { isAdmin: resolvedIsAdmin }),
+		...(resolvedPlatformConversationId === undefined
+			? {}
+			: { platformConversationId: resolvedPlatformConversationId }),
+		...(resolvedRole === undefined ? {} : { role: resolvedRole }),
+		...(resolvedSenderPlatformId === undefined
+			? {}
+			: { senderPlatformId: resolvedSenderPlatformId }),
+		...(resolvedUserId === undefined ? {} : { userId: resolvedUserId }),
+	};
+}

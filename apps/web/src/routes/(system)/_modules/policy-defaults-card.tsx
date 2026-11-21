@@ -17,6 +17,7 @@ import {
 	PolicyPacingFields,
 	PolicySidechatFields,
 	PolicySocialFields,
+	PolicyWorkspaceDelegationField,
 } from "../../_modules/policy/conversation-policy-fields";
 import { InlineError } from "../../_modules/shell/primitives";
 import { Modal, ModalActions } from "../../_modules/ui/modal";
@@ -180,6 +181,9 @@ export function PolicyDefaultsCard() {
 						<section className="space-y-2.5">
 							<SectionHeader onReset={resetPacing} title={m.policy_section_pacing()} />
 							<PolicyPacingFields draft={draft} onChange={change} />
+							<div className="border-t border-border/60 pt-2.5">
+								<PolicyWorkspaceDelegationField draft={draft} onChange={change} />
+							</div>
 						</section>
 
 						<section className="space-y-2.5 border-t border-border/60 pt-3">

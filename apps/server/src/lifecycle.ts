@@ -106,6 +106,7 @@ import {
 } from "./services/memory-service.ts";
 import { SocialProfileService } from "./services/social-profile.ts";
 import { InboundMediaResolver } from "./services/inbound-media.ts";
+import { resolveImCallerContext } from "./services/im-caller-context.ts";
 import { MediaService } from "./services/media-service.ts";
 import { HookBus } from "./services/hook-bus.ts";
 import { createMentionIdentityStore } from "./services/mention-identity-store.ts";
@@ -150,6 +151,7 @@ import { WorkspaceReferenceService } from "./services/workspace-references.ts";
 import { WorkspaceSqlService } from "./services/workspace-sql.ts";
 import { WorkspaceTodoService } from "./services/workspace-todos.ts";
 import {
+	IM_WORKSPACE_DELEGATION_TOOL_NAMES,
 	WORKSPACE_CODING_TOOL_NAMES,
 	WORKSPACE_TOOL_NAMES,
 	createWorkspaceToolsExtension,
@@ -382,6 +384,9 @@ export class TsukaimaLifecycle {
 			database: () => this.domainDatabase,
 			host: () => this.conversationHost,
 			logger: this.runtimeLog,
+			onPolicySynced: async (durableConversationId, policy) => {
+				await this.applySessionToolPolicy(durableConversationId, policy);
+			},
 		});
 		this.conversationRouter = new ConversationRouter({
 			applyModelToolPolicy: async (durableConversationId, policy) =>
@@ -715,8 +720,51 @@ export class TsukaimaLifecycle {
 			token: () => this.github.gitCredential(),
 			workspace: this.workspace,
 		});
+		const imDelegationTools = new Set<string>(IM_WORKSPACE_DELEGATION_TOOL_NAMES);
 		this.workspaceToolsExtension = createWorkspaceToolsExtension({
 			audit: (entry) => this.writeAudit(entry),
+			authorizeCaller: async (durableConversationId, toolName) => {
+				const caller = await resolveImCallerContext({
+					conversationId: durableConversationId,
+					database: this.domainDatabase,
+					settings: this.pluginSettings,
+				});
+				const chatKind = caller.chatKind;
+				const isImChat = chatKind === "private" || chatKind === "group";
+				const base = {
+					...(caller.senderPlatformId === undefined ? {} : { callerId: caller.senderPlatformId }),
+					...(caller.channelId === undefined ? {} : { channelId: caller.channelId }),
+					...(chatKind === undefined ? {} : { chatKind }),
+					...(caller.isAdmin === undefined ? {} : { isAdmin: caller.isAdmin }),
+					...(caller.platformConversationId === undefined
+						? {}
+						: { platformConversationId: caller.platformConversationId }),
+					...(caller.domainConversationId === undefined
+						? {}
+						: { sessionId: caller.domainConversationId }),
+				};
+				if (toolName === "workspace_git_identity" && chatKind !== "workspace") {
+					return { ...base, allowed: false, reason: "workspace_coding_tool_denied" };
+				}
+				if (!isImChat) {
+					return { ...base, allowed: true };
+				}
+				if (!imDelegationTools.has(toolName)) {
+					return { ...base, allowed: false, reason: "im_tool_not_permitted" };
+				}
+				const sessionId = caller.domainConversationId;
+				if (sessionId === undefined) {
+					return { ...base, allowed: false, reason: "session_not_found" };
+				}
+				const policy = await this.conversationPolicy.effectivePolicy(sessionId);
+				if (policy.workspaceDelegationEnabled !== true) {
+					return { ...base, allowed: false, reason: "workspace_delegation_disabled" };
+				}
+				if (caller.isAdmin !== true || caller.senderPlatformId === undefined) {
+					return { ...base, allowed: false, reason: "admin_required" };
+				}
+				return { ...base, allowed: true };
+			},
 			gitIdentity: () => readGitIdentity(this.domainDatabase),
 			logger: this.runtimeLog,
 			messaging: this.sessionMessaging,
@@ -727,6 +775,32 @@ export class TsukaimaLifecycle {
 		});
 		this.codingAgentToolsExtension = createCodingAgentToolsExtension({
 			audit: (entry) => this.writeAudit(entry),
+			authorize: async (durableConversationId) => {
+				const caller = await resolveImCallerContext({
+					conversationId: durableConversationId,
+					database: this.domainDatabase,
+					settings: this.pluginSettings,
+				});
+				const chatKind = caller.chatKind;
+				if (chatKind !== "workspace") {
+					return {
+						allowed: false,
+						reason:
+							chatKind === "private" || chatKind === "group"
+								? "im_tool_not_permitted"
+								: "coding_tools_require_workspace",
+					};
+				}
+				const sessionId = caller.domainConversationId;
+				if (sessionId === undefined) {
+					return { allowed: false, reason: "session_not_found" };
+				}
+				const policy = await this.conversationPolicy.effectivePolicy(sessionId);
+				if (policy.capabilities.includes("coding") !== true) {
+					return { allowed: false, reason: "coding_capability_required" };
+				}
+				return { allowed: true };
+			},
 			logger: this.runtimeLog,
 			messaging: this.sessionMessaging,
 			references: workspaceReferences,
@@ -1158,19 +1232,29 @@ export class TsukaimaLifecycle {
 	}
 
 	/**
-	 * Keep each conversation's model-tool surface aligned with its execution role. Chat can
-	 * control workspaces and hooks but never receives coding tools; workspace requires an
-	 * explicit `coding` capability and receives the repo tools only then.
+	 * Keep each conversation's model-tool surface aligned with its execution role.
+	 * - WebUI chats can control workspaces, hooks, and host schedules, but never receive coding tools.
+	 * - Authorized IM chats (`private`/`group` with `policy.workspaceDelegationEnabled === true`)
+	 *   receive `IM_WORKSPACE_DELEGATION_TOOL_NAMES` (eagerly accessible), while strictly never
+	 *   receiving `self-iteration.*`, `CODING_AGENT_TOOL_NAMES`, or `WORKSPACE_CODING_TOOL_NAMES`.
+	 * - IM chats receive the unified host `SCHEDULE_TOOL_NAMES` family and never the conflicting
+	 *   `proactive-scheduler.*` model tools.
+	 * - Workspaces require an explicit `coding` capability and receive repo tools only then.
 	 */
 	private async applySessionToolPolicy(
 		durableConversationId: string,
-		policy: { readonly capabilities: readonly string[] },
+		policy: {
+			readonly capabilities: readonly string[];
+			readonly workspaceDelegationEnabled?: boolean;
+		},
 	): Promise<void> {
 		const database = this.domainDatabase;
 		const host = this.conversationHost;
 		if (database === undefined || host === undefined) return;
 		const codingTools = this.pluginHost.modelToolNames("self-iteration");
+		const proactiveTools = this.pluginHost.modelToolNames("proactive-scheduler");
 		const sessionTools = [...WORKSPACE_TOOL_NAMES, ...SCHEDULE_TOOL_NAMES];
+		const imDelegationAllowedSet = new Set<string>(IM_WORKSPACE_DELEGATION_TOOL_NAMES);
 		const codingAgentTools = [...CODING_AGENT_TOOL_NAMES];
 		const removed = new Set<string>();
 		let kind: string | undefined;
@@ -1220,14 +1304,27 @@ export class TsukaimaLifecycle {
 			for (const name of codingAgentTools) removed.add(name);
 			for (const name of WORKSPACE_CODING_TOOL_NAMES) removed.add(name);
 		}
+		const isImChat = kind === "private" || kind === "group";
 		if (kind === "webui" && !readFailed) {
 			// A chat may spawn/control workspaces but never edit code in its own turn.
 			for (const name of codingTools) removed.add(name);
 		} else if (kind === "workspace") {
 			removed.add("workspace_spawn");
+		} else if (isImChat && !readFailed) {
+			// Unified scheduling for IM: expose host `schedule_*` tools and withhold duplicate
+			// `proactive-scheduler.*` model tools so IM models see one consistent schedule family.
+			for (const name of proactiveTools) removed.add(name);
+			if (policy.workspaceDelegationEnabled === true) {
+				for (const name of WORKSPACE_TOOL_NAMES) {
+					if (!imDelegationAllowedSet.has(name)) removed.add(name);
+				}
+			} else {
+				for (const name of WORKSPACE_TOOL_NAMES) removed.add(name);
+			}
 		} else {
-			// IM and every unknown/background conversation kind: no host session tools.
+			// Unknown/background conversations or transient DB read failure: fail closed on host session tools.
 			for (const name of sessionTools) removed.add(name);
+			for (const name of proactiveTools) removed.add(name);
 		}
 		try {
 			if (readFailed || (!codingAllowed && kind !== "webui") || !this.prompts.agentAccess()) {
@@ -1918,6 +2015,12 @@ export class TsukaimaLifecycle {
 			const result = await this.conversationRouter.ingest(envelope);
 			if (!result.duplicated && !result.ignored) {
 				this.processedMessageCount += 1;
+				void this.schedules.cancelRepliedSchedules(result.sessionId).catch((error: unknown) => {
+					this.runtimeLog.warn("cancel-if-replied schedule check failed", {
+						error: error instanceof Error ? error.message : String(error),
+						sessionId: result.sessionId,
+					});
+				});
 				this.hooks.emitDetached("message.received", {
 					channelId,
 					chatObjectId: result.chatObjectId,

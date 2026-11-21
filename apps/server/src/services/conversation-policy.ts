@@ -230,6 +230,9 @@ export function mergeConversationPolicy(
 			: { memoryMaxWritesPerActivity: patch.memoryMaxWritesPerActivity }),
 		...(patch.version === undefined ? {} : { version: patch.version }),
 		...(patch.capabilities === undefined ? {} : { capabilities: patch.capabilities }),
+		...(patch.workspaceDelegationEnabled === undefined
+			? {}
+			: { workspaceDelegationEnabled: patch.workspaceDelegationEnabled }),
 		compaction,
 		crossSession,
 		gate,
@@ -248,6 +251,11 @@ export interface ConversationPolicyServiceOptions {
 	readonly database: () => TsukaimaDatabase | undefined;
 	readonly host: () => PiDurableConversationHost | undefined;
 	readonly logger: Logger;
+	/** Called after a policy revision is synced to the durable host so tool access refreshes immediately. */
+	readonly onPolicySynced?: (
+		durableConversationId: string,
+		policy: ConversationPolicy,
+	) => Promise<void> | void;
 }
 
 /**
@@ -258,12 +266,14 @@ export class ConversationPolicyService {
 	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #host: () => PiDurableConversationHost | undefined;
 	readonly #logger: Logger;
+	readonly #onPolicySynced: ConversationPolicyServiceOptions["onPolicySynced"];
 	readonly #synced = new Map<string, string>();
 
 	constructor(options: ConversationPolicyServiceOptions) {
 		this.#database = options.database;
 		this.#host = options.host;
 		this.#logger = options.logger.child("tsukaima::server::policy");
+		this.#onPolicySynced = options.onPolicySynced;
 	}
 
 	#db(): TsukaimaDatabase {
@@ -629,6 +639,7 @@ export class ConversationPolicyService {
 			const host = this.#host();
 			if (host !== undefined) {
 				await host.updatePolicy(durableConversationId, policy, agentSettings);
+				await this.#onPolicySynced?.(durableConversationId, policy);
 				this.#synced.set(key, signature);
 			}
 		} catch (error) {
@@ -651,6 +662,7 @@ export class ConversationPolicyService {
 			if (session === undefined) return;
 			const agentSettings = await this.agentSettingsForConversation(conversationId, policy);
 			await this.#host()?.updatePolicy(session.durableConversationId, policy, agentSettings);
+			await this.#onPolicySynced?.(session.durableConversationId, policy);
 			this.#synced.set(
 				`${conversationId}\0${session.durableConversationId}`,
 				JSON.stringify({ agentSettings, policy }),

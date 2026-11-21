@@ -19,6 +19,7 @@ import {
 	PolicyPacingFields,
 	PolicySidechatFields,
 	PolicySocialFields,
+	PolicyWorkspaceDelegationField,
 	Toggle,
 	fieldClass,
 	textareaClass,
@@ -299,6 +300,10 @@ export function PolicyTriggerTabView({
 								}
 							/>
 						</Field>
+					</div>
+
+					<div className="border-t border-border/60 pt-2.5">
+						<PolicyWorkspaceDelegationField draft={draft} onChange={onChange} />
 					</div>
 
 					<Field label={m.policy_allowlist()} hint={m.policy_allowlist_hint()}>

@@ -15,6 +15,7 @@ import type {
 	ScheduleExecutor,
 	ScheduleSnapshot,
 } from "./schedule-service.ts";
+import { isInQuietHours, nextQuietHoursEndMs } from "./schedule-time.ts";
 import type { SessionMessagingService } from "./session-messaging.ts";
 
 export interface ScheduleExecutorOptions {
@@ -96,18 +97,33 @@ export class ScheduleExecutionService implements ScheduleExecutor {
 				.where(eq(schedules.id, snapshot.scheduleId));
 			return { result: { skipped: "chat_archived" }, status: "skipped" };
 		}
+		const now = this.#now();
+		if (snapshot.flexWindowMs !== null) {
+			const scheduledMs = Date.parse(occurrence.scheduledFor);
+			if (Number.isFinite(scheduledMs) && now > scheduledMs + snapshot.flexWindowMs) {
+				return { result: { skipped: "due_window_expired" }, status: "skipped" };
+			}
+		}
 		if (snapshot.respectQuietHours) {
 			const policy = await this.#policy.effectivePolicy(snapshot.sessionId);
 			const quiet = policy.pacing.quietHours;
-			if (quiet?.enabled === true) {
-				const hour = new Date(this.#now()).getHours();
-				const inQuiet =
-					quiet.startHour === quiet.endHour
-						? true
-						: quiet.startHour < quiet.endHour
-							? hour >= quiet.startHour && hour < quiet.endHour
-							: hour >= quiet.startHour || hour < quiet.endHour;
-				if (inQuiet) return { result: { skipped: "quiet_hours" }, status: "skipped" };
+			if (quiet?.enabled === true && isInQuietHours(now, quiet, snapshot.timeZone)) {
+				// One-off user-requested reminders defer to the next quiet-hours end instead of
+				// permanently dropping as skipped; recurring schedules still skip the quiet slot.
+				if (snapshot.recurrenceKind === "once") {
+					const deferredUntilMs = nextQuietHoursEndMs(now, quiet, snapshot.timeZone);
+					if (deferredUntilMs !== undefined) {
+						return {
+							deferredUntilMs,
+							result: {
+								deferred: "quiet_hours",
+								deferredUntil: new Date(deferredUntilMs).toISOString(),
+							},
+							status: "deferred",
+						};
+					}
+				}
+				return { result: { skipped: "quiet_hours" }, status: "skipped" };
 			}
 		}
 		const messageId = `schedule:${occurrence.id}`;

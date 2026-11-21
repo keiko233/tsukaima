@@ -119,10 +119,16 @@ function scheduleInput(input: Record<string, unknown>) {
 					...(typeof repeatRecord.untilMs === "number" ? { untilMs: repeatRecord.untilMs } : {}),
 				};
 	const kind = scheduledTaskKindSchema.safeParse(input.kind);
+	const at = asString(input, "at");
+	const timeZone = asString(input, "timeZone");
+	const delayMs = asNumber(input, "delayMs");
 	return {
+		...(at === undefined ? {} : { at }),
 		...(input.cancelIfReplied === true ? { cancelIfReplied: true } : {}),
 		conversationId: asString(input, "conversationId") ?? "",
-		delayMs: Math.max(0, Math.floor(asNumber(input, "delayMs") ?? 0)),
+		...(delayMs === undefined && at !== undefined
+			? {}
+			: { delayMs: Math.max(0, Math.floor(delayMs ?? 0)) }),
 		...(asNumber(input, "dueWindowMs") === undefined
 			? {}
 			: { dueWindowMs: Math.floor(asNumber(input, "dueWindowMs")!) }),
@@ -132,6 +138,7 @@ function scheduleInput(input: Record<string, unknown>) {
 			: { maxAttempts: Math.floor(asNumber(input, "maxAttempts")!) }),
 		prompt: asString(input, "prompt") ?? "",
 		...(repeat === undefined ? {} : { repeat }),
+		...(timeZone === undefined ? {} : { timeZone }),
 	};
 }
 
@@ -194,6 +201,7 @@ export function registerProactiveSchedulerTools(
 		name: "proactive-scheduler.schedule",
 		parameters: {
 			properties: {
+				at: { type: "string" },
 				cancelIfReplied: { type: "boolean" },
 				delayMs: { minimum: 0, type: "integer" },
 				dueWindowMs: { minimum: 1, type: "integer" },
@@ -209,6 +217,7 @@ export function registerProactiveSchedulerTools(
 					required: ["intervalMs"],
 					type: "object",
 				},
+				timeZone: { type: "string" },
 			},
 			required: ["prompt"],
 			type: "object",

@@ -138,6 +138,23 @@ const compactionPresetLabels: Record<ConversationCompactionPreset, () => string>
 	conservative: () => m.policy_compaction_preset_conservative(),
 };
 
+export function PolicyWorkspaceDelegationField({ draft, onChange }: PolicyFieldsProps) {
+	return (
+		<div className="space-y-1">
+			<Toggle
+				checked={draft.workspaceDelegationEnabled}
+				label={m.policy_workspace_delegation()}
+				onChange={(value) =>
+					onChange((current) => ({ ...current, workspaceDelegationEnabled: value }))
+				}
+			/>
+			<p className="text-[11px] leading-4 text-muted-foreground">
+				{m.policy_workspace_delegation_hint()}
+			</p>
+		</div>
+	);
+}
+
 export function PolicyPacingFields({ draft, onChange }: PolicyFieldsProps) {
 	const updatePacing = (patch: Partial<ConversationPolicy["pacing"]>) => {
 		onChange((current) => ({ ...current, pacing: { ...current.pacing, ...patch } }));

@@ -16,8 +16,18 @@ export const CODING_AGENT_TOOL_NAMES = [
 	"db_query",
 ] as const;
 
+export interface CodingAgentAuthorization {
+	readonly allowed: boolean;
+	readonly reason?: string;
+}
+
 export interface CodingAgentToolsOptions {
 	readonly audit?: (entry: AuditEntry) => Promise<void> | void;
+	/** Fail-closed runtime check: coding tools only execute in coding-capable workspaces. */
+	readonly authorize?: (
+		durableConversationId: string,
+		toolName: string,
+	) => Promise<CodingAgentAuthorization>;
 	readonly logger: Logger;
 	readonly messaging: SessionMessagingService;
 	readonly references: WorkspaceReferenceService;
@@ -118,6 +128,27 @@ export function createCodingAgentToolsExtension(
 		| { output: { text: string; type: "text" }[] }
 		| { isError: true; output: { text: string; type: "text" }[] }
 	> => {
+		let authorization: CodingAgentAuthorization = { allowed: true };
+		if (options.authorize !== undefined) {
+			try {
+				authorization = await options.authorize(conversationId, name);
+			} catch {
+				authorization = { allowed: false, reason: "authorization_check_failed" };
+			}
+		}
+		if (!authorization.allowed) {
+			const reason = authorization.reason ?? "coding_tool_denied";
+			await options.audit?.({
+				action: `coding-tool.${name}`,
+				actorKind: "agent",
+				payload: { conversationId, reason },
+				reason,
+				result: "denied",
+				targetKind: "coding-tool",
+			});
+			options.logger.warn("coding tool denied", { conversationId, reason, tool: name });
+			return failure(new Error(reason));
+		}
 		try {
 			const result = await body();
 			await options.audit?.({

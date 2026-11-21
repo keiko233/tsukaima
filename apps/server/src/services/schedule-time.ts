@@ -194,6 +194,61 @@ export function previewOccurrences(input: {
 	return occurrences;
 }
 
+export interface QuietHoursWindow {
+	readonly enabled: boolean;
+	readonly endHour: number;
+	readonly startHour: number;
+}
+
+/**
+ * Evaluate whether an instant falls inside a conversation's configured quiet hours in the
+ * schedule's IANA time zone (including overnight wrap-around ranges such as 22:00–07:00).
+ */
+export function isInQuietHours(
+	atMs: number,
+	quietHours: QuietHoursWindow,
+	timeZone: string,
+): boolean {
+	if (!quietHours.enabled) return false;
+	const safeZone = isValidTimeZone(timeZone) ? timeZone : "UTC";
+	const { hour } = localParts(atMs, safeZone);
+	if (quietHours.startHour === quietHours.endHour) return true;
+	return quietHours.startHour < quietHours.endHour
+		? hour >= quietHours.startHour && hour < quietHours.endHour
+		: hour >= quietHours.startHour || hour < quietHours.endHour;
+}
+
+/**
+ * Compute the next UTC instant when quiet hours end in `timeZone` for an instant that is
+ * currently inside quiet hours. Returns `undefined` if quiet hours are disabled, cover all
+ * 24 hours (`startHour === endHour`), or `atMs` is already outside quiet hours. Wall-clock
+ * conversion uses `zonedTimeToUtc`, so DST spring-forward gaps and fall-back repeats resolve to
+ * the first valid instant after the gap rather than looping.
+ */
+export function nextQuietHoursEndMs(
+	atMs: number,
+	quietHours: QuietHoursWindow,
+	timeZone: string,
+): number | undefined {
+	if (!quietHours.enabled || quietHours.startHour === quietHours.endHour) return undefined;
+	const safeZone = isValidTimeZone(timeZone) ? timeZone : "UTC";
+	if (!isInQuietHours(atMs, quietHours, safeZone)) return undefined;
+	const local = localParts(atMs, safeZone);
+	const today = { day: local.day, month: local.month, year: local.year };
+	const wrapsMidnight = quietHours.startHour > quietHours.endHour;
+	const targetDate =
+		wrapsMidnight && local.hour >= quietHours.startHour ? addDays(today, 1) : today;
+	let candidate = zonedTimeToUtc(targetDate, { hour: quietHours.endHour, minute: 0 }, safeZone);
+	if (candidate <= atMs) {
+		candidate = zonedTimeToUtc(
+			addDays(targetDate, 1),
+			{ hour: quietHours.endHour, minute: 0 },
+			safeZone,
+		);
+	}
+	return candidate;
+}
+
 export function catchUpDefaults(recurrence: ScheduleRecurrence): {
 	readonly catchUp: "skip" | "latest" | "all";
 	readonly graceMs: number;

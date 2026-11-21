@@ -206,6 +206,7 @@ export interface TaskCreateRequest {
 
 export const taskCreateInputSchema = z
 	.object({
+		at: z.string().datetime({ offset: true }).optional(),
 		cancelIfReplied: z.boolean().optional(),
 		chatObjectId: z.string().min(1).optional(),
 		conversationId: z.string().min(1),
@@ -220,6 +221,7 @@ export const taskCreateInputSchema = z
 		maxAttempts: z.number().int().min(1).max(10).optional(),
 		prompt: z.string().trim().min(1).max(100_000),
 		repeat: repeatSchema.optional(),
+		timeZone: z.string().min(1).max(100).optional(),
 	})
 	.strict();
 
@@ -253,6 +255,48 @@ export function isQuietHours(
 		}
 	}
 	return false;
+}
+
+/**
+ * Compute the next UTC instant after `nowMs` when configured quiet hours end, respecting
+ * `timezoneOffsetMinutes` and wrap-around or adjacent ranges. Returns `undefined` if quiet hours
+ * are disabled, `nowMs` is not in quiet hours, or the configured ranges cover all 24 hours.
+ */
+export function nextQuietHoursEndMs(
+	quiet: ProactiveQuietHours,
+	nowMs: number,
+	timezoneOffsetMinutes = quiet.timezoneOffsetMinutes,
+): number | undefined {
+	if (!quiet.enabled || quiet.ranges.length === 0) return undefined;
+	if (!isQuietHours(quiet, nowMs, timezoneOffsetMinutes)) return undefined;
+	const offsetMs = timezoneOffsetMinutes * 60_000;
+	const dayMs = 24 * 60 * 60_000;
+	let cursorMs = nowMs;
+	for (let step = 0; step <= quiet.ranges.length; step += 1) {
+		const localMs = cursorMs + offsetMs;
+		const localDate = new Date(localMs);
+		const localMidnightUtcMs =
+			Date.UTC(localDate.getUTCFullYear(), localDate.getUTCMonth(), localDate.getUTCDate()) -
+			offsetMs;
+		const minutes = localDate.getUTCHours() * 60 + localDate.getUTCMinutes();
+		let nextEndMs: number | undefined;
+		for (const range of quiet.ranges) {
+			const start = minutesOfDay(range.start);
+			const end = minutesOfDay(range.end);
+			if (start === end) return undefined;
+			const matches =
+				start < end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
+			if (!matches) continue;
+			const endDayOffsetMs = start > end && minutes >= start ? dayMs : 0;
+			const candidate = localMidnightUtcMs + endDayOffsetMs + end * 60_000;
+			if (nextEndMs === undefined || candidate > nextEndMs) nextEndMs = candidate;
+		}
+		if (nextEndMs === undefined) return cursorMs > nowMs ? cursorMs : undefined;
+		if (nextEndMs <= cursorMs) return undefined;
+		cursorMs = nextEndMs;
+		if (!isQuietHours(quiet, cursorMs, timezoneOffsetMinutes)) return cursorMs;
+	}
+	return undefined;
 }
 
 export function dailyKey(nowMs: number, timezoneOffsetMinutes: number): string {

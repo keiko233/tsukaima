@@ -503,6 +503,8 @@
 	"policy_stop_sequences_hint": "One per line, up to four. Leave blank to use the provider model value.",
 	"policy_unsaved": "Unsaved changes",
 	"policy_version": "Version {version}",
+	"policy_workspace_delegation": "Allow IM workspace delegation",
+	"policy_workspace_delegation_hint": "Let trusted admins in this chat spawn and message coding workspaces. Ordinary chats never receive repository coding tools.",
 	"processed_requests": "Processed requests",
 	"receiving": "Receiving",
 	"rename": "Rename",
