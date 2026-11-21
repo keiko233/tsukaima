@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+	consolidationMemoryCandidateSchema,
 	emptyWarmState,
 	memoryConsolidationOutputSchema,
 	warmStatePayloadSchema,
@@ -100,20 +101,267 @@ export function parseWarmState(evidence: Record<string, unknown>): WarmStatePayl
 	return parsed.success ? parsed.data : undefined;
 }
 
-/** Extract and validate the JSON object a consolidation model returned. */
-export function parseConsolidationOutput(text: string): MemoryConsolidationOutput | undefined {
+export type ParseConsolidationOutputResult =
+	| { readonly data: MemoryConsolidationOutput; readonly ok: true }
+	| { readonly error: string; readonly ok: false };
+
+const VALID_MEMORY_KINDS = new Set<string>([
+	"fact",
+	"preference",
+	"person",
+	"relationship",
+	"event",
+	"todo",
+	"glossary",
+	"style",
+]);
+
+const MEMORY_KIND_SYNONYMS: Record<
+	string,
+	"fact" | "preference" | "person" | "relationship" | "event" | "todo" | "glossary" | "style"
+> = {
+	action: "todo",
+	convention: "style",
+	definition: "glossary",
+	detail: "fact",
+	favorite: "preference",
+	habit: "preference",
+	identity: "person",
+	info: "fact",
+	information: "fact",
+	interest: "preference",
+	knowledge: "fact",
+	note: "fact",
+	observation: "fact",
+	plan: "todo",
+	profile: "person",
+	reminder: "todo",
+	rule: "style",
+	setting: "fact",
+	task: "todo",
+	term: "glossary",
+};
+
+function normalizeMemoryKind(
+	raw: unknown,
+): "fact" | "preference" | "person" | "relationship" | "event" | "todo" | "glossary" | "style" {
+	if (typeof raw !== "string") return "fact";
+	const normalized = raw.trim().toLowerCase();
+	if (VALID_MEMORY_KINDS.has(normalized)) {
+		return normalized as
+			| "fact"
+			| "preference"
+			| "person"
+			| "relationship"
+			| "event"
+			| "todo"
+			| "glossary"
+			| "style";
+	}
+	return MEMORY_KIND_SYNONYMS[normalized] ?? "fact";
+}
+
+function normalizeCleanString(val: unknown, maxChars: number): string {
+	if (typeof val === "string") return val.trim().slice(0, maxChars);
+	return "";
+}
+
+function normalizeOptionalCleanString(val: unknown, maxChars: number): string | undefined {
+	if (typeof val === "string") {
+		const trimmed = val.trim();
+		return trimmed.length > 0 ? trimmed.slice(0, maxChars) : undefined;
+	}
+	return undefined;
+}
+
+function normalizeCleanStringList(items: unknown, maxItems: number, maxChars: number): string[] {
+	if (!Array.isArray(items)) return [];
+	return items
+		.map((item) => (typeof item === "string" ? item.trim() : ""))
+		.filter((item) => item.length > 0)
+		.map((item) => item.slice(0, maxChars))
+		.slice(0, maxItems);
+}
+
+/** Extract and validate the JSON object a consolidation model returned with detailed error reporting. */
+export function parseConsolidationOutputDetailed(text: string): ParseConsolidationOutputResult {
 	const trimmed = text.trim();
 	const start = trimmed.indexOf("{");
 	const end = trimmed.lastIndexOf("}");
-	if (start === -1 || end <= start) return undefined;
-	try {
-		const parsed = memoryConsolidationOutputSchema.safeParse(
-			JSON.parse(trimmed.slice(start, end + 1)) as unknown,
-		);
-		return parsed.success ? parsed.data : undefined;
-	} catch {
-		return undefined;
+	if (start === -1 || end <= start) {
+		return { error: "no JSON object found in consolidation output", ok: false };
 	}
+	let raw: unknown;
+	try {
+		raw = JSON.parse(trimmed.slice(start, end + 1));
+	} catch (error) {
+		return {
+			error: `malformed JSON in consolidation output: ${error instanceof Error ? error.message : String(error)}`,
+			ok: false,
+		};
+	}
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		return { error: "consolidation output must be a JSON object", ok: false };
+	}
+	const rawRecord = raw as Record<string, unknown>;
+	if (
+		!("state" in rawRecord) ||
+		typeof rawRecord.state !== "object" ||
+		rawRecord.state === null ||
+		Array.isArray(rawRecord.state)
+	) {
+		return { error: "consolidation output missing state object", ok: false };
+	}
+	const rawState = rawRecord.state as Record<string, unknown>;
+
+	const rawPeople = Array.isArray(rawState.people) ? rawState.people : [];
+	const normalizedPeople = rawPeople
+		.filter(
+			(item): item is Record<string, unknown> =>
+				typeof item === "object" && item !== null && !Array.isArray(item),
+		)
+		.map((item) => {
+			const key = typeof item.key === "string" ? item.key.trim().slice(0, 200) : "";
+			const name = typeof item.name === "string" ? item.name.trim().slice(0, 120) : "";
+			if (key.length === 0 || name.length === 0) return undefined;
+			const aliases = normalizeCleanStringList(item.aliases, 8, 120);
+			const notes = normalizeCleanStringList(item.notes, 8, 240);
+			const lastSeenAt = normalizeOptionalCleanString(item.lastSeenAt, 100);
+			return {
+				aliases,
+				key,
+				...(lastSeenAt === undefined ? {} : { lastSeenAt }),
+				name,
+				notes,
+			};
+		})
+		.filter((item): item is NonNullable<typeof item> => item !== undefined)
+		.slice(0, 100);
+
+	const rawGlossary = Array.isArray(rawState.glossary) ? rawState.glossary : [];
+	const normalizedGlossary = rawGlossary
+		.filter(
+			(item): item is Record<string, unknown> =>
+				typeof item === "object" && item !== null && !Array.isArray(item),
+		)
+		.map((item) => {
+			const term = typeof item.term === "string" ? item.term.trim().slice(0, 80) : "";
+			const meaning = typeof item.meaning === "string" ? item.meaning.trim().slice(0, 240) : "";
+			if (term.length === 0 || meaning.length === 0) return undefined;
+			return { meaning, term };
+		})
+		.filter((item): item is NonNullable<typeof item> => item !== undefined)
+		.slice(0, 30);
+
+	const rawCommitments = Array.isArray(rawState.commitments) ? rawState.commitments : [];
+	const normalizedCommitments = rawCommitments
+		.filter(
+			(item): item is Record<string, unknown> =>
+				typeof item === "object" && item !== null && !Array.isArray(item),
+		)
+		.map((item) => {
+			const key = typeof item.key === "string" ? item.key.trim().slice(0, 120) : "";
+			const textValue = typeof item.text === "string" ? item.text.trim().slice(0, 240) : "";
+			if (key.length === 0 || textValue.length === 0) return undefined;
+			const owner = normalizeOptionalCleanString(item.owner, 200);
+			const status = item.status === "done" || item.status === "cancelled" ? item.status : "open";
+			const expiresAt = normalizeOptionalCleanString(item.expiresAt, 100);
+			return {
+				key,
+				status,
+				text: textValue,
+				...(expiresAt === undefined ? {} : { expiresAt }),
+				...(owner === undefined ? {} : { owner }),
+			};
+		})
+		.filter((item): item is NonNullable<typeof item> => item !== undefined)
+		.slice(0, 20);
+
+	const rawAnswers = Array.isArray(rawState.answers) ? rawState.answers : [];
+	const normalizedAnswers = rawAnswers
+		.filter(
+			(item): item is Record<string, unknown> =>
+				typeof item === "object" && item !== null && !Array.isArray(item),
+		)
+		.map((item) => {
+			const key = typeof item.key === "string" ? item.key.trim().slice(0, 120) : "";
+			const question = typeof item.question === "string" ? item.question.trim().slice(0, 240) : "";
+			const answer = typeof item.answer === "string" ? item.answer.trim().slice(0, 400) : "";
+			if (key.length === 0 || question.length === 0 || answer.length === 0) return undefined;
+			const answeredAt = normalizeOptionalCleanString(item.answeredAt, 100);
+			return {
+				answer,
+				key,
+				question,
+				...(answeredAt === undefined ? {} : { answeredAt }),
+			};
+		})
+		.filter((item): item is NonNullable<typeof item> => item !== undefined)
+		.slice(0, 30);
+
+	const rawMemories = Array.isArray(rawRecord.memories) ? rawRecord.memories : [];
+	const normalizedMemories = rawMemories
+		.filter(
+			(item): item is Record<string, unknown> =>
+				typeof item === "object" && item !== null && !Array.isArray(item),
+		)
+		.map((item) => {
+			const summary = typeof item.summary === "string" ? item.summary.trim().slice(0, 400) : "";
+			if (summary.length === 0) return undefined;
+			const kind = normalizeMemoryKind(item.kind);
+			const content = normalizeOptionalCleanString(item.content, 1_000);
+			const subject = normalizeOptionalCleanString(item.subject, 200);
+			const expiresAt = normalizeOptionalCleanString(item.expiresAt, 100);
+			const confidence =
+				typeof item.confidence === "number" && Number.isFinite(item.confidence)
+					? Math.max(0, Math.min(1, item.confidence))
+					: 0.6;
+			const importance =
+				typeof item.importance === "number" && Number.isFinite(item.importance)
+					? Math.max(0, Math.min(1, item.importance))
+					: 0.5;
+			const candidate = {
+				confidence,
+				importance,
+				kind,
+				summary,
+				...(content === undefined ? {} : { content }),
+				...(expiresAt === undefined ? {} : { expiresAt }),
+				...(subject === undefined ? {} : { subject }),
+			};
+			const validated = consolidationMemoryCandidateSchema.safeParse(candidate);
+			return validated.success ? validated.data : undefined;
+		})
+		.filter((item): item is NonNullable<typeof item> => item !== undefined)
+		.slice(0, 20);
+
+	const normalizedPayload = {
+		memories: normalizedMemories,
+		state: {
+			answers: normalizedAnswers,
+			atmosphere: normalizeCleanString(rawState.atmosphere, 400),
+			commitments: normalizedCommitments,
+			glossary: normalizedGlossary,
+			people: normalizedPeople,
+			summary: normalizeCleanString(rawState.summary, 8_000),
+			topics: normalizeCleanStringList(rawState.topics, 6, 80),
+		},
+	};
+
+	const parsed = memoryConsolidationOutputSchema.safeParse(normalizedPayload);
+	if (parsed.success) {
+		return { data: parsed.data, ok: true };
+	}
+	const reason = parsed.error.issues
+		.map((issue) => `${issue.path.join(".") || "root"}: ${issue.message}`)
+		.join("; ");
+	return { error: reason, ok: false };
+}
+
+/** Extract and validate the JSON object a consolidation model returned. */
+export function parseConsolidationOutput(text: string): MemoryConsolidationOutput | undefined {
+	const result = parseConsolidationOutputDetailed(text);
+	return result.ok ? result.data : undefined;
 }
 
 function clip(text: string, max: number): string {

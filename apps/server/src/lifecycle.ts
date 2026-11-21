@@ -2056,10 +2056,16 @@ export class TsukaimaLifecycle {
 			promptPreview: previewText(prompt),
 			providerId: model.providerId,
 		});
-		const response = await model.models.completeSimple(selected, {
-			messages: [{ content: prompt, role: "user", timestamp: Date.now() }],
-			...(signal === undefined ? {} : { signal }),
-		});
+		const response = await model.models.completeSimple(
+			selected,
+			{
+				messages: [{ content: prompt, role: "user", timestamp: Date.now() }],
+			},
+			{
+				reasoning: "low",
+				...(signal === undefined ? {} : { signal }),
+			},
+		);
 		const text = response.content
 			.filter(
 				(part): part is { readonly text: string; readonly type: "text" } => part.type === "text",
