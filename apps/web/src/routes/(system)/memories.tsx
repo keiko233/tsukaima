@@ -1,4 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { MemoriesPage } from "./_modules/memories-page";
+import { createFileRoute, Navigate } from "@tanstack/react-router";
 
-export const Route = createFileRoute("/(system)/memories")({ component: MemoriesPage });
+function MemoriesRedirect() {
+	return <Navigate params={{ pluginId: "memory" }} replace to="/plugins/$pluginId" />;
+}
+
+export const Route = createFileRoute("/(system)/memories")({ component: MemoriesRedirect });

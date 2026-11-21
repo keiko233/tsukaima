@@ -3,7 +3,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
-	Brain,
 	CalendarClock,
 	Inbox,
 	LogOut,
@@ -36,7 +35,6 @@ import { LogPanel } from "./log-panel";
 type RailDestination =
 	| "/"
 	| "/groups"
-	| "/memories"
 	| "/plugins"
 	| "/requests"
 	| "/settings"
@@ -253,12 +251,6 @@ export function AppRail() {
 						icon={Terminal}
 						label={`${m.logs_title()} (${m.logs_shortcut()})`}
 						onClick={() => setLogsOpen((value) => !value)}
-					/>
-					<RailLink
-						active={destinationActive("/memories", pathname)}
-						icon={Brain}
-						label={m.nav_memories()}
-						to="/memories"
 					/>
 					<MorphPopover open={moreOpen} onOpenChange={setMoreOpen}>
 						<MorphPopoverTrigger>

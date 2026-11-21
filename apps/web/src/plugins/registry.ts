@@ -1,4 +1,5 @@
 import type { PluginUiLoader, PluginUiModule } from "@tsukaima/sdk/ui";
+import { m } from "@/paraglide/messages";
 
 /**
  * Build-time registry of trusted plugin browser entries.
@@ -11,7 +12,28 @@ const loaders: Record<string, PluginUiLoader> = import.meta.glob(
 	"../../../../plugins/*/src/ui.tsx",
 ) as Record<string, PluginUiLoader>;
 
+const builtinLoaders: Record<string, PluginUiLoader> = {
+	memory: async () => {
+		const { EmbeddedMemoriesPanel } = await import("@/routes/(system)/_modules/memories-page");
+		return {
+			default: {
+				description: () => m.memories_description(),
+				displayName: () => m.nav_memories(),
+				panels: [
+					{
+						component: EmbeddedMemoriesPanel,
+						icon: "list",
+						id: "memories",
+						title: () => m.memories_list_title(),
+					},
+				],
+			},
+		};
+	},
+};
+
 export function pluginUiLoader(pluginId: string): PluginUiLoader | undefined {
+	if (pluginId in builtinLoaders) return builtinLoaders[pluginId];
 	const entry = Object.entries(loaders).find(([path]) =>
 		path.includes(`/plugins/${pluginId}/src/ui.tsx`),
 	);

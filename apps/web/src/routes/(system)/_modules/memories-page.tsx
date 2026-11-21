@@ -72,7 +72,7 @@ function StatusFilter({
 	);
 }
 
-export function MemoriesPage() {
+export function MemoriesPage({ embedded = false }: { embedded?: boolean } = {}) {
 	const toast = useToast();
 	const queryClient = useQueryClient();
 	const [scope, setScope] = useState<MemoryScope | "">("");
@@ -193,8 +193,8 @@ export function MemoriesPage() {
 		});
 	};
 
-	return (
-		<SystemPage description={m.memories_description()} title={m.nav_memories()}>
+	const body = (
+		<>
 			<Card size="compact">
 				<CardHeader>
 					<CardTitle as="h2">{m.memories_list_title()}</CardTitle>
@@ -395,6 +395,17 @@ export function MemoriesPage() {
 					</ModalActions>
 				</div>
 			</Modal>
+		</>
+	);
+
+	if (embedded) return <div className="space-y-4">{body}</div>;
+	return (
+		<SystemPage description={m.memories_description()} title={m.nav_memories()}>
+			{body}
 		</SystemPage>
 	);
+}
+
+export function EmbeddedMemoriesPanel() {
+	return <MemoriesPage embedded />;
 }
