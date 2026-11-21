@@ -1,5 +1,9 @@
 # NapCat operational parity spec
 
+[Chat agent runtime refactor](chat-agent-runtime-refactor.md) defines the post-cutover refactor
+of eager chat tools, current-chat addressing, reply/notice fidelity, and media inspection parity.
+It supersedes the corresponding initial rollout requirements below.
+
 ## Outcome
 
 Tsukaima must operate as the sole bot process on the current NapCat deployment without losing
