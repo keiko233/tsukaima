@@ -14,6 +14,7 @@ import { codingTasks, messages, workspaceSessions, type TsukaimaDatabase } from 
 import { loadConfig } from "../src/config.ts";
 import { TsukaimaLifecycle } from "../src/lifecycle.ts";
 import { abortSessionRun, getSessionContextStats } from "../src/services/webui.ts";
+import { WORKSPACE_NATIVE_LIVE_TOOL_OUTPUT_MAX_CHARS } from "../src/services/workspace-native-runner.ts";
 
 const directories: string[] = [];
 const lifecycles: TsukaimaLifecycle[] = [];
@@ -258,6 +259,106 @@ describe("workspace native Pi integration", () => {
 		expect(requests[0]).not.toContain("check");
 		expect(requestBodies.join("\n")).not.toContain("self-iteration");
 		expect(requestBodies.join("\n")).not.toContain("db_query");
+	}, 60_000);
+
+	test("keeps multi-turn live tool state bounded and free of duplicate rounds", async () => {
+		const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-native-multiturn-"));
+		directories.push(root);
+		const repo = await fixtureRepository(root);
+		await fs.mkdir(join(repo, "docs"), { recursive: true });
+		await fs.writeFile(
+			join(repo, "docs", "large.txt"),
+			Array.from({ length: 400 }, (_, index) => `line ${index} ${"x".repeat(24)}\n`).join(""),
+		);
+		execFileSync("git", ["add", "docs/large.txt"], { cwd: repo });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.name=test",
+				"-c",
+				"user.email=test@tsukaima.invalid",
+				"commit",
+				"-m",
+				"large fixture",
+			],
+			{ cwd: repo },
+		);
+		let request = 0;
+		const model = createOpenAICompatibleModelPort(
+			{
+				apiKey: "synthetic-native-key",
+				baseUrl: "http://native-workspace.invalid/v1",
+				fetch: (async (_input, _init) => {
+					request += 1;
+					if (request <= 2) {
+						return Response.json({
+							choices: [
+								{
+									finish_reason: "tool_calls",
+									message: {
+										content: null,
+										tool_calls: [
+											{
+												function: {
+													arguments: JSON.stringify({
+														path: "docs/large.txt",
+													}),
+													name: "read",
+												},
+												id: `native-read-${request}`,
+												type: "function",
+											},
+										],
+									},
+								},
+							],
+							id: `scripted-native-read-${request}`,
+							model: "scripted-native",
+							usage: { completion_tokens: 1, prompt_tokens: 1, total_tokens: 2 },
+						});
+					}
+					return Response.json({
+						choices: [
+							{
+								finish_reason: "stop",
+								message: { content: "Read the large fixture twice." },
+							},
+						],
+						id: "scripted-native-multiturn",
+						model: "scripted-native",
+						usage: { completion_tokens: 1, prompt_tokens: 1, total_tokens: 2 },
+					});
+				}) as typeof fetch,
+			},
+			[{ capabilities: ["basic-chat", "tool-use"], modelId: "scripted-native" }],
+		);
+		const { lifecycle } = await start({ model: model as never, root });
+		const workspace = await lifecycle.workspace.create({
+			goal: "Read a large fixture twice.",
+			requestedBy: "test-admin",
+		});
+		const database = lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("Database not ready");
+		await lifecycle.sessionMessaging.sendAgentMessage({
+			sessionId: workspace.sessionId,
+			source: "webui",
+			text: "Read the large fixture twice with the read tool.",
+		});
+		const answer = await waitFor(
+			async () => (await nativeAnswers(database, workspace.sessionId))[0],
+		);
+		const entryId = answer.durableEntryId;
+		if (entryId === null) throw new Error("Answer entry id missing");
+		const final = await lifecycle.liveRuns.final(entryId);
+		const toolSteps = final?.steps.filter((step) => step.kind === "tool") ?? [];
+		expect(toolSteps).toHaveLength(2);
+		for (const step of toolSteps) {
+			if (step.kind !== "tool") continue;
+			// Completed rounds are cleared, so each call appears once rather than once per turn.
+			expect(step.output.length).toBeLessThanOrEqual(WORKSPACE_NATIVE_LIVE_TOOL_OUTPUT_MAX_CHARS);
+			expect(step.output).toContain("[truncated]");
+		}
 	}, 60_000);
 
 	test("abort stops an active native run and a repeated message id is idempotent", async () => {

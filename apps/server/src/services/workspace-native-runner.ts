@@ -254,6 +254,10 @@ function argumentsText(value: unknown): string | undefined {
 	}
 }
 
+/** Cap for tool output included in live snapshots; full output stays in the model transcript. */
+export const WORKSPACE_NATIVE_LIVE_TOOL_OUTPUT_MAX_CHARS = 4_000;
+const LIVE_TOOL_OUTPUT_TRUNCATION_MARKER = "\n… [truncated]";
+
 function toolResultText(result: unknown): string {
 	const record = recordOf(result);
 	const content = Array.isArray(record.content) ? record.content : [];
@@ -262,6 +266,15 @@ function toolResultText(result: unknown): string {
 		.filter((part) => part.type === "text" && typeof part.text === "string")
 		.map((part) => String(part.text))
 		.join("\n");
+}
+
+function liveToolResultText(result: unknown): string {
+	const text = toolResultText(result);
+	if (text.length <= WORKSPACE_NATIVE_LIVE_TOOL_OUTPUT_MAX_CHARS) return text;
+	return `${text.slice(
+		0,
+		WORKSPACE_NATIVE_LIVE_TOOL_OUTPUT_MAX_CHARS - LIVE_TOOL_OUTPUT_TRUNCATION_MARKER.length,
+	)}${LIVE_TOOL_OUTPUT_TRUNCATION_MARKER}`;
 }
 
 function snapshotOf(state: NativeRunState): LiveRunSnapshot {
@@ -730,6 +743,10 @@ export class WorkspaceNativeRunner {
 		const unsubscribe = native.session.subscribe((event) => {
 			const message = "message" in event ? (event.message as PipeMessage | undefined) : undefined;
 			if (event.type === "turn_start") {
+				// Snapshot the finished tools before the new turn clears them so the timeline can
+				// commit them without waiting for a throttled poll that may never see this round.
+				if (state.tools.some((tool) => tool.status === "done")) emit();
+				state.tools = state.tools.filter((tool) => tool.status !== "done");
 				state.turns += 1;
 				throttled();
 				return;
@@ -771,14 +788,14 @@ export class WorkspaceNativeRunner {
 			}
 			if (event.type === "tool_execution_update") {
 				const existing = state.tools.find((tool) => tool.callId === event.toolCallId);
-				if (existing !== undefined) existing.output = toolResultText(event.partialResult);
+				if (existing !== undefined) existing.output = liveToolResultText(event.partialResult);
 				throttled();
 				return;
 			}
 			if (event.type === "tool_execution_end") {
 				const existing = state.tools.find((tool) => tool.callId === event.toolCallId);
 				if (existing !== undefined) {
-					existing.output = toolResultText(event.result);
+					existing.output = liveToolResultText(event.result);
 					existing.status = "done";
 				}
 				throttled();
