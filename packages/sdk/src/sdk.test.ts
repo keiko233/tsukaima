@@ -461,12 +461,12 @@ describe("plugin sdk", () => {
 	});
 
 	test("allocates concise shorthand names, namespacing only real collisions", () => {
-		expect(allocateModelToolNames(["memory.recall", "search-fetch.web"]).get("memory.recall")).toBe(
+		expect(allocateModelToolNames(["memory.recall", "memory.save"]).get("memory.recall")).toBe(
 			"recall",
 		);
-		expect(
-			allocateModelToolNames(["memory.recall", "search-fetch.web"]).get("search-fetch.web"),
-		).toBe("web");
+		expect(allocateModelToolNames(["memory.recall", "memory.save"]).get("memory.save")).toBe(
+			"save",
+		);
 
 		// Both `send` tools collide, so both keep the namespaced provider-safe name.
 		const sends = allocateModelToolNames(["onebot-napcat.send", "sticker-meme.send"]);
@@ -528,7 +528,7 @@ describe("plugin sdk", () => {
 		expect(resolveToolName(legacyProviderSafeToolName("sticker-meme.send"))).toBe(
 			"sticker-meme.send",
 		);
-		expect(resolveToolName("search-fetch_web")).toBe("search-fetch.web");
+		expect(resolveToolName("openai-compatible_complete")).toBe("openai-compatible.complete");
 		expect(resolveToolName(legacyProviderSafeToolName("proactive-scheduler.schedule"))).toBe(
 			"proactive-scheduler.schedule",
 		);
