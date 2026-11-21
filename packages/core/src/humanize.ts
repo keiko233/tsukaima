@@ -250,7 +250,16 @@ const META_LEAK_RULES: readonly MetaLeakRule[] = [
 	},
 	{
 		name: "thinking-block",
-		pattern: /<(?:thought|thinking)\b[^>]*>[\s\S]*?<\/(?:thought|thinking)>/giu,
+		pattern:
+			/<(?:think|thought|thinking)(?::[^>\s]+)?\b[^>]*>[\s\S]*?<\/(?:think|thought|thinking)(?::[^>\s]+)?\s*>/giu,
+	},
+	{
+		name: "thinking-unopened-prefix",
+		pattern: /^[\s\S]*?<\/(?:think|thought|thinking)(?::[^>\s]+)?\s*>/iu,
+	},
+	{
+		name: "thinking-tag",
+		pattern: /<\/?(?:think|thought|thinking)(?::[^>\s]+)?\b[^>]*>/giu,
 	},
 	{
 		name: "internal-template-token",

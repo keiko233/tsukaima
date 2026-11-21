@@ -191,3 +191,29 @@ describe("humanize: stickers meta-leak", () => {
 		expect(result.text).toContain("今天几点见？");
 	});
 });
+
+describe("humanize: thinking tag meta-leak", () => {
+	test("strips paired <think> and suffixed <think:id> blocks", () => {
+		const result = sanitizeOutboundMetaLeaks(
+			"<think>internal reasoning</think>好的，晚上见\n<think:6124c78e>more reasoning</think:6124c78e>别迟到",
+		);
+		expect(result.modified).toBe(true);
+		expect(result.text).toBe("好的，晚上见\n别迟到");
+		expect(result.stripped).toContain("thinking-block");
+	});
+
+	test("strips unopened chain-of-thought ending with </think:id> or </think>", () => {
+		const result = sanitizeOutboundMetaLeaks(
+			"Checking synthetic context before answering.\n\nKeep the reply brief.</think:abcd1234>Sounds good, see you tomorrow.\n\nBring your notes.",
+		);
+		expect(result.modified).toBe(true);
+		expect(result.text).toBe("Sounds good, see you tomorrow.\n\nBring your notes.");
+		expect(result.stripped).toContain("thinking-unopened-prefix");
+	});
+
+	test("preserves think tags inside fenced code blocks", () => {
+		const result = sanitizeOutboundMetaLeaks("示例：\n```xml\n<think>demo</think>\n```");
+		expect(result.modified).toBe(false);
+		expect(result.text).toContain("<think>demo</think>");
+	});
+});
