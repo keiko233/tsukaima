@@ -922,6 +922,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function readAbortSignal(value: unknown): AbortSignal | undefined {
+	if (!isRecord(value)) return undefined;
+	const candidate = value.abortSignal;
+	if (typeof candidate !== "object" || candidate === null) return undefined;
+	if (
+		"aborted" in candidate &&
+		typeof candidate.aborted === "boolean" &&
+		"addEventListener" in candidate &&
+		typeof candidate.addEventListener === "function" &&
+		"removeEventListener" in candidate &&
+		typeof candidate.removeEventListener === "function"
+	) {
+		return candidate as AbortSignal;
+	}
+	return undefined;
+}
+
 function warn(
 	logger: PluginToolsExtensionOptions["logger"],
 	message: string,
@@ -999,9 +1016,10 @@ export function createPluginToolsExtension(
 			description: tool.description,
 			...(resolvedPolicy.lazy ? { deferred: true as const } : {}),
 			surface: resolvedPolicy.surface ?? "both",
-			async execute(args, api) {
+			async execute(args, api, toolContext) {
 				const input = isRecord(args) ? args : {};
 				const conversationId = String(api.conversationId);
+				const callerSignal = readAbortSignal(toolContext);
 				const invocationContext: ToolInvocationContext = { conversationId };
 				const startedAtMs = Date.now();
 				const logDenied = (reason: string): void => {
@@ -1104,6 +1122,18 @@ export function createPluginToolsExtension(
 				const semaphore = semaphoreFor(tool);
 				const controller = new AbortController();
 				let timedOut = false;
+				let callerAborted = false;
+				const onCallerAbort = (): void => {
+					callerAborted = true;
+					controller.abort(callerSignal?.reason);
+				};
+				if (callerSignal !== undefined) {
+					if (callerSignal.aborted) {
+						onCallerAbort();
+					} else {
+						callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+					}
+				}
 				const timer = setTimeout(() => {
 					timedOut = true;
 					controller.abort();
@@ -1112,19 +1142,25 @@ export function createPluginToolsExtension(
 				try {
 					release = await semaphore.acquire(controller.signal);
 					if (timedOut) throw new Error(`Tool ${tool.name} timed out after ${policy.timeoutMs}ms`);
+					if (callerAborted) throw new Error(`Tool ${tool.name} aborted`);
+					const toolAbortError = (): Error =>
+						timedOut
+							? new Error(`Tool ${tool.name} timed out after ${policy.timeoutMs}ms`)
+							: new Error(`Tool ${tool.name} aborted`);
 					const execution = Promise.resolve().then(() =>
-						invoke(tool.name, input, effectiveInvocationContext),
+						invoke(tool.name, input, {
+							...effectiveInvocationContext,
+							signal: controller.signal,
+						}),
 					);
 					const timeout = new Promise<never>((_resolve, reject) => {
 						if (controller.signal.aborted) {
-							reject(new Error(`Tool ${tool.name} timed out after ${policy.timeoutMs}ms`));
+							reject(toolAbortError());
 							return;
 						}
-						controller.signal.addEventListener(
-							"abort",
-							() => reject(new Error(`Tool ${tool.name} timed out after ${policy.timeoutMs}ms`)),
-							{ once: true },
-						);
+						controller.signal.addEventListener("abort", () => reject(toolAbortError()), {
+							once: true,
+						});
 					});
 					void execution.catch(() => undefined);
 					const outcome = await Promise.race([execution, timeout]);
@@ -1217,6 +1253,7 @@ export function createPluginToolsExtension(
 					};
 				} finally {
 					clearTimeout(timer);
+					callerSignal?.removeEventListener("abort", onCallerAbort);
 					release?.();
 				}
 			},

@@ -265,4 +265,32 @@ describe("tool policy", () => {
 			expect.objectContaining({ lazy: true, name: "demo.chat", surface: "chat" }),
 		);
 	});
+
+	test("forwards caller abortSignal into plugin tool invocations and aborts promptly", async () => {
+		let receivedSignal: AbortSignal | undefined;
+		const longTool = tool({ name: "demo.long", policy: { timeoutMs: 30_000 } });
+		const extension = createPluginToolsExtension(
+			() => [longTool],
+			async (_name, _input, context) => {
+				receivedSignal = context?.signal;
+				await new Promise<void>((resolve) => {
+					context?.signal?.addEventListener("abort", () => resolve(), { once: true });
+				});
+				return { ok: true, result: { content: [] } };
+			},
+			{
+				policyContext: { grantedPermissions: ["conversation.read"] },
+			},
+		);
+		const caller = new AbortController();
+		const registration = extension.tools[0]!;
+		const pending = registration.execute({}, { conversationId: 1 }, { abortSignal: caller.signal });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(receivedSignal).toBeDefined();
+		expect(receivedSignal?.aborted).toBe(false);
+		caller.abort();
+		const result = await pending;
+		expect(receivedSignal?.aborted).toBe(true);
+		expect(result.isError).toBe(true);
+	});
 });
