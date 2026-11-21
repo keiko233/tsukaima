@@ -213,9 +213,9 @@ export function UpgradeCenter() {
 	const canStart =
 		check.data?.canUpgrade === true &&
 		start.isPending === false &&
-		latest !== null &&
 		latest !== undefined &&
-		(latest.status === "completed" ||
+		(latest === null ||
+			latest.status === "completed" ||
 			latest.status === "failed" ||
 			latest.status === "cancelled");
 	const canFinalize =

@@ -3,7 +3,14 @@
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDownToLine, ArrowUpFromLine, Download, GitBranch, RefreshCw } from "lucide-react";
+import {
+	ArrowDownToLine,
+	ArrowUpFromLine,
+	Download,
+	GitBranch,
+	RefreshCw,
+	Rocket,
+} from "lucide-react";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
 import { Input } from "@tsukaima/ui/components/motion/input";
@@ -212,10 +219,12 @@ export function RepositoryStatusCard() {
 		...orpc.admin.repository.status.queryOptions(),
 		staleTime: 15_000,
 	});
+	const restart = useQuery(orpc.admin.runtime.restartStatus.queryOptions());
 	const invalidate = async () => {
 		await Promise.all([
 			queryClient.invalidateQueries({ queryKey: orpc.admin.repository.key() }),
 			queryClient.invalidateQueries({ queryKey: orpc.admin.upgrade.key() }),
+			queryClient.invalidateQueries({ queryKey: orpc.admin.runtime.key() }),
 		]);
 	};
 	const fetchRemote = useMutation(
@@ -238,6 +247,26 @@ export function RepositoryStatusCard() {
 			},
 		}),
 	);
+	const pullAndRestart = useMutation({
+		mutationFn: async () => {
+			await orpc.admin.repository.pull.call({});
+			return await orpc.admin.runtime.scheduleRestart.call({
+				delaySeconds: 60,
+				mode: "update",
+				reason: "pull and upgrade restart requested from WebUI",
+			});
+		},
+		onError: async (error) => {
+			toast.error(m.repository_pull_and_restart_failed(), { description: errorMessage(error) });
+			await invalidate();
+		},
+		onSuccess: async () => {
+			toast.success(m.repository_pulled_and_restarting());
+			await invalidate();
+		},
+	});
+	const restartActive =
+		restart.data?.status === "scheduled" || restart.data?.status === "executing";
 	const push = useMutation(
 		orpc.admin.repository.push.mutationOptions({
 			onError: (error) =>
@@ -287,6 +316,7 @@ export function RepositoryStatusCard() {
 						{m.repository_fetch()}
 					</Button>
 					<Button
+						disabled={pullAndRestart.isPending}
 						leadingIcon={<ArrowDownToLine />}
 						loading={pull.isPending}
 						size="xs"
@@ -294,6 +324,21 @@ export function RepositoryStatusCard() {
 						onClick={() => pull.mutate({})}
 					>
 						{m.repository_pull()}
+					</Button>
+					<Button
+						disabled={
+							pull.isPending ||
+							restartActive ||
+							status.data?.branch === null ||
+							status.data?.upstream === null
+						}
+						leadingIcon={<Rocket />}
+						loading={pullAndRestart.isPending}
+						size="xs"
+						variant="primary"
+						onClick={() => pullAndRestart.mutate()}
+					>
+						{m.repository_pull_and_restart()}
 					</Button>
 					<Button
 						disabled={status.data?.pushed === true || status.data?.branch === null}
