@@ -18,7 +18,7 @@ import { builtinPlugins } from "../src/plugins/builtin.ts";
 
 const directories: string[] = [];
 /** The model sees a provider-safe alias; plugin routing and audit keep the original name. */
-const SAFE_ECHO_TOOL_NAME = "echo";
+const SAFE_ECHO_TOOL_NAME = "fake-tools_echo";
 
 afterEach(async () => {
 	await Promise.all(
