@@ -9,6 +9,7 @@ import type { ChannelAdapter, ChannelDiagnostics } from "@tsukaima/sdk";
 import { createApp } from "../src/app.ts";
 import type { ChannelRegistry } from "../src/services/channel-registry.ts";
 import { localDateKey, sessionDateKey } from "../src/services/conversation-router.ts";
+import { listMessages } from "../src/services/webui.ts";
 
 const directories: string[] = [];
 
@@ -39,6 +40,26 @@ async function createLifecycle() {
 	await lifecycle.start();
 	return lifecycle;
 }
+
+test("keeps the reason for an ambient group message in the transcript", async () => {
+	const lifecycle = await createLifecycle();
+	try {
+		const result = await lifecycle.conversationRouter.ingest({
+			...envelope("ambient-1", "A synthetic group update"),
+			conversationKey: { groupId: "group-1", kind: "group" },
+		});
+		expect(result.classification).toBe("ambient");
+		expect(await listMessages(lifecycle, result.sessionId)).toEqual([
+			expect.objectContaining({
+				direction: "inbound",
+				replyDecision: { cooldownMs: 0, reason: "group context only" },
+				triggerClassification: "ambient",
+			}),
+		]);
+	} finally {
+		await lifecycle.stop();
+	}
+});
 
 /**
  * Register a minimal adapter and return the function that pushes an envelope through the

@@ -2288,7 +2288,14 @@ export class PiDurableConversationHost {
 		}
 	}
 
-	async listEntries(conversationId: string, limit = 500): Promise<EntryRecord[]> {
+	async listEntries(
+		conversationId: string,
+		limit = 500,
+		throughEntryId?: string,
+	): Promise<EntryRecord[]> {
+		const maxEntryId = throughEntryId === undefined ? undefined : Number(throughEntryId);
+		if (maxEntryId !== undefined && (!Number.isSafeInteger(maxEntryId) || maxEntryId <= 0))
+			return [];
 		const harness = await this.openHarness();
 		const conversation = await harness.conversation(
 			Number(conversationId) as ConversationId,
@@ -2296,7 +2303,10 @@ export class PiDurableConversationHost {
 		);
 		if (!conversation) return [];
 		const page = await conversation.entries(
-			{ order: "descending" },
+			{
+				order: "descending",
+				...(maxEntryId === undefined ? {} : { maxEntryId: maxEntryId as EntryRecord["id"] }),
+			},
 			Math.min(Math.max(limit, 1), 1_000),
 			undefined,
 			BACKGROUND_CONTEXT,

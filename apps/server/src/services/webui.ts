@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
 import {
+	inboundReplyDecisionSchema,
 	messagePartSchema,
 	type MessageDeliveryMode,
 	type MessagePage,
@@ -11,6 +12,7 @@ import {
 	type SessionsAbortResult,
 	type SessionsCompactResult,
 } from "@tsukaima/contracts";
+import { sanitizeOutboundMetaLeaks } from "@tsukaima/core";
 import {
 	chatObjects,
 	conversationMembers,
@@ -144,6 +146,15 @@ async function mentionLabelsFor(
 	return loadMentionLabels(database, messageScopes(rows, sessions), messageMentionIds(rows));
 }
 
+function readReplyDecision(raw: string | null) {
+	if (raw === null) return undefined;
+	try {
+		return inboundReplyDecisionSchema.safeParse(JSON.parse(raw)?.replyDecision).data;
+	} catch {
+		return undefined;
+	}
+}
+
 function toMessageSummary(
 	row: MessageRow,
 	labels: ReadonlyMap<string, string> = new Map(),
@@ -154,8 +165,14 @@ function toMessageSummary(
 	const isWebui =
 		row.kind === "webui" || row.direction === "outbound" || row.senderExternalId === "webui-admin";
 	const isBot = row.kind === "assistant";
+	const replyDecision = row.direction === "inbound" ? readReplyDecision(row.rawRefJson) : undefined;
+	const displayText = (text: string) =>
+		replaceMentionIds(
+			row.direction === "outbound" ? sanitizeOutboundMetaLeaks(text).text : text,
+			labels,
+		);
 	return {
-		contentText: replaceMentionIds(row.contentText ?? "", labels),
+		contentText: displayText(row.contentText ?? ""),
 		direction: row.direction,
 		deliveryStatus: row.deliveryStatus,
 		durableEntryId: row.durableEntryId,
@@ -163,10 +180,11 @@ function toMessageSummary(
 		kind: row.kind,
 		occurredAt: row.occurredAt,
 		parts: parseParts(row.partsJson).map((part) =>
-			part.type === "text" ? { ...part, text: replaceMentionIds(part.text, labels) } : part,
+			part.type === "text" ? { ...part, text: displayText(part.text) } : part,
 		),
 		platformMessageId: row.platformMessageId,
 		replyToMessageId: row.replyToMessageId,
+		replyDecision,
 		senderDisplayName: row.senderDisplayName ?? (isWebui ? "WebUI" : "Unknown"),
 		senderExternalId: row.senderExternalId,
 		// The WebUI operator is the system side of a local conversation, not a channel user: it
@@ -833,7 +851,7 @@ export async function listRunSteps(
 		.where(eq(conversations.id, input.sessionId))
 		.limit(1);
 	if (session === undefined) throw new Error("Session not found");
-	const entries = await host.listEntries(session.durableConversationId, 500);
+	const entries = await host.listEntries(session.durableConversationId, 500, input.entryId);
 	const durable = collectRunSteps(
 		entries.map((entry) => ({
 			data: entry.data,
@@ -847,7 +865,7 @@ export async function listRunSteps(
 	// the durable assistant entry. The KV cache kept the final live process chain keyed by the
 	// durable answer id, so the transcript can still show what the agent thought and ran.
 	const cached = await lifecycle.liveRuns.final(input.entryId);
-	if (cached === undefined) return durable;
+	if (cached?.sessionId !== input.sessionId) return durable;
 	const durationSeconds = durable.durationSeconds ?? cached.durationSeconds;
 	const withDuration = durationSeconds === undefined ? {} : { durationSeconds };
 	const cachedThinking = cached.steps.filter((step) => step.kind === "thinking");

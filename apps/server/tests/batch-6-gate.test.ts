@@ -12,6 +12,7 @@ import {
 } from "@tsukaima/core";
 import { chatObjects, conversations, messages } from "@tsukaima/db";
 import { createApp } from "../src/app.ts";
+import { listMessages } from "../src/services/webui.ts";
 
 const directories: string[] = [];
 
@@ -142,6 +143,12 @@ describe("Batch 6 pre-model gate acceptance", () => {
 				.from(messages)
 				.where(eq(messages.platformMessageId, "group-skip-1"));
 			expect(inbound?.triggerClassification).toBe("ambient");
+			const [message] = await listMessages(lifecycle, group.sessionId);
+			expect(message?.replyDecision).toEqual({
+				cooldownMs: 0,
+				gate: { decision: "SKIP", reason: "chatter", source: "gate" },
+				reason: "recent conversation activity",
+			});
 		} finally {
 			await lifecycle.stop();
 		}

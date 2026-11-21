@@ -1,6 +1,6 @@
 import type { LiveRunPatch, LiveRunPhase, LiveRunState, RunStep } from "@tsukaima/contracts";
 import type { KeyvCache } from "@tsukaima/cache";
-import type { LiveRunSnapshot } from "@tsukaima/core";
+import { extractLurkMarker, sanitizeOutboundMetaLeaks, type LiveRunSnapshot } from "@tsukaima/core";
 import { LiveRunTimeline } from "./live-run-timeline.ts";
 
 /** An active run is readable across a browser reload and a short host restart. */
@@ -176,29 +176,20 @@ function startsNewRun(
 	return previousRunId === undefined && previous.startedAtMs !== snapshot.startedAtMs;
 }
 
-const MAX_STEP_TEXT_CHARS = 2_000;
-
-function clip(value: string, max = MAX_STEP_TEXT_CHARS): string {
-	const trimmed = value.trim();
-	return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max)}…`;
-}
-
 /** Current-round fields the timeline had not committed yet when finalization raced ahead. */
 function appendCurrentSteps(steps: RunStep[], state: LiveRunState): void {
 	const thinking = state.partialThinking?.trim();
 	if (thinking !== undefined && thinking.length > 0) {
-		const text = clip(thinking);
 		const lastThinking = steps.findLast((step) => step.kind === "thinking");
-		if (lastThinking?.kind !== "thinking" || lastThinking.text !== text) {
-			steps.push({ kind: "thinking", text });
+		if (lastThinking?.kind !== "thinking" || lastThinking.text !== thinking) {
+			steps.push({ kind: "thinking", text: thinking });
 		}
 	}
 	const answer = state.partialText?.trim();
 	if (answer !== undefined && answer.length > 0) {
-		const text = clip(answer);
 		const lastText = steps.findLast((step) => step.kind === "text");
-		if (lastText?.kind !== "text" || lastText.text !== text) {
-			steps.push({ kind: "text", text });
+		if (lastText?.kind !== "text" || lastText.text !== answer) {
+			steps.push({ kind: "text", text: answer });
 		}
 	}
 	for (const tool of state.tools) {
@@ -206,7 +197,7 @@ function appendCurrentSteps(steps: RunStep[], state: LiveRunState): void {
 			argumentsText: tool.argumentsText ?? "",
 			isError: false,
 			kind: "tool",
-			output: clip(tool.output ?? ""),
+			output: tool.output ?? "",
 			toolName: tool.toolName,
 		});
 	}
@@ -370,7 +361,9 @@ export class LiveRunCache {
 		}
 		const steps = timeline.observe(snapshot);
 		const partialThinking = timeline.currentThinking;
-		const partialText = timeline.currentText;
+		const partialText = extractLurkMarker(
+			sanitizeOutboundMetaLeaks(timeline.currentText).text,
+		).text;
 		// Keep the first observation's wall clock for a run that a newer watcher continues.
 		const startedAtMs =
 			newRun || previous === undefined ? snapshot.startedAtMs : previous.startedAtMs;

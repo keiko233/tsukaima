@@ -641,7 +641,7 @@ describe("Batch 2 acceptance: lurk and truncation", () => {
 				activityId: "activity-prose",
 				conversationId: session.durableConversationId,
 				entryId: "entry-prose",
-				text: "The token TSUKAIMA_LURK is internal, sorry!",
+				text: "The token TSUKAIMA_LURK is internal, sorry!\n<error>Error: synthetic tool failure</error>",
 			});
 			const prose = await waitFor(async () => {
 				const rows = await outboundRows(lifecycle, session.sessionId);

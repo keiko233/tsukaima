@@ -1,17 +1,5 @@
 import type { RunStep } from "@tsukaima/contracts";
 
-/** Cap for a single tool argument line, so one huge payload cannot dominate the panel. */
-const MAX_ARGUMENTS_CHARS = 400;
-/** Cap for a tool's own text output. Tool output can be megabytes; the panel shows a digest. */
-const MAX_OUTPUT_CHARS = 2_000;
-/** Cap for one thinking block. */
-const MAX_THINKING_CHARS = 2_000;
-
-function clip(value: string, max: number): string {
-	const trimmed = value.trim();
-	return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max)}…`;
-}
-
 /** Compact single-line JSON, so an argument object reads as one row. */
 function argumentsText(value: unknown): string {
 	if (value === undefined || value === null) return "";
@@ -21,19 +9,24 @@ function argumentsText(value: unknown): string {
 	} catch {
 		return "";
 	}
-	return clip(json, MAX_ARGUMENTS_CHARS);
+	return json;
 }
 
-/** Concatenated text of a `content` block list, ignoring non-text blocks. */
-function contentText(content: unknown): string {
-	if (!Array.isArray(content)) return "";
-	const parts: string[] = [];
-	for (const block of content as readonly unknown[]) {
-		if (typeof block !== "object" || block === null) continue;
-		if (!("type" in block) || block.type !== "text") continue;
-		if (!("text" in block) || typeof block.text !== "string") continue;
-		parts.push(block.text);
-	}
+function toolOutput(message: Record<string, unknown>): string {
+	const blocks: readonly unknown[] = Array.isArray(message.content) ? message.content : [];
+	const parts = blocks.map((block) => {
+		if (
+			typeof block === "object" &&
+			block !== null &&
+			"type" in block &&
+			block.type === "text" &&
+			"text" in block &&
+			typeof block.text === "string"
+		)
+			return block.text;
+		return JSON.stringify(block, null, 2);
+	});
+	if (message.details !== undefined) parts.push(JSON.stringify(message.details, null, 2));
 	return parts.join("\n");
 }
 
@@ -165,7 +158,7 @@ export function collectRunSteps(
 					const thinking =
 						"thinking" in block && typeof block.thinking === "string" ? block.thinking : "";
 					if (thinking.trim().length > 0) {
-						steps.push({ kind: "thinking", text: clip(thinking, MAX_THINKING_CHARS) });
+						steps.push({ kind: "thinking", text: thinking });
 					}
 					continue;
 				}
@@ -201,15 +194,18 @@ export function collectRunSteps(
 					: undefined;
 			if (callId === undefined) continue;
 			const pending = pendingCalls.get(callId);
-			if (pending === undefined) continue;
-			const existing = steps[pending.index];
-			if (existing === undefined || existing.kind !== "tool") continue;
-			const output = "content" in message ? contentText(message.content) : "";
-			steps[pending.index] = {
-				...existing,
-				isError: "isError" in message ? message.isError === true : false,
-				output: clip(output, MAX_OUTPUT_CHARS),
+			const existing = pending === undefined ? undefined : steps[pending.index];
+			const toolName = existing?.kind === "tool" ? existing.toolName : message.toolName;
+			if (typeof toolName !== "string") continue;
+			const result: RunStep = {
+				argumentsText: existing?.kind === "tool" ? existing.argumentsText : "",
+				isError: message.isError === true,
+				kind: "tool",
+				output: toolOutput(message),
+				toolName,
 			};
+			if (pending === undefined) steps.push(result);
+			else steps[pending.index] = result;
 			pendingCalls.delete(callId);
 		}
 	}

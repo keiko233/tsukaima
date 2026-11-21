@@ -1,12 +1,8 @@
 import type { RunStep } from "@tsukaima/contracts";
 import type { LiveRunSnapshot } from "@tsukaima/core";
 
-/** Cap for a single argument line, matching the durable run-steps panel. */
-const MAX_ARGUMENTS_CHARS = 400;
-/** Cap for one model's thinking block or text. */
+/** Cap for a model retry error shown in the live timeline. */
 const MAX_STEP_TEXT_CHARS = 2_000;
-/** Cap for a tool's retained output tail. */
-const MAX_OUTPUT_CHARS = 2_000;
 
 function clip(value: string, max: number): string {
 	const trimmed = value.trim();
@@ -242,17 +238,17 @@ export class LiveRunTimeline {
 	 */
 	#commitRoundContent(options: { keepDrafts?: boolean } = {}): void {
 		if (this.#thinking.trim().length > 0) {
-			this.#steps.push({ kind: "thinking", text: clip(this.#thinking, MAX_STEP_TEXT_CHARS) });
+			this.#steps.push({ kind: "thinking", text: this.#thinking });
 		}
 		if (this.#text.trim().length > 0) {
-			this.#steps.push({ kind: "text", text: clip(this.#text, MAX_STEP_TEXT_CHARS) });
+			this.#steps.push({ kind: "text", text: this.#text });
 		}
 		this.#thinking = "";
 		this.#text = "";
 		if (options.keepDrafts === true) return;
 		for (const draft of this.#drafts.values()) {
 			this.#steps.push({
-				argumentsText: clip(draft.argumentsText ?? "", MAX_ARGUMENTS_CHARS),
+				argumentsText: draft.argumentsText ?? "",
 				isError: false,
 				kind: "tool",
 				output: "",
@@ -267,10 +263,10 @@ export class LiveRunTimeline {
 			const argumentsText =
 				tool.argumentsText ?? this.#drafts.get(tool.callId)?.argumentsText ?? "";
 			this.#steps.push({
-				argumentsText: clip(argumentsText, MAX_ARGUMENTS_CHARS),
+				argumentsText,
 				isError: false,
 				kind: "tool",
-				output: clip(tool.output ?? "", MAX_OUTPUT_CHARS),
+				output: tool.output ?? "",
 				toolName: tool.toolName,
 			});
 		}
