@@ -255,7 +255,7 @@ const META_LEAK_RULES: readonly MetaLeakRule[] = [
 	{
 		name: "thinking-block",
 		pattern:
-			/<(?:think|thought|thinking)(?::[^>\s]+)?\b[^>]*>[\s\S]*?<\/(?:think|thought|thinking)(?::[^>\s]+)?\s*>/giu,
+			/<(think|thought|thinking)(?::[^>\s]+)?\b[^>]*>[\s\S]*?(?:<\/\1(?::[^>\s]+)?\s*>|$)/giu,
 	},
 	{
 		name: "thinking-unopened-prefix",
@@ -331,13 +331,21 @@ function sanitizeSegment(text: string): { changed: boolean; names: string[]; tex
 }
 
 /**
+ * Opening thinking tag outside fenced code blocks. Used by the top-level scanner so a fenced
+ * code block embedded inside `<think>...</think>` is stripped with the thinking block rather than
+ * splitting the tag pair and leaking its contents.
+ */
+const THINKING_OPEN_TAG = /<(think|thought|thinking)(?::[^>\s]+)?\b[^>]*>/iu;
+
+/**
  * Strip leaked internal template tags, placeholder tokens, and harness instruction echoes from
  * outbound assistant text before channel delivery.
  *
  * Fenced code blocks are kept byte-for-byte: a model quoting a template example, an XML snippet,
  * or a provider tag inside code is showing the user code, not leaking its own prompt. Only prose
  * outside fences is scanned, and the surrounding whitespace is normalized without touching the
- * fence content.
+ * fence content. Thinking blocks whose opening tag appears outside a fence are stripped in full
+ * even when they contain fenced code blocks or are left unclosed at end-of-message.
  */
 export function sanitizeOutboundMetaLeaks(text: string): MetaLeakSanitizeResult {
 	if (text.length === 0) return { modified: false, stripped: [], text };
@@ -345,29 +353,57 @@ export function sanitizeOutboundMetaLeaks(text: string): MetaLeakSanitizeResult 
 	let changed = false;
 	let cursor = 0;
 	const parts: string[] = [];
-	for (const match of text.matchAll(FENCED_CODE)) {
-		const start = match.index ?? 0;
-		const prose = text.slice(cursor, start);
+
+	const pushProse = (prose: string) => {
+		if (prose.length === 0) return;
 		const result = sanitizeSegment(prose);
 		parts.push(result.text);
 		if (result.changed) {
 			changed = true;
 			for (const name of result.names) stripped.add(name);
 		}
-		parts.push(match[0]);
-		cursor = start + match[0].length;
+	};
+
+	while (cursor < text.length) {
+		const slice = text.slice(cursor);
+		const fenceMatch = new RegExp(FENCED_CODE.source, "u").exec(slice);
+		const thinkMatch = THINKING_OPEN_TAG.exec(slice);
+		const fenceIndex = fenceMatch?.index ?? Number.POSITIVE_INFINITY;
+		const thinkIndex = thinkMatch?.index ?? Number.POSITIVE_INFINITY;
+
+		if (fenceIndex === Number.POSITIVE_INFINITY && thinkIndex === Number.POSITIVE_INFINITY) {
+			pushProse(slice);
+			break;
+		}
+
+		if (thinkIndex < fenceIndex && thinkMatch !== null) {
+			pushProse(slice.slice(0, thinkIndex));
+			const tagName = thinkMatch[1] ?? "think";
+			const afterOpen = cursor + thinkIndex + thinkMatch[0].length;
+			const closePattern = new RegExp(`<\\/${tagName}(?::[^>\\s]+)?\\s*>`, "iu");
+			const closeMatch = closePattern.exec(text.slice(afterOpen));
+			changed = true;
+			stripped.add("thinking-block");
+			cursor =
+				closeMatch === null ? text.length : afterOpen + closeMatch.index + closeMatch[0].length;
+			continue;
+		}
+
+		if (fenceMatch !== null) {
+			pushProse(slice.slice(0, fenceIndex));
+			parts.push(fenceMatch[0]);
+			cursor += fenceIndex + fenceMatch[0].length;
+		}
 	}
-	const tail = sanitizeSegment(text.slice(cursor));
-	parts.push(tail.text);
-	if (tail.changed) {
-		changed = true;
-		for (const name of tail.names) stripped.add(name);
-	}
+
 	if (!changed) return { modified: false, stripped: [], text };
 	return {
 		modified: true,
 		stripped: [...stripped],
-		text: parts.join("").trim(),
+		text: parts
+			.join("")
+			.replace(/\n{3,}/gu, "\n\n")
+			.trim(),
 	};
 }
 

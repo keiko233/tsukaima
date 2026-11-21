@@ -410,6 +410,157 @@ describe("OpenAI-compatible provider", () => {
 		});
 	});
 
+	test("preserves reasoning_content on current-turn tool-call rounds and omits it on earlier turns", async () => {
+		const fetch = mock(async () => textResponse()) as unknown as FetchMock;
+		const streams = createOpenAICompatibleStreams({
+			apiKey: "test-key",
+			baseUrl: "https://model.example/v1",
+			fetch: fetch as unknown as FetchFunction,
+		});
+		const context = normalizeContext({
+			messages: [
+				{ content: "first question", role: "user", timestamp: 1 },
+				{
+					api: "openai-compatible",
+					content: [
+						{ thinking: "old turn reasoning", type: "thinking" },
+						{ text: "first answer", type: "text" },
+					],
+					model: model.id,
+					provider: model.provider,
+					role: "assistant",
+					stopReason: "stop",
+					timestamp: 2,
+					usage: {
+						cacheRead: 0,
+						cacheWrite: 0,
+						cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+						input: 1,
+						output: 1,
+						totalTokens: 2,
+					},
+				},
+				{ content: "second question", role: "user", timestamp: 3 },
+				{
+					api: "openai-compatible",
+					content: [
+						{ thinking: "current turn tool reasoning", type: "thinking" },
+						{ arguments: { path: "/tmp/a" }, id: "call-1", name: "read_file", type: "toolCall" },
+					],
+					model: model.id,
+					provider: model.provider,
+					role: "assistant",
+					stopReason: "toolUse",
+					timestamp: 4,
+					usage: {
+						cacheRead: 0,
+						cacheWrite: 0,
+						cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+						input: 1,
+						output: 1,
+						totalTokens: 2,
+					},
+				},
+				{
+					content: [{ text: "file contents", type: "text" }],
+					isError: false,
+					role: "toolResult",
+					timestamp: 5,
+					toolCallId: "call-1",
+					toolName: "read_file",
+				},
+			],
+		} satisfies Context);
+		const events = [];
+		for await (const event of streams.stream(model, context)) events.push(event);
+		expect(events.at(-1)).toMatchObject({ type: "done" });
+		const request = (fetch.mock.calls[0] as [string, RequestInit])[1];
+		const sent = JSON.parse(request.body as string).messages as {
+			role: string;
+			reasoning_content?: string;
+		}[];
+		const assistants = sent.filter((entry) => entry.role === "assistant");
+		expect(assistants).toHaveLength(2);
+		expect(assistants[0]?.reasoning_content).toBeUndefined();
+		expect(assistants[1]?.reasoning_content).toBe("current turn tool reasoning");
+	});
+
+	test("splits inline <think> tags across SSE chunks into thinking blocks while keeping fenced code intact", async () => {
+		const encoder = new TextEncoder();
+		const chunks = [
+			sseData({ choices: [{ delta: { content: "<thi" } }] }),
+			sseData({ choices: [{ delta: { content: "nk:abc>internal " } }] }),
+			sseData({ choices: [{ delta: { content: "plan</thi" } }] }),
+			sseData({
+				choices: [{ delta: { content: "nk:abc>Answer\n```xml\n<think>demo</think>\n```" } }],
+			}),
+			sseData({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+			"data: [DONE]\n\n",
+		];
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+				controller.close();
+			},
+		});
+		const fetch = mock(
+			async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
+		) as unknown as FetchMock;
+		const streams = createOpenAICompatibleStreams({
+			apiKey: "test-key",
+			baseUrl: "https://model.example/v1",
+			fetch: fetch as unknown as FetchFunction,
+		});
+		const events = [];
+		for await (const event of collectStream(streams.stream)) events.push(event);
+		expect(events.at(-1)).toMatchObject({
+			message: {
+				content: [
+					{ thinking: "internal plan", type: "thinking" },
+					{ text: "Answer\n```xml\n<think>demo</think>\n```", type: "text" },
+				],
+			},
+			type: "done",
+		});
+	});
+
+	test("extracts reasoning when reasoning_content is empty and reasoning or reasoning_details is populated", async () => {
+		const encoder = new TextEncoder();
+		const chunks = [
+			sseData({ choices: [{ delta: { reasoning: "step 1 ", reasoning_content: "" } }] }),
+			sseData({
+				choices: [{ delta: { reasoning_details: [{ text: "step 2" }] } }],
+			}),
+			sseData({ choices: [{ delta: { content: "done" }, finish_reason: "stop" }] }),
+			"data: [DONE]\n\n",
+		];
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+				controller.close();
+			},
+		});
+		const fetch = mock(
+			async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
+		) as unknown as FetchMock;
+		const streams = createOpenAICompatibleStreams({
+			apiKey: "test-key",
+			baseUrl: "https://model.example/v1",
+			fetch: fetch as unknown as FetchFunction,
+		});
+		const events = [];
+		for await (const event of collectStream(streams.stream)) events.push(event);
+		expect(events.at(-1)).toMatchObject({
+			message: {
+				content: [
+					{ thinking: "step 1 step 2", type: "thinking" },
+					{ text: "done", type: "text" },
+				],
+			},
+			type: "done",
+		});
+	});
+
 	test("supports image input and omits tools when the model declares no tool use", async () => {
 		const fetch = mock(async () => textResponse()) as unknown as FetchMock;
 		const streams = createOpenAICompatibleStreams(

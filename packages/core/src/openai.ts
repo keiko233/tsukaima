@@ -170,6 +170,7 @@ type OpenAIMessage =
 	| {
 			readonly role: "assistant";
 			readonly content: string | null;
+			readonly reasoning_content?: string;
 			readonly tool_calls?: readonly {
 				readonly id: string;
 				readonly type: "function";
@@ -191,12 +192,19 @@ interface OpenAITool {
 	};
 }
 
+interface OpenAIReasoningDetail {
+	readonly text?: string | null;
+	readonly summary?: string | null;
+}
+
 interface OpenAIResponse {
 	readonly choices?: readonly {
 		readonly message?: {
 			readonly content?: string | null;
 			readonly reasoning?: string | null;
 			readonly reasoning_content?: string | null;
+			readonly reasoning_details?: readonly OpenAIReasoningDetail[] | null;
+			readonly thinking?: string | null;
 			readonly tool_calls?: readonly {
 				readonly id?: string;
 				readonly type?: string;
@@ -231,6 +239,8 @@ interface OpenAIStreamDelta {
 	readonly content?: string | null;
 	readonly reasoning?: string | null;
 	readonly reasoning_content?: string | null;
+	readonly reasoning_details?: readonly OpenAIReasoningDetail[] | null;
+	readonly thinking?: string | null;
 	readonly tool_calls?: readonly OpenAIStreamToolCall[];
 }
 
@@ -444,6 +454,246 @@ function parseToolArguments(
 	}
 }
 
+function extractReasoningText(
+	source:
+		| {
+				readonly reasoning?: string | null;
+				readonly reasoning_content?: string | null;
+				readonly reasoning_details?: readonly OpenAIReasoningDetail[] | null;
+				readonly thinking?: string | null;
+		  }
+		| undefined,
+): string | undefined {
+	if (source === undefined) return undefined;
+	if (typeof source.reasoning_content === "string" && source.reasoning_content.length > 0) {
+		return source.reasoning_content;
+	}
+	if (typeof source.reasoning === "string" && source.reasoning.length > 0) {
+		return source.reasoning;
+	}
+	if (typeof source.thinking === "string" && source.thinking.length > 0) {
+		return source.thinking;
+	}
+	if (Array.isArray(source.reasoning_details) && source.reasoning_details.length > 0) {
+		const parts: string[] = [];
+		for (const detail of source.reasoning_details) {
+			const chunk =
+				typeof detail?.text === "string" && detail.text.length > 0
+					? detail.text
+					: typeof detail?.summary === "string" && detail.summary.length > 0
+						? detail.summary
+						: undefined;
+			if (chunk !== undefined) parts.push(chunk);
+		}
+		if (parts.length > 0) return parts.join("");
+	}
+	return undefined;
+}
+
+const INLINE_THINKING_OPEN = /<(think|thought|thinking)(?::[^>\s]+)?>/iu;
+const INLINE_THINKING_MAX_TAG_LEN = 48;
+
+/**
+ * Split inline `<think>...</think>` (and `<thought>`, `<thinking>`, `<think:id>`) emitted inside
+ * `content` into `thinking` vs `text` pieces, preserving `<think>` tags inside fenced code blocks.
+ * Buffers short trailing partial tags so tags split across SSE chunks never leak into `text`.
+ */
+class InlineThinkingSplitter {
+	#buffer = "";
+	#inThinking: string | undefined;
+	#fenceChar: "`" | "~" | undefined;
+	#fenceLen = 0;
+	#atLineStart = true;
+
+	push(chunk: string): { readonly kind: "thinking" | "text"; readonly value: string }[] {
+		if (chunk.length === 0) return [];
+		this.#buffer += chunk;
+		return this.#drain(false);
+	}
+
+	flush(): { readonly kind: "thinking" | "text"; readonly value: string }[] {
+		return this.#drain(true);
+	}
+
+	#drain(final: boolean): { readonly kind: "thinking" | "text"; readonly value: string }[] {
+		const out: { readonly kind: "thinking" | "text"; readonly value: string }[] = [];
+		const emit = (kind: "thinking" | "text", value: string) => {
+			if (value.length === 0) return;
+			if (kind === "text") {
+				this.#updateFenceState(value);
+			}
+			const last = out.at(-1);
+			if (last !== undefined && last.kind === kind) {
+				out[out.length - 1] = { kind, value: last.value + value };
+			} else {
+				out.push({ kind, value });
+			}
+		};
+
+		while (this.#buffer.length > 0) {
+			if (this.#inThinking !== undefined) {
+				const closePattern = new RegExp(`<\\/${this.#inThinking}(?::[^>\\s]+)?\\s*>`, "iu");
+				const match = closePattern.exec(this.#buffer);
+				if (match !== null) {
+					emit("thinking", this.#buffer.slice(0, match.index));
+					this.#buffer = this.#buffer.slice(match.index + match[0].length);
+					this.#inThinking = undefined;
+					continue;
+				}
+				if (!final) {
+					const hold = this.#partialTagStart(this.#buffer);
+					if (hold >= 0) {
+						emit("thinking", this.#buffer.slice(0, hold));
+						this.#buffer = this.#buffer.slice(hold);
+						break;
+					}
+				}
+				emit("thinking", this.#buffer);
+				this.#buffer = "";
+				break;
+			}
+
+			// Outside thinking: if we're inside a fenced code block, scan line by line until it closes.
+			if (this.#fenceChar !== undefined) {
+				const newline = this.#buffer.indexOf("\n");
+				if (newline < 0) {
+					if (!final) break;
+					emit("text", this.#buffer);
+					this.#buffer = "";
+					break;
+				}
+				emit("text", this.#buffer.slice(0, newline + 1));
+				this.#buffer = this.#buffer.slice(newline + 1);
+				continue;
+			}
+
+			// Outside thinking and outside a code fence: check whether a code fence starts before any
+			// inline thinking tag.
+			const fenceIdx = this.#nextFenceStart(this.#buffer);
+			const openMatch = INLINE_THINKING_OPEN.exec(this.#buffer);
+			const openIdx = openMatch?.index ?? Number.POSITIVE_INFINITY;
+
+			if (fenceIdx < openIdx) {
+				const newline = this.#buffer.indexOf("\n", fenceIdx);
+				if (newline < 0) {
+					if (!final) {
+						emit("text", this.#buffer.slice(0, fenceIdx));
+						this.#buffer = this.#buffer.slice(fenceIdx);
+						break;
+					}
+					emit("text", this.#buffer);
+					this.#buffer = "";
+					break;
+				}
+				emit("text", this.#buffer.slice(0, newline + 1));
+				this.#buffer = this.#buffer.slice(newline + 1);
+				continue;
+			}
+
+			if (openMatch !== null) {
+				emit("text", this.#buffer.slice(0, openMatch.index));
+				this.#buffer = this.#buffer.slice(openMatch.index + openMatch[0].length);
+				this.#inThinking = (openMatch[1] ?? "think").toLowerCase();
+				continue;
+			}
+
+			if (!final) {
+				const holdTag = this.#partialTagStart(this.#buffer);
+				const holdFence = this.#partialFenceStart(this.#buffer);
+				const hold =
+					holdTag >= 0 && holdFence >= 0
+						? Math.min(holdTag, holdFence)
+						: holdTag >= 0
+							? holdTag
+							: holdFence;
+				if (hold >= 0) {
+					emit("text", this.#buffer.slice(0, hold));
+					this.#buffer = this.#buffer.slice(hold);
+					break;
+				}
+			}
+
+			emit("text", this.#buffer);
+			this.#buffer = "";
+		}
+
+		return out;
+	}
+
+	#partialTagStart(text: string): number {
+		const lastLt = text.lastIndexOf("<");
+		if (lastLt < 0) return -1;
+		if (text.length - lastLt > INLINE_THINKING_MAX_TAG_LEN) return -1;
+		if (text.indexOf(">", lastLt) >= 0) return -1;
+		const tail = text.slice(lastLt).toLowerCase();
+		if (this.#inThinking !== undefined) {
+			const prefix = `</${this.#inThinking}`;
+			if (prefix.startsWith(tail) || tail.startsWith(prefix)) return lastLt;
+			return -1;
+		}
+		const candidates = ["<think", "<thought", "<thinking"];
+		if (candidates.some((candidate) => candidate.startsWith(tail) || tail.startsWith(candidate))) {
+			return lastLt;
+		}
+		return -1;
+	}
+
+	#partialFenceStart(text: string): number {
+		const lastNl = text.lastIndexOf("\n");
+		const lineStart = lastNl < 0 ? (this.#atLineStart ? 0 : -1) : lastNl + 1;
+		if (lineStart < 0) return -1;
+		const tail = text.slice(lineStart);
+		if (/^ {0,3}(?:`{1,2}|~{1,2})$/u.test(tail)) return lineStart;
+		return -1;
+	}
+
+	#nextFenceStart(text: string): number {
+		let pos = 0;
+		let lineStart = this.#atLineStart;
+		while (pos < text.length) {
+			if (lineStart) {
+				const match = /^ {0,3}(`{3,}|~{3,})/u.exec(text.slice(pos));
+				if (match !== null) return pos;
+			}
+			const nl = text.indexOf("\n", pos);
+			if (nl < 0) break;
+			pos = nl + 1;
+			lineStart = true;
+		}
+		return Number.POSITIVE_INFINITY;
+	}
+
+	#updateFenceState(text: string): void {
+		let pos = 0;
+		while (pos < text.length) {
+			const nl = text.indexOf("\n", pos);
+			const end = nl < 0 ? text.length : nl;
+			if (this.#atLineStart) {
+				const line = text.slice(pos, end);
+				if (this.#fenceChar === undefined) {
+					const open = /^ {0,3}(`{3,}|~{3,})/u.exec(line);
+					if (open !== null && open[1] !== undefined) {
+						this.#fenceChar = open[1][0] as "`" | "~";
+						this.#fenceLen = open[1].length;
+					}
+				} else {
+					const close = new RegExp(`^ {0,3}${this.#fenceChar}{${this.#fenceLen},}[ \\t\\r]*$`, "u");
+					if (close.test(line)) {
+						this.#fenceChar = undefined;
+						this.#fenceLen = 0;
+					}
+				}
+			}
+			if (nl < 0) {
+				this.#atLineStart = false;
+				break;
+			}
+			pos = nl + 1;
+			this.#atLineStart = true;
+		}
+	}
+}
+
 function buildAssistantMessage(model: Model<Api>, payload: OpenAIResponse): AssistantMessage {
 	const choice = payload.choices?.[0];
 	const message = choice?.message;
@@ -464,26 +714,29 @@ function buildAssistantMessage(model: Model<Api>, payload: OpenAIResponse): Assi
 			});
 		}
 	}
-	const text = message?.content ?? "";
+	const rawText = message?.content ?? "";
 	const finishReason = choice?.finish_reason;
-	const content: AssistantMessage["content"] = [
-		...(text.length > 0 ? [{ type: "text", text } as AssistantMessage["content"][number]] : []),
-		...toolCalls,
-	];
-	const reasoning =
-		typeof message?.reasoning_content === "string" && message.reasoning_content.length > 0
-			? message.reasoning_content
-			: typeof message?.reasoning === "string" && message.reasoning.length > 0
-				? message.reasoning
-				: undefined;
+	const reasoning = extractReasoningText(message);
+	const content: AssistantMessage["content"] = [];
+	if (reasoning !== undefined) {
+		content.push({ type: "thinking", thinking: reasoning });
+	}
+	if (rawText.length > 0) {
+		const splitter = new InlineThinkingSplitter();
+		for (const piece of [...splitter.push(rawText), ...splitter.flush()]) {
+			if (piece.kind === "thinking") {
+				content.push({ type: "thinking", thinking: piece.value });
+			} else {
+				content.push({ type: "text", text: piece.value });
+			}
+		}
+	}
+	content.push(...toolCalls);
 	const stopReason: "toolUse" | "length" | "stop" =
 		toolCalls.length > 0 ? "toolUse" : finishReason === "length" ? "length" : "stop";
 	return {
 		api: model.api,
-		content: [
-			...(reasoning === undefined ? [] : [{ type: "thinking" as const, thinking: reasoning }]),
-			...content,
-		],
+		content,
 		model: model.id,
 		provider: model.provider,
 		role: "assistant",
@@ -499,6 +752,7 @@ function buildAssistantMessage(model: Model<Api>, payload: OpenAIResponse): Assi
 function messageToOpenAI(
 	message: TranscriptContext["messages"][number],
 	index: number,
+	lastUserIndex: number,
 ): OpenAIMessage | undefined {
 	if (message.role === "system") {
 		const text = index === 0 ? getSystemMessageText(message) : renderSystemMessageUpdate(message);
@@ -527,6 +781,14 @@ function messageToOpenAI(
 		const text = contentText(
 			message.content.filter((block) => block.type !== "toolCall" && block.type !== "thinking"),
 		);
+		const thinking =
+			lastUserIndex >= 0 && index > lastUserIndex
+				? message.content
+						.flatMap((block) =>
+							block.type === "thinking" && block.thinking.length > 0 ? [block.thinking] : [],
+						)
+						.join("\n")
+				: "";
 		const toolCalls = message.content.flatMap((block) => {
 			if (block.type !== "toolCall") return [];
 			return [
@@ -540,6 +802,7 @@ function messageToOpenAI(
 		return {
 			role: "assistant",
 			content: text.length > 0 ? text : null,
+			...(thinking.length > 0 ? { reasoning_content: thinking } : {}),
 			...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
 		};
 	}
@@ -653,6 +916,38 @@ async function consumeOpenAIStream(
 		return text;
 	};
 
+	const contentSplitter = new InlineThinkingSplitter();
+	const emitThinkingDelta = (value: string) => {
+		if (value.length === 0) return;
+		if (text !== undefined) closeText();
+		const current = startThinking();
+		current.block.thinking += value;
+		output.push({
+			type: "thinking_delta",
+			contentIndex: current.index,
+			delta: value,
+			partial: partial(),
+		});
+	};
+	const emitTextDelta = (value: string) => {
+		if (value.length === 0) return;
+		if (thinking !== undefined) closeThinking();
+		const current = startText();
+		current.block.text += value;
+		output.push({
+			type: "text_delta",
+			contentIndex: current.index,
+			delta: value,
+			partial: partial(),
+		});
+	};
+	const flushContentSplitter = () => {
+		for (const piece of contentSplitter.flush()) {
+			if (piece.kind === "thinking") emitThinkingDelta(piece.value);
+			else emitTextDelta(piece.value);
+		}
+	};
+
 	for await (const data of readSseData(response, progress)) {
 		if (data.trim() === "[DONE]") break;
 		let chunk: OpenAIStreamChunk;
@@ -675,33 +970,22 @@ async function consumeOpenAIStream(
 		const delta = choice.delta;
 		if (delta === undefined) continue;
 
-		const reasoning = delta.reasoning_content ?? delta.reasoning;
-		if (typeof reasoning === "string" && reasoning.length > 0) {
-			if (text !== undefined) closeText();
-			const current = startThinking();
-			current.block.thinking += reasoning;
-			output.push({
-				type: "thinking_delta",
-				contentIndex: current.index,
-				delta: reasoning,
-				partial: partial(),
-			});
+		const reasoning = extractReasoningText(delta);
+		if (reasoning !== undefined) {
+			flushContentSplitter();
+			emitThinkingDelta(reasoning);
 		}
 		if (typeof delta.content === "string" && delta.content.length > 0) {
-			if (thinking !== undefined) closeThinking();
-			const current = startText();
-			current.block.text += delta.content;
-			output.push({
-				type: "text_delta",
-				contentIndex: current.index,
-				delta: delta.content,
-				partial: partial(),
-			});
+			for (const piece of contentSplitter.push(delta.content)) {
+				if (piece.kind === "thinking") emitThinkingDelta(piece.value);
+				else emitTextDelta(piece.value);
+			}
 		}
 		for (const call of delta.tool_calls ?? []) {
 			const key = call.index ?? 0;
 			let current = toolCalls.get(key);
 			if (current === undefined) {
+				flushContentSplitter();
 				if (thinking !== undefined) closeThinking();
 				if (text !== undefined) closeText();
 				const block = {
@@ -738,6 +1022,7 @@ async function consumeOpenAIStream(
 	}
 
 	if (!sawChoice) throw new Error("OpenAI-compatible stream contained no choices");
+	flushContentSplitter();
 	if (thinking !== undefined) closeThinking();
 	if (text !== undefined) closeText();
 	for (const current of [...toolCalls.values()].toSorted((a, b) => a.index - b.index)) {
@@ -820,8 +1105,12 @@ export function createOpenAICompatibleStreams(
 				const modelConfig = configs.get(requestModel.id);
 				const url = `${baseUrl}/chat/completions`;
 				const messages: OpenAIMessage[] = [];
+				let lastUserIndex = -1;
 				for (const [index, message] of requestContext.messages.entries()) {
-					const converted = messageToOpenAI(message, index);
+					if (message.role === "user") lastUserIndex = index;
+				}
+				for (const [index, message] of requestContext.messages.entries()) {
+					const converted = messageToOpenAI(message, index, lastUserIndex);
 					if (converted) messages.push(converted);
 				}
 				const declaredTools = getCurrentTools(requestContext.messages);

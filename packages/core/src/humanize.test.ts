@@ -224,4 +224,22 @@ describe("humanize: thinking tag meta-leak", () => {
 		expect(result.modified).toBe(false);
 		expect(result.text).toContain("<think>demo</think>");
 	});
+
+	test("strips unclosed <think> blocks to end-of-message instead of exposing their body", () => {
+		const result = sanitizeOutboundMetaLeaks(
+			"好的，我来看看。\n<think>Internal reasoning cut off by max tokens without a closing tag",
+		);
+		expect(result.modified).toBe(true);
+		expect(result.text).toBe("好的，我来看看。");
+		expect(result.stripped).toContain("thinking-block");
+	});
+
+	test("strips <think> blocks that contain fenced code blocks", () => {
+		const result = sanitizeOutboundMetaLeaks(
+			"<think>Let me draft a snippet:\n```ts\nconst secret = 1;\n```\nBetter not send that.</think>直接告诉你结论。",
+		);
+		expect(result.modified).toBe(true);
+		expect(result.text).toBe("直接告诉你结论。");
+		expect(result.stripped).toContain("thinking-block");
+	});
 });

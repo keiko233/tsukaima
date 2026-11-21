@@ -17,7 +17,7 @@ import {
 	type ConversationPolicy,
 } from "@tsukaima/contracts";
 import { LENGTH_CONTINUATION_PROMPT } from "./context.ts";
-import { REPETITION_REWRITE_PROMPT } from "./humanize.ts";
+import { REPETITION_REWRITE_PROMPT, sanitizeOutboundMetaLeaks } from "./humanize.ts";
 import type { CoreLogger } from "./logger.ts";
 import { extractLurkMarker } from "./trigger.ts";
 
@@ -137,7 +137,7 @@ export function narrationCandidate(input: {
 		return { narrate: false, reason: "direct-send-tool" };
 	}
 	if (input.directSendEarlier === true) return { narrate: false, reason: "direct-send-earlier" };
-	const raw = assistantMessageText(input.message);
+	const raw = sanitizeOutboundMetaLeaks(assistantMessageText(input.message)).text;
 	const lurk = extractLurkMarker(raw);
 	if (lurk.lurk) return { narrate: false, reason: "lurk" };
 	if (lurk.text.length === 0) return { narrate: false, reason: "empty" };
@@ -302,7 +302,9 @@ export function createChatRunExtension<Tool extends ToolRegistration = ToolRegis
 							const runFirst = await liveRunFirst(api, context);
 							if ((await runKind(api, context, runFirst)) !== "chat") return undefined;
 							if ((await repetitionRewriteCount(api, context, runFirst)) >= 1) return undefined;
-							const text = extractLurkMarker(assistantMessageText(answer)).text;
+							const text = extractLurkMarker(
+								sanitizeOutboundMetaLeaks(assistantMessageText(answer)).text,
+							).text;
 							if (text.length === 0) return undefined;
 							const check = await options.checkRepetitionRewrite(conversationId, text);
 							if (check?.rewrite === true) {
@@ -346,7 +348,9 @@ export function createChatRunExtension<Tool extends ToolRegistration = ToolRegis
 							});
 							return undefined;
 						}
-						const text = extractLurkMarker(assistantMessageText(answer)).text;
+						const text = extractLurkMarker(
+							sanitizeOutboundMetaLeaks(assistantMessageText(answer)).text,
+						).text;
 						if (text.length > 0 && options.onNarration !== undefined) {
 							// The cut prefix is not the run's final answer, so deliver it now; the
 							// continuation's answer carries only the remainder.
