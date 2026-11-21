@@ -567,4 +567,25 @@ describe("plugin sdk", () => {
 		).toBe(true);
 		expect(providerToolNameAliases(sendTool)).toContain("onebot-napcat_send");
 	});
+
+	test("omits ambiguous and reserved aliases from model tool registrations", () => {
+		const tools: PluginTool[] = ["alpha.send", "beta.send"].map((name) => ({
+			aliases: ["deliver", "tool_search"],
+			description: "Send text",
+			execute: () => ({ content: [] }),
+			name,
+			parameters: {},
+			requiredPermissions: [],
+		}));
+		const extension = createPluginToolsExtension(
+			() => tools,
+			async () => ({ ok: true, result: { content: [] } }),
+			{ reservedNames: ["tool_search"] },
+		);
+		for (const [index, registration] of extension.tools.entries()) {
+			expect(registration.aliases).toContain(tools[index]!.name);
+			expect(registration.aliases).not.toContain("deliver");
+			expect(registration.aliases).not.toContain("tool_search");
+		}
+	});
 });

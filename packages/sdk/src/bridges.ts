@@ -897,12 +897,7 @@ export function allocateModelToolNames(
 	};
 	for (const { canonical, explicitShort, entry } of catalog) {
 		own(explicitShort, canonical);
-		if (typeof entry !== "string") {
-			for (const alias of entry.aliases ?? []) {
-				const trimmed = alias.trim();
-				if (trimmed !== "") own(safeName(trimmed), canonical);
-			}
-		}
+		for (const alias of providerToolNameAliases(entry)) own(alias, canonical);
 	}
 	const assigned = new Map<string, string>();
 	const claimed = new Set<string>();
@@ -1173,9 +1168,17 @@ export function createPluginToolsExtension(
 			? options.policyContext(tool, context)
 			: (options.policyContext ?? {});
 
-	const registrationFor = (tool: PluginTool, modelName: string): PluginToolRegistration => {
+	const registrationFor = (
+		tool: PluginTool,
+		modelName: string,
+		aliases: readonly string[],
+	): PluginToolRegistration => {
 		const existing = registrations.get(tool.name);
-		if (existing?.tool === tool && existing.modelName === modelName) {
+		if (
+			existing?.tool === tool &&
+			existing.modelName === modelName &&
+			existing.registration.aliases?.join("\0") === aliases.join("\0")
+		) {
 			return existing.registration;
 		}
 		const resolvedPolicy = resolveToolPolicy(tool);
@@ -1427,7 +1430,7 @@ export function createPluginToolsExtension(
 			name: modelName,
 			parameters: tool.parameters,
 			canonicalName: tool.name,
-			aliases: providerToolNameAliases(tool),
+			aliases,
 		};
 		registrations.set(tool.name, { modelName, registration, tool });
 		return registration;
@@ -1461,9 +1464,25 @@ export function createPluginToolsExtension(
 					? options.reservedNames()
 					: (options.reservedNames ?? []);
 			const allocated = allocateModelToolNames(filtered, { reservedNames });
-			const tools = filtered.map((tool) =>
-				registrationFor(tool, allocated.get(tool.name) ?? providerSafeToolName(tool.name)),
-			);
+			const canonicalNames = new Set(filtered.map((tool) => tool.name));
+			const reserved = new Set(reservedNames);
+			const claims = new Map<string, Set<string>>();
+			for (const tool of filtered) {
+				for (const alias of providerToolNameAliases(tool)) {
+					const owners = claims.get(alias) ?? new Set<string>();
+					owners.add(tool.name);
+					claims.set(alias, owners);
+				}
+			}
+			const tools = filtered.map((tool) => {
+				const modelName = allocated.get(tool.name) ?? providerSafeToolName(tool.name);
+				const aliases = providerToolNameAliases(tool).filter(
+					(alias) =>
+						alias === tool.name ||
+						(!reserved.has(alias) && !canonicalNames.has(alias) && claims.get(alias)?.size === 1),
+				);
+				return registrationFor(tool, modelName, aliases);
+			});
 			for (const name of registrations.keys()) {
 				if (!names.has(name)) registrations.delete(name);
 			}

@@ -578,7 +578,11 @@ export class PluginHost {
 	}> {
 		const owner = this.#toolOwner(tool.name);
 		const manifest = owner === undefined ? undefined : this.#plugins.get(owner)?.manifest;
-		const modelName = this.#modelToolNames().get(tool.name);
+		const allowedTools = context.allowedTools?.flatMap((name) => {
+			if (name === "*" || name.endsWith(".*")) return [name];
+			const canonical = this.resolveModelToolName(name);
+			return canonical === tool.name ? [canonical] : [];
+		});
 		const conversation = context.conversationId;
 		const caller = await resolveImCallerContext({
 			conversationId: conversation,
@@ -633,10 +637,7 @@ export class PluginHost {
 			(conversationCapabilities?.includes("coding") === true ? "coding" : undefined);
 		return {
 			grantedPermissions: manifest?.permissions ?? [],
-			...(modelName === undefined ? {} : { toolNameAliases: [modelName] }),
-			...(context.allowedTools === undefined
-				? {}
-				: { conversationAllowedTools: context.allowedTools }),
+			...(allowedTools === undefined ? {} : { conversationAllowedTools: allowedTools }),
 			...(channelCapabilities === undefined ? {} : { channelCapabilities }),
 			...(conversationCapabilities === undefined ? {} : { conversationCapabilities }),
 			...(caller.platformConversationId === undefined
@@ -655,11 +656,14 @@ export class PluginHost {
 	}
 
 	/** Allocated model-facing names for every started plugin tool, keyed by canonical name. */
+	#reservedModelToolNames(): readonly string[] {
+		return typeof this.#reservedToolNames === "function"
+			? this.#reservedToolNames()
+			: (this.#reservedToolNames ?? []);
+	}
+
 	#modelToolNames(): Map<string, string> {
-		const reservedNames =
-			typeof this.#reservedToolNames === "function"
-				? this.#reservedToolNames()
-				: (this.#reservedToolNames ?? []);
+		const reservedNames = this.#reservedModelToolNames();
 		const tools = this.tools().filter((tool) => resolveToolPolicy(tool).visibility === "model");
 		return allocateModelToolNames(tools, { reservedNames });
 	}
@@ -681,11 +685,14 @@ export class PluginHost {
 	resolveModelToolName(name: string): string | undefined {
 		const trimmed = name.trim();
 		if (trimmed === "") return undefined;
+		const tools = this.tools();
+		if (tools.some((tool) => tool.name === trimmed)) return trimmed;
+		if (this.#reservedModelToolNames().includes(trimmed)) return undefined;
 		const allocated = this.#modelToolNames();
 		for (const [canonical, modelName] of allocated) {
 			if (modelName === trimmed) return canonical;
 		}
-		return resolveToolName(trimmed, this.tools());
+		return resolveToolName(trimmed, tools);
 	}
 
 	#toolOwner(name: string): string | undefined {
