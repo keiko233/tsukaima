@@ -118,6 +118,12 @@ export const conversationPacingPolicySchema = z
 		narrationEnabled: z.boolean().default(true),
 		/** Minimum spacing between two narration messages of the same conversation. */
 		narrationMinIntervalMs: z.number().int().min(0).default(1_500),
+		/**
+		 * Flush completed newline-terminated answer lines while the model is still streaming, so
+		 * the chat reads naturally instead of waiting for the whole answer. Never flushes inside an
+		 * open code fence or when the turn may lurk.
+		 */
+		streamingLineFlushEnabled: z.boolean().default(true),
 		replyCooldownMs: z.number().int().min(0).default(0),
 		typingEnabled: z.boolean().default(false),
 		replyDelayEnabled: z.boolean().default(false),
@@ -495,6 +501,7 @@ export const conversationPolicySchema = z
 			replyDelayEnabled: false,
 			replyDelayMaxMs: 2_000,
 			sendIntervalMs: 400,
+			streamingLineFlushEnabled: true,
 			stripMarkdown: true,
 			typingEnabled: false,
 		}),
@@ -578,6 +585,7 @@ export const defaultConversationPolicy: ConversationPolicy = {
 		replyDelayEnabled: false,
 		replyDelayMaxMs: 2_000,
 		sendIntervalMs: 400,
+		streamingLineFlushEnabled: true,
 		maxImmediateOutputMessages: 6,
 		stripMarkdown: true,
 		maxRepliesPerMinute: 20,
@@ -643,6 +651,7 @@ const pacingPolicyPatchSchema = z
 		activeBurstWindowMs: z.number().int().min(0).optional(),
 		narrationEnabled: z.boolean().optional(),
 		narrationMinIntervalMs: z.number().int().min(0).optional(),
+		streamingLineFlushEnabled: z.boolean().optional(),
 		replyCooldownMs: z.number().int().min(0).optional(),
 		typingEnabled: z.boolean().optional(),
 		replyDelayEnabled: z.boolean().optional(),

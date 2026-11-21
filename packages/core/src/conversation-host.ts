@@ -92,6 +92,7 @@ import type { BusyArbiter, BusyArbitrationResult } from "./busy-arbiter.ts";
 import type { ConversationGatePort } from "./gate.ts";
 import { shouldInterject, type FastLaneInterjector, type FastLaneReply } from "./interject.ts";
 import { shouldCloseActivityWindow } from "./index.ts";
+import { flushStreamLines } from "./stream-lines.ts";
 
 /** Platform id of the triggering envelope's sender, tolerant of stored JSON shapes. */
 function senderExternalId(envelope: StoredEnvelope | undefined): string | undefined {
@@ -504,6 +505,11 @@ export interface DurableConversationHostOptions {
 	 * callback must not wait on the conversation lock; the dispatcher dedupes by `narrationId`.
 	 */
 	readonly onNarration?: (narration: ConversationNarration) => Promise<void> | void;
+	/**
+	 * Domain kind of a durable conversation (`private`, `group`, `webui`, `workspace`, ...).
+	 * Streaming line flush stays chat-only, so workspace/task runs never post partial code.
+	 */
+	readonly readConversationKind?: (conversationId: string) => Promise<string | undefined>;
 	/** Tools that post to the chat themselves; their message text is never narrated. */
 	readonly isDirectSendTool?: (toolName: string) => boolean;
 	/** True when this turn already delivered text through a direct send tool. */
@@ -1450,7 +1456,8 @@ export class PiDurableConversationHost {
 	 */
 	private watchLiveRun(harness: DurableHarness, conversationId: string): void {
 		const onLiveRun = this.options.onLiveRun;
-		if (onLiveRun === undefined) return;
+		const onNarration = this.options.onNarration;
+		if (onLiveRun === undefined && onNarration === undefined) return;
 		// A steered input or a follow-up window starts another observer for the same
 		// conversation. Let the newest observer own the watch; otherwise the old timer keeps
 		// publishing snapshots with an older start time and the cache resets its timeline.
@@ -1475,6 +1482,12 @@ export class PiDurableConversationHost {
 		// poller would stop before the first token and report nothing.
 		let sawRun = false;
 		let stopped = false;
+		// Streaming line flush state is per run. A replaced watcher (steer/follow-up) resets it and
+		// the line index makes narration ids stable across the replacement.
+		const streamState: { afterLine: number; runId: string | undefined } = {
+			afterLine: 0,
+			runId: undefined,
+		};
 		const timer = setInterval(() => {
 			if (this.closed || stopped || this.liveRuns.get(conversationId)?.timer !== timer) {
 				this.stopLiveRun(conversationId, timer);
@@ -1500,14 +1513,14 @@ export class PiDurableConversationHost {
 						// The run settled. Report a failure first so a client can show it, then clear.
 						stopped = true;
 						if (live?.runFailure !== undefined) {
-							onLiveRun({
+							onLiveRun?.({
 								...emptyLiveRun(conversationId, startedAtMs),
 								failure: runFailureText(live.runFailure),
 							});
 						}
 						this.stopLiveRun(conversationId, timer);
 						if (live?.runFailure === undefined) {
-							onLiveRun(emptyLiveRun(conversationId, startedAtMs));
+							onLiveRun?.(emptyLiveRun(conversationId, startedAtMs));
 						}
 						return;
 					}
@@ -1518,7 +1531,14 @@ export class PiDurableConversationHost {
 							knownArguments.set(tool.callId, tool.argumentsText);
 						}
 					}
-					onLiveRun(snapshot);
+					if (snapshot.runId !== undefined && snapshot.runId !== streamState.runId) {
+						streamState.runId = snapshot.runId;
+						streamState.afterLine = 0;
+					}
+					onLiveRun?.(snapshot);
+					if (onNarration !== undefined) {
+						await this.flushStreamedLines(conversationId, snapshot, streamState);
+					}
 				} catch (error) {
 					// Live presentation is optional; ingestion and answers must not depend on it.
 					this.logger.trace("Live run poll failed", { conversationId, error });
@@ -1531,6 +1551,51 @@ export class PiDurableConversationHost {
 		}, LIVE_RUN_POLL_MS);
 		timer.unref?.();
 		this.liveRuns.set(conversationId, { startedAtMs, timer });
+	}
+
+	/**
+	 * Flush answer lines that finished streaming since the previous poll. Chat-only: a workspace
+	 * or task run must never post partial code before its governed answer settles.
+	 */
+	private async flushStreamedLines(
+		conversationId: string,
+		snapshot: LiveRunSnapshot,
+		state: { afterLine: number; runId: string | undefined },
+	): Promise<void> {
+		const partialText = snapshot.partialText;
+		const onNarration = this.options.onNarration;
+		if (partialText === undefined || onNarration === undefined) return;
+		let policy: ConversationPolicy;
+		try {
+			policy = await this.readPolicy(Number(conversationId) as ConversationId);
+		} catch {
+			return;
+		}
+		if (!policy.pacing.streamingLineFlushEnabled) return;
+		try {
+			const kind = await this.options.readConversationKind?.(conversationId);
+			if (kind === "workspace" || kind === "task" || kind === "plugin") return;
+		} catch {
+			return;
+		}
+		const flushed = flushStreamLines({
+			afterLine: state.afterLine,
+			enabled: true,
+			partialText,
+			repetitionRewriteEnabled: policy.humanization.repetitionRewriteEnabled,
+		});
+		state.afterLine = flushed.afterLine;
+		if (flushed.lines.length === 0) return;
+		const runKey = snapshot.runId ?? `t${snapshot.startedAtMs}`;
+		for (const line of flushed.lines) {
+			await onNarration({
+				conversationId,
+				kind: "stream-line",
+				narrationId: `stream:${runKey}:${line.index}`,
+				text: line.text,
+				toolNames: [],
+			});
+		}
 	}
 
 	/** Stop polling one conversation's live run. Safe to call when nothing is polling. */

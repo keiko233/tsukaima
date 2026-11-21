@@ -41,7 +41,7 @@ export interface ConversationNarration {
 	 * twice.
 	 */
 	readonly narrationId: string;
-	readonly kind: "tool-preamble" | "length-prefix";
+	readonly kind: "tool-preamble" | "length-prefix" | "stream-line";
 	readonly text: string;
 	/** Tools called by the same assistant message (`tool-preamble` only). */
 	readonly toolNames: readonly string[];

@@ -1823,6 +1823,23 @@ export class TsukaimaLifecycle {
 					});
 				});
 			},
+			// Only chat surfaces stream answer lines mid-run. A workspace or task turn posts its
+			// governed result when it settles, so partial code never escapes the worktree.
+			readConversationKind: async (durableConversationId) => {
+				const known = this.sessionKindByDurableId.get(durableConversationId);
+				if (known !== undefined) return known;
+				const database = this.domainDatabase;
+				if (database === undefined) return undefined;
+				const [row] = await database
+					.select({ chatKind: chatObjects.kind, sessionKind: conversations.kind })
+					.from(conversations)
+					.leftJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
+					.where(eq(conversations.durableConversationId, durableConversationId))
+					.limit(1);
+				const kind = row?.chatKind ?? row?.sessionKind;
+				if (kind !== undefined) this.sessionKindByDurableId.set(durableConversationId, kind);
+				return kind;
+			},
 			// Only canonical channel chat-send tools count: `workspace_send` and
 			// `sticker-meme_send` are not direct sends and must not suppress the final answer.
 			isDirectSendTool: (toolName) =>

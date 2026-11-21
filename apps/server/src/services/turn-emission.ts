@@ -76,6 +76,18 @@ export class TurnEmissionTracker {
 		return (this.#turns.get(conversationId) ?? []).some((entry) => entry.kind === "text");
 	}
 
+	/** Narrated and streamed lines, optionally excluding one id still being decided. */
+	narratedTexts(conversationId: string, excludeId?: string): string[] {
+		const texts: string[] = [];
+		for (const entry of this.#turns.get(conversationId) ?? []) {
+			if (excludeId !== undefined && entry.id === excludeId) continue;
+			if (entry.kind !== "narration" && entry.kind !== "stream-line") continue;
+			const text = entry.text?.trim() ?? "";
+			if (text.length > 0) texts.push(text);
+		}
+		return texts;
+	}
+
 	/** Capture the turn's emissions before an await can admit a newer turn. */
 	capture(conversationId: string): TurnEmissionSnapshot {
 		const emissions = this.#turns.get(conversationId) ?? [];

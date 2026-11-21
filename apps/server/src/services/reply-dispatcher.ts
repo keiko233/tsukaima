@@ -601,10 +601,20 @@ export class ReplyDispatcher {
 			}),
 		).then((outcome) => {
 			// Narration is not owed when it is skipped (disabled, rate limited, direct-send), so
-			// the answer must not treat it as already shown.
-			if (outcome?.deliveryStatus === "skipped") this.#rollbackNarrationShown(narration, recorded);
+			// the answer must not treat it as already shown. A duplicate id belongs to an accepted
+			// earlier delivery and must keep its emission.
+			if (outcome?.deliveryStatus === "skipped" && outcome.reason !== "duplicate") {
+				this.#rollbackNarrationShown(narration, recorded);
+			}
 			return outcome;
 		});
+	}
+
+	#alreadyNarrated(narration: ConversationNarration): boolean {
+		const text = narration.text.trim();
+		if (text.length === 0) return false;
+		const previous = this.#emissions.narratedTexts(narration.conversationId, narration.narrationId);
+		return stripNarratedPrefix(previous, text).duplicate;
 	}
 
 	#recordNarrationShown(narration: ConversationNarration): string | undefined {
@@ -612,7 +622,7 @@ export class ReplyDispatcher {
 		if (text.length === 0) return undefined;
 		this.#emissions.record(narration.conversationId, {
 			id: narration.narrationId,
-			kind: "narration",
+			kind: narration.kind === "stream-line" ? "stream-line" : "narration",
 			text,
 		});
 		return text;
@@ -644,8 +654,12 @@ export class ReplyDispatcher {
 		if (session === undefined) return { deliveryStatus: "skipped", reason: "no_domain_session" };
 		// A length-prefix narration is owed content from a truncated answer, not an optional
 		// preamble: it must be delivered even after a direct send, with narration disabled, or
-		// inside the minimum interval. Dropping it loses text the reader never receives.
-		const owed = narration.kind === "length-prefix";
+		// inside the minimum interval. Dropping it loses text the reader never receives. A
+		// streamed line is the same: it is answer text, already read by the model's stream.
+		const owed = narration.kind === "length-prefix" || narration.kind === "stream-line";
+		if (!owed && this.#alreadyNarrated(narration)) {
+			return { deliveryStatus: "skipped", reason: "already_shown" };
+		}
 		if (!owed && this.hasDirectSendThisTurn(narration.conversationId)) {
 			return { deliveryStatus: "skipped", reason: "direct-send" };
 		}

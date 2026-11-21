@@ -253,4 +253,34 @@ describe("reply dispatcher turn isolation", () => {
 			await lifecycle.stop();
 		}
 	});
+
+	test("a streamed line flush is delivered once and removed from the final answer", async () => {
+		const { lifecycle } = await createHarness();
+		try {
+			const dispatcher = lifecycle.replyDispatcher;
+			dispatcher.beginTurn("durable-1");
+			const streamed = await dispatcher.handleNarration({
+				conversationId: "durable-1",
+				kind: "stream-line",
+				narrationId: "stream:run-1:0",
+				text: "Hello",
+				toolNames: [],
+			});
+			expect(streamed).toMatchObject({ deliveryStatus: "sent" });
+			const duplicate = await dispatcher.handleNarration({
+				conversationId: "durable-1",
+				kind: "stream-line",
+				narrationId: "stream:run-1:0",
+				text: "Hello",
+				toolNames: [],
+			});
+			expect(duplicate).toMatchObject({ deliveryStatus: "skipped", reason: "duplicate" });
+			const final = await dispatcher.handleAnswer(
+				answer({ entryId: "answer-after-stream", text: "Hello\nWorld" }),
+			);
+			expect(final).toMatchObject({ deliveryStatus: "sent", text: "World" });
+		} finally {
+			await lifecycle.stop();
+		}
+	});
 });
