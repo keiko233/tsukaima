@@ -803,8 +803,10 @@ export class TsukaimaLifecycle {
 		});
 		this.upgrades = new UpgradeService({
 			audit: (entry) => this.writeAudit(entry),
+			coding: this.codingStore,
 			database: () => this.domainDatabase,
 			defaultRemote: config.upgradeRemote,
+			ensureWorktree: async (taskId) => await this.ensureWorkspaceWorktree(taskId),
 			logger: this.runtimeLog,
 			repositoryRoot: config.repositoryRoot,
 			restart: {

@@ -1,17 +1,44 @@
 import { randomUUID } from "node:crypto";
 import { desc, eq, sql } from "drizzle-orm";
 import type { RestartStatus, UpgradeCheck, UpgradeRecord } from "@tsukaima/contracts";
-import { gitCredentialEnvironment, GitCli, type GitCommandResult } from "@tsukaima/coding";
+import {
+	gitCredentialEnvironment,
+	GitCli,
+	measureTaskSnapshot,
+	sha256Hex,
+	type DeploymentProposal,
+	type DeploymentProposalInput,
+	type DeploymentProposalStatus,
+	type GitCommandResult,
+	type IterationTask,
+	type IterationTaskPatch,
+} from "@tsukaima/coding";
 import { runtimeUpgrades, type TsukaimaDatabase } from "@tsukaima/db";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import { gitIdentityArgs, readGitIdentity } from "./git-identity.ts";
 import type { WorkspaceService } from "./workspace.ts";
 
+/** The host-owned task/worktree surface the upgrade service needs; no model tools are involved. */
+export interface UpgradeCodingStore {
+	createProposal(input: DeploymentProposalInput): Promise<DeploymentProposal>;
+	getTask(id: string): Promise<IterationTask | null>;
+	listProposals(taskId?: string): Promise<readonly DeploymentProposal[]>;
+	transitionProposal(id: string, status: DeploymentProposalStatus): Promise<DeploymentProposal>;
+	updateTask(id: string, patch: IterationTaskPatch): Promise<IterationTask>;
+}
+
+export interface UpgradeTaskWorktree {
+	readonly path: string;
+}
+
 export interface UpgradeServiceOptions {
 	readonly audit?: (entry: AuditEntry) => Promise<void> | void;
+	readonly coding: UpgradeCodingStore;
 	readonly database: () => TsukaimaDatabase | undefined;
 	readonly defaultRemote: string;
+	/** Reuse the lifecycle's governed task worktree rather than creating a second worktree policy. */
+	readonly ensureWorktree: (taskId: string) => Promise<UpgradeTaskWorktree>;
 	readonly logger: Logger;
 	readonly repositoryRoot: string;
 	readonly restart: {
@@ -46,7 +73,23 @@ const DEFAULT_UPGRADE_DELAY_SECONDS = 60;
 const GIT_TIMEOUT_MS = 60_000;
 /** Local revision reads are fast; a hung `git status` must not hold an admin request open. */
 const GIT_QUICK_TIMEOUT_MS = 15_000;
+/** A reviewable patch is bounded independently of the git output cap; never approve a partial diff. */
+const UPGRADE_DIFF_MAX_BYTES = 1024 * 1024;
 const SAFE_GIT_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/u;
+const SAFE_COMMIT = /^[0-9a-f]{7,64}$/u;
+
+interface WorkspaceEvidence {
+	readonly changedFiles: readonly string[];
+	readonly diff: string;
+	readonly diffChecksum: string;
+	readonly snapshotChecksum: string;
+}
+
+interface WorkspaceReview {
+	readonly branchName: string;
+	readonly proposal: DeploymentProposal;
+	readonly worktreeHead: string;
+}
 
 function toRecord(row: UpgradeRow): UpgradeRecord {
 	return {
@@ -85,17 +128,22 @@ function upgradeModeFor(
 /**
  * Inspect and start git-based upstream upgrades without handing the model host-shell access.
  *
- * A clean checkout with no local commits is fast-forwarded in place. Any local commit (or a
- * dirty working tree) is routed through the existing governed workspace flow instead: the
- * workspace gets its own worktree, must produce a proposal, and only `finalize` merges that
- * branch back into the running checkout. Every path ends in the durable restart coordinator.
+ * A clean checkout with no local commits is fast-forwarded in place. A checkout with local
+ * commits is prepared by the host in a governed workspace worktree: the host merges the target,
+ * derives the patch/snapshot, records a proposal, and waits for an administrator to finalize it.
+ * The live checkout is not touched until finalize re-verifies its revision, cleanliness, target
+ * ancestry, worktree snapshot, and proposal before merging. Every path ends in the durable
+ * restart coordinator.
  */
 export class UpgradeService {
 	readonly #audit: UpgradeServiceOptions["audit"];
+	readonly #coding: UpgradeServiceOptions["coding"];
 	readonly #database: UpgradeServiceOptions["database"];
 	readonly #defaultRemote: string;
+	readonly #ensureWorktree: UpgradeServiceOptions["ensureWorktree"];
 	readonly #gitCli: GitCli;
 	readonly #logger: Logger;
+	readonly #repositoryRoot: string;
 	readonly #restart: UpgradeServiceOptions["restart"];
 	readonly #token: UpgradeServiceOptions["token"];
 	readonly #workspace: WorkspaceService;
@@ -103,10 +151,13 @@ export class UpgradeService {
 
 	constructor(options: UpgradeServiceOptions) {
 		this.#audit = options.audit;
+		this.#coding = options.coding;
 		this.#database = options.database;
 		this.#defaultRemote = options.defaultRemote;
+		this.#ensureWorktree = options.ensureWorktree;
 		this.#gitCli = new GitCli({ repositoryPath: options.repositoryRoot });
 		this.#logger = options.logger.child("tsukaima::server::upgrade");
+		this.#repositoryRoot = options.repositoryRoot;
 		this.#restart = options.restart;
 		this.#token = options.token;
 		this.#workspace = options.workspace;
@@ -240,6 +291,9 @@ export class UpgradeService {
 				throw new Error(check.status === "up_to_date" ? "already_up_to_date" : "no_upgrade_mode");
 			}
 			if (check.dirty) throw new Error("working_tree_dirty");
+			// Fail before creating a workspace when the host-owned preparation port is unavailable;
+			// a model-only workspace could never record the proposal this upgrade requires.
+			if (check.mode === "workspace") this.#requireWorkspacePreparation();
 			const now = Date.now();
 			const id = randomUUID();
 			const autoFinalize = input.autoFinalize !== false;
@@ -328,28 +382,18 @@ export class UpgradeService {
 			throw new Error(`upgrade_not_finalizable:${row.status}`);
 		}
 		const requestedBy = input.requestedBy ?? "webui-admin";
-		if (row.mode === "workspace") {
-			if (row.workspaceSessionId === null) throw new Error("upgrade_workspace_missing");
-			const detail = await this.#workspace.get(row.workspaceSessionId);
-			if (detail === null) throw new Error("upgrade_workspace_not_found");
-			const proposal = detail.proposals.find(
-				(entry) => entry.status === "approved" || entry.status === "pending_approval",
-			);
-			const workspaceStatus = await this.#workspace.status({
-				sessionId: row.workspaceSessionId,
-			});
-			const taskStatus = String(workspaceStatus.status ?? "");
-			if (proposal === undefined && taskStatus !== "completed") {
-				throw new Error("upgrade_proposal_required");
-			}
-		}
+		// Workspace rows are approved by re-deriving and matching the exact worktree snapshot before
+		// any live git command. A pending proposal becomes `approved` only after those checks pass;
+		// a completed task without a verifiable proposal never replaces the live checkout.
+		const review =
+			row.mode === "workspace" ? await this.#reviewWorkspace(row, requestedBy) : undefined;
 		const now = Date.now();
 		await database
 			.update(runtimeUpgrades)
 			.set({ error: null, status: "merging", updatedAtMs: now })
 			.where(eq(runtimeUpgrades.id, row.id));
 		try {
-			await this.#merge(row, requestedBy);
+			await this.#merge(row, requestedBy, review);
 			const restart = await this.#restart.schedule({
 				delaySeconds: DEFAULT_UPGRADE_DELAY_SECONDS,
 				mode: "update",
@@ -517,12 +561,20 @@ export class UpgradeService {
 		return toRecord(result);
 	}
 
+	/** Fail before workspace creation when the host cannot derive and approve a proposal. */
+	#requireWorkspacePreparation(): void {
+		if (this.#coding === undefined || this.#ensureWorktree === undefined) {
+			throw new Error("upgrade_workspace_unavailable");
+		}
+	}
+
 	async #startWorkspace(
 		row: UpgradeRow,
 		check: UpgradeCheck,
 		requestedBy: string,
 	): Promise<UpgradeStartResult> {
 		const database = this.#db();
+		let taskId: string | undefined;
 		try {
 			const goal = [
 				`Upgrade this Tsukaima checkout from ${check.currentVersion} (${check.currentCommit.slice(0, 12)}) to upstream ${check.upstreamVersion} (${check.upstreamCommit.slice(0, 12)}).`,
@@ -530,10 +582,9 @@ export class UpgradeService {
 				`Upstream ref: ${check.upstreamRef}`,
 				`Local-only commits: ${check.ahead}`,
 				`Upstream commits to integrate: ${check.behind}`,
-				check.dirty ? "The live working tree has uncommitted changes; preserve their intent." : "",
 				"",
-				"Create the governed worktree from the current checkout, merge the upstream ref inside that worktree, resolve conflicts, run the repository checks, and create a deployment proposal.",
-				"Do not edit the live repository directly. Do not schedule a restart yourself; finalizing the upgrade does that after the proposal is reviewed.",
+				"The server prepares this merge in the governed task worktree and records a proposal. Inspect the result here; the administrator finalizes it from Settings.",
+				"Do not edit the live repository and do not schedule a restart.",
 			]
 				.filter((line) => line.length > 0)
 				.join("\n");
@@ -542,49 +593,98 @@ export class UpgradeService {
 				goal,
 				requestedBy,
 			});
-			const taskId =
-				workspace.taskId ?? (await this.#workspace.startTask(workspace.sessionId, { goal }));
+			taskId = workspace.taskId ?? (await this.#workspace.startTask(workspace.sessionId, { goal }));
+			await database
+				.update(runtimeUpgrades)
+				.set({
+					taskId,
+					updatedAtMs: Date.now(),
+					workspaceSessionId: workspace.sessionId,
+				})
+				.where(eq(runtimeUpgrades.id, row.id));
+
+			const task = await this.#coding.getTask(taskId);
+			if (task === null) throw new Error("upgrade_workspace_task_missing");
+			const worktree = await this.#ensureWorktree(taskId);
+			const worktreePath = worktree.path;
+			await database
+				.update(runtimeUpgrades)
+				.set({ updatedAtMs: Date.now(), worktreePath })
+				.where(eq(runtimeUpgrades.id, row.id));
+
+			await this.#assertLiveCheckout(row);
+			await this.#assertCleanWorktree(worktreePath);
+			const worktreeHead = await this.#worktreeHead(worktreePath);
+			if (worktreeHead !== row.currentCommit) {
+				throw new Error("upgrade_worktree_base_mismatch");
+			}
+
+			// The host, not a model, performs the merge. The operator-configurable identity keeps this
+			// working on a host with no git config, and conflicts fail before any live checkout change.
+			const identityArgs = gitIdentityArgs(await readGitIdentity(this.#db()));
+			const merge = await this.#git(
+				[
+					"-C",
+					worktreePath,
+					...identityArgs,
+					"merge",
+					"--no-ff",
+					"--no-edit",
+					"-m",
+					`chore(upgrade): merge ${row.targetVersion} from ${row.upstreamRef}`,
+					row.targetCommit,
+				],
+				GIT_TIMEOUT_MS,
+			);
+			if (merge.exitCode !== 0) {
+				await this.#git(["-C", worktreePath, "merge", "--abort"]);
+				throw new Error(`upgrade_merge_failed:${merge.stderr.trim()}`);
+			}
+			const mergedHead = await this.#worktreeHead(worktreePath);
+			await this.#assertAncestor(row.currentCommit, mergedHead, "upgrade_worktree_base_mismatch");
+			await this.#assertAncestor(row.targetCommit, mergedHead, "upgrade_target_not_integrated");
+			const evidence = await this.#workspaceEvidence(worktreePath, row.currentCommit, mergedHead);
+			const proposal = await this.#createWorkspaceProposal(row, taskId, mergedHead, evidence);
+			await this.#coding.transitionProposal(proposal.id, "pending_approval");
+			await this.#appendTask(taskId, "awaiting_approval", proposal.id, "workspace.upgrade.propose");
+			await this.#auditRecord({
+				action: "runtime.upgrade.proposal",
+				actorId: requestedBy,
+				actorKind: "user",
+				payload: {
+					changedFiles: evidence.changedFiles.length,
+					diffChecksum: evidence.diffChecksum,
+					proposalId: proposal.id,
+					sourceRevision: mergedHead,
+				},
+				result: "ok",
+				targetId: row.id,
+				targetKind: "runtime-upgrade",
+			});
+
 			const updatedAtMs = Date.now();
 			const updated = await database
 				.update(runtimeUpgrades)
-				.set({
-					status: "ready",
-					taskId,
-					updatedAtMs,
-					workspaceSessionId: workspace.sessionId,
-				})
+				.set({ error: null, status: "ready", updatedAtMs, worktreePath })
 				.where(eq(runtimeUpgrades.id, row.id))
 				.returning();
 			const result = updated[0];
 			if (result === undefined) throw new Error("upgrade_update_failed");
-			this.#logger.info("upgrade workspace created", {
+			this.#logger.info("upgrade workspace prepared", {
+				proposalId: proposal.id,
 				taskId,
 				upgradeId: row.id,
 				workspaceSessionId: workspace.sessionId,
 			});
-			const workspaceStatus = await this.#workspace.status({ sessionId: workspace.sessionId });
-			const worktreePath =
-				typeof workspaceStatus.worktreePath === "string" ? workspaceStatus.worktreePath : undefined;
-			if (worktreePath !== undefined) {
-				const linked = await database
-					.update(runtimeUpgrades)
-					.set({ updatedAtMs: Date.now(), worktreePath })
-					.where(eq(runtimeUpgrades.id, row.id))
-					.returning();
-				const linkedRow = linked[0];
-				if (linkedRow !== undefined) {
-					return {
-						upgrade: toRecord(linkedRow),
-						workspace: { sessionId: workspace.sessionId, taskId },
-					};
-				}
-			}
 			return {
 				upgrade: toRecord(result),
 				workspace: { sessionId: workspace.sessionId, taskId },
 			};
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
+			if (taskId !== undefined) {
+				await this.#appendTask(taskId, "failed", message, "workspace.upgrade.prepare", "failure");
+			}
 			await database
 				.update(runtimeUpgrades)
 				.set({ error: message, status: "failed", updatedAtMs: Date.now() })
@@ -597,7 +697,220 @@ export class UpgradeService {
 		}
 	}
 
-	async #merge(row: UpgradeRow, requestedBy: string): Promise<void> {
+	async #createWorkspaceProposal(
+		row: UpgradeRow,
+		taskId: string,
+		worktreeHead: string,
+		evidence: WorkspaceEvidence,
+	): Promise<DeploymentProposal> {
+		return await this.#coding.createProposal({
+			changedFiles: evidence.changedFiles,
+			diff: evidence.diff,
+			diffChecksum: evidence.diffChecksum,
+			evidence: {
+				diffChecksum: evidence.diffChecksum,
+				// The host prepares and snapshots the merge, but repository checks remain the
+				// administrator's review step; no check result is invented here.
+				items: [],
+				snapshotChecksum: evidence.snapshotChecksum,
+			},
+			envChanges: [],
+			motivation: `Integrate ${row.upstreamRef} into the local checkout at ${row.currentCommit}.`,
+			requiresRestart: true,
+			riskAssessment:
+				"Host-prepared merge. The live checkout is only changed after the administrator finalizes and the target, worktree snapshot, and proposal are re-verified.",
+			rollbackNotes: `Before finalize, reset the worktree to ${row.currentCommit}. After finalize, revert the upgrade merge or reset the live checkout to ${row.currentCommit}.`,
+			sourceRevision: worktreeHead,
+			taskId,
+			title: `Upgrade ${row.currentVersion} to ${row.targetVersion}`,
+		});
+	}
+
+	/**
+	 * Re-derive the worktree snapshot and match it against a reviewable proposal. Nothing in the
+	 * live checkout changes here; a pending proposal is marked approved only after every check.
+	 */
+	async #reviewWorkspace(row: UpgradeRow, requestedBy: string): Promise<WorkspaceReview> {
+		if (row.workspaceSessionId === null) throw new Error("upgrade_workspace_missing");
+		if (row.taskId === null) throw new Error("upgrade_workspace_task_missing");
+		const status = await this.#workspace.status({ sessionId: row.workspaceSessionId });
+		const worktreePath =
+			typeof status.worktreePath === "string"
+				? status.worktreePath
+				: (row.worktreePath ?? undefined);
+		if (worktreePath === undefined || worktreePath.length === 0) {
+			throw new Error("upgrade_worktree_missing");
+		}
+		await this.#assertLiveCheckout(row);
+		await this.#assertCleanWorktree(worktreePath);
+		const worktreeHead = await this.#worktreeHead(worktreePath);
+		await this.#assertAncestor(row.currentCommit, worktreeHead, "upgrade_worktree_base_mismatch");
+		await this.#assertAncestor(row.targetCommit, worktreeHead, "upgrade_target_not_integrated");
+		const branch = await this.#git(["-C", worktreePath, "symbolic-ref", "--short", "-q", "HEAD"]);
+		if (branch.exitCode !== 0) throw new Error("upgrade_workspace_branch_missing");
+		const branchName = branch.stdout.trim();
+		if (!SAFE_GIT_NAME.test(branchName)) throw new Error("upgrade_workspace_branch_invalid");
+		const branchHead = await this.#git(["rev-parse", "--verify", `refs/heads/${branchName}`]);
+		if (branchHead.exitCode !== 0 || branchHead.stdout.trim() !== worktreeHead) {
+			throw new Error("upgrade_worktree_branch_stale");
+		}
+
+		const evidence = await this.#workspaceEvidence(worktreePath, row.currentCommit, worktreeHead);
+		const proposals = await this.#coding.listProposals(row.taskId);
+		const reviewable = proposals.filter(
+			(proposal) => proposal.status === "approved" || proposal.status === "pending_approval",
+		);
+		if (reviewable.length === 0) throw new Error("upgrade_proposal_required");
+		const matching = reviewable.filter(
+			(proposal) =>
+				proposal.sourceRevision === worktreeHead &&
+				proposal.diffChecksum === evidence.diffChecksum &&
+				proposal.evidence !== null &&
+				proposal.evidence.diffChecksum === evidence.diffChecksum &&
+				proposal.evidence.snapshotChecksum === evidence.snapshotChecksum,
+		);
+		if (matching.length === 0) {
+			const unverified = reviewable.some((proposal) => proposal.evidence === null);
+			throw new Error(unverified ? "upgrade_proposal_unverified" : "upgrade_proposal_stale");
+		}
+		const proposal = matching.reduce((latest, candidate) =>
+			candidate.updatedAtMs > latest.updatedAtMs ? candidate : latest,
+		);
+		if (proposal.status === "pending_approval") {
+			await this.#coding.transitionProposal(proposal.id, "approved");
+			await this.#auditRecord({
+				action: "runtime.upgrade.approve",
+				actorId: requestedBy,
+				actorKind: "user",
+				payload: {
+					diffChecksum: evidence.diffChecksum,
+					proposalId: proposal.id,
+					sourceRevision: worktreeHead,
+				},
+				result: "ok",
+				targetId: row.id,
+				targetKind: "runtime-upgrade",
+			});
+		}
+		this.#logger.info("upgrade workspace reviewed", {
+			proposalId: proposal.id,
+			upgradeId: row.id,
+			worktreeHead,
+		});
+		return { branchName, proposal, worktreeHead };
+	}
+
+	async #workspaceEvidence(
+		worktreePath: string,
+		baseCommit: string,
+		worktreeHead: string,
+	): Promise<WorkspaceEvidence> {
+		this.#assertCommit(baseCommit, "upgrade_checkout_invalid");
+		this.#assertCommit(worktreeHead, "upgrade_worktree_invalid");
+		const diff = await this.#gitCli.exec(
+			[
+				"-C",
+				worktreePath,
+				"diff",
+				"--binary",
+				"--no-color",
+				"--no-ext-diff",
+				`${baseCommit}..${worktreeHead}`,
+			],
+			{ maxOutputBytes: UPGRADE_DIFF_MAX_BYTES, timeoutMs: GIT_TIMEOUT_MS },
+		);
+		if (diff.exitCode !== 0) throw new Error("upgrade_diff_failed");
+		if (diff.stdoutTruncated) throw new Error("upgrade_diff_too_large");
+		const names = await this.#git([
+			"-C",
+			worktreePath,
+			"diff",
+			"--name-only",
+			"-z",
+			`${baseCommit}..${worktreeHead}`,
+		]);
+		if (names.exitCode !== 0 || names.stdoutTruncated) throw new Error("upgrade_diff_failed");
+		const changedFiles = names.stdout
+			.split("\0")
+			.map((path) => path.trim())
+			.filter((path) => path.length > 0);
+		const snapshot = await measureTaskSnapshot({
+			paths: changedFiles,
+			repositoryPath: this.#repositoryRoot,
+			sourcePath: worktreePath,
+		});
+		if (snapshot.uncoveredPaths.length > 0) throw new Error("upgrade_snapshot_incomplete");
+		return {
+			changedFiles,
+			diff: diff.stdout,
+			diffChecksum: sha256Hex(diff.stdout),
+			snapshotChecksum: snapshot.manifest.checksum,
+		};
+	}
+
+	async #assertLiveCheckout(row: UpgradeRow): Promise<void> {
+		this.#assertCommit(row.currentCommit, "upgrade_checkout_invalid");
+		const head = await this.#headCommit();
+		if (head !== row.currentCommit) throw new Error("upgrade_checkout_stale");
+		const branch = await this.#git(["rev-parse", "--abbrev-ref", "HEAD"]);
+		if (branch.exitCode !== 0 || branch.stdout.trim() !== row.branch) {
+			throw new Error("upgrade_branch_changed");
+		}
+		const status = await this.#git(["status", "--porcelain"]);
+		if (status.exitCode !== 0 || status.stdout.trim().length > 0) {
+			throw new Error("working_tree_dirty");
+		}
+	}
+
+	async #assertCleanWorktree(worktreePath: string): Promise<void> {
+		const status = await this.#git(["-C", worktreePath, "status", "--porcelain"]);
+		if (status.exitCode !== 0) throw new Error("upgrade_worktree_unavailable");
+		if (status.stdout.trim().length > 0) throw new Error("upgrade_worktree_dirty");
+	}
+
+	async #worktreeHead(worktreePath: string): Promise<string> {
+		const head = await this.#git(["-C", worktreePath, "rev-parse", "HEAD"]);
+		if (head.exitCode !== 0) throw new Error("upgrade_worktree_unavailable");
+		const commit = head.stdout.trim();
+		this.#assertCommit(commit, "upgrade_worktree_invalid");
+		return commit;
+	}
+
+	async #assertAncestor(ancestor: string, descendant: string, error: string): Promise<void> {
+		this.#assertCommit(ancestor, "upgrade_revision_invalid");
+		this.#assertCommit(descendant, "upgrade_revision_invalid");
+		const result = await this.#git(["merge-base", "--is-ancestor", ancestor, descendant]);
+		if (result.exitCode !== 0) throw new Error(error);
+	}
+
+	#assertCommit(value: string, error: string): void {
+		if (!SAFE_COMMIT.test(value)) throw new Error(error);
+	}
+
+	async #appendTask(
+		taskId: string,
+		status: IterationTask["status"],
+		detail: string,
+		tool: string,
+		outcome: "failure" | "success" = "success",
+	): Promise<void> {
+		try {
+			const task = await this.#coding.getTask(taskId);
+			if (task === null) return;
+			const patch: IterationTaskPatch = {
+				status,
+				timeline: [...task.timeline, { atMs: Date.now(), detail, outcome, tool }],
+			};
+			await this.#coding.updateTask(taskId, patch);
+		} catch (error) {
+			this.#logger.warn("upgrade task bookkeeping failed", {
+				error: error instanceof Error ? error.message : String(error),
+				taskId,
+			});
+		}
+	}
+
+	async #merge(row: UpgradeRow, requestedBy: string, review?: WorkspaceReview): Promise<void> {
 		if (row.mode === "fast_forward") {
 			const merge = await this.#git(["merge", "--ff-only", row.targetCommit]);
 			if (merge.exitCode !== 0) {
@@ -605,40 +918,10 @@ export class UpgradeService {
 			}
 			return;
 		}
-		if (row.workspaceSessionId === null) throw new Error("upgrade_workspace_missing");
-		const status = await this.#workspace.status({ sessionId: row.workspaceSessionId });
-		const worktreePath = typeof status.worktreePath === "string" ? status.worktreePath : undefined;
-		if (worktreePath === undefined) throw new Error("upgrade_worktree_missing");
-		await this.#db()
-			.update(runtimeUpgrades)
-			.set({ worktreePath, updatedAtMs: Date.now() })
-			.where(eq(runtimeUpgrades.id, row.id));
-		const branch = await this.#git(["-C", worktreePath, "symbolic-ref", "--short", "-q", "HEAD"]);
-		if (branch.exitCode !== 0) {
-			throw new Error("upgrade_workspace_branch_missing");
-		}
-		const branchName = branch.stdout.trim();
-		if (!SAFE_GIT_NAME.test(branchName)) throw new Error("upgrade_workspace_branch_invalid");
-		await this.#git(["-C", worktreePath, "add", "--all"]);
-		const pending = await this.#git(["-C", worktreePath, "status", "--porcelain"]);
-		// The operator-configurable identity keeps merges working on a host with no git config.
+		if (review === undefined) throw new Error("upgrade_worktree_missing");
+		// Merge the exact commit that was reviewed, not a branch ref that a concurrent workspace
+		// turn could have moved after the snapshot check.
 		const identityArgs = gitIdentityArgs(await readGitIdentity(this.#db()));
-		if (pending.stdout.trim().length > 0) {
-			const commit = await this.#git(
-				[
-					"-C",
-					worktreePath,
-					...identityArgs,
-					"commit",
-					"-m",
-					`chore(upgrade): integrate ${row.targetVersion}`,
-				],
-				GIT_TIMEOUT_MS,
-			);
-			if (commit.exitCode !== 0) {
-				throw new Error(`upgrade_commit_failed:${commit.stderr.trim()}`);
-			}
-		}
 		const merge = await this.#git(
 			[
 				...identityArgs,
@@ -647,7 +930,7 @@ export class UpgradeService {
 				"--no-edit",
 				"-m",
 				`chore(upgrade): merge ${row.targetVersion} from ${row.upstreamRef}`,
-				branchName,
+				review.worktreeHead,
 			],
 			GIT_TIMEOUT_MS,
 		);
@@ -655,35 +938,35 @@ export class UpgradeService {
 			await this.#git(["merge", "--abort"]);
 			throw new Error(`upgrade_merge_failed:${merge.stderr.trim()}`);
 		}
-		const integrated = await this.#git([
-			"-C",
-			worktreePath,
-			"merge-base",
-			"--is-ancestor",
-			row.targetCommit,
-			"HEAD",
-		]);
-		if (integrated.exitCode !== 0) {
-			throw new Error("upgrade_target_not_integrated");
+		const liveHead = await this.#headCommit();
+		await this.#assertAncestor(
+			review.worktreeHead,
+			liveHead,
+			"upgrade_live_checkout_missing_workspace",
+		);
+		await this.#assertAncestor(row.targetCommit, liveHead, "upgrade_live_checkout_missing_target");
+		if (row.taskId !== null) {
+			await this.#appendTask(
+				row.taskId,
+				"completed",
+				`${review.worktreeHead} (${review.proposal.id})`,
+				"workspace.upgrade.merge",
+			);
 		}
 		await this.#auditRecord({
 			action: "runtime.upgrade.merge",
 			actorId: requestedBy,
 			actorKind: "user",
-			payload: { branch: branchName, targetCommit: row.targetCommit },
+			payload: {
+				branch: review.branchName,
+				proposalId: review.proposal.id,
+				targetCommit: row.targetCommit,
+				worktreeHead: review.worktreeHead,
+			},
 			result: "ok",
 			targetId: row.id,
 			targetKind: "runtime-upgrade",
 		});
-		const liveIntegrated = await this.#git([
-			"merge-base",
-			"--is-ancestor",
-			row.targetCommit,
-			"HEAD",
-		]);
-		if (liveIntegrated.exitCode !== 0) {
-			throw new Error("upgrade_live_checkout_missing_target");
-		}
 	}
 
 	async #currentRevision(): Promise<{
