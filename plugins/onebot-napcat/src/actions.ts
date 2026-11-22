@@ -1,4 +1,5 @@
 import { messagePartSchema, type ConversationPolicy, type MessagePart } from "@tsukaima/contracts";
+import { uniq } from "es-toolkit";
 import type {
 	AuditEntry,
 	ChannelCapability,
@@ -838,7 +839,7 @@ export class OneBotActionFacade {
 						.filter((entry): entry is string => entry !== undefined)
 						.map((entry) => cleanMessageId(entry)),
 				];
-				const uniqueIds = [...new Set(messageIds)];
+				const uniqueIds = uniq(messageIds);
 				const result = await channel.forwardMessage(target, uniqueIds);
 				await this.#recordInteraction(target, "forward");
 				return result;

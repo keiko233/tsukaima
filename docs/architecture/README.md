@@ -26,6 +26,7 @@ This document set is the durable design record for Tsukaima. Each file is meant 
 | [Model routing](model-routing.md) | Capability policies, provider registration, selection order, and usage accounting |
 | [WebUI](web-ui.md) | Admin console layout and interaction model |
 | [Technology stack](tech-stack.md) | Full library choices, workspace layout, and dependency policy |
+| [es-toolkit conventions](es-toolkit.md) | Object/collection helper choices, patch merge semantics, and adoption scope |
 | [Quality gates](../operations/quality.md) | Lint, format, commits, tests, scopes, and dependency review |
 | [Implementation specs](../specs/README.md) | Ordered parity specs for DSH migration and remaining runtime work |
 | [Implementation review 2026-11-12](../reviews/implementation-review-2026-11-12.md) | Verified baseline, findings, and the remediation rounds for the first implementation pass |

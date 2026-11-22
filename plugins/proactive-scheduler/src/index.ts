@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { isPlainObject } from "es-toolkit";
 import {
 	CONVERSATION_GATE_BINDING,
 	SOCIAL_PROFILE_BINDING,
@@ -37,9 +38,7 @@ export { registerProactiveSchedulerRpc } from "./rpc.ts";
 export { registerProactiveSchedulerTools } from "./tools.ts";
 
 function recordValue(value: unknown): Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: {};
+	return isPlainObject(value) ? value : {};
 }
 
 interface SchedulerRuntime {

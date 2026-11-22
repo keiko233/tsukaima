@@ -1,3 +1,4 @@
+import { isPlainObject } from "es-toolkit";
 import { assertPermission, hasPermission } from "./permissions.ts";
 import { pluginManifestSchema, type PluginManifest } from "./manifest.ts";
 import { LocalTaskBridge } from "./tasks.ts";
@@ -74,7 +75,7 @@ type PluginLoggerSink = (level: PluginLoggerLevel, message: string, details: unk
 function mergeLoggerFields(fields: Record<string, unknown> | undefined, details: unknown): unknown {
 	if (fields === undefined || Object.keys(fields).length === 0) return details;
 	if (details === undefined) return fields;
-	if (isRecord(details)) return { ...fields, ...details };
+	if (isPlainObject(details)) return { ...fields, ...details };
 	return { ...fields, details };
 }
 
@@ -1096,12 +1097,8 @@ function textOutput(text: string): { readonly type: "text"; readonly text: strin
 	return [{ text, type: "text" }];
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function readAbortSignal(value: unknown): AbortSignal | undefined {
-	if (!isRecord(value)) return undefined;
+	if (!isPlainObject(value)) return undefined;
 	const candidate = value.abortSignal;
 	if (typeof candidate !== "object" || candidate === null) return undefined;
 	if (
@@ -1203,7 +1200,7 @@ export function createPluginToolsExtension(
 			...(resolvedPolicy.lazy ? { deferred: true as const } : {}),
 			surface: resolvedPolicy.surface ?? "both",
 			async execute(args, api, toolContext) {
-				const input = isRecord(args) ? args : {};
+				const input = isPlainObject(args) ? args : {};
 				const conversationId = String(api.conversationId);
 				const callerSignal = readAbortSignal(toolContext);
 				const invocationContext: ToolInvocationContext = { conversationId };

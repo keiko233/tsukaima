@@ -2,7 +2,9 @@ import { Database } from "bun:sqlite";
 import { promises as fs } from "node:fs";
 import { basename, relative } from "node:path";
 import { DSH_SOURCE, type SnapshotSource } from "./dsh-inspect.ts";
+import { uniq } from "es-toolkit";
 import { listFiles } from "./fs.ts";
+import { isRecord } from "./guards.ts";
 
 export const DSH_BASELINE_SECTIONS = [
 	"versions",
@@ -378,10 +380,6 @@ const TIMING_FIELDS = [
 ] as const;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function nonEmpty(value: string | undefined): string | null {
 	return value && value.trim() !== "" ? value : null;
 }
@@ -414,7 +412,7 @@ function sqliteTableList(value: unknown): DshSqliteTable[] {
 }
 
 function sorted(values: Iterable<string>): string[] {
-	return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+	return uniq([...values]).toSorted((left, right) => left.localeCompare(right));
 }
 
 function keySegments(key: string): string[] {
@@ -422,7 +420,7 @@ function keySegments(key: string): string[] {
 		.replace(/([a-z0-9])([A-Z])/g, "$1-$2")
 		.toLowerCase()
 		.split(/[^a-z0-9]+/)
-		.filter(Boolean);
+		.filter((segment) => segment.length > 0);
 }
 
 export function isCredentialLikeKey(key: string): boolean {

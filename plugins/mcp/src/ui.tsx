@@ -1,6 +1,7 @@
 "use client";
 
 import type { McpServerSnapshot } from "@tsukaima/contracts";
+import { clamp } from "es-toolkit";
 import {
 	Alert,
 	Button,
@@ -305,7 +306,7 @@ function McpPanel() {
 		setForm((current) => ({ ...current, [key]: value }));
 
 	const buildInput = () => {
-		const timeoutMs = Math.max(1, Math.min(600_000, Number(form.timeoutMs) || 30_000));
+		const timeoutMs = clamp(Number(form.timeoutMs) || 30_000, 1, 600_000);
 		const args = splitLines(form.args);
 		const env = form.transportType === "stdio" ? parseEnv(form.env) : undefined;
 		const headers = form.transportType === "http" ? parseHeaders(form.headers) : undefined;

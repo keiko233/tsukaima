@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import type { PluginManifest } from "@tsukaima/sdk";
 import { type TsukaimaDatabase, meta } from "@tsukaima/db";
 import { validatePluginConfig } from "@tsukaima/plugin-registry";
+import { isRecord } from "../records.ts";
 
 export type PluginConfigValue = Record<string, unknown>;
 
@@ -138,9 +139,7 @@ export class PluginSettingsStore {
 		if (raw === undefined) return {};
 		try {
 			const parsed: unknown = JSON.parse(raw);
-			return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-				? (parsed as PluginConfigValue)
-				: {};
+			return isRecord(parsed) ? (parsed as PluginConfigValue) : {};
 		} catch {
 			return {};
 		}

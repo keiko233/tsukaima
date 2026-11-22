@@ -24,6 +24,7 @@ import {
 } from "@tsukaima/db";
 import type { Logger } from "../logging.ts";
 import { readRuntimeSettings } from "../runtime-settings.ts";
+import { isUndefined, omit, omitBy } from "es-toolkit";
 import type { z } from "zod";
 import { PromptConflictError } from "./prompts.ts";
 
@@ -136,14 +137,7 @@ const toRevision = (row: typeof policies.$inferSelect): PolicyRevision => ({
 const mergeSection = <T extends Record<string, unknown>>(
 	base: T,
 	patch: Record<string, unknown> | undefined,
-): T => {
-	if (patch === undefined) return { ...base };
-	const next: Record<string, unknown> = { ...base };
-	for (const [key, value] of Object.entries(patch)) {
-		if (value !== undefined) next[key] = value;
-	}
-	return next as T;
-};
+): T => (patch === undefined ? { ...base } : { ...base, ...omitBy(patch, isUndefined) }) as T;
 
 export function mergeConversationPolicy(
 	base: ConversationPolicy,
@@ -194,45 +188,32 @@ export function mergeConversationPolicy(
 			: (patch.memoryExtractModel ?? base.memoryExtractModel);
 	const model = patch.model === null ? undefined : (patch.model ?? base.model);
 	const thinking = patch.thinking === null ? undefined : (patch.thinking ?? base.thinking);
-	const baseRest: ConversationPolicy = { ...base };
-	delete baseRest.memoryExtractModel;
-	delete baseRest.model;
-	delete baseRest.thinking;
+	const baseRest = omit(base, ["memoryExtractModel", "model", "thinking"]);
+	const topLevelPatch = omitBy(
+		{
+			capabilities: patch.capabilities,
+			enabled: patch.enabled,
+			followUpWhenBusy: patch.followUpWhenBusy,
+			memoryCompactionEnabled: patch.memoryCompactionEnabled,
+			memoryEnabled: patch.memoryEnabled,
+			memoryExtractModel,
+			memoryExtractionPromptVersion: patch.memoryExtractionPromptVersion,
+			memoryMaxWritesPerActivity: patch.memoryMaxWritesPerActivity,
+			memoryMinConfidence: patch.memoryMinConfidence,
+			memoryReviewRequired: patch.memoryReviewRequired,
+			model,
+			sharedMemoryEnabled: patch.sharedMemoryEnabled,
+			sharedMemoryWriteEnabled: patch.sharedMemoryWriteEnabled,
+			steerWhenBusy: patch.steerWhenBusy,
+			thinking,
+			version: patch.version,
+			workspaceDelegationEnabled: patch.workspaceDelegationEnabled,
+		},
+		isUndefined,
+	);
 	return conversationPolicySchema.parse({
 		...baseRest,
-		...(patch.enabled === undefined ? {} : { enabled: patch.enabled }),
-		...(patch.followUpWhenBusy === undefined ? {} : { followUpWhenBusy: patch.followUpWhenBusy }),
-		...(patch.steerWhenBusy === undefined ? {} : { steerWhenBusy: patch.steerWhenBusy }),
-		...(patch.memoryEnabled === undefined ? {} : { memoryEnabled: patch.memoryEnabled }),
-		...(patch.sharedMemoryEnabled === undefined
-			? {}
-			: { sharedMemoryEnabled: patch.sharedMemoryEnabled }),
-		...(patch.sharedMemoryWriteEnabled === undefined
-			? {}
-			: { sharedMemoryWriteEnabled: patch.sharedMemoryWriteEnabled }),
-		...(patch.memoryReviewRequired === undefined
-			? {}
-			: { memoryReviewRequired: patch.memoryReviewRequired }),
-		...(patch.memoryCompactionEnabled === undefined
-			? {}
-			: { memoryCompactionEnabled: patch.memoryCompactionEnabled }),
-		...(memoryExtractModel === undefined ? {} : { memoryExtractModel }),
-		...(model === undefined ? {} : { model }),
-		...(thinking === undefined ? {} : { thinking }),
-		...(patch.memoryExtractionPromptVersion === undefined
-			? {}
-			: { memoryExtractionPromptVersion: patch.memoryExtractionPromptVersion }),
-		...(patch.memoryMinConfidence === undefined
-			? {}
-			: { memoryMinConfidence: patch.memoryMinConfidence }),
-		...(patch.memoryMaxWritesPerActivity === undefined
-			? {}
-			: { memoryMaxWritesPerActivity: patch.memoryMaxWritesPerActivity }),
-		...(patch.version === undefined ? {} : { version: patch.version }),
-		...(patch.capabilities === undefined ? {} : { capabilities: patch.capabilities }),
-		...(patch.workspaceDelegationEnabled === undefined
-			? {}
-			: { workspaceDelegationEnabled: patch.workspaceDelegationEnabled }),
+		...topLevelPatch,
 		compaction,
 		crossSession,
 		gate,

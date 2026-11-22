@@ -8,6 +8,7 @@
 	},
 	"dependencies": {
 		"@tsukaima/db": "workspace:*",
-		"drizzle-orm": "0.45.4"
+		"drizzle-orm": "0.45.4",
+		"es-toolkit": "1.53.2"
 	}
 }

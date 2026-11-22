@@ -1,10 +1,12 @@
 import { promises as fs } from "node:fs";
 import { basename, join, relative } from "node:path";
+import { compact, uniq } from "es-toolkit";
 import { isCredentialLikeKey } from "./dsh-baseline.ts";
 import { redactSecrets } from "./secrets.ts";
 import { DSH_SOURCE, inspectDshSnapshot, type SnapshotSource } from "./dsh-inspect.ts";
 import { sha256Bytes, sha256String, stableStringify } from "./fs.ts";
 import { listFiles, resolveSnapshotRoot } from "./fs.ts";
+import { isRecord } from "./guards.ts";
 import { readZip } from "./zip.ts";
 import {
 	mergeDecisionReports,
@@ -396,10 +398,6 @@ export interface NormalizeResult {
 }
 
 const defaultTime = new Date(0).toISOString();
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function timestamp(value: string | number | undefined, fallback: string): string {
 	if (typeof value === "number") {
@@ -1742,7 +1740,7 @@ function mergeAttachments(
 	left: NormalizedMessage,
 	right: NormalizedMessage,
 ): NormalizedMessage["attachments"] {
-	return [...new Set([...left.attachments, ...right.attachments])];
+	return uniq([...left.attachments, ...right.attachments]);
 }
 
 /** Prefer OneBot history/recent rows (exact ids/timestamps) over prompt-derived rows. */
@@ -1873,7 +1871,7 @@ export async function normalizeSnapshot(source: SnapshotSource): Promise<Normali
 			}
 			const records: Record<string, unknown>[] = [];
 			if (path.endsWith(".jsonl")) {
-				for (const line of content.split("\n").filter(Boolean)) {
+				for (const line of compact(content.split("\n"))) {
 					try {
 						const parsed = JSON.parse(line) as unknown;
 						if (parsed && typeof parsed === "object") {

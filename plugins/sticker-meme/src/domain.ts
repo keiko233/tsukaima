@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { clamp, isPlainObject } from "es-toolkit";
 import { z } from "zod";
 
 export const stickerPackSources = ["builtin", "imported", "generated", "learned"] as const;
@@ -125,7 +126,7 @@ export function stableId(prefix: string, value: string): string {
 
 /** Clamps a user-supplied worker count into a safe range for import/semantic pools. */
 export function clampConcurrency(value: number | undefined, fallback = 4): number {
-	return Math.max(1, Math.min(16, Math.floor(value ?? fallback)));
+	return clamp(Math.floor(value ?? fallback), 1, 16);
 }
 
 export function sha256Bytes(bytes: Uint8Array): string {
@@ -183,9 +184,7 @@ export function textList(value: unknown): string[] {
 }
 
 export function recordValue(value: unknown): Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: {};
+	return isPlainObject(value) ? value : {};
 }
 
 /** Reject traversal and absolute paths from imported manifests. */

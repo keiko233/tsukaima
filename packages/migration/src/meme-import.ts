@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { promises as fs } from "node:fs";
 import { basename, join, relative } from "node:path";
+import { compact } from "es-toolkit";
 import type { SnapshotSource } from "./dsh-inspect.ts";
 import {
 	listFiles,
@@ -10,6 +11,7 @@ import {
 	stableStringify,
 } from "./fs.ts";
 import type { DecisionEntry } from "./decision.ts";
+import { isRecord } from "./guards.ts";
 
 export interface ImportedMemeItem {
 	readonly id: string;
@@ -60,20 +62,13 @@ export interface MemeImportResult {
 	readonly missing: number;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function text(value: unknown, fallback = ""): string {
 	return typeof value === "string" && value.trim() !== "" ? value.trim() : fallback;
 }
 
 function list(value: unknown): string[] {
 	if (typeof value === "string") {
-		return value
-			.split(/[,，]/u)
-			.map((entry) => entry.trim())
-			.filter(Boolean);
+		return compact(value.split(/[,，]/u).map((entry) => entry.trim()));
 	}
 	return Array.isArray(value)
 		? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")

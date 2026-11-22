@@ -1,4 +1,5 @@
 import { and, desc, eq, ne } from "drizzle-orm";
+import { clamp } from "es-toolkit";
 import {
 	defaultConversationPolicy,
 	humanProfileSchema,
@@ -356,8 +357,8 @@ export function humanProfileFromDsh(
 			(v): v is number => typeof v === "number" && Number.isFinite(v),
 		);
 		if (hours.length === 2) {
-			const start = Math.max(0, Math.min(23, Math.floor(hours[0]!)));
-			const end = Math.max(0, Math.min(23, Math.floor(hours[1]!)));
+			const start = clamp(Math.floor(hours[0]!), 0, 23);
+			const end = clamp(Math.floor(hours[1]!), 0, 23);
 			if (start <= end) {
 				for (let h = start; h <= end; h += 1) activeHours[String(h)] = 1;
 			} else {
@@ -365,7 +366,7 @@ export function humanProfileFromDsh(
 				for (let h = 0; h <= end; h += 1) activeHours[String(h)] = 1;
 			}
 		} else {
-			for (const h of hours) activeHours[String(Math.max(0, Math.min(23, Math.floor(h))))] = 1;
+			for (const h of hours) activeHours[String(clamp(Math.floor(h), 0, 23))] = 1;
 		}
 	} else if (typeof raw.activeHours === "object" && raw.activeHours !== null) {
 		for (const [k, v] of Object.entries(raw.activeHours as Record<string, unknown>)) {

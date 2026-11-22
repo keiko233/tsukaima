@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm";
+import { compact, uniq } from "es-toolkit";
 import {
 	detectOverusedPhrases,
 	detectRigidRhythm,
@@ -321,9 +322,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			]);
 			const lines: string[] = [];
 			if (persona !== undefined) lines.push(`- You are ${persona.name}; stay in character.`);
-			const aliases = [
-				...new Set([...policy.trigger.selfAliases, ...(persona?.selfAliases ?? [])]),
-			];
+			const aliases = uniq([...policy.trigger.selfAliases, ...(persona?.selfAliases ?? [])]);
 			if (aliases.length > 0) lines.push(`- People may also call you: ${aliases.join(", ")}.`);
 			if (session.chatKind === "group") {
 				lines.push(
@@ -380,13 +379,13 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			chat && behavior.includeRuntimeContext
 				? `Local time: ${formatLocalDateTime(request.nowMs, this.#timeZoneOptions())}`
 				: undefined;
-		const hooks = [
-			...new Set(
+		const hooks = compact(
+			uniq(
 				request.triggers
 					.map((trigger) => trigger.promptHooks?.trim())
 					.filter((value): value is string => value !== undefined && value.length > 0),
 			),
-		].join("\n\n");
+		).join("\n\n");
 		// A run is soft only when none of its inputs addressed the assistant directly.
 		const soft =
 			request.triggers.length > 0 &&
@@ -875,15 +874,13 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				? undefined
 				: await this.#memoryService.warmState(session.sessionId);
 		const scopeFilter = await this.#scopeFilter(database, session, policy);
-		const query = [
-			...new Set([
+		const query = compact(
+			uniq([
 				...inputs.slice(-RECALL_QUERY_MESSAGE_LIMIT).map((input) => snippet(input.text ?? "", 600)),
 				...recent.map((row) => snippet(row.contentText ?? "", 600)),
 				...(warm?.state?.topics ?? []),
 			]),
-		]
-			.filter(Boolean)
-			.join("\n");
+		).join("\n");
 		this.#logger.trace("collecting memories for context", {
 			durableConversationId,
 			hasScopeFilter: scopeFilter !== undefined,

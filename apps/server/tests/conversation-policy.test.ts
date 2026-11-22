@@ -20,7 +20,10 @@ import {
 import { createApp } from "../src/app.ts";
 import { createLogger } from "../src/logging.ts";
 import { writeRuntimeSettings } from "../src/runtime-settings.ts";
-import { ConversationPolicyService } from "../src/services/conversation-policy.ts";
+import {
+	ConversationPolicyService,
+	mergeConversationPolicy,
+} from "../src/services/conversation-policy.ts";
 import { DrizzleContextProvider } from "../src/services/context-provider.ts";
 
 const directories: string[] = [];
@@ -90,6 +93,74 @@ const groupEnvelope = (id: string, text: string): MessageEnvelope => ({
 	parts: [{ text, type: "text" }],
 	sender: { displayName: "Tester", id: "user-1", platformId: "user-1" },
 	source: { messageId: id, timestampMs: Date.now() },
+});
+
+describe("mergeConversationPolicy", () => {
+	test("keeps omitted or undefined fields and clears null overrides", () => {
+		const base = {
+			...defaultConversationPolicy,
+			generation: {
+				...defaultConversationPolicy.generation,
+				stop: ["END"],
+				temperature: 0.5,
+				topP: 0.9,
+			},
+			gate: { ...defaultConversationPolicy.gate, model: "gate-model" },
+			memoryExtractModel: "extract-model",
+			model: { modelId: "chat-model", providerId: "provider-a" },
+			pacing: { ...defaultConversationPolicy.pacing, allowedTools: ["tool-a"] },
+			sidechat: {
+				...defaultConversationPolicy.sidechat,
+				interjectModel: "interject-model",
+				model: "side-model",
+			},
+			thinking: "medium" as const,
+		};
+		const kept = mergeConversationPolicy(base, {
+			memoryExtractModel: undefined,
+			model: undefined,
+			pacing: { allowedTools: undefined, burstSettleMs: 321 },
+			thinking: undefined,
+		});
+		expect(kept.memoryExtractModel).toBe("extract-model");
+		expect(kept.model).toEqual(base.model);
+		expect(kept.pacing.allowedTools).toEqual(["tool-a"]);
+		expect(kept.pacing.burstSettleMs).toBe(321);
+		expect(kept.thinking).toBe("medium");
+
+		const cleared = mergeConversationPolicy(base, {
+			gate: { model: null },
+			generation: { stop: null, temperature: null, topP: null },
+			memoryExtractModel: null,
+			model: null,
+			pacing: { allowedTools: null },
+			sidechat: { interjectModel: null, model: null },
+			thinking: null,
+		});
+		expect(cleared.gate.model).toBeUndefined();
+		expect(cleared.generation.stop).toBeUndefined();
+		expect(cleared.generation.temperature).toBeUndefined();
+		expect(cleared.generation.topP).toBeUndefined();
+		expect(cleared.memoryExtractModel).toBeUndefined();
+		expect(cleared.model).toBeUndefined();
+		expect(cleared.pacing.allowedTools).toBeUndefined();
+		expect(cleared.sidechat.interjectModel).toBeUndefined();
+		expect(cleared.sidechat.model).toBeUndefined();
+		expect(cleared.thinking).toBeUndefined();
+	});
+
+	test("replaces array fields instead of merging them", () => {
+		const base = {
+			...defaultConversationPolicy,
+			trigger: {
+				...defaultConversationPolicy.trigger,
+				selfAliases: ["alias-a", "alias-b"],
+			},
+		};
+		const merged = mergeConversationPolicy(base, { trigger: { selfAliases: ["alias-c"] } });
+		expect(merged.trigger.selfAliases).toEqual(["alias-c"]);
+		expect(merged.trigger.peerBotIds).toEqual(base.trigger.peerBotIds);
+	});
 });
 
 describe("conversation policy service", () => {

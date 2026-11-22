@@ -4,6 +4,7 @@ import {
 	skillNameSchema,
 	type SkillDiagnostic,
 } from "@tsukaima/contracts";
+import { isPlainObject } from "es-toolkit";
 
 export interface SkillDocument {
 	readonly body: string;
@@ -30,10 +31,6 @@ export interface ValidationResult {
 
 function parseFailure(message: string): ParseSkillDocumentResult {
 	return { ok: false, message };
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function cleanDescription(value: string): string {

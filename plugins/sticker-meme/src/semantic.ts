@@ -1,5 +1,6 @@
 import type { PluginModelInfo, PluginModelRegistry } from "@tsukaima/sdk";
 import emojiLibrary from "emojilib";
+import { uniq } from "es-toolkit";
 import { z } from "zod";
 import {
 	EMPTY_SEMANTIC_PROFILE,
@@ -496,7 +497,7 @@ export function extractEmojis(value: string): string[] {
 		if (key.length === 0 || !remaining.includes(key)) continue;
 		found.push(key);
 	}
-	return [...new Set(found)];
+	return uniq(found);
 }
 
 function collectEmojiKeywords(emoji: readonly string[]): string[] {
@@ -504,7 +505,7 @@ function collectEmojiKeywords(emoji: readonly string[]): string[] {
 	for (const value of emoji) {
 		for (const keyword of emojiLibrary[value] ?? []) keywords.push(keyword);
 	}
-	return [...new Set(keywords)];
+	return uniq(keywords);
 }
 
 function uniqueLabels(values: Iterable<string>, limit = 64): string[] {

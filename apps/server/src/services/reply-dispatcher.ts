@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { uniq } from "es-toolkit";
 import { and, asc, desc, eq, lt } from "drizzle-orm";
 import {
 	messagePartSchema,
@@ -1787,7 +1788,7 @@ export class ReplyDispatcher {
 			.from(replyDispatchIntents)
 			.where(eq(replyDispatchIntents.state, "claimed"));
 		if (orphans.length === 0) return;
-		const sessions = [...new Set(orphans.map((row) => row.sessionId))];
+		const sessions = uniq(orphans.map((row) => row.sessionId));
 		this.#logger.warn(
 			"claimed dispatch intents without a reply expectation cannot be replayed safely",
 			{ count: orphans.length, sessions: sessions.length },

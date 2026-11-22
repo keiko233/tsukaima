@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { promises as fs } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { listFiles, sha256File, sha256String, stableStringify } from "./fs.ts";
+import { isRecord } from "./guards.ts";
 
 export interface BackupFileRecord {
 	readonly logicalName: string;
@@ -54,10 +55,6 @@ export interface RestoreBackupResult {
 	readonly restoredFiles: readonly string[];
 	readonly removedPaths: readonly string[];
 	readonly auditPath: string | null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function checkpoint(path: string): void {

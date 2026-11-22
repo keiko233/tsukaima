@@ -1,5 +1,6 @@
 import { basename, relative } from "node:path";
 import { promises as fs } from "node:fs";
+import { uniq } from "es-toolkit";
 import { listFiles, resolveSnapshotRoot, sha256File, sha256String } from "./fs.ts";
 import { readZip } from "./zip.ts";
 
@@ -104,7 +105,7 @@ export async function inspectDshSnapshot(source: SnapshotSource): Promise<Snapsh
 		[...textFiles.keys()]
 			.filter((path) => pattern.test(path))
 			.toSorted((a, b) => a.localeCompare(b));
-	const allPaths = [...new Set([...textFiles.keys(), ...files.map((file) => file.path)])];
+	const allPaths = uniq([...textFiles.keys(), ...files.map((file) => file.path)]);
 	const sessions = allPaths
 		.filter(isSessionPath)
 		.toSorted((left, right) => left.localeCompare(right));

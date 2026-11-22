@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { relative } from "node:path";
 import type { DecisionEntry } from "./decision.ts";
 import { listFiles, resolveSnapshotRoot, sha256String, stableStringify } from "./fs.ts";
+import { isRecord } from "./guards.ts";
 import { conversationIdForPlatformKey } from "./memory-import.ts";
 import { mapDshConversationIdentity } from "./session-v4.ts";
 
@@ -69,10 +70,6 @@ export interface ScheduleRequestImportResult {
 	readonly decisions: readonly DecisionEntry[];
 	readonly warnings: readonly string[];
 	readonly skippedExpired: number;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function string(value: unknown): string | null {

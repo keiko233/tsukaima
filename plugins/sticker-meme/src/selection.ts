@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { compact, uniq } from "es-toolkit";
 import type { AuditEntry, PluginLogger, PluginMediaApi } from "@tsukaima/sdk";
 import { normalizeLabel, sanitizeModelText } from "./domain.ts";
 import type { StickerItem, StickerPack } from "./domain.ts";
@@ -81,9 +82,9 @@ const RECENT_COOLDOWN_MS = 5 * 60_000;
 const EMOTION_ALIASES = new Map<string, string>();
 const QUERY_ALIASES = new Map<string, readonly string[]>();
 for (const category of STICKER_SEMANTIC_CATEGORIES) {
-	const terms = [...new Set([category.id, ...category.terms].map(normalizeLabel).filter(Boolean))];
+	const terms = uniq(compact([category.id, ...category.terms].map(normalizeLabel)));
 	for (const term of terms) {
-		QUERY_ALIASES.set(term, [...new Set([...(QUERY_ALIASES.get(term) ?? []), ...terms])]);
+		QUERY_ALIASES.set(term, uniq([...(QUERY_ALIASES.get(term) ?? []), ...terms]));
 		if (category.kind === "emotion" && !EMOTION_ALIASES.has(term)) {
 			EMOTION_ALIASES.set(term, category.id);
 		}
@@ -214,7 +215,7 @@ export function rankStickerItem(
 	if (input.personaId !== undefined && pack.personaIds.length > 0) {
 		if (!pack.personaIds.includes(input.personaId)) return undefined;
 	}
-	const tags = (input.tags ?? []).map(normalizeLabel).filter(Boolean);
+	const tags = compact((input.tags ?? []).map(normalizeLabel));
 	if (tags.length > 0 && !tags.every((tag) => packTags.includes(tag))) return undefined;
 	let score = item.score;
 	let tokenScore = 0;

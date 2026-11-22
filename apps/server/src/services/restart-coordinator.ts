@@ -6,6 +6,7 @@ import type { RestartMode, RestartStatus } from "@tsukaima/contracts";
 import type { ReloadContext, ReloadController, ReloadResult } from "@tsukaima/coding";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
+import { isRecord } from "../records.ts";
 import type { PromptHookService } from "./prompt-hooks.ts";
 
 const DEFAULT_DELAY_MS = 60_000;
@@ -51,9 +52,7 @@ export type RestartSettlementOutcome = "cancelled" | "completed" | "interrupted"
 function parseMetadata(value: string): Readonly<Record<string, unknown>> {
 	try {
 		const parsed: unknown = JSON.parse(value);
-		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-			? (parsed as Readonly<Record<string, unknown>>)
-			: {};
+		return isRecord(parsed) ? parsed : {};
 	} catch {
 		return {};
 	}

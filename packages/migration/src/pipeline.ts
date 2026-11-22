@@ -23,6 +23,7 @@ import {
 	userAliases,
 	users,
 } from "@tsukaima/db";
+import { mapValues, uniq } from "es-toolkit";
 import { DSH_SOURCE, type SnapshotSource } from "./dsh-inspect.ts";
 import { crossSessionPolicyPatchFromDsh } from "./config-map.ts";
 import { FakeCompressor, type Compressor, type CompressionResult } from "./compressor.ts";
@@ -323,19 +324,16 @@ async function compressionSummary(
 function databaseFingerprint(database: NormalizedDatabase): string {
 	return sha256String(
 		stableStringify(
-			Object.fromEntries(
-				Object.entries(database).map(([key, records]) => [
-					key,
-					records.map((record) => {
-						const value = record as unknown as {
-							sourceId?: string;
-							sourceHash?: string;
-							id?: string;
-							canonicalId?: string;
-						};
-						return [value.sourceId ?? value.id ?? value.canonicalId ?? "", value.sourceHash ?? ""];
-					}),
-				]),
+			mapValues(database, (records) =>
+				records.map((record) => {
+					const value = record as unknown as {
+						sourceId?: string;
+						sourceHash?: string;
+						id?: string;
+						canonicalId?: string;
+					};
+					return [value.sourceId ?? value.id ?? value.canonicalId ?? "", value.sourceHash ?? ""];
+				}),
 			),
 		),
 	);
@@ -476,7 +474,7 @@ async function collectSourceSecretValues(source: SnapshotSource): Promise<string
 			values.push(...collectSecretValues(parsed));
 		}
 	}
-	return [...new Set(values.filter((value) => value.trim() !== ""))];
+	return uniq(values.filter((value) => value.trim() !== ""));
 }
 
 function serializeDatabase(database: TsukaimaDatabase): string {

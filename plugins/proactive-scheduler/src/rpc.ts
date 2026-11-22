@@ -1,4 +1,5 @@
 import type { PluginContext, PluginLogger, PluginRpcHandler } from "@tsukaima/sdk";
+import { isPlainObject, omit } from "es-toolkit";
 import {
 	CONVERSATION_POLICY_SCOPE,
 	GLOBAL_POLICY_SCOPE,
@@ -12,9 +13,7 @@ import type { ProactiveSchedulerService } from "./service.ts";
 const ADMIN_ACTOR = "webui-admin";
 
 function record(input: unknown): Record<string, unknown> {
-	return typeof input === "object" && input !== null && !Array.isArray(input)
-		? (input as Record<string, unknown>)
-		: {};
+	return isPlainObject(input) ? input : {};
 }
 
 function stringValue(value: unknown): string | undefined {
@@ -93,13 +92,7 @@ export function registerProactiveSchedulerRpc(
 		if (scope !== GLOBAL_POLICY_SCOPE && scopeId.length === 0) {
 			throw new Error(`${scope} policy requires scopeId`);
 		}
-		const patchSource =
-			body.patch ??
-			Object.fromEntries(
-				Object.entries(body).filter(
-					([key]) => key !== "scope" && key !== "scopeId" && key !== "id" && key !== "confirm",
-				),
-			);
+		const patchSource = body.patch ?? omit(body, ["scope", "scopeId", "id", "confirm"]);
 		const patch = proactivePolicyPatchSchema.parse(patchSource);
 		return await service.savePolicy(scope, scopeId, patch, ADMIN_ACTOR);
 	});

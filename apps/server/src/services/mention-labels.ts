@@ -1,4 +1,5 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { uniq } from "es-toolkit";
 import { identities, messages, users, type TsukaimaDatabase } from "@tsukaima/db";
 
 /**
@@ -175,7 +176,7 @@ export async function loadMentionLabels(
 		accountByConversation.set(scope.conversationId, scope.platformAccountId);
 		accountIds.add(scope.platformAccountId);
 	}
-	const ids = [...new Set(externalIds)];
+	const ids = uniq([...externalIds]);
 	if (accountByConversation.size === 0 || ids.length === 0) return new Map();
 	const conversationIds = [...accountByConversation.keys()];
 

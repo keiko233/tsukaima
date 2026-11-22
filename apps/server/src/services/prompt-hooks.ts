@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { promptHooks, type TsukaimaDatabase } from "@tsukaima/db";
 import type { Logger } from "../logging.ts";
+import { isRecord } from "../records.ts";
 
 export type PromptHookKind = "context" | "resume" | "runtime";
 
@@ -56,9 +57,7 @@ type HookRow = typeof promptHooks.$inferSelect;
 function parseMetadata(value: string): Readonly<Record<string, unknown>> {
 	try {
 		const parsed: unknown = JSON.parse(value);
-		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-			? (parsed as Readonly<Record<string, unknown>>)
-			: {};
+		return isRecord(parsed) ? parsed : {};
 	} catch {
 		return {};
 	}

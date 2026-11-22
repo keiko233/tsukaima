@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { isPlainObject } from "es-toolkit";
 import type { PluginContext, TsukaimaPlugin } from "@tsukaima/sdk";
 import { SkillCatalog } from "./catalog.ts";
 import { parseSkillsConfig } from "./config.ts";
@@ -70,9 +71,7 @@ interface SkillsRuntime {
 const runtimes = new WeakMap<PluginContext, SkillsRuntime>();
 
 function recordValue(value: unknown): Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: {};
+	return isPlainObject(value) ? value : {};
 }
 
 function updateStatus(context: PluginContext, catalog: SkillCatalog): void {

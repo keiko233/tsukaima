@@ -6,6 +6,7 @@ import { listFiles, resolveSnapshotRoot } from "./fs.ts";
 import { sha256String, stableStringify } from "./fs.ts";
 import type { DecisionEntry } from "./decision.ts";
 import { isCredentialLikeKey, sanitizeMemorySpace } from "./dsh-baseline.ts";
+import { isRecord } from "./guards.ts";
 
 export interface ImportedMemoryRecord {
 	readonly sourceId: string;
@@ -90,10 +91,6 @@ interface SourceFile {
 function importSpace(raw: string): string {
 	const cleaned = raw.replace(/[^a-zA-Z0-9_-]/g, "_");
 	return cleaned === "" ? "custom" : cleaned;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function number(value: unknown): number | null {

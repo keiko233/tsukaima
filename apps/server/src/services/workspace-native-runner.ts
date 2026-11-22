@@ -30,6 +30,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateTextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { Type } from "typebox";
 import type { Logger } from "../logging.ts";
+import { record as recordOf } from "../records.ts";
 import type { WorkspaceReferenceService } from "./workspace-references.ts";
 import type { WorkspaceTodoService } from "./workspace-todos.ts";
 import type { GitIdentity } from "./git-identity.ts";
@@ -218,12 +219,6 @@ interface NativeSessionHandle {
 	readonly subscribe: (listener: (event: AgentSessionEvent) => void) => () => void;
 	isStreaming: () => boolean;
 	queue: (text: string, behavior: "followUp" | "steer") => Promise<void>;
-}
-
-function recordOf(value: unknown): Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: {};
 }
 
 function jsonText(value: unknown): string {

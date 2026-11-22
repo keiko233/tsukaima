@@ -14,6 +14,7 @@ import type {
 	SendOptions,
 } from "@tsukaima/sdk";
 import type { WebSocket as BunWebSocket, WebSocketOptions } from "bun";
+import { delay, isPlainObject } from "es-toolkit";
 import {
 	createSafeLogger,
 	safeEndpoint,
@@ -83,8 +84,6 @@ const actionTimeoutError = (action: string): Error => new Error(`OneBot action t
 
 const closeError = (): Error => new Error("OneBot connection closed");
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
 const DEFAULT_INBOUND_MEDIA_TIMEOUT_MS = 10_000;
 const DEFAULT_INBOUND_MEDIA_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -94,9 +93,7 @@ const mediaFile = (part: MessagePart): string | undefined => {
 };
 
 const recordOf = (value: unknown): Record<string, unknown> | undefined =>
-	typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: undefined;
+	isPlainObject(value) ? value : undefined;
 
 const stringOf = (value: unknown): string | undefined =>
 	typeof value === "string" && value.length > 0 ? value : undefined;
@@ -1262,7 +1259,7 @@ export class OneBotChannel {
 						delayMs: READ_RETRY_DELAY_MS,
 						error: message,
 					});
-					await sleep(READ_RETRY_DELAY_MS);
+					await delay(READ_RETRY_DELAY_MS);
 				}
 			}
 		}
