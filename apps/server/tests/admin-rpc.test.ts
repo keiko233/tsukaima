@@ -139,6 +139,7 @@ describe("admin RPC", () => {
 			plugins: [
 				{ config: {}, id: "openai-compatible", secretsSet: [] },
 				{ config: {}, id: "onebot-napcat", secretsSet: [] },
+				{ config: {}, id: "history", secretsSet: [] },
 				{ config: {}, id: "memory", secretsSet: [] },
 				{ config: {}, id: "proactive-scheduler", secretsSet: [] },
 				{ config: {}, id: "sticker-meme", secretsSet: [] },
@@ -152,6 +153,7 @@ describe("admin RPC", () => {
 			plugins: [
 				{ config: {}, id: "openai-compatible", secretsSet: [] },
 				{ config: {}, id: "onebot-napcat", secretsSet: [] },
+				{ config: {}, id: "history", secretsSet: [] },
 				{ config: {}, id: "memory", secretsSet: [] },
 				{ config: {}, id: "proactive-scheduler", secretsSet: [] },
 				{ config: {}, id: "sticker-meme", secretsSet: [] },

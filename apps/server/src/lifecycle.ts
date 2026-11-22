@@ -107,6 +107,10 @@ import {
 	MemoryService,
 	type MemoryEmbeddingOutput,
 } from "./services/memory-service.ts";
+import {
+	CHAT_HISTORY_SERVICE_BINDING,
+	ChatHistoryService,
+} from "./services/chat-history-service.ts";
 import { SocialProfileService } from "./services/social-profile.ts";
 import { InboundMediaResolver } from "./services/inbound-media.ts";
 import { resolveImCallerContext } from "./services/im-caller-context.ts";
@@ -251,6 +255,7 @@ export class TsukaimaLifecycle {
 	/** One lock shared by inbound turns, outbound pacing, tasks, and background turns. */
 	readonly executionLock: ConversationExecutionLock;
 	readonly memory: MemoryService;
+	readonly chatHistory: ChatHistoryService;
 	readonly socialProfiles: SocialProfileService;
 	/** Admin chat snapshot checkpoint/restore; created after the conversation host exists. */
 	private chatSnapshotService: ChatSnapshotService | undefined;
@@ -434,6 +439,11 @@ export class TsukaimaLifecycle {
 			onPolicySynced: async (durableConversationId, policy) => {
 				await this.applySessionToolPolicy(durableConversationId, policy);
 			},
+		});
+		this.chatHistory = new ChatHistoryService({
+			database: () => this.domainDatabase,
+			logger: this.runtimeLog,
+			policyService: this.conversationPolicy,
 		});
 		this.conversationRouter = new ConversationRouter({
 			applyModelToolPolicy: async (durableConversationId, policy) =>
@@ -932,6 +942,7 @@ export class TsukaimaLifecycle {
 		});
 		const pluginBindings = new Map(options?.pluginBindings ?? []);
 		pluginBindings.set(MEMORY_SERVICE_BINDING, this.memory);
+		pluginBindings.set(CHAT_HISTORY_SERVICE_BINDING, this.chatHistory);
 		pluginBindings.set(SOCIAL_PROFILE_BINDING, this.socialProfiles);
 		const proactiveGateBridge: ProactiveBubbleGateBridge = {
 			decideProactiveBubble: async (input) =>
