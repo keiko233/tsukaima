@@ -660,6 +660,7 @@ export async function completePluginModel(
 		toPortMessages(request.messages, port.providerId, targetModelId),
 		{
 			...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
+			...(request.reasoning === undefined ? {} : { reasoning: request.reasoning }),
 			...(request.signal === undefined ? {} : { signal: request.signal }),
 			...(request.temperature === undefined ? {} : { temperature: request.temperature }),
 		},

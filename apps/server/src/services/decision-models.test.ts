@@ -117,3 +117,60 @@ test("a malformed native result preserves the group gate fail-open behavior", as
 		source: "fallback",
 	});
 });
+
+test("chat-completion gate and sidechat request minimal reasoning and sufficient token budget", async () => {
+	const gateCalls: { maxTokens: number; reasoning?: string }[] = [];
+	const gate = new ConversationGateService({
+		defaultModelId: async () => "reasoning-model",
+		logger,
+		models: {
+			active: () => ({ modelId: "reasoning-model", providerId: "openai-compatible" }),
+			complete: async (_target, _prompt, options) => {
+				gateCalls.push({
+					maxTokens: options.maxTokens,
+					...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
+				});
+				return '{"decision":"REPLY","confidence":0.9,"reason":"direct question"}';
+			},
+			eligible: async () => [{ modelId: "reasoning-model", providerId: "openai-compatible" }],
+		},
+	});
+	expect(await gate.decideUndirectedGroupReply(gateInput)).toMatchObject({
+		decision: "REPLY",
+		modelId: "reasoning-model",
+		source: "gate",
+	});
+	expect(gateCalls).toEqual([{ maxTokens: 512, reasoning: "minimal" }]);
+
+	const sidechatCalls: { maxTokens: number; reasoning?: string }[] = [];
+	const sidechat = new SidechatService({
+		defaultModelId: async () => "reasoning-model",
+		logger,
+		models: {
+			active: () => ({ modelId: "reasoning-model", providerId: "openai-compatible" }),
+			complete: async (_target, _prompt, options) => {
+				sidechatCalls.push({
+					maxTokens: options.maxTokens,
+					...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
+				});
+				return '{"decision":"wait","confidence":0.9,"reason":"let current run finish"}';
+			},
+			eligible: async () => [{ modelId: "reasoning-model", providerId: "openai-compatible" }],
+		},
+	});
+	expect(
+		await sidechat.decide({
+			conversationId: "synthetic-group",
+			pendingText: "Follow up",
+			policy: {
+				...defaultConversationPolicy,
+				sidechat: { ...defaultConversationPolicy.sidechat, enabled: true },
+			},
+			runAgeMs: 2_000,
+			runningRequest: "Answer a synthetic question",
+			toolsActive: false,
+			turns: 0,
+		}),
+	).toMatchObject({ decision: "wait" });
+	expect(sidechatCalls).toEqual([{ maxTokens: 512, reasoning: "minimal" }]);
+});

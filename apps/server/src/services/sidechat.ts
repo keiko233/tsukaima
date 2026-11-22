@@ -1,4 +1,5 @@
 import type { BusyArbitrationInput, BusyArbitrationResult } from "@tsukaima/core";
+import type { PluginModelReasoningLevel } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import type { NativeDecisionModels } from "./decision-models.ts";
 import { DEFAULT_PROMPTS } from "./prompt-defaults.ts";
@@ -63,6 +64,7 @@ export interface SidechatModels {
 		prompt: string,
 		options: {
 			readonly maxTokens: number;
+			readonly reasoning?: PluginModelReasoningLevel;
 			readonly signal: AbortSignal;
 			readonly temperature: number;
 		},
@@ -173,7 +175,8 @@ export class SidechatService {
 				});
 			} else if (target !== undefined) {
 				const text = await this.#models.complete(target, buildSidechatPrompt(input, instructions), {
-					maxTokens: 160,
+					maxTokens: 512,
+					reasoning: "minimal",
 					signal: controller.signal,
 					temperature: 0,
 				});

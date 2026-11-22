@@ -46,6 +46,7 @@ import {
 	createPluginToolsExtension,
 	MODEL_CAPABILITIES,
 	type AuditEntry,
+	type PluginModelReasoningLevel,
 	type TsukaimaPlugin,
 } from "@tsukaima/sdk";
 import {
@@ -1177,6 +1178,7 @@ export class TsukaimaLifecycle {
 					],
 					modelId: target.modelId,
 					providerId: target.providerId,
+					reasoning: "minimal",
 					signal: controller.signal,
 				},
 				MODEL_CAPABILITIES.sidechat,
@@ -1745,6 +1747,7 @@ export class TsukaimaLifecycle {
 				prompt: string,
 				options: {
 					readonly maxTokens: number;
+					readonly reasoning?: PluginModelReasoningLevel;
 					readonly signal: AbortSignal;
 					readonly temperature: number;
 				},
@@ -1755,6 +1758,7 @@ export class TsukaimaLifecycle {
 						messages: [{ content: prompt, role: "user" }],
 						modelId: target.modelId,
 						providerId: target.providerId,
+						...(options.reasoning === undefined ? {} : { reasoning: options.reasoning }),
 						signal: options.signal,
 						temperature: options.temperature,
 					},
