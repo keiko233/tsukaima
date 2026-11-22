@@ -322,7 +322,7 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 						...result,
 						parentSessionId: sourceSessionId,
 						status: "spawned",
-						next: "Use workspace_status to poll and workspace_send to queue constraints or interrupt.",
+						next: "Workspace agent is now running this goal. Use workspace_status to check progress or read its reply, and workspace_send to queue constraints or interrupt. You will also be notified when it finishes.",
 					};
 				},
 				(result) => ({

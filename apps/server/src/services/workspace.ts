@@ -40,6 +40,7 @@ export interface WorkspaceServiceOptions {
 	}) => Promise<string>;
 	readonly database: () => TsukaimaDatabase | undefined;
 	readonly host: () => PiDurableConversationHost | undefined;
+	readonly isRunning?: (sessionId: string) => boolean;
 	readonly logger: Logger;
 	readonly messaging: SessionMessagingService;
 	readonly policy: ConversationPolicyService;
@@ -121,6 +122,7 @@ export class WorkspaceService {
 	readonly #createTask: WorkspaceServiceOptions["createTask"];
 	readonly #database: WorkspaceServiceOptions["database"];
 	readonly #host: WorkspaceServiceOptions["host"];
+	readonly #isRunning: WorkspaceServiceOptions["isRunning"];
 	readonly #logger: Logger;
 	readonly #messaging: SessionMessagingService;
 	readonly #policy: ConversationPolicyService;
@@ -135,6 +137,7 @@ export class WorkspaceService {
 		this.#createTask = options.createTask;
 		this.#database = options.database;
 		this.#host = options.host;
+		this.#isRunning = options.isRunning;
 		this.#logger = options.logger.child("tsukaima::server::workspace");
 		this.#messaging = options.messaging;
 		this.#policy = options.policy;
@@ -398,7 +401,7 @@ export class WorkspaceService {
 				throw new Error("Workspace delegation is not enabled for this conversation");
 			}
 		}
-		return this.create({
+		const created = await this.create({
 			...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
 			...(input.goal === undefined ? {} : { goal: input.goal }),
 			...(input.model === undefined ? {} : { model: input.model }),
@@ -407,6 +410,15 @@ export class WorkspaceService {
 			...(input.tags === undefined ? {} : { tags: input.tags }),
 			...(input.thinking === undefined ? {} : { thinking: input.thinking }),
 		});
+		const goal = input.goal?.trim();
+		if (goal !== undefined && goal.length > 0 && created.taskId !== null) {
+			await this.sendToWorkspace({
+				deliveryMode: "queue",
+				sessionId: created.sessionId,
+				text: goal,
+			});
+		}
+		return created;
 	}
 
 	async list(options: { readonly includeArchived?: boolean } = {}): Promise<WorkspaceSummary[]> {
@@ -563,17 +575,28 @@ export class WorkspaceService {
 			)[0];
 		if (resolvedWorkspace === undefined) {
 			return {
+				running: false,
 				status: resolvedTask.status,
 				taskId: resolvedTask.id,
 				timeline: JSON.parse(resolvedTask.timelineJson) as unknown,
 			};
 		}
+		const [latestReply] = await database
+			.select({ contentText: messages.contentText })
+			.from(messages)
+			.where(
+				and(eq(messages.conversationId, resolvedWorkspace.id), eq(messages.direction, "outbound")),
+			)
+			.orderBy(desc(messages.occurredAt), desc(messages.id))
+			.limit(1);
 		return {
 			baseRef: resolvedWorkspace.baseRef,
 			goal: resolvedWorkspace.goal,
+			latestReply: latestReply?.contentText ?? null,
 			parentSessionId: resolvedWorkspace.parentSessionId,
 			proposals: await this.#proposals(resolvedTaskId),
 			repositoryRoot: resolvedWorkspace.repositoryRoot,
+			running: this.#isRunning?.(resolvedWorkspace.id) ?? false,
 			sessionId: resolvedWorkspace.id,
 			status: resolvedTask.status,
 			tags: parseTags(resolvedWorkspace.tagsJson),

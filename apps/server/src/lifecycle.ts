@@ -166,6 +166,7 @@ import {
 	isWorkspaceWorktreeCheckout,
 	WORKSPACE_NATIVE_TASK_CONSTRAINTS,
 	WorkspaceNativeRunner,
+	type WorkspaceRunFinishedEvent,
 } from "./services/workspace-native-runner.ts";
 
 /**
@@ -699,6 +700,10 @@ export class TsukaimaLifecycle {
 					});
 				});
 			},
+			onRunFinished: async (event) => {
+				if (event.aborted || this.currentState !== "ready") return;
+				await this.notifyWorkspaceParent(event);
+			},
 			authorizeCoding: async (sessionId) =>
 				(await this.conversationPolicy.effectivePolicy(sessionId)).capabilities.includes("coding"),
 			references: workspaceReferences,
@@ -807,6 +812,7 @@ export class TsukaimaLifecycle {
 			createTask: async (input) => await this.createWorkspaceTask(input),
 			database: () => this.domainDatabase,
 			host: () => this.conversationHost,
+			isRunning: (sessionId) => this.workspaceNative.isRunning(sessionId),
 			logger: this.runtimeLog,
 			messaging: this.sessionMessaging,
 			policy: this.conversationPolicy,
@@ -1403,6 +1409,42 @@ export class TsukaimaLifecycle {
 	}
 
 	/** Workspace task creation owns its durable task row; no plugin RPC is on this path. */
+	private async notifyWorkspaceParent(event: WorkspaceRunFinishedEvent): Promise<void> {
+		const database = this.domainDatabase;
+		if (database === undefined) return;
+		const [workspace] = await database
+			.select({ parentSessionId: workspaceSessions.parentSessionId })
+			.from(workspaceSessions)
+			.where(eq(workspaceSessions.id, event.sessionId))
+			.limit(1);
+		const parentSessionId = workspace?.parentSessionId;
+		if (parentSessionId === null || parentSessionId === undefined) return;
+		const summary = event.assistantText.trim();
+		const lines = [
+			"[Workspace subagent finished]",
+			`workspaceSessionId: ${event.sessionId}`,
+			`taskId: ${event.taskId}`,
+			...(event.failure === undefined ? [] : [`error: ${event.failure}`]),
+			...(summary.length === 0 ? [] : [`summary:\n${summary}`]),
+			`Use workspace_status({ sessionId: "${event.sessionId}" }) for proposals/details, and report the outcome to the user.`,
+		];
+		try {
+			await this.sessionMessaging.sendAgentMessage({
+				deliveryMode: "follow-up",
+				direction: "system",
+				sessionId: parentSessionId,
+				source: "session-tool",
+				text: lines.join("\n"),
+			});
+		} catch (error) {
+			this.runtimeLog.warn("failed to notify parent session of workspace completion", {
+				error: error instanceof Error ? error.message : String(error),
+				parentSessionId,
+				workspaceSessionId: event.sessionId,
+			});
+		}
+	}
+
 	private async createWorkspaceTask(input: {
 		readonly baseRef: string;
 		readonly goal: string;
