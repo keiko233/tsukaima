@@ -13,6 +13,7 @@
 		"@tsukaima/ui": "workspace:*",
 		"canvas": "^3.2.3",
 		"emojilib": "^4.0.3",
+		"es-toolkit": "1.53.2",
 		"gifenc": "^1.0.3",
 		"grammy": "^1.46.0",
 		"jsdom": "^26.1.0",

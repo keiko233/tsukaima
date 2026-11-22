@@ -11,6 +11,7 @@
 		"@tsukaima/contracts": "workspace:*",
 		"@tsukaima/sdk": "workspace:*",
 		"@tsukaima/ui": "workspace:*",
+		"es-toolkit": "1.53.2",
 		"lucide-react": "^1.72.0",
 		"zod": "4.6.7"
 	},
