@@ -172,5 +172,10 @@
 	"qq_steal_stealing": "Stealing…",
 	"qq_steal_already": "In library",
 	"qq_steal_success": "Saved \"{name}\" to {pack}",
-	"qq_steal_failed": "Could not steal sticker"
+	"qq_steal_failed": "Could not steal sticker",
+	"uncategorized_section": "Uncategorized stickers",
+	"uncategorized_hint": "Stickers without a pack or without emotion/keyword tags. Click any sticker to assign a pack or tags.",
+	"uncategorized_empty": "All stickers are categorized.",
+	"uncategorized_pack_name": "Uncategorized (no pack)",
+	"item_pack": "Sticker pack"
 }

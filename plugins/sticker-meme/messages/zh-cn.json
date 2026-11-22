@@ -172,5 +172,10 @@
 	"qq_steal_stealing": "正在保存…",
 	"qq_steal_already": "已在库中",
 	"qq_steal_success": "已保存「{name}」到 {pack}",
-	"qq_steal_failed": "偷取表情包失败"
+	"qq_steal_failed": "偷取表情包失败",
+	"uncategorized_section": "无分类的表情包",
+	"uncategorized_hint": "尚未归属表情包或尚未设置情绪/关键词标签的表情包，点击即可编辑所属表情包与标签。",
+	"uncategorized_empty": "所有表情包均已分类。",
+	"uncategorized_pack_name": "未分类（无所属表情包）",
+	"item_pack": "所属表情包"
 }

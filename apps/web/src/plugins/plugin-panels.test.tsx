@@ -187,6 +187,9 @@ describe("built-in plugin panels", () => {
 		};
 		const html = renderPanel(stickerUi, stickerI18n.bind("en"), stickerPlugin);
 		expect(html).toContain("Sticker library");
+		expect(html).toContain("Add sticker from URL");
+		expect(html).toContain("Steal from QQ chat");
+		expect(html).toContain("Uncategorized stickers");
 		expect(html).toContain("No sticker packs yet");
 		expect(html).toContain("Telegram bot token");
 		expect(html).toContain("Bot token");
@@ -202,6 +205,9 @@ describe("built-in plugin panels", () => {
 		expect(html).not.toContain("No items in this view.");
 		const zh = renderPanel(stickerUi, stickerI18n.bind("zh-cn"), stickerPlugin);
 		expect(zh).toContain("表情包素材库");
+		expect(zh).toContain("从 URL 添加表情包");
+		expect(zh).toContain("从 QQ 聊天偷表情包");
+		expect(zh).toContain("无分类的表情包");
 		expect(zh).toContain("还没有表情包");
 		expect(zh).toContain("Telegram 机器人 Token");
 		expect(zh).toContain("动态表情格式");

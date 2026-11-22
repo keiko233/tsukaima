@@ -137,6 +137,10 @@ async function configuredClassifier(
 
 function asItemPatch(input: Record<string, unknown>) {
 	const reviewStatus = stickerReviewStatusSchema.safeParse(input.reviewStatus);
+	const packId =
+		typeof input.packId === "string" && input.packId.trim().length > 0
+			? input.packId.trim()
+			: undefined;
 	const description = typeof input.description === "string" ? input.description : undefined;
 	const enabled = asBoolean(input.enabled);
 	const emotions = asStringList(input.emotions);
@@ -154,6 +158,7 @@ function asItemPatch(input: Record<string, unknown>) {
 		...(emotions === undefined ? {} : { emotions }),
 		...(keywords === undefined ? {} : { keywords }),
 		...(name === undefined ? {} : { name }),
+		...(packId === undefined ? {} : { packId }),
 		...(reviewStatus.success ? { reviewStatus: reviewStatus.data } : {}),
 		...(revokedAt === undefined ? {} : { revokedAt }),
 		...(score === undefined ? {} : { score }),
@@ -676,7 +681,11 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		const record = recordValue(input);
 		const id = normalizeText(record.id ?? record.itemId);
 		if (id.length === 0) throw new Error("id is required");
-		const item = await repository.updateItem(id, asItemPatch(record));
+		const patch = asItemPatch(record);
+		if (patch.packId !== undefined && (await repository.getPack(patch.packId)) === undefined) {
+			throw new Error("Pack not found");
+		}
+		const item = await repository.updateItem(id, patch);
 		if (item === undefined) throw new Error("Item not found");
 		await context.audit?.record({
 			action: "sticker.item.updated",
