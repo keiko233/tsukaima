@@ -97,6 +97,20 @@ const NARRATION_IGNORABLE = /[\s\p{P}\p{S}]/gu;
  * so strip the longest matching already-shown prefix and send only the remainder. When nothing
  * substantive remains, the whole answer was already shown and must be suppressed.
  */
+function stripOneNarratedCandidate(trimmed: string, candidate: string): string | undefined {
+	if (trimmed === candidate) return "";
+	if (!trimmed.startsWith(candidate)) return undefined;
+	const next = trimmed.charAt(candidate.length);
+	const boundary = next === "" || /\s/u.test(next);
+	const terminal = /[.!?。！？…~～\n]$/u.test(candidate);
+	if (!boundary) return undefined;
+	if (!terminal && next !== "\n") return undefined;
+	return trimmed
+		.slice(candidate.length)
+		.replace(/^[ \t]*\n?[ \t]*/u, "")
+		.trim();
+}
+
 export function stripNarratedPrefix(
 	shown: readonly string[] | undefined,
 	text: string,
@@ -104,29 +118,45 @@ export function stripNarratedPrefix(
 	const trimmed = text.trim();
 	if (shown === undefined || shown.length === 0) return { duplicate: false, text: trimmed };
 	const candidates = shown.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+	if (candidates.length === 0) return { duplicate: false, text: trimmed };
+
+	// First try longest single/joined match (preserves exact existing behavior).
+	const withJoined = [...candidates];
 	const joined = candidates.join("\n");
-	if (joined.length > 0) candidates.push(joined);
-	let matched: string | undefined;
-	for (const candidate of candidates) {
-		if (trimmed === candidate) {
-			if (matched === undefined || candidate.length > matched.length) matched = candidate;
-			continue;
+	if (joined.length > 0) withJoined.push(joined);
+	let bestSingleRemainder: string | undefined;
+	for (const candidate of withJoined) {
+		const remainder = stripOneNarratedCandidate(trimmed, candidate);
+		if (remainder === undefined) continue;
+		if (bestSingleRemainder === undefined || remainder.length < bestSingleRemainder.length) {
+			bestSingleRemainder = remainder;
 		}
-		if (!trimmed.startsWith(candidate)) continue;
-		const next = trimmed.charAt(candidate.length);
-		const boundary = next === "" || /\s/u.test(next);
-		const terminal = /[.!?。！？…~～\n]$/u.test(candidate);
-		if (!boundary) continue;
-		if (!terminal && next !== "\n") continue;
-		if (matched === undefined || candidate.length > matched.length) matched = candidate;
 	}
-	if (matched === undefined) return { duplicate: false, text: trimmed };
-	const remainder = trimmed
-		.slice(matched.length)
-		.replace(/^[ \t]*\n?[ \t]*/u, "")
-		.trim();
-	const substantive = remainder.replace(NARRATION_IGNORABLE, "").length;
-	return { duplicate: substantive === 0, text: substantive === 0 ? "" : remainder };
+
+	// Also strip ordered narrated/streamed chunks one by one across blank-line gaps (`\n\n`).
+	let sequential = trimmed;
+	let matchedSequential = false;
+	for (const candidate of candidates) {
+		const remainder = stripOneNarratedCandidate(sequential, candidate);
+		if (remainder === undefined) continue;
+		sequential = remainder;
+		matchedSequential = true;
+		if (sequential.length === 0) break;
+	}
+
+	let finalRemainder: string | undefined;
+	if (bestSingleRemainder !== undefined && matchedSequential) {
+		finalRemainder =
+			sequential.length <= bestSingleRemainder.length ? sequential : bestSingleRemainder;
+	} else if (matchedSequential) {
+		finalRemainder = sequential;
+	} else {
+		finalRemainder = bestSingleRemainder;
+	}
+
+	if (finalRemainder === undefined) return { duplicate: false, text: trimmed };
+	const substantive = finalRemainder.replace(NARRATION_IGNORABLE, "").length;
+	return { duplicate: substantive === 0, text: substantive === 0 ? "" : finalRemainder };
 }
 
 const DEDUP_PUNCTUATION = /[。.!！?？…~～,，;；:：]/u;

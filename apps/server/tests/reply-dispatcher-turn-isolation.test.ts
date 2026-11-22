@@ -283,4 +283,58 @@ describe("reply dispatcher turn isolation", () => {
 			await lifecycle.stop();
 		}
 	});
+
+	test("streamed lines separated by blank lines are stripped cleanly from the final answer", async () => {
+		const { lifecycle } = await createHarness();
+		try {
+			const dispatcher = lifecycle.replyDispatcher;
+			dispatcher.beginTurn("durable-1");
+			await dispatcher.handleNarration({
+				conversationId: "durable-1",
+				kind: "stream-line",
+				narrationId: "stream:run-2:g0:0",
+				text: "First paragraph.",
+				toolNames: [],
+			});
+			await dispatcher.handleNarration({
+				conversationId: "durable-1",
+				kind: "stream-line",
+				narrationId: "stream:run-2:g0:2",
+				text: "Second paragraph.",
+				toolNames: [],
+			});
+			const final = await dispatcher.handleAnswer(
+				answer({
+					entryId: "answer-blank-lines",
+					text: "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.",
+				}),
+			);
+			expect(final).toMatchObject({ deliveryStatus: "sent", text: "Third paragraph." });
+
+			dispatcher.beginTurn("durable-1");
+			await dispatcher.handleNarration({
+				conversationId: "durable-1",
+				kind: "stream-line",
+				narrationId: "stream:run-3:g0:0",
+				text: "Only line.",
+				toolNames: [],
+			});
+			await dispatcher.handleNarration({
+				conversationId: "durable-1",
+				kind: "stream-line",
+				narrationId: "stream:run-3:g0:2",
+				text: "Closing line.",
+				toolNames: [],
+			});
+			const suppressed = await dispatcher.handleAnswer(
+				answer({
+					entryId: "answer-all-blank-lines",
+					text: "Only line.\n\nClosing line.",
+				}),
+			);
+			expect(suppressed).toMatchObject({ deliveryStatus: "suppressed", reason: "already_shown" });
+		} finally {
+			await lifecycle.stop();
+		}
+	});
 });

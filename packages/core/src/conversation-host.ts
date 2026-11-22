@@ -962,7 +962,12 @@ export class PiDurableConversationHost {
 	/** Live-run pollers by conversation, so a settle or a close can stop them. */
 	private readonly liveRuns = new Map<
 		string,
-		{ startedAtMs: number; timer: ReturnType<typeof setInterval> }
+		{
+			currentPoll?: Promise<void> | undefined;
+			startedAtMs: number;
+			stopped: boolean;
+			timer: ReturnType<typeof setInterval>;
+		}
 	>();
 	/** Reads already dispatched by a poller, so `close()` waits instead of closing storage under them. */
 	private readonly pendingPolls = new Set<Promise<void>>();
@@ -1360,6 +1365,7 @@ export class PiDurableConversationHost {
 			};
 			try {
 				const settled = await submission.wait(BACKGROUND_CONTEXT);
+				await this.stopAndDrainLiveRun(conversationId);
 				if (onAnswer === undefined || settled.type !== "input" || settled.status !== "done") {
 					notifySettled();
 					return;
@@ -1481,24 +1487,44 @@ export class PiDurableConversationHost {
 		// "settled" once a run was actually observed, or after this grace period, otherwise the
 		// poller would stop before the first token and report nothing.
 		let sawRun = false;
-		let stopped = false;
-		// Streaming line flush state is per run. A replaced watcher (steer/follow-up) resets it and
-		// the line index makes narration ids stable across the replacement.
-		const streamState: { afterLine: number; runId: string | undefined } = {
+		// Streaming line flush state is per run and per generation round. A replaced watcher
+		// (steer/follow-up) resets it, and the generation index keeps narration ids distinct
+		// across tool rounds within the same run.
+		const streamState: {
+			afterLine: number;
+			generationIndex: number;
+			generationStartedAtMs: number | undefined;
+			runId: string | undefined;
+		} = {
 			afterLine: 0,
+			generationIndex: 0,
+			generationStartedAtMs: undefined,
 			runId: undefined,
 		};
+		const pollEntry: {
+			currentPoll?: Promise<void> | undefined;
+			startedAtMs: number;
+			stopped: boolean;
+			timer: ReturnType<typeof setInterval>;
+		} = {
+			startedAtMs,
+			stopped: false,
+			timer: undefined as unknown as ReturnType<typeof setInterval>,
+		};
+		const isWatcherStale = () =>
+			this.closed || pollEntry.stopped || this.liveRuns.get(conversationId) !== pollEntry;
 		const timer = setInterval(() => {
-			if (this.closed || stopped || this.liveRuns.get(conversationId)?.timer !== timer) {
+			if (isWatcherStale()) {
 				this.stopLiveRun(conversationId, timer);
 				return;
 			}
+			// Never overlap two polls for the same conversation: concurrent ticks would race on
+			// `streamState.afterLine` and emit duplicate `stream-line` bubbles.
+			if (pollEntry.currentPoll !== undefined) return;
 			const polling = (async () => {
 				try {
 					const live = await harness.snapshot(LiveDoc, numericId, BACKGROUND_CONTEXT);
-					if (this.closed || stopped || this.liveRuns.get(conversationId)?.timer !== timer) {
-						return;
-					}
+					if (isWatcherStale()) return;
 					const running = live?.run !== undefined;
 					if (!running && !sawRun && Date.now() - startedAtMs < LIVE_RUN_START_GRACE_MS) {
 						return;
@@ -1511,7 +1537,7 @@ export class PiDurableConversationHost {
 					}
 					if (!running) {
 						// The run settled. Report a failure first so a client can show it, then clear.
-						stopped = true;
+						pollEntry.stopped = true;
 						if (live?.runFailure !== undefined) {
 							onLiveRun?.({
 								...emptyLiveRun(conversationId, startedAtMs),
@@ -1533,24 +1559,44 @@ export class PiDurableConversationHost {
 					}
 					if (snapshot.runId !== undefined && snapshot.runId !== streamState.runId) {
 						streamState.runId = snapshot.runId;
+						streamState.generationStartedAtMs = snapshot.generationStartedAtMs;
+						streamState.generationIndex = 0;
 						streamState.afterLine = 0;
+					} else if (
+						snapshot.generationStartedAtMs !== undefined &&
+						streamState.generationStartedAtMs !== undefined &&
+						snapshot.generationStartedAtMs !== streamState.generationStartedAtMs
+					) {
+						streamState.generationStartedAtMs = snapshot.generationStartedAtMs;
+						streamState.generationIndex += 1;
+						streamState.afterLine = 0;
+					} else if (
+						streamState.generationStartedAtMs === undefined &&
+						snapshot.generationStartedAtMs !== undefined
+					) {
+						streamState.generationStartedAtMs = snapshot.generationStartedAtMs;
 					}
 					onLiveRun?.(snapshot);
 					if (onNarration !== undefined) {
-						await this.flushStreamedLines(conversationId, snapshot, streamState);
+						await this.flushStreamedLines(conversationId, snapshot, streamState, isWatcherStale);
 					}
 				} catch (error) {
 					// Live presentation is optional; ingestion and answers must not depend on it.
 					this.logger.trace("Live run poll failed", { conversationId, error });
-					stopped = true;
+					pollEntry.stopped = true;
 					this.stopLiveRun(conversationId, timer);
 				}
 			})();
+			pollEntry.currentPoll = polling;
 			this.pendingPolls.add(polling);
-			void polling.finally(() => this.pendingPolls.delete(polling));
+			void polling.finally(() => {
+				if (pollEntry.currentPoll === polling) pollEntry.currentPoll = undefined;
+				this.pendingPolls.delete(polling);
+			});
 		}, LIVE_RUN_POLL_MS);
 		timer.unref?.();
-		this.liveRuns.set(conversationId, { startedAtMs, timer });
+		pollEntry.timer = timer;
+		this.liveRuns.set(conversationId, pollEntry);
 	}
 
 	/**
@@ -1560,24 +1606,31 @@ export class PiDurableConversationHost {
 	private async flushStreamedLines(
 		conversationId: string,
 		snapshot: LiveRunSnapshot,
-		state: { afterLine: number; runId: string | undefined },
+		state: {
+			afterLine: number;
+			generationIndex: number;
+			generationStartedAtMs: number | undefined;
+			runId: string | undefined;
+		},
+		isWatcherStale: () => boolean,
 	): Promise<void> {
 		const partialText = snapshot.partialText;
 		const onNarration = this.options.onNarration;
-		if (partialText === undefined || onNarration === undefined) return;
+		if (partialText === undefined || onNarration === undefined || isWatcherStale()) return;
 		let policy: ConversationPolicy;
 		try {
 			policy = await this.readPolicy(Number(conversationId) as ConversationId);
 		} catch {
 			return;
 		}
-		if (!policy.pacing.streamingLineFlushEnabled) return;
+		if (isWatcherStale() || !policy.pacing.streamingLineFlushEnabled) return;
 		try {
 			const kind = await this.options.readConversationKind?.(conversationId);
 			if (kind === "workspace" || kind === "task" || kind === "plugin") return;
 		} catch {
 			return;
 		}
+		if (isWatcherStale()) return;
 		const flushed = flushStreamLines({
 			afterLine: state.afterLine,
 			enabled: true,
@@ -1588,14 +1641,28 @@ export class PiDurableConversationHost {
 		if (flushed.lines.length === 0) return;
 		const runKey = snapshot.runId ?? `t${snapshot.startedAtMs}`;
 		for (const line of flushed.lines) {
+			if (isWatcherStale()) return;
 			await onNarration({
 				conversationId,
 				kind: "stream-line",
-				narrationId: `stream:${runKey}:${line.index}`,
+				narrationId: `stream:${runKey}:g${state.generationIndex}:${line.index}`,
 				text: line.text,
 				toolNames: [],
 			});
 		}
+	}
+
+	/** Stop polling one conversation's live run and wait for any in-flight poll before answer delivery. */
+	private async stopAndDrainLiveRun(conversationId: string): Promise<void> {
+		const poll = this.liveRuns.get(conversationId);
+		if (poll === undefined) return;
+		poll.stopped = true;
+		clearInterval(poll.timer);
+		this.liveRuns.delete(conversationId);
+		if (poll.currentPoll !== undefined) {
+			await poll.currentPoll.catch(() => undefined);
+		}
+		this.options.onLiveRun?.(emptyLiveRun(conversationId, poll.startedAtMs));
 	}
 
 	/** Stop polling one conversation's live run. Safe to call when nothing is polling. */
@@ -1610,6 +1677,7 @@ export class PiDurableConversationHost {
 			clearInterval(timer);
 			return;
 		}
+		poll.stopped = true;
 		this.liveRuns.delete(conversationId);
 		clearInterval(poll.timer);
 	}
