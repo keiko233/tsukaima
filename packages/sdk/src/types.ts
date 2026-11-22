@@ -200,6 +200,7 @@ export interface PluginModelCompleteRequest {
 	readonly capability?: string;
 	readonly input?: PluginModelInputModality;
 	readonly maxTokens?: number;
+	readonly reasoning?: PluginModelReasoningLevel;
 	readonly temperature?: number;
 	readonly signal?: AbortSignal;
 }

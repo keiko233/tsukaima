@@ -6,6 +6,7 @@ import {
 	type Context,
 	type FetchFunction,
 	type Model,
+	type SimpleStreamOptions,
 	type Tool,
 } from "@earendil-works/pi-ai";
 import {
@@ -408,6 +409,16 @@ describe("OpenAI-compatible provider", () => {
 				usage: { cacheRead: 12, input: 7, output: 14, reasoning: 4, totalTokens: 33 },
 			},
 		});
+
+		for await (const event of streams.stream(
+			reasoningModel,
+			normalizeContext({ messages: [{ content: "quick", role: "user", timestamp: 2 }] }),
+			{ reasoning: "minimal" } as SimpleStreamOptions,
+		)) {
+			void event;
+		}
+		const clampedRequest = (fetch.mock.calls[1] as [string, RequestInit])[1];
+		expect(JSON.parse(clampedRequest.body as string).reasoning_effort).toBe("low");
 	});
 
 	test("preserves reasoning_content on current-turn tool-call rounds and omits it on earlier turns", async () => {

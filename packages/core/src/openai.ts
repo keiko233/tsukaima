@@ -1132,9 +1132,17 @@ export function createOpenAICompatibleStreams(
 					throw error;
 				}
 				const apiKeyFromOptions = requestOptions?.apiKey ?? apiKey;
+				const requestedReasoning = requestOptions?.reasoning;
+				const clampedReasoning =
+					requestedReasoning !== undefined &&
+					modelConfig?.reasoningLevels !== undefined &&
+					modelConfig.reasoningLevels.length > 0 &&
+					!modelConfig.reasoningLevels.includes(requestedReasoning)
+						? modelConfig.reasoningLevels[0]
+						: requestedReasoning;
 				const reasoningEffort =
 					requestModel.reasoning === true
-						? (requestOptions?.reasoning ?? modelConfig?.defaultReasoningLevel)
+						? (clampedReasoning ?? modelConfig?.defaultReasoningLevel)
 						: undefined;
 				const sampling = requestSampling(modelConfig, requestOptions);
 				const baseRequest: OpenAIRequest = {

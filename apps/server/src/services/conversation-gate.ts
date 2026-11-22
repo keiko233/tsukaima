@@ -20,6 +20,8 @@ import {
 } from "./sidechat.ts";
 
 const MAX_PROMPT_ITEM_CHARS = 240;
+// Allow enough budget for reasoning/thinking tokens before the short JSON decision.
+const GATE_MAX_TOKENS = 512;
 
 const clip = (value: string, max = MAX_PROMPT_ITEM_CHARS): string => {
 	const single = value.replace(/\s+/gu, " ").trim();
@@ -307,11 +309,21 @@ export class ConversationGateService implements ConversationGatePort {
 		const target = await this.#resolveTarget(requested);
 		if (target === undefined) return undefined;
 		const text = await models.complete(target, prompt(false), {
-			maxTokens: 96,
+			maxTokens: GATE_MAX_TOKENS,
+			reasoning: "minimal",
 			signal,
 			temperature: 0,
 		});
 		const result = parseBinaryDecision(text, first, second);
-		return result === undefined ? undefined : { ...result, modelId: target.modelId };
+		if (result === undefined) {
+			this.#logger.debug("conversation gate returned unparseable response", {
+				modelId: target.modelId,
+				providerId: target.providerId,
+				textLength: text.length,
+				textPreview: text.length === 0 ? undefined : clip(text, 120),
+			});
+			return undefined;
+		}
+		return { ...result, modelId: target.modelId };
 	}
 }
