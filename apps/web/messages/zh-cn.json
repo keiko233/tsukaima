@@ -308,6 +308,7 @@
 	"message_image": "图片",
 	"message_image_unavailable": "图片不可用",
 	"message_media_unavailable_hint": "媒体下载失败,稍后可能会重试。",
+	"message_reply_unavailable": "引用了早前的消息",
 	"message_sender_tsukaima": "Tsukaima",
 	"message_sender_unknown": "未知发送者",
 	"message_sender_webui": "WebUI",

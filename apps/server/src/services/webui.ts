@@ -3,9 +3,11 @@ import { and, asc, desc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
 import {
 	inboundReplyDecisionSchema,
 	messagePartSchema,
+	messageQuoteSchema,
 	type MessageDeliveryMode,
 	type MessagePage,
 	type MessagePart,
+	type MessageReplyPreview,
 	type MessageSummary as ContractMessageSummary,
 	type RunStep,
 	type SessionContextStats,
@@ -155,9 +157,109 @@ function readReplyDecision(raw: string | null) {
 	}
 }
 
+function readReplyQuote(raw: string | null) {
+	if (raw === null) return undefined;
+	try {
+		return messageQuoteSchema.safeParse(JSON.parse(raw)?.target?.quote).data;
+	} catch {
+		return undefined;
+	}
+}
+
+function replyTargetKey(conversationId: string, messageId: string): string {
+	return `${conversationId}\0${messageId}`;
+}
+
+async function loadReplyTargets(
+	database: TsukaimaDatabase,
+	rows: readonly MessageRow[],
+): Promise<Map<string, MessageRow>> {
+	const conversationIds = new Set<string>();
+	const replyIds = new Set<string>();
+	for (const row of rows) {
+		if (row.replyToMessageId === null || row.replyToMessageId.length === 0) continue;
+		conversationIds.add(row.conversationId);
+		replyIds.add(row.replyToMessageId);
+	}
+	const targets = new Map<string, MessageRow>();
+	if (conversationIds.size === 0 || replyIds.size === 0) return targets;
+	const idList = [...replyIds];
+	const targetRows = await database
+		.select()
+		.from(messages)
+		.where(
+			and(
+				inArray(messages.conversationId, [...conversationIds]),
+				or(inArray(messages.platformMessageId, idList), inArray(messages.id, idList)),
+			),
+		);
+	for (const target of targetRows) {
+		targets.set(replyTargetKey(target.conversationId, target.id), target);
+		if (target.platformMessageId !== null) {
+			targets.set(replyTargetKey(target.conversationId, target.platformMessageId), target);
+		}
+	}
+	return targets;
+}
+
+function buildReplyPreview(
+	row: MessageRow,
+	replyTarget: MessageRow | undefined,
+	displayText: (text: string) => string,
+): MessageReplyPreview | undefined {
+	if (row.replyToMessageId === null) return undefined;
+	const rawQuote = readReplyQuote(row.rawRefJson);
+	if (replyTarget !== undefined) {
+		const fromSelf =
+			replyTarget.direction === "outbound" || replyTarget.senderExternalId === "tsukaima";
+		const targetParts = parseParts(replyTarget.partsJson).map((part) =>
+			part.type === "text" ? { ...part, text: displayText(part.text) } : part,
+		);
+		const rawText = replyTarget.contentText ?? "";
+		const contentText =
+			rawText.trim().length > 0
+				? displayText(rawText)
+				: rawQuote?.excerpt !== undefined
+					? displayText(rawQuote.excerpt)
+					: "";
+		const senderDisplayName =
+			replyTarget.senderDisplayName ?? (fromSelf ? "Tsukaima" : rawQuote?.senderDisplayName);
+		return {
+			contentText,
+			...(fromSelf ? { fromSelf: true } : {}),
+			messageId: replyTarget.id,
+			parts: targetParts,
+			...(senderDisplayName !== undefined && senderDisplayName.trim().length > 0
+				? { senderDisplayName }
+				: {}),
+			...(replyTarget.senderExternalId !== null
+				? { senderExternalId: replyTarget.senderExternalId }
+				: {}),
+		};
+	}
+	if (rawQuote !== undefined) {
+		const senderDisplayName =
+			rawQuote.fromSelf === true
+				? "Tsukaima"
+				: (rawQuote.senderDisplayName ?? rawQuote.senderPlatformId);
+		return {
+			contentText: displayText(rawQuote.excerpt ?? ""),
+			...(rawQuote.fromSelf === true ? { fromSelf: true } : {}),
+			...(senderDisplayName !== undefined && senderDisplayName.trim().length > 0
+				? { senderDisplayName }
+				: {}),
+			...(rawQuote.senderPlatformId !== undefined
+				? { senderExternalId: rawQuote.senderPlatformId }
+				: {}),
+		};
+	}
+	return undefined;
+}
+
 function toMessageSummary(
 	row: MessageRow,
 	labels: ReadonlyMap<string, string> = new Map(),
+	replyTarget?: MessageRow,
 ): MessageSummary {
 	// Rows are stored with the platform id in mention text (`@<qq>`); the transcript shows the
 	// display name instead. Nothing here is persisted, so a renamed contact shows up on the next
@@ -171,6 +273,7 @@ function toMessageSummary(
 			row.direction === "outbound" ? sanitizeOutboundMetaLeaks(text).text : text,
 			labels,
 		);
+	const replyTo = buildReplyPreview(row, replyTarget, displayText);
 	return {
 		contentText: displayText(row.contentText ?? ""),
 		direction: row.direction,
@@ -183,6 +286,7 @@ function toMessageSummary(
 			part.type === "text" ? { ...part, text: displayText(part.text) } : part,
 		),
 		platformMessageId: row.platformMessageId,
+		...(replyTo === undefined ? {} : { replyTo }),
 		replyToMessageId: row.replyToMessageId,
 		replyDecision,
 		senderDisplayName: row.senderDisplayName ?? (isWebui ? "WebUI" : "Unknown"),
@@ -198,6 +302,25 @@ function toMessageSummary(
 					: "human",
 		triggerClassification: row.triggerClassification,
 	};
+}
+
+async function toMessageSummaries(
+	database: TsukaimaDatabase,
+	rows: readonly MessageRow[],
+	sessions: readonly { channelId?: string | null | undefined; id: string }[],
+): Promise<MessageSummary[]> {
+	if (rows.length === 0) return [];
+	const replyTargets = await loadReplyTargets(database, rows);
+	const labels = await mentionLabelsFor(database, [...rows, ...replyTargets.values()], sessions);
+	return rows.map((row) =>
+		toMessageSummary(
+			row,
+			mentionLabelsForConversation(labels, row.conversationId),
+			row.replyToMessageId === null
+				? undefined
+				: replyTargets.get(replyTargetKey(row.conversationId, row.replyToMessageId)),
+		),
+	);
 }
 
 function requireDatabase(lifecycle: TsukaimaLifecycle) {
@@ -304,12 +427,10 @@ export async function listChats(
 					latestIds.map((row) => row.id),
 				),
 			);
-		const labels = await mentionLabelsFor(database, messageRows, sessionRows);
-		for (const row of messageRows) {
-			latestBySession.set(
-				row.conversationId,
-				toMessageSummary(row, mentionLabelsForConversation(labels, row.conversationId)),
-			);
+		const summaries = await toMessageSummaries(database, messageRows, sessionRows);
+		for (const summary of summaries) {
+			const row = messageRows.find((item) => item.id === summary.id);
+			if (row !== undefined) latestBySession.set(row.conversationId, summary);
 		}
 	}
 	return objectRows.map((object) => ({
@@ -739,10 +860,7 @@ export async function listMessages(
 		.from(messages)
 		.where(eq(messages.conversationId, sessionId))
 		.orderBy(asc(messages.occurredAt), asc(messages.id));
-	const labels = await mentionLabelsFor(database, rows, [session]);
-	return rows.map((row) =>
-		toMessageSummary(row, mentionLabelsForConversation(labels, row.conversationId)),
-	);
+	return toMessageSummaries(database, rows, [session]);
 }
 
 /**
@@ -790,13 +908,9 @@ export async function listMessagePage(
 		.limit(limit + 1);
 	const pageRows = rows.slice(0, limit);
 	const oldest = pageRows.at(-1);
-	const labels = await mentionLabelsFor(database, pageRows, [session]);
+	const orderedRows = pageRows.toReversed();
 	return {
-		messages: pageRows
-			.toReversed()
-			.map((row) =>
-				toMessageSummary(row, mentionLabelsForConversation(labels, row.conversationId)),
-			),
+		messages: await toMessageSummaries(database, orderedRows, [session]),
 		nextCursor:
 			rows.length > limit && oldest !== undefined
 				? encodeMessageCursor({ id: oldest.id, occurredAt: oldest.occurredAt })
@@ -831,12 +945,12 @@ export async function getSessionMessage(
 		.from(conversations)
 		.where(eq(conversations.id, input.sessionId))
 		.limit(1);
-	const labels = await mentionLabelsFor(
+	const [summary] = await toMessageSummaries(
 		database,
 		[row],
 		[{ channelId: session?.channelId ?? null, id: input.sessionId }],
 	);
-	return toMessageSummary(row, mentionLabelsForConversation(labels, row.conversationId));
+	return summary ?? null;
 }
 
 /**

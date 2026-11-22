@@ -591,4 +591,68 @@ describe("WebUI chat and session service", () => {
 			await lifecycle.stop();
 		}
 	});
+
+	test("resolves replyTo previews from stored messages and hydrated channel quotes", async () => {
+		const lifecycle = await createLifecycle();
+		try {
+			await lifecycle.processEnvelope({
+				...envelope("sticker-msg", ""),
+				parts: [{ channelRef: "sticker-1", previewText: "greeting sticker", type: "sticker" }],
+				sender: { displayName: "StickerSender", id: "user-1", platformId: "user-1" },
+			});
+			await lifecycle.processEnvelope({
+				...envelope("reply-stored", "not that one"),
+				sender: { displayName: "Replier", id: "user-2", platformId: "user-2" },
+				target: { replyToEnvelopeId: "sticker-msg" },
+			});
+			await lifecycle.processEnvelope({
+				...envelope("reply-hydrated", "remember this"),
+				sender: { displayName: "Replier", id: "user-2", platformId: "user-2" },
+				target: {
+					quote: {
+						excerpt: "earlier note",
+						senderDisplayName: "EarlierSender",
+						senderPlatformId: "user-3",
+					},
+					replyToEnvelopeId: "missing-msg",
+				},
+			});
+
+			const chats = await listChats(lifecycle);
+			const sessionId = chats[0]?.sessions[0]?.id;
+			if (sessionId === undefined) throw new Error("Session was not created");
+
+			const page = await listMessagePage(lifecycle, { sessionId });
+			const storedMsg = page.messages.find((item) => item.platformMessageId === "sticker-msg");
+			const replyStored = page.messages.find((item) => item.platformMessageId === "reply-stored");
+			const replyHydrated = page.messages.find(
+				(item) => item.platformMessageId === "reply-hydrated",
+			);
+
+			expect(replyStored?.replyToMessageId).toBe("sticker-msg");
+			expect(replyStored?.replyTo).toEqual({
+				contentText: "[sticker: greeting sticker]",
+				messageId: storedMsg?.id,
+				parts: [
+					{
+						channelRef: "sticker-1",
+						mediaUnavailableReason: "channel_unavailable",
+						previewText: "greeting sticker",
+						type: "sticker",
+					},
+				],
+				senderDisplayName: "StickerSender",
+				senderExternalId: "user-1",
+			});
+
+			expect(replyHydrated?.replyToMessageId).toBe("missing-msg");
+			expect(replyHydrated?.replyTo).toEqual({
+				contentText: "earlier note",
+				senderDisplayName: "EarlierSender",
+				senderExternalId: "user-3",
+			});
+		} finally {
+			await lifecycle.stop();
+		}
+	});
 });

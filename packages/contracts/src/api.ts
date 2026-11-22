@@ -68,6 +68,16 @@ export const inboundReplyDecisionSchema = z.object({
 });
 export type InboundReplyDecision = z.infer<typeof inboundReplyDecisionSchema>;
 
+export const messageReplyPreviewSchema = z.object({
+	contentText: z.string(),
+	fromSelf: z.boolean().optional(),
+	messageId: z.string().optional(),
+	parts: z.array(messagePartSchema).optional(),
+	senderDisplayName: z.string().optional(),
+	senderExternalId: z.string().nullable().optional(),
+});
+export type MessageReplyPreview = z.infer<typeof messageReplyPreviewSchema>;
+
 export const messageSummarySchema = z.object({
 	contentText: z.string(),
 	deliveryStatus: deliveryStatusSchema,
@@ -83,6 +93,7 @@ export const messageSummarySchema = z.object({
 	occurredAt: z.string(),
 	parts: z.array(messagePartSchema),
 	platformMessageId: z.string().nullable(),
+	replyTo: messageReplyPreviewSchema.optional(),
 	replyToMessageId: z.string().nullable(),
 	replyDecision: inboundReplyDecisionSchema.optional(),
 	senderDisplayName: z.string(),

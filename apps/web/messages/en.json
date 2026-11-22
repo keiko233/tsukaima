@@ -308,6 +308,7 @@
 	"message_image": "Image",
 	"message_image_unavailable": "Image unavailable",
 	"message_media_unavailable_hint": "The media could not be downloaded. It may be retried later.",
+	"message_reply_unavailable": "Replied to an earlier message",
 	"message_sender_tsukaima": "Tsukaima",
 	"message_sender_unknown": "Unknown sender",
 	"message_sender_webui": "WebUI",
