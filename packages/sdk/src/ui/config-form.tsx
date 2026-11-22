@@ -1,5 +1,6 @@
 "use client";
 
+import { isPlainObject } from "es-toolkit";
 import { Input } from "@tsukaima/ui/components/motion/input";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import {
@@ -48,9 +49,7 @@ type Control =
 
 function properties(schema: Record<string, unknown> | undefined): Record<string, JsonSchemaNode> {
 	const value = schema?.properties;
-	return typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as Record<string, JsonSchemaNode>)
-		: {};
+	return isPlainObject(value) ? (value as Record<string, JsonSchemaNode>) : {};
 }
 
 function controlFor(field: JsonSchemaNode): Control {
@@ -293,9 +292,7 @@ export function PluginConfigForm({
 								{renderControl(
 									`${draftKey}.${subKey}`,
 									subField,
-									typeof current === "object" && current !== null && !Array.isArray(current)
-										? (current as Record<string, unknown>)[subKey]
-										: undefined,
+									isPlainObject(current) ? (current as Record<string, unknown>)[subKey] : undefined,
 									false,
 								)}
 							</Field>
@@ -340,10 +337,7 @@ export function PluginConfigForm({
 			);
 		}
 		if (control.kind === "object") {
-			const nestedCurrent =
-				typeof current === "object" && current !== null && !Array.isArray(current)
-					? (current as Record<string, unknown>)
-					: {};
+			const nestedCurrent = isPlainObject(current) ? current : {};
 			return (
 				<div className="space-y-3 rounded-lg border border-border/60 bg-background/40 p-3">
 					{Object.entries(control.properties).map(([subKey, subField]) => (
