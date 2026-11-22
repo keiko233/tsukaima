@@ -421,6 +421,73 @@ describe("OpenAI-compatible provider", () => {
 		expect(JSON.parse(clampedRequest.body as string).reasoning_effort).toBe("low");
 	});
 
+	test("never upscales low-budget reasoning requests into high effort and clamps by rank", async () => {
+		const fetch = mock(async () => textResponse()) as unknown as FetchMock;
+		const streams = createOpenAICompatibleStreams(
+			{
+				apiKey: "test-key",
+				baseUrl: "https://model.example/v1",
+				fetch: fetch as unknown as FetchFunction,
+			},
+			[
+				{
+					defaultReasoningLevel: "medium",
+					modelId: "high-only-model",
+					reasoningLevels: ["high"],
+					supportsReasoning: true,
+				},
+				{
+					defaultReasoningLevel: "high",
+					modelId: "unsorted-levels-model",
+					reasoningLevels: ["high", "low"],
+					supportsReasoning: true,
+				},
+				{
+					defaultReasoningLevel: "low",
+					modelId: "capped-medium-model",
+					reasoningLevels: ["low", "medium"],
+					supportsReasoning: true,
+				},
+			],
+		);
+		const context = normalizeContext({
+			messages: [{ content: "quick", role: "user", timestamp: 1 }],
+		});
+
+		for await (const event of streams.stream(
+			{ ...model, id: "high-only-model", reasoning: true },
+			context,
+			{ reasoning: "minimal" } as SimpleStreamOptions,
+		)) {
+			void event;
+		}
+		for await (const event of streams.stream(
+			{ ...model, id: "unsorted-levels-model", reasoning: true },
+			context,
+			{ reasoning: "minimal" } as SimpleStreamOptions,
+		)) {
+			void event;
+		}
+		for await (const event of streams.stream(
+			{ ...model, id: "capped-medium-model", reasoning: true },
+			context,
+			{ reasoning: "high" } as SimpleStreamOptions,
+		)) {
+			void event;
+		}
+
+		const highOnlyBody = JSON.parse(
+			(fetch.mock.calls[0] as [string, RequestInit])[1].body as string,
+		);
+		const unsortedBody = JSON.parse(
+			(fetch.mock.calls[1] as [string, RequestInit])[1].body as string,
+		);
+		const cappedBody = JSON.parse((fetch.mock.calls[2] as [string, RequestInit])[1].body as string);
+		expect(highOnlyBody.reasoning_effort).toBeUndefined();
+		expect(unsortedBody.reasoning_effort).toBe("low");
+		expect(cappedBody.reasoning_effort).toBe("medium");
+	});
+
 	test("preserves reasoning_content on current-turn tool-call rounds and omits it on earlier turns", async () => {
 		const fetch = mock(async () => textResponse()) as unknown as FetchMock;
 		const streams = createOpenAICompatibleStreams({

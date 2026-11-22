@@ -134,6 +134,43 @@ export type OpenAICompatibleReasoningLevel =
 	| "xhigh"
 	| "max";
 
+const REASONING_LEVEL_RANK: Readonly<Record<OpenAICompatibleReasoningLevel, number>> = {
+	minimal: 0,
+	low: 1,
+	medium: 2,
+	high: 3,
+	xhigh: 4,
+	max: 5,
+};
+
+function resolveReasoningEffort(
+	supportsReasoning: boolean,
+	requested: OpenAICompatibleReasoningLevel | undefined,
+	modelConfig: OpenAICompatibleModelConfig | undefined,
+): OpenAICompatibleReasoningLevel | undefined {
+	if (!supportsReasoning) return undefined;
+	if (requested === undefined) return modelConfig?.defaultReasoningLevel;
+	const levels = modelConfig?.reasoningLevels;
+	if (levels === undefined || levels.length === 0 || levels.includes(requested)) {
+		return requested;
+	}
+	const requestedRank = REASONING_LEVEL_RANK[requested];
+	const sorted = levels.toSorted((a, b) => REASONING_LEVEL_RANK[a] - REASONING_LEVEL_RANK[b]);
+	const atOrBelow = sorted.findLast((level) => REASONING_LEVEL_RANK[level] <= requestedRank);
+	if (atOrBelow !== undefined) return atOrBelow;
+	const lowest = sorted[0];
+	if (lowest === undefined) return undefined;
+	// Never upscale a low-budget request (such as gate/sidechat `minimal`) into `high` or above;
+	// omit `reasoning_effort` so the provider does not spend a high reasoning budget and time out.
+	if (
+		requestedRank <= REASONING_LEVEL_RANK.low &&
+		REASONING_LEVEL_RANK[lowest] >= REASONING_LEVEL_RANK.high
+	) {
+		return undefined;
+	}
+	return lowest;
+}
+
 export type ModelCapability =
 	| "basic-chat"
 	| "tool-use"
@@ -1132,18 +1169,11 @@ export function createOpenAICompatibleStreams(
 					throw error;
 				}
 				const apiKeyFromOptions = requestOptions?.apiKey ?? apiKey;
-				const requestedReasoning = requestOptions?.reasoning;
-				const clampedReasoning =
-					requestedReasoning !== undefined &&
-					modelConfig?.reasoningLevels !== undefined &&
-					modelConfig.reasoningLevels.length > 0 &&
-					!modelConfig.reasoningLevels.includes(requestedReasoning)
-						? modelConfig.reasoningLevels[0]
-						: requestedReasoning;
-				const reasoningEffort =
-					requestModel.reasoning === true
-						? (clampedReasoning ?? modelConfig?.defaultReasoningLevel)
-						: undefined;
+				const reasoningEffort = resolveReasoningEffort(
+					requestModel.reasoning === true,
+					requestOptions?.reasoning,
+					modelConfig,
+				);
 				const sampling = requestSampling(modelConfig, requestOptions);
 				const baseRequest: OpenAIRequest = {
 					model: requestModel.id,

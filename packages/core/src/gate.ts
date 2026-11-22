@@ -206,7 +206,7 @@ export class FailOpenConversationGate implements ConversationGatePort {
 		this.#breaker =
 			options.breaker ??
 			new GateCircuitBreaker(options.now === undefined ? {} : { now: options.now });
-		this.#defaultTimeoutMs = Math.max(100, options.defaultTimeoutMs ?? 1_500);
+		this.#defaultTimeoutMs = Math.max(100, options.defaultTimeoutMs ?? 4_000);
 		this.#driver = options.driver;
 		this.#now = options.now ?? Date.now;
 		this.#onFallback = options.onFallback;
