@@ -154,7 +154,78 @@ function InlineMedia({ part }: { part: MediaPart }) {
 	);
 }
 
-function MessageBody({ message, markdown }: { message: MessageSummary; markdown: boolean }) {
+function ReplyPreview({
+	message,
+	onJumpToMessage,
+}: {
+	message: MessageSummary;
+	onJumpToMessage?: ((messageId: string) => void) | undefined;
+}) {
+	const replyTo = message.replyTo;
+	if (replyTo === undefined && message.replyToMessageId === null) return null;
+	const replySender =
+		replyTo?.fromSelf === true
+			? m.message_sender_tsukaima()
+			: replyTo?.senderDisplayName?.trim()
+				? replyTo.senderDisplayName
+				: m.message_sender_unknown();
+	const replyParts = replyTo?.parts ?? [];
+	const inlineMedia = replyParts.find((part) => isInlineImage(part));
+	const nonTextLabel = replyParts
+		.filter((part) => part.type !== "text")
+		.map((part) => partLabel(part))
+		.filter((label) => label.length > 0)
+		.join(" · ");
+	const textPreview = replyTo?.contentText.trim() ?? "";
+	const bodyPreview =
+		textPreview.length > 0
+			? textPreview
+			: nonTextLabel.length > 0
+				? nonTextLabel
+				: m.message_reply_unavailable();
+	const jumpTargetId = replyTo?.messageId ?? message.replyToMessageId;
+	const clickable = onJumpToMessage !== undefined && jumpTargetId !== null;
+	const content = (
+		<div className="flex min-w-0 items-center gap-2 border-l-2 border-primary/45 bg-background/45 px-2 py-1 rounded-r-md text-left">
+			{inlineMedia !== undefined && inlineMedia.mediaId !== undefined ? (
+				<img
+					src={runtimeUrl(`/media/${encodeURIComponent(inlineMedia.mediaId)}`)}
+					alt={partLabel(inlineMedia)}
+					loading="lazy"
+					className="size-8 shrink-0 rounded object-cover border border-border/60"
+				/>
+			) : null}
+			<div className="min-w-0 flex-1">
+				{replyTo !== undefined ? (
+					<div className="truncate text-[11px] font-medium text-foreground/75">{replySender}</div>
+				) : null}
+				<div className="line-clamp-2 break-words text-[11px] text-muted-foreground">
+					{bodyPreview}
+				</div>
+			</div>
+		</div>
+	);
+	if (!clickable) return content;
+	return (
+		<button
+			type="button"
+			onClick={() => onJumpToMessage(jumpTargetId)}
+			className="block w-full cursor-pointer rounded-r-md transition-colors hover:bg-background/70"
+		>
+			{content}
+		</button>
+	);
+}
+
+function MessageBody({
+	message,
+	markdown,
+	onJumpToMessage,
+}: {
+	message: MessageSummary;
+	markdown: boolean;
+	onJumpToMessage?: ((messageId: string) => void) | undefined;
+}) {
 	const textParts = message.parts.filter((part) => part.type === "text" && part.text);
 	const mediaParts = message.parts.filter((part) => part.type !== "text");
 	const inlineParts = mediaParts.filter((part) => isInlineImage(part));
@@ -162,6 +233,7 @@ function MessageBody({ message, markdown }: { message: MessageSummary; markdown:
 	const chipParts = mediaParts.filter((part) => !isInlineImage(part) && !isUnavailableMedia(part));
 	return (
 		<div className="space-y-1.5">
+			<ReplyPreview message={message} onJumpToMessage={onJumpToMessage} />
 			{textParts.length > 0 ? (
 				<MessageText
 					markdown={markdown}
@@ -219,12 +291,14 @@ function MessageRow({
 	grouped,
 	markdown,
 	message,
+	onJumpToMessage,
 	sessionId,
 }: {
 	/** Follows an earlier message from the same sender, so the identity chrome is skipped. */
 	grouped: boolean;
 	markdown: boolean;
 	message: MessageSummary;
+	onJumpToMessage?: ((messageId: string) => void) | undefined;
 	/** Session the message belongs to, needed to expand a turn's steps. */
 	sessionId: string;
 }) {
@@ -284,7 +358,11 @@ function MessageRow({
 								assistant ? "max-w-[46rem]" : "max-w-[min(32rem,80%)] rounded-lg px-2.5 py-1.5",
 							)}
 						>
-							<MessageBody markdown={assistant && markdown} message={message} />
+							<MessageBody
+								markdown={assistant && markdown}
+								message={message}
+								onJumpToMessage={onJumpToMessage}
+							/>
 						</MessageBubbleContent>
 					</MessageBubble>
 				)}
@@ -429,6 +507,14 @@ export function MessageList({
 	}, [hasOlder, loadingOlder, messages.length]);
 
 	const empty = messages.length === 0 && liveRun === undefined;
+	const jumpToMessage = (targetId: string) => {
+		const index = messages.findIndex(
+			(item) => item.id === targetId || item.platformMessageId === targetId,
+		);
+		if (index >= 0) {
+			virtualizer.scrollToIndex(index, { align: "center" });
+		}
+	};
 	return (
 		<div className="relative h-full min-h-0">
 			<MessageScroller
@@ -477,6 +563,7 @@ export function MessageList({
 											}
 											markdown={markdown}
 											message={message}
+											onJumpToMessage={jumpToMessage}
 											sessionId={sessionId}
 										/>
 									)}

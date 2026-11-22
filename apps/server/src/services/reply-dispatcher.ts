@@ -2291,6 +2291,7 @@ export class ReplyDispatcher {
 					.set({
 						deliveryStatus,
 						platformMessageId: firstPlatformMessageId,
+						...(replyTo !== undefined && replyTargetSent ? { replyToMessageId: replyTo } : {}),
 						updatedAt: new Date().toISOString(),
 					})
 					.where(eq(messages.id, target.id));
@@ -2325,6 +2326,7 @@ export class ReplyDispatcher {
 				.set({
 					deliveryStatus: "sent",
 					platformMessageId: firstPlatformMessageId,
+					...(replyTo !== undefined && replyTargetSent ? { replyToMessageId: replyTo } : {}),
 					updatedAt: new Date().toISOString(),
 				})
 				.where(eq(messages.id, target.id));
