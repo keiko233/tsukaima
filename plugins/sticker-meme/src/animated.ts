@@ -14,6 +14,8 @@ export interface AnimatedConversionOptions {
 	/** Output FPS. Defaults to 15 and is capped by the source frame rate. */
 	readonly fps?: number;
 	readonly height?: number;
+	/** Optional input file extension (without leading dot), e.g. "mp4" or "webm". */
+	readonly inputExtension?: string;
 	/** Maximum encoded frames. Defaults to 50. */
 	readonly maxFrames?: number;
 	readonly width?: number;
@@ -254,7 +256,9 @@ export async function videoToGif(
 	});
 	const directory = await mkdtemp(join(tmpdir(), "tsukaima-sticker-video-"));
 	try {
-		const input = join(directory, "input.webm");
+		const rawExt = (options.inputExtension ?? "webm").replace(/[^a-z0-9]/giu, "").toLowerCase();
+		const inputExt = rawExt.length > 0 ? rawExt : "webm";
+		const input = join(directory, `input.${inputExt}`);
 		await writeFile(input, bytes);
 		const fps = clamp(options.fps, DEFAULT_FPS, 1, MAX_FPS);
 		const maxFrames = clamp(options.maxFrames, DEFAULT_MAX_FRAMES, 1, MAX_MAX_FRAMES);
@@ -269,7 +273,7 @@ export async function videoToGif(
 				"-i",
 				input,
 				"-vf",
-				`fps=${fps},scale=${width}:-1:flags=lanczos,format=rgba`,
+				`fps=${fps},scale='min(${width},iw)':-1:flags=lanczos,format=rgba`,
 				"-frames:v",
 				String(maxFrames),
 				"-f",

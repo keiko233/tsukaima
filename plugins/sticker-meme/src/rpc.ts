@@ -27,6 +27,7 @@ import {
 } from "./semantic.ts";
 import { TelegramStickerClient } from "./telegram.ts";
 import { TelegramStickerImportService } from "./telegram-import.ts";
+import type { StickerUrlImportService } from "./url-import.ts";
 
 interface ServiceBag {
 	readonly importService: StickerImportService;
@@ -35,6 +36,7 @@ interface ServiceBag {
 	readonly onSettled?: () => Promise<void>;
 	readonly repository: StickerRepository;
 	readonly selection?: StickerSelectionService;
+	readonly urlImport?: StickerUrlImportService;
 }
 
 function resultCounts(result: unknown): Record<string, number> {
@@ -160,7 +162,7 @@ function asItemPatch(input: Record<string, unknown>) {
 
 /** Registers the admin/WebUI procedure surface. The host adds the plugin-id namespace. */
 export function registerStickerRpc(context: PluginContext, services: ServiceBag): void {
-	const { importService, learning, onSettled, repository, selection } = services;
+	const { importService, learning, onSettled, repository, selection, urlImport } = services;
 	const logger = services.logger ?? context.logger;
 	const rpc = {
 		list(): readonly { readonly method: string }[] {
@@ -809,5 +811,149 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 		const bytes = await context.media?.readBytes(mediaId);
 		if (bytes === undefined) throw new Error("Media is unavailable");
 		return { dataBase64: encodeBase64(bytes), mediaId, mimeType };
+	});
+
+	rpc.register("items.importUrl", async (input) => {
+		if (urlImport === undefined) {
+			throw new Error("URL import service is unavailable");
+		}
+		const record = recordValue(input);
+		const url = normalizeText(record.url);
+		if (url.length === 0) throw new Error("url is required");
+		const name = normalizeText(record.name);
+		const packId = normalizeText(record.packId);
+		const description = typeof record.description === "string" ? record.description : undefined;
+		const emotions = asStringList(record.emotions);
+		const keywords = asStringList(record.keywords);
+		const fps = asNumber(record.fps);
+		const maxFrames = asNumber(record.maxFrames);
+		const width = asNumber(record.width);
+		const skipClassifier = record.classify === false;
+		const classifier = skipClassifier ? undefined : await importClassifier(record);
+		const result = await urlImport.importUrl({
+			...(record.approve === undefined ? {} : { approve: record.approve === true }),
+			...(classifier === undefined ? {} : { classifier }),
+			...(fps === undefined && maxFrames === undefined && width === undefined
+				? {}
+				: {
+						conversion: {
+							...(fps === undefined ? {} : { fps }),
+							...(maxFrames === undefined ? {} : { maxFrames }),
+							...(width === undefined ? {} : { width }),
+						},
+					}),
+			...(description === undefined ? {} : { description }),
+			...(emotions === undefined ? {} : { emotions }),
+			...(keywords === undefined ? {} : { keywords }),
+			...(name.length === 0 ? {} : { name }),
+			...(packId.length === 0 ? {} : { packId }),
+			url,
+		});
+		await onSettled?.();
+		return result;
+	});
+
+	rpc.register("qq.recentMedia", async (input) => {
+		const conversations = context.conversations;
+		if (conversations === undefined) {
+			return { items: [] };
+		}
+		const record = recordValue(input);
+		const filterConversationId = normalizeText(record.conversationId);
+		const limit = Math.max(1, Math.min(80, Math.floor(asNumber(record.limit) ?? 40)));
+		const allConversations = await conversations.list();
+		const targetConversations = allConversations
+			.filter((conv) => {
+				if (filterConversationId.length > 0) return conv.id === filterConversationId;
+				const cid = conv.channelId ?? "";
+				return cid === "onebot-napcat" || cid.includes("qq");
+			})
+			.slice(0, 15);
+		const existingItems = await repository.listItems();
+		const existingByHash = new Map(existingItems.map((item) => [item.hash, item.id]));
+		const seenMediaIds = new Set<string>();
+		const collected: Array<{
+			readonly alreadyInLibrary: boolean;
+			readonly channelId: string;
+			readonly conversationId: string;
+			readonly conversationTitle: string;
+			readonly createdAt: string;
+			readonly existingItemId?: string;
+			readonly mediaId: string;
+			readonly messageId: string;
+			readonly mimeType: string;
+			readonly partType: "image" | "sticker";
+			readonly previewText?: string;
+			readonly sha256?: string;
+		}> = [];
+		const messageLists = await Promise.all(
+			targetConversations.map(async (conv) => ({
+				conv,
+				messages: await conversations.recentMessages(conv.id, 30),
+			})),
+		);
+		for (const { conv, messages } of messageLists) {
+			for (const message of messages) {
+				for (const part of message.parts ?? []) {
+					if (part.type !== "sticker" && part.type !== "image") continue;
+					if (part.mediaId === undefined || part.mediaId.length === 0) continue;
+					if (seenMediaIds.has(part.mediaId)) continue;
+					seenMediaIds.add(part.mediaId);
+					const existingItemId =
+						part.sha256 !== undefined ? existingByHash.get(part.sha256) : undefined;
+					collected.push({
+						alreadyInLibrary: existingItemId !== undefined,
+						channelId: conv.channelId ?? "unknown",
+						conversationId: conv.id,
+						conversationTitle: conv.title,
+						createdAt: message.occurredAt,
+						...(existingItemId === undefined ? {} : { existingItemId }),
+						mediaId: part.mediaId,
+						messageId: message.platformMessageId ?? message.id,
+						mimeType: part.mimeType ?? "image/png",
+						partType: part.type,
+						...(part.previewText === undefined ? {} : { previewText: part.previewText }),
+						...(part.sha256 === undefined ? {} : { sha256: part.sha256 }),
+					});
+				}
+			}
+		}
+		collected.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+		return { items: collected.slice(0, limit) };
+	});
+
+	rpc.register("qq.steal", async (input) => {
+		const record = recordValue(input);
+		const mediaId = normalizeText(record.mediaId);
+		const sha256 = normalizeText(record.sha256);
+		if (mediaId.length === 0 && sha256.length === 0) {
+			throw new Error("mediaId or sha256 is required");
+		}
+		const name = normalizeText(record.name);
+		const packId = normalizeText(record.packId);
+		const mimeType = normalizeText(record.mimeType);
+		const sourceConversationId = normalizeText(
+			record.sourceConversationId ?? record.conversationId,
+		);
+		const description = typeof record.description === "string" ? record.description : undefined;
+		const emotions = asStringList(record.emotions);
+		const keywords = asStringList(record.keywords);
+		const skipClassifier = record.classify === false;
+		const classifier = skipClassifier ? undefined : await importClassifier(record);
+		const result = await learning.stealMedia({
+			...(record.approve === undefined ? {} : { approve: record.approve === true }),
+			...(classifier === undefined ? {} : { classifier }),
+			...(description === undefined ? {} : { description }),
+			...(emotions === undefined ? {} : { emotions }),
+			...(keywords === undefined ? {} : { keywords }),
+			...(mediaId.length === 0 ? {} : { mediaId }),
+			...(mimeType.length === 0 ? {} : { mimeType }),
+			...(name.length === 0 ? {} : { name }),
+			...(packId.length === 0 ? {} : { packId }),
+			...(sha256.length === 0 ? {} : { sha256 }),
+			...(sourceConversationId.length === 0 ? {} : { sourceConversationId }),
+		});
+		await onSettled?.();
+		return result;
 	});
 }

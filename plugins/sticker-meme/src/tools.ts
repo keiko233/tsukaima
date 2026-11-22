@@ -1,7 +1,16 @@
 import type { PluginContext, PluginLogger, ToolResult } from "@tsukaima/sdk";
+import type { LearningService } from "./learning.ts";
 import { elapsedMs, traceLog } from "./logging.ts";
 import { toStickerMessagePart } from "./output.ts";
 import type { StickerSearchInput, StickerSelectionService } from "./selection.ts";
+import type { StickerSemanticClassifier } from "./semantic.ts";
+import type { StickerUrlImportService } from "./url-import.ts";
+
+export interface StickerToolExtras {
+	readonly learning?: LearningService;
+	readonly resolveClassifier?: () => Promise<StickerSemanticClassifier>;
+	readonly urlImport?: StickerUrlImportService;
+}
 
 const text = (value: string): ToolResult => ({ content: [{ text: value, type: "text" }] });
 
@@ -48,6 +57,7 @@ export function registerStickerTools(
 	context: PluginContext,
 	selection: StickerSelectionService,
 	logger?: PluginLogger,
+	extras?: StickerToolExtras,
 ): void {
 	const log = logger ?? context.logger;
 	context.tools.register({
@@ -300,4 +310,218 @@ export function registerStickerTools(
 		},
 		requiredPermissions: ["media.read", "conversation.read"],
 	});
+
+	if (extras?.learning !== undefined) {
+		const learning = extras.learning;
+		context.tools.register({
+			description:
+				"Steal/save a sticker or image from the current QQ/chat conversation into the sticker library so it can be reused later. Matches by messageId ([msg:<id>]), mediaId, sha256, or defaults to the latest sticker/image in this conversation.",
+			async execute(input, invocation) {
+				const startedAt = Date.now();
+				const conversationId = invocation.conversationId;
+				if (conversationId === undefined || conversationId.trim().length === 0) {
+					return text("A conversation is required to steal a sticker.");
+				}
+				const conversations = context.conversations;
+				if (conversations === undefined) {
+					return text("Conversation history is unavailable on this host.");
+				}
+				const rawMessageId = asString(input, "messageId");
+				const requestedMessageId = rawMessageId?.replace(/^\[?msg:([^\]]+)\]?$/iu, "$1");
+				const requestedMediaId = asString(input, "mediaId");
+				const requestedSha = asString(input, "sha256");
+				const includeImages = input.includeImages !== false;
+				const recent = (await conversations.recentMessages(conversationId, 50)).toReversed();
+				let targetPart:
+					| {
+							readonly channelRef?: string | undefined;
+							readonly mediaId?: string | undefined;
+							readonly mimeType?: string | undefined;
+							readonly previewText?: string | undefined;
+							readonly sha256?: string | undefined;
+							readonly type: "image" | "sticker";
+					  }
+					| undefined;
+				for (const msg of recent) {
+					if (
+						requestedMessageId !== undefined &&
+						msg.platformMessageId !== requestedMessageId &&
+						msg.id !== requestedMessageId
+					) {
+						continue;
+					}
+					for (const part of msg.parts ?? []) {
+						if (part.type !== "sticker" && (!includeImages || part.type !== "image")) continue;
+						if (part.channelRef?.startsWith("face:") === true && part.mediaId === undefined) {
+							continue;
+						}
+						if (requestedMediaId !== undefined && part.mediaId !== requestedMediaId) continue;
+						if (requestedSha !== undefined && part.sha256 !== requestedSha) continue;
+						if (part.mediaId === undefined && part.sha256 === undefined) continue;
+						targetPart = part;
+						break;
+					}
+					if (targetPart !== undefined) break;
+				}
+				if (targetPart === undefined) {
+					return text(
+						"No stealable sticker or image with stored media was found in recent messages of this conversation.",
+					);
+				}
+				const classifier =
+					extras.resolveClassifier === undefined ? undefined : await extras.resolveClassifier();
+				const name = asString(input, "name") ?? targetPart.previewText;
+				const description = asString(input, "description");
+				const emotions = asStringList(input, "emotions");
+				const keywords = asStringList(input, "keywords");
+				const packId = asString(input, "packId");
+				const result = await learning.stealMedia({
+					approve: input.approve !== false,
+					...(classifier === undefined ? {} : { classifier }),
+					...(description === undefined ? {} : { description }),
+					...(emotions === undefined ? {} : { emotions }),
+					...(keywords === undefined ? {} : { keywords }),
+					...(targetPart.mediaId === undefined ? {} : { mediaId: targetPart.mediaId }),
+					...(targetPart.mimeType === undefined ? {} : { mimeType: targetPart.mimeType }),
+					...(name === undefined ? {} : { name }),
+					...(packId === undefined ? {} : { packId }),
+					...(targetPart.sha256 === undefined ? {} : { sha256: targetPart.sha256 }),
+					sourceConversationId: conversationId,
+				});
+				log.debug("sticker tool completed", {
+					duplicate: result.duplicate,
+					durationMs: elapsedMs(startedAt),
+					itemId: result.item.id,
+					tool: "sticker-meme.steal",
+				});
+				return text(
+					JSON.stringify({
+						duplicate: result.duplicate,
+						itemId: result.item.id,
+						mimeType: result.item.mimeType,
+						name: result.item.name,
+						packId: result.pack.id,
+						packName: result.pack.name,
+						stolen: true,
+					}),
+				);
+			},
+			lazy: false,
+			name: "sticker-meme.steal",
+			parameters: {
+				properties: {
+					approve: {
+						description: "Immediately approve the stolen sticker for chat use (default true).",
+						type: "boolean",
+					},
+					description: { type: "string" },
+					emotions: { items: { type: "string" }, type: "array" },
+					includeImages: {
+						description: "Also match plain image parts in chat (default true).",
+						type: "boolean",
+					},
+					keywords: { items: { type: "string" }, type: "array" },
+					mediaId: { type: "string" },
+					messageId: {
+						description: "Optional platform message id or [msg:<id>] containing the sticker/image.",
+						type: "string",
+					},
+					name: { type: "string" },
+					packId: { description: "Optional target pack id or name.", type: "string" },
+					sha256: { type: "string" },
+				},
+				type: "object",
+			},
+			policy: {
+				conversationAllowlist: true,
+				lazy: false,
+				maxConcurrent: 4,
+				maxPayloadBytes: 4_096,
+				surface: "chat",
+				timeoutMs: 20_000,
+			},
+			requiredPermissions: ["media.read", "media.write", "conversation.read"],
+		});
+	}
+
+	if (extras?.urlImport !== undefined) {
+		const urlImport = extras.urlImport;
+		context.tools.register({
+			description:
+				"Download an image or video URL (including Twitter/X MP4 GIFs, PNG, JPG, GIF, WebP) and save it as a sticker in the library. Videos are automatically converted to animated GIFs for QQ compatibility.",
+			async execute(input, invocation) {
+				const startedAt = Date.now();
+				const url = asString(input, "url");
+				if (url === undefined) {
+					return text("url is required.");
+				}
+				const classifier =
+					extras.resolveClassifier === undefined ? undefined : await extras.resolveClassifier();
+				const name = asString(input, "name");
+				const description = asString(input, "description");
+				const emotions = asStringList(input, "emotions");
+				const keywords = asStringList(input, "keywords");
+				const packId = asString(input, "packId");
+				const result = await urlImport.importUrl({
+					approve: input.approve !== false,
+					...(classifier === undefined ? {} : { classifier }),
+					...(description === undefined ? {} : { description }),
+					...(emotions === undefined ? {} : { emotions }),
+					...(keywords === undefined ? {} : { keywords }),
+					...(name === undefined ? {} : { name }),
+					...(packId === undefined ? {} : { packId }),
+					...(invocation.conversationId === undefined
+						? {}
+						: { sourceConversationId: invocation.conversationId }),
+					url,
+				});
+				log.debug("sticker tool completed", {
+					convertedFromVideo: result.convertedFromVideo,
+					duplicate: result.duplicate,
+					durationMs: elapsedMs(startedAt),
+					itemId: result.item.id,
+					tool: "sticker-meme.import_url",
+				});
+				return text(
+					JSON.stringify({
+						convertedFromVideo: result.convertedFromVideo,
+						duplicate: result.duplicate,
+						itemId: result.item.id,
+						mimeType: result.item.mimeType,
+						name: result.item.name,
+						originalMimeType: result.originalMimeType,
+						packId: result.pack.id,
+						packName: result.pack.name,
+					}),
+				);
+			},
+			lazy: true,
+			name: "sticker-meme.import_url",
+			parameters: {
+				properties: {
+					approve: { type: "boolean" },
+					description: { type: "string" },
+					emotions: { items: { type: "string" }, type: "array" },
+					keywords: { items: { type: "string" }, type: "array" },
+					name: { type: "string" },
+					packId: { type: "string" },
+					url: {
+						description: "HTTP(S) URL to an image or video (e.g. Twitter MP4).",
+						type: "string",
+					},
+				},
+				required: ["url"],
+				type: "object",
+			},
+			policy: {
+				conversationAllowlist: true,
+				lazy: true,
+				maxConcurrent: 2,
+				maxPayloadBytes: 4_096,
+				surface: "chat",
+				timeoutMs: 45_000,
+			},
+			requiredPermissions: ["media.read", "media.write"],
+		});
+	}
 }

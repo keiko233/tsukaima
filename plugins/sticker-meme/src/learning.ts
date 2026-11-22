@@ -15,9 +15,12 @@ import {
 	sha256Bytes,
 	stableId,
 	type StickerItem,
+	type StickerPack,
 } from "./domain.ts";
-import { elapsedMs, traceLog } from "./logging.ts";
+import { elapsedMs, logErrorMessage, traceLog } from "./logging.ts";
+import { normalizeStickerMedia } from "./media-format.ts";
 import type { StickerItemInput, StickerRepository } from "./repository.ts";
+import type { StickerSemanticClassifier } from "./semantic.ts";
 
 export interface LearningSettings {
 	readonly allowGenerated: boolean;
@@ -257,11 +260,16 @@ export class LearningService {
 		});
 		for (const [index, rawPart] of parts.entries()) {
 			const part = recordValue(rawPart);
-			const learnable = part.modelReadable === true || part.learnable === true;
+			const isSticker = part.type === "sticker";
+			const isImage = part.type === "image";
+			const inspectable = isSticker || isImage;
+			// Inbound `sticker` parts from channels (e.g. QQ collected/animated stickers) are
+			// inherently sticker candidates; plain `image` photos still require an explicit
+			// `learnable`/`modelReadable` flag during passive capture.
+			const learnable = isSticker || part.modelReadable === true || part.learnable === true;
 			const channelRef = normalizeText(part.channelRef);
 			const mediaId = normalizeText(part.mediaId);
 			const sha256 = normalizeText(part.sha256);
-			const inspectable = part.type === "sticker" || part.type === "image";
 			traceLog(this.#logger, "sticker envelope part inspected", {
 				eligible: inspectable && learnable,
 				hasChannelRef: channelRef.length > 0,
@@ -327,10 +335,132 @@ export class LearningService {
 		return undefined;
 	}
 
-	async #learnedPack(packId: string | undefined): Promise<{ id: string }> {
+	async stealMedia(input: {
+		readonly approve?: boolean;
+		readonly classifier?: StickerSemanticClassifier;
+		readonly description?: string;
+		readonly emotions?: readonly string[] | string;
+		readonly keywords?: readonly string[] | string;
+		readonly mediaId?: string;
+		readonly mimeType?: string;
+		readonly name?: string;
+		readonly packId?: string;
+		readonly sha256?: string;
+		readonly sourceConversationId?: string;
+	}): Promise<{
+		readonly duplicate: boolean;
+		readonly item: StickerItem;
+		readonly pack: StickerPack;
+	}> {
+		const startedAt = Date.now();
+		let rawBytes: Uint8Array | undefined;
+		let resolvedMime = normalizeText(input.mimeType);
+		if (input.mediaId !== undefined && input.mediaId.trim().length > 0) {
+			const record = await this.#media.findById(input.mediaId.trim());
+			if (record !== undefined) {
+				rawBytes = await this.#media.readBytes(record.id);
+				if (resolvedMime.length === 0) resolvedMime = record.mimeType;
+			}
+		}
+		if (rawBytes === undefined && input.sha256 !== undefined && input.sha256.trim().length > 0) {
+			const record = await this.#media.findBySha(input.sha256.trim());
+			if (record !== undefined) {
+				rawBytes = await this.#media.readBytes(record.id);
+				if (resolvedMime.length === 0) resolvedMime = record.mimeType;
+			}
+		}
+		if (rawBytes === undefined || rawBytes.byteLength === 0) {
+			throw new Error("Target sticker or image bytes are unavailable");
+		}
+		const normalized = await normalizeStickerMedia(rawBytes, {
+			...(resolvedMime.length === 0 ? {} : { declaredMimeType: resolvedMime }),
+			logger: this.#logger,
+		});
+		const hash = sha256Bytes(normalized.bytes);
+		const duplicates = await this.#repository.findItemsByHash(hash);
+		if (duplicates[0] !== undefined) {
+			const existingPack =
+				(await this.#repository.getPack(duplicates[0].packId)) ??
+				(await this.#learnedPack(input.packId));
+			return { duplicate: true, item: duplicates[0], pack: existingPack };
+		}
+		const pack = await this.#learnedPack(input.packId);
+		const name = normalizeText(input.name, `stolen-${hash.slice(0, 8)}`);
+		const stored = await this.#media.store({
+			bytes: normalized.bytes,
+			...(normalized.height === null ? {} : { height: normalized.height }),
+			kind: "sticker",
+			mimeType: normalized.mimeType,
+			source: "channel",
+			...(normalized.width === null ? {} : { width: normalized.width }),
+		});
+		const manualKeywords = normalizeLabels(input.keywords).values;
+		const manualEmotions = normalizeLabels(input.emotions).values;
+		let semantic = EMPTY_SEMANTIC_PROFILE;
+		let description = normalizeText(input.description);
+		let keywords = manualKeywords;
+		let emotions = manualEmotions;
+		if (input.classifier !== undefined) {
+			try {
+				semantic = await input.classifier.classify({
+					bytes: normalized.bytes,
+					mimeType: normalized.mimeType,
+					title: name,
+				});
+				if (description.length === 0) description = semantic.description;
+				keywords = normalizeLabels([...manualKeywords, ...semantic.keywords]).values;
+				emotions = normalizeLabels([...manualEmotions, ...semantic.emotions]).values;
+			} catch (error) {
+				this.#logger?.warn("stolen sticker semantic classification failed", {
+					error: logErrorMessage(error),
+				});
+			}
+		}
+		const item = await this.#repository.upsertItem({
+			description,
+			emotions,
+			enabled: true,
+			hash,
+			height: normalized.height,
+			keywords,
+			mediaId: stored.id,
+			mimeType: stored.mimeType,
+			name,
+			packId: pack.id,
+			reviewStatus: input.approve === false ? "pending" : "approved",
+			semantic,
+			sourceConversationId: input.sourceConversationId ?? null,
+			width: normalized.width,
+		});
+		await this.#audit?.record({
+			action: "sticker.chat.stolen",
+			actorKind: "user",
+			payload: {
+				itemId: item.id,
+				mimeType: item.mimeType,
+				packId: pack.id,
+				sourceConversationId: input.sourceConversationId ?? null,
+			},
+			result: "ok",
+			targetId: item.id,
+			targetKind: "sticker-item",
+		});
+		this.#logger?.debug("sticker stolen from chat", {
+			durationMs: elapsedMs(startedAt),
+			itemId: item.id,
+			mimeType: item.mimeType,
+			packId: pack.id,
+		});
+		return { duplicate: false, item, pack };
+	}
+
+	async #learnedPack(packId: string | undefined): Promise<StickerPack> {
 		if (packId !== undefined) {
 			const existing = await this.#repository.getPack(packId);
 			if (existing !== undefined) return existing;
+			const all = await this.#repository.listPacks();
+			const byName = all.find((pack) => pack.name.toLowerCase() === packId.toLowerCase());
+			if (byName !== undefined) return byName;
 		}
 		const id = stableId("pack", `learned:${packId ?? "default"}`);
 		return await this.#repository.savePack({

@@ -21,6 +21,7 @@ export const CURATED_EAGER_CHAT_TOOLS: ReadonlySet<string> = new Set([
 	"sticker-meme.send",
 	"sticker-meme.search",
 	"sticker-meme.list_packs",
+	"sticker-meme.steal",
 	"memory.recall",
 	"memory.save",
 	"memory.update",

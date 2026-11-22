@@ -9,7 +9,9 @@ import { createStickerReplyTransform } from "./output.ts";
 import { StickerRepository } from "./repository.ts";
 import { registerStickerRpc } from "./rpc.ts";
 import { StickerSelectionService } from "./selection.ts";
+import { resolveSemanticClassifier } from "./semantic.ts";
 import { registerStickerTools } from "./tools.ts";
+import { StickerUrlImportService } from "./url-import.ts";
 
 export {
 	STICKER_MEME_DIRECTIVE_PATTERN,
@@ -88,6 +90,20 @@ export {
 	type TelegramStickerImportReport,
 	type TelegramVideoFormat,
 } from "./telegram-import.ts";
+export {
+	detectStickerMediaFormat,
+	normalizeStickerMedia,
+	type DetectedStickerFormat,
+	type NormalizedStickerMedia,
+	type SupportedStickerMime,
+} from "./media-format.ts";
+export {
+	fetchStickerUrl,
+	StickerUrlImportService,
+	type FetchStickerUrlOptions,
+	type StickerUrlImportInput,
+	type StickerUrlImportResult,
+} from "./url-import.ts";
 export * from "./domain.ts";
 
 interface StickerRuntime {
@@ -164,6 +180,19 @@ export const stickerMemePlugin: TsukaimaPlugin = {
 			repository,
 			...(context.settings === undefined ? {} : { settings: context.settings }),
 		});
+		const urlImport = new StickerUrlImportService({
+			...(context.audit === undefined ? {} : { audit: context.audit }),
+			logger: importLogger,
+			media,
+			repository,
+		});
+		const resolveClassifier = async () => {
+			const settings = recordValue((await context.settings?.get()) ?? {});
+			return await resolveSemanticClassifier(settings, {
+				logger: context.logger,
+				models: context.models,
+			});
+		};
 		const transform = createStickerReplyTransform({
 			...(context.audit === undefined ? {} : { audit: context.audit }),
 			logger: outputLogger,
@@ -173,7 +202,11 @@ export const stickerMemePlugin: TsukaimaPlugin = {
 		});
 		const runtime: StickerRuntime = { disposers: [] };
 		runtimes.set(context, runtime);
-		registerStickerTools(context, selection, toolsLogger);
+		registerStickerTools(context, selection, toolsLogger, {
+			learning,
+			resolveClassifier,
+			urlImport,
+		});
 		registerStickerRpc(context, {
 			importService,
 			learning,
@@ -181,6 +214,7 @@ export const stickerMemePlugin: TsukaimaPlugin = {
 			onSettled: () => updateStatus(context, repository),
 			repository,
 			selection,
+			urlImport,
 		});
 		runtime.disposers.push(
 			context.events.on("message.received", async (payload) => {
