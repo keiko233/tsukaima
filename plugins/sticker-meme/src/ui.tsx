@@ -121,6 +121,29 @@ interface TelegramImportRow {
 	readonly warnings: readonly string[];
 }
 
+interface UrlImportRow {
+	readonly convertedFromVideo: boolean;
+	readonly duplicate: boolean;
+	readonly item: ItemRow;
+	readonly originalMimeType: string;
+	readonly pack: PackRow;
+}
+
+interface QqRecentMediaRow {
+	readonly alreadyInLibrary: boolean;
+	readonly channelId: string;
+	readonly conversationId: string;
+	readonly conversationTitle: string;
+	readonly createdAt: string;
+	readonly existingItemId?: string;
+	readonly mediaId: string;
+	readonly messageId: string;
+	readonly mimeType: string;
+	readonly partType: "image" | "sticker";
+	readonly previewText?: string;
+	readonly sha256?: string;
+}
+
 interface ReclassifyRow {
 	readonly classifier: string;
 	readonly skipped: number;
@@ -812,6 +835,19 @@ function StickerPanel() {
 	const [exporting, setExporting] = useState(false);
 	const [loading, setLoading] = useState(false);
 	const [jobs, setJobs] = useState<readonly JobProgressRow[]>([]);
+	const [stickerUrl, setStickerUrl] = useState("");
+	const [urlPackId, setUrlPackId] = useState("");
+	const [urlName, setUrlName] = useState("");
+	const [urlKeywords, setUrlKeywords] = useState("");
+	const [urlEmotions, setUrlEmotions] = useState("");
+	const [importingUrl, setImportingUrl] = useState(false);
+	const [urlImportResult, setUrlImportResult] = useState<UrlImportRow | null>(null);
+	const [urlImportError, setUrlImportError] = useState<string | null>(null);
+	const [qqMedia, setQqMedia] = useState<readonly QqRecentMediaRow[]>([]);
+	const [qqPreviews, setQqPreviews] = useState<Record<string, string>>({});
+	const [loadingQqMedia, setLoadingQqMedia] = useState(false);
+	const [qqStealPackId, setQqStealPackId] = useState("");
+	const [stealingMediaId, setStealingMediaId] = useState<string | null>(null);
 	const previewLoadingRef = useRef(new Set<string>());
 	const inFlightRef = useRef(false);
 	inFlightRef.current = importingTelegram || reclassifying || importingLegacy !== null;
@@ -876,8 +912,104 @@ function StickerPanel() {
 		}
 	};
 
+	const loadQqMedia = async (): Promise<void> => {
+		setLoadingQqMedia(true);
+		try {
+			const result = await rpc.call<{ items: readonly QqRecentMediaRow[] }>(
+				rpcName("qq.recentMedia"),
+				{ limit: 24 },
+			);
+			const mediaList = result.items ?? [];
+			setQqMedia(mediaList);
+			const limit = pLimit(4);
+			const loaded: Record<string, string> = {};
+			await Promise.all(
+				mediaList.slice(0, 24).map(async (entry) => {
+					if (qqPreviews[entry.mediaId] !== undefined) return;
+					try {
+						const preview = await limit(() =>
+							rpc.call<PreviewRow>(rpcName("preview"), {
+								mediaId: entry.mediaId,
+								mimeType: entry.mimeType,
+							}),
+						);
+						loaded[entry.mediaId] = preview.dataBase64;
+					} catch {
+						// Ignore individual preview errors
+					}
+				}),
+			);
+			if (Object.keys(loaded).length > 0) {
+				setQqPreviews((current) => ({ ...current, ...loaded }));
+			}
+		} catch (error) {
+			toast.error(t.t("load_failed"), String(error));
+		} finally {
+			setLoadingQqMedia(false);
+		}
+	};
+
+	const importFromUrl = async (): Promise<void> => {
+		setUrlImportResult(null);
+		setUrlImportError(null);
+		setImportingUrl(true);
+		try {
+			const report = await rpc.call<UrlImportRow>(rpcName("items.importUrl"), {
+				...(urlEmotions.trim().length > 0 ? { emotions: urlEmotions.trim() } : {}),
+				...(urlKeywords.trim().length > 0 ? { keywords: urlKeywords.trim() } : {}),
+				...(urlName.trim().length > 0 ? { name: urlName.trim() } : {}),
+				...(urlPackId.trim().length > 0 ? { packId: urlPackId.trim() } : {}),
+				url: stickerUrl.trim(),
+			});
+			setUrlImportResult(report);
+			setStickerUrl("");
+			setUrlName("");
+			setUrlKeywords("");
+			setUrlEmotions("");
+			toast.success(
+				report.duplicate
+					? t.t("url_import_duplicate", { name: report.item.name })
+					: t.t("url_import_success", { name: report.item.name, pack: report.pack.name }),
+			);
+			await refresh();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			setUrlImportError(message);
+			toast.error(t.t("url_import_failed"), message);
+		} finally {
+			setImportingUrl(false);
+		}
+	};
+
+	const stealFromQq = async (entry: QqRecentMediaRow): Promise<void> => {
+		setStealingMediaId(entry.mediaId);
+		try {
+			const result = await rpc.call<{
+				duplicate: boolean;
+				item: ItemRow;
+				pack: PackRow;
+			}>(rpcName("qq.steal"), {
+				conversationId: entry.conversationId,
+				mediaId: entry.mediaId,
+				mimeType: entry.mimeType,
+				...(entry.previewText ? { name: entry.previewText } : {}),
+				...(qqStealPackId.trim().length > 0 ? { packId: qqStealPackId.trim() } : {}),
+				...(entry.sha256 ? { sha256: entry.sha256 } : {}),
+			});
+			toast.success(
+				t.t("qq_steal_success", { name: result.item.name, pack: result.pack.name }),
+			);
+			await Promise.all([refresh(), loadQqMedia()]);
+		} catch (error) {
+			toast.error(t.t("qq_steal_failed"), error instanceof Error ? error.message : String(error));
+		} finally {
+			setStealingMediaId(null);
+		}
+	};
+
 	useEffect(() => {
 		void refresh();
+		void loadQqMedia();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
@@ -1507,6 +1639,149 @@ function StickerPanel() {
 								? ""
 								: ` ${telegramReport.warnings.join(" · ")}`}
 						</Alert>
+					)}
+				</div>
+			</PluginSection>
+
+			<PluginSection description={t.t("url_import_hint")} title={t.t("url_import")}>
+				<div className="space-y-3">
+					<Field label={t.t("url_import_url")}>
+						<Input
+							placeholder={t.t("url_import_url_placeholder")}
+							value={stickerUrl}
+							onChange={setStickerUrl}
+						/>
+					</Field>
+					<div className="grid gap-3 sm:grid-cols-2">
+						<Field label={t.t("url_import_pack")}>
+							<select
+								className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+								value={urlPackId}
+								onChange={(event) => setUrlPackId(event.target.value)}
+							>
+								<option value="">{t.t("url_import_pack_default")}</option>
+								{packs.map((pack) => (
+									<option key={pack.id} value={pack.id}>
+										{pack.name}
+									</option>
+								))}
+							</select>
+						</Field>
+						<Field label={t.t("url_import_name")}>
+							<Input value={urlName} onChange={setUrlName} />
+						</Field>
+						<Field label={t.t("url_import_keywords")}>
+							<Input value={urlKeywords} onChange={setUrlKeywords} />
+						</Field>
+						<Field label={t.t("url_import_emotions")}>
+							<Input value={urlEmotions} onChange={setUrlEmotions} />
+						</Field>
+					</div>
+					<Button
+						disabled={importingUrl || stickerUrl.trim().length === 0}
+						leadingIcon={<Upload />}
+						loading={importingUrl}
+						size="sm"
+						onClick={() => void importFromUrl()}
+					>
+						{importingUrl ? t.t("url_import_running") : t.t("url_import_run")}
+					</Button>
+					{urlImportError === null ? null : <Alert tone="danger">{urlImportError}</Alert>}
+					{urlImportResult === null ? null : (
+						<Alert tone="info">
+							{urlImportResult.duplicate
+								? t.t("url_import_duplicate", { name: urlImportResult.item.name })
+								: t.t("url_import_success", {
+										name: urlImportResult.item.name,
+										pack: urlImportResult.pack.name,
+									})}
+							{urlImportResult.convertedFromVideo
+								? ` · ${t.t("url_import_converted", { from: urlImportResult.originalMimeType })}`
+								: ""}
+						</Alert>
+					)}
+				</div>
+			</PluginSection>
+
+			<PluginSection description={t.t("qq_steal_hint")} title={t.t("qq_steal")}>
+				<div className="space-y-3">
+					<div className="flex flex-wrap items-end justify-between gap-3">
+						<Field label={t.t("url_import_pack")}>
+							<select
+								className="h-9 min-w-52 rounded-md border border-border bg-background px-2 text-sm"
+								value={qqStealPackId}
+								onChange={(event) => setQqStealPackId(event.target.value)}
+							>
+								<option value="">{t.t("url_import_pack_default")}</option>
+								{packs.map((pack) => (
+									<option key={pack.id} value={pack.id}>
+										{pack.name}
+									</option>
+								))}
+							</select>
+						</Field>
+						<Button
+							disabled={loadingQqMedia}
+							leadingIcon={<RefreshCw />}
+							loading={loadingQqMedia}
+							size="sm"
+							variant="secondary"
+							onClick={() => void loadQqMedia()}
+						>
+							{t.t("qq_steal_refresh")}
+						</Button>
+					</div>
+					{qqMedia.length === 0 ? (
+						<EmptyState title={t.t("qq_steal_empty")} />
+					) : (
+						<div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+							{qqMedia.map((entry) => {
+								const previewBase64 = qqPreviews[entry.mediaId];
+								const isStealing = stealingMediaId === entry.mediaId;
+								return (
+									<div
+										key={entry.mediaId}
+										className="flex flex-col justify-between gap-2 rounded-md border border-border bg-background p-2"
+									>
+										<div className="flex h-24 items-center justify-center overflow-hidden rounded bg-muted/40">
+											{previewBase64 !== undefined ? (
+												<img
+													alt={entry.previewText ?? entry.partType}
+													className="max-h-24 max-w-full object-contain"
+													src={`data:${entry.mimeType};base64,${previewBase64}`}
+												/>
+											) : (
+												<span className="text-[11px] text-muted-foreground">
+													{entry.partType}
+												</span>
+											)}
+										</div>
+										<div className="space-y-1">
+											<div className="truncate text-[11px] font-medium">
+												{entry.previewText ?? entry.partType}
+											</div>
+											<div className="truncate text-[10px] text-muted-foreground">
+												{entry.conversationTitle}
+											</div>
+											<Button
+												className="w-full"
+												disabled={entry.alreadyInLibrary || stealingMediaId !== null}
+												loading={isStealing}
+												size="sm"
+												variant={entry.alreadyInLibrary ? "ghost" : "secondary"}
+												onClick={() => void stealFromQq(entry)}
+											>
+												{entry.alreadyInLibrary
+													? t.t("qq_steal_already")
+													: isStealing
+														? t.t("qq_steal_stealing")
+														: t.t("qq_steal_action")}
+											</Button>
+										</div>
+									</div>
+								);
+							})}
+						</div>
 					)}
 				</div>
 			</PluginSection>

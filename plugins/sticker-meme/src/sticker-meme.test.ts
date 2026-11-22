@@ -59,6 +59,9 @@ import {
 } from "./telegram.ts";
 import { TelegramStickerImportService, type TelegramImportProgress } from "./telegram-import.ts";
 import { registerStickerTools } from "./tools.ts";
+import { findFfmpeg } from "./ffmpeg.ts";
+import { detectStickerMediaFormat, normalizeStickerMedia } from "./media-format.ts";
+import { StickerUrlImportService } from "./url-import.ts";
 
 const directories: string[] = [];
 
@@ -2604,5 +2607,377 @@ describe("sticker debug logging", () => {
 			{ itemCount: 2, name: "Alpha Pack" },
 			{ itemCount: 1, name: "Beta Pack" },
 		]);
+	});
+});
+
+const publicDns = async () => ["93.184.216.34"];
+
+describe("URL sticker import & format normalization", () => {
+	const ffmpegBinary = findFfmpeg();
+
+	test("detects image and video magic bytes and rejects HTML/unknown payloads", () => {
+		const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+		const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00]);
+		const gif = new TextEncoder().encode("GIF89a\x01\x00\x01\x00");
+		const webp = new Uint8Array([
+			0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+		]);
+		const mp4 = new Uint8Array([
+			0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32,
+		]);
+		const webm = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x01, 0x00]);
+		const html = new TextEncoder().encode("<!doctype html><html></html>");
+
+		expect(detectStickerMediaFormat(png)?.mimeType).toBe("image/png");
+		expect(detectStickerMediaFormat(jpg)?.mimeType).toBe("image/jpeg");
+		expect(detectStickerMediaFormat(gif)?.mimeType).toBe("image/gif");
+		expect(detectStickerMediaFormat(webp)?.mimeType).toBe("image/webp");
+		expect(detectStickerMediaFormat(mp4, "application/octet-stream")).toEqual({
+			extension: "mp4",
+			isVideo: true,
+			mimeType: "video/mp4",
+		});
+		expect(detectStickerMediaFormat(webm)).toEqual({
+			extension: "webm",
+			isVideo: true,
+			mimeType: "video/webm",
+		});
+		expect(detectStickerMediaFormat(html, "text/html")).toBeUndefined();
+	});
+
+	test.skipIf(ffmpegBinary === undefined)(
+		"imports a Twitter-style MP4 URL by converting it to an animated GIF sticker",
+		async () => {
+			const directory = await mkdtemp(join(tmpdir(), "tsukaima-url-mp4-"));
+			directories.push(directory);
+			const source = join(directory, "frame.png");
+			const mp4Path = join(directory, "tweet_video.mp4");
+			const { Canvas } = await import("canvas");
+			const canvas = new Canvas(64, 64);
+			const ctx = canvas.getContext("2d");
+			ctx.fillStyle = "#3399ff";
+			ctx.fillRect(8, 8, 48, 48);
+			await writeFile(source, canvas.toBuffer("image/png"));
+			const exitCode = await Bun.spawn([
+				ffmpegBinary as string,
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-loop",
+				"1",
+				"-i",
+				source,
+				"-t",
+				"0.4",
+				"-r",
+				"5",
+				"-c:v",
+				"libx264",
+				"-pix_fmt",
+				"yuv420p",
+				mp4Path,
+			]).exited;
+			expect(exitCode).toBe(0);
+			const mp4Bytes = new Uint8Array(await Bun.file(mp4Path).arrayBuffer());
+
+			const { audits, media, repository } = baseFixture();
+			const service = new StickerUrlImportService({
+				audit: {
+					record: async (entry) => {
+						audits.push(entry);
+					},
+				},
+				fetchFn: async (url) => {
+					expect(url).toBe("https://video.twimg.com/tweet_video/example.mp4?tag=12");
+					return new Response(mp4Bytes, {
+						headers: { "content-type": "video/mp4" },
+						status: 200,
+					});
+				},
+				media,
+				repository,
+				resolveDns: publicDns,
+			});
+
+			const result = await service.importUrl({
+				emotions: ["happy"],
+				keywords: ["twitter", "dance"],
+				name: "Twitter Dance",
+				url: "https://video.twimg.com/tweet_video/example.mp4?tag=12",
+			});
+			expect(result.convertedFromVideo).toBe(true);
+			expect(result.originalMimeType).toBe("video/mp4");
+			expect(result.duplicate).toBe(false);
+			expect(result.item.mimeType).toBe("image/gif");
+			expect(result.item.reviewStatus).toBe("approved");
+			expect(result.item.name).toBe("Twitter Dance");
+			const storedBytes = await media.readBytes(result.item.mediaId);
+			expect(new TextDecoder().decode(storedBytes.slice(0, 6))).toBe("GIF89a");
+			expect(audits.some((entry) => entry.action === "sticker.url.imported")).toBe(true);
+
+			// Re-importing the same URL deduplicates cleanly.
+			const again = await service.importUrl({
+				url: "https://video.twimg.com/tweet_video/example.mp4?tag=12",
+			});
+			expect(again.duplicate).toBe(true);
+			expect(again.item.id).toBe(result.item.id);
+		},
+	);
+
+	test("blocks private/loopback URLs and extracts og:video from HTML pages", async () => {
+		const { media, repository } = baseFixture();
+		const gifBytes = tinyGif(4, 4);
+		const service = new StickerUrlImportService({
+			converter: {
+				convertTgs: async (b) => b,
+				convertVideo: async () => gifBytes,
+			},
+			fetchFn: async (url) => {
+				if (url === "https://example.test/tweet-page") {
+					return new Response(
+						'<html><head><meta property="og:video" content="https://video.twimg.com/tweet_video/og.mp4"></head></html>',
+						{ headers: { "content-type": "text/html" }, status: 200 },
+					);
+				}
+				if (url === "https://video.twimg.com/tweet_video/og.mp4") {
+					return new Response(
+						new Uint8Array([
+							0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32,
+						]),
+						{ headers: { "content-type": "video/mp4" }, status: 200 },
+					);
+				}
+				return new Response("<html><body>no media</body></html>", {
+					headers: { "content-type": "text/html" },
+					status: 200,
+				});
+			},
+			media,
+			repository,
+			resolveDns: publicDns,
+		});
+
+		await expect(service.importUrl({ url: "http://127.0.0.1:8080/secret.png" })).rejects.toThrow(
+			/private or reserved/iu,
+		);
+		await expect(service.importUrl({ url: "http://localhost/secret.png" })).rejects.toThrow(
+			/local or private/iu,
+		);
+		await expect(service.importUrl({ url: "https://example.test/plain-page" })).rejects.toThrow(
+			/HTML page/iu,
+		);
+
+		const ogResult = await service.importUrl({ url: "https://example.test/tweet-page" });
+		expect(ogResult.convertedFromVideo).toBe(true);
+		expect(ogResult.item.mimeType).toBe("image/gif");
+
+		const normalizedImage = await normalizeStickerMedia(gifBytes);
+		expect(normalizedImage.convertedFromVideo).toBe(false);
+		expect(normalizedImage.mimeType).toBe("image/gif");
+	});
+});
+
+describe("QQ chat sticker stealing", () => {
+	test("passively captures inbound QQ stickers without modelReadable while ignoring plain photos", async () => {
+		const { media, repository } = baseFixture();
+		const learning = new LearningService({ media, repository });
+		const { Canvas } = await import("canvas");
+		const pngCanvas = new Canvas(4, 4);
+		const stickerRecord = await media.store({
+			bytes: tinyGif(4, 4),
+			kind: "sticker",
+			mimeType: "image/gif",
+			source: "channel",
+		});
+		const photoRecord = await media.store({
+			bytes: new Uint8Array(pngCanvas.toBuffer("image/png")),
+			kind: "image",
+			mimeType: "image/png",
+			source: "channel",
+		});
+
+		// Plain image without modelReadable/learnable is not auto-captured.
+		const skippedPhoto = await learning.learnFromEnvelope({
+			envelope: {
+				parts: [{ mediaId: photoRecord.id, mimeType: "image/png", type: "image" }],
+			},
+			sessionId: "qq-group-1",
+		});
+		expect(skippedPhoto).toBeUndefined();
+
+		// QQ sticker part without modelReadable IS auto-captured as a pending candidate.
+		const capturedSticker = await learning.learnFromEnvelope({
+			envelope: {
+				parts: [
+					{
+						mediaId: stickerRecord.id,
+						mimeType: "image/gif",
+						previewText: "[动画表情]",
+						type: "sticker",
+					},
+				],
+			},
+			sessionId: "qq-group-1",
+		});
+		expect(capturedSticker?.item.reviewStatus).toBe("pending");
+		expect(capturedSticker?.item.sourceConversationId).toBe("qq-group-1");
+		expect(capturedSticker?.item.mimeType).toBe("image/gif");
+	});
+
+	test("supports sticker-meme.steal tool, qq.recentMedia, qq.steal, and items.importUrl RPCs", async () => {
+		const { media, repository } = baseFixture();
+		const learning = new LearningService({ media, repository });
+		const selection = new StickerSelectionService({ media, repository });
+		const urlImport = new StickerUrlImportService({
+			fetchFn: async () =>
+				new Response(tinyGif(6, 6), { headers: { "content-type": "image/gif" }, status: 200 }),
+			media,
+			repository,
+			resolveDns: async () => ["93.184.216.34"],
+		});
+
+		const { Canvas } = await import("canvas");
+		const pngCanvas = new Canvas(4, 4);
+		const chatImage = await media.store({
+			bytes: new Uint8Array(pngCanvas.toBuffer("image/png")),
+			kind: "image",
+			mimeType: "image/png",
+			source: "channel",
+		});
+		const chatSticker = await media.store({
+			bytes: tinyGif(4, 4),
+			kind: "sticker",
+			mimeType: "image/gif",
+			source: "channel",
+		});
+
+		const context = createPluginContext({
+			manifest: stickerMemeManifest,
+			media,
+			pluginId: "sticker-meme",
+		});
+		const mutableContext = context as unknown as {
+			conversations: {
+				list: () => Promise<readonly { id: string; channelId: string; title: string }[]>;
+				recentMessages: (
+					conversationId: string,
+					limit?: number,
+				) => Promise<
+					readonly {
+						id: string;
+						platformMessageId?: string;
+						occurredAt: string;
+						parts: readonly {
+							type: "image" | "sticker";
+							mediaId: string;
+							mimeType: string;
+							sha256: string;
+							previewText?: string;
+						}[];
+					}[]
+				>;
+			};
+		};
+		mutableContext.conversations = {
+			list: async () => [{ channelId: "onebot-napcat", id: "conv-qq-1", title: "QQ Group Test" }],
+			recentMessages: async () => [
+				{
+					id: "msg-1",
+					occurredAt: "2026-11-22T10:00:00.000Z",
+					parts: [
+						{
+							mediaId: chatImage.id,
+							mimeType: "image/png",
+							previewText: "funny photo",
+							sha256: chatImage.sha256,
+							type: "image",
+						},
+					],
+					platformMessageId: "qq-msg-1",
+				},
+				{
+					id: "msg-2",
+					occurredAt: "2026-11-22T10:01:00.000Z",
+					parts: [
+						{
+							mediaId: chatSticker.id,
+							mimeType: "image/gif",
+							previewText: "cat sticker",
+							sha256: chatSticker.sha256,
+							type: "sticker",
+						},
+					],
+					platformMessageId: "qq-msg-2",
+				},
+			],
+		};
+
+		registerStickerTools(context, selection, undefined, { learning, urlImport });
+
+		// Model steals the latest sticker from QQ chat.
+		const stealRes = await context.tools.invoke(
+			"sticker-meme.steal",
+			{ keywords: ["cat", "cute"] },
+			{ conversationId: "conv-qq-1" },
+		);
+		expect(stealRes.ok).toBe(true);
+		if (stealRes.ok) {
+			const parsed = JSON.parse(stealRes.result.content[0]?.text ?? "{}") as {
+				itemId: string;
+				name: string;
+				stolen: boolean;
+			};
+			expect(parsed.stolen).toBe(true);
+			expect(parsed.name).toBe("cat sticker");
+			// Approved immediately so it can be searched right away.
+			const candidates = await selection.search({ query: "cat" });
+			expect(candidates.map((c) => c.itemId)).toContain(parsed.itemId);
+		}
+
+		// RPCs: qq.recentMedia, qq.steal, and items.importUrl
+		const rpcHandlers = new Map<string, (input: unknown) => Promise<unknown> | unknown>();
+		const rpcContext = {
+			...context,
+			rpc: {
+				list: () => [],
+				register: (method: string, handler: (input: unknown) => Promise<unknown> | unknown) => {
+					rpcHandlers.set(method, handler);
+					return () => {};
+				},
+			},
+		} as unknown as PluginContext;
+		registerStickerRpc(rpcContext, {
+			importService: new StickerImportService({ media, repository }),
+			learning,
+			repository,
+			selection,
+			urlImport,
+		});
+
+		const recentMedia = (await rpcHandlers.get("qq.recentMedia")?.({})) as {
+			items: readonly { mediaId: string; alreadyInLibrary: boolean }[];
+		};
+		expect(recentMedia.items.length).toBe(2);
+		expect(recentMedia.items.find((i) => i.mediaId === chatSticker.id)?.alreadyInLibrary).toBe(
+			true,
+		);
+		expect(recentMedia.items.find((i) => i.mediaId === chatImage.id)?.alreadyInLibrary).toBe(false);
+
+		const stolenViaRpc = (await rpcHandlers.get("qq.steal")?.({
+			classify: false,
+			mediaId: chatImage.id,
+			name: "Funny Photo Meme",
+		})) as { duplicate: boolean; item: StickerItem };
+		expect(stolenViaRpc.duplicate).toBe(false);
+		expect(stolenViaRpc.item.name).toBe("Funny Photo Meme");
+		expect(stolenViaRpc.item.reviewStatus).toBe("approved");
+
+		const importedViaRpc = (await rpcHandlers.get("items.importUrl")?.({
+			classify: false,
+			name: "From URL",
+			url: "https://example.test/meme.gif",
+		})) as { item: StickerItem };
+		expect(importedViaRpc.item.name).toBe("From URL");
 	});
 });
