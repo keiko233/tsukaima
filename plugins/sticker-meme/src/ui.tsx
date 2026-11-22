@@ -33,6 +33,7 @@ import {
 	X,
 } from "lucide-react";
 import pLimit from "p-limit";
+import { pickBy } from "es-toolkit";
 import { useEffect, useRef, useState } from "react";
 import { i18n } from "./i18n.ts";
 import { STICKER_MEME_PLUGIN_ID } from "./manifest.ts";
@@ -866,10 +867,7 @@ function StickerPanel() {
 			);
 			setPreviews((current) => {
 				const ids = new Set(itemResult.items.map((item) => item.id));
-				return Object.fromEntries(Object.entries(current).filter(([id]) => ids.has(id))) as Record<
-					string,
-					string
-				>;
+				return pickBy(current, (_value, id) => ids.has(id)) as Record<string, string>;
 			});
 		} catch (error) {
 			toast.error(t.t("load_failed"), String(error));

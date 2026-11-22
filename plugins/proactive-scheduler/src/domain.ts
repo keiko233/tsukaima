@@ -3,6 +3,7 @@ import {
 	PROACTIVE_SCHEDULE_LATER_MARKER,
 	PROACTIVE_SKIP_MARKER,
 } from "@tsukaima/contracts";
+import { isUndefined, omitBy } from "es-toolkit";
 import { z } from "zod";
 
 export const scheduledTaskKindSchema = z.enum(["remind", "nudge", "proactive", "workflow"]);
@@ -328,7 +329,7 @@ export function mergePolicy(
 	if (patch === undefined) return base;
 	return proactivePolicySchema.parse({
 		...base,
-		...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)),
+		...omitBy(patch, isUndefined),
 		quietHours: mergeQuietHours(base.quietHours, patch.quietHours),
 	});
 }

@@ -1,6 +1,7 @@
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { clamp } from "es-toolkit";
 import { findFfmpeg, runFfmpegCommand } from "./ffmpeg.ts";
 
 /** Minimal logging port, so a semantic classifier logger can be passed straight through. */
@@ -98,7 +99,7 @@ export async function buildAnimatedFrameSheet(
 		2,
 		Math.min(MAX_MAX_FRAMES, Math.floor(options.maxFrames ?? DEFAULT_MAX_FRAMES)),
 	);
-	const cellSize = Math.max(32, Math.min(512, Math.floor(options.cellSize ?? DEFAULT_CELL_SIZE)));
+	const cellSize = clamp(Math.floor(options.cellSize ?? DEFAULT_CELL_SIZE), 32, 512);
 	const directory = await mkdtemp(join(tmpdir(), "tsukaima-sticker-sheet-"));
 	try {
 		const extension = mimeType.toLowerCase() === "image/webp" ? "webp" : "gif";

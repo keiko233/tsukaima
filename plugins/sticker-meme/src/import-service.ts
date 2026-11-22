@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { compact } from "es-toolkit";
 import pLimit from "p-limit";
 import type {
 	PluginLogger,
@@ -479,7 +480,7 @@ export class StickerImportService {
 			const memes = existsSync(sqlitePath) ? readDshMemes(sqlitePath) : [];
 			const items = memes.length > 0 ? memes : (manifest.items ?? manifest.memes ?? []);
 			const fallbackName =
-				normalizeText(manifest.name) || prefix.split("/").filter(Boolean).at(-1) || "DSH meme pack";
+				normalizeText(manifest.name) || compact(prefix.split("/")).at(-1) || "DSH meme pack";
 			return await this.importBundle({
 				...(input.classifier === undefined ? {} : { classifier: input.classifier }),
 				dryRun: input.dryRun === true,

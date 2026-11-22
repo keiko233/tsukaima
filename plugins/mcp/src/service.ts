@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { isPlainObject, mapValues } from "es-toolkit";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import {
@@ -62,10 +63,6 @@ const DEFAULT_CLIENT_NAME = "tsukaima";
 const DEFAULT_CLIENT_VERSION = "0.1.0";
 const MAX_TOOL_PAGES = 20;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
@@ -124,9 +121,7 @@ function maskTransport(transport: McpTransport): McpServerConfigView["transport"
 			...(transport.env === undefined
 				? {}
 				: {
-						env: Object.fromEntries(
-							Object.keys(transport.env).map((key) => [key, MCP_SECRET_MASK] as const),
-						),
+						env: mapValues(transport.env, () => MCP_SECRET_MASK),
 					}),
 			type: "stdio",
 		};
@@ -135,9 +130,7 @@ function maskTransport(transport: McpTransport): McpServerConfigView["transport"
 		...(transport.headers === undefined
 			? {}
 			: {
-					headers: Object.fromEntries(
-						Object.keys(transport.headers).map((key) => [key, MCP_SECRET_MASK] as const),
-					),
+					headers: mapValues(transport.headers, () => MCP_SECRET_MASK),
 				}),
 		type: "http",
 		url: transport.url,
@@ -160,11 +153,8 @@ function preserveSecrets(next: McpTransport, previous: McpTransport): McpTranspo
 		const previousEnv = previous.type === "stdio" ? (previous.env ?? {}) : {};
 		return {
 			...next,
-			env: Object.fromEntries(
-				Object.entries(next.env).map(([key, value]) => [
-					key,
-					value === MCP_SECRET_MASK ? (previousEnv[key] ?? value) : value,
-				]),
+			env: mapValues(next.env, (value, key) =>
+				value === MCP_SECRET_MASK ? (previousEnv[key] ?? value) : value,
 			),
 		};
 	}
@@ -172,11 +162,8 @@ function preserveSecrets(next: McpTransport, previous: McpTransport): McpTranspo
 	const previousHeaders = previous.type === "http" ? (previous.headers ?? {}) : {};
 	return {
 		...next,
-		headers: Object.fromEntries(
-			Object.entries(next.headers).map(([key, value]) => [
-				key,
-				value === MCP_SECRET_MASK ? (previousHeaders[key] ?? value) : value,
-			]),
+		headers: mapValues(next.headers, (value, key) =>
+			value === MCP_SECRET_MASK ? (previousHeaders[key] ?? value) : value,
 		),
 	};
 }
@@ -261,7 +248,7 @@ function sseTransportFor(config: Extract<McpTransport, { type: "http" }>): Trans
 function normalizedContent(blocks: readonly unknown[]): McpToolContent[] {
 	const output: McpToolContent[] = [];
 	for (const block of blocks) {
-		if (!isRecord(block)) {
+		if (!isPlainObject(block)) {
 			output.push({ text: JSON.stringify(block), type: "text" });
 			continue;
 		}
@@ -284,7 +271,7 @@ function normalizedContent(blocks: readonly unknown[]): McpToolContent[] {
 			});
 			continue;
 		}
-		if (block.type === "resource" && isRecord(block.resource)) {
+		if (block.type === "resource" && isPlainObject(block.resource)) {
 			const resource = block.resource;
 			if (typeof resource.text === "string") {
 				output.push({ text: resource.text, type: "text" });
@@ -627,10 +614,10 @@ export class McpManager {
 				signal,
 			})) as unknown as { nextCursor?: string; tools?: readonly unknown[] };
 			for (const tool of result.tools ?? []) {
-				if (!isRecord(tool) || typeof tool.name !== "string") continue;
+				if (!isPlainObject(tool) || typeof tool.name !== "string") continue;
 				tools.push({
 					...(typeof tool.description === "string" ? { description: tool.description } : {}),
-					inputSchema: isRecord(tool.inputSchema) ? tool.inputSchema : { type: "object" },
+					inputSchema: isPlainObject(tool.inputSchema) ? tool.inputSchema : { type: "object" },
 					name: tool.name,
 				});
 			}

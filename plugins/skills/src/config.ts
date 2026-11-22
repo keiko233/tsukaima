@@ -1,4 +1,5 @@
 import { delimiter, resolve } from "node:path";
+import { isPlainObject } from "es-toolkit";
 import type { SkillSurface } from "@tsukaima/contracts";
 
 export const DEFAULT_SKILLS_MAX_CATALOG_CHARS = 4_000;
@@ -40,10 +41,7 @@ function clampedInteger(value: unknown, min: number, max: number, fallback: numb
  * failing plugin setup, because the loader must stay alive to report a useful status.
  */
 export function parseSkillsConfig(raw: unknown, cwd = process.cwd()): SkillsConfig {
-	const config =
-		typeof raw === "object" && raw !== null && !Array.isArray(raw)
-			? (raw as Record<string, unknown>)
-			: {};
+	const config = isPlainObject(raw) ? raw : {};
 	const paths: string[] = [];
 	const seen = new Set<string>();
 	for (const entry of textValues(config.paths)) {

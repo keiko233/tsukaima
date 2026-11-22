@@ -9,6 +9,7 @@ import {
 	type MessageQuote,
 } from "@tsukaima/contracts";
 import type { PluginLogger } from "@tsukaima/sdk";
+import { compact } from "es-toolkit";
 import { createSafeLogger, segmentTypeCounts, singleLinePreview } from "../logging.ts";
 import type { OneBotMentionNameResolver } from "./mention-names.ts";
 import type { OneBotIntervalRateLimiter } from "./rate-limit.ts";
@@ -58,12 +59,12 @@ const fileNameFrom = (value: string | undefined): string | undefined => {
 	if (value === undefined) return undefined;
 	if (isHttpUrl(value)) {
 		try {
-			const name = new URL(value).pathname.split("/").filter(Boolean).at(-1);
+			const name = compact(new URL(value).pathname.split("/")).at(-1);
 			if (name !== undefined && name.length > 0) return decodeURIComponent(name);
 		} catch {}
 	}
 	const safe = value.startsWith("file://") ? value.slice("file://".length) : value;
-	const name = safe.split(/[\\/]/u).filter(Boolean).at(-1);
+	const name = compact(safe.split(/[\\/]/u)).at(-1);
 	return name !== undefined && name.length > 0 ? name : undefined;
 };
 
