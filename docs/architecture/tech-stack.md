@@ -196,6 +196,8 @@ Pre-commit must not run the full test suite by default if it makes iteration slo
 - Avoid overlapping libraries for the same concern.
 - Avoid runtime dependencies in `packages/contracts` except Zod and oRPC types.
 - Review every new dependency for Bun compatibility, maintenance activity, and security.
+- Object and collection shaping uses `es-toolkit` where it reads better than hand-written loops;
+  pin it exactly and follow [es-toolkit conventions](es-toolkit.md).
 - Lock dependency versions in `bun.lock`.
 
 ## Development commands
