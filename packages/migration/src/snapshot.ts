@@ -1,3 +1,4 @@
+import { compact, uniq } from "es-toolkit";
 import { promises as fs } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { tmpdir } from "node:os";
@@ -190,7 +191,7 @@ export function matchesSnapshotExclude(
 	excludes: readonly string[] = DEFAULT_SNAPSHOT_EXCLUDES,
 ): boolean {
 	const normalized = path.replaceAll("\\", "/");
-	const segments = normalized.split("/").filter(Boolean);
+	const segments = compact(normalized.split("/"));
 	return excludes.some((pattern) => {
 		const regex = new RegExp(`(?:^|/)${escapePattern(pattern)}(?:$|/)`, "i");
 		if (regex.test(normalized)) return true;
@@ -298,7 +299,7 @@ export async function captureSnapshot(
 ): Promise<CaptureSnapshotResult> {
 	const now = options.now ?? Date.now;
 	const dryRun = options.dryRun === true;
-	const excludes = [...new Set([...(options.excludes ?? []), ...DEFAULT_SNAPSHOT_EXCLUDES])];
+	const excludes = uniq([...(options.excludes ?? []), ...DEFAULT_SNAPSHOT_EXCLUDES]);
 	const target = resolveSnapshotTarget(options.target, options.environment);
 	const output = options.output;
 	await fs.mkdir(output, { recursive: true });

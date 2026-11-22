@@ -1,6 +1,7 @@
 import { classifyDshConfigKey } from "./dsh-baseline.ts";
 import { type DecisionEntry, type DecisionReport, summarizeDecisions } from "./decision.ts";
 import { sha256String, stableStringify } from "./fs.ts";
+import { isRecord } from "./guards.ts";
 import { isHostSpecificKey, isIdentifyingKey, isSecretKey, redactSecrets } from "./secrets.ts";
 import type { NormalizedSetting } from "./normalize.ts";
 
@@ -314,10 +315,6 @@ for (const area of DSH_CONFIG_AREAS) {
 
 function normalizeKey(key: string): string {
 	return key.toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 export function classifyConfigArea(path: readonly string[], key: string): DshConfigArea {

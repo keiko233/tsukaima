@@ -1,5 +1,7 @@
 import { isCredentialLikeKey } from "./dsh-baseline.ts";
+import { mapValues } from "es-toolkit";
 import { stableStringify } from "./fs.ts";
+import { isRecord } from "./guards.ts";
 
 export interface SecretRedaction {
 	readonly path: string;
@@ -52,7 +54,7 @@ function segments(key: string): string[] {
 		.replace(/([a-z0-9])([A-Z])/g, "$1-$2")
 		.toLowerCase()
 		.split(/[^a-z0-9]+/)
-		.filter(Boolean);
+		.filter((segment) => segment.length > 0);
 }
 
 export function isSecretKey(key: string): boolean {
@@ -66,10 +68,6 @@ export function isHostSpecificKey(key: string): boolean {
 
 export function isIdentifyingKey(key: string): boolean {
 	return IDENTIFYING_KEYS.has(key.toLowerCase().replace(/[^a-z0-9]+/g, ""));
-}
-
-function isContainer(value: unknown): value is Record<string, unknown> {
-	return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 /**
@@ -89,22 +87,19 @@ export function redactSecrets<T>(
 			if (Array.isArray(current)) {
 				return current.map(() => "[REDACTED]");
 			}
-			if (isContainer(current)) {
-				return Object.fromEntries(Object.keys(current).map((child) => [child, "[REDACTED]"]));
+			if (isRecord(current)) {
+				return mapValues(current, () => "[REDACTED]");
 			}
 			return current === null || current === undefined || current === "" ? current : "[REDACTED]";
 		}
 		if (Array.isArray(current)) {
 			return current.map((item, index) => visit(item, `${path}[${index}]`, key));
 		}
-		if (!isContainer(current)) {
+		if (!isRecord(current)) {
 			return current;
 		}
-		return Object.fromEntries(
-			Object.entries(current).map(([childKey, childValue]) => [
-				childKey,
-				visit(childValue, `${path}.${childKey}`, childKey),
-			]),
+		return mapValues(current, (childValue, childKey) =>
+			visit(childValue, `${path}.${childKey}`, childKey),
 		);
 	};
 	return { redactions, value: visit(value, "$", "") as T };
@@ -115,7 +110,7 @@ export function collectSecretValues(value: unknown, path = "$"): string[] {
 	if (Array.isArray(value)) {
 		return value.flatMap((item, index) => collectSecretValues(item, `${path}[${index}]`));
 	}
-	if (!isContainer(value)) {
+	if (!isRecord(value)) {
 		return [];
 	}
 	return Object.entries(value).flatMap(([key, child]) => {

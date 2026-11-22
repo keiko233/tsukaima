@@ -1,3 +1,5 @@
+import { uniq } from "es-toolkit";
+
 export const DECISION_ACTIONS = ["direct", "remap", "review", "discard"] as const;
 
 export type DecisionAction = (typeof DECISION_ACTIONS)[number];
@@ -38,7 +40,7 @@ export function summarizeDecisions(
 		counts,
 		entries,
 		redactedValues: entries.filter((entry) => entry.redacted === true).length,
-		secretPaths: [...new Set(secretPaths)].toSorted((left, right) => left.localeCompare(right)),
+		secretPaths: uniq(secretPaths).toSorted((left, right) => left.localeCompare(right)),
 		unresolved: entries.filter((entry) => entry.action === "review"),
 	};
 }
@@ -56,7 +58,7 @@ export function mergeDecisionReports(reports: readonly DecisionReport[]): Decisi
 		counts,
 		entries,
 		redactedValues: reports.reduce((total, report) => total + report.redactedValues, 0),
-		secretPaths: [...new Set(secretPaths)].toSorted((left, right) => left.localeCompare(right)),
+		secretPaths: uniq(secretPaths).toSorted((left, right) => left.localeCompare(right)),
 		unresolved: entries.filter((entry) => entry.action === "review"),
 	};
 }

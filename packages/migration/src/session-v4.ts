@@ -2,6 +2,7 @@ import { createZstdDecompress } from "node:zlib";
 import { Readable } from "node:stream";
 import { open } from "node:fs/promises";
 import { sha256String, stableStringify } from "./fs.ts";
+import { isRecord } from "./guards.ts";
 
 export const DSH_SESSION_SCHEMA_VERSION = 4;
 export const DSH_SESSION_RECORD_TYPES = [
@@ -112,10 +113,6 @@ export interface SessionParseOptions {
 	readonly maxRecordBytes?: number;
 	readonly startOffset?: number;
 	readonly now?: () => number;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function stringOrNull(value: unknown): string | null {
