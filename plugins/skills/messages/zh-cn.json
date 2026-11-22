@@ -12,5 +12,17 @@
 	"no_paths_hint": "请设置 TSUKAIMA_SKILLS_PATHS，或在插件配置中添加技能根目录。",
 	"preview": "预览",
 	"disabled_badge": "已停用",
-	"action_failed": "技能操作失败"
+	"action_failed": "技能操作失败",
+	"config_paths": "技能目录",
+	"config_paths_hint": "包含技能文件夹（每个含 SKILL.md）的目录路径。相对路径基于服务端工作目录解析。",
+	"config_disabled": "已停用的技能",
+	"config_disabled_hint": "要从目录和工具中隐藏的技能名称列表。",
+	"config_surfaces": "可用范围",
+	"config_surfaces_hint": "接收技能目录与工具的会话类型（chat、workspace）。",
+	"config_allow_resources": "允许读取技能资源",
+	"config_allow_resources_hint": "允许模型读取技能目录中附带的 UTF-8 文本文件。",
+	"config_max_catalog_chars": "目录长度上限",
+	"config_max_catalog_chars_hint": "每轮上下文中渲染技能目录的最大字符数（500–8000）。",
+	"config_refresh_interval_seconds": "重扫间隔（秒）",
+	"config_refresh_interval_seconds_hint": "后台自动重新扫描过期技能目录的时间间隔（5–3600）。"
 }

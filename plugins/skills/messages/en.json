@@ -12,5 +12,17 @@
 	"no_paths_hint": "Set TSUKAIMA_SKILLS_PATHS or add skill roots in the plugin config.",
 	"preview": "Preview",
 	"disabled_badge": "Disabled",
-	"action_failed": "Skill action failed"
+	"action_failed": "Skill action failed",
+	"config_paths": "Skill directories",
+	"config_paths_hint": "Directories containing skill folders (each with a SKILL.md). Relative paths resolve against the server working directory.",
+	"config_disabled": "Disabled skills",
+	"config_disabled_hint": "Skill names to hide from the catalog and tools.",
+	"config_surfaces": "Surfaces",
+	"config_surfaces_hint": "Conversation surfaces that receive the skill catalog and tools (chat, workspace).",
+	"config_allow_resources": "Allow skill resources",
+	"config_allow_resources_hint": "Allow the model to read text files bundled inside a skill folder.",
+	"config_max_catalog_chars": "Catalog size limit",
+	"config_max_catalog_chars_hint": "Maximum characters rendered for the skill catalog in turn context (500–8000).",
+	"config_refresh_interval_seconds": "Rescan interval (seconds)",
+	"config_refresh_interval_seconds_hint": "How often stale skill directories are rescanned in the background (5–3600)."
 }

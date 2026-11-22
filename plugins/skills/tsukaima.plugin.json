@@ -11,19 +11,41 @@
 		"properties": {
 			"paths": {
 				"type": "array",
-				"items": { "type": "string" }
+				"items": { "type": "string" },
+				"titleKey": "config_paths",
+				"descriptionKey": "config_paths_hint"
 			},
 			"disabled": {
 				"type": "array",
-				"items": { "type": "string" }
+				"items": { "type": "string" },
+				"titleKey": "config_disabled",
+				"descriptionKey": "config_disabled_hint"
 			},
 			"surfaces": {
 				"type": "array",
-				"items": { "type": "string", "enum": ["chat", "workspace"] }
+				"items": { "type": "string", "enum": ["chat", "workspace"] },
+				"titleKey": "config_surfaces",
+				"descriptionKey": "config_surfaces_hint"
 			},
-			"allowResources": { "type": "boolean" },
-			"maxCatalogChars": { "type": "integer", "minimum": 500, "maximum": 8000 },
-			"refreshIntervalSeconds": { "type": "integer", "minimum": 5, "maximum": 3600 }
+			"allowResources": {
+				"type": "boolean",
+				"titleKey": "config_allow_resources",
+				"descriptionKey": "config_allow_resources_hint"
+			},
+			"maxCatalogChars": {
+				"type": "integer",
+				"minimum": 500,
+				"maximum": 8000,
+				"titleKey": "config_max_catalog_chars",
+				"descriptionKey": "config_max_catalog_chars_hint"
+			},
+			"refreshIntervalSeconds": {
+				"type": "integer",
+				"minimum": 5,
+				"maximum": 3600,
+				"titleKey": "config_refresh_interval_seconds",
+				"descriptionKey": "config_refresh_interval_seconds_hint"
+			}
 		},
 		"type": "object"
 	},

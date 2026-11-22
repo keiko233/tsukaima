@@ -12,13 +12,41 @@ export const skillsManifest: PluginManifest = pluginManifestSchema.parse({
 	configEnv: { paths: "TSUKAIMA_SKILLS_PATHS" },
 	configSchema: {
 		properties: {
-			allowResources: { type: "boolean" },
-			disabled: { items: { type: "string" }, type: "array" },
-			maxCatalogChars: { maximum: 8_000, minimum: 500, type: "integer" },
-			paths: { items: { type: "string" }, type: "array" },
-			refreshIntervalSeconds: { maximum: 3_600, minimum: 5, type: "integer" },
+			allowResources: {
+				descriptionKey: "config_allow_resources_hint",
+				titleKey: "config_allow_resources",
+				type: "boolean",
+			},
+			disabled: {
+				descriptionKey: "config_disabled_hint",
+				items: { type: "string" },
+				titleKey: "config_disabled",
+				type: "array",
+			},
+			maxCatalogChars: {
+				descriptionKey: "config_max_catalog_chars_hint",
+				maximum: 8_000,
+				minimum: 500,
+				titleKey: "config_max_catalog_chars",
+				type: "integer",
+			},
+			paths: {
+				descriptionKey: "config_paths_hint",
+				items: { type: "string" },
+				titleKey: "config_paths",
+				type: "array",
+			},
+			refreshIntervalSeconds: {
+				descriptionKey: "config_refresh_interval_seconds_hint",
+				maximum: 3_600,
+				minimum: 5,
+				titleKey: "config_refresh_interval_seconds",
+				type: "integer",
+			},
 			surfaces: {
+				descriptionKey: "config_surfaces_hint",
 				items: { enum: ["chat", "workspace"], type: "string" },
+				titleKey: "config_surfaces",
 				type: "array",
 			},
 		},
