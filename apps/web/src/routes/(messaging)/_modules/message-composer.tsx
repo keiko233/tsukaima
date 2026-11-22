@@ -1,7 +1,7 @@
 "use client";
 
-import { AtSign, ListEnd, MessageCircle, Send, X, Zap } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { AtSign, ListEnd, X, Zap } from "lucide-react";
+import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PromptInput } from "@tsukaima/ui/components/agents/prompt-input";
 import { Button } from "@tsukaima/ui/components/motion/button";
@@ -41,17 +41,16 @@ export function MessageComposer({
 	workspace?: boolean;
 }) {
 	const draftKey = `tsukaima.webui.draft.${sessionId}`;
-	const targetKey = `tsukaima.webui.target.${sessionId}`;
 	const modeKey = `tsukaima.webui.delivery-mode.${sessionId}`;
 	const [text, setText] = useState(() => localStorage.getItem(draftKey) ?? "");
 	const [mode, setMode] = useState<MessageDeliveryMode>(() => {
 		const stored = localStorage.getItem(modeKey);
 		return stored === "interrupt" || stored === "follow-up" ? stored : "queue";
 	});
-	const [target, setTarget] = useState<DeliveryTarget>(() => {
-		const stored = localStorage.getItem(targetKey);
-		return stored === "channel" ? "channel" : "tsukaima";
-	});
+	// External chats only send directly to the channel from the WebUI; internal Tsukaima turns
+	// are not exposed in the external composer so operator interventions never surface as chat UX.
+	const target: DeliveryTarget = externalEligible ? "channel" : "tsukaima";
+	const channelUnavailable = externalEligible && !channelConnected;
 	const [references, setReferences] = useState<
 		Array<{ kind: string; sessionId: string; title: string }>
 	>([]);
@@ -68,18 +67,9 @@ export function MessageComposer({
 		enabled: workspace && referenceOpen,
 	});
 
-	useEffect(() => {
-		if (!externalEligible || !channelConnected) setTarget("tsukaima");
-	}, [channelConnected, externalEligible]);
-
 	const updateText = (next: string) => {
 		setText(next);
 		localStorage.setItem(draftKey, next);
-	};
-
-	const updateTarget = (next: DeliveryTarget) => {
-		setTarget(next);
-		localStorage.setItem(targetKey, next);
 	};
 
 	const updateMode = (next: MessageDeliveryMode) => {
@@ -183,47 +173,6 @@ export function MessageComposer({
 		</div>
 	) : null;
 
-	const targetSelect = externalEligible ? (
-		<Select
-			value={target}
-			onValueChange={(value) => updateTarget(value as DeliveryTarget)}
-			disabled={disabled || sending}
-		>
-			<SelectTrigger
-				className="h-7 w-auto max-w-48 rounded-md border-0 bg-transparent px-1.5 py-0 text-[11px] hover:bg-muted focus-visible:ring-2"
-				aria-label={m.session_target()}
-			>
-				<span className="flex min-w-0 items-center gap-1.5">
-					{target === "channel" ? (
-						<Send className="size-3 text-muted-foreground" />
-					) : (
-						<MessageCircle className="size-3 text-muted-foreground" />
-					)}
-					<span className="truncate text-muted-foreground">
-						{target === "channel" ? m.send_to_channel() : m.send_to_tsukaima()}
-					</span>
-				</span>
-			</SelectTrigger>
-			<SelectContent className="right-auto w-60 shadow-none">
-				<SelectItem value="tsukaima" className="py-2">
-					<span className="block">
-						<span className="block text-sm text-foreground">{m.send_to_tsukaima()}</span>
-						<span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
-							{m.composer_hint_tsukaima()}
-						</span>
-					</span>
-				</SelectItem>
-				<SelectItem value="channel" disabled={!channelConnected} className="py-2">
-					<span className="block">
-						<span className="block text-sm text-foreground">{m.send_to_channel()}</span>
-						<span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
-							{channelConnected ? m.composer_hint_channel() : m.channel_not_connected()}
-						</span>
-					</span>
-				</SelectItem>
-			</SelectContent>
-		</Select>
-	) : null;
 	const modeSelect =
 		target === "tsukaima" ? (
 			<Select
@@ -313,14 +262,13 @@ export function MessageComposer({
 					onSubmit={(value) => void submit(value)}
 					placeholder={m.composer_placeholder()}
 					aria-label={m.composer_placeholder()}
-					disabled={disabled || sending}
+					disabled={disabled || sending || channelUnavailable}
 					minRows={1}
 					maxRows={8}
 					leadingAction={
-						targetSelect !== null || modeSelect !== null || referencePicker !== null ? (
+						modeSelect !== null || referencePicker !== null ? (
 							<span className="flex items-center gap-0.5">
 								{referencePicker}
-								{targetSelect}
 								{modeSelect}
 							</span>
 						) : null
@@ -329,7 +277,9 @@ export function MessageComposer({
 				/>
 				<p className="mt-1 px-1.5 text-[10px] leading-4 text-muted-foreground/80">
 					{target === "channel"
-						? m.composer_hint_channel()
+						? channelConnected
+							? m.composer_hint_channel()
+							: m.channel_not_connected()
 						: workspace
 							? m.composer_hint_workspace()
 							: m.composer_hint_tsukaima()}
