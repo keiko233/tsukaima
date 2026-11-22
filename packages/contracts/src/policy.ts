@@ -416,7 +416,7 @@ export const conversationGatePolicySchema = z
 		enabled: z.boolean().default(false),
 		/** Lightweight model id inside the active provider; falls back to runtime `gateModelId`. */
 		model: z.string().min(1).optional(),
-		timeoutMs: z.number().int().min(100).max(30_000).default(1_500),
+		timeoutMs: z.number().int().min(100).max(30_000).default(4_000),
 		burstCompletion: z.boolean().default(true),
 		undirectedGroupReply: z.boolean().default(true),
 		ambientGroupReply: z.boolean().default(false),
@@ -435,7 +435,7 @@ export const defaultConversationGatePolicy: ConversationGatePolicy = {
 	circuitBreakerThreshold: 3,
 	enabled: false,
 	proactiveBubble: true,
-	timeoutMs: 1_500,
+	timeoutMs: 4_000,
 	undirectedGroupReply: true,
 };
 
