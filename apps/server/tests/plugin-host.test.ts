@@ -219,6 +219,7 @@ describe("plugin host", () => {
 			expect(plugins.map((plugin) => plugin.name)).toEqual([
 				"openai-compatible",
 				"onebot-napcat",
+				"history",
 				"memory",
 				"proactive-scheduler",
 				"sticker-meme",

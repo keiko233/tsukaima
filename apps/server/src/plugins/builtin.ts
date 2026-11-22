@@ -6,6 +6,7 @@ import { skillsPlugin } from "@tsukaima-plugin/skills";
 import { stickerMemePlugin } from "@tsukaima-plugin/sticker-meme";
 import type { TsukaimaPlugin } from "@tsukaima/sdk";
 import { memoryPlugin } from "./memory.ts";
+import { chatHistoryPlugin } from "./chat-history.ts";
 
 /**
  * Composition root for built-in plugins. This is the only server file that imports plugin
@@ -14,6 +15,7 @@ import { memoryPlugin } from "./memory.ts";
 export const builtinPlugins: readonly TsukaimaPlugin[] = [
 	openAiCompatiblePlugin,
 	oneBotNapCatPlugin,
+	chatHistoryPlugin,
 	memoryPlugin,
 	proactiveSchedulerPlugin,
 	stickerMemePlugin,
