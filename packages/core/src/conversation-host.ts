@@ -3123,6 +3123,58 @@ export class PiDurableConversationHost {
 	}
 
 	/**
+	 * Resume durable tasks and re-attach live/answer observers after a process restart.
+	 *
+	 * `Harness.open()` loads surviving tasks and resets `running` tasks to `pending`, but leaves
+	 * scheduling disabled until `harness.resume()` is called. Re-attaching `observeAnswer` and
+	 * `watchLiveRun` before enabling the scheduler ensures resumed turns update live run state,
+	 * emit streamed lines, and dispatch their final answer without waiting for recovery sweeps.
+	 */
+	async resumePendingRuns(): Promise<number> {
+		if (this.closed) return 0;
+		const harness = await this.openHarness();
+		const inspection = await harness.inspect(BACKGROUND_CONTEXT);
+		const conversationIds = new Set<string>();
+		for (const submission of inspection.submissions) {
+			conversationIds.add(String(submission.conversationId));
+		}
+		for (const task of inspection.tasks) {
+			conversationIds.add(String(task.record.conversationId));
+		}
+		for (const conversationId of conversationIds) {
+			const numericId = Number(conversationId) as ConversationId;
+			const conversation = await harness.conversation(numericId, BACKGROUND_CONTEXT);
+			if (conversation === undefined) continue;
+			await this.ensureExtensions(conversation, conversationId);
+			await this.ensureAgentModel(conversation, conversationId);
+		}
+		const watchedConversations = new Set<string>();
+		for (const submission of inspection.submissions) {
+			const conversationId = String(submission.conversationId);
+			const submissionId = String(submission.id);
+			this.trackSubmission(conversationId, submissionId);
+			const handle = await harness.submission(submission.id, BACKGROUND_CONTEXT);
+			this.observeAnswer(harness, conversationId, handle, submissionId, submission.requestId);
+			watchedConversations.add(conversationId);
+		}
+		for (const task of inspection.tasks) {
+			const conversationId = String(task.record.conversationId);
+			if (watchedConversations.has(conversationId)) continue;
+			this.watchLiveRun(harness, conversationId);
+			watchedConversations.add(conversationId);
+		}
+		harness.resume();
+		if (inspection.submissions.length > 0 || inspection.tasks.length > 0) {
+			this.logger.info("Resumed durable conversation runs", {
+				conversations: conversationIds.size,
+				submissions: inspection.submissions.length,
+				tasks: inspection.tasks.length,
+			});
+		}
+		return conversationIds.size;
+	}
+
+	/**
 	 * Persist the effective domain policy into the durable conversation document. The server
 	 * policy service owns resolution and revision history; this method only syncs the active
 	 * document so activity aggregation and pacing read from one durable source.
