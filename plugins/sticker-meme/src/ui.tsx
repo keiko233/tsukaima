@@ -321,16 +321,19 @@ function StickerInspector({
 	item,
 	onChanged,
 	onClose,
+	packs,
 	preview,
 }: {
 	item: ItemRow;
 	onChanged: () => Promise<void>;
 	onClose: () => void;
+	packs: readonly PackRow[];
 	preview?: string;
 }) {
 	const t = usePluginI18n();
 	const rpc = usePluginRpc();
 	const toast = usePluginToast();
+	const [packId, setPackId] = useState(item.packId);
 	const [name, setName] = useState(item.name);
 	const [description, setDescription] = useState(item.description);
 	const [keywords, setKeywords] = useState(join(item.keywords));
@@ -349,6 +352,7 @@ function StickerInspector({
 				id: item.id,
 				keywords: list(keywords),
 				name,
+				...(packId.length > 0 && packs.some((pack) => pack.id === packId) ? { packId } : {}),
 				score: Number(score) || 0,
 			});
 			toast.success(t.t("save_success"));
@@ -435,6 +439,24 @@ function StickerInspector({
 				</div>
 			</div>
 			<div className="grid gap-2 sm:grid-cols-2">
+				{packs.length > 0 ? (
+					<Field label={t.t("item_pack")}>
+						<select
+							className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+							value={packId}
+							onChange={(event) => setPackId(event.target.value)}
+						>
+							{!packs.some((pack) => pack.id === packId) ? (
+								<option value={packId}>{t.t("uncategorized_pack_name")}</option>
+							) : null}
+							{packs.map((pack) => (
+								<option key={pack.id} value={pack.id}>
+									{pack.name}
+								</option>
+							))}
+						</select>
+					</Field>
+				) : null}
 				<Field label={t.t("item_name")}>
 					<Input value={name} onChange={setName} />
 				</Field>
@@ -469,20 +491,111 @@ function StickerInspector({
 	);
 }
 
+function StickerThumbnailGrid({
+	emptyText,
+	items,
+	onChanged,
+	packs,
+	previewErrors,
+	previews,
+	selectedId,
+	setSelectedId,
+}: {
+	emptyText: string;
+	items: readonly ItemRow[];
+	onChanged: () => Promise<void>;
+	packs: readonly PackRow[];
+	previewErrors: Record<string, boolean>;
+	previews: Record<string, string>;
+	selectedId: string | null;
+	setSelectedId: (id: string | null) => void;
+}) {
+	const t = usePluginI18n();
+	const selected = items.find((item) => item.id === selectedId) ?? null;
+	return (
+		<div className="space-y-3">
+			{items.length === 0 ? (
+				<div className="text-xs text-muted-foreground">{emptyText}</div>
+			) : (
+				<div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
+					{items.map((item) => {
+						const preview = previews[item.id];
+						const missing = item.mediaId.length === 0 || item.revokedAt !== null;
+						const isSelected = selectedId === item.id;
+						return (
+							<button
+								key={item.id}
+								aria-label={item.name}
+								aria-pressed={isSelected}
+								className={cn(
+									"group relative aspect-square overflow-hidden rounded-lg border border-border bg-background/60 p-1 transition hover:border-primary/50",
+									isSelected && "ring-2 ring-primary",
+									!item.enabled && "opacity-50",
+								)}
+								type="button"
+								onClick={() => setSelectedId(isSelected ? null : item.id)}
+							>
+								{preview === undefined ? (
+									<span className="flex size-full items-center justify-center text-center text-[10px] text-muted-foreground">
+										{previewErrors[item.id] ? t.t("preview_failed") : t.t("item_preview")}
+									</span>
+								) : (
+									<StickerMediaPreview
+										alt={item.name}
+										className="size-full object-contain"
+										mimeType={item.mimeType}
+										preview={preview}
+									/>
+								)}
+								{missing ? (
+									<span className="absolute inset-x-0 bottom-0 bg-warning/20 px-1 text-center text-[9px] text-warning">
+										{t.t("status_missing")}
+									</span>
+								) : null}
+								{!item.enabled ? (
+									<span className="absolute left-1 top-1 rounded bg-background/80 px-1 text-[9px] text-muted-foreground">
+										{t.t("item_disabled_short")}
+									</span>
+								) : null}
+							</button>
+						);
+					})}
+				</div>
+			)}
+			{selected === null ? (
+				<div className="text-[11px] text-muted-foreground">{t.t("sticker_edit_hint")}</div>
+			) : (
+				<StickerInspector
+					key={selected.id}
+					item={selected}
+					packs={packs}
+					preview={previews[selected.id]}
+					onChanged={onChanged}
+					onClose={() => setSelectedId(null)}
+				/>
+			)}
+		</div>
+	);
+}
+
 function PackAccordion({
 	items,
 	onChanged,
 	onLoadPreviews,
 	pack,
+	packs,
 	previewErrors,
 	previews,
+	readOnly = false,
 }: {
 	items: readonly ItemRow[];
 	onChanged: () => Promise<void>;
 	onLoadPreviews: (items: readonly ItemRow[]) => Promise<void>;
 	pack: PackRow;
+	packs: readonly PackRow[];
 	previewErrors: Record<string, boolean>;
 	previews: Record<string, string>;
+	readOnly?: boolean;
 }) {
 	const t = usePluginI18n();
 	const rpc = usePluginRpc();
@@ -497,7 +610,6 @@ function PackAccordion({
 	const [deleting, setDeleting] = useState(false);
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const telegramName = telegramSetName(pack);
-	const selected = items.find((item) => item.id === selectedId) ?? null;
 	const toggle = () => {
 		const next = !expanded;
 		setExpanded(next);
@@ -572,41 +684,43 @@ function PackAccordion({
 						</span>
 					</span>
 				</button>
-				<div className="flex shrink-0 items-center gap-1">
-					<Button
-						aria-label={confirmDelete ? t.t("pack_delete_confirm") : t.t("delete_pack")}
-						disabled={deleting}
-						leadingIcon={confirmDelete ? undefined : <Trash2 />}
-						loading={deleting}
-						size="xs"
-						variant={confirmDelete ? "danger" : "ghost"}
-						onClick={() => void deletePack()}
-					>
-						{confirmDelete ? t.t("pack_delete_confirm") : null}
-					</Button>
-					<Button
-						aria-expanded={editing}
-						leadingIcon={<Pencil />}
-						size="xs"
-						variant="ghost"
-						onClick={() => {
-							setConfirmDelete(false);
-							setEditing(!editing);
-						}}
-					>
-						{editing ? t.t("pack_edit_done") : t.t("edit")}
-					</Button>
-					<Switch
-						ariaLabel={t.t("pack_enabled")}
-						checked={pack.enabled}
-						onCheckedChange={() => {
-							void rpc
-								.call(rpcName("packs.toggle"), { enabled: !pack.enabled, packId: pack.id })
-								.then(onChanged)
-								.catch((error: unknown) => toast.error(t.t("save_failed"), String(error)));
-						}}
-					/>
-				</div>
+				{readOnly ? null : (
+					<div className="flex shrink-0 items-center gap-1">
+						<Button
+							aria-label={confirmDelete ? t.t("pack_delete_confirm") : t.t("delete_pack")}
+							disabled={deleting}
+							leadingIcon={confirmDelete ? undefined : <Trash2 />}
+							loading={deleting}
+							size="xs"
+							variant={confirmDelete ? "danger" : "ghost"}
+							onClick={() => void deletePack()}
+						>
+							{confirmDelete ? t.t("pack_delete_confirm") : null}
+						</Button>
+						<Button
+							aria-expanded={editing}
+							leadingIcon={<Pencil />}
+							size="xs"
+							variant="ghost"
+							onClick={() => {
+								setConfirmDelete(false);
+								setEditing(!editing);
+							}}
+						>
+							{editing ? t.t("pack_edit_done") : t.t("edit")}
+						</Button>
+						<Switch
+							ariaLabel={t.t("pack_enabled")}
+							checked={pack.enabled}
+							onCheckedChange={() => {
+								void rpc
+									.call(rpcName("packs.toggle"), { enabled: !pack.enabled, packId: pack.id })
+									.then(onChanged)
+									.catch((error: unknown) => toast.error(t.t("save_failed"), String(error)));
+							}}
+						/>
+					</div>
+				)}
 			</div>
 			{editing ? (
 				<div className="space-y-2 border-t border-border p-3">
@@ -629,69 +743,61 @@ function PackAccordion({
 				</div>
 			) : null}
 			{expanded ? (
-				<div className="space-y-3 border-t border-border p-3">
-					{items.length === 0 ? (
-						<div className="text-xs text-muted-foreground">{t.t("pack_items_empty")}</div>
-					) : (
-						<div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
-							{items.map((item) => {
-								const preview = previews[item.id];
-								const missing = item.mediaId.length === 0 || item.revokedAt !== null;
-								const isSelected = selectedId === item.id;
-								return (
-									<button
-										key={item.id}
-										aria-label={item.name}
-										aria-pressed={isSelected}
-										className={cn(
-											"group relative aspect-square overflow-hidden rounded-lg border border-border bg-background/60 p-1 transition hover:border-primary/50",
-											isSelected && "ring-2 ring-primary",
-											!item.enabled && "opacity-50",
-										)}
-										type="button"
-										onClick={() => setSelectedId(isSelected ? null : item.id)}
-									>
-										{preview === undefined ? (
-											<span className="flex size-full items-center justify-center text-center text-[10px] text-muted-foreground">
-												{previewErrors[item.id] ? t.t("preview_failed") : t.t("item_preview")}
-											</span>
-										) : (
-											<StickerMediaPreview
-												alt={item.name}
-												className="size-full object-contain"
-												mimeType={item.mimeType}
-												preview={preview}
-											/>
-										)}
-										{missing ? (
-											<span className="absolute inset-x-0 bottom-0 bg-warning/20 px-1 text-center text-[9px] text-warning">
-												{t.t("status_missing")}
-											</span>
-										) : null}
-										{!item.enabled ? (
-											<span className="absolute left-1 top-1 rounded bg-background/80 px-1 text-[9px] text-muted-foreground">
-												{t.t("item_disabled_short")}
-											</span>
-										) : null}
-									</button>
-								);
-							})}
-						</div>
-					)}
-					{selected === null ? (
-						<div className="text-[11px] text-muted-foreground">{t.t("sticker_edit_hint")}</div>
-					) : (
-						<StickerInspector
-							key={selected.id}
-							item={selected}
-							preview={previews[selected.id]}
-							onChanged={onChanged}
-							onClose={() => setSelectedId(null)}
-						/>
-					)}
+				<div className="border-t border-border p-3">
+					<StickerThumbnailGrid
+						emptyText={t.t("pack_items_empty")}
+						items={items}
+						packs={packs}
+						previewErrors={previewErrors}
+						previews={previews}
+						selectedId={selectedId}
+						setSelectedId={setSelectedId}
+						onChanged={onChanged}
+					/>
 				</div>
 			) : null}
 		</div>
+	);
+}
+
+function UncategorizedSection({
+	items,
+	onChanged,
+	onLoadPreviews,
+	packs,
+	previewErrors,
+	previews,
+}: {
+	items: readonly ItemRow[];
+	onChanged: () => Promise<void>;
+	onLoadPreviews: (items: readonly ItemRow[]) => Promise<void>;
+	packs: readonly PackRow[];
+	previewErrors: Record<string, boolean>;
+	previews: Record<string, string>;
+}) {
+	const t = usePluginI18n();
+	const [selectedId, setSelectedId] = useState<string | null>(null);
+	useEffect(() => {
+		if (items.length > 0) void onLoadPreviews(items);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [items]);
+	return (
+		<PluginSection description={t.t("uncategorized_hint")} title={t.t("uncategorized_section")}>
+			{items.length === 0 ? (
+				<EmptyState title={t.t("uncategorized_empty")} />
+			) : (
+				<StickerThumbnailGrid
+					emptyText={t.t("uncategorized_empty")}
+					items={items}
+					packs={packs}
+					previewErrors={previewErrors}
+					previews={previews}
+					selectedId={selectedId}
+					setSelectedId={setSelectedId}
+					onChanged={onChanged}
+				/>
+			)}
+		</PluginSection>
 	);
 }
 
@@ -1431,6 +1537,15 @@ function StickerPanel() {
 	const reclassifyBusy = reclassifying || reclassifyProgress?.status === "running";
 	const legacyProgress = latestJob(["packs.importDir", "packs.importBundle", "packs.importDsh"]);
 	const legacyBusy = importingLegacy !== null || legacyProgress?.status === "running";
+	const packIds = new Set(packs.map((pack) => pack.id));
+	const orphanedItems = items.filter((item) => !packIds.has(item.packId));
+	const uncategorizedItems = items.filter(
+		(item) =>
+			!packIds.has(item.packId) ||
+			(item.emotions.length === 0 &&
+				item.keywords.length === 0 &&
+				(item.semantic?.labels.length ?? 0) === 0),
+	);
 	const workerArgs = (): Record<string, number> => ({
 		importConcurrency: clampWorkerCount(importConcurrency, 4),
 		semanticConcurrency: clampWorkerCount(semanticConcurrency, 4),
@@ -1468,6 +1583,149 @@ function StickerPanel() {
 						{ label: t.t("stats_usage"), value: stats?.usage ?? 0 },
 					]}
 				/>
+			</PluginSection>
+
+			<PluginSection description={t.t("url_import_hint")} title={t.t("url_import")}>
+				<div className="space-y-3">
+					<Field label={t.t("url_import_url")}>
+						<Input
+							placeholder={t.t("url_import_url_placeholder")}
+							value={stickerUrl}
+							onChange={setStickerUrl}
+						/>
+					</Field>
+					<div className="grid gap-3 sm:grid-cols-2">
+						<Field label={t.t("url_import_pack")}>
+							<select
+								className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+								value={urlPackId}
+								onChange={(event) => setUrlPackId(event.target.value)}
+							>
+								<option value="">{t.t("url_import_pack_default")}</option>
+								{packs.map((pack) => (
+									<option key={pack.id} value={pack.id}>
+										{pack.name}
+									</option>
+								))}
+							</select>
+						</Field>
+						<Field label={t.t("url_import_name")}>
+							<Input value={urlName} onChange={setUrlName} />
+						</Field>
+						<Field label={t.t("url_import_keywords")}>
+							<Input value={urlKeywords} onChange={setUrlKeywords} />
+						</Field>
+						<Field label={t.t("url_import_emotions")}>
+							<Input value={urlEmotions} onChange={setUrlEmotions} />
+						</Field>
+					</div>
+					<Button
+						disabled={importingUrl || stickerUrl.trim().length === 0}
+						leadingIcon={<Upload />}
+						loading={importingUrl}
+						size="sm"
+						onClick={() => void importFromUrl()}
+					>
+						{importingUrl ? t.t("url_import_running") : t.t("url_import_run")}
+					</Button>
+					{urlImportError === null ? null : <Alert tone="danger">{urlImportError}</Alert>}
+					{urlImportResult === null ? null : (
+						<Alert tone="info">
+							{urlImportResult.duplicate
+								? t.t("url_import_duplicate", { name: urlImportResult.item.name })
+								: t.t("url_import_success", {
+										name: urlImportResult.item.name,
+										pack: urlImportResult.pack.name,
+									})}
+							{urlImportResult.convertedFromVideo
+								? ` · ${t.t("url_import_converted", { from: urlImportResult.originalMimeType })}`
+								: ""}
+						</Alert>
+					)}
+				</div>
+			</PluginSection>
+
+			<PluginSection description={t.t("qq_steal_hint")} title={t.t("qq_steal")}>
+				<div className="space-y-3">
+					<div className="flex flex-wrap items-end justify-between gap-3">
+						<Field label={t.t("url_import_pack")}>
+							<select
+								className="h-9 min-w-52 rounded-md border border-border bg-background px-2 text-sm"
+								value={qqStealPackId}
+								onChange={(event) => setQqStealPackId(event.target.value)}
+							>
+								<option value="">{t.t("url_import_pack_default")}</option>
+								{packs.map((pack) => (
+									<option key={pack.id} value={pack.id}>
+										{pack.name}
+									</option>
+								))}
+							</select>
+						</Field>
+						<Button
+							disabled={loadingQqMedia}
+							leadingIcon={<RefreshCw />}
+							loading={loadingQqMedia}
+							size="sm"
+							variant="secondary"
+							onClick={() => void loadQqMedia()}
+						>
+							{t.t("qq_steal_refresh")}
+						</Button>
+					</div>
+					{qqMedia.length === 0 ? (
+						<EmptyState title={t.t("qq_steal_empty")} />
+					) : (
+						<div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+							{qqMedia.map((entry) => {
+								const previewBase64 = qqPreviews[entry.mediaId];
+								const isStealing = stealingMediaId === entry.mediaId;
+								return (
+									<div
+										key={entry.mediaId}
+										className="flex flex-col justify-between gap-2 rounded-md border border-border bg-background p-2"
+									>
+										<div className="flex h-24 items-center justify-center overflow-hidden rounded bg-muted/40">
+											{previewBase64 !== undefined ? (
+												<img
+													alt={entry.previewText ?? entry.partType}
+													className="max-h-24 max-w-full object-contain"
+													src={`data:${entry.mimeType};base64,${previewBase64}`}
+												/>
+											) : (
+												<span className="text-[11px] text-muted-foreground">
+													{entry.partType}
+												</span>
+											)}
+										</div>
+										<div className="space-y-1">
+											<div className="truncate text-[11px] font-medium">
+												{entry.previewText ?? entry.partType}
+											</div>
+											<div className="truncate text-[10px] text-muted-foreground">
+												{entry.conversationTitle}
+											</div>
+											<Button
+												className="w-full"
+												disabled={entry.alreadyInLibrary || stealingMediaId !== null}
+												loading={isStealing}
+												size="sm"
+												variant={entry.alreadyInLibrary ? "ghost" : "secondary"}
+												onClick={() => void stealFromQq(entry)}
+											>
+												{entry.alreadyInLibrary
+													? t.t("qq_steal_already")
+													: isStealing
+														? t.t("qq_steal_stealing")
+														: t.t("qq_steal_action")}
+											</Button>
+										</div>
+									</div>
+								);
+							})}
+						</div>
+					)}
+				</div>
 			</PluginSection>
 
 			<PluginSection
@@ -1643,149 +1901,6 @@ function StickerPanel() {
 				</div>
 			</PluginSection>
 
-			<PluginSection description={t.t("url_import_hint")} title={t.t("url_import")}>
-				<div className="space-y-3">
-					<Field label={t.t("url_import_url")}>
-						<Input
-							placeholder={t.t("url_import_url_placeholder")}
-							value={stickerUrl}
-							onChange={setStickerUrl}
-						/>
-					</Field>
-					<div className="grid gap-3 sm:grid-cols-2">
-						<Field label={t.t("url_import_pack")}>
-							<select
-								className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
-								value={urlPackId}
-								onChange={(event) => setUrlPackId(event.target.value)}
-							>
-								<option value="">{t.t("url_import_pack_default")}</option>
-								{packs.map((pack) => (
-									<option key={pack.id} value={pack.id}>
-										{pack.name}
-									</option>
-								))}
-							</select>
-						</Field>
-						<Field label={t.t("url_import_name")}>
-							<Input value={urlName} onChange={setUrlName} />
-						</Field>
-						<Field label={t.t("url_import_keywords")}>
-							<Input value={urlKeywords} onChange={setUrlKeywords} />
-						</Field>
-						<Field label={t.t("url_import_emotions")}>
-							<Input value={urlEmotions} onChange={setUrlEmotions} />
-						</Field>
-					</div>
-					<Button
-						disabled={importingUrl || stickerUrl.trim().length === 0}
-						leadingIcon={<Upload />}
-						loading={importingUrl}
-						size="sm"
-						onClick={() => void importFromUrl()}
-					>
-						{importingUrl ? t.t("url_import_running") : t.t("url_import_run")}
-					</Button>
-					{urlImportError === null ? null : <Alert tone="danger">{urlImportError}</Alert>}
-					{urlImportResult === null ? null : (
-						<Alert tone="info">
-							{urlImportResult.duplicate
-								? t.t("url_import_duplicate", { name: urlImportResult.item.name })
-								: t.t("url_import_success", {
-										name: urlImportResult.item.name,
-										pack: urlImportResult.pack.name,
-									})}
-							{urlImportResult.convertedFromVideo
-								? ` · ${t.t("url_import_converted", { from: urlImportResult.originalMimeType })}`
-								: ""}
-						</Alert>
-					)}
-				</div>
-			</PluginSection>
-
-			<PluginSection description={t.t("qq_steal_hint")} title={t.t("qq_steal")}>
-				<div className="space-y-3">
-					<div className="flex flex-wrap items-end justify-between gap-3">
-						<Field label={t.t("url_import_pack")}>
-							<select
-								className="h-9 min-w-52 rounded-md border border-border bg-background px-2 text-sm"
-								value={qqStealPackId}
-								onChange={(event) => setQqStealPackId(event.target.value)}
-							>
-								<option value="">{t.t("url_import_pack_default")}</option>
-								{packs.map((pack) => (
-									<option key={pack.id} value={pack.id}>
-										{pack.name}
-									</option>
-								))}
-							</select>
-						</Field>
-						<Button
-							disabled={loadingQqMedia}
-							leadingIcon={<RefreshCw />}
-							loading={loadingQqMedia}
-							size="sm"
-							variant="secondary"
-							onClick={() => void loadQqMedia()}
-						>
-							{t.t("qq_steal_refresh")}
-						</Button>
-					</div>
-					{qqMedia.length === 0 ? (
-						<EmptyState title={t.t("qq_steal_empty")} />
-					) : (
-						<div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
-							{qqMedia.map((entry) => {
-								const previewBase64 = qqPreviews[entry.mediaId];
-								const isStealing = stealingMediaId === entry.mediaId;
-								return (
-									<div
-										key={entry.mediaId}
-										className="flex flex-col justify-between gap-2 rounded-md border border-border bg-background p-2"
-									>
-										<div className="flex h-24 items-center justify-center overflow-hidden rounded bg-muted/40">
-											{previewBase64 !== undefined ? (
-												<img
-													alt={entry.previewText ?? entry.partType}
-													className="max-h-24 max-w-full object-contain"
-													src={`data:${entry.mimeType};base64,${previewBase64}`}
-												/>
-											) : (
-												<span className="text-[11px] text-muted-foreground">
-													{entry.partType}
-												</span>
-											)}
-										</div>
-										<div className="space-y-1">
-											<div className="truncate text-[11px] font-medium">
-												{entry.previewText ?? entry.partType}
-											</div>
-											<div className="truncate text-[10px] text-muted-foreground">
-												{entry.conversationTitle}
-											</div>
-											<Button
-												className="w-full"
-												disabled={entry.alreadyInLibrary || stealingMediaId !== null}
-												loading={isStealing}
-												size="sm"
-												variant={entry.alreadyInLibrary ? "ghost" : "secondary"}
-												onClick={() => void stealFromQq(entry)}
-											>
-												{entry.alreadyInLibrary
-													? t.t("qq_steal_already")
-													: isStealing
-														? t.t("qq_steal_stealing")
-														: t.t("qq_steal_action")}
-											</Button>
-										</div>
-									</div>
-								);
-							})}
-						</div>
-					)}
-				</div>
-			</PluginSection>
-
 			<PluginSection description={t.t("semantic_hint")} title={t.t("semantic")}>
 				<div className="space-y-3">
 					<div className="flex flex-wrap items-end gap-3">
@@ -1867,8 +1982,17 @@ function StickerPanel() {
 				</div>
 			</PluginSection>
 
+			<UncategorizedSection
+				items={uncategorizedItems}
+				packs={packs}
+				previewErrors={previewErrors}
+				previews={previews}
+				onChanged={refresh}
+				onLoadPreviews={loadPreviews}
+			/>
+
 			<PluginSection description={t.t("packs_hint")} title={t.t("packs")}>
-				{packs.length === 0 ? (
+				{packs.length === 0 && orphanedItems.length === 0 ? (
 					<EmptyState description={t.t("packs_empty")} title={t.t("packs")} />
 				) : (
 					<div className="space-y-2">
@@ -1877,12 +2001,37 @@ function StickerPanel() {
 								key={pack.id}
 								items={items.filter((item) => item.packId === pack.id)}
 								pack={pack}
+								packs={packs}
 								previewErrors={previewErrors}
 								previews={previews}
 								onChanged={refresh}
 								onLoadPreviews={loadPreviews}
 							/>
 						))}
+						{orphanedItems.length > 0 ? (
+							<PackAccordion
+								key="__uncategorized__"
+								readOnly
+								items={orphanedItems}
+								pack={{
+									createdAt: "",
+									enabled: true,
+									id: "__uncategorized__",
+									itemCount: orphanedItems.length,
+									metadata: {},
+									name: t.t("uncategorized_pack_name"),
+									personaIds: [],
+									source: "learned",
+									tags: [],
+									updatedAt: "",
+								}}
+								packs={packs}
+								previewErrors={previewErrors}
+								previews={previews}
+								onChanged={refresh}
+								onLoadPreviews={loadPreviews}
+							/>
+						) : null}
 					</div>
 				)}
 			</PluginSection>

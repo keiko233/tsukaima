@@ -79,6 +79,7 @@ export interface StickerItemInput {
 }
 
 export interface StickerItemPatch {
+	readonly packId?: string;
 	readonly name?: string;
 	readonly description?: string;
 	readonly keywords?: readonly string[];
@@ -362,10 +363,11 @@ export class StickerRepository {
 		const semantic = patch.semantic ?? existing.semantic;
 		await this.#database.query(
 			`UPDATE plugin_sticker_meme_items SET
-				name = ?, description = ?, keywords_json = ?, emotions_json = ?, enabled = ?,
+				pack_id = ?, name = ?, description = ?, keywords_json = ?, emotions_json = ?, enabled = ?,
 				review_status = ?, score = ?, semantic_json = ?, revoked_at = ?, updated_at = ?
 			WHERE id = ?`,
 			[
+				patch.packId ?? existing.packId,
 				patch.name ?? existing.name,
 				patch.description ?? existing.description,
 				JSON.stringify(keywords),

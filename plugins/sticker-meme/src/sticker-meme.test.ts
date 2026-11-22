@@ -2979,5 +2979,23 @@ describe("QQ chat sticker stealing", () => {
 			url: "https://example.test/meme.gif",
 		})) as { item: StickerItem };
 		expect(importedViaRpc.item.name).toBe("From URL");
+
+		// Moving an item to another pack via items.update
+		const targetPack = await repository.savePack({
+			id: "pack-target",
+			name: "Target Pack",
+			source: "imported",
+		});
+		const moved = (await rpcHandlers.get("items.update")?.({
+			id: importedViaRpc.item.id,
+			packId: targetPack.id,
+		})) as StickerItem;
+		expect(moved.packId).toBe(targetPack.id);
+		await expect(
+			rpcHandlers.get("items.update")?.({
+				id: importedViaRpc.item.id,
+				packId: "pack-does-not-exist",
+			}),
+		).rejects.toThrow("Pack not found");
 	});
 });
