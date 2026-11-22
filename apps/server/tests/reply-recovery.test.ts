@@ -4,7 +4,11 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { createFakeModel, PiDurableConversationHost } from "@tsukaima/core";
+import {
+	createFakeModel,
+	createSlowStreamingModel,
+	PiDurableConversationHost,
+} from "@tsukaima/core";
 import {
 	auditLog,
 	chatObjects,
@@ -897,4 +901,74 @@ describe("durable reply expectations", () => {
 			await lifecycle.stop();
 		}
 	});
+
+	test("resumes an interrupted turn after restart and delivers its answer", async () => {
+		const dataDir = await fs.mkdtemp(join(tmpdir(), "tsukaima-answer-interrupted-"));
+		directories.push(dataDir);
+		const storage = await openDurableStorage(join(dataDir, "durable.sqlite"));
+		let runStarted = false;
+		const crashedHost = new PiDurableConversationHost({
+			model: createSlowStreamingModel(["partial-1", "partial-2", "partial-3"], {
+				delayMs: 250,
+			}),
+			onLiveRun: (state) => {
+				if (!state.settled) runStarted = true;
+			},
+			storage,
+		});
+		const durableConversationId = await crashedHost.createConversation();
+		const requestId = `${durableConversationId}:activity#interrupted-1`;
+		await crashedHost.append({
+			conversationId: durableConversationId,
+			envelope: envelope("interrupted-1", "hello before upgrade"),
+			forceSubmit: true,
+			submittedAtMs: Date.now(),
+		});
+		await waitFor(() => (runStarted ? true : undefined));
+		await crashedHost.close();
+		await storage.close(BACKGROUND_CONTEXT);
+
+		const { sessionId } = await seedDomainSession(dataDir, durableConversationId);
+		await seedExpectation(dataDir, sessionId, requestId);
+
+		const onebot = createSendTransport();
+		const { lifecycle } = createApp(
+			{
+				TSUKAIMA_DATA_DIR: dataDir,
+				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001",
+				TSUKAIMA_PORT: "7435",
+			},
+			{
+				model: createSlowStreamingModel(["resumed-server-reply"], { delayMs: 5 }),
+				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, onebot.factory]]),
+				reply: { reconcileIntervalMs: 50 },
+			},
+		);
+		const actions = onebot.actions;
+		await lifecycle.start();
+		try {
+			await waitFor(
+				() => (actions.some((action) => action.action.startsWith("send_")) ? true : undefined),
+				10_000,
+			);
+			const sends = actions.filter((action) => action.action.startsWith("send_"));
+			expect(sends).toHaveLength(1);
+			expect(JSON.stringify(sends[0]?.params)).toContain("resumed-server-reply");
+
+			const rows =
+				(await lifecycle.domainDatabase
+					?.select()
+					.from(replyDispatchExpectations)
+					.where(eq(replyDispatchExpectations.conversationId, sessionId))) ?? [];
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.state).toBe("settled");
+
+			await waitFor(async () =>
+				(await lifecycle.liveRuns.snapshots()).length === 0 ? true : undefined,
+			);
+			expect(await lifecycle.liveRuns.snapshots()).toHaveLength(0);
+		} finally {
+			await lifecycle.stop();
+		}
+	}, 15_000);
 });

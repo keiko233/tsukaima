@@ -849,4 +849,69 @@ describe("PiDurableConversationHost turn sender binding", () => {
 			await rm(directory, { force: true, recursive: true });
 		}
 	});
+
+	test("resumes interrupted runs and re-attaches observers after restart", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-resume-"));
+		try {
+			const dbPath = join(directory, "durable.sqlite");
+			const firstStorage = await openDurableStorage(dbPath);
+			let started = false;
+			const firstHost = new PiDurableConversationHost({
+				model: createSlowStreamingModel(["part-1", "part-2", "part-3"], {
+					delayMs: 250,
+				}),
+				onLiveRun: (state) => {
+					if (!state.settled) started = true;
+				},
+				storage: firstStorage,
+			});
+			const conversationId = await firstHost.createConversation();
+			await firstHost.append({
+				conversationId,
+				envelope: envelope("interrupted-1", "hello before restart"),
+				forceSubmit: true,
+				submittedAtMs: Date.now(),
+			});
+			for (let step = 0; step < 40; step += 1) {
+				if (started) break;
+				await Bun.sleep(25);
+			}
+			expect(started).toBe(true);
+			await firstHost.close();
+			await firstStorage.close(BACKGROUND_CONTEXT);
+
+			const secondStorage = await openDurableStorage(dbPath);
+			const answers: string[] = [];
+			const liveSettled: boolean[] = [];
+			const secondHost = new PiDurableConversationHost({
+				model: createSlowStreamingModel(["resumed after restart"], { delayMs: 5 }),
+				onAnswer: (answer) => {
+					answers.push(answer.text);
+				},
+				onLiveRun: (state) => {
+					if (state.settled) liveSettled.push(true);
+				},
+				storage: secondStorage,
+			});
+			try {
+				const resumed = await secondHost.resumePendingRuns();
+				expect(resumed).toBe(1);
+				for (
+					let step = 0;
+					step < 300 && (answers.length === 0 || liveSettled.length === 0);
+					step += 1
+				) {
+					await Bun.sleep(25);
+				}
+				expect(answers).toEqual(["resumed after restart"]);
+				expect(liveSettled.length).toBeGreaterThanOrEqual(1);
+				expect((await secondHost.conversationActivity(conversationId))?.busy).toBe(false);
+			} finally {
+				await secondHost.close();
+				await secondStorage.close(BACKGROUND_CONTEXT);
+			}
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	}, 15_000);
 });

@@ -1996,6 +1996,45 @@ export class TsukaimaLifecycle {
 			// a message while the extension still had no tools.
 			conversationHost.installExtensions(dynamicExtensions);
 		}
+		if (conversationHost !== undefined) {
+			try {
+				await conversationHost.resumePendingRuns();
+			} catch (error) {
+				this.runtimeLog.warn("startup pending-run resume failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+			try {
+				const durableBySession = new Map(
+					persistedSessions.map((session) => [session.id, session.durableConversationId]),
+				);
+				for (const stale of await this.liveRuns.snapshots()) {
+					const durableId = durableBySession.get(stale.sessionId);
+					if (durableId === undefined) continue;
+					const status = await conversationHost.conversationActivity(durableId);
+					if (status?.busy === true) continue;
+					await this.liveRuns.record(stale.sessionId, {
+						attempt: undefined,
+						conversationId: durableId,
+						draftTools: [],
+						failure: undefined,
+						generationStartedAtMs: undefined,
+						model: undefined,
+						partialText: undefined,
+						partialThinking: undefined,
+						retry: undefined,
+						settled: true,
+						startedAtMs: stale.startedAtMs,
+						tools: [],
+						turns: 0,
+					});
+				}
+			} catch (error) {
+				this.runtimeLog.warn("startup stale live-run cleanup failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
 
 		try {
 			await this.replyDispatcher.reconcilePendingDeliveries();
