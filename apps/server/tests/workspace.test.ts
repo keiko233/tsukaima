@@ -234,6 +234,48 @@ describe("workspace sessions", () => {
 		await lifecycle.stop();
 	});
 
+	test("spawnFromSession dispatches the workspace run, reports latestReply, and notifies parent on completion", async () => {
+		const lifecycle = await startApp();
+		const parent = await createLocalChat(lifecycle, {
+			sessionTitle: "Main",
+			title: "Admin chat",
+		});
+		const spawned = await lifecycle.workspace.spawnFromSession(parent.sessionId, {
+			goal: "Inspect and fix the synthetic bug.",
+		});
+		const deadline = Date.now() + 8_000;
+		let parentNotified = false;
+		let statusSnapshot: Record<string, unknown> | undefined;
+		const database = lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("Database not ready");
+		while (Date.now() < deadline) {
+			statusSnapshot = await lifecycle.workspace.status({ sessionId: spawned.sessionId });
+			const parentMessages = await database
+				.select({ contentText: messages.contentText, direction: messages.direction })
+				.from(messages)
+				.where(eq(messages.conversationId, parent.sessionId));
+			parentNotified = parentMessages.some(
+				(row) =>
+					row.direction === "system" &&
+					(row.contentText ?? "").includes("[Workspace subagent finished]"),
+			);
+			if (
+				statusSnapshot.running === false &&
+				typeof statusSnapshot.latestReply === "string" &&
+				statusSnapshot.latestReply.length > 0 &&
+				parentNotified
+			) {
+				break;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 40));
+		}
+		expect(statusSnapshot?.running).toBe(false);
+		expect(typeof statusSnapshot?.latestReply).toBe("string");
+		expect(String(statusSnapshot?.latestReply ?? "").length).toBeGreaterThan(0);
+		expect(parentNotified).toBe(true);
+		await lifecycle.stop();
+	});
+
 	test("chat gets workspace controls but workspace alone gets coding tools", async () => {
 		const lifecycle = await startApp();
 		const parent = await createLocalChat(lifecycle, {

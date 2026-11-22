@@ -90,6 +90,14 @@ export interface WorkspaceNativeDispatchInput {
 	readonly text: string;
 }
 
+export interface WorkspaceRunFinishedEvent {
+	readonly aborted: boolean;
+	readonly assistantText: string;
+	readonly failure?: string;
+	readonly sessionId: string;
+	readonly taskId: string;
+}
+
 export interface WorkspaceNativeRunnerOptions {
 	readonly agentDirRoot: string;
 	readonly audit?: (entry: AuditEntry) => Promise<void> | void;
@@ -112,6 +120,7 @@ export interface WorkspaceNativeRunnerOptions {
 		durableConversationId: string,
 		snapshot: LiveRunSnapshot,
 	) => void;
+	readonly onRunFinished?: (event: WorkspaceRunFinishedEvent) => Promise<void> | void;
 	readonly authorizeCoding: (sessionId: string) => Promise<boolean>;
 	readonly references: WorkspaceReferenceService;
 	readonly resolveAgentSettings: (sessionId: string) => Promise<ConversationAgentSettings>;
@@ -386,6 +395,10 @@ export class WorkspaceNativeRunner {
 			await native.session.abort();
 			return true;
 		});
+	}
+
+	isRunning(sessionId: string): boolean {
+		return this.#sessions.get(sessionId)?.activeRun !== undefined;
 	}
 
 	contextStats(sessionId: string): SessionContextStats | null {
@@ -816,9 +829,13 @@ export class WorkspaceNativeRunner {
 				throttled();
 			}
 		});
+		let assistantText = "";
+		let aborted = false;
 		const run = (async () => {
 			try {
 				const result = await native.session.run(prompt);
+				assistantText = result.assistantText;
+				aborted = result.aborted;
 				if (result.aborted) state.failure = "aborted";
 				await this.#persistAnswer(native, context, state, result);
 			} catch (error) {
@@ -836,6 +853,22 @@ export class WorkspaceNativeRunner {
 		native.activeRun = run;
 		void run.finally(() => {
 			if (native.activeRun === run) native.activeRun = undefined;
+			if (this.#options.onRunFinished !== undefined) {
+				void Promise.resolve(
+					this.#options.onRunFinished({
+						aborted,
+						assistantText,
+						...(state.failure === undefined ? {} : { failure: state.failure }),
+						sessionId: context.sessionId,
+						taskId: context.taskId,
+					}),
+				).catch((error: unknown) => {
+					this.#options.logger.warn("workspace run finished callback failed", {
+						error: error instanceof Error ? error.message : String(error),
+						sessionId: context.sessionId,
+					});
+				});
+			}
 		});
 	}
 
