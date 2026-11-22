@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { clamp, uniq } from "es-toolkit";
 import {
 	consolidationMemoryCandidateSchema,
 	emptyWarmState,
@@ -314,11 +315,11 @@ export function parseConsolidationOutputDetailed(text: string): ParseConsolidati
 			const expiresAt = normalizeOptionalCleanString(item.expiresAt, 100);
 			const confidence =
 				typeof item.confidence === "number" && Number.isFinite(item.confidence)
-					? Math.max(0, Math.min(1, item.confidence))
+					? clamp(item.confidence, 0, 1)
 					: 0.6;
 			const importance =
 				typeof item.importance === "number" && Number.isFinite(item.importance)
-					? Math.max(0, Math.min(1, item.importance))
+					? clamp(item.importance, 0, 1)
 					: 0.5;
 			const candidate = {
 				confidence,
@@ -392,7 +393,7 @@ export function mergeWarmState(input: {
 		const prior = people.get(key);
 		people.set(key, {
 			...card,
-			aliases: [...new Set([...(prior?.aliases ?? []), ...card.aliases])].slice(0, 8),
+			aliases: uniq([...(prior?.aliases ?? []), ...card.aliases]).slice(0, 8),
 			notes: card.notes.slice(0, 8),
 			...(card.lastSeenAt === undefined && prior?.lastSeenAt !== undefined
 				? { lastSeenAt: prior.lastSeenAt }
@@ -452,7 +453,7 @@ export function deterministicWarmState(input: {
 		if (key === undefined || name === undefined || name.length === 0) continue;
 		const prior = people.get(personKey(key));
 		people.set(personKey(key), {
-			aliases: [...new Set([...(prior?.aliases ?? []), ...(prior?.name === name ? [] : [name])])]
+			aliases: uniq([...(prior?.aliases ?? []), ...(prior?.name === name ? [] : [name])])
 				.filter((alias) => alias !== name)
 				.slice(0, 8),
 			key,

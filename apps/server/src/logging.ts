@@ -1,6 +1,7 @@
 import { mkdirSync, readdirSync, rmSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { logLevels, type LogLevel } from "@tsukaima/contracts";
+import { isRecord } from "./records.ts";
 
 export { logLevels, type LogLevel };
 export type LogValue = string | number | boolean | null | LogValue[] | { [key: string]: LogValue };
@@ -123,13 +124,6 @@ export function previewText(value: string, maxLength = DEFAULT_PREVIEW_LENGTH): 
 	return truncate(singleLine(value), Math.max(1, maxLength));
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-	if (value instanceof Error || value instanceof Date) return false;
-	const proto = Object.getPrototypeOf(value) as object | null;
-	return proto === Object.prototype || proto === null;
-}
-
 function normalizeValue(value: unknown, depth: number, seen: WeakSet<object>): LogValue {
 	if (value === null) return null;
 	if (typeof value === "string") return truncate(singleLine(value), MAX_MESSAGE_LENGTH);
@@ -168,7 +162,7 @@ function normalizeFields(fields: unknown): LogFields {
 	if (fields instanceof Error) {
 		return { error: normalizeValue(fields, 0, new WeakSet()) };
 	}
-	if (!isPlainRecord(fields)) {
+	if (!isRecord(fields)) {
 		return { detail: normalizeValue(fields, 0, new WeakSet()) };
 	}
 	return Object.fromEntries(

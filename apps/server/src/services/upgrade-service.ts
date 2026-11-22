@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
+import { clamp } from "es-toolkit";
 import type { RestartStatus, UpgradeCheck, UpgradeRecord } from "@tsukaima/contracts";
 import {
 	gitCredentialEnvironment,
@@ -483,7 +484,7 @@ export class UpgradeService {
 			.select()
 			.from(runtimeUpgrades)
 			.orderBy(desc(runtimeUpgrades.createdAtMs))
-			.limit(Math.max(1, Math.min(limit, 100)));
+			.limit(clamp(limit, 1, 100));
 		return rows.map(toRecord);
 	}
 

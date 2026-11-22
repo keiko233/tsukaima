@@ -2,6 +2,7 @@ import { type ScheduleRecurrence, scheduleRecurrenceSchema } from "@tsukaima/con
 import type { DurableExtension, DurableToolRegistration } from "@tsukaima/core";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
+import { record } from "../records.ts";
 import type { ScheduleService } from "./schedule-service.ts";
 import { isValidTimeZone } from "./schedule-time.ts";
 import type { SessionMessagingService } from "./session-messaging.ts";
@@ -21,12 +22,6 @@ export interface ScheduleToolsOptions {
 	readonly messaging: SessionMessagingService;
 	readonly resolveSessionId: (durableConversationId: string) => Promise<string | undefined>;
 	readonly schedules: ScheduleService;
-}
-
-function record(input: unknown): Record<string, unknown> {
-	return typeof input === "object" && input !== null && !Array.isArray(input)
-		? (input as Record<string, unknown>)
-		: {};
 }
 
 function text(value: unknown) {

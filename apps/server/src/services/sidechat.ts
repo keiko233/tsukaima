@@ -1,5 +1,6 @@
 import type { BusyArbitrationInput, BusyArbitrationResult } from "@tsukaima/core";
 import type { PluginModelReasoningLevel } from "@tsukaima/sdk";
+import { clamp } from "es-toolkit";
 import type { Logger } from "../logging.ts";
 import type { NativeDecisionModels } from "./decision-models.ts";
 import { DEFAULT_PROMPTS } from "./prompt-defaults.ts";
@@ -33,7 +34,7 @@ function parseDecision(
 	if (decision !== "interrupt" && decision !== "steer" && decision !== "wait") return undefined;
 	const confidence =
 		typeof record.confidence === "number" && Number.isFinite(record.confidence)
-			? Math.max(0, Math.min(1, record.confidence))
+			? clamp(record.confidence, 0, 1)
 			: undefined;
 	const reason =
 		typeof record.reason === "string" && record.reason.trim().length > 0

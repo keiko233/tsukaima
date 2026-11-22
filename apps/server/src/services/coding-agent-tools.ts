@@ -2,6 +2,7 @@ import type { DurableExtension, DurableToolRegistration } from "@tsukaima/core";
 import type { WorkspaceTodoStatus } from "@tsukaima/contracts";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
+import { record } from "../records.ts";
 import type { SessionMessagingService } from "./session-messaging.ts";
 import type { WorkspaceReferenceService } from "./workspace-references.ts";
 import type { WorkspaceSqlService } from "./workspace-sql.ts";
@@ -34,12 +35,6 @@ export interface CodingAgentToolsOptions {
 	readonly resolveSessionId: (durableConversationId: string) => Promise<string | undefined>;
 	readonly sql: WorkspaceSqlService;
 	readonly todos: WorkspaceTodoService;
-}
-
-function record(input: unknown): Record<string, unknown> {
-	return typeof input === "object" && input !== null && !Array.isArray(input)
-		? (input as Record<string, unknown>)
-		: {};
 }
 
 function text(value: unknown): { output: { text: string; type: "text" }[] } {

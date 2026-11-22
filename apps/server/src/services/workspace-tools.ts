@@ -2,6 +2,7 @@ import type { DurableExtension, DurableToolRegistration } from "@tsukaima/core";
 import type { MessageDeliveryMode, ThinkingLevel } from "@tsukaima/contracts";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
+import { record } from "../records.ts";
 import type { GitIdentity } from "./git-identity.ts";
 import type { PromptHookService } from "./prompt-hooks.ts";
 import type { ScheduleService } from "./schedule-service.ts";
@@ -57,12 +58,6 @@ export interface WorkspaceToolsOptions {
 	readonly resolveSessionId: (durableConversationId: string) => Promise<string | undefined>;
 	readonly schedules?: ScheduleService;
 	readonly workspace: WorkspaceService;
-}
-
-function record(input: unknown): Record<string, unknown> {
-	return typeof input === "object" && input !== null && !Array.isArray(input)
-		? (input as Record<string, unknown>)
-		: {};
 }
 
 function text(value: unknown): { output: { text: string; type: "text" }[] } {

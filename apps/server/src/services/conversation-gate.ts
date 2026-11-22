@@ -11,6 +11,7 @@ import {
 	type UndirectedGroupGateDecision,
 	type UndirectedGroupGateInput,
 } from "@tsukaima/core";
+import { clamp } from "es-toolkit";
 import type { Logger } from "../logging.ts";
 import type { NativeDecisionModels } from "./decision-models.ts";
 import {
@@ -47,7 +48,7 @@ function parseBinaryDecision<A extends string, B extends string>(
 			if (matched !== undefined) {
 				const confidence =
 					typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
-						? Math.max(0, Math.min(1, parsed.confidence))
+						? clamp(parsed.confidence, 0, 1)
 						: undefined;
 				const reason =
 					typeof parsed.reason === "string" && parsed.reason.trim().length > 0

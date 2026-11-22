@@ -21,6 +21,7 @@ import {
 } from "@tsukaima/db";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
+import { isRecord } from "../records.ts";
 import {
 	catchUpDefaults,
 	isValidTimeZone,
@@ -138,8 +139,8 @@ function decodeRecurrenceJson(
 	readonly recurrence: ScheduleRecurrence | null;
 } {
 	const parsed = parseJson<unknown>(value, null);
-	if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-		const record = parsed as Record<string, unknown>;
+	if (isRecord(parsed)) {
+		const record = parsed;
 		if (
 			"scheduleMeta" in record &&
 			typeof record.scheduleMeta === "object" &&

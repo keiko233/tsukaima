@@ -31,6 +31,7 @@ import {
 } from "@tsukaima/db";
 import type { AuditEntry, PluginPermission, PluginTask } from "@tsukaima/sdk";
 import { previewText, type Logger } from "../logging.ts";
+import { isRecord } from "../records.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
 import {
 	consolidationBatchKey,
@@ -406,9 +407,7 @@ function parseEvidence(value: string | null): Record<string, unknown> {
 	if (value === null || value.trim().length === 0) return {};
 	try {
 		const parsed: unknown = JSON.parse(value);
-		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-			? (parsed as Record<string, unknown>)
-			: {};
+		return isRecord(parsed) ? parsed : {};
 	} catch {
 		return {};
 	}

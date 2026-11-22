@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
+import { clamp } from "es-toolkit";
 import type { MessageDeliveryMode, MessagePart } from "@tsukaima/contracts";
 import type { PiDurableConversationHost } from "@tsukaima/core";
 import { chatObjects, conversations, messages, type TsukaimaDatabase } from "@tsukaima/db";
@@ -177,7 +178,7 @@ export class SessionMessagingService {
 					value.toLowerCase().includes(needle),
 				);
 			})
-			.slice(0, Math.max(1, Math.min(limit, 25)))
+			.slice(0, clamp(limit, 1, 25))
 			.map((row) => ({
 				chatId: row.chatId,
 				chatTitle: row.chatTitle,
