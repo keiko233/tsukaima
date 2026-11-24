@@ -2725,6 +2725,68 @@ describe("URL sticker import & format normalization", () => {
 		},
 	);
 
+	test.skipIf(ffmpegBinary === undefined)(
+		"preserves high-FPS smoothness for short MP4s and fits longer MP4s within maxFrames",
+		async () => {
+			const directory = await mkdtemp(join(tmpdir(), "tsukaima-url-smooth-mp4-"));
+			directories.push(directory);
+			const highFpsMp4 = join(directory, "high-fps.mp4");
+			const exit50 = await Bun.spawn([
+				ffmpegBinary as string,
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-f",
+				"lavfi",
+				"-i",
+				"testsrc=size=120x120:rate=50",
+				"-t",
+				"0.2",
+				"-c:v",
+				"libx264",
+				"-pix_fmt",
+				"yuv420p",
+				highFpsMp4,
+			]).exited;
+			expect(exit50).toBe(0);
+			const highFpsBytes = new Uint8Array(await Bun.file(highFpsMp4).arrayBuffer());
+			const normalizedHighFps = await normalizeStickerMedia(highFpsBytes, {
+				declaredMimeType: "video/mp4",
+			});
+			expect(normalizedHighFps.convertedFromVideo).toBe(true);
+			expect(normalizedHighFps.mimeType).toBe("image/gif");
+
+			const outGif = join(directory, "out.gif");
+			await writeFile(outGif, normalizedHighFps.bytes);
+			const ffprobe = Bun.which("ffprobe");
+			if (ffprobe !== null) {
+				const proc = Bun.spawn(
+					[
+						ffprobe,
+						"-v",
+						"error",
+						"-select_streams",
+						"v:0",
+						"-show_entries",
+						"stream=nb_frames,r_frame_rate",
+						"-of",
+						"json",
+						outGif,
+					],
+					{ stdout: "pipe" },
+				);
+				const stdout = await new Response(proc.stdout).text();
+				expect(await proc.exited).toBe(0);
+				const parsed = JSON.parse(stdout) as {
+					streams?: Array<{ nb_frames?: string; r_frame_rate?: string }>;
+				};
+				expect(Number(parsed.streams?.[0]?.nb_frames)).toBeGreaterThanOrEqual(9);
+				expect(parsed.streams?.[0]?.r_frame_rate).toBe("50/1");
+			}
+		},
+	);
+
 	test("blocks private/loopback URLs and extracts og:video from HTML pages", async () => {
 		const { media, repository } = baseFixture();
 		const gifBytes = tinyGif(4, 4);

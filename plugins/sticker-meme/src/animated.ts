@@ -6,9 +6,9 @@ import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import type { PluginLogger } from "@tsukaima/sdk";
 import type { Canvas as NodeCanvas } from "canvas";
-import { findFfmpeg, runFfmpegCommand } from "./ffmpeg.ts";
+import { findFfmpeg, findFfprobe, probeVideoMetadata, runFfmpegCommand } from "./ffmpeg.ts";
 import { elapsedMs, logErrorMessage } from "./logging.ts";
-import { encodeGifFrames, type RgbaFrame } from "./padding-crop.ts";
+import { encodeGifFrames, gifScreenSize, type RgbaFrame } from "./padding-crop.ts";
 
 export interface AnimatedConversionOptions {
 	/** Output FPS. Defaults to 15 and is capped by the source frame rate. */
@@ -49,9 +49,10 @@ interface JsdomWindow {
 
 const require = createRequire(import.meta.url);
 const DEFAULT_FPS = 15;
-const MAX_FPS = 30;
+const DEFAULT_AUTO_VIDEO_FPS = 25;
+const MAX_FPS = 50;
 const DEFAULT_MAX_FRAMES = 50;
-const MAX_MAX_FRAMES = 120;
+const MAX_MAX_FRAMES = 200;
 const MAX_SIZE = 512;
 const FRAME_FILE_PATTERN = /^frame-(\d+)\.png$/u;
 let renderQueue: Promise<unknown> = Promise.resolve();
@@ -234,10 +235,33 @@ async function readPngFrame(path: string, canvasModule: CanvasModule): Promise<R
 	};
 }
 
+function resolveVideoFps(
+	requestedFps: number | undefined,
+	maxFrames: number,
+	sourceFps: number | undefined,
+	durationSeconds: number | undefined,
+): number {
+	if (requestedFps !== undefined) {
+		return clamp(requestedFps, DEFAULT_FPS, 1, MAX_FPS);
+	}
+	let target =
+		sourceFps !== undefined && sourceFps > 0
+			? Math.max(1, Math.min(MAX_FPS, Math.round(sourceFps)))
+			: DEFAULT_AUTO_VIDEO_FPS;
+	if (
+		durationSeconds !== undefined &&
+		durationSeconds > 0 &&
+		durationSeconds * target > maxFrames
+	) {
+		target = Math.max(1, Math.floor((maxFrames / durationSeconds) * 10) / 10);
+	}
+	return target;
+}
+
 /**
- * Telegram video stickers are WebM files with an alpha channel. ffmpeg extracts frames as
- * RGBA PNGs, then the shared GIF encoder trims the transparent padding and quantizes each frame.
- * WebM itself is never stored or delivered.
+ * Convert a video sticker or clip (WebM with alpha, MP4, MOV) to a looping animated GIF.
+ * Transparent videos use RGBA PNG extraction + padding crop + white flattening; opaque videos
+ * use ffmpeg's native palettegen/paletteuse pipeline to preserve smooth frame pacing and color.
  */
 export async function videoToGif(
 	bytes: Uint8Array,
@@ -260,9 +284,54 @@ export async function videoToGif(
 		const inputExt = rawExt.length > 0 ? rawExt : "webm";
 		const input = join(directory, `input.${inputExt}`);
 		await writeFile(input, bytes);
-		const fps = clamp(options.fps, DEFAULT_FPS, 1, MAX_FPS);
+		const ffprobe = findFfprobe(ffmpegPath);
+		const metadata = ffprobe === undefined ? undefined : await probeVideoMetadata(ffprobe, input);
 		const maxFrames = clamp(options.maxFrames, DEFAULT_MAX_FRAMES, 1, MAX_MAX_FRAMES);
+		const fps = resolveVideoFps(options.fps, maxFrames, metadata?.fps, metadata?.durationSeconds);
 		const width = clamp(options.width, 512, 32, MAX_SIZE);
+		const hasAlpha = metadata?.hasAlpha === true || inputExt === "webm";
+
+		if (!hasAlpha) {
+			const outputGif = join(directory, "output.gif");
+			try {
+				await runFfmpegCommand(ffmpeg, [
+					"-hide_banner",
+					"-loglevel",
+					"error",
+					"-y",
+					"-i",
+					input,
+					"-vf",
+					`fps=${fps},scale='min(${width},iw)':-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`,
+					"-frames:v",
+					String(maxFrames),
+					"-loop",
+					"0",
+					outputGif,
+				]);
+			} catch (error) {
+				logger?.warn("video animated sticker conversion failed", {
+					bytes: bytes.byteLength,
+					durationMs: elapsedMs(startedAt),
+					error: logErrorMessage(error),
+				});
+				throw error;
+			}
+			const gifBytes = new Uint8Array(await readFile(outputGif));
+			if (gifBytes.byteLength === 0) throw new Error("ffmpeg produced an empty GIF");
+			const size = gifScreenSize(gifBytes);
+			logger?.debug("video animated sticker conversion completed", {
+				bytes: gifBytes.byteLength,
+				durationMs: elapsedMs(startedAt),
+				format: "gif",
+				fps,
+				height: size?.height ?? null,
+				pipeline: "palettegen",
+				width: size?.width ?? null,
+			});
+			return gifBytes;
+		}
+
 		const framesPath = join(directory, "frame-%03d.png");
 		try {
 			await runFfmpegCommand(ffmpeg, [

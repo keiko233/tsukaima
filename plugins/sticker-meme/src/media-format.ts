@@ -158,9 +158,8 @@ export async function normalizeStickerMedia(
 	if (detected.isVideo) {
 		const converter = options.converter ?? defaultAnimatedConverter;
 		const gifBytes = await converter.convertVideo(bytes, {
-			fps: 15,
-			maxFrames: 60,
-			width: 360,
+			maxFrames: 150,
+			width: 480,
 			...options.conversion,
 			inputExtension: detected.extension,
 		});
