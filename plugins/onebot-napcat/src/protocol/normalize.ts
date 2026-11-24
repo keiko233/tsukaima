@@ -357,7 +357,10 @@ const formatForwardNodes = (
 	let used = 0;
 	let truncated = nodes.length > options.maxNodes;
 	for (const [index, node] of nodes.slice(0, options.maxNodes).entries()) {
-		const sender = node.senderName ?? node.senderId ?? "unknown";
+		const sender =
+			node.senderName && node.senderId && node.senderName !== node.senderId
+				? `${node.senderName}(${node.senderId})`
+				: (node.senderName ?? node.senderId ?? "unknown");
 		const text = nodeText(node).replace(/\s+/gu, " ").trim();
 		if (text.length === 0) continue;
 		const line = `${sender}: ${text}`;

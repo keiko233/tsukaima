@@ -281,6 +281,7 @@ function saveTool(context: PluginContext, log: PluginLogger): PluginTool {
 			}
 			const kind = inputString(input, "kind") ?? "fact";
 			const requestedScope = inputScope(input);
+			const subjectUserId = inputString(input, "subjectUserId");
 			const target = effectiveWrite(resolved, requestedScope);
 			log.trace("memory.save start", {
 				conversationId: invocation.conversationId,
@@ -314,6 +315,7 @@ function saveTool(context: PluginContext, log: PluginLogger): PluginTool {
 				kind,
 				scope: target.scope,
 				status: target.status,
+				...(subjectUserId === undefined ? {} : { subjectUserId }),
 				summary,
 				...(target.scope === "global" ? { visibility: "shared" } : { visibility: "private" }),
 			});
@@ -341,6 +343,11 @@ function saveTool(context: PluginContext, log: PluginLogger): PluginTool {
 				kind: { type: "string" },
 				scope: {
 					enum: ["global", "persona", "user", "conversation", "project", "ephemeral"],
+					type: "string",
+				},
+				subjectUserId: {
+					description:
+						"Optional unique user ID of the person this memory is about (for scope='user'). Never use display names or nicknames.",
 					type: "string",
 				},
 				summary: { type: "string" },

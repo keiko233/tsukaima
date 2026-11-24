@@ -341,6 +341,8 @@ export class ConversationRouter {
 						contentText: messages.contentText,
 						direction: messages.direction,
 						senderDisplayName: messages.senderDisplayName,
+						senderExternalId: messages.senderExternalId,
+						senderUserId: messages.senderUserId,
 					})
 					.from(messages)
 					.where(
@@ -352,7 +354,14 @@ export class ConversationRouter {
 					.toReversed()
 					.filter((row) => (row.contentText ?? "").trim().length > 0)
 					.map((row) => {
-						const who = row.direction === "outbound" ? "(you)" : (row.senderDisplayName ?? "user");
+						const id = row.senderExternalId?.trim() ?? row.senderUserId?.trim();
+						const name = row.senderDisplayName?.trim();
+						const who =
+							row.direction === "outbound"
+								? "(you)"
+								: id !== undefined && id !== "" && name !== undefined && name !== "" && name !== id
+									? `${name}(${id})`
+									: (name ?? id ?? "user");
 						return `${who}: ${(row.contentText ?? "").trim()}`;
 					});
 				const gateDecision = await gate.decideUndirectedGroupReply({
@@ -595,6 +604,7 @@ export class ConversationRouter {
 				direction: messages.direction,
 				senderDisplayName: messages.senderDisplayName,
 				senderExternalId: messages.senderExternalId,
+				senderUserId: messages.senderUserId,
 			})
 			.from(messages)
 			.where(
@@ -615,6 +625,9 @@ export class ConversationRouter {
 			...(row.senderDisplayName === null || row.senderDisplayName.trim().length === 0
 				? {}
 				: { senderDisplayName: row.senderDisplayName }),
+			...(row.senderUserId === null || row.senderUserId.trim().length === 0
+				? {}
+				: { senderId: row.senderUserId }),
 			...(row.senderExternalId === null || row.senderExternalId.length === 0
 				? {}
 				: { senderPlatformId: row.senderExternalId }),

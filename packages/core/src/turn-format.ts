@@ -16,6 +16,7 @@ export interface RenderableEnvelope {
 		readonly label?: string;
 	}[];
 	readonly sender?: {
+		readonly id?: string;
 		readonly displayName?: string;
 		readonly platformId?: string;
 		readonly isBot?: boolean;
@@ -76,12 +77,12 @@ export function envelopeTimeMs(envelope: RenderableEnvelope): number | undefined
 
 /** Speaker label: display name, plus a compact platform id in group chats. */
 export function envelopeSpeaker(envelope: RenderableEnvelope): string {
-	const name = envelope.sender?.displayName?.trim() || "Unknown";
-	const platformId = envelope.sender?.platformId?.trim();
-	if (envelope.conversationKey?.kind !== "group" || platformId === undefined || platformId === "") {
+	const id = envelope.sender?.platformId?.trim() || envelope.sender?.id?.trim();
+	const name = envelope.sender?.displayName?.trim() || id || "Unknown";
+	if (envelope.conversationKey?.kind !== "group" || id === undefined || id === "" || id === name) {
 		return name;
 	}
-	return name === platformId ? name : `${name}(${platformId})`;
+	return `${name}(${id})`;
 }
 
 /**
@@ -104,7 +105,14 @@ export function applyMentionLabels(text: string, mentions: RenderableEnvelope["m
 /** `[reply to Name: "excerpt"]`, or `undefined` when nothing useful is known. */
 export function formatQuote(quote: MessageQuote | undefined): string | undefined {
 	if (quote === undefined) return undefined;
-	const who = quote.fromSelf === true ? "you" : (quote.senderDisplayName ?? quote.senderPlatformId);
+	const id = quote.senderPlatformId?.trim() || quote.senderId?.trim();
+	const name = quote.senderDisplayName?.trim();
+	const who =
+		quote.fromSelf === true
+			? "you"
+			: id !== undefined && id !== "" && name !== undefined && name !== "" && name !== id
+				? `${name}(${id})`
+				: (name ?? id);
 	const excerpt = quote.excerpt?.replace(/\s+/gu, " ").trim();
 	const clipped =
 		excerpt === undefined || excerpt.length === 0

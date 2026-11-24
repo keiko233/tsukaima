@@ -17,6 +17,7 @@ export const messageQuoteSchema = z.object({
 	excerpt: z.string().max(MESSAGE_QUOTE_EXCERPT_MAX_CHARS).optional(),
 	fromSelf: z.boolean().optional(),
 	senderDisplayName: z.string().min(1).optional(),
+	senderId: z.string().min(1).optional(),
 	senderPlatformId: z.string().min(1).optional(),
 });
 
