@@ -52,7 +52,7 @@ describe("computeOmittedSessionTools parity", () => {
 			for (const name of WORKSPACE_TOOL_NAMES) expect(withoutDelegation.has(name)).toBe(true);
 			for (const name of proactiveTools) expect(withoutDelegation.has(name)).toBe(true);
 			for (const name of SCHEDULE_TOOL_NAMES) expect(withoutDelegation.has(name)).toBe(false);
-			for (const name of PROMPT_TOOL_NAMES) expect(withoutDelegation.has(name)).toBe(true);
+			for (const name of PROMPT_TOOL_NAMES) expect(withoutDelegation.has(name)).toBe(false);
 
 			const withDelegation = omitted({ kind, workspaceDelegationEnabled: true });
 			const delegationNames = new Set<string>(IM_WORKSPACE_DELEGATION_TOOL_NAMES);
@@ -93,6 +93,25 @@ describe("computeOmittedSessionTools parity", () => {
 		]) {
 			const tools = omitted(input);
 			for (const name of ADMIN_OPS_TOOL_NAMES) expect(tools.has(name)).toBe(true);
+		}
+	});
+
+	test("prompt tools stay discoverable only on admin-capable chats with agent access", () => {
+		for (const kind of ["webui", "workspace", "private", "group"] as const) {
+			const tools = omitted({ kind, capabilities: kind === "workspace" ? ["coding"] : [] });
+			for (const name of PROMPT_TOOL_NAMES) expect(tools.has(name)).toBe(false);
+		}
+		for (const input of [
+			{ kind: "workspace", capabilities: ["coding"], agentAccess: false } as const,
+			{ kind: "private", readFailed: true } as const,
+			{ kind: "group", readFailed: true } as const,
+			{ kind: "workspace", readFailed: true } as const,
+			{ kind: "task" } as const,
+			{ kind: "plugin" } as const,
+			{ kind: undefined } as const,
+		]) {
+			const tools = omitted(input);
+			for (const name of PROMPT_TOOL_NAMES) expect(tools.has(name)).toBe(true);
 		}
 	});
 

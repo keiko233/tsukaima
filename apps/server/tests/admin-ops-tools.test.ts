@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import {
 	chatObjects,
 	conversations,
@@ -17,6 +17,7 @@ import type { Logger } from "../src/logging.ts";
 import {
 	ADMIN_OPS_TOOL_NAMES,
 	authorizeAdminOpsToolCall,
+	buildAdminCommandEnv,
 	createAdminOpsToolsExtension,
 	type AdminOpsToolsOptions,
 } from "../src/services/admin-ops-tools.ts";
@@ -259,6 +260,60 @@ describe("admin ops authorization", () => {
 		).toMatchObject({ allowed: true, callerId: "10002", isAdmin: true });
 	});
 
+	test("webui and workspace resolve as admin while IM and synthetic kinds fail closed", async () => {
+		const harness = await createHarness();
+		try {
+			for (const kind of ["webui", "workspace"] as const) {
+				const session = await seedConversation(harness.database, { kind });
+				const caller = await resolveImCallerContext({
+					conversationId: session.durableConversationId,
+					database: harness.database,
+					settings: settingsWithAdmins([]),
+				});
+				expect(caller.chatKind).toBe(kind);
+				expect(caller.isAdmin).toBe(true);
+				expect(caller.role).toBe("admin");
+			}
+			const webui = await seedConversation(harness.database, { kind: "webui" });
+			const explicitlyDenied = await resolveImCallerContext({
+				conversationId: webui.durableConversationId,
+				database: harness.database,
+				overrides: { isAdmin: false },
+				settings: settingsWithAdmins([]),
+			});
+			expect(explicitlyDenied.isAdmin).toBe(false);
+			expect(explicitlyDenied.role).toBeUndefined();
+
+			const privateChat = await seedConversation(harness.database, {
+				kind: "private",
+				messages: [{ senderExternalId: "10003" }],
+				platformConversationId: "10003",
+			});
+			const nonAdminIm = await resolveImCallerContext({
+				conversationId: privateChat.durableConversationId,
+				database: harness.database,
+				overrides: { turnBoundSender: "10003" },
+				settings: settingsWithAdmins(["10002"]),
+			});
+			expect(nonAdminIm.chatKind).toBe("private");
+			expect(nonAdminIm.isAdmin).toBeUndefined();
+			expect(nonAdminIm.role).toBeUndefined();
+
+			for (const chatKind of ["task", "plugin", "unknown"] as const) {
+				const caller = await resolveImCallerContext({
+					conversationId: "synthetic:unknown",
+					database: undefined,
+					overrides: { chatKind, turnBoundSender: "10002" },
+					settings: settingsWithAdmins(["10002"]),
+				});
+				expect(caller.isAdmin).toBeUndefined();
+				expect(caller.role).toBeUndefined();
+			}
+		} finally {
+			await harness.cleanup();
+		}
+	});
+
 	test("ADMIN_OPS_TOOL_NAMES is the complete admin surface", () => {
 		expect([...ADMIN_OPS_TOOL_NAMES]).toEqual([
 			"admin_exec",
@@ -487,6 +542,63 @@ describe("admin ops runtime authorization", () => {
 			});
 			expect(audits.filter((entry) => entry.result === "ok")).toHaveLength(2);
 		} finally {
+			await harness.cleanup();
+		}
+	});
+});
+
+describe("admin command environment", () => {
+	test("curates locale, home, and PATH without copying host secrets", () => {
+		const env = buildAdminCommandEnv({
+			HOME: "/home/synthetic",
+			LANG: "C.UTF-8",
+			PATH: ["/usr/bin", "/usr/local/bin", "/home/synthetic/.local/bin", "/bin"].join(delimiter),
+			SYNTHETIC_SECRET_VALUE: "do-not-copy",
+		});
+		expect(env).toEqual({
+			HOME: "/home/synthetic",
+			LANG: "C.UTF-8",
+			PATH: ["/usr/local/bin", "/home/synthetic/.local/bin", "/usr/bin", "/bin"].join(delimiter),
+			TZ: "UTC",
+		});
+		const withoutHome = buildAdminCommandEnv({ PATH: "/usr/bin:/bin" });
+		expect(withoutHome).toEqual({
+			LANG: "C.UTF-8",
+			PATH: ["/usr/local/bin", "/usr/bin", "/bin"].join(delimiter),
+			TZ: "UTC",
+		});
+		expect(withoutHome.HOME).toBeUndefined();
+	});
+
+	test("admin_exec inherits the curated PATH and HOME but no unrelated server env", async () => {
+		const harness = await createHarness();
+		const marker = "TSUKAIMA_SYNTHETIC_ADMIN_ENV_SECRET";
+		const previous = process.env[marker];
+		process.env[marker] = "synthetic-secret-value";
+		try {
+			const session = await seedConversation(harness.database, { kind: "webui" });
+			const { extension } = createExtension({
+				adminUsers: [],
+				database: harness.database,
+				opsRoot: harness.opsRoot,
+				turnBoundSender: undefined,
+			});
+			const result = await invokeTool(
+				extension,
+				"admin_exec",
+				{ command: "env" },
+				session.durableConversationId,
+			);
+			const output = String(decodeResult(result).stdout ?? "");
+			expect(output).toContain("/usr/local/bin");
+			if (process.env.HOME !== undefined) {
+				expect(output).toContain(`HOME=${process.env.HOME}`);
+			}
+			expect(output).not.toContain(marker);
+			expect(output).not.toContain("synthetic-secret-value");
+		} finally {
+			if (previous === undefined) delete process.env[marker];
+			else process.env[marker] = previous;
 			await harness.cleanup();
 		}
 	});

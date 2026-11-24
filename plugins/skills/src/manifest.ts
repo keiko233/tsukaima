@@ -6,6 +6,12 @@ export const SKILLS_LOAD_TOOL = `${SKILLS_PLUGIN_ID}.load`;
 export const SKILLS_READ_RESOURCE_TOOL = `${SKILLS_PLUGIN_ID}.read_resource`;
 export const SKILLS_LOAD_MODEL_NAME = "load_skill";
 export const SKILLS_READ_RESOURCE_MODEL_NAME = "read_skill_resource";
+export const SKILLS_INSTALL_TOOL = `${SKILLS_PLUGIN_ID}.install`;
+export const SKILLS_REMOVE_TOOL = `${SKILLS_PLUGIN_ID}.remove`;
+export const SKILLS_RESCAN_TOOL = `${SKILLS_PLUGIN_ID}.rescan`;
+export const SKILLS_INSTALL_MODEL_NAME = "skill_install";
+export const SKILLS_REMOVE_MODEL_NAME = "skill_remove";
+export const SKILLS_RESCAN_MODEL_NAME = "skill_rescan";
 
 export const skillsManifest: PluginManifest = pluginManifestSchema.parse({
 	apiVersion: "1",

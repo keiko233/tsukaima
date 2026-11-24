@@ -62,6 +62,30 @@ const QA_SNIPPET_LIMIT = 200;
 const PERSONA_TRUNCATION_NOTE = "[persona truncated to fit the context budget]";
 const MEMORY_TRUNCATION_NOTE = "[memories truncated to fit the context budget]";
 const WARM_HEADER = "Conversation state:";
+const ADMIN_TOOL_NAMES = [
+	"admin_exec",
+	"admin_file_read",
+	"admin_file_write",
+	"admin_file_list",
+	"skill_install",
+	"skill_remove",
+	"skill_rescan",
+	"mcp_list",
+	"mcp_install",
+	"mcp_update",
+	"mcp_toggle",
+	"mcp_reconnect",
+	"mcp_remove",
+	"workspace_spawn",
+	"prompt_list",
+	"prompt_update",
+	"persona_prompt_update",
+] as const;
+const ADMIN_CAPABILITIES_TEXT = [
+	"The current speaker is an authenticated administrator. Deferred administrator tools are available:",
+	ADMIN_TOOL_NAMES.map((name) => `- ${name}`).join("\n"),
+	"Load the tool you need with tool_search first, then call it. Confirm destructive intent before running commands, writing files, installing skills or MCP servers, or spawning workspaces.",
+].join("\n");
 const QA_HEADER = "You answered similar questions here before; stay consistent:";
 const LONG_TERM_HEADER = "Known memories, most relevant first:";
 const OBSERVATION_HEADER = "Recent messages in this group, oldest first (you = your own messages):";
@@ -139,6 +163,8 @@ export interface DrizzleContextProviderOptions {
 	readonly stickerHints?: () => Promise<StickerHintsPayload | undefined>;
 	/** Optional pre-rendered Agent Skills catalog for the turn's execution surface. */
 	readonly skillCatalog?: (surface: "chat" | "workspace") => Promise<string | undefined>;
+	/** Fail-closed check for an authenticated administrator speaker on this turn. */
+	readonly resolveAdminCaller?: (conversationId: string) => Promise<boolean>;
 }
 
 export interface StickerHintsPayload {
@@ -229,6 +255,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	readonly #renderPrompt: DrizzleContextProviderOptions["renderPrompt"];
 	readonly #renderSystem: DrizzleContextProviderOptions["renderSystem"];
 	readonly #skillCatalog: DrizzleContextProviderOptions["skillCatalog"];
+	readonly #resolveAdminCaller: DrizzleContextProviderOptions["resolveAdminCaller"];
 	readonly #stickerCaptions: DrizzleContextProviderOptions["stickerCaptions"];
 	readonly #stickerHints: DrizzleContextProviderOptions["stickerHints"];
 	readonly #timeZone: string | undefined;
@@ -237,6 +264,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	constructor(options: DrizzleContextProviderOptions) {
 		this.#renderSystem = options.renderSystem;
 		this.#skillCatalog = options.skillCatalog;
+		this.#resolveAdminCaller = options.resolveAdminCaller;
 		this.#renderPrompt = options.renderPrompt;
 		this.#stickerCaptions = options.stickerCaptions;
 		this.#stickerHints = options.stickerHints;
@@ -379,6 +407,16 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			chat && behavior.includeRuntimeContext
 				? `Local time: ${formatLocalDateTime(request.nowMs, this.#timeZoneOptions())}`
 				: undefined;
+		let adminCapabilities: string | undefined;
+		if (chat && this.#resolveAdminCaller !== undefined) {
+			try {
+				if (await this.#resolveAdminCaller(request.conversationId)) {
+					adminCapabilities = ADMIN_CAPABILITIES_TEXT;
+				}
+			} catch (error) {
+				this.#logger.warn("admin caller check unavailable", { error: errorMessage(error) });
+			}
+		}
 		const hooks = compact(
 			uniq(
 				request.triggers
@@ -579,6 +617,8 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		push("rhythm-nudge", rhythmNudge);
 		push("stickers", stickerHints);
 		push("skills", skillCatalog);
+		// Budget-exempt: the administrator needs the deferred tool list even in a tight turn.
+		push("admin-capabilities", adminCapabilities);
 		if (chat) push("live-replies", LIVE_REPLY_GUIDE);
 		push("prompt-hooks", hooks);
 		push("cue", cue);

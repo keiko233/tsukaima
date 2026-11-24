@@ -142,7 +142,17 @@ export async function resolveImCallerContext(
 		} catch {}
 	}
 
-	if (resolvedIsAdmin === undefined && resolvedUserId !== undefined) {
+	// WebUI and workspace are already authenticated administrator surfaces; IM kinds still
+	// require an explicit trusted sender below. An explicit `isAdmin: false` override wins.
+	if (resolvedChatKind === "webui" || resolvedChatKind === "workspace") {
+		if (resolvedIsAdmin === undefined) resolvedIsAdmin = true;
+		if (resolvedIsAdmin) resolvedRole = resolvedRole ?? "admin";
+	}
+
+	// Trusted-admin membership applies to IM conversations only. `task`, `plugin`, and unknown
+	// kinds stay fail-closed even when the bound sender happens to be an IM administrator.
+	const adminEligible = resolvedChatKind === "private" || resolvedChatKind === "group";
+	if (adminEligible && resolvedIsAdmin === undefined && resolvedUserId !== undefined) {
 		try {
 			const onebotSettings = await input.settings.read("onebot-napcat");
 			const adminUsers = Array.isArray(

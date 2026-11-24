@@ -3,8 +3,24 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { mcpServerSnapshotSchema, type McpServerSnapshot } from "@tsukaima/contracts";
-import { createPluginContext, LocalStorageBridge, type PluginContext } from "@tsukaima/sdk";
-import { mcpPlugin } from "./index.ts";
+import {
+	createPluginContext,
+	LocalStorageBridge,
+	type AuditEntry,
+	type PluginContext,
+} from "@tsukaima/sdk";
+import {
+	MCP_ADMIN_TOOL_NAMES,
+	MCP_INSTALL_SERVER_MODEL_NAME,
+	MCP_INSTALL_SERVER_TOOL,
+	MCP_LIST_SERVERS_MODEL_NAME,
+	MCP_LIST_SERVERS_TOOL,
+	MCP_RECONNECT_SERVER_TOOL,
+	MCP_REMOVE_SERVER_TOOL,
+	MCP_TOGGLE_SERVER_TOOL,
+	MCP_UPDATE_SERVER_TOOL,
+	mcpPlugin,
+} from "./index.ts";
 import { mcpManifest } from "./manifest.ts";
 import { stdioEnvironment } from "./service.ts";
 
@@ -12,13 +28,35 @@ const FIXTURE = new URL("./fixtures/mcp-stdio-server.ts", import.meta.url).pathn
 const ENV_FIXTURE = new URL("./fixtures/mcp-env-stdio-server.ts", import.meta.url).pathname;
 const SERVER_ID = "synthetic-mcp";
 
-function makeContext(storage = new LocalStorageBridge()): PluginContext {
+function makeContext(storage = new LocalStorageBridge(), audits: AuditEntry[] = []): PluginContext {
 	return createPluginContext({
+		audit: {
+			record: async (entry) => {
+				audits.push(entry);
+			},
+		},
 		grantedPermissions: mcpManifest.permissions,
 		manifest: mcpManifest,
 		pluginId: "mcp",
 		storage,
 	});
+}
+
+function toolText(result: {
+	readonly result: { readonly content: readonly { readonly text: string }[] };
+}) {
+	return result.result.content.map((part) => part.text).join("\n");
+}
+
+async function invokeTool(
+	context: PluginContext,
+	name: string,
+	input: Record<string, unknown>,
+	caller: Record<string, unknown> = { chatKind: "webui" },
+): Promise<{ readonly text: string }> {
+	const result = await context.tools.invoke(name, input, caller);
+	if (!result.ok) throw new Error(`tool invocation failed: ${result.reason}`);
+	return { text: toolText(result) };
 }
 
 function rpc(context: PluginContext, method: string, input?: unknown): Promise<unknown> {
@@ -67,6 +105,7 @@ describe("mcp plugin", () => {
 			expect(created.state).toBe("connected");
 			expect(created.tools.map((tool) => tool.name)).toEqual(["echo", "picture", "slow", "fail"]);
 			expect(context.tools.list().map((tool) => tool.name)).toEqual([
+				...MCP_ADMIN_TOOL_NAMES,
 				"mcp.synthetic-mcp.echo",
 				"mcp.synthetic-mcp.picture",
 				"mcp.synthetic-mcp.slow",
@@ -129,7 +168,7 @@ describe("mcp plugin", () => {
 			expect(restored[0]?.id).toBe(SERVER_ID);
 			expect(restored[0]?.state).toBe("connected");
 			expect(JSON.stringify(restored)).not.toContain(secret);
-			expect(second.tools.list()).toHaveLength(4);
+			expect(second.tools.list()).toHaveLength(MCP_ADMIN_TOOL_NAMES.length + 4);
 		} finally {
 			await mcpPlugin.teardown?.(second);
 		}
@@ -141,7 +180,7 @@ describe("mcp plugin", () => {
 		try {
 			await rpc(context, "mcp.create", createInput());
 			await rpc(context, "mcp.toggle", { enabled: false, id: SERVER_ID });
-			expect(context.tools.list()).toEqual([]);
+			expect(context.tools.list().map((tool) => tool.name)).toEqual([...MCP_ADMIN_TOOL_NAMES]);
 			const disabled = (await listServers(context))[0];
 			expect(disabled?.state).toBe("disconnected");
 
@@ -149,11 +188,11 @@ describe("mcp plugin", () => {
 				await rpc(context, "mcp.toggle", { enabled: true, id: SERVER_ID }),
 			);
 			expect(enabled.state).toBe("connected");
-			expect(context.tools.list()).toHaveLength(4);
+			expect(context.tools.list()).toHaveLength(MCP_ADMIN_TOOL_NAMES.length + 4);
 
 			const reconnected = parseSnapshot(await rpc(context, "mcp.reconnect", { id: SERVER_ID }));
 			expect(reconnected.state).toBe("connected");
-			expect(context.tools.list()).toHaveLength(4);
+			expect(context.tools.list()).toHaveLength(MCP_ADMIN_TOOL_NAMES.length + 4);
 
 			await rpc(context, "mcp.update", {
 				disabledTools: ["picture"],
@@ -165,7 +204,7 @@ describe("mcp plugin", () => {
 			);
 
 			await rpc(context, "mcp.delete", { id: SERVER_ID });
-			expect(context.tools.list()).toEqual([]);
+			expect(context.tools.list().map((tool) => tool.name)).toEqual([...MCP_ADMIN_TOOL_NAMES]);
 			expect(await listServers(context)).toEqual([]);
 		} finally {
 			await mcpPlugin.teardown?.(context);
@@ -195,7 +234,7 @@ describe("mcp plugin", () => {
 			expect(broken.state).toBe("error");
 			expect(broken.tools).toEqual([]);
 			expect(broken.lastError?.length).toBeGreaterThan(0);
-			expect(context.tools.list()).toEqual([]);
+			expect(context.tools.list().map((tool) => tool.name)).toEqual([...MCP_ADMIN_TOOL_NAMES]);
 		} finally {
 			await mcpPlugin.teardown?.(context);
 		}
@@ -218,6 +257,179 @@ describe("mcp plugin", () => {
 		try {
 			await expect(rpc(context, "mcp.create", { name: "Missing transport" })).rejects.toThrow();
 			await expect(rpc(context, "mcp.delete", { id: "" })).rejects.toThrow();
+		} finally {
+			await mcpPlugin.teardown?.(context);
+		}
+	});
+
+	test("admin MCP tools cover list, install, update, toggle, reconnect, and remove", async () => {
+		const audits: AuditEntry[] = [];
+		const context = makeContext(new LocalStorageBridge(), audits);
+		await mcpPlugin.setup(context);
+		const secret = "synthetic-mcp-admin-secret";
+		try {
+			const tools = context.tools.list();
+			expect(
+				tools.filter((tool) => MCP_ADMIN_TOOL_NAMES.includes(tool.name as never)),
+			).toHaveLength(MCP_ADMIN_TOOL_NAMES.length);
+			expect(tools.find((tool) => tool.name === MCP_LIST_SERVERS_TOOL)?.modelName).toBe(
+				MCP_LIST_SERVERS_MODEL_NAME,
+			);
+			expect(tools.find((tool) => tool.name === MCP_INSTALL_SERVER_TOOL)?.modelName).toBe(
+				MCP_INSTALL_SERVER_MODEL_NAME,
+			);
+
+			const listed = await invokeTool(context, MCP_LIST_SERVERS_TOOL, {}, { chatKind: "webui" });
+			expect(JSON.parse(listed.text)).toEqual({ servers: [] });
+			expect(audits.at(-1)).toMatchObject({
+				action: "mcp.admin-tool",
+				payload: expect.objectContaining({ operation: MCP_LIST_SERVERS_TOOL }),
+				result: "ok",
+				targetKind: "mcp-server",
+			});
+
+			const installed = parseSnapshot(
+				JSON.parse(
+					(
+						await invokeTool(
+							context,
+							MCP_INSTALL_SERVER_TOOL,
+							createInput({
+								transport: {
+									args: [FIXTURE],
+									command: process.execPath,
+									env: { MCP_SYNTHETIC_SECRET: secret },
+									type: "stdio",
+								},
+							}),
+							{ chatKind: "workspace" },
+						)
+					).text,
+				),
+			);
+			expect(installed.state).toBe("connected");
+			expect(installed.secretKeys).toEqual(["env:MCP_SYNTHETIC_SECRET"]);
+			expect(JSON.stringify(installed)).not.toContain(secret);
+			expect(JSON.stringify(audits)).not.toContain(secret);
+
+			const renamed = parseSnapshot(
+				JSON.parse(
+					(
+						await invokeTool(
+							context,
+							MCP_UPDATE_SERVER_TOOL,
+							{ id: SERVER_ID, name: "Synthetic MCP admin rename" },
+							{ chatKind: "private", isAdmin: true, senderPlatformId: "10002" },
+						)
+					).text,
+				),
+			);
+			expect(renamed.name).toBe("Synthetic MCP admin rename");
+
+			const disabled = parseSnapshot(
+				JSON.parse(
+					(
+						await invokeTool(
+							context,
+							MCP_TOGGLE_SERVER_TOOL,
+							{ enabled: false, id: SERVER_ID },
+							{ chatKind: "group", isAdmin: true, senderPlatformId: "10002" },
+						)
+					).text,
+				),
+			);
+			expect(disabled.state).toBe("disconnected");
+			expect(
+				context.tools
+					.list()
+					.map((tool) => tool.name)
+					.filter((name) => !name.startsWith("mcp.")),
+			).toEqual([]);
+
+			const enabled = parseSnapshot(
+				JSON.parse(
+					(
+						await invokeTool(
+							context,
+							MCP_TOGGLE_SERVER_TOOL,
+							{ enabled: true, id: SERVER_ID },
+							{ chatKind: "private", isAdmin: true, senderPlatformId: "10002" },
+						)
+					).text,
+				),
+			);
+			expect(enabled.state).toBe("connected");
+			const reconnected = parseSnapshot(
+				JSON.parse(
+					(
+						await invokeTool(
+							context,
+							MCP_RECONNECT_SERVER_TOOL,
+							{ id: SERVER_ID },
+							{ chatKind: "group", isAdmin: true, senderPlatformId: "10002" },
+						)
+					).text,
+				),
+			);
+			expect(reconnected.state).toBe("connected");
+
+			const removed = JSON.parse(
+				(
+					await invokeTool(
+						context,
+						MCP_REMOVE_SERVER_TOOL,
+						{ id: SERVER_ID },
+						{ chatKind: "group", isAdmin: true, senderPlatformId: "10002" },
+					)
+				).text,
+			) as { readonly deleted: boolean; readonly id: string };
+			expect(removed).toEqual({ deleted: true, id: SERVER_ID });
+			expect(context.tools.list().map((tool) => tool.name)).toEqual([...MCP_ADMIN_TOOL_NAMES]);
+			expect(
+				audits.filter((audit) => audit.action === "mcp.admin-tool" && audit.result === "ok"),
+			).toHaveLength(7);
+		} finally {
+			await mcpPlugin.teardown?.(context);
+		}
+	});
+
+	test("every admin MCP tool denies non-admin IM, missing-sender, and synthetic callers", async () => {
+		const audits: AuditEntry[] = [];
+		const context = makeContext(new LocalStorageBridge(), audits);
+		await mcpPlugin.setup(context);
+		const invocations: readonly [string, Record<string, unknown>][] = [
+			[MCP_LIST_SERVERS_TOOL, {}],
+			[MCP_INSTALL_SERVER_TOOL, createInput({ id: "synthetic-denied" })],
+			[MCP_UPDATE_SERVER_TOOL, { id: "synthetic-denied", name: "Synthetic denied" }],
+			[MCP_TOGGLE_SERVER_TOOL, { enabled: false, id: "synthetic-denied" }],
+			[MCP_RECONNECT_SERVER_TOOL, { id: "synthetic-denied" }],
+			[MCP_REMOVE_SERVER_TOOL, { id: "synthetic-denied" }],
+		];
+		try {
+			const callers = [
+				{ chatKind: "private", isAdmin: false, senderPlatformId: "10003" },
+				{ chatKind: "private", isAdmin: true },
+				{ chatKind: "group", isAdmin: true },
+				{ chatKind: "group" },
+				{ chatKind: "task", isAdmin: true, senderPlatformId: "10002" },
+				{ chatKind: "plugin", isAdmin: true, senderPlatformId: "10002" },
+			];
+			for (const [name, input] of invocations) {
+				for (const caller of callers) {
+					const result = await context.tools.invoke(name, input, caller);
+					expect(result.ok).toBe(true);
+					if (!result.ok) throw new Error("expected a text denial");
+					expect(JSON.parse(toolText(result))).toEqual({ error: "admin_required" });
+				}
+			}
+			expect(audits.filter((entry) => entry.result === "denied")).toHaveLength(
+				invocations.length * callers.length,
+			);
+			for (const entry of audits.filter((audit) => audit.result === "denied")) {
+				expect(entry.reason).toBe("admin_required");
+				expect(entry.action).toBe("mcp.admin-tool");
+				expect(JSON.stringify(entry.payload)).not.toContain("MCP_SYNTHETIC_SECRET");
+			}
 		} finally {
 			await mcpPlugin.teardown?.(context);
 		}

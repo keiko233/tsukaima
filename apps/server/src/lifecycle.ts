@@ -1,5 +1,5 @@
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
 	ConversationExecutionLock,
@@ -55,6 +55,7 @@ import {
 	ONEBOT_MENTION_NAME_BINDING,
 	ONEBOT_VIDEO_FRAME_EXTRACTOR_BINDING,
 } from "@tsukaima-plugin/onebot-napcat";
+import { parseSkillsConfig } from "@tsukaima-plugin/skills";
 import {
 	MigrationRegistry,
 	PluginDatabaseStore,
@@ -545,6 +546,20 @@ export class TsukaimaLifecycle {
 				const parsed = skillsTurnContextResultSchema.safeParse(raw);
 				return parsed.success ? parsed.data.text : undefined;
 			},
+			resolveAdminCaller: async (conversationId) => {
+				const caller = await resolveImCallerContext({
+					conversationId,
+					database: this.domainDatabase,
+					overrides: { turnBoundSender: this.boundTurnSender(conversationId) },
+					settings: this.pluginSettings,
+				});
+				if (caller.chatKind === "webui") return true;
+				return (
+					(caller.chatKind === "private" || caller.chatKind === "group") &&
+					caller.isAdmin === true &&
+					caller.senderPlatformId !== undefined
+				);
+			},
 		});
 		this.requestService = new RequestService({
 			audit: (entry) => this.writeAudit(entry),
@@ -943,8 +958,26 @@ export class TsukaimaLifecycle {
 			sql: workspaceSql,
 			todos: this.workspaceTodos,
 		});
+		const skillEnv = options?.env ?? process.env;
+		const configuredSkillPaths = skillEnv.TSUKAIMA_SKILLS_PATHS?.trim();
+		const adminSkillRoots =
+			configuredSkillPaths === undefined || configuredSkillPaths.length === 0
+				? []
+				: parseSkillsConfig({ paths: configuredSkillPaths }, process.cwd(), {
+						TSUKAIMA_DATA_DIR: config.dataDir,
+					}).paths;
+		const adminAllowedRoots = [
+			...new Set(
+				[
+					config.repositoryRoot,
+					config.dataDir,
+					resolve(config.dataDir, "skills"),
+					...adminSkillRoots,
+				].map((root) => resolve(root)),
+			),
+		];
 		this.adminOpsToolsExtension = createAdminOpsToolsExtension({
-			allowedRoots: [config.repositoryRoot, config.dataDir],
+			allowedRoots: adminAllowedRoots,
 			audit: (entry) => this.writeAudit(entry),
 			authorize: async (durableConversationId, toolName) => {
 				const caller = await resolveImCallerContext({
@@ -1997,7 +2030,39 @@ export class TsukaimaLifecycle {
 						},
 					);
 		const dynamicExtensions = [
-			createPromptTools(this.prompts, this.conversationPolicy),
+			createPromptTools(this.prompts, this.conversationPolicy, {
+				authorize: async (durableConversationId, _toolName) => {
+					const caller = await resolveImCallerContext({
+						conversationId: durableConversationId,
+						database: this.domainDatabase,
+						overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
+						settings: this.pluginSettings,
+					});
+					if (caller.chatKind === "webui") return { allowed: true };
+					if (caller.chatKind === "workspace") {
+						const sessionId = caller.domainConversationId;
+						if (sessionId === undefined) {
+							return { allowed: false, reason: "session_not_found" };
+						}
+						try {
+							const policy = await this.conversationPolicy.effectivePolicy(sessionId);
+							return policy.capabilities.includes("coding")
+								? { allowed: true }
+								: { allowed: false, reason: "coding_capability_required" };
+						} catch {
+							return { allowed: false, reason: "policy_unavailable" };
+						}
+					}
+					if (
+						(caller.chatKind === "private" || caller.chatKind === "group") &&
+						caller.isAdmin === true &&
+						caller.senderPlatformId !== undefined
+					) {
+						return { allowed: true };
+					}
+					return { allowed: false, reason: "prompt_tool_access_denied" };
+				},
+			}),
 			...(pluginTools === undefined ? [] : [pluginTools]),
 			...(this.workspaceToolsExtension === undefined ? [] : [this.workspaceToolsExtension]),
 			...(this.scheduleToolsExtension === undefined ? [] : [this.scheduleToolsExtension]),

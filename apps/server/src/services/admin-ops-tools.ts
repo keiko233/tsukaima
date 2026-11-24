@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
-import { basename, dirname, isAbsolute, resolve } from "node:path";
-import { runManagedProcess, SCRUBBED_COMMAND_ENV } from "@tsukaima/coding";
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { runManagedProcess } from "@tsukaima/coding";
 import type { DurableExtension, DurableToolRegistration } from "@tsukaima/core";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
@@ -19,6 +19,28 @@ const DEFAULT_MAX_COMMAND_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const DEFAULT_MAX_LIST_ENTRIES = 1_000;
+
+/**
+ * Curated environment for admin commands: locale, zone, home, and a PATH that reaches image
+ * and per-user tooling. Arbitrary host environment (API keys, tokens, credentials) never
+ * crosses into a spawned command.
+ */
+export function buildAdminCommandEnv(
+	env: Readonly<Record<string, string | undefined>> = process.env,
+): Record<string, string> {
+	const home = env.HOME;
+	const pathEntries = new Set<string>(["/usr/local/bin"]);
+	if (home !== undefined && home.length > 0) pathEntries.add(join(home, ".local/bin"));
+	for (const entry of (env.PATH ?? "/usr/local/bin:/usr/bin:/bin").split(delimiter)) {
+		if (entry.length > 0) pathEntries.add(entry);
+	}
+	return {
+		LANG: env.LANG ?? "C.UTF-8",
+		PATH: [...pathEntries].join(delimiter),
+		TZ: env.TZ ?? "UTC",
+		...(home === undefined || home.length === 0 ? {} : { HOME: home }),
+	};
+}
 
 export interface AdminOpsAuthorization {
 	readonly allowed: boolean;
@@ -352,7 +374,7 @@ export function createAdminOpsToolsExtension(options: AdminOpsToolsOptions): Dur
 						args: ["-c", command],
 						command: "/bin/bash",
 						cwd,
-						env: SCRUBBED_COMMAND_ENV,
+						env: buildAdminCommandEnv(),
 						maxOutputBytes,
 						timeoutMs,
 					});
