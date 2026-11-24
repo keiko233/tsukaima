@@ -179,6 +179,8 @@ describe("built-in plugin panels", () => {
 		expect(zh).toContain("添加 MCP 服务器");
 		expect(zh).toContain("使用权限");
 		expect(zh).toContain("正在加载 MCP 服务器…");
+		expect(mcpI18n.bind("en").t("auth_oauth_authorization_code")).toContain("OAuth");
+		expect(mcpI18n.bind("zh-cn").t("auth_oauth_authorization_code")).toContain("OAuth");
 	});
 
 	test("renders the Skills panel in en and zh-cn", () => {
