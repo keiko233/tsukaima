@@ -57,7 +57,7 @@ RUN mkdir -p /runtime \
 
 FROM oven/bun:latest AS runtime
 # Pin upstream CLIs so device-flow, token refresh, and runtime tooling stay reproducible.
-ARG GH_VERSION=2.104.0
+ARG GH_VERSION=2.105.0
 # Node ships npm/npx for `npx`-based stdio MCP servers; `uv` runs Python-based servers and skills.
 ARG NODE_VERSION=26.13.1
 ARG UV_VERSION=0.13.9
