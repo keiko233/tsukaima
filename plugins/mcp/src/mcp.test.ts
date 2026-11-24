@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { mcpServerSnapshotSchema, type McpServerSnapshot } from "@tsukaima/contracts";
 import { createPluginContext, LocalStorageBridge, type PluginContext } from "@tsukaima/sdk";
 import { mcpPlugin } from "./index.ts";
 import { mcpManifest } from "./manifest.ts";
+import { stdioEnvironment } from "./service.ts";
 
 const FIXTURE = new URL("./fixtures/mcp-stdio-server.ts", import.meta.url).pathname;
+const ENV_FIXTURE = new URL("./fixtures/mcp-env-stdio-server.ts", import.meta.url).pathname;
 const SERVER_ID = "synthetic-mcp";
 
 function makeContext(storage = new LocalStorageBridge()): PluginContext {
@@ -213,6 +218,98 @@ describe("mcp plugin", () => {
 		try {
 			await expect(rpc(context, "mcp.create", { name: "Missing transport" })).rejects.toThrow();
 			await expect(rpc(context, "mcp.delete", { id: "" })).rejects.toThrow();
+		} finally {
+			await mcpPlugin.teardown?.(context);
+		}
+	});
+
+	test("extends the stdio PATH with the tool install directories and de-duplicates it", () => {
+		const home = "/home/synthetic";
+		const env = stdioEnvironment({
+			HOME: home,
+			PATH: ["/usr/bin", "/usr/local/bin", join(home, ".local/bin"), "/bin"].join(delimiter),
+		});
+		expect(env.HOME).toBe(home);
+		expect(env.PATH?.split(delimiter)).toEqual([
+			"/usr/local/bin",
+			join(home, ".local/bin"),
+			"/usr/bin",
+			"/bin",
+		]);
+	});
+
+	test("passes configured env, cwd, and the extended PATH to a stdio server", async () => {
+		const home = realpathSync(mkdtempSync(join(tmpdir(), "tsukaima-mcp-env-")));
+		const localBin = join(home, ".local/bin");
+		const context = makeContext();
+		await mcpPlugin.setup(context);
+		try {
+			const created = parseSnapshot(
+				await rpc(
+					context,
+					"mcp.create",
+					createInput({
+						id: "synthetic-env",
+						name: "Synthetic env MCP",
+						transport: {
+							args: [ENV_FIXTURE],
+							command: process.execPath,
+							cwd: home,
+							env: {
+								HOME: home,
+								MCP_SYNTHETIC_FLAG: "synthetic",
+								PATH: ["/usr/bin", "/usr/local/bin", localBin, "/bin"].join(delimiter),
+							},
+							type: "stdio",
+						},
+					}),
+				),
+			);
+			expect(created.state).toBe("connected");
+
+			const result = await context.tools.invoke("mcp.synthetic-env.environment", {});
+			expect(result.ok).toBe(true);
+			if (!result.ok) throw new Error("expected an environment result");
+			const reported = JSON.parse(result.result.content[0]?.text ?? "{}") as {
+				custom?: string;
+				cwd?: string;
+				home?: string;
+				path?: string;
+			};
+			expect(reported.home).toBe(home);
+			expect(reported.custom).toBe("synthetic");
+			expect(reported.cwd).toBe(home);
+			expect(reported.path?.split(delimiter)).toEqual([
+				"/usr/local/bin",
+				localBin,
+				"/usr/bin",
+				"/bin",
+			]);
+		} finally {
+			await mcpPlugin.teardown?.(context);
+			rmSync(home, { force: true, recursive: true });
+		}
+	});
+
+	test("names the missing executable when a stdio command cannot be spawned", async () => {
+		const context = makeContext();
+		await mcpPlugin.setup(context);
+		const missing = "tsukaima-mcp-executable-that-does-not-exist";
+		try {
+			const broken = parseSnapshot(
+				await rpc(
+					context,
+					"mcp.create",
+					createInput({
+						id: "synthetic-missing",
+						name: "Synthetic missing MCP",
+						transport: { args: [], command: missing, type: "stdio" },
+					}),
+				),
+			);
+			expect(broken.state).toBe("error");
+			expect(broken.lastError).toContain(missing);
+			expect(broken.lastError).toContain("was not found");
 		} finally {
 			await mcpPlugin.teardown?.(context);
 		}
