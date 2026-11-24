@@ -56,10 +56,14 @@ RUN mkdir -p /runtime \
 	done
 
 FROM oven/bun:latest AS runtime
-# Pin the CLI because the runtime needs the same device-flow and token-refresh behavior locally.
+# Pin upstream CLIs so device-flow, token refresh, and runtime tooling stay reproducible.
 ARG GH_VERSION=2.104.0
+# Node ships npm/npx for `npx`-based stdio MCP servers; `uv` runs Python-based servers and skills.
+ARG NODE_VERSION=26.13.1
+ARG UV_VERSION=0.13.9
 # Canvas ships bundled shared libraries when it uses a prebuilt binary; a source build links
-# these system libraries instead, so both paths work at runtime.
+# these system libraries instead, so both paths work at runtime. Python needs venv/pip because a
+# stdio MCP server or skill script may create its own virtualenv and install packages into it.
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
 		bubblewrap \
@@ -67,6 +71,9 @@ RUN apt-get update \
 		curl \
 		ffmpeg \
 		git \
+		python3 \
+		python3-pip \
+		python3-venv \
 		ripgrep \
 		tini \
 		libcairo2 \
@@ -80,12 +87,32 @@ RUN apt-get update \
 	&& install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${gh_arch}/bin/gh" /usr/local/bin/gh \
 	&& rm -rf /var/lib/apt/lists/* /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${gh_arch}"
 
+# Both toolchains land in /usr/local/bin, which the stdio MCP transport prepends to `PATH` and
+# the image PATH below already contains. Pinned tarballs avoid an archive package that lags the
+# Node version `npx` servers expect on Debian.
+RUN runtime_arch="$(dpkg --print-architecture)" \
+	&& case "$runtime_arch" in \
+		amd64) node_arch=x64; uv_arch=x86_64 ;; \
+		arm64) node_arch=arm64; uv_arch=aarch64 ;; \
+		*) echo "unsupported architecture: $runtime_arch" >&2; exit 1 ;; \
+	esac \
+	&& curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.gz" -o /tmp/node.tar.gz \
+	&& tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 \
+		--exclude=CHANGELOG.md --exclude=LICENSE --exclude=README.md \
+	&& curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${uv_arch}-unknown-linux-gnu.tar.gz" -o /tmp/uv.tar.gz \
+	&& tar -xzf /tmp/uv.tar.gz -C /tmp \
+	&& install -m 0755 "/tmp/uv-${uv_arch}-unknown-linux-gnu/uv" "/tmp/uv-${uv_arch}-unknown-linux-gnu/uvx" /usr/local/bin/ \
+	&& rm -rf /tmp/node.tar.gz /tmp/uv.tar.gz "/tmp/uv-${uv_arch}-unknown-linux-gnu"
+
 WORKDIR /app
+# `uv tool`, `pip install --user`, and npm caches write below the running user's home, so the
+# per-user bin directory has to be on PATH for skill scripts and workspace commands too.
 ENV NODE_ENV=production \
 	TSUKAIMA_HOST=0.0.0.0 \
 	TSUKAIMA_PORT=7420 \
 	TSUKAIMA_DATA_DIR=/data \
-	TSUKAIMA_WEB_DIST=/app/apps/web/dist
+	TSUKAIMA_WEB_DIST=/app/apps/web/dist \
+	PATH=/usr/local/bin:/home/bun/.local/bin:$PATH
 
 # Ownership is applied during the copy: a separate `chown -R /app` rewrote the whole tree into
 # another layer, which doubled the image and cost ~25 s per build. `bun` stays able to write

@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { isPlainObject, mapValues } from "es-toolkit";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -217,14 +218,133 @@ function resolveStdioCommand(
 	};
 }
 
+/**
+ * Directories that must be reachable from a spawned stdio server: image-installed tooling lives
+ * in `/usr/local/bin`, and per-user installs (`uv tool`, `pip install --user`) land in
+ * `~/.local/bin`. The SDK's curated environment already carries `PATH`, but it may miss either
+ * directory, which made Python and `npx` servers look uninstalled.
+ */
+const STDIO_PATH_PREPEND = ["/usr/local/bin", "~/.local/bin"] as const;
+
+function expandHomeDirectory(entry: string, home: string | undefined): string {
+	if (home === undefined || home.length === 0) return entry;
+	if (entry === "~") return home;
+	if (entry.startsWith("~/")) return join(home, entry.slice(2));
+	return entry;
+}
+
+/**
+ * Builds the environment for a spawned stdio MCP server: the curated defaults, the configured
+ * values, and a de-duplicated PATH that reaches the image's Python, uv, and Node tooling.
+ */
+export function stdioEnvironment(
+	configured: Readonly<Record<string, string>> | undefined,
+): Record<string, string> {
+	const merged: Record<string, string> = { ...getDefaultEnvironment(), ...configured };
+	const home = merged.HOME ?? process.env.HOME;
+	const inherited = merged.PATH ?? process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
+	const pathEntries = new Set<string>();
+	for (const entry of [
+		...STDIO_PATH_PREPEND.map((dir) => expandHomeDirectory(dir, home)),
+		...inherited.split(delimiter),
+	]) {
+		if (entry.length > 0) pathEntries.add(entry);
+	}
+	return { ...merged, PATH: [...pathEntries].join(delimiter) };
+}
+
+function executableSuffixes(): readonly string[] {
+	if (process.platform !== "win32") return [""];
+	const pathext = process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM";
+	return ["", ...pathext.split(";").filter((entry) => entry.length > 0)];
+}
+
+function isRunnableFile(candidate: string): boolean {
+	try {
+		if (!statSync(candidate).isFile()) return false;
+		accessSync(candidate, constants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function isDirectory(candidate: string): boolean {
+	try {
+		return statSync(candidate).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/** Resolves `command` the way the spawned child will, so a missing binary can be named. */
+function findStdioExecutable(
+	command: string,
+	env: Readonly<Record<string, string>>,
+	cwd: string | undefined,
+): string | undefined {
+	const hasSeparator =
+		command.includes("/") || (process.platform === "win32" && command.includes("\\"));
+	if (hasSeparator) {
+		const candidate = isAbsolute(command) ? command : resolve(cwd ?? process.cwd(), command);
+		return isRunnableFile(candidate) ? candidate : undefined;
+	}
+	const suffixes = executableSuffixes();
+	for (const dir of (env.PATH ?? "").split(delimiter)) {
+		if (dir.length === 0) continue;
+		for (const suffix of suffixes) {
+			const candidate = join(dir, `${command}${suffix}`);
+			if (isRunnableFile(candidate)) return candidate;
+		}
+	}
+	return undefined;
+}
+
+/**
+ * A bare `spawn ENOENT` never says which executable failed, which is the usual symptom of a
+ * Python or `npx` server configured against a runtime image that lacks it.
+ */
+function missingStdioCommandMessage(
+	command: string,
+	env: Readonly<Record<string, string>>,
+): string {
+	return `MCP stdio command "${command}" was not found. Install python3, uv, or node/npx in the runtime image, or configure an absolute command path. PATH: ${env.PATH ?? ""}`;
+}
+
+/** A spawn error carries its `ENOENT` marker on the error object, not in a plain record. */
+function errorCode(error: unknown): string | undefined {
+	if (typeof error !== "object" || error === null) return undefined;
+	const code: unknown = (error as { code?: unknown }).code;
+	return typeof code === "string" ? code : undefined;
+}
+
+/** Enriches an `ENOENT` from the spawn itself, e.g. a script whose shebang interpreter is absent. */
+function describeSpawnFailure(error: unknown, transport: McpTransport): string {
+	const message = shortMessage(error);
+	if (transport.type !== "stdio" || errorCode(error) !== "ENOENT") return message;
+	const cwd = transport.cwd === undefined ? "" : ` and working directory "${transport.cwd}"`;
+	return `spawn ENOENT: "${transport.command}"${cwd} not found (PATH: ${
+		stdioEnvironment(transport.env).PATH ?? ""
+	}); ${message}`;
+}
+
 function transportFor(config: McpTransport): Transport {
 	if (config.type === "stdio") {
 		const resolved = resolveStdioCommand(config.command, config.args);
+		const env = stdioEnvironment(config.env);
+		if (config.cwd !== undefined && !isDirectory(config.cwd)) {
+			throw new Error(
+				`MCP stdio command "${resolved.command}" has working directory "${config.cwd}", which does not exist.`,
+			);
+		}
+		if (findStdioExecutable(resolved.command, env, config.cwd) === undefined) {
+			throw new Error(missingStdioCommandMessage(resolved.command, env));
+		}
 		return new StdioClientTransport({
 			args: resolved.args,
 			command: resolved.command,
 			...(config.cwd === undefined ? {} : { cwd: config.cwd }),
-			env: { ...getDefaultEnvironment(), ...config.env },
+			env,
 			stderr: "ignore",
 		});
 	}
@@ -588,7 +708,7 @@ export class McpManager {
 			});
 		} catch (error) {
 			await client.close().catch(() => undefined);
-			const reason = redactSecrets(shortMessage(error), config.transport);
+			const reason = redactSecrets(describeSpawnFailure(error, config.transport), config.transport);
 			if (this.#records.get(id) === record && record.config === config) {
 				record.state = "error";
 				record.lastError = reason;
