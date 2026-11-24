@@ -102,6 +102,11 @@ import {
 	authorizeAdminOpsToolCall,
 	createAdminOpsToolsExtension,
 } from "./services/admin-ops-tools.ts";
+import {
+	ADMIN_SETTINGS_TOOL_NAMES,
+	authorizeAdminSettingsToolCall,
+	createAdminSettingsToolsExtension,
+} from "./services/admin-settings-tools.ts";
 import { ConversationGateService } from "./services/conversation-gate.ts";
 import { NativeDecisionModels } from "./services/decision-models.ts";
 import { ConversationPacingTracker } from "./services/conversation-pacing.ts";
@@ -199,6 +204,7 @@ function reservedModelToolNames(): readonly string[] {
 		...CODING_AGENT_TOOL_NAMES,
 		...WORKSPACE_TOOL_NAMES,
 		...ADMIN_OPS_TOOL_NAMES,
+		...ADMIN_SETTINGS_TOOL_NAMES,
 	];
 }
 
@@ -345,6 +351,7 @@ export class TsukaimaLifecycle {
 	private scheduleToolsExtension: DurableExtension | undefined;
 	private codingAgentToolsExtension: DurableExtension | undefined;
 	private adminOpsToolsExtension: DurableExtension | undefined;
+	private adminSettingsToolsExtension: DurableExtension | undefined;
 
 	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
 		this.config = config;
@@ -989,6 +996,43 @@ export class TsukaimaLifecycle {
 				return authorizeAdminOpsToolCall({ caller, toolName });
 			},
 			logger: this.runtimeLog,
+		});
+		this.adminSettingsToolsExtension = createAdminSettingsToolsExtension({
+			applyRuntimeSettings: (settings) => this.applyRuntimeSettings(settings),
+			audit: (entry) => this.writeAudit(entry),
+			authorize: async (durableConversationId, toolName) => {
+				const caller = await resolveImCallerContext({
+					conversationId: durableConversationId,
+					database: this.domainDatabase,
+					overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
+					settings: this.pluginSettings,
+				});
+				return authorizeAdminSettingsToolCall({ caller, toolName });
+			},
+			availableModels: async () => {
+				const providerId = this.activeModelProviderId;
+				if (providerId === undefined) return [];
+				const models = await this.pluginHost.listModels({ providerId });
+				return models.map((model) => ({
+					capabilities: [...model.capabilities],
+					id: model.id,
+					providerId: model.providerId,
+					...(model.reasoning === undefined
+						? {}
+						: { reasoningLevels: [...model.reasoning.levels] }),
+				}));
+			},
+			database: () => this.domainDatabase,
+			logger: this.runtimeLog,
+			plugins: {
+				configViews: () => this.pluginHost.configViews(),
+				list: () => this.pluginHost.list(),
+				reload: (pluginId) => this.pluginHost.reload(pluginId),
+				setEnabled: (pluginId, enabled) => this.setPluginEnabled(pluginId, enabled),
+				updateConfig: (pluginId, patch) => this.updatePluginConfig(pluginId, patch),
+			},
+			policy: this.conversationPolicy,
+			resolveSessionId,
 		});
 		this.pluginConversations = new PluginConversationService({
 			audit: (entry) => this.writeAudit(entry),
@@ -2068,6 +2112,7 @@ export class TsukaimaLifecycle {
 			...(this.scheduleToolsExtension === undefined ? [] : [this.scheduleToolsExtension]),
 			...(this.codingAgentToolsExtension === undefined ? [] : [this.codingAgentToolsExtension]),
 			...(this.adminOpsToolsExtension === undefined ? [] : [this.adminOpsToolsExtension]),
+			...(this.adminSettingsToolsExtension === undefined ? [] : [this.adminSettingsToolsExtension]),
 		];
 		if (conversationHost !== undefined && dynamicExtensions.length > 0) {
 			// Install before plugins connect so inbound messages always resolve the extension;

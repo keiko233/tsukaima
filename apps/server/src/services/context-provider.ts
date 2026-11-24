@@ -35,6 +35,7 @@ import {
 import { queryCrossSession, renderCrossSession } from "./cross-session.ts";
 import { renderWarmStateLines } from "./memory-consolidation.ts";
 import { MemoryService, type RankedMemory } from "./memory-service.ts";
+import { ADMIN_SETTINGS_TOOL_NAMES } from "./admin-settings-tools.ts";
 
 /**
  * Persona character ceiling for the static system prefix. Personas are the single most
@@ -84,6 +85,7 @@ const ADMIN_TOOL_NAMES = [
 const ADMIN_CAPABILITIES_TEXT = [
 	"The current speaker is an authenticated administrator. Deferred administrator tools are available:",
 	ADMIN_TOOL_NAMES.map((name) => `- ${name}`).join("\n"),
+	`- Settings & config: ${ADMIN_SETTINGS_TOOL_NAMES.join(", ")}`,
 	"Load the tool you need with tool_search first, then call it. Confirm destructive intent before running commands, writing files, installing skills or MCP servers, or spawning workspaces.",
 ].join("\n");
 const QA_HEADER = "You answered similar questions here before; stay consistent:";

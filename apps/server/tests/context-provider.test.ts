@@ -687,6 +687,9 @@ describe("DrizzleContextProvider", () => {
 			expect(admin?.text).toContain("skill_install");
 			expect(admin?.text).toContain("mcp_install");
 			expect(admin?.text).toContain("prompt_update");
+			expect(admin?.text).toContain("Settings & config: settings_get, settings_update");
+			expect(admin?.text).toContain("plugin_configure");
+			expect(admin?.text).toContain("persona_manage");
 			expect(admin?.text).toContain("tool_search");
 
 			const imAdmin = await provider(database, {

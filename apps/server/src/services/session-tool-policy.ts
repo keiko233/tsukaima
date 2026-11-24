@@ -1,4 +1,5 @@
 import { ADMIN_OPS_TOOL_NAMES } from "./admin-ops-tools.ts";
+import { ADMIN_SETTINGS_TOOL_NAMES } from "./admin-settings-tools.ts";
 import { CODING_AGENT_TOOL_NAMES } from "./coding-agent-tools.ts";
 import { PROMPT_TOOL_NAMES } from "./prompt-tools.ts";
 import {
@@ -52,6 +53,7 @@ export function computeOmittedSessionTools(
 		!readFailed && (input.kind === "webui" || input.kind === "workspace" || isImChat);
 	if (!adminOpsVisible) {
 		for (const name of ADMIN_OPS_TOOL_NAMES) removed.add(name);
+		for (const name of ADMIN_SETTINGS_TOOL_NAMES) removed.add(name);
 	}
 	if (input.kind === "webui" && !readFailed) {
 		// Coding tools are already omitted above; the branch stays explicit so the surface rule
