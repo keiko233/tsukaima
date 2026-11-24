@@ -96,6 +96,11 @@ import {
 	type BackupDrillRunResult,
 } from "./services/backup-drill-scheduler.ts";
 import { ChannelRegistry } from "./services/channel-registry.ts";
+import {
+	ADMIN_OPS_TOOL_NAMES,
+	authorizeAdminOpsToolCall,
+	createAdminOpsToolsExtension,
+} from "./services/admin-ops-tools.ts";
 import { ConversationGateService } from "./services/conversation-gate.ts";
 import { NativeDecisionModels } from "./services/decision-models.ts";
 import { ConversationPacingTracker } from "./services/conversation-pacing.ts";
@@ -192,6 +197,7 @@ function reservedModelToolNames(): readonly string[] {
 		...SCHEDULE_TOOL_NAMES,
 		...CODING_AGENT_TOOL_NAMES,
 		...WORKSPACE_TOOL_NAMES,
+		...ADMIN_OPS_TOOL_NAMES,
 	];
 }
 
@@ -337,6 +343,7 @@ export class TsukaimaLifecycle {
 	private workspaceToolsExtension: DurableExtension | undefined;
 	private scheduleToolsExtension: DurableExtension | undefined;
 	private codingAgentToolsExtension: DurableExtension | undefined;
+	private adminOpsToolsExtension: DurableExtension | undefined;
 
 	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
 		this.config = config;
@@ -935,6 +942,20 @@ export class TsukaimaLifecycle {
 			resolveSessionId,
 			sql: workspaceSql,
 			todos: this.workspaceTodos,
+		});
+		this.adminOpsToolsExtension = createAdminOpsToolsExtension({
+			allowedRoots: [config.repositoryRoot, config.dataDir],
+			audit: (entry) => this.writeAudit(entry),
+			authorize: async (durableConversationId, toolName) => {
+				const caller = await resolveImCallerContext({
+					conversationId: durableConversationId,
+					database: this.domainDatabase,
+					overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
+					settings: this.pluginSettings,
+				});
+				return authorizeAdminOpsToolCall({ caller, toolName });
+			},
+			logger: this.runtimeLog,
 		});
 		this.pluginConversations = new PluginConversationService({
 			audit: (entry) => this.writeAudit(entry),
@@ -1981,6 +2002,7 @@ export class TsukaimaLifecycle {
 			...(this.workspaceToolsExtension === undefined ? [] : [this.workspaceToolsExtension]),
 			...(this.scheduleToolsExtension === undefined ? [] : [this.scheduleToolsExtension]),
 			...(this.codingAgentToolsExtension === undefined ? [] : [this.codingAgentToolsExtension]),
+			...(this.adminOpsToolsExtension === undefined ? [] : [this.adminOpsToolsExtension]),
 		];
 		if (conversationHost !== undefined && dynamicExtensions.length > 0) {
 			// Install before plugins connect so inbound messages always resolve the extension;

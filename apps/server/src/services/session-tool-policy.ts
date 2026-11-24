@@ -1,3 +1,4 @@
+import { ADMIN_OPS_TOOL_NAMES } from "./admin-ops-tools.ts";
 import { CODING_AGENT_TOOL_NAMES } from "./coding-agent-tools.ts";
 import { PROMPT_TOOL_NAMES } from "./prompt-tools.ts";
 import {
@@ -44,6 +45,14 @@ export function computeOmittedSessionTools(
 		for (const name of WORKSPACE_CODING_TOOL_NAMES) removed.add(name);
 	}
 	const isImChat = input.kind === "private" || input.kind === "group";
+	// Admin terminal/file tools stay discoverable on the admin-capable surfaces (WebUI, workspace,
+	// and IM) but every IM execution is additionally admin-gated at runtime. Unknown kinds and
+	// transient reads must lose them so a failed lookup cannot widen the surface.
+	const adminOpsVisible =
+		!readFailed && (input.kind === "webui" || input.kind === "workspace" || isImChat);
+	if (!adminOpsVisible) {
+		for (const name of ADMIN_OPS_TOOL_NAMES) removed.add(name);
+	}
 	if (input.kind === "webui" && !readFailed) {
 		// Coding tools are already omitted above; the branch stays explicit so the surface rule
 		// matches the documented role policy.
