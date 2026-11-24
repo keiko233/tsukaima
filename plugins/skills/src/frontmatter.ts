@@ -19,10 +19,20 @@ export interface SkillFields {
 	readonly allowedTools?: readonly string[];
 	readonly compatibility?: string;
 	readonly description: string;
+	readonly env?: readonly string[];
 	readonly license?: string;
 	readonly metadata?: Record<string, string>;
 	readonly name: string;
+	readonly requires?: readonly string[];
+	readonly tags?: readonly string[];
+	readonly version?: string;
 }
+
+const METADATA_KEY_MAX_CHARS = 64;
+const METADATA_MAX_ENTRIES = 32;
+const METADATA_VALUE_MAX_CHARS = 512;
+const LIST_MAX_ITEMS = 16;
+const LIST_ITEM_MAX_CHARS = 128;
 
 export interface ValidationResult {
 	readonly diagnostics: readonly SkillDiagnostic[];
@@ -46,6 +56,84 @@ function stringValue(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const trimmed = value.trim();
 	return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function scalarText(value: unknown): string | undefined {
+	if (typeof value === "number" && Number.isFinite(value)) return String(value);
+	if (typeof value === "boolean") return value ? "true" : "false";
+	if (typeof value !== "string") return undefined;
+	const cleaned = cleanDescription(value);
+	return cleaned.length === 0 ? undefined : cleaned;
+}
+
+/**
+ * Coerces the shapes Hermes-style metadata uses (scalars, lists, and nested maps) into a short
+ * string. Nothing here is fatal: an unusable value is simply omitted from the catalog metadata.
+ */
+function metadataValue(value: unknown): string | undefined {
+	const scalar = scalarText(value);
+	if (scalar !== undefined) return scalar.slice(0, METADATA_VALUE_MAX_CHARS);
+	if (Array.isArray(value)) {
+		const items = value
+			.map((entry) => metadataValue(entry))
+			.filter((entry): entry is string => entry !== undefined)
+			.slice(0, LIST_MAX_ITEMS);
+		return items.length === 0 ? undefined : items.join(", ").slice(0, METADATA_VALUE_MAX_CHARS);
+	}
+	if (isPlainObject(value)) {
+		try {
+			const serialized = JSON.stringify(value);
+			return serialized === undefined ? undefined : serialized.slice(0, METADATA_VALUE_MAX_CHARS);
+		} catch {
+			return undefined;
+		}
+	}
+	return undefined;
+}
+
+function listText(
+	value: unknown,
+	options: { readonly splitWhitespace?: boolean } = {},
+): string[] | undefined {
+	const parts: string[] = [];
+	const addText = (text: string): void => {
+		for (const piece of text.split(/[,\n]+/u)) {
+			const words = options.splitWhitespace === true ? piece.split(/\s+/u) : [piece];
+			for (const word of words) {
+				const trimmed = word.trim();
+				if (trimmed.length === 0) continue;
+				const capped = trimmed.slice(0, LIST_ITEM_MAX_CHARS);
+				if (!parts.includes(capped)) parts.push(capped);
+				if (parts.length >= LIST_MAX_ITEMS) return;
+			}
+		}
+	};
+	const add = (entry: unknown): void => {
+		const text = scalarText(entry);
+		if (text === undefined) return;
+		addText(text);
+	};
+	const source = Array.isArray(value)
+		? value
+		: value === undefined || value === null
+			? []
+			: [value];
+	for (const entry of source) {
+		if (parts.length >= LIST_MAX_ITEMS) break;
+		add(entry);
+	}
+	return parts.length === 0 ? undefined : parts;
+}
+
+function allowedToolsValue(value: unknown): string[] | undefined {
+	const parts = listText(value);
+	if (parts === undefined) return undefined;
+	// `allowed-tools` is often whitespace-separated; tags/requires keep their internal spaces.
+	const expanded = parts
+		.flatMap((entry) => entry.split(/\s+/u))
+		.filter((entry) => entry.length > 0);
+	const unique = [...new Set(expanded)];
+	return unique.length === 0 ? undefined : unique;
 }
 
 /**
@@ -163,26 +251,48 @@ export function validateSkillFields(
 		0,
 		SKILL_COMPATIBILITY_MAX_CHARS,
 	);
+	const version = scalarText(frontmatter.version)?.slice(0, LIST_ITEM_MAX_CHARS);
+	const tags = listText(frontmatter.tags, { splitWhitespace: true });
+	const requires = listText(frontmatter.requires);
+	const env = listText(frontmatter.env);
 	const metadata: Record<string, string> = {};
 	if (isPlainObject(frontmatter.metadata)) {
 		for (const [key, value] of Object.entries(frontmatter.metadata)) {
-			if (typeof value === "string") metadata[key] = value;
+			if (Object.keys(metadata).length >= METADATA_MAX_ENTRIES) break;
+			const cleanKey = scalarText(key)?.slice(0, METADATA_KEY_MAX_CHARS);
+			const cleanValue = metadataValue(value);
+			if (cleanKey === undefined || cleanValue === undefined) continue;
+			metadata[cleanKey] = cleanValue;
 		}
 	}
-	const allowedTools =
-		typeof frontmatter["allowed-tools"] === "string"
-			? frontmatter["allowed-tools"].split(/\s+/u).filter((entry) => entry.length > 0)
-			: undefined;
+	const recognized: readonly [string, readonly string[] | undefined, unknown][] = [
+		["version", version === undefined ? undefined : [version], frontmatter.version],
+		["tags", tags, frontmatter.tags],
+		["requires", requires, frontmatter.requires],
+		["env", env, frontmatter.env],
+	];
+	for (const [key, list, raw] of recognized) {
+		if (metadata[key] !== undefined && metadata[key].length > 0) continue;
+		const text = list === undefined ? metadataValue(raw) : list.join(", ");
+		if (text !== undefined && text.length > 0) {
+			metadata[key] = text.slice(0, METADATA_VALUE_MAX_CHARS);
+		}
+	}
+	const allowedTools = allowedToolsValue(frontmatter["allowed-tools"] ?? frontmatter.allowed_tools);
 
 	return {
 		diagnostics,
 		fields: {
 			description,
 			name,
-			...(allowedTools === undefined || allowedTools.length === 0 ? {} : { allowedTools }),
+			...(allowedTools === undefined ? {} : { allowedTools }),
 			...(compatibility === undefined ? {} : { compatibility }),
+			...(env === undefined ? {} : { env }),
 			...(license === undefined ? {} : { license }),
 			...(Object.keys(metadata).length === 0 ? {} : { metadata }),
+			...(requires === undefined ? {} : { requires }),
+			...(tags === undefined ? {} : { tags }),
+			...(version === undefined ? {} : { version }),
 		},
 	};
 }

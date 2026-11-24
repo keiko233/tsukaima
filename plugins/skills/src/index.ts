@@ -23,8 +23,10 @@ export {
 	MAX_SKILLS_REFRESH_INTERVAL_SECONDS,
 	MIN_SKILLS_MAX_CATALOG_CHARS,
 	MIN_SKILLS_REFRESH_INTERVAL_SECONDS,
+	defaultSkillRoot,
 	parseSkillsConfig,
 	type SkillsConfig,
+	type SkillsEnvironment,
 } from "./config.ts";
 export {
 	parseSkillDocument,
@@ -53,6 +55,7 @@ export {
 	type ScanResult,
 	type SkillRecord,
 	type SkillResourceListing,
+	type WalkSkillResourcesOptions,
 } from "./discovery.ts";
 export {
 	SkillCatalog,

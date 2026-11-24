@@ -18,6 +18,18 @@ export interface SkillsConfig {
 	readonly surfaces: ReadonlySet<SkillSurface>;
 }
 
+export type SkillsEnvironment = Readonly<Record<string, string | undefined>>;
+
+/** Default root used when `paths` is empty and a data directory is configured. */
+export function defaultSkillRoot(
+	cwd = process.cwd(),
+	env: SkillsEnvironment = process.env,
+): string | undefined {
+	const dataDir = env.TSUKAIMA_DATA_DIR?.trim();
+	if (dataDir === undefined || dataDir.length === 0) return undefined;
+	return resolve(cwd, dataDir, "skills");
+}
+
 function textValues(value: unknown): string[] {
 	const raw =
 		typeof value === "string"
@@ -40,7 +52,11 @@ function clampedInteger(value: unknown, min: number, max: number, fallback: numb
  * Reads the plugin config defensively: an invalid key falls back to its default instead of
  * failing plugin setup, because the loader must stay alive to report a useful status.
  */
-export function parseSkillsConfig(raw: unknown, cwd = process.cwd()): SkillsConfig {
+export function parseSkillsConfig(
+	raw: unknown,
+	cwd = process.cwd(),
+	env: SkillsEnvironment = process.env,
+): SkillsConfig {
 	const config = isPlainObject(raw) ? raw : {};
 	const paths: string[] = [];
 	const seen = new Set<string>();
@@ -49,6 +65,11 @@ export function parseSkillsConfig(raw: unknown, cwd = process.cwd()): SkillsConf
 		if (seen.has(resolved)) continue;
 		seen.add(resolved);
 		paths.push(resolved);
+	}
+	if (paths.length === 0) {
+		const fallback = defaultSkillRoot(cwd, env);
+		// A missing default root is a warning during a later scan, never a configuration error.
+		if (fallback !== undefined && !seen.has(fallback)) paths.push(fallback);
 	}
 	const disabled = new Set(textValues(config.disabled));
 	const configuredSurfaces = Array.isArray(config.surfaces)

@@ -63,9 +63,62 @@ describe("validateSkillFields", () => {
 			compatibility: "x".repeat(500),
 			description: "A very noisy description.",
 			license: "MIT",
-			metadata: { author: "synthetic" },
+			metadata: { author: "synthetic", ignored: "42" },
 			name: "demo-skill",
 		});
+	});
+
+	test("accepts Hermes-style frontmatter without dropping useful metadata", () => {
+		const result = validateSkillFields(
+			{
+				"allowed-tools": ["read_file", "write_file"],
+				description: "Hermes-style skill",
+				env: ["TOKEN"],
+				metadata: {
+					author: "synthetic",
+					flags: ["a", "b"],
+					nested: { level: 2 },
+				},
+				name: "hermes-skill",
+				requires: ["git", "node >=18"],
+				tags: ["ops", "deploy"],
+				version: "1.2.3",
+			},
+			"hermes-skill",
+		);
+		expect(result.diagnostics).toEqual([]);
+		expect(result.fields).toEqual({
+			allowedTools: ["read_file", "write_file"],
+			description: "Hermes-style skill",
+			env: ["TOKEN"],
+			metadata: {
+				author: "synthetic",
+				env: "TOKEN",
+				flags: "a, b",
+				nested: '{"level":2}',
+				requires: "git, node >=18",
+				tags: "ops, deploy",
+				version: "1.2.3",
+			},
+			name: "hermes-skill",
+			requires: ["git", "node >=18"],
+			tags: ["ops", "deploy"],
+			version: "1.2.3",
+		});
+	});
+
+	test("accepts comma-separated tags and an allowed_tools alias", () => {
+		const result = validateSkillFields(
+			{
+				allowed_tools: "read_file, write_file",
+				description: "Demo",
+				name: "demo",
+				tags: "ops, deploy",
+			},
+			"demo",
+		);
+		expect(result.fields?.allowedTools).toEqual(["read_file", "write_file"]);
+		expect(result.fields?.tags).toEqual(["ops", "deploy"]);
 	});
 
 	test("a directory/name mismatch is a warning and still loads", () => {

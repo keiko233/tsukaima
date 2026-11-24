@@ -139,6 +139,71 @@ describe("skills plugin", () => {
 		}
 	});
 
+	test("loads nested Hermes-style skills and surfaces metadata and bundled files", async () => {
+		const root = await fixture();
+		const skill = join(root, "category", "hermes-ops");
+		await fs.mkdir(join(skill, "scripts"), { recursive: true });
+		await fs.mkdir(join(skill, "references"), { recursive: true });
+		await fs.writeFile(join(skill, "scripts", "run.sh"), "#!/bin/sh\n");
+		await fs.writeFile(join(skill, "references", "guide.md"), "# Guide\n");
+		await fs.writeFile(
+			join(skill, "SKILL.md"),
+			[
+				"---",
+				"name: hermes-ops",
+				"description: Hermes operations skill",
+				"version: 2.0.0",
+				"tags: [ops, deploy]",
+				"requires: [git]",
+				"env: [TOKEN]",
+				"allowed-tools: [read_file]",
+				"metadata:",
+				"  owner: synthetic",
+				"---",
+				"Body",
+				"",
+			].join("\n"),
+		);
+		const context = makeContext({ paths: [root] });
+		await skillsPlugin.setup(context);
+		try {
+			const snapshot = skillsSnapshotSchema.parse(await rpc(context, "skills.snapshot"));
+			expect(snapshot.skills.map((entry) => entry.name)).toEqual(["hermes-ops"]);
+			expect(snapshot.skills[0]?.metadata).toEqual({
+				category: "category",
+				env: "TOKEN",
+				owner: "synthetic",
+				requires: "git",
+				tags: "ops, deploy",
+				version: "2.0.0",
+			});
+
+			const detail = skillDetailSchema.parse(
+				await rpc(context, "skills.get", { name: "hermes-ops" }),
+			);
+			expect(detail.resources.map((entry) => entry.path)).toEqual([
+				"references/guide.md",
+				"scripts/run.sh",
+			]);
+
+			const loaded = await invoke(context, SKILLS_LOAD_TOOL, { name: "hermes-ops" });
+			const loadedText = resultText(loaded);
+			expect(loadedText).toContain("Skill metadata:");
+			expect(loadedText).toContain("- version: 2.0.0");
+			expect(loadedText).toContain("- references/guide.md");
+			expect(loadedText).toContain("- scripts/run.sh");
+
+			const turn = (await rpc(context, "skills.turnContext", { surface: "chat" })) as {
+				text?: string;
+			};
+			expect(turn.text).toContain("category: category");
+			expect(turn.text).toContain("version: 2.0.0");
+			expect(turn.text).toContain("tags: ops, deploy");
+		} finally {
+			await skillsPlugin.teardown?.(context);
+		}
+	});
+
 	test("reads bundled resources and audits path denials without leaking absolute paths", async () => {
 		const root = await fixture();
 		const skill = await writeSkill(root, "pdf-forms", {
@@ -256,6 +321,10 @@ describe("skills plugin", () => {
 				text?: string;
 			};
 			expect(turn).toEqual({});
+			const detail = skillDetailSchema.parse(
+				await rpc(context, "skills.get", { name: "chat-only" }),
+			);
+			expect(detail.resources).toEqual([]);
 		} finally {
 			await skillsPlugin.teardown?.(context);
 		}
@@ -329,6 +398,24 @@ describe("parseSkillsConfig", () => {
 		expect(
 			parseSkillsConfig({ paths: ["docs", "docs", "./docs"] }, "/synthetic/cwd").paths,
 		).toEqual([join("/synthetic/cwd", "docs")]);
+	});
+
+	test("uses TSUKAIMA_DATA_DIR/skills only when no paths are configured", () => {
+		const fallback = parseSkillsConfig({}, "/synthetic/cwd", {
+			TSUKAIMA_DATA_DIR: "./runtime",
+		});
+		expect(fallback.paths).toEqual([join("/synthetic/cwd", "runtime", "skills")]);
+
+		const explicit = parseSkillsConfig({ paths: ["docs"] }, "/synthetic/cwd", {
+			TSUKAIMA_DATA_DIR: "./runtime",
+		});
+		expect(explicit.paths).toEqual([join("/synthetic/cwd", "docs")]);
+
+		const absent = parseSkillsConfig({}, "/synthetic/cwd", {});
+		expect(absent.paths).toEqual([]);
+
+		const empty = parseSkillsConfig({}, "/synthetic/cwd", { TSUKAIMA_DATA_DIR: "  " });
+		expect(empty.paths).toEqual([]);
 	});
 });
 
