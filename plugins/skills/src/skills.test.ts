@@ -12,10 +12,16 @@ import {
 import { pluginManifestSchema } from "@tsukaima/sdk/manifest";
 import { parseSkillsConfig, SkillCatalog, skillsPlugin } from "./index.ts";
 import {
+	SKILLS_INSTALL_MODEL_NAME,
+	SKILLS_INSTALL_TOOL,
 	SKILLS_LOAD_MODEL_NAME,
 	SKILLS_LOAD_TOOL,
 	SKILLS_READ_RESOURCE_MODEL_NAME,
 	SKILLS_READ_RESOURCE_TOOL,
+	SKILLS_REMOVE_MODEL_NAME,
+	SKILLS_REMOVE_TOOL,
+	SKILLS_RESCAN_MODEL_NAME,
+	SKILLS_RESCAN_TOOL,
 	skillsManifest,
 } from "./manifest.ts";
 
@@ -96,6 +102,26 @@ function resultText(result: { readonly content: readonly { readonly text: string
 	return result.content.map((part) => part.text).join("\n");
 }
 
+async function invokeAs(
+	context: PluginContext,
+	name: string,
+	input: Record<string, unknown>,
+	caller: Record<string, unknown>,
+) {
+	const result = await context.tools.invoke(name, input, caller);
+	if (!result.ok) throw new Error(`tool invocation failed: ${result.reason}`);
+	return result.result;
+}
+
+const VALID_SKILL = [
+	"---",
+	"name: synthetic-skill",
+	"description: Synthetic admin skill",
+	"---",
+	"Body",
+	"",
+].join("\n");
+
 function auditPayload(entry: AuditEntry | undefined): Record<string, unknown> {
 	return typeof entry?.payload === "object" && entry.payload !== null
 		? (entry.payload as Record<string, unknown>)
@@ -120,10 +146,19 @@ describe("skills plugin", () => {
 		await skillsPlugin.setup(context);
 		try {
 			const tools = context.tools.list();
-			expect(tools.map((tool) => tool.name)).toEqual([SKILLS_LOAD_TOOL, SKILLS_READ_RESOURCE_TOOL]);
+			expect(tools.map((tool) => tool.name)).toEqual([
+				SKILLS_LOAD_TOOL,
+				SKILLS_READ_RESOURCE_TOOL,
+				SKILLS_INSTALL_TOOL,
+				SKILLS_REMOVE_TOOL,
+				SKILLS_RESCAN_TOOL,
+			]);
 			expect(tools.map((tool) => tool.modelName)).toEqual([
 				SKILLS_LOAD_MODEL_NAME,
 				SKILLS_READ_RESOURCE_MODEL_NAME,
+				SKILLS_INSTALL_MODEL_NAME,
+				SKILLS_REMOVE_MODEL_NAME,
+				SKILLS_RESCAN_MODEL_NAME,
 			]);
 
 			const listing = await invoke(context, SKILLS_LOAD_TOOL, {});
@@ -134,6 +169,197 @@ describe("skills plugin", () => {
 
 			const unknown = await invoke(context, SKILLS_LOAD_TOOL, { name: "missing-skill" });
 			expect(JSON.parse(resultText(unknown))).toEqual({ error: "unknown_skill" });
+		} finally {
+			await skillsPlugin.teardown?.(context);
+		}
+	});
+
+	test("installs, rescans, and removes skills for administrators immediately", async () => {
+		const root = await fixture();
+		const audits: AuditEntry[] = [];
+		const context = makeContext({ paths: [root] }, audits);
+		await skillsPlugin.setup(context);
+		try {
+			const installed = JSON.parse(
+				resultText(
+					await invokeAs(
+						context,
+						SKILLS_INSTALL_TOOL,
+						{
+							content: VALID_SKILL,
+							files: [{ content: "#!/bin/sh\n", path: "scripts/run.sh" }],
+							name: "synthetic-skill",
+						},
+						{ chatKind: "webui" },
+					),
+				),
+			);
+			expect(installed).toMatchObject({
+				filesWritten: 2,
+				installed: true,
+				name: "synthetic-skill",
+				root,
+				snapshot: { enabled: 1, skills: 1 },
+			});
+			expect((await fs.readFile(join(root, "synthetic-skill", "SKILL.md"), "utf8")).trim()).toBe(
+				VALID_SKILL.trim(),
+			);
+			expect(await fs.readFile(join(root, "synthetic-skill", "scripts", "run.sh"), "utf8")).toBe(
+				"#!/bin/sh\n",
+			);
+			// The catalog is rescanned before the tool returns, so the turn context is immediate.
+			const turn = (await rpc(context, "skills.turnContext", { surface: "chat" })) as {
+				text?: string;
+			};
+			expect(turn.text).toContain("synthetic-skill");
+			expect(audits.at(-1)).toMatchObject({
+				action: "skills.admin-tool",
+				payload: expect.objectContaining({ operation: "install" }),
+				result: "ok",
+				targetKind: "skill-admin",
+			});
+			expect(JSON.stringify(audits)).not.toContain("#!/bin/sh");
+
+			const rescanned = JSON.parse(
+				resultText(await invokeAs(context, SKILLS_RESCAN_TOOL, {}, { chatKind: "workspace" })),
+			);
+			expect(rescanned).toMatchObject({
+				diagnostics: [],
+				roots: [root],
+				skills: [{ description: "Synthetic admin skill", enabled: true, name: "synthetic-skill" }],
+			});
+
+			const removed = JSON.parse(
+				resultText(
+					await invokeAs(
+						context,
+						SKILLS_REMOVE_TOOL,
+						{ name: "synthetic-skill" },
+						{ chatKind: "group", isAdmin: true, senderPlatformId: "10002" },
+					),
+				),
+			);
+			expect(removed).toEqual({ name: "synthetic-skill", removed: true });
+			await expect(fs.stat(join(root, "synthetic-skill"))).rejects.toThrow();
+			const after = skillsSnapshotSchema.parse(await rpc(context, "skills.snapshot"));
+			expect(after.skills).toEqual([]);
+		} finally {
+			await skillsPlugin.teardown?.(context);
+		}
+	});
+
+	test("validates install input, frontmatter, overwrite, and bundled paths before writing", async () => {
+		const root = await fixture();
+		const audits: AuditEntry[] = [];
+		const context = makeContext({ paths: [root] }, audits);
+		await skillsPlugin.setup(context);
+		const call = (input: Record<string, unknown>) =>
+			invokeAs(context, SKILLS_INSTALL_TOOL, input, { chatKind: "webui" });
+		try {
+			const invalidCases: readonly [Record<string, unknown>, string][] = [
+				[{ content: VALID_SKILL, name: "Bad Name" }, "invalid_name"],
+				[
+					{ content: "---\nname: synthetic-skill\n---\nBody", name: "synthetic-skill" },
+					"invalid_frontmatter",
+				],
+				[{ content: VALID_SKILL, name: "other-name" }, "skill_name_mismatch"],
+				[
+					{
+						content: VALID_SKILL,
+						name: "synthetic-skill",
+						files: [{ content: "x", path: "SKILL.md" }],
+					},
+					"duplicate_skill_document",
+				],
+				[
+					{
+						content: VALID_SKILL,
+						name: "synthetic-skill",
+						files: [{ content: "x", path: "../escape.txt" }],
+					},
+					"traversal",
+				],
+				[
+					{
+						content: VALID_SKILL,
+						name: "synthetic-skill",
+						files: [{ content: "x", path: "/synthetic/absolute.txt" }],
+					},
+					"absolute_path",
+				],
+			];
+			for (const [input, error] of invalidCases) {
+				expect(JSON.parse(resultText(await call(input)))).toEqual({ error });
+			}
+			await expect(fs.stat(join(root, "synthetic-skill"))).rejects.toThrow();
+			expect(JSON.stringify(audits)).not.toContain("/synthetic/absolute.txt");
+
+			expect(
+				JSON.parse(resultText(await call({ content: VALID_SKILL, name: "synthetic-skill" }))),
+			).toMatchObject({ installed: true });
+			expect(
+				JSON.parse(resultText(await call({ content: VALID_SKILL, name: "synthetic-skill" }))),
+			).toEqual({ error: "skill_already_exists" });
+			expect(
+				JSON.parse(
+					resultText(
+						await call({ content: VALID_SKILL, name: "synthetic-skill", overwrite: true }),
+					),
+				),
+			).toMatchObject({ installed: true });
+
+			const traversal = await invokeAs(
+				context,
+				SKILLS_INSTALL_TOOL,
+				{
+					content: VALID_SKILL,
+					files: [{ content: "synthetic", path: "../outside.txt" }],
+					name: "synthetic-skill",
+					overwrite: true,
+				},
+				{ chatKind: "webui" },
+			);
+			expect(JSON.parse(resultText(traversal))).toEqual({ error: "traversal" });
+			await expect(fs.stat(join(root, "outside.txt"))).rejects.toThrow();
+		} finally {
+			await skillsPlugin.teardown?.(context);
+		}
+	});
+
+	test("every admin Skill tool denies non-admin IM and synthetic callers", async () => {
+		const root = await fixture();
+		const audits: AuditEntry[] = [];
+		const context = makeContext({ paths: [root] }, audits);
+		await skillsPlugin.setup(context);
+		const invocations: readonly [string, Record<string, unknown>][] = [
+			[SKILLS_INSTALL_TOOL, { content: VALID_SKILL, name: "synthetic-skill" }],
+			[SKILLS_REMOVE_TOOL, { name: "synthetic-skill" }],
+			[SKILLS_RESCAN_TOOL, {}],
+		];
+		try {
+			const callers = [
+				{ chatKind: "private", isAdmin: false, senderPlatformId: "10003" },
+				{ chatKind: "group" },
+				{ chatKind: "task", isAdmin: true, senderPlatformId: "10002" },
+				{ chatKind: "plugin", isAdmin: true, senderPlatformId: "10002" },
+			];
+			for (const [name, input] of invocations) {
+				for (const caller of callers) {
+					expect(JSON.parse(resultText(await invokeAs(context, name, input, caller)))).toEqual({
+						error: "admin_required",
+					});
+				}
+			}
+			expect(audits.filter((entry) => entry.result === "denied")).toHaveLength(
+				invocations.length * callers.length,
+			);
+			for (const entry of audits.filter((audit) => audit.result === "denied")) {
+				expect(entry).toMatchObject({
+					action: "skills.admin-tool",
+					reason: "admin_required",
+					payload: expect.objectContaining({ reason: "admin_required" }),
+				});
+			}
 		} finally {
 			await skillsPlugin.teardown?.(context);
 		}

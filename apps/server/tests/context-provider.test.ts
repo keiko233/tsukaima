@@ -33,6 +33,8 @@ import {
 	type DrizzleContextProviderOptions,
 } from "../src/services/context-provider.ts";
 import { ConversationPolicyService } from "../src/services/conversation-policy.ts";
+import { resolveImCallerContext } from "../src/services/im-caller-context.ts";
+import type { PluginSettingsStore } from "../src/services/plugin-settings.ts";
 import { createPromptTools } from "../src/services/prompt-tools.ts";
 import { DEFAULT_PROMPTS } from "../src/services/prompt-defaults.ts";
 import { PromptService } from "../src/services/prompts.ts";
@@ -64,6 +66,7 @@ function provider(
 			| "memoryTopK"
 			| "personaBudgetChars"
 			| "renderSystem"
+			| "resolveAdminCaller"
 			| "skillCatalog"
 			| "stickerCaptions"
 			| "stickerHints"
@@ -77,6 +80,13 @@ function provider(
 		...overrides,
 	});
 }
+
+const adminContextRequest = (conversationId: string) => ({
+	conversationId,
+	inputs: [],
+	nowMs: Date.now(),
+	triggers: [],
+});
 
 async function insertMemory(
 	database: TsukaimaDatabase,
@@ -642,6 +652,64 @@ describe("DrizzleContextProvider", () => {
 		}
 	});
 
+	test("injects admin capabilities only for an authenticated administrator speaker", async () => {
+		const { database } = await openFixture();
+		try {
+			await database.insert(conversations).values([
+				{
+					durableConversationId: "admin-webui",
+					id: "session-admin-webui",
+					kind: "webui",
+					title: "Admin WebUI",
+				},
+				{
+					durableConversationId: "admin-im",
+					id: "session-admin-im",
+					kind: "private",
+					title: "Admin IM",
+				},
+				{
+					durableConversationId: "admin-im-member",
+					id: "session-admin-im-member",
+					kind: "group",
+					title: "Member IM",
+				},
+			]);
+			const adminSections = await provider(database, {
+				// A one-character budget proves the section is budget-exempt.
+				resolveAdminCaller: async (conversationId) =>
+					conversationId === "admin-webui" || conversationId === "admin-im",
+				turnBudgetChars: 1,
+			}).renderTurnContext(adminContextRequest("admin-webui"));
+			const admin = adminSections.find((section) => section.key === "admin-capabilities");
+			expect(admin?.text).toContain("authenticated administrator");
+			expect(admin?.text).toContain("admin_exec");
+			expect(admin?.text).toContain("skill_install");
+			expect(admin?.text).toContain("mcp_install");
+			expect(admin?.text).toContain("prompt_update");
+			expect(admin?.text).toContain("tool_search");
+
+			const imAdmin = await provider(database, {
+				resolveAdminCaller: async (conversationId) => conversationId === "admin-im",
+			}).renderTurnContext(adminContextRequest("admin-im"));
+			expect(imAdmin.find((section) => section.key === "admin-capabilities")).toBeDefined();
+
+			const member = await provider(database, {
+				resolveAdminCaller: async (conversationId) => conversationId === "admin-im",
+			}).renderTurnContext(adminContextRequest("admin-im-member"));
+			expect(member.find((section) => section.key === "admin-capabilities")).toBeUndefined();
+
+			const unavailable = await provider(database, {
+				resolveAdminCaller: async () => {
+					throw new Error("synthetic admin lookup failure");
+				},
+			}).renderTurnContext(adminContextRequest("admin-webui"));
+			expect(unavailable.find((section) => section.key === "admin-capabilities")).toBeUndefined();
+		} finally {
+			database.$client.close();
+		}
+	});
+
 	test("injects private chat history and recalls from the latest input before its row exists", async () => {
 		const { database } = await openFixture();
 		try {
@@ -877,6 +945,76 @@ describe("context injection end to end", () => {
 			await prompts.setAgentAccess(false);
 			expect(prompts.agentAccess()).toBe(false);
 			expect((await run(101, "Revoked write")).isError).toBe(true);
+		} finally {
+			database.$client.close();
+		}
+	});
+	test("prompt tools allow verified IM admins and deny non-admin or synthetic callers", async () => {
+		const { database } = await openFixture();
+		try {
+			await database
+				.insert(conversations)
+				.values([
+					{ durableConversationId: "201", id: "prompt-webui-2", kind: "webui" },
+					{ durableConversationId: "202", id: "prompt-im-admin", kind: "private" },
+					{ durableConversationId: "203", id: "prompt-group-admin", kind: "group" },
+					{ durableConversationId: "204", id: "prompt-im-member", kind: "private" },
+					{ durableConversationId: "205", id: "prompt-group-member", kind: "group" },
+					{ durableConversationId: "206", id: "prompt-task", kind: "task" },
+				])
+				.run();
+			const prompts = new PromptService(
+				() => database,
+				async () => {},
+			);
+			const policy = new ConversationPolicyService({
+				database: () => database,
+				host: () => undefined,
+				logger,
+			});
+			const settings = {
+				read: async () => ({ adminUsers: ["10002"] }),
+			} as unknown as PluginSettingsStore;
+			const boundSender: Record<string, string | undefined> = {
+				202: "10002",
+				203: "10002",
+				204: "10003",
+				205: "10003",
+				206: "10002",
+			};
+			const extensions = createPromptTools(prompts, policy, {
+				authorize: async (durableConversationId, _toolName) => {
+					const caller = await resolveImCallerContext({
+						conversationId: durableConversationId,
+						database,
+						overrides: { turnBoundSender: boundSender[durableConversationId] },
+						settings,
+					});
+					if (caller.chatKind === "webui") return { allowed: true };
+					if (
+						(caller.chatKind === "private" || caller.chatKind === "group") &&
+						caller.isAdmin === true &&
+						caller.senderPlatformId !== undefined
+					) {
+						return { allowed: true };
+					}
+					return { allowed: false, reason: "prompt_tool_access_denied" };
+				},
+			});
+			const list = extensions.tools?.find(({ name }) => name === "prompt_list");
+			if (list === undefined) throw new Error("Prompt list tool is missing");
+			const run = (conversationId: number) =>
+				list.execute(
+					{},
+					{ conversationId } as Parameters<DurableToolRegistration["execute"]>[1],
+					{} as Parameters<DurableToolRegistration["execute"]>[2],
+				);
+			expect((await run(201)).isError).toBeUndefined();
+			expect((await run(202)).isError).toBeUndefined();
+			expect((await run(203)).isError).toBeUndefined();
+			expect((await run(204)).isError).toBe(true);
+			expect((await run(205)).isError).toBe(true);
+			expect((await run(206)).isError).toBe(true);
 		} finally {
 			database.$client.close();
 		}

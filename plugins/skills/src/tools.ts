@@ -1,4 +1,11 @@
-import { skillNameSchema, type SkillSurface } from "@tsukaima/contracts";
+import { promises as fs } from "node:fs";
+import { dirname, join } from "node:path";
+import {
+	SKILL_DOCUMENT_MAX_BYTES,
+	SKILL_RESOURCE_MAX_BYTES,
+	skillNameSchema,
+	type SkillSurface,
+} from "@tsukaima/contracts";
 import type {
 	PluginContext,
 	PluginLogger,
@@ -7,14 +14,30 @@ import type {
 	ToolResult,
 } from "@tsukaima/sdk";
 import type { SkillCatalog } from "./catalog.ts";
+import { parseSkillDocument, validateSkillFields } from "./frontmatter.ts";
 import {
+	SKILLS_INSTALL_MODEL_NAME,
+	SKILLS_INSTALL_TOOL,
 	SKILLS_LOAD_MODEL_NAME,
 	SKILLS_LOAD_TOOL,
 	SKILLS_READ_RESOURCE_MODEL_NAME,
 	SKILLS_READ_RESOURCE_TOOL,
+	SKILLS_REMOVE_MODEL_NAME,
+	SKILLS_REMOVE_TOOL,
+	SKILLS_RESCAN_MODEL_NAME,
+	SKILLS_RESCAN_TOOL,
 } from "./manifest.ts";
+import { isInside, normalizeRelative, resolveInside } from "./paths.ts";
 
 const AUDIT_ACTION = "skills.resource.denied";
+const ADMIN_AUDIT_ACTION = "skills.admin-tool";
+const ADMIN_POLICY = {
+	lazy: true,
+	maxConcurrent: 4,
+	surface: "both",
+	timeoutMs: 30_000,
+	visibility: "model",
+} as const;
 const RESOURCE_DENIAL_REASONS = new Set([
 	"absolute_path",
 	"escapes_root",
@@ -121,8 +144,215 @@ async function denyResource(
 	return text({ error: reason });
 }
 
+export interface SkillsToolsOptions {
+	readonly onChanged?: () => Promise<void> | void;
+}
+
+interface InstallFile {
+	readonly content: string;
+	readonly path: string;
+}
+
+interface InstallInput {
+	readonly content: string;
+	readonly files: readonly InstallFile[];
+	readonly name: string;
+	readonly overwrite: boolean;
+}
+
+type ParsedInstall =
+	| { readonly ok: true; readonly value: InstallInput }
+	| { readonly ok: false; readonly reason: string };
+
+interface AdminOutcome {
+	readonly ok: boolean;
+	readonly reason?: string;
+	readonly summary?: Record<string, unknown>;
+	readonly value?: unknown;
+}
+
+function recordInput(input: unknown): Record<string, unknown> {
+	return typeof input === "object" && input !== null && !Array.isArray(input)
+		? (input as Record<string, unknown>)
+		: {};
+}
+
+/** Fail-closed runtime gate shared by every Skill management tool. */
+export function isAdminSkillCaller(invocation: ToolInvocationContext): boolean {
+	const kind = invocation.chatKind;
+	if (kind === "webui" || kind === "workspace") return true;
+	if ((kind === "private" || kind === "group") && invocation.isAdmin === true) {
+		return invocation.senderPlatformId !== undefined;
+	}
+	return false;
+}
+
+function callerIdentity(invocation: ToolInvocationContext): Record<string, unknown> {
+	return {
+		...(invocation.chatKind === undefined ? {} : { chatKind: invocation.chatKind }),
+		...(invocation.conversationId === undefined
+			? {}
+			: { conversationId: invocation.conversationId }),
+		...(invocation.senderPlatformId === undefined
+			? {}
+			: { senderPlatformId: invocation.senderPlatformId }),
+		...(invocation.isAdmin === undefined ? {} : { isAdmin: invocation.isAdmin }),
+	};
+}
+
+function parseInstallInput(raw: unknown): ParsedInstall {
+	const input = recordInput(raw);
+	const name = typeof input.name === "string" ? input.name.trim() : "";
+	if (!skillNameSchema.safeParse(name).success) return { ok: false, reason: "invalid_name" };
+	if (typeof input.content !== "string") return { ok: false, reason: "invalid_content" };
+	if (Buffer.byteLength(input.content, "utf8") > SKILL_DOCUMENT_MAX_BYTES) {
+		return { ok: false, reason: "too_large" };
+	}
+	const files: InstallFile[] = [];
+	if (input.files !== undefined) {
+		if (!Array.isArray(input.files)) return { ok: false, reason: "invalid_files" };
+		for (const entry of input.files) {
+			const file = recordInput(entry);
+			if (typeof file.path !== "string" || typeof file.content !== "string") {
+				return { ok: false, reason: "invalid_files" };
+			}
+			if (Buffer.byteLength(file.content, "utf8") > SKILL_RESOURCE_MAX_BYTES) {
+				return { ok: false, reason: "too_large" };
+			}
+			files.push({ content: file.content, path: file.path });
+		}
+	}
+	return {
+		ok: true,
+		value: {
+			content: input.content,
+			files,
+			name,
+			overwrite: input.overwrite === true,
+		},
+	};
+}
+
+async function lstatOrUndefined(candidate: string) {
+	try {
+		return await fs.lstat(candidate);
+	} catch (error) {
+		const code =
+			typeof error === "object" && error !== null && "code" in error
+				? String((error as { readonly code?: unknown }).code)
+				: undefined;
+		if (code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
+/**
+ * Validates one bundled file below the canonical skill directory before anything is written.
+ * Absolute paths, dot segments, traversal, symlinks, a second SKILL.md, and oversized bodies
+ * are rejected by stable reason codes without echoing the requested path.
+ */
+async function validateBundledFile(
+	rootReal: string,
+	file: InstallFile,
+): Promise<
+	| { readonly ok: true; readonly relative: string; readonly target: string }
+	| { readonly ok: false; readonly reason: string }
+> {
+	const normalized = normalizeRelative(file.path);
+	if (!normalized.ok) return { ok: false, reason: normalized.reason };
+	if (normalized.value.path === "SKILL.md") {
+		return { ok: false, reason: "duplicate_skill_document" };
+	}
+	const segments = normalized.value.segments;
+	const resolved = await resolveInside(rootReal, normalized.value.path);
+	if (!resolved.ok && resolved.reason !== "not_found") {
+		return { ok: false, reason: resolved.reason };
+	}
+	let current = rootReal;
+	for (const [index, segment] of segments.entries()) {
+		current = join(current, segment);
+		const stats = await lstatOrUndefined(current);
+		if (stats === undefined) continue;
+		if (stats.isSymbolicLink()) return { ok: false, reason: "symlink" };
+		const last = index === segments.length - 1;
+		if (last && !stats.isFile()) return { ok: false, reason: "not_file" };
+		if (!last && !stats.isDirectory()) return { ok: false, reason: "invalid_path" };
+	}
+	return { ok: true, relative: normalized.value.path, target: current };
+}
+
+async function adminExecute(input: {
+	readonly body: (input: Record<string, unknown>) => Promise<AdminOutcome>;
+	readonly context: PluginContext;
+	readonly invocation: ToolInvocationContext;
+	readonly operation: string;
+	readonly raw: unknown;
+	readonly onChanged?: (() => Promise<void> | void) | undefined;
+}): Promise<ToolResult> {
+	const { context, invocation, operation } = input;
+	const caller = callerIdentity(invocation);
+	const audit = async (entry: {
+		readonly payload: Record<string, unknown>;
+		readonly reason?: string;
+		readonly result: "ok" | "denied" | "failed";
+		readonly targetId?: string;
+	}) => {
+		try {
+			await context.audit?.record({
+				action: ADMIN_AUDIT_ACTION,
+				...(invocation.senderPlatformId === undefined
+					? {}
+					: { actorId: invocation.senderPlatformId }),
+				actorKind: invocation.senderPlatformId === undefined ? "agent" : "user",
+				payload: { ...caller, operation, ...entry.payload },
+				...(entry.reason === undefined ? {} : { reason: entry.reason }),
+				result: entry.result,
+				...(entry.targetId === undefined ? {} : { targetId: entry.targetId }),
+				targetKind: "skill-admin",
+			});
+		} catch {}
+	};
+	if (!isAdminSkillCaller(invocation)) {
+		await audit({
+			payload: { reason: "admin_required" },
+			reason: "admin_required",
+			result: "denied",
+		});
+		return text({ error: "admin_required" });
+	}
+	try {
+		const inputRecord = recordInput(input.raw);
+		const parsedName =
+			typeof inputRecord.name === "string" ? inputRecord.name.trim().slice(0, 128) : undefined;
+		const outcome = await input.body(inputRecord);
+		if (outcome.ok) await input.onChanged?.();
+		await audit({
+			payload: {
+				...(parsedName === undefined ? {} : { name: parsedName }),
+				...outcome.summary,
+				...(outcome.ok ? {} : { reason: outcome.reason ?? "operation_failed" }),
+			},
+			...(outcome.ok ? {} : { reason: outcome.reason ?? "operation_failed" }),
+			result: outcome.ok ? "ok" : "failed",
+			...(parsedName === undefined ? {} : { targetId: parsedName }),
+		});
+		return text(outcome.ok ? outcome.value : { error: outcome.reason ?? "operation_failed" });
+	} catch {
+		await audit({
+			payload: { reason: "operation_failed" },
+			reason: "operation_failed",
+			result: "failed",
+		});
+		return text({ error: "operation_failed" });
+	}
+}
+
 /** Registers the read-only `load_skill` and `read_skill_resource` model tools. */
-export function registerSkillsTools(context: PluginContext, catalog: SkillCatalog): void {
+export function registerSkillsTools(
+	context: PluginContext,
+	catalog: SkillCatalog,
+	options: SkillsToolsOptions = {},
+): void {
 	const register = (tool: PluginTool): void => context.tools.register(tracedTool(context, tool));
 	register({
 		description:
@@ -222,6 +452,179 @@ export function registerSkillsTools(context: PluginContext, catalog: SkillCatalo
 			surface: "both",
 			timeoutMs: 10_000,
 		},
+		requiredPermissions: ["tools"],
+	});
+
+	register({
+		description:
+			"Install an Agent Skill for administrators. Content must be a valid SKILL.md with matching frontmatter; bundled files stay inside the skill directory.",
+		async execute(raw, invocation) {
+			return await adminExecute({
+				body: async (input) => {
+					const parsed = parseInstallInput(input);
+					if (!parsed.ok) return { ok: false, reason: parsed.reason };
+					const document = parseSkillDocument(parsed.value.content);
+					if (!document.ok) return { ok: false, reason: "invalid_frontmatter" };
+					const fields = validateSkillFields(document.document.frontmatter, parsed.value.name);
+					if (fields.fields === undefined) return { ok: false, reason: "invalid_frontmatter" };
+					if (fields.fields.name !== parsed.value.name) {
+						return { ok: false, reason: "skill_name_mismatch" };
+					}
+					const root = catalog.config.paths[0];
+					if (root === undefined) return { ok: false, reason: "no_skill_root_configured" };
+					await fs.mkdir(root, { recursive: true });
+					const rootReal = await fs.realpath(root);
+					const target = join(rootReal, parsed.value.name);
+					const existing = await lstatOrUndefined(target);
+					if (existing !== undefined) {
+						if (existing.isSymbolicLink()) return { ok: false, reason: "skill_path_unsafe" };
+						if (!existing.isDirectory()) return { ok: false, reason: "skill_not_directory" };
+						if (!parsed.value.overwrite) return { ok: false, reason: "skill_already_exists" };
+					}
+					const validated: { readonly content: string; readonly target: string }[] = [];
+					const seen = new Set<string>();
+					for (const file of parsed.value.files) {
+						const checked = await validateBundledFile(target, file);
+						if (!checked.ok) return { ok: false, reason: checked.reason };
+						if (seen.has(checked.relative)) return { ok: false, reason: "duplicate_file_path" };
+						seen.add(checked.relative);
+						validated.push({ content: file.content, target: checked.target });
+					}
+					await fs.mkdir(target, { recursive: true });
+					await fs.writeFile(join(target, "SKILL.md"), parsed.value.content, "utf8");
+					for (const file of validated) {
+						await fs.mkdir(dirname(file.target), { recursive: true });
+						await fs.writeFile(file.target, file.content, "utf8");
+					}
+					const snapshot = await catalog.rescan();
+					const filesWritten = validated.length + 1;
+					return {
+						ok: true,
+						summary: { filesWritten },
+						value: {
+							filesWritten,
+							installed: true,
+							name: parsed.value.name,
+							root,
+							snapshot: {
+								enabled: snapshot.skills.filter((skill) => skill.enabled).length,
+								skills: snapshot.skills.length,
+							},
+						},
+					};
+				},
+				context,
+				invocation,
+				operation: "install",
+				onChanged: options.onChanged,
+				raw,
+			});
+		},
+		modelName: SKILLS_INSTALL_MODEL_NAME,
+		name: SKILLS_INSTALL_TOOL,
+		parameters: {
+			properties: {
+				content: { type: "string" },
+				files: {
+					items: {
+						properties: { content: { type: "string" }, path: { type: "string" } },
+						required: ["path", "content"],
+						type: "object",
+					},
+					type: "array",
+				},
+				name: { type: "string" },
+				overwrite: { type: "boolean" },
+			},
+			required: ["name", "content"],
+			type: "object",
+		},
+		policy: ADMIN_POLICY,
+		requiredPermissions: ["tools"],
+	});
+	register({
+		description: "Remove an installed Agent Skill by name for administrators.",
+		async execute(raw, invocation) {
+			return await adminExecute({
+				body: async (input) => {
+					const name = typeof input.name === "string" ? input.name.trim() : "";
+					if (!skillNameSchema.safeParse(name).success) {
+						return { ok: false, reason: "invalid_name" };
+					}
+					const record = catalog.findAny(name);
+					for (const root of catalog.config.paths) {
+						let rootReal: string;
+						try {
+							rootReal = await fs.realpath(root);
+						} catch {
+							continue;
+						}
+						const target = record?.directory ?? join(rootReal, name);
+						const stats = await lstatOrUndefined(target);
+						if (stats === undefined) continue;
+						if (stats.isSymbolicLink()) return { ok: false, reason: "skill_path_unsafe" };
+						if (!stats.isDirectory()) continue;
+						const targetReal = await fs.realpath(target);
+						if (!isInside(rootReal, targetReal)) {
+							return { ok: false, reason: "skill_path_unsafe" };
+						}
+						await fs.rm(targetReal, { force: false, recursive: true });
+						await catalog.rescan();
+						return { ok: true, summary: { removed: true }, value: { name, removed: true } };
+					}
+					return { ok: false, reason: "skill_not_found" };
+				},
+				context,
+				invocation,
+				operation: "remove",
+				onChanged: options.onChanged,
+				raw,
+			});
+		},
+		modelName: SKILLS_REMOVE_MODEL_NAME,
+		name: SKILLS_REMOVE_TOOL,
+		parameters: {
+			properties: { name: { type: "string" } },
+			required: ["name"],
+			type: "object",
+		},
+		policy: ADMIN_POLICY,
+		requiredPermissions: ["tools"],
+	});
+	register({
+		description: "Rescan configured Agent Skill roots and report the current catalog.",
+		async execute(raw, invocation) {
+			return await adminExecute({
+				body: async () => {
+					const snapshot = await catalog.rescan();
+					return {
+						ok: true,
+						summary: {
+							diagnostics: snapshot.diagnostics.length,
+							skills: snapshot.skills.length,
+						},
+						value: {
+							diagnostics: snapshot.diagnostics,
+							roots: catalog.config.paths,
+							skills: snapshot.skills.map((skill) => ({
+								description: skill.description,
+								enabled: skill.enabled,
+								name: skill.name,
+							})),
+						},
+					};
+				},
+				context,
+				invocation,
+				operation: "rescan",
+				onChanged: options.onChanged,
+				raw,
+			});
+		},
+		modelName: SKILLS_RESCAN_MODEL_NAME,
+		name: SKILLS_RESCAN_TOOL,
+		parameters: { properties: {}, type: "object" },
+		policy: ADMIN_POLICY,
 		requiredPermissions: ["tools"],
 	});
 }

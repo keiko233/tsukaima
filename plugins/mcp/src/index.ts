@@ -1,10 +1,34 @@
 import { fileURLToPath } from "node:url";
 import type { PluginContext, TsukaimaPlugin } from "@tsukaima/sdk";
 import { mcpManifest } from "./manifest.ts";
+import { registerMcpTools } from "./tools.ts";
 import { registerMcpRpc } from "./rpc.ts";
 import { McpManager } from "./service.ts";
 
-export { MCP_PLUGIN_ID, MCP_RPC_PREFIX, MCP_SERVERS_STORAGE_KEY, mcpManifest } from "./manifest.ts";
+export {
+	MCP_INSTALL_SERVER_MODEL_NAME,
+	MCP_INSTALL_SERVER_TOOL,
+	MCP_LIST_SERVERS_MODEL_NAME,
+	MCP_LIST_SERVERS_TOOL,
+	MCP_PLUGIN_ID,
+	MCP_RECONNECT_SERVER_MODEL_NAME,
+	MCP_RECONNECT_SERVER_TOOL,
+	MCP_REMOVE_SERVER_MODEL_NAME,
+	MCP_REMOVE_SERVER_TOOL,
+	MCP_RPC_PREFIX,
+	MCP_SERVERS_STORAGE_KEY,
+	MCP_TOGGLE_SERVER_MODEL_NAME,
+	MCP_TOGGLE_SERVER_TOOL,
+	MCP_UPDATE_SERVER_MODEL_NAME,
+	MCP_UPDATE_SERVER_TOOL,
+	mcpManifest,
+} from "./manifest.ts";
+export {
+	MCP_ADMIN_TOOL_NAMES,
+	createMcpTools,
+	isAdminMcpCaller,
+	registerMcpTools,
+} from "./tools.ts";
 export { registerMcpRpc } from "./rpc.ts";
 export {
 	McpManager,
@@ -47,6 +71,7 @@ async function openManager(context: PluginContext): Promise<McpRuntime> {
 	await manager.start();
 	const refresh = () => summarize(context, manager);
 	registerMcpRpc(context, manager, { onChanged: refresh });
+	registerMcpTools(context, manager, { onChanged: refresh });
 	const runtime: McpRuntime = { manager };
 	runtimes.set(context, runtime);
 	refresh();

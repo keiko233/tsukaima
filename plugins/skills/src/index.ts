@@ -8,11 +8,17 @@ import { registerSkillsRpc } from "./rpc.ts";
 import { registerSkillsTools } from "./tools.ts";
 
 export {
+	SKILLS_INSTALL_MODEL_NAME,
+	SKILLS_INSTALL_TOOL,
 	SKILLS_LOAD_MODEL_NAME,
 	SKILLS_LOAD_TOOL,
 	SKILLS_PLUGIN_ID,
 	SKILLS_READ_RESOURCE_MODEL_NAME,
 	SKILLS_READ_RESOURCE_TOOL,
+	SKILLS_REMOVE_MODEL_NAME,
+	SKILLS_REMOVE_TOOL,
+	SKILLS_RESCAN_MODEL_NAME,
+	SKILLS_RESCAN_TOOL,
 	SKILLS_RPC_PREFIX,
 	skillsManifest,
 } from "./manifest.ts";
@@ -64,7 +70,7 @@ export {
 	type SkillResourceReadResult,
 } from "./catalog.ts";
 export { registerSkillsRpc } from "./rpc.ts";
-export { registerSkillsTools } from "./tools.ts";
+export { isAdminSkillCaller, registerSkillsTools } from "./tools.ts";
 
 interface SkillsRuntime {
 	readonly catalog: SkillCatalog;
@@ -108,7 +114,9 @@ export const skillsPlugin: TsukaimaPlugin = {
 			config,
 			logger: context.logger.child?.("catalog") ?? context.logger,
 		});
-		registerSkillsTools(context, catalog);
+		registerSkillsTools(context, catalog, {
+			onChanged: () => updateStatus(context, catalog),
+		});
 		registerSkillsRpc(context, catalog);
 		const disposeSettings = settings?.onChange(async (next) => {
 			catalog.configure(parseSkillsConfig(recordValue(next)));

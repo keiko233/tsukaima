@@ -411,7 +411,13 @@ describe("plugin host", () => {
 			expect(napcatTools).toContain("onebot-napcat_listTargets");
 
 			const skillTools = lifecycle.pluginHost.modelToolNames("skills");
-			expect(skillTools).toEqual(["load_skill", "read_skill_resource"]);
+			expect(skillTools).toEqual([
+				"load_skill",
+				"read_skill_resource",
+				"skill_install",
+				"skill_remove",
+				"skill_rescan",
+			]);
 			expect(lifecycle.pluginHost.resolveModelToolName("load_skill")).toBe("skills.load");
 			expect(lifecycle.pluginHost.resolveModelToolName("read_skill_resource")).toBe(
 				"skills.read_resource",

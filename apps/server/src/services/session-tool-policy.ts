@@ -73,7 +73,17 @@ export function computeOmittedSessionTools(
 		for (const name of SCHEDULE_TOOL_NAMES) removed.add(name);
 		for (const name of input.proactiveTools) removed.add(name);
 	}
-	if (readFailed || (!codingAllowed && input.kind !== "webui") || !input.agentAccess) {
+	// Prompt tools are discoverable on WebUI, coding workspaces, and IM chats. IM execution is
+	// still gated at runtime to a verified administrator inside `prompt-tools.ts`; unknown
+	// kinds, failed reads, and disabled agent access lose them entirely.
+	const promptVisible =
+		!readFailed &&
+		input.agentAccess &&
+		(input.kind === "webui" ||
+			(input.kind === "workspace" && codingAllowed) ||
+			input.kind === "private" ||
+			input.kind === "group");
+	if (!promptVisible) {
 		for (const name of PROMPT_TOOL_NAMES) removed.add(name);
 	}
 	return [...removed];
