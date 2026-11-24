@@ -179,9 +179,15 @@ function searchTargetLabel(message: ChatHistoryMessage): string {
 }
 
 function senderName(message: ChatHistoryMessage): string {
-	if (message.senderDisplayName !== null) return message.senderDisplayName;
-	if (message.senderExternalId !== null) return message.senderExternalId;
-	if (message.senderUserId !== null) return message.senderUserId;
+	const id = message.senderExternalId?.trim() || message.senderUserId?.trim();
+	const name = message.senderDisplayName?.trim();
+	if (name !== undefined && name.length > 0) {
+		if (id !== undefined && id.length > 0 && id !== name) {
+			return `${name}(${id})`;
+		}
+		return name;
+	}
+	if (id !== undefined && id.length > 0) return id;
 	if (message.direction === "outbound") return "assistant";
 	if (message.direction === "system") return "system";
 	return "unknown";

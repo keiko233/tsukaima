@@ -186,8 +186,8 @@ function isSelfPokeNotice(rawRefJson: string | null): boolean {
 }
 
 function observationSpeaker(displayName: string | null, platformId: string | null): string {
-	const name = displayName?.trim() || platformId?.trim() || "Unknown";
 	const id = platformId?.trim();
+	const name = displayName?.trim() || id || "Unknown";
 	return id === undefined || id.length === 0 || id === name ? name : `${name}(${id})`;
 }
 
@@ -836,7 +836,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			const speaker =
 				row.direction === "outbound" && row.senderExternalId !== "webui-admin"
 					? SELF_LABEL
-					: observationSpeaker(row.senderDisplayName, row.senderExternalId);
+					: observationSpeaker(row.senderDisplayName, row.senderExternalId ?? row.senderUserId);
 			const msgRef =
 				row.direction === "inbound" &&
 				row.platformMessageId !== null &&

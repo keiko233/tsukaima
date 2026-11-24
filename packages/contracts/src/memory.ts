@@ -12,7 +12,7 @@ export const WARM_STATE_SCHEMA_VERSION = 2;
 // model, and an extra field should not count as a failed batch.
 
 export const warmStatePersonCardSchema = z.object({
-	/** Canonical key: the domain user id when known, otherwise a normalized display name. */
+	/** Canonical key: the unique domain user id or platform id. Never a display name or nickname. */
 	key: z.string().min(1).max(200),
 	name: z.string().min(1).max(120),
 	aliases: z

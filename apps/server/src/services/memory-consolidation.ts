@@ -29,6 +29,7 @@ export interface ConsolidationMessage {
 	readonly direction: string;
 	readonly occurredAt: string;
 	readonly senderDisplayName: string | null;
+	readonly senderExternalId?: string | null;
 	readonly senderUserId: string | null;
 	readonly text: string;
 }
@@ -389,6 +390,7 @@ export function mergeWarmState(input: {
 	const people = new Map<string, WarmStatePersonCard>();
 	for (const card of previous.people) people.set(personKey(card.key), card);
 	for (const card of input.next.people) {
+		if (card.key.startsWith("name:")) continue;
 		const key = personKey(card.key);
 		const prior = people.get(key);
 		people.set(key, {
@@ -449,16 +451,20 @@ export function deterministicWarmState(input: {
 	for (const message of input.delta) {
 		if (message.direction !== "inbound") continue;
 		const name = message.senderDisplayName?.trim();
-		const key = message.senderUserId ?? (name === undefined ? undefined : `name:${name}`);
-		if (key === undefined || name === undefined || name.length === 0) continue;
+		const key = message.senderUserId?.trim() || message.senderExternalId?.trim() || undefined;
+		if (key === undefined || key.length === 0) continue;
+		const displayName = name && name.length > 0 ? name : key;
 		const prior = people.get(personKey(key));
 		people.set(personKey(key), {
-			aliases: uniq([...(prior?.aliases ?? []), ...(prior?.name === name ? [] : [name])])
-				.filter((alias) => alias !== name)
+			aliases: uniq([
+				...(prior?.aliases ?? []),
+				...(prior?.name === displayName ? [] : [displayName]),
+			])
+				.filter((alias) => alias !== displayName)
 				.slice(0, 8),
 			key,
 			lastSeenAt: message.occurredAt,
-			name,
+			name: displayName,
 			notes: prior?.notes ?? [],
 		});
 	}
@@ -484,12 +490,11 @@ export function renderConsolidationPrompt(input: {
 	const transcript = input.delta
 		.filter((message) => message.text.trim().length > 0)
 		.map((message) => {
+			const id = message.senderUserId?.trim() || message.senderExternalId?.trim() || null;
 			const speaker =
 				message.direction === "outbound"
 					? "(assistant)"
-					: `${message.senderDisplayName?.trim() || "Unknown"}${
-							message.senderUserId === null ? "" : ` <${message.senderUserId}>`
-						}`;
+					: `${message.senderDisplayName?.trim() || "Unknown"}${id === null ? "" : ` <${id}>`}`;
 			return `[${message.occurredAt}] ${speaker}: ${clip(message.text, 500)}`;
 		})
 		.join("\n");
@@ -501,8 +506,8 @@ export function renderConsolidationPrompt(input: {
 		"Output contract:",
 		'Return ONLY one JSON object: {"state": {...}, "memories": [...]}.',
 		`- state is the COMPLETE merged state (not a diff) with: summary (<= ${input.policy.summaryMaxChars} chars), topics (<= 6 short strings), people (<= ${input.policy.maxPersonCards} cards: key, name, aliases, notes, lastSeenAt), atmosphere, glossary (term, meaning), commitments (key, text, owner, status open|done|cancelled, expiresAt ISO), answers (key, question, answer, answeredAt).`,
-		"- Person card keys: use the <id> shown after a speaker name when present, otherwise name:<display name>. Never invent keys.",
-		"- memories: only new durable facts worth remembering beyond this chat window: kind (fact|preference|person|relationship|event|todo|glossary|style), summary, optional content, optional subject (person card key), confidence 0..1, importance 0..1, optional expiresAt.",
+		"- Person card keys: use the unique <id> shown after a speaker name (e.g. user_xxx or platform id). Never use a display name or nickname as a key; never use name:<display name>. If no <id> is present, do not create a person card. Never invent keys.",
+		"- memories: only new durable facts worth remembering beyond this chat window: kind (fact|preference|person|relationship|event|todo|glossary|style), summary, optional content, optional subject (unique <id> of the person, NEVER a nickname or display name), confidence 0..1, importance 0..1, optional expiresAt.",
 		"- Return an empty memories array when nothing durable was said.",
 		"",
 		`Chat kind: ${input.chatKind}. Current time: ${input.nowIso}.`,
@@ -549,7 +554,9 @@ export function renderWarmStateLines(
 	});
 	for (const card of people) {
 		if (card.notes.length === 0) continue;
-		add(`- ${card.name}: ${card.notes.join("; ")}`);
+		const idSuffix =
+			card.key && card.key !== card.name && !card.key.startsWith("name:") ? ` (${card.key})` : "";
+		add(`- ${card.name}${idSuffix}: ${card.notes.join("; ")}`);
 	}
 	const open = state.commitments.filter((item) => item.status === "open");
 	if (open.length > 0) {

@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+	deterministicWarmState,
+	mergeWarmState,
 	parseConsolidationOutput,
 	parseConsolidationOutputDetailed,
+	renderConsolidationPrompt,
+	renderWarmStateLines,
 } from "../src/services/memory-consolidation.ts";
 
 describe("memory consolidation output parsing & normalization", () => {
@@ -249,5 +253,133 @@ describe("memory consolidation output parsing & normalization", () => {
 		if (!missingState.ok) {
 			expect(missingState.error).toContain("missing state object");
 		}
+	});
+});
+
+describe("memory consolidation unique id key enforcement", () => {
+	test("deterministicWarmState uses unique ID and never stores nickname as key", () => {
+		const state = deterministicWarmState({
+			delta: [
+				{
+					direction: "inbound",
+					id: "m-1",
+					occurredAt: "2026-11-24T10:00:00.000Z",
+					senderDisplayName: "Alice Nickname",
+					senderExternalId: "10001",
+					senderUserId: "user-uuid-1",
+					text: "hello there",
+				},
+				{
+					direction: "inbound",
+					id: "m-2",
+					occurredAt: "2026-11-24T10:01:00.000Z",
+					senderDisplayName: "Bob Group Card",
+					senderExternalId: "10002",
+					senderUserId: null,
+					text: "hi there",
+				},
+				{
+					direction: "inbound",
+					id: "m-3",
+					occurredAt: "2026-11-24T10:02:00.000Z",
+					senderDisplayName: "No ID User",
+					senderExternalId: null,
+					senderUserId: null,
+					text: "some message",
+				},
+			],
+			policy: { maxPersonCards: 10 },
+			previous: undefined,
+		});
+
+		expect(state.people).toHaveLength(2);
+		expect(state.people[0]?.key).toBe("user-uuid-1");
+		expect(state.people[0]?.name).toBe("Alice Nickname");
+		expect(state.people[1]?.key).toBe("10002");
+		expect(state.people[1]?.name).toBe("Bob Group Card");
+		expect(state.people.some((card) => card.key.startsWith("name:"))).toBe(false);
+	});
+
+	test("renderConsolidationPrompt includes unique id in transcript and instructs model to key by id", () => {
+		const prompt = renderConsolidationPrompt({
+			chatKind: "group",
+			delta: [
+				{
+					direction: "inbound",
+					id: "m-1",
+					occurredAt: "2026-11-24T10:00:00.000Z",
+					senderDisplayName: "Alice",
+					senderExternalId: "10001",
+					senderUserId: "u-1",
+					text: "I love tea",
+				},
+			],
+			instructions: "Test instructions",
+			nowIso: "2026-11-24T10:05:00.000Z",
+			policy: { maxPersonCards: 5, summaryMaxChars: 500 },
+			previous: undefined,
+		});
+
+		expect(prompt).toContain("Alice <u-1>: I love tea");
+		expect(prompt).toContain("Person card keys: use the unique <id>");
+		expect(prompt).toContain("Never use a display name or nickname as a key");
+	});
+
+	test("mergeWarmState rejects legacy name-based person card keys", () => {
+		const merged = mergeWarmState({
+			next: {
+				answers: [],
+				atmosphere: "",
+				commitments: [],
+				glossary: [],
+				people: [
+					{
+						aliases: [],
+						key: "name:Alice",
+						lastSeenAt: undefined,
+						name: "Alice",
+						notes: ["loves tea"],
+					},
+					{
+						aliases: [],
+						key: "user-1",
+						lastSeenAt: undefined,
+						name: "Bob",
+						notes: ["plays piano"],
+					},
+				],
+				summary: "summary",
+				topics: [],
+			},
+			nowIso: "2026-11-24T10:05:00.000Z",
+			policy: { maxPersonCards: 5, summaryMaxChars: 500 },
+			previous: undefined,
+		});
+
+		expect(merged.people).toHaveLength(1);
+		expect(merged.people[0]?.key).toBe("user-1");
+	});
+
+	test("renderWarmStateLines renders unique id next to name", () => {
+		const lines = renderWarmStateLines({
+			answers: [],
+			atmosphere: "",
+			commitments: [],
+			glossary: [],
+			people: [
+				{
+					aliases: [],
+					key: "10001",
+					lastSeenAt: undefined,
+					name: "Alice",
+					notes: ["loves coffee"],
+				},
+			],
+			summary: "",
+			topics: [],
+			version: 2,
+		});
+
+		expect(lines).toContain("- Alice (10001): loves coffee");
 	});
 });

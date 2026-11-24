@@ -1849,6 +1849,7 @@ export class MemoryService {
 				id: messages.id,
 				occurredAt: messages.occurredAt,
 				senderDisplayName: messages.senderDisplayName,
+				senderExternalId: messages.senderExternalId,
 				senderUserId: messages.senderUserId,
 			})
 			.from(messages)
@@ -1864,6 +1865,7 @@ export class MemoryService {
 			id: row.id,
 			occurredAt: row.occurredAt,
 			senderDisplayName: row.senderDisplayName,
+			senderExternalId: row.senderExternalId,
 			senderUserId: row.senderUserId,
 			text: row.contentText ?? "",
 		}));
@@ -1987,6 +1989,9 @@ export class MemoryService {
 			if (message.senderUserId === null) continue;
 			const name = message.senderDisplayName?.trim();
 			personIds.set(memoryPersonKey(message.senderUserId), message.senderUserId);
+			if (message.senderExternalId !== null && message.senderExternalId !== undefined) {
+				personIds.set(memoryPersonKey(message.senderExternalId), message.senderUserId);
+			}
 			if (name !== undefined && name.length > 0) {
 				personIds.set(memoryPersonKey(name), message.senderUserId);
 				personIds.set(memoryPersonKey(`name:${name}`), message.senderUserId);
