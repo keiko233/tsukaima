@@ -545,11 +545,14 @@ export class TsukaimaLifecycle {
 					...(packs === undefined ? {} : { packs }),
 				};
 			},
-			skillCatalog: async (surface) => {
+			skillCatalog: async (surface, isAdmin) => {
 				if (!(await this.pluginSettings.isEnabled("skills"))) return undefined;
 				const plugin = this.pluginHost.context("skills");
 				if (plugin === undefined) return undefined;
-				const raw = await this.pluginHost.invokeRpc("skills.turnContext", { surface });
+				const raw = await this.pluginHost.invokeRpc("skills.turnContext", {
+					isAdmin,
+					surface,
+				});
 				const parsed = skillsTurnContextResultSchema.safeParse(raw);
 				return parsed.success ? parsed.data.text : undefined;
 			},

@@ -22,6 +22,7 @@ import { useEffect, useState } from "react";
 import { i18n } from "./i18n.ts";
 import { MCP_PLUGIN_ID } from "./manifest.ts";
 
+type Scope = McpServerSnapshot["scope"];
 type Surface = McpServerSnapshot["surface"];
 type TransportType = "http" | "stdio";
 
@@ -38,6 +39,7 @@ interface FormState {
 	headers: string;
 	id: string;
 	name: string;
+	scope: Scope;
 	surface: Surface;
 	timeoutMs: string;
 	transportType: TransportType;
@@ -60,6 +62,7 @@ function blankForm(): FormState {
 		headers: "",
 		id: "",
 		name: "",
+		scope: "admin",
 		surface: "both",
 		timeoutMs: "30000",
 		transportType: "stdio",
@@ -122,6 +125,7 @@ function formFromSnapshot(server: McpServerSnapshot): FormState {
 		headers: transport.type === "http" ? keyValueLines(transport.headers, ": ") : "",
 		id: server.id,
 		name: server.name,
+		scope: server.scope,
 		surface: server.surface,
 		timeoutMs: String(server.timeoutMs),
 		transportType: transport.type,
@@ -176,6 +180,7 @@ function ServerCard({
 			: server.surface === "chat"
 				? t.t("surface_chat")
 				: t.t("surface_workspace");
+	const scope = server.scope === "everyone" ? t.t("scope_everyone") : t.t("scope_admin");
 	return (
 		<div className="space-y-2 rounded-xl border border-border bg-background/40 p-3">
 			<div className="flex flex-wrap items-start justify-between gap-2">
@@ -186,6 +191,9 @@ function ServerCard({
 					</div>
 				</div>
 				<div className="flex items-center gap-2">
+					<span className="inline-flex items-center rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground">
+						{scope}
+					</span>
 					<span
 						className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10.5px] font-medium ${stateClass(server.state)}`}
 					>
@@ -332,6 +340,7 @@ function McpPanel() {
 			...(disabledTools.length === 0 ? {} : { disabledTools }),
 			enabled: form.enabled,
 			name: form.name.trim(),
+			scope: form.scope,
 			surface: form.surface,
 			timeoutMs,
 			transport,
@@ -435,6 +444,18 @@ function McpPanel() {
 								<option value="both">{t.t("surface_both")}</option>
 								<option value="chat">{t.t("surface_chat")}</option>
 								<option value="workspace">{t.t("surface_workspace")}</option>
+							</select>
+						</label>
+					</Field>
+					<Field label={t.t("scope")}>
+						<label className="flex items-center gap-2 text-xs">
+							<select
+								className="min-h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
+								value={form.scope}
+								onChange={(event) => set("scope", event.target.value as Scope)}
+							>
+								<option value="admin">{t.t("scope_admin")}</option>
+								<option value="everyone">{t.t("scope_everyone")}</option>
 							</select>
 						</label>
 					</Field>

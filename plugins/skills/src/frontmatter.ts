@@ -3,6 +3,7 @@ import {
 	SKILL_DESCRIPTION_MAX_CHARS,
 	skillNameSchema,
 	type SkillDiagnostic,
+	type SkillScope,
 } from "@tsukaima/contracts";
 import { isPlainObject } from "es-toolkit";
 
@@ -24,6 +25,7 @@ export interface SkillFields {
 	readonly metadata?: Record<string, string>;
 	readonly name: string;
 	readonly requires?: readonly string[];
+	readonly scope?: SkillScope;
 	readonly tags?: readonly string[];
 	readonly version?: string;
 }
@@ -279,6 +281,9 @@ export function validateSkillFields(
 		}
 	}
 	const allowedTools = allowedToolsValue(frontmatter["allowed-tools"] ?? frontmatter.allowed_tools);
+	const rawScope = stringValue(frontmatter.scope)?.toLowerCase();
+	const scope: SkillScope | undefined =
+		rawScope === "everyone" || rawScope === "admin" ? rawScope : undefined;
 
 	return {
 		diagnostics,
@@ -291,6 +296,7 @@ export function validateSkillFields(
 			...(license === undefined ? {} : { license }),
 			...(Object.keys(metadata).length === 0 ? {} : { metadata }),
 			...(requires === undefined ? {} : { requires }),
+			...(scope === undefined ? {} : { scope }),
 			...(tags === undefined ? {} : { tags }),
 			...(version === undefined ? {} : { version }),
 		},

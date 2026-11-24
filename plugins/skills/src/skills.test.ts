@@ -91,7 +91,7 @@ async function invoke(
 	context: PluginContext,
 	name: string,
 	input: Record<string, unknown>,
-	chatKind = "group",
+	chatKind = "webui",
 ) {
 	const result = await context.tools.invoke(name, input, { chatKind });
 	if (!result.ok) throw new Error(`tool invocation failed: ${result.reason}`);
@@ -208,7 +208,10 @@ describe("skills plugin", () => {
 				"#!/bin/sh\n",
 			);
 			// The catalog is rescanned before the tool returns, so the turn context is immediate.
-			const turn = (await rpc(context, "skills.turnContext", { surface: "chat" })) as {
+			const turn = (await rpc(context, "skills.turnContext", {
+				isAdmin: true,
+				surface: "chat",
+			})) as {
 				text?: string;
 			};
 			expect(turn.text).toContain("synthetic-skill");
@@ -419,7 +422,10 @@ describe("skills plugin", () => {
 			expect(loadedText).toContain("- references/guide.md");
 			expect(loadedText).toContain("- scripts/run.sh");
 
-			const turn = (await rpc(context, "skills.turnContext", { surface: "chat" })) as {
+			const turn = (await rpc(context, "skills.turnContext", {
+				isAdmin: true,
+				surface: "chat",
+			})) as {
 				text?: string;
 			};
 			expect(turn.text).toContain("category: category");
@@ -506,7 +512,10 @@ describe("skills plugin", () => {
 			expect(detail.resources).toEqual([{ bytes: 13, path: "templates/basic.txt" }]);
 			expect(await rpc(context, "skills.get", { name: "Bad Name" })).toEqual({});
 
-			const turn = (await rpc(context, "skills.turnContext", { surface: "chat" })) as {
+			const turn = (await rpc(context, "skills.turnContext", {
+				isAdmin: true,
+				surface: "chat",
+			})) as {
 				text?: string;
 			};
 			expect(turn.text).toContain("<available_skills>");
@@ -543,7 +552,10 @@ describe("skills plugin", () => {
 				path: "notes.txt",
 				reason: "resources_disabled",
 			});
-			const turn = (await rpc(context, "skills.turnContext", { surface: "workspace" })) as {
+			const turn = (await rpc(context, "skills.turnContext", {
+				isAdmin: true,
+				surface: "workspace",
+			})) as {
 				text?: string;
 			};
 			expect(turn).toEqual({});
@@ -586,17 +598,140 @@ describe("skills plugin", () => {
 			await skillsPlugin.teardown?.(context);
 		}
 	});
+
+	test("defaults skill scope to admin and enforces admin vs everyone scope across catalog and tools", async () => {
+		const root = await fixture();
+		const adminSkill = await writeSkill(root, "admin-ops", {
+			description: "Admin only skill",
+			name: "admin-ops",
+		});
+		await fs.writeFile(join(adminSkill, "notes.txt"), "admin secret notes");
+		const publicSkill = join(root, "public-helper");
+		await fs.mkdir(publicSkill, { recursive: true });
+		await fs.writeFile(
+			join(publicSkill, "SKILL.md"),
+			"---\nname: public-helper\ndescription: Open to everyone\nscope: everyone\n---\nPublic instructions\n",
+		);
+		await fs.writeFile(join(publicSkill, "notes.txt"), "public notes");
+		await writeSkill(root, "override-public", {
+			description: "Opened via everyoneSkills",
+			name: "override-public",
+		});
+		const overrideAdmin = join(root, "override-admin");
+		await fs.mkdir(overrideAdmin, { recursive: true });
+		await fs.writeFile(
+			join(overrideAdmin, "SKILL.md"),
+			"---\nname: override-admin\ndescription: Forced admin\nscope: everyone\n---\nRestricted\n",
+		);
+
+		const audits: AuditEntry[] = [];
+		const context = makeContext(
+			{
+				adminSkills: ["override-admin"],
+				everyoneSkills: ["override-public", "override-admin"],
+				paths: [root],
+			},
+			audits,
+		);
+		await skillsPlugin.setup(context);
+		try {
+			const snapshot = skillsSnapshotSchema.parse(await rpc(context, "skills.snapshot"));
+			expect(snapshot.skills.map((skill) => [skill.name, skill.scope])).toEqual([
+				["admin-ops", "admin"],
+				["override-admin", "admin"],
+				["override-public", "everyone"],
+				["public-helper", "everyone"],
+			]);
+
+			// Fail-closed: omitting isAdmin or passing false hides admin-scoped skills.
+			const omittedTurn = (await rpc(context, "skills.turnContext", { surface: "chat" })) as {
+				text?: string;
+			};
+			expect(omittedTurn.text).toContain("public-helper");
+			expect(omittedTurn.text).toContain("override-public");
+			expect(omittedTurn.text).not.toContain("admin-ops");
+			expect(omittedTurn.text).not.toContain("override-admin");
+
+			const adminTurn = (await rpc(context, "skills.turnContext", {
+				isAdmin: true,
+				surface: "chat",
+			})) as { text?: string };
+			expect(adminTurn.text).toContain("admin-ops");
+			expect(adminTurn.text).toContain("override-admin");
+			expect(adminTurn.text).toContain("public-helper");
+
+			const nonAdmin = { chatKind: "group", senderPlatformId: "10003" };
+			const listedForMember = resultText(await invokeAs(context, SKILLS_LOAD_TOOL, {}, nonAdmin));
+			expect(listedForMember).toContain("public-helper");
+			expect(listedForMember).toContain("override-public");
+			expect(listedForMember).not.toContain("admin-ops");
+			expect(listedForMember).not.toContain("override-admin");
+
+			expect(
+				JSON.parse(
+					resultText(await invokeAs(context, SKILLS_LOAD_TOOL, { name: "admin-ops" }, nonAdmin)),
+				),
+			).toEqual({ error: "admin_required" });
+			expect(
+				JSON.parse(
+					resultText(
+						await invokeAs(
+							context,
+							SKILLS_READ_RESOURCE_TOOL,
+							{ name: "admin-ops", path: "notes.txt" },
+							nonAdmin,
+						),
+					),
+				),
+			).toEqual({ error: "admin_required" });
+			expect(audits.filter((entry) => entry.action === "skills.tool.denied")).toHaveLength(2);
+
+			expect(
+				resultText(await invokeAs(context, SKILLS_LOAD_TOOL, { name: "public-helper" }, nonAdmin)),
+			).toContain("Public instructions");
+			expect(
+				resultText(
+					await invokeAs(
+						context,
+						SKILLS_READ_RESOURCE_TOOL,
+						{ name: "public-helper", path: "notes.txt" },
+						nonAdmin,
+					),
+				),
+			).toBe("public notes");
+
+			const imAdmin = { chatKind: "group", isAdmin: true, senderPlatformId: "10002" };
+			expect(
+				resultText(await invokeAs(context, SKILLS_LOAD_TOOL, { name: "admin-ops" }, imAdmin)),
+			).toContain("Body");
+			expect(
+				resultText(
+					await invokeAs(
+						context,
+						SKILLS_READ_RESOURCE_TOOL,
+						{ name: "admin-ops", path: "notes.txt" },
+						imAdmin,
+					),
+				),
+			).toBe("admin secret notes");
+		} finally {
+			await skillsPlugin.teardown?.(context);
+		}
+	});
 });
 
 describe("parseSkillsConfig", () => {
 	test("resolves, dedupes, and clamps values without throwing", () => {
 		const parsed = parseSkillsConfig(
 			{
+				adminSkills: ["  secret "],
 				allowResources: false,
 				disabled: ["  alpha ", "", "beta"],
+				everyoneSkills: ["public-one", ""],
 				maxCatalogChars: 10,
 				paths: "docs:extra\nnested",
 				refreshIntervalSeconds: 999_999,
+				scope: "everyone",
 				surfaces: ["chat", "bogus"],
 			},
 			"/synthetic/cwd",
@@ -607,16 +742,22 @@ describe("parseSkillsConfig", () => {
 			join("/synthetic/cwd", "nested"),
 		]);
 		expect([...parsed.disabled]).toEqual(["alpha", "beta"]);
+		expect([...parsed.adminSkills]).toEqual(["secret"]);
+		expect([...parsed.everyoneSkills]).toEqual(["public-one"]);
+		expect(parsed.scope).toBe("everyone");
 		expect(parsed.allowResources).toBe(false);
 		expect(parsed.maxCatalogChars).toBe(500);
 		expect(parsed.refreshIntervalMs).toBe(3_600_000);
 		expect([...parsed.surfaces]).toEqual(["chat"]);
 	});
 
-	test("falls back to both surfaces for absent or invalid input", () => {
+	test("falls back to both surfaces and admin scope for absent or invalid input", () => {
 		const parsed = parseSkillsConfig(null);
 		expect(parsed.paths).toEqual([]);
 		expect(parsed.allowResources).toBe(true);
+		expect(parsed.scope).toBe("admin");
+		expect([...parsed.adminSkills]).toEqual([]);
+		expect([...parsed.everyoneSkills]).toEqual([]);
 		expect(parsed.maxCatalogChars).toBe(4_000);
 		expect(parsed.refreshIntervalMs).toBe(30_000);
 		expect([...parsed.surfaces].toSorted()).toEqual(["chat", "workspace"]);
@@ -688,14 +829,15 @@ describe("SkillCatalog", () => {
 		});
 		try {
 			await catalog.rescan();
-			const text = catalog.renderTurnContext("chat");
+			expect(catalog.renderTurnContext("chat")).toBeUndefined();
+			const text = catalog.renderTurnContext("chat", true);
 			expect(text).toBeDefined();
 			expect(text).toContain("Bundled files can be read with read_skill_resource.");
 			expect(text).not.toContain("<pdf>");
 			expect(text).toContain("‹pdf›");
 			expect(text).toContain("more skills not shown");
 			expect(text?.length ?? 0).toBeLessThanOrEqual(500);
-			expect(catalog.renderTurnContext("workspace")).toBe(text);
+			expect(catalog.renderTurnContext("workspace", true)).toBe(text);
 		} finally {
 			catalog.dispose();
 		}
@@ -710,10 +852,10 @@ describe("SkillCatalog", () => {
 		});
 		try {
 			await catalog.rescan();
-			const text = catalog.renderTurnContext("chat");
+			const text = catalog.renderTurnContext("chat", true);
 			expect(text).toBeDefined();
 			expect(text).not.toContain("Bundled files can be read with read_skill_resource.");
-			expect(catalog.renderTurnContext("workspace")).toBeUndefined();
+			expect(catalog.renderTurnContext("workspace", true)).toBeUndefined();
 			const read = await catalog.readResource("alpha", "notes.txt");
 			expect(read).toEqual({ ok: false, reason: "resources_disabled" });
 		} finally {

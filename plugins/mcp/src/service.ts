@@ -22,13 +22,15 @@ import {
 	type McpToolInfo,
 	type McpTransport,
 } from "@tsukaima/contracts";
-import {
-	type AuditEntry,
-	type PluginAuditApi,
-	type PluginLogger,
-	type PluginStorage,
-	type PluginTool,
+import type {
+	AuditEntry,
+	PluginAuditApi,
+	PluginLogger,
+	PluginStorage,
+	PluginTool,
+	ToolInvocationContext,
 } from "@tsukaima/sdk";
+import { isAdminMcpCaller, mcpCallerIdentity } from "./auth.ts";
 
 /** One normalized MCP content block; images stay base64 so a model can see them directly. */
 export type McpToolContent =
@@ -500,6 +502,7 @@ export class McpManager {
 				enabled: input.enabled,
 				id,
 				name: input.name,
+				scope: input.scope,
 				surface: input.surface,
 				timeoutMs: input.timeoutMs,
 				transport: input.transport,
@@ -539,6 +542,7 @@ export class McpManager {
 				enabled: input.enabled ?? previous.enabled,
 				id: previous.id,
 				name: input.name ?? previous.name,
+				scope: input.scope ?? previous.scope,
 				surface: input.surface ?? previous.surface,
 				timeoutMs: input.timeoutMs ?? previous.timeoutMs,
 				transport: nextTransport,
@@ -792,12 +796,13 @@ export class McpManager {
 
 	#pluginTool(config: McpServerConfig, tool: McpToolInfo): PluginTool {
 		const surface = config.surface === "workspace" ? "coding" : config.surface;
+		const scopeHint = config.scope === "admin" ? ", admin only" : "";
 		return {
 			name: canonicalToolName(config.id, tool.name),
 			description:
 				tool.description === undefined
-					? `${tool.name} (MCP server ${config.name})`
-					: `${tool.description}\n(MCP server ${config.name})`,
+					? `${tool.name} (MCP server ${config.name}${scopeHint})`
+					: `${tool.description}\n(MCP server ${config.name}${scopeHint})`,
 			parameters:
 				tool.inputSchema.type === "object" ? tool.inputSchema : { properties: {}, type: "object" },
 			requiredPermissions: [],
@@ -810,6 +815,12 @@ export class McpManager {
 				timeoutMs: config.timeoutMs,
 			},
 			execute: async (input, invocation) => {
+				if (config.scope === "admin" && !isAdminMcpCaller(invocation)) {
+					await this.#auditToolDenied(config, tool.name, invocation);
+					return {
+						content: [{ text: JSON.stringify({ error: "admin_required" }), type: "text" }],
+					};
+				}
 				const result = await this.callTool(config.id, tool.name, input, invocation.signal);
 				const text = result.content
 					.filter((part): part is Extract<McpToolContent, { type: "text" }> => part.type === "text")
@@ -865,6 +876,7 @@ export class McpManager {
 			enabled: config.enabled,
 			id: config.id,
 			name: config.name,
+			scope: config.scope,
 			secretKeys: secretKeys(config.transport),
 			state: record.state,
 			surface: config.surface,
@@ -905,6 +917,7 @@ export class McpManager {
 					? {}
 					: {
 							enabled: config.enabled,
+							scope: config.scope,
 							secretKeys: secretKeys(config.transport),
 							transport: config.transport.type,
 						}),
@@ -920,6 +933,42 @@ export class McpManager {
 			this.#options.logger.warn("MCP audit write failed", {
 				action,
 				error: shortMessage(error),
+			});
+		}
+	}
+
+	async #auditToolDenied(
+		config: McpServerConfig,
+		toolName: string,
+		invocation: ToolInvocationContext,
+	): Promise<void> {
+		if (this.#options.audit === undefined) return;
+		const canonical = canonicalToolName(config.id, toolName);
+		const entry: AuditEntry = {
+			action: "mcp.tool.denied",
+			...(invocation.senderPlatformId === undefined
+				? {}
+				: { actorId: invocation.senderPlatformId }),
+			actorKind: invocation.senderPlatformId === undefined ? "agent" : "user",
+			payload: {
+				...mcpCallerIdentity(invocation),
+				operation: canonical,
+				reason: "admin_required",
+				scope: config.scope,
+				serverId: config.id,
+				tool: toolName,
+			},
+			reason: "admin_required",
+			result: "denied",
+			targetId: canonical,
+			targetKind: "mcp-tool",
+		};
+		try {
+			await this.#options.audit.record(entry);
+		} catch (error) {
+			this.#options.logger.warn("MCP tool denial audit write failed", {
+				error: shortMessage(error),
+				tool: canonical,
 			});
 		}
 	}

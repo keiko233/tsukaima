@@ -31,6 +31,7 @@ import { isInside, normalizeRelative, resolveInside } from "./paths.ts";
 
 const AUDIT_ACTION = "skills.resource.denied";
 const ADMIN_AUDIT_ACTION = "skills.admin-tool";
+const SCOPE_AUDIT_ACTION = "skills.tool.denied";
 const ADMIN_POLICY = {
 	lazy: true,
 	maxConcurrent: 4,
@@ -142,6 +143,30 @@ async function denyResource(
 		});
 	} catch {}
 	return text({ error: reason });
+}
+
+async function denySkillScope(
+	context: PluginContext,
+	invocation: ToolInvocationContext,
+	name: string,
+	operation: string,
+): Promise<ToolResult> {
+	const caller = callerIdentity(invocation);
+	try {
+		await context.audit?.record({
+			action: SCOPE_AUDIT_ACTION,
+			...(invocation.senderPlatformId === undefined
+				? {}
+				: { actorId: invocation.senderPlatformId }),
+			actorKind: invocation.senderPlatformId === undefined ? "agent" : "user",
+			payload: { ...caller, name, operation, reason: "admin_required", scope: "admin" },
+			reason: "admin_required",
+			result: "denied",
+			targetId: name,
+			targetKind: "skill",
+		});
+	} catch {}
+	return text({ error: "admin_required" });
 }
 
 export interface SkillsToolsOptions {
@@ -363,8 +388,11 @@ export function registerSkillsTools(
 			}
 			const name = stringInput(input, "name");
 			if (name === undefined) {
+				const isAdmin = isAdminSkillCaller(invocation);
 				const snapshot = await catalog.current();
-				const available = snapshot.skills.filter((skill) => skill.enabled);
+				const available = snapshot.skills.filter(
+					(skill) => skill.enabled && (isAdmin || skill.scope === "everyone"),
+				);
 				if (available.length === 0) return text({ error: "no_skills" });
 				return text(
 					[
@@ -375,6 +403,11 @@ export function registerSkillsTools(
 			}
 			if (!skillNameSchema.safeParse(name).success) {
 				return await denyResource(context, invocation, "invalid_name", { name });
+			}
+			const record = catalog.find(name);
+			if (record === undefined) return text({ error: "unknown_skill" });
+			if (record.scope === "admin" && !isAdminSkillCaller(invocation)) {
+				return await denySkillScope(context, invocation, name, "load");
 			}
 			const detail = await catalog.loadDetail(name);
 			if (detail === undefined) return text({ error: "unknown_skill" });
@@ -424,6 +457,11 @@ export function registerSkillsTools(
 			}
 			if (rawPath === undefined) {
 				return await denyResource(context, invocation, "invalid_path", { name });
+			}
+			const record = catalog.find(name);
+			if (record === undefined) return text({ error: "unknown_skill" });
+			if (record.scope === "admin" && !isAdminSkillCaller(invocation)) {
+				return await denySkillScope(context, invocation, name, "read_resource");
 			}
 			const result = await catalog.readResource(name, rawPath);
 			if (!result.ok) {

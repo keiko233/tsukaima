@@ -33,11 +33,13 @@ function SkillRow({
 	skill,
 	previewLabel,
 	disabledLabel,
+	scopeLabel,
 }: {
 	readonly busy: boolean;
 	readonly onPreview: () => void;
 	readonly previewLabel: string;
 	readonly disabledLabel: string;
+	readonly scopeLabel: string;
 	readonly skill: SkillSummary;
 }) {
 	return (
@@ -45,6 +47,9 @@ function SkillRow({
 			<div className="min-w-0">
 				<div className="flex flex-wrap items-center gap-2">
 					<span className="font-mono text-sm font-medium">{skill.name}</span>
+					<span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10.5px] text-muted-foreground">
+						{scopeLabel}
+					</span>
 					{skill.enabled ? null : (
 						<span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10.5px] text-muted-foreground">
 							{disabledLabel}
@@ -156,6 +161,9 @@ function SkillsPanel() {
 								disabledLabel={t.t("disabled_badge")}
 								key={skill.name}
 								previewLabel={t.t("preview")}
+								scopeLabel={
+									skill.scope === "everyone" ? t.t("scope_everyone") : t.t("scope_admin")
+								}
 								skill={skill}
 								onPreview={() => void preview(skill.name)}
 							/>
