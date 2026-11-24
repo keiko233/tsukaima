@@ -112,22 +112,28 @@ describe("mcp plugin", () => {
 				"mcp.synthetic-mcp.fail",
 			]);
 
-			const text = await context.tools.invoke("mcp.synthetic-mcp.echo", {
-				text: "synthetic ping",
-			});
+			const text = await context.tools.invoke(
+				"mcp.synthetic-mcp.echo",
+				{ text: "synthetic ping" },
+				{ chatKind: "webui" },
+			);
 			expect(text.ok).toBe(true);
 			if (!text.ok) throw new Error("expected text result");
 			expect(text.result.content).toEqual([{ text: "synthetic ping", type: "text" }]);
 
-			const image = await context.tools.invoke("mcp.synthetic-mcp.picture", {});
+			const image = await context.tools.invoke(
+				"mcp.synthetic-mcp.picture",
+				{},
+				{ chatKind: "webui" },
+			);
 			expect(image.ok).toBe(true);
 			if (!image.ok) throw new Error("expected image result");
 			expect(image.result.images?.[0]?.mimeType).toBe("image/png");
 			expect((image.result.images?.[0]?.data.length ?? 0) > 0).toBe(true);
 
-			await expect(context.tools.invoke("mcp.synthetic-mcp.fail", {})).rejects.toThrow(
-				"synthetic tool failure",
-			);
+			await expect(
+				context.tools.invoke("mcp.synthetic-mcp.fail", {}, { chatKind: "webui" }),
+			).rejects.toThrow("synthetic tool failure");
 		} finally {
 			await mcpPlugin.teardown?.(context);
 		}
@@ -245,7 +251,9 @@ describe("mcp plugin", () => {
 		await mcpPlugin.setup(context);
 		try {
 			await rpc(context, "mcp.create", createInput({ timeoutMs: 300 }));
-			await expect(context.tools.invoke("mcp.synthetic-mcp.slow", {})).rejects.toThrow("timed out");
+			await expect(
+				context.tools.invoke("mcp.synthetic-mcp.slow", {}, { chatKind: "webui" }),
+			).rejects.toThrow("timed out");
 		} finally {
 			await mcpPlugin.teardown?.(context);
 		}
@@ -479,7 +487,11 @@ describe("mcp plugin", () => {
 			);
 			expect(created.state).toBe("connected");
 
-			const result = await context.tools.invoke("mcp.synthetic-env.environment", {});
+			const result = await context.tools.invoke(
+				"mcp.synthetic-env.environment",
+				{},
+				{ chatKind: "webui" },
+			);
 			expect(result.ok).toBe(true);
 			if (!result.ok) throw new Error("expected an environment result");
 			const reported = JSON.parse(result.result.content[0]?.text ?? "{}") as {
@@ -546,6 +558,77 @@ describe("mcp plugin", () => {
 			);
 			expect(created.state).toBe("connected");
 			expect(created.tools.length).toBe(4);
+		} finally {
+			await mcpPlugin.teardown?.(context);
+		}
+	});
+
+	test("defaults MCP server scope to admin and gates server tools by scope", async () => {
+		const audits: AuditEntry[] = [];
+		const context = makeContext(new LocalStorageBridge(), audits);
+		await mcpPlugin.setup(context);
+		try {
+			const created = parseSnapshot(await rpc(context, "mcp.create", createInput()));
+			expect(created.scope).toBe("admin");
+			expect(
+				context.tools.list().find((tool) => tool.name === "mcp.synthetic-mcp.echo")?.description,
+			).toContain("admin only");
+
+			const deniedCallers = [
+				{},
+				{ chatKind: "private", isAdmin: false, senderPlatformId: "10003" },
+				{ chatKind: "group", senderPlatformId: "10003" },
+				{ chatKind: "group", isAdmin: true },
+				{ chatKind: "task", isAdmin: true, senderPlatformId: "10002" },
+				{ chatKind: "plugin", isAdmin: true, senderPlatformId: "10002" },
+			];
+			for (const caller of deniedCallers) {
+				const denied = await context.tools.invoke(
+					"mcp.synthetic-mcp.echo",
+					{ text: "denied" },
+					caller,
+				);
+				expect(denied.ok).toBe(true);
+				if (!denied.ok) throw new Error("expected text denial");
+				expect(JSON.parse(toolText(denied))).toEqual({ error: "admin_required" });
+			}
+			expect(audits.filter((entry) => entry.action === "mcp.tool.denied")).toHaveLength(
+				deniedCallers.length,
+			);
+
+			const allowedCallers = [
+				{ chatKind: "webui" },
+				{ chatKind: "workspace" },
+				{ chatKind: "private", isAdmin: true, senderPlatformId: "10002" },
+				{ chatKind: "group", isAdmin: true, senderPlatformId: "10002" },
+			];
+			for (const caller of allowedCallers) {
+				const allowed = await context.tools.invoke(
+					"mcp.synthetic-mcp.echo",
+					{ text: "allowed" },
+					caller,
+				);
+				expect(allowed.ok).toBe(true);
+				if (!allowed.ok) throw new Error("expected allowed response");
+				expect(allowed.result.content).toEqual([{ text: "allowed", type: "text" }]);
+			}
+
+			const opened = parseSnapshot(
+				await rpc(context, "mcp.update", { id: SERVER_ID, scope: "everyone" }),
+			);
+			expect(opened.scope).toBe("everyone");
+			expect(
+				context.tools.list().find((tool) => tool.name === "mcp.synthetic-mcp.echo")?.description,
+			).not.toContain("admin only");
+
+			const nonAdminAllowed = await context.tools.invoke(
+				"mcp.synthetic-mcp.echo",
+				{ text: "public" },
+				{ chatKind: "group", senderPlatformId: "10003" },
+			);
+			expect(nonAdminAllowed.ok).toBe(true);
+			if (!nonAdminAllowed.ok) throw new Error("expected public response");
+			expect(nonAdminAllowed.result.content).toEqual([{ text: "public", type: "text" }]);
 		} finally {
 			await mcpPlugin.teardown?.(context);
 		}

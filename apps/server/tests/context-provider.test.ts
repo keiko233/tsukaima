@@ -603,9 +603,12 @@ describe("DrizzleContextProvider", () => {
 				},
 			]);
 			const surfaces: string[] = [];
+			const adminFlags: boolean[] = [];
 			const chatSections = await provider(database, {
-				skillCatalog: async (surface) => {
+				resolveAdminCaller: async () => false,
+				skillCatalog: async (surface, isAdmin) => {
 					surfaces.push(surface);
+					adminFlags.push(isAdmin);
 					return "<chat-skill-catalog>";
 				},
 				turnBudgetChars: 1,
@@ -616,13 +619,15 @@ describe("DrizzleContextProvider", () => {
 				triggers: [],
 			});
 			expect(surfaces).toEqual(["chat"]);
+			expect(adminFlags).toEqual([false]);
 			expect(chatSections.find((section) => section.key === "skills")?.text).toBe(
 				"<chat-skill-catalog>",
 			);
 
 			const workspaceSections = await provider(database, {
-				skillCatalog: async (surface) => {
+				skillCatalog: async (surface, isAdmin) => {
 					surfaces.push(surface);
+					adminFlags.push(isAdmin);
 					return "x".repeat(SKILLS_TURN_CONTEXT_MAX_CHARS + 50);
 				},
 			}).renderTurnContext({
@@ -632,6 +637,7 @@ describe("DrizzleContextProvider", () => {
 				triggers: [],
 			});
 			expect(surfaces).toEqual(["chat", "workspace"]);
+			expect(adminFlags).toEqual([false, true]);
 			expect(workspaceSections.find((section) => section.key === "skills")?.text.length).toBe(
 				SKILLS_TURN_CONTEXT_MAX_CHARS,
 			);

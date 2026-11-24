@@ -21,6 +21,29 @@
 				"titleKey": "config_disabled",
 				"descriptionKey": "config_disabled_hint"
 			},
+			"scope": {
+				"type": "string",
+				"enum": ["admin", "everyone"],
+				"default": "admin",
+				"enumLabels": {
+					"admin": "config_scope_admin",
+					"everyone": "config_scope_everyone"
+				},
+				"titleKey": "config_scope",
+				"descriptionKey": "config_scope_hint"
+			},
+			"everyoneSkills": {
+				"type": "array",
+				"items": { "type": "string" },
+				"titleKey": "config_everyone_skills",
+				"descriptionKey": "config_everyone_skills_hint"
+			},
+			"adminSkills": {
+				"type": "array",
+				"items": { "type": "string" },
+				"titleKey": "config_admin_skills",
+				"descriptionKey": "config_admin_skills_hint"
+			},
 			"surfaces": {
 				"type": "array",
 				"items": { "type": "string", "enum": ["chat", "workspace"] },

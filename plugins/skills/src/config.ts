@@ -1,6 +1,6 @@
 import { delimiter, resolve } from "node:path";
 import { isPlainObject } from "es-toolkit";
-import type { SkillSurface } from "@tsukaima/contracts";
+import type { SkillScope, SkillSurface } from "@tsukaima/contracts";
 
 export const DEFAULT_SKILLS_MAX_CATALOG_CHARS = 4_000;
 export const MIN_SKILLS_MAX_CATALOG_CHARS = 500;
@@ -10,11 +10,14 @@ export const MIN_SKILLS_REFRESH_INTERVAL_SECONDS = 5;
 export const MAX_SKILLS_REFRESH_INTERVAL_SECONDS = 3_600;
 
 export interface SkillsConfig {
+	readonly adminSkills: ReadonlySet<string>;
 	readonly allowResources: boolean;
 	readonly disabled: ReadonlySet<string>;
+	readonly everyoneSkills: ReadonlySet<string>;
 	readonly maxCatalogChars: number;
 	readonly paths: readonly string[];
 	readonly refreshIntervalMs: number;
+	readonly scope: SkillScope;
 	readonly surfaces: ReadonlySet<SkillSurface>;
 }
 
@@ -72,6 +75,9 @@ export function parseSkillsConfig(
 		if (fallback !== undefined && !seen.has(fallback)) paths.push(fallback);
 	}
 	const disabled = new Set(textValues(config.disabled));
+	const adminSkills = new Set(textValues(config.adminSkills));
+	const everyoneSkills = new Set(textValues(config.everyoneSkills));
+	const scope: SkillScope = config.scope === "everyone" ? "everyone" : "admin";
 	const configuredSurfaces = Array.isArray(config.surfaces)
 		? config.surfaces.filter((entry): entry is string => typeof entry === "string")
 		: undefined;
@@ -97,11 +103,14 @@ export function parseSkillsConfig(
 		DEFAULT_SKILLS_REFRESH_INTERVAL_MS / 1_000,
 	);
 	return {
+		adminSkills,
 		allowResources: typeof config.allowResources === "boolean" ? config.allowResources : true,
 		disabled,
+		everyoneSkills,
 		maxCatalogChars,
 		paths,
 		refreshIntervalMs: refreshIntervalSeconds * 1_000,
+		scope,
 		surfaces,
 	};
 }

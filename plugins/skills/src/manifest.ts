@@ -18,6 +18,12 @@ export const skillsManifest: PluginManifest = pluginManifestSchema.parse({
 	configEnv: { paths: "TSUKAIMA_SKILLS_PATHS" },
 	configSchema: {
 		properties: {
+			adminSkills: {
+				descriptionKey: "config_admin_skills_hint",
+				items: { type: "string" },
+				titleKey: "config_admin_skills",
+				type: "array",
+			},
 			allowResources: {
 				descriptionKey: "config_allow_resources_hint",
 				titleKey: "config_allow_resources",
@@ -27,6 +33,12 @@ export const skillsManifest: PluginManifest = pluginManifestSchema.parse({
 				descriptionKey: "config_disabled_hint",
 				items: { type: "string" },
 				titleKey: "config_disabled",
+				type: "array",
+			},
+			everyoneSkills: {
+				descriptionKey: "config_everyone_skills_hint",
+				items: { type: "string" },
+				titleKey: "config_everyone_skills",
 				type: "array",
 			},
 			maxCatalogChars: {
@@ -48,6 +60,17 @@ export const skillsManifest: PluginManifest = pluginManifestSchema.parse({
 				minimum: 5,
 				titleKey: "config_refresh_interval_seconds",
 				type: "integer",
+			},
+			scope: {
+				default: "admin",
+				descriptionKey: "config_scope_hint",
+				enum: ["admin", "everyone"],
+				enumLabels: {
+					admin: "config_scope_admin",
+					everyone: "config_scope_everyone",
+				},
+				titleKey: "config_scope",
+				type: "string",
 			},
 			surfaces: {
 				descriptionKey: "config_surfaces_hint",

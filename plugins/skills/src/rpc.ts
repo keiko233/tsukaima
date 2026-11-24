@@ -28,7 +28,7 @@ export function registerSkillsRpc(context: PluginContext, catalog: SkillCatalog)
 	register("turnContext", async (input) => {
 		const parsed = skillsTurnContextInputSchema.safeParse(input);
 		if (!parsed.success) return {};
-		const text = catalog.renderTurnContext(parsed.data.surface);
+		const text = catalog.renderTurnContext(parsed.data.surface, parsed.data.isAdmin);
 		return skillsTurnContextResultSchema.parse(text === undefined ? {} : { text });
 	});
 }

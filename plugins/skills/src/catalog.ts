@@ -57,6 +57,7 @@ function summaryOf(record: SkillRecord): SkillSummary {
 		enabled: record.enabled,
 		fingerprint: record.fingerprint,
 		name: record.name,
+		scope: record.scope,
 		...(record.allowedTools === undefined ? {} : { allowedTools: [...record.allowedTools] }),
 		...(record.compatibility === undefined ? {} : { compatibility: record.compatibility }),
 		...(record.license === undefined ? {} : { license: record.license }),
@@ -173,11 +174,11 @@ export class SkillCatalog {
 		return this.#config.surfaces.has(surface);
 	}
 
-	renderTurnContext(surface: SkillSurface): string | undefined {
+	renderTurnContext(surface: SkillSurface, isAdmin = false): string | undefined {
 		if (!this.surfaceAllowed(surface)) return undefined;
-		const key = `${this.#snapshot.version}|${surface}|${this.#config.maxCatalogChars}|${this.#config.allowResources ? 1 : 0}|${this.#config.paths.join("\0")}`;
+		const key = `${this.#snapshot.version}|${surface}|${isAdmin ? 1 : 0}|${this.#config.maxCatalogChars}|${this.#config.allowResources ? 1 : 0}|${this.#config.paths.join("\0")}`;
 		if (this.#memo?.key === key) return this.#memo.text;
-		const text = this.#render(surface);
+		const text = this.#render(surface, isAdmin);
 		this.#memo = { key, text };
 		return text;
 	}
@@ -230,9 +231,9 @@ export class SkillCatalog {
 		this.#inflight = undefined;
 	}
 
-	#render(surface: SkillSurface): string | undefined {
+	#render(surface: SkillSurface, isAdmin: boolean): string | undefined {
 		const enabled = this.#records
-			.filter((record) => record.enabled)
+			.filter((record) => record.enabled && (isAdmin || record.scope === "everyone"))
 			.toSorted((left, right) => left.name.localeCompare(right.name));
 		if (enabled.length === 0) return undefined;
 		const base =
@@ -277,7 +278,7 @@ export class SkillCatalog {
 		const signature = summaries
 			.map(
 				(summary) =>
-					`${summary.name}\0${summary.description}\0${summary.enabled ? 1 : 0}\0${summary.fingerprint}`,
+					`${summary.name}\0${summary.description}\0${summary.enabled ? 1 : 0}\0${summary.scope}\0${summary.fingerprint}`,
 			)
 			.join("\n");
 		if (signature !== this.#signature) {

@@ -4,7 +4,7 @@ import {
 	mcpServerToggleInputSchema,
 	mcpServerUpdateSchema,
 } from "@tsukaima/contracts";
-import type { PluginContext, PluginTool, ToolInvocationContext, ToolResult } from "@tsukaima/sdk";
+import type { PluginContext, PluginTool, ToolResult } from "@tsukaima/sdk";
 import { z } from "zod";
 import {
 	MCP_INSTALL_SERVER_MODEL_NAME,
@@ -21,6 +21,9 @@ import {
 	MCP_UPDATE_SERVER_TOOL,
 } from "./manifest.ts";
 import type { McpManager } from "./service.ts";
+import { isAdminMcpCaller, mcpCallerIdentity } from "./auth.ts";
+
+export { isAdminMcpCaller };
 
 export const MCP_ADMIN_TOOL_NAMES = [
 	MCP_LIST_SERVERS_TOOL,
@@ -48,30 +51,7 @@ const text = (value: unknown): ToolResult => ({
 	content: [{ text: typeof value === "string" ? value : JSON.stringify(value), type: "text" }],
 });
 
-/** Fail-closed runtime gate shared by every MCP management tool. */
-export function isAdminMcpCaller(invocation: ToolInvocationContext): boolean {
-	const kind = invocation.chatKind;
-	if (kind === "webui" || kind === "workspace") return true;
-	if ((kind === "private" || kind === "group") && invocation.isAdmin === true) {
-		return invocation.senderPlatformId !== undefined;
-	}
-	return false;
-}
-
-function callerIdentity(invocation: ToolInvocationContext): Record<string, unknown> {
-	return {
-		...(invocation.chatKind === undefined ? {} : { chatKind: invocation.chatKind }),
-		...(invocation.conversationId === undefined
-			? {}
-			: { conversationId: invocation.conversationId }),
-		...(invocation.senderPlatformId === undefined
-			? {}
-			: { senderPlatformId: invocation.senderPlatformId }),
-		...(invocation.isAdmin === undefined ? {} : { isAdmin: invocation.isAdmin }),
-	};
-}
-
-/** Audit-safe view of a server input: identifiers and transport kind, never secret values. */
+/** Audit-safe view of a server input: identifiers, scope, and transport kind, never secret values. */
 function serverInputSummary(input: unknown): Record<string, unknown> {
 	if (typeof input !== "object" || input === null) return {};
 	const record = input as Record<string, unknown>;
@@ -83,6 +63,7 @@ function serverInputSummary(input: unknown): Record<string, unknown> {
 		...(typeof record.id === "string" ? { id: record.id } : {}),
 		...(typeof record.name === "string" ? { name: record.name } : {}),
 		...(typeof record.enabled === "boolean" ? { enabled: record.enabled } : {}),
+		...(typeof record.scope === "string" ? { scope: record.scope } : {}),
 		...(typeof transport?.type === "string" ? { transport: transport.type } : {}),
 	};
 }
@@ -111,7 +92,7 @@ export function createMcpTools(
 		description: config.description,
 		modelName: config.modelName,
 		async execute(raw, invocation) {
-			const caller = callerIdentity(invocation);
+			const caller = mcpCallerIdentity(invocation);
 			if (!isAdminMcpCaller(invocation)) {
 				await audit({
 					action: AUDIT_ACTION,
@@ -196,7 +177,7 @@ export function createMcpTools(
 		}),
 		tool({
 			description:
-				"Install an MCP server. Provide the same fields as the MCP settings form; secret env/header values are stored masked.",
+				"Install an MCP server. Provide the same fields as the MCP settings form; scope defaults to admin (or set everyone); secret env/header values are stored masked.",
 			modelName: MCP_INSTALL_SERVER_MODEL_NAME,
 			mutates: true,
 			name: MCP_INSTALL_SERVER_TOOL,

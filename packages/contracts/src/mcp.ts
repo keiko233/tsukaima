@@ -34,6 +34,10 @@ export type McpTransport = z.infer<typeof mcpTransportSchema>;
 
 export const mcpSurfaceSchema = z.enum(["chat", "workspace", "both"]);
 
+export const mcpScopeSchema = z.enum(["everyone", "admin"]);
+
+export type McpScope = z.infer<typeof mcpScopeSchema>;
+
 export const mcpServerStateSchema = z.enum(["disconnected", "connecting", "connected", "error"]);
 
 export type McpServerState = z.infer<typeof mcpServerStateSchema>;
@@ -49,6 +53,7 @@ export const mcpServerConfigSchema = z.object({
 		.max(64)
 		.regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u, "MCP server ids use letters, digits, dots, dashes"),
 	name: z.string().min(1).max(128),
+	scope: mcpScopeSchema.default("admin"),
 	surface: mcpSurfaceSchema.default("both"),
 	timeoutMs: z.number().int().min(1).max(MCP_MAX_TIMEOUT_MS).default(30_000),
 	transport: mcpTransportSchema,
@@ -64,6 +69,7 @@ export const mcpServerCreateSchema = z.object({
 	enabled: z.boolean().default(true),
 	id: mcpServerConfigSchema.shape.id.optional(),
 	name: z.string().min(1).max(128),
+	scope: mcpScopeSchema.default("admin"),
 	surface: mcpSurfaceSchema.default("both"),
 	timeoutMs: z.number().int().min(1).max(MCP_MAX_TIMEOUT_MS).default(30_000),
 	transport: mcpTransportSchema,
@@ -79,6 +85,7 @@ export const mcpServerUpdateSchema = z.object({
 	enabled: z.boolean().optional(),
 	id: z.string().min(1),
 	name: z.string().min(1).max(128).optional(),
+	scope: mcpScopeSchema.optional(),
 	surface: mcpSurfaceSchema.optional(),
 	timeoutMs: z.number().int().min(1).max(MCP_MAX_TIMEOUT_MS).optional(),
 	transport: mcpTransportSchema.optional(),
@@ -125,6 +132,7 @@ export const mcpServerConfigViewSchema = z.object({
 	enabled: z.boolean(),
 	id: z.string().min(1),
 	name: z.string().min(1),
+	scope: mcpScopeSchema,
 	/** Logical secret keys such as `env:API_KEY` or `header:Authorization`. */
 	secretKeys: z.array(z.string()),
 	surface: mcpSurfaceSchema,

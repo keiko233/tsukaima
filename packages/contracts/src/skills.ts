@@ -26,6 +26,11 @@ export const skillSurfaceSchema = z.enum(["chat", "workspace"]);
 
 export type SkillSurface = z.infer<typeof skillSurfaceSchema>;
 
+/** Access scope controlling whether everyone or only administrators may use a skill. */
+export const skillScopeSchema = z.enum(["everyone", "admin"]);
+
+export type SkillScope = z.infer<typeof skillScopeSchema>;
+
 export const skillDiagnosticLevelSchema = z.enum(["warning", "error"]);
 
 export const skillDiagnosticCodeSchema = z.enum([
@@ -69,6 +74,7 @@ export const skillSummarySchema = z.object({
 	license: z.string().optional(),
 	metadata: z.record(z.string(), z.string()).optional(),
 	name: skillNameSchema,
+	scope: skillScopeSchema.default("admin"),
 });
 
 export type SkillSummary = z.infer<typeof skillSummarySchema>;
@@ -101,7 +107,10 @@ export const skillNameInputSchema = z.object({ name: skillNameSchema });
 
 export type SkillNameInput = z.infer<typeof skillNameInputSchema>;
 
-export const skillsTurnContextInputSchema = z.object({ surface: skillSurfaceSchema });
+export const skillsTurnContextInputSchema = z.object({
+	isAdmin: z.boolean().default(false),
+	surface: skillSurfaceSchema,
+});
 
 export type SkillsTurnContextInput = z.infer<typeof skillsTurnContextInputSchema>;
 

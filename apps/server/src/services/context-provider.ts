@@ -163,8 +163,11 @@ export interface DrizzleContextProviderOptions {
 	readonly stickerCaptions?: () => Promise<readonly string[] | undefined>;
 	/** Optional bounded sticker hints (packs + captions) for the ephemeral turn context. */
 	readonly stickerHints?: () => Promise<StickerHintsPayload | undefined>;
-	/** Optional pre-rendered Agent Skills catalog for the turn's execution surface. */
-	readonly skillCatalog?: (surface: "chat" | "workspace") => Promise<string | undefined>;
+	/** Optional pre-rendered Agent Skills catalog for the turn's execution surface and caller role. */
+	readonly skillCatalog?: (
+		surface: "chat" | "workspace",
+		isAdmin: boolean,
+	) => Promise<string | undefined>;
 	/** Fail-closed check for an authenticated administrator speaker on this turn. */
 	readonly resolveAdminCaller?: (conversationId: string) => Promise<boolean>;
 }
@@ -409,10 +412,12 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			chat && behavior.includeRuntimeContext
 				? `Local time: ${formatLocalDateTime(request.nowMs, this.#timeZoneOptions())}`
 				: undefined;
+		let isAdminCaller = session?.chatKind === "workspace";
 		let adminCapabilities: string | undefined;
 		if (chat && this.#resolveAdminCaller !== undefined) {
 			try {
 				if (await this.#resolveAdminCaller(request.conversationId)) {
+					isAdminCaller = true;
 					adminCapabilities = ADMIN_CAPABILITIES_TEXT;
 				}
 			} catch (error) {
@@ -544,7 +549,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		if (this.#skillCatalog !== undefined) {
 			try {
 				const surface = session?.chatKind === "workspace" ? "workspace" : "chat";
-				const rendered = await this.#skillCatalog(surface);
+				const rendered = await this.#skillCatalog(surface, isAdminCaller);
 				if (rendered !== undefined && rendered.trim().length > 0) {
 					skillCatalog =
 						rendered.length > SKILLS_TURN_CONTEXT_MAX_CHARS

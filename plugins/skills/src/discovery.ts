@@ -8,6 +8,7 @@ import {
 	SKILL_RESOURCE_MAX_BYTES,
 	type SkillDiagnostic,
 	type SkillResource,
+	type SkillScope,
 } from "@tsukaima/contracts";
 import type { SkillsConfig } from "./config.ts";
 import { parseSkillDocument, validateSkillFields, type SkillFields } from "./frontmatter.ts";
@@ -38,6 +39,7 @@ export interface SkillRecord {
 	readonly metadata?: Record<string, string>;
 	readonly name: string;
 	readonly rootIndex: number;
+	readonly scope: SkillScope;
 }
 
 export interface ScanResult {
@@ -144,6 +146,18 @@ function categoryFor(rootReal: string, directoryReal: string): string | undefine
 	return normalized.length === 0 ? undefined : normalized;
 }
 
+/** Fail-closed scope precedence: explicit admin override > everyone override > frontmatter > default. */
+function resolveSkillScope(
+	name: string,
+	frontmatterScope: SkillScope | undefined,
+	config: SkillsConfig,
+): SkillScope {
+	if (config.adminSkills.has(name)) return "admin";
+	if (config.everyoneSkills.has(name)) return "everyone";
+	if (frontmatterScope !== undefined) return frontmatterScope;
+	return config.scope;
+}
+
 /** Builds the record used by the catalog after a document passed parsing and validation. */
 function recordFor(
 	fields: SkillFields,
@@ -153,6 +167,7 @@ function recordFor(
 		readonly enabled: boolean;
 		readonly fingerprint: string;
 		readonly rootIndex: number;
+		readonly scope: SkillScope;
 	},
 ): SkillRecord {
 	return {
@@ -162,6 +177,7 @@ function recordFor(
 		fingerprint: input.fingerprint,
 		name: fields.name,
 		rootIndex: input.rootIndex,
+		scope: input.scope,
 		...(fields.allowedTools === undefined ? {} : { allowedTools: fields.allowedTools }),
 		...(input.category === undefined ? {} : { category: input.category }),
 		...(fields.compatibility === undefined ? {} : { compatibility: fields.compatibility }),
@@ -335,6 +351,7 @@ async function scanCandidateDirectory(
 			enabled: !config.disabled.has(fields.name),
 			fingerprint: `${document.value.text.length}:${String(Bun.hash(document.value.text))}`,
 			rootIndex,
+			scope: resolveSkillScope(fields.name, fields.scope, config),
 		}),
 	);
 	return 1;

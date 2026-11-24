@@ -7,11 +7,13 @@ import { oneBotNapCatManifest } from "../../../../plugins/onebot-napcat/src/mani
 import oneBotUi from "../../../../plugins/onebot-napcat/src/ui.tsx";
 import openAiUi from "../../../../plugins/openai-compatible/src/ui.tsx";
 import proactiveUi from "../../../../plugins/proactive-scheduler/src/ui.tsx";
+import skillsUi from "../../../../plugins/skills/src/ui.tsx";
 import stickerUi from "../../../../plugins/sticker-meme/src/ui.tsx";
 import { i18n as mcpI18n } from "../../../../plugins/mcp/src/i18n.ts";
 import { i18n as oneBotI18n } from "../../../../plugins/onebot-napcat/src/i18n.ts";
 import { i18n as openAiI18n } from "../../../../plugins/openai-compatible/src/i18n.ts";
 import { i18n as proactiveI18n } from "../../../../plugins/proactive-scheduler/src/i18n.ts";
+import { i18n as skillsI18n } from "../../../../plugins/skills/src/i18n.ts";
 import { i18n as stickerI18n } from "../../../../plugins/sticker-meme/src/i18n.ts";
 import type { PluginUiModuleDefinition } from "@tsukaima/sdk/ui";
 
@@ -170,11 +172,28 @@ describe("built-in plugin panels", () => {
 		const html = renderPanel(mcpUi, mcpI18n.bind("en"), mcpPlugin);
 		expect(html).toContain("MCP servers");
 		expect(html).toContain("Add MCP server");
+		expect(html).toContain("Access scope");
 		expect(html).toContain("Loading MCP servers…");
 		const zh = renderPanel(mcpUi, mcpI18n.bind("zh-cn"), mcpPlugin);
 		expect(zh).toContain("MCP 服务器");
 		expect(zh).toContain("添加 MCP 服务器");
+		expect(zh).toContain("使用权限");
 		expect(zh).toContain("正在加载 MCP 服务器…");
+	});
+
+	test("renders the Skills panel in en and zh-cn", () => {
+		const skillsPluginSummary: PluginSummary = {
+			...plugin,
+			id: "skills",
+			name: "skills",
+			permissions: ["ui.panel", "tools", "audit.write"],
+		};
+		const html = renderPanel(skillsUi, skillsI18n.bind("en"), skillsPluginSummary);
+		expect(html).toContain("Skills");
+		expect(html).toContain("Rescan");
+		const zh = renderPanel(skillsUi, skillsI18n.bind("zh-cn"), skillsPluginSummary);
+		expect(zh).toContain("技能");
+		expect(zh).toContain("重新扫描");
 	});
 
 	test("renders the sticker-meme library panel in en and zh-cn", () => {

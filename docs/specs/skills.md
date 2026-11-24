@@ -25,6 +25,9 @@ per-conversation enable/disable in v1.
 | --- | --- | --- | --- |
 | `paths` | string array | `[]` | Skill roots. `TSUKAIMA_SKILLS_PATHS` is the environment fallback; it accepts the platform path delimiter and newlines. |
 | `disabled` | string array | `[]` | Skill names that stay in the catalog but are not offered to models. |
+| `scope` | `"admin" \| "everyone"` | `"admin"` | Default access scope for skills without a per-skill override. |
+| `everyoneSkills` | string array | `[]` | Skill names usable by everyone even when the default scope is `"admin"`. |
+| `adminSkills` | string array | `[]` | Skill names restricted to administrators even when the default scope is `"everyone"`. |
 | `surfaces` | `("chat" \| "workspace")[]` | both | Execution surfaces that receive the catalog and the tools. |
 | `allowResources` | boolean | `true` | Enables `read_skill_resource` and the resource sentence in the catalog. |
 | `maxCatalogChars` | integer 500..8000 | `4000` | Maximum rendered catalog length. |
