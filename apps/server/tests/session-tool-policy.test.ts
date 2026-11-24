@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { computeOmittedSessionTools } from "../src/services/session-tool-policy.ts";
 import { ADMIN_OPS_TOOL_NAMES } from "../src/services/admin-ops-tools.ts";
+import { ADMIN_SETTINGS_TOOL_NAMES } from "../src/services/admin-settings-tools.ts";
 import { CODING_AGENT_TOOL_NAMES } from "../src/services/coding-agent-tools.ts";
 import { PROMPT_TOOL_NAMES } from "../src/services/prompt-tools.ts";
 import { SCHEDULE_TOOL_NAMES } from "../src/services/schedule-tools.ts";
@@ -80,10 +81,11 @@ describe("computeOmittedSessionTools parity", () => {
 		for (const name of SCHEDULE_TOOL_NAMES) expect(withCoding.has(name)).toBe(false);
 	});
 
-	test("admin terminal and file tools stay on admin-capable surfaces and fail closed elsewhere", () => {
+	test("admin terminal, file, and settings tools stay on admin-capable surfaces and fail closed elsewhere", () => {
+		const adminTools = [...ADMIN_OPS_TOOL_NAMES, ...ADMIN_SETTINGS_TOOL_NAMES];
 		for (const kind of ["webui", "workspace", "private", "group"] as const) {
 			const tools = omitted({ kind });
-			for (const name of ADMIN_OPS_TOOL_NAMES) expect(tools.has(name)).toBe(false);
+			for (const name of adminTools) expect(tools.has(name)).toBe(false);
 		}
 		for (const input of [
 			{ kind: "task" } as const,
@@ -92,7 +94,7 @@ describe("computeOmittedSessionTools parity", () => {
 			{ kind: "webui", readFailed: true } as const,
 		]) {
 			const tools = omitted(input);
-			for (const name of ADMIN_OPS_TOOL_NAMES) expect(tools.has(name)).toBe(true);
+			for (const name of adminTools) expect(tools.has(name)).toBe(true);
 		}
 	});
 
