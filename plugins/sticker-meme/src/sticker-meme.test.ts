@@ -13,6 +13,7 @@ import {
 	pluginManifestSchema,
 	type AuditEntry,
 	type PluginContext,
+	type PluginConversationsApi,
 	type PluginDatabaseApi,
 	type PluginLogger,
 	type PluginMediaApi,
@@ -792,6 +793,176 @@ describe("sticker selection and send tokens", () => {
 			mediaId: setup.fresh.mediaId,
 			type: "sticker",
 		});
+	});
+
+	test("sticker-meme.send supports cross-conversation targets and enforces fail-closed policy", async () => {
+		const setup = await setupSelection();
+		const sentViaSend: {
+			originConversationId?: string;
+			parts: readonly unknown[];
+			target: unknown;
+		}[] = [];
+		const sentViaConversation: { conversationId: string; parts: readonly unknown[] }[] = [];
+
+		const conversationsList = [
+			{
+				channelId: "onebot",
+				durableConversationId: "conv-allowed",
+				id: "conv-allowed",
+				kind: "group",
+				muted: false,
+				platformConversationId: "20002",
+				title: "Allowed Target Group",
+			},
+			{
+				channelId: "onebot",
+				durableConversationId: "conv-muted",
+				id: "conv-muted",
+				kind: "group",
+				muted: true,
+				platformConversationId: "20003",
+				title: "Muted Target Group",
+			},
+			{
+				channelId: "onebot",
+				durableConversationId: "conv-disabled",
+				id: "conv-disabled",
+				kind: "group",
+				muted: false,
+				platformConversationId: "20004",
+				title: "Disabled Target Group",
+			},
+		];
+
+		const policies: Record<string, { allowedTargets?: string[]; enabled?: boolean }> = {
+			"conversation-1": {
+				allowedTargets: ["group:20002", "group:20003", "group:20004"],
+				enabled: true,
+			},
+			"conv-allowed": { allowedTargets: ["group:20002"], enabled: true },
+			"conv-disabled": { enabled: false },
+			"conv-muted": { enabled: true },
+		};
+
+		const context = createPluginContext({
+			conversations: {
+				getPolicy: async (id: string) => policies[id] as never,
+				list: async () => conversationsList as never,
+				recentMessages: async () => [],
+			} as unknown as PluginConversationsApi,
+			grantedPermissions: stickerMemeManifest.permissions,
+			manifest: stickerMemeManifest,
+			outbound: {
+				recordInteraction: async () => undefined,
+				send: async (input) => {
+					sentViaSend.push(input);
+					return {};
+				},
+				sendToConversation: async (input) => {
+					sentViaConversation.push(input);
+					return {};
+				},
+			},
+			pluginId: "sticker-meme",
+		});
+		registerStickerTools(context, setup.selection);
+
+		// 1. Successful cross-chat send with explicit target object
+		const successfulSend = await context.tools.invoke(
+			"sticker-meme.send",
+			{
+				query: "happy",
+				target: {
+					channelId: "onebot",
+					kind: "group",
+					platformConversationId: "20002",
+				},
+			},
+			{ conversationId: "conversation-1" },
+		);
+		expect(successfulSend.ok).toBe(true);
+		if (successfulSend.ok) {
+			const payload = JSON.parse(successfulSend.result.content[0]?.text ?? "{}");
+			expect(payload.sent).toBe(true);
+			expect(payload.targetConversationId).toBe("conv-allowed");
+			expect(payload.target).toEqual({
+				channelId: "onebot",
+				kind: "group",
+				platformConversationId: "20002",
+			});
+		}
+		expect(sentViaSend).toHaveLength(1);
+		expect(sentViaSend[0]?.originConversationId).toBe("conversation-1");
+		expect(sentViaSend[0]?.target).toEqual({
+			channelId: "onebot",
+			kind: "group",
+			platformConversationId: "20002",
+		});
+		expect(sentViaSend[0]?.parts[0]).toMatchObject({
+			mediaId: setup.fresh.mediaId,
+			type: "sticker",
+		});
+
+		// 2. Successful cross-chat send with groupId shorthand
+		const groupShorthandSend = await context.tools.invoke(
+			"sticker-meme.send",
+			{
+				groupId: "20002",
+				query: "happy",
+			},
+			{ conversationId: "conversation-1" },
+		);
+		expect(groupShorthandSend.ok).toBe(true);
+		expect(sentViaSend).toHaveLength(2);
+
+		// 3. Denied when target is muted
+		await expect(
+			context.tools.invoke(
+				"sticker-meme.send",
+				{
+					groupId: "20003",
+					query: "happy",
+				},
+				{ conversationId: "conversation-1" },
+			),
+		).rejects.toThrow("cross-chat-target-muted");
+
+		// 4. Denied when target policy is disabled
+		await expect(
+			context.tools.invoke(
+				"sticker-meme.send",
+				{
+					groupId: "20004",
+					query: "happy",
+				},
+				{ conversationId: "conversation-1" },
+			),
+		).rejects.toThrow("cross-chat-target-disabled");
+
+		// 5. Denied when target is not allowed by policy
+		policies["conversation-1"] = { allowedTargets: ["group:99999"], enabled: true };
+		await expect(
+			context.tools.invoke(
+				"sticker-meme.send",
+				{
+					groupId: "20002",
+					query: "happy",
+				},
+				{ conversationId: "conversation-1" },
+			),
+		).rejects.toThrow("cross-chat-target-not-allowed");
+
+		// 6. Denied when target is unknown
+		await expect(
+			context.tools.invoke(
+				"sticker-meme.send",
+				{
+					groupId: "88888",
+					query: "happy",
+				},
+				{ conversationId: "conversation-1" },
+			),
+		).rejects.toThrow("cross-chat-target-unknown");
 	});
 
 	test("resolveForSend sends immediately without issuing a marker token", async () => {

@@ -484,6 +484,158 @@ describe("OneBot action policy and audit", () => {
 		}
 	});
 
+	test("normalizes sticker candidates to inline markers and resolves media parts from conversation history", async () => {
+		const recentMessages = [
+			{
+				id: "msg-history-1",
+				parts: [
+					{ text: "Here is an image", type: "text" as const },
+					{
+						channelRef: "photo-file-1",
+						mediaId: "media-img-1",
+						mimeType: "image/png",
+						sha256: "sha-img-1",
+						type: "image" as const,
+					},
+				],
+				platformMessageId: "98765",
+			},
+			{
+				id: "msg-history-2",
+				parts: [
+					{
+						channelRef: "sticker-file-2",
+						mediaId: "media-stk-2",
+						mimeType: "image/gif",
+						sha256: "sha-stk-2",
+						type: "sticker" as const,
+					},
+				],
+				platformMessageId: "98766",
+			},
+		];
+		const fakeConversations = {
+			getPolicy: async () => ({ enabled: true }),
+			list: async () => [
+				{
+					channelId: "onebot",
+					durableConversationId: "durable-1",
+					id: "conv-group-1",
+					kind: "group",
+					platformConversationId: "20001",
+					title: "Group 1",
+				},
+			],
+			recentMessages: async () => recentMessages,
+		} as unknown as PluginConversationsApi;
+		const harness = await createHarness(base, { conversations: fakeConversations });
+		try {
+			const currentGroupContext = {
+				channelId: "onebot",
+				chatKind: "group",
+				conversationId: "conv-group-1",
+				platformConversationId: "20001",
+				senderPlatformId: "10005",
+			};
+
+			// 1. Sticker candidate with query is normalized to text [表情:开心]
+			const stickerCandidateSend = await harness.context.tools.invoke(
+				"onebot-napcat.send",
+				{
+					parts: [{ query: "开心", type: "sticker" }],
+				},
+				currentGroupContext,
+			);
+			expect(stickerCandidateSend.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "send_group_msg",
+				params: {
+					group_id: "20001",
+					message: [{ data: { text: "[表情:开心]" }, type: "text" }],
+				},
+			});
+
+			// 2. Sticker candidate with itemId is normalized to text [表情:item-abc]
+			const stickerItemIdSend = await harness.context.tools.invoke(
+				"onebot-napcat.send",
+				{
+					parts: [{ itemId: "item-abc", type: "sticker" }],
+				},
+				currentGroupContext,
+			);
+			expect(stickerItemIdSend.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "send_group_msg",
+				params: {
+					group_id: "20001",
+					message: [{ data: { text: "[表情:item-abc]" }, type: "text" }],
+				},
+			});
+
+			// 3. Image part referencing message from history by messageId
+			const imageMsgRefSend = await harness.context.tools.invoke(
+				"onebot-napcat.send",
+				{
+					parts: [{ messageId: "[msg:98765]", type: "image" }],
+				},
+				currentGroupContext,
+			);
+			expect(imageMsgRefSend.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "send_group_msg",
+				params: {
+					group_id: "20001",
+					message: [{ data: { file: "photo-file-1" }, type: "image" }],
+				},
+			});
+
+			// 4. Image part without explicit messageId resolves the latest image in history
+			const latestImageSend = await harness.context.tools.invoke(
+				"onebot-napcat.send",
+				{
+					parts: [{ type: "image" }],
+				},
+				currentGroupContext,
+			);
+			expect(latestImageSend.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "send_group_msg",
+				params: {
+					group_id: "20001",
+					message: [{ data: { file: "photo-file-1" }, type: "image" }],
+				},
+			});
+
+			// 5. Sticker part referencing message from history
+			const stickerMsgRefSend = await harness.context.tools.invoke(
+				"onebot-napcat.send",
+				{
+					parts: [{ messageId: "98766", type: "sticker" }],
+				},
+				currentGroupContext,
+			);
+			expect(stickerMsgRefSend.ok).toBe(true);
+			expect(harness.transports[0]?.sent.at(-1)).toEqual({
+				action: "send_group_msg",
+				params: {
+					group_id: "20001",
+					message: [
+						{
+							data: {
+								file: "sticker-file-2",
+								sub_type: 1,
+								summary: "[动画表情]",
+							},
+							type: "image",
+						},
+					],
+				},
+			});
+		} finally {
+			await oneBotNapCatPlugin.teardown?.(harness.context);
+		}
+	});
+
 	test("discovers missing allowed group/friend targets from NapCat and filters disabled policy rows", async () => {
 		const currentGroup = {
 			channelId: "onebot",

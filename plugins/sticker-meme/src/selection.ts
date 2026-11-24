@@ -510,6 +510,14 @@ export class StickerSelectionService {
 	): Promise<StickerItem | undefined> {
 		const trimmed = query.trim();
 		if (trimmed.length === 0) return undefined;
+		const directItem = await this.#repository.getItem(trimmed);
+		if (directItem !== undefined) {
+			const pack = await this.#repository.getPack(directItem.packId);
+			if (pack !== undefined && (await this.#selectable(directItem, pack)) === undefined) {
+				await this.#repository.recordUse(directItem.id);
+				return directItem;
+			}
+		}
 		// Try matching as a general query first, then fall back to emotion-only matching if needed.
 		let [best] = await this.search({
 			limit: 1,

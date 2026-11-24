@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
-import { messagePartsText, type MessageEnvelope, type MessagePart } from "@tsukaima/contracts";
+import {
+	messagePartsText,
+	messagePartSchema,
+	type MessageEnvelope,
+	type MessagePart,
+} from "@tsukaima/contracts";
 import {
 	chatObjects,
 	conversations,
@@ -156,11 +161,18 @@ export class OutboundService {
 		if (external && adapter === undefined) {
 			throw new Error(`Channel ${session.channelId} is not registered`);
 		}
+		const parts = await this.#transformParts(input.parts, {
+			channelId: session.channelId,
+			chatKind: session.chatKind,
+			chatObjectId: session.chatObjectId,
+			conversationId: session.durableConversationId,
+			sessionId: session.sessionId,
+		});
 		const now = new Date().toISOString();
 		const id = randomUUID();
 		const durableEntryId = `outbound:${id}`;
-		const text = messagePartsText(input.parts);
-		const chatText = input.parts
+		const text = messagePartsText(parts);
+		const chatText = parts
 			.filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
 			.map((part) => part.text)
 			.join("\n");
@@ -175,7 +187,7 @@ export class OutboundService {
 			ingestedAt: now,
 			kind: external ? (adapter?.kind ?? "plugin") : session.chatKind,
 			occurredAt: now,
-			partsJson: JSON.stringify(input.parts),
+			partsJson: JSON.stringify(parts),
 			senderDisplayName: "Tsukaima",
 			senderExternalId: "tsukaima",
 			updatedAt: now,
@@ -186,8 +198,8 @@ export class OutboundService {
 			if (chatText.trim().length > 0) this.#onDirectSend?.(session.durableConversationId, chatText);
 			this.#onToolSend?.({
 				durableConversationId: session.durableConversationId,
-				hasMedia: input.parts.some((part) => part.type !== "text"),
-				parts: input.parts,
+				hasMedia: parts.some((part) => part.type !== "text"),
+				parts,
 				pluginId,
 				sessionId: session.sessionId,
 				text,
@@ -223,7 +235,7 @@ export class OutboundService {
 				channelId,
 				chatKind,
 				platformConversationId,
-				input.parts,
+				parts,
 				input.options,
 			);
 			await database
@@ -271,6 +283,45 @@ export class OutboundService {
 		}
 	}
 
+	async #transformParts(
+		parts: readonly MessagePart[],
+		context: {
+			readonly channelId?: string | null;
+			readonly chatKind?: string | null;
+			readonly chatObjectId?: string | null;
+			readonly conversationId: string;
+			readonly sessionId?: string;
+		},
+	): Promise<readonly MessagePart[]> {
+		if (this.#hooks === undefined || !parts.some((part) => part.type === "text")) {
+			return parts;
+		}
+		try {
+			const fullText = messagePartsText(parts);
+			const result = await this.#hooks.transform("reply.transform", {
+				channelId: context.channelId ?? null,
+				chatKind: context.chatKind ?? null,
+				chatObjectId: context.chatObjectId ?? null,
+				conversationId: context.conversationId,
+				parts,
+				sessionId: context.sessionId ?? context.conversationId,
+				text: fullText,
+			});
+			if (typeof result === "object" && result !== null && "parts" in result) {
+				const candidate = (result as { readonly parts?: unknown }).parts;
+				const parsed = messagePartSchema.array().safeParse(candidate);
+				if (parsed.success && parsed.data.length > 0) {
+					return parsed.data;
+				}
+			}
+		} catch (error) {
+			this.#logger.debug("outbound reply transform failed; using original parts", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+		return parts;
+	}
+
 	async #sendResolved(
 		pluginId: string,
 		input: PluginOutboundSendInput,
@@ -279,6 +330,13 @@ export class OutboundService {
 	): Promise<SendResult> {
 		const database = this.#requireDatabase();
 		const { target } = input;
+		const parts = await this.#transformParts(input.parts, {
+			channelId: target.channelId,
+			chatKind: target.kind,
+			chatObjectId: resolved.chatObjectId,
+			conversationId: resolved.durableConversationId,
+			sessionId: resolved.sessionId,
+		});
 		// A tool send from another conversation (cross-chat `onebot-napcat.send`) is recorded in
 		// the target transcript, but it must never mark the target's active turn as already
 		// shown: the reply to that turn is unrelated to this message.
@@ -287,9 +345,14 @@ export class OutboundService {
 			input.originConversationId === resolved.durableConversationId;
 		const now = new Date().toISOString();
 		const id = randomUUID();
+		const text = messagePartsText(parts);
+		const chatText = parts
+			.filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
+			.map((part) => part.text)
+			.join("\n");
 		await database.insert(messages).values({
 			chatObjectId: resolved.chatObjectId,
-			contentText: messagePartsText(input.parts) || null,
+			contentText: text || null,
 			conversationId: resolved.sessionId,
 			direction: "outbound",
 			deliveryStatus: "pending",
@@ -297,7 +360,7 @@ export class OutboundService {
 			ingestedAt: now,
 			kind,
 			occurredAt: now,
-			partsJson: JSON.stringify(input.parts),
+			partsJson: JSON.stringify(parts),
 			senderDisplayName: "Tsukaima",
 			senderExternalId: "tsukaima",
 			updatedAt: now,
@@ -306,7 +369,7 @@ export class OutboundService {
 			conversationId: resolved.sessionId,
 			messageId: id,
 			pluginId,
-			preview: previewText(messagePartsText(input.parts)),
+			preview: previewText(text),
 			targetKind: target.kind,
 		});
 		try {
@@ -314,7 +377,7 @@ export class OutboundService {
 				target.channelId,
 				target.kind,
 				target.platformConversationId,
-				input.parts,
+				parts,
 				input.options,
 			);
 			await database
@@ -327,11 +390,6 @@ export class OutboundService {
 					updatedAt: new Date().toISOString(),
 				})
 				.where(eq(messages.id, id));
-			const text = messagePartsText(input.parts);
-			const chatText = input.parts
-				.filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
-				.map((part) => part.text)
-				.join("\n");
 			if (originMatches && chatText.trim().length > 0) {
 				this.#onDirectSend?.(resolved.durableConversationId, chatText);
 			}
@@ -340,8 +398,8 @@ export class OutboundService {
 			if (originMatches) {
 				this.#onToolSend?.({
 					durableConversationId: resolved.durableConversationId,
-					hasMedia: input.parts.some((part) => part.type !== "text"),
-					parts: input.parts,
+					hasMedia: parts.some((part) => part.type !== "text"),
+					parts,
 					pluginId,
 					sessionId: resolved.sessionId,
 					text,
