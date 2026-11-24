@@ -150,6 +150,10 @@ export function createStickerReplyTransform(options: StickerOutputOptions) {
 				continue;
 			}
 			if ((await options.media.findById(item.mediaId)) === undefined) continue;
+			if (item.id === query) {
+				bestItem = item;
+				break;
+			}
 			const score =
 				rankStickerItem(item, pack, {
 					...(personaId === undefined ? {} : { personaId }),

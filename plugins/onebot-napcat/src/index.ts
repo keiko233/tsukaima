@@ -134,17 +134,33 @@ const MESSAGE_PART_SCHEMA = {
 	additionalProperties: true,
 	properties: {
 		channelRef: { type: "string" },
+		emotion: {
+			description: "Emotion identifier for sticker meme parts (e.g. 'happy', '开心').",
+			type: "string",
+		},
 		fileName: {
 			description: "File name for file parts (alias: name).",
 			type: "string",
 		},
+		itemId: {
+			description: "Sticker item ID for direct sticker meme resolution.",
+			type: "string",
+		},
 		mediaId: { type: "string" },
+		messageId: {
+			description: "Message reference ([msg:<id>] or ID) to reuse media from conversation history.",
+			type: "string",
+		},
 		mimeType: { type: "string" },
 		name: {
-			description: "Alias for fileName on file parts.",
+			description: "Alias for fileName on file parts, or sticker query alias.",
 			type: "string",
 		},
 		previewText: { type: "string" },
+		query: {
+			description: "Search query or emotion alias for sticker meme parts (e.g. '开心').",
+			type: "string",
+		},
 		sha256: { type: "string" },
 		sourceUrl: {
 			description: "HTTP(S) URL for image/audio/video/file parts (alias: url).",
@@ -388,16 +404,22 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 		properties: {
 			forward: { type: "boolean" },
 			groupId: { type: "string" },
+			messageId: {
+				description:
+					"Optional message reference ([msg:<id>] or ID) from conversation history to resolve media parts from.",
+				type: "string",
+			},
 			parts: {
 				description:
-					"Ordered message parts, e.g. [{ type: 'text', text: 'Hello' }, { type: 'image', sourceUrl: 'https://...' }].",
+					"Ordered message parts, e.g. [{ type: 'text', text: 'Hello' }, { type: 'image', sourceUrl: 'https://...' }, { type: 'sticker', query: '开心' }, { type: 'image', messageId: '[msg:123]' }].",
 				items: MESSAGE_PART_SCHEMA,
 				type: "array",
 			},
 			replyToPlatformMessageId: { type: "string" },
 			target: TARGET_SCHEMA,
 			text: {
-				description: "Plain-text message shorthand when parts is omitted.",
+				description:
+					"Plain-text message shorthand when parts is omitted. Can contain sticker directives/markers like [表情:开心] which will be transformed into native stickers.",
 				type: "string",
 			},
 			userId: { type: "string" },
@@ -408,7 +430,14 @@ const TOOL_PARAMETERS_BY_METHOD: Record<OneBotActionMethod, Record<string, unkno
 		additionalProperties: true,
 		properties: {
 			groupId: { type: "string" },
+			messageId: {
+				description:
+					"Optional message reference ([msg:<id>] or ID) from conversation history to resolve media parts from.",
+				type: "string",
+			},
 			parts: {
+				description:
+					"Ordered message parts for the forward bundle, e.g. [{ type: 'text', text: 'Hello' }, { type: 'image', messageId: '[msg:123]' }].",
 				items: MESSAGE_PART_SCHEMA,
 				type: "array",
 			},

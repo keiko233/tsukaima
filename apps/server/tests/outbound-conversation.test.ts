@@ -252,4 +252,64 @@ describe("conversation-scoped immediate outbound", () => {
 			await lifecycle.stop();
 		}
 	});
+
+	test("transforms text with sticker markers via reply.transform hook before sending to external channel", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-outbound-conversation-"));
+		directories.push(directory);
+		const onebot = createOneBotTransportSpy();
+		const { lifecycle } = createApp(
+			{
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_ONEBOT_WS_URL: "ws://napcat.test:3001",
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			},
+			{
+				pluginBindings: new Map([[ONEBOT_TRANSPORT_FACTORY_BINDING, onebot.createTransport]]),
+			},
+		);
+		const unsubscribe = lifecycle.hooks.on("reply.transform", async (payload) => {
+			const p = payload as { text: string };
+			if (p.text.includes("[表情:开心]")) {
+				return {
+					parts: [
+						{ text: "看这个", type: "text" },
+						{ mediaId: "media-happy-1", sha256: "sha-happy-1", type: "sticker" },
+					],
+				};
+			}
+			return undefined;
+		});
+		await lifecycle.start();
+		onebot.connections[0]?.emitOpen();
+		try {
+			const session = await createExternalSession(lifecycle, {
+				kind: "group",
+				platformConversationId: "group-1",
+			});
+			await lifecycle.outbound.send("onebot-napcat", {
+				originConversationId: "other-conversation",
+				parts: [{ text: "看这个 [表情:开心]", type: "text" }],
+				target: {
+					channelId: "onebot",
+					kind: "group",
+					platformConversationId: "group-1",
+				},
+			});
+
+			const sent = onebot.actions.filter((action) => action.action === "send_group_msg");
+			expect(sent).toHaveLength(1);
+			expect(sent[0]?.params?.group_id).toBe("group-1");
+			const rows = await outboundRows(lifecycle, session.sessionId);
+			expect(rows).toHaveLength(1);
+			const parts = JSON.parse(rows[0]?.partsJson ?? "[]");
+			expect(parts).toEqual([
+				{ text: "看这个", type: "text" },
+				{ mediaId: "media-happy-1", sha256: "sha-happy-1", type: "sticker" },
+			]);
+		} finally {
+			unsubscribe();
+			await lifecycle.stop();
+		}
+	}, 30_000);
 });

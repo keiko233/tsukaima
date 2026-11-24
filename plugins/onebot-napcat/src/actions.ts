@@ -376,6 +376,7 @@ const resolveGroupId = (input: Record<string, unknown>, actor?: OneBotActionActo
 const normalizeCandidatePart = (raw: unknown): unknown => {
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
 	const record = { ...(raw as Record<string, unknown>) };
+	const rawName = toIdString(record.name);
 	if (
 		record.sourceUrl === undefined &&
 		typeof record.url === "string" &&
@@ -390,12 +391,8 @@ const normalizeCandidatePart = (raw: unknown): unknown => {
 		}
 		delete record.sourceUrl;
 	}
-	if (
-		record.fileName === undefined &&
-		typeof record.name === "string" &&
-		record.name.trim().length > 0
-	) {
-		record.fileName = record.name.trim();
+	if (record.fileName === undefined && rawName !== undefined && rawName.length > 0) {
+		record.fileName = rawName;
 	}
 	delete record.name;
 	if (
@@ -404,44 +401,23 @@ const normalizeCandidatePart = (raw: unknown): unknown => {
 	) {
 		record.fileName = "attachment";
 	}
-	return record;
-};
-
-const asParts = (value: unknown, rootInput?: Record<string, unknown>): MessagePart[] => {
-	const root = rootInput ?? {};
-	const paramsRecord = asRecord(root.params);
-	const raw =
-		value ??
-		paramsRecord.parts ??
-		root.text ??
-		root.message ??
-		root.content ??
-		paramsRecord.text ??
-		paramsRecord.message;
-	const parsedValue = parseJsonIfString(raw);
-	if (typeof parsedValue === "string" && parsedValue.length > 0) {
-		return [{ text: parsedValue, type: "text" }];
-	}
-	const list =
-		!Array.isArray(parsedValue) &&
-		typeof parsedValue === "object" &&
-		parsedValue !== null &&
-		"type" in parsedValue
-			? [parsedValue]
-			: parsedValue;
-	if (!Array.isArray(list)) throw new Error("parts must be an array");
-	return list.map((part, index) => {
-		const candidate = normalizeCandidatePart(
-			typeof part === "string" ? { text: part, type: "text" } : parseJsonIfString(part),
-		);
-		const parsed = messagePartSchema.safeParse(candidate);
-		if (!parsed.success) {
-			throw new Error(
-				`parts[${index}] is invalid: ${parsed.error.issues[0]?.message ?? "invalid"}`,
-			);
+	if (
+		record.type === "sticker" &&
+		record.mediaId === undefined &&
+		record.sha256 === undefined &&
+		record.sourceUrl === undefined &&
+		record.channelRef === undefined
+	) {
+		const label =
+			toIdString(record.itemId) ??
+			toIdString(record.query) ??
+			rawName ??
+			toIdString(record.emotion);
+		if (label !== undefined) {
+			return { text: `[表情:${label}]`, type: "text" };
 		}
-		return parsed.data;
-	});
+	}
+	return record;
 };
 
 export interface OneBotActionFacadeOptions {
@@ -775,6 +751,226 @@ export class OneBotActionFacade {
 		return { target, userId: asString(userId, "userId") };
 	}
 
+	#resolveMediaPartFromMessages(
+		messages: readonly {
+			readonly id: string;
+			readonly parts?: readonly MessagePart[];
+			readonly platformMessageId?: string | null;
+		}[],
+		type: string,
+		requestedMessageId: string | undefined,
+		candidate: Record<string, unknown>,
+	): MessagePart | undefined {
+		const requestedMediaId = toIdString(candidate.mediaId ?? candidate.media_id);
+		const requestedSha = toIdString(candidate.sha256);
+		const requestedFile = toIdString(candidate.channelRef ?? candidate.sourceUrl ?? candidate.file);
+
+		const messageMatches = (msg: (typeof messages)[number]): boolean => {
+			if (requestedMessageId === undefined) return true;
+			return (
+				msg.id === requestedMessageId ||
+				msg.platformMessageId === requestedMessageId ||
+				cleanMessageId(requestedMessageId) === msg.platformMessageId ||
+				cleanMessageId(requestedMessageId) === msg.id
+			);
+		};
+
+		for (const msg of messages) {
+			if (!messageMatches(msg)) continue;
+			const parts = msg.parts ?? [];
+			for (const p of parts) {
+				if (p.type === type && p.type !== "text" && p.type !== "channel-native") {
+					if (
+						(requestedMediaId === undefined || p.mediaId === requestedMediaId) &&
+						(requestedSha === undefined || p.sha256 === requestedSha) &&
+						(requestedFile === undefined ||
+							p.channelRef === requestedFile ||
+							p.sourceUrl === requestedFile)
+					) {
+						return p;
+					}
+				}
+			}
+		}
+		return undefined;
+	}
+
+	async #resolveSendParts(
+		input: Record<string, unknown>,
+		actor: OneBotActionActor,
+	): Promise<MessagePart[]> {
+		const root = input;
+		const paramsRecord = asRecord(root.params);
+		const raw =
+			root.parts ??
+			paramsRecord.parts ??
+			root.text ??
+			root.message ??
+			root.content ??
+			paramsRecord.text ??
+			paramsRecord.message ??
+			(root.image !== undefined || paramsRecord.image !== undefined
+				? [{ sourceUrl: toIdString(root.image ?? paramsRecord.image), type: "image" }]
+				: undefined) ??
+			(root.file !== undefined || paramsRecord.file !== undefined
+				? [
+						{
+							fileName: "attachment",
+							sourceUrl: toIdString(root.file ?? paramsRecord.file),
+							type: "file",
+						},
+					]
+				: undefined);
+
+		const parsedValue = parseJsonIfString(raw);
+		if (typeof parsedValue === "string" && parsedValue.length > 0) {
+			return [{ text: parsedValue, type: "text" }];
+		}
+		const list =
+			!Array.isArray(parsedValue) &&
+			typeof parsedValue === "object" &&
+			parsedValue !== null &&
+			"type" in parsedValue
+				? [parsedValue]
+				: parsedValue;
+		if (!Array.isArray(list)) throw new Error("parts must be an array");
+
+		const needsResolution = list.some((item) => {
+			if (typeof item !== "object" || item === null) return false;
+			const r = item as Record<string, unknown>;
+			const type = r.type;
+			if (
+				type === "image" ||
+				type === "sticker" ||
+				type === "audio" ||
+				type === "video" ||
+				type === "file"
+			) {
+				return (
+					r.mediaId === undefined &&
+					r.sha256 === undefined &&
+					r.sourceUrl === undefined &&
+					r.channelRef === undefined &&
+					r.url === undefined
+				);
+			}
+			return false;
+		});
+
+		let scopedMessages: readonly {
+			readonly id: string;
+			readonly parts?: readonly MessagePart[];
+			readonly platformMessageId?: string | null;
+		}[] = [];
+
+		if (needsResolution && this.#conversations !== undefined) {
+			const scopeIds: string[] = [];
+			if (actor.conversationId !== undefined) scopeIds.push(actor.conversationId);
+			if (root.target !== undefined) {
+				try {
+					const target = asTarget(root.target, root, actor);
+					if (this.#isCrossChat(target, actor)) {
+						const match = (await this.#conversations.list()).find(
+							(entry) =>
+								entry.kind === target.kind &&
+								entry.platformConversationId === target.platformConversationId,
+						);
+						if (match !== undefined && !scopeIds.includes(match.id)) {
+							scopeIds.push(match.id);
+						}
+					}
+				} catch {
+					// Ignore invalid target during scope collection
+				}
+			}
+			if (scopeIds.length > 0) {
+				try {
+					scopedMessages = (
+						await Promise.all(scopeIds.map((cid) => this.#conversations!.recentMessages(cid, 50)))
+					)
+						.flat()
+						.toReversed();
+				} catch (error) {
+					this.#logger.debug("failed to fetch recent messages for send media resolution", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+			}
+		}
+
+		return list.map((part, index) => {
+			let candidate =
+				typeof part === "string" ? { text: part, type: "text" } : parseJsonIfString(part);
+			if (typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)) {
+				const candRecord = candidate as Record<string, unknown>;
+				const type = candRecord.type;
+				const isMedia =
+					type === "image" ||
+					type === "sticker" ||
+					type === "audio" ||
+					type === "video" ||
+					type === "file";
+				const hasDirectRef =
+					candRecord.mediaId !== undefined ||
+					candRecord.sha256 !== undefined ||
+					candRecord.sourceUrl !== undefined ||
+					candRecord.channelRef !== undefined ||
+					candRecord.url !== undefined;
+
+				const requestedMsgId =
+					pickMessageId(candRecord, ["messageId", "message_id", "platformMessageId", "id"]) ??
+					pickMessageId(root, ["messageId", "message_id", "platformMessageId", "id"]) ??
+					pickMessageId(paramsRecord, ["messageId", "message_id", "platformMessageId", "id"]);
+
+				const hasStickerMemeLabel =
+					type === "sticker" &&
+					(toIdString(candRecord.itemId) !== undefined ||
+						toIdString(candRecord.query) !== undefined ||
+						toIdString(candRecord.emotion) !== undefined ||
+						toIdString(candRecord.name) !== undefined);
+
+				const shouldResolveFromHistory =
+					isMedia &&
+					!hasDirectRef &&
+					(requestedMsgId !== undefined || !hasStickerMemeLabel) &&
+					scopedMessages.length > 0;
+
+				if (shouldResolveFromHistory) {
+					const resolvedPart = this.#resolveMediaPartFromMessages(
+						scopedMessages,
+						typeof type === "string" ? type : "image",
+						requestedMsgId,
+						candRecord,
+					);
+					if (resolvedPart !== undefined) {
+						const {
+							emotion: _e,
+							id: _id,
+							itemId: _i,
+							message_id: _m2,
+							messageId: _m1,
+							platformMessageId: _m3,
+							query: _q,
+							...overrides
+						} = candRecord;
+						candidate = {
+							...resolvedPart,
+							...overrides,
+						};
+					}
+				}
+			}
+			const normalized = normalizeCandidatePart(candidate);
+			const parsed = messagePartSchema.safeParse(normalized);
+			if (!parsed.success) {
+				throw new Error(
+					`parts[${index}] is invalid: ${parsed.error.issues[0]?.message ?? "invalid"}`,
+				);
+			}
+			return parsed.data;
+		});
+	}
+
 	async #execute(
 		adapter: OneBotChannelAdapter,
 		method: OneBotActionMethod,
@@ -786,7 +982,7 @@ export class OneBotActionFacade {
 		switch (method) {
 			case "send": {
 				const target = asTarget(input.target, input, actor);
-				const parts = asParts(input.parts, input);
+				const parts = await this.#resolveSendParts(input, actor);
 				const replyRaw = toIdString(
 					input.replyToPlatformMessageId ?? input.reply_to_message_id ?? input.replyToMessageId,
 				);
@@ -814,7 +1010,7 @@ export class OneBotActionFacade {
 			}
 			case "sendForward": {
 				const target = asTarget(input.target, input, actor);
-				const parts = asParts(input.parts, input);
+				const parts = await this.#resolveSendParts(input, actor);
 				const result = await channel.sendForward(target, parts);
 				await this.#recordInteraction(target, "forward", parts);
 				return result;

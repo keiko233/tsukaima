@@ -1,4 +1,11 @@
-import type { PluginContext, PluginLogger, ToolResult } from "@tsukaima/sdk";
+import type { ConversationPolicy } from "@tsukaima/contracts";
+import type {
+	OutboundTarget,
+	PluginContext,
+	PluginConversationSummary,
+	PluginLogger,
+	ToolResult,
+} from "@tsukaima/sdk";
 import type { LearningService } from "./learning.ts";
 import { elapsedMs, traceLog } from "./logging.ts";
 import { toStickerMessagePart } from "./output.ts";
@@ -18,6 +25,217 @@ const asString = (input: Record<string, unknown>, key: string): string | undefin
 	const value = input[key];
 	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 };
+
+const pickTargetId = (
+	source: Record<string, unknown> | undefined,
+	keys: readonly string[],
+): string | undefined => {
+	if (source === undefined) return undefined;
+	for (const key of keys) {
+		const val = source[key];
+		if (typeof val === "string" && val.trim().length > 0) return val.trim();
+		if (typeof val === "number" && Number.isFinite(val)) return String(val);
+	}
+	return undefined;
+};
+
+const parseJsonObject = (value: unknown): Record<string, unknown> | undefined => {
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+			try {
+				const parsed = JSON.parse(trimmed) as unknown;
+				if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+					return parsed as Record<string, unknown>;
+				}
+			} catch {
+				return undefined;
+			}
+		}
+		return undefined;
+	}
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+};
+
+interface ResolvedStickerTarget {
+	readonly explicitConversationId?: string;
+	readonly isCrossChat: boolean;
+	readonly outboundTarget?: OutboundTarget;
+}
+
+function resolveStickerTarget(
+	input: Record<string, unknown>,
+	invocation: {
+		readonly channelId?: string;
+		readonly chatKind?: string;
+		readonly conversationId?: string;
+		readonly platformConversationId?: string;
+	},
+): ResolvedStickerTarget {
+	const rawTarget = parseJsonObject(input.target);
+	const explicitConversationId = asString(input, "conversationId");
+	const groupId =
+		pickTargetId(input, ["groupId", "group_id"]) ??
+		pickTargetId(rawTarget, ["groupId", "group_id"]);
+	const userId =
+		pickTargetId(input, ["userId", "user_id", "peerId", "peer_id", "qq"]) ??
+		pickTargetId(rawTarget, ["userId", "user_id", "peerId", "peer_id", "qq"]);
+
+	let kind = rawTarget?.kind as string | undefined;
+	if (kind === undefined) {
+		if (groupId !== undefined) kind = "group";
+		else if (userId !== undefined) kind = "private";
+	}
+
+	let outboundTarget: OutboundTarget | undefined;
+	if (kind === "group" || kind === "private") {
+		const platformConversationId =
+			(kind === "group" ? groupId : userId) ??
+			pickTargetId(rawTarget, ["platformConversationId", "id", "chatId", "chat_id"]);
+		if (platformConversationId !== undefined) {
+			outboundTarget = {
+				channelId: asString(rawTarget ?? {}, "channelId") ?? invocation.channelId ?? "onebot",
+				kind,
+				platformConversationId,
+			};
+		}
+	}
+
+	const isCrossChat =
+		outboundTarget !== undefined
+			? invocation.platformConversationId === undefined ||
+				outboundTarget.platformConversationId !== invocation.platformConversationId ||
+				(invocation.chatKind !== undefined && outboundTarget.kind !== invocation.chatKind)
+			: explicitConversationId !== undefined &&
+				invocation.conversationId !== undefined &&
+				explicitConversationId !== invocation.conversationId;
+
+	return {
+		...(explicitConversationId === undefined ? {} : { explicitConversationId }),
+		isCrossChat,
+		...(outboundTarget === undefined ? {} : { outboundTarget }),
+	};
+}
+
+async function checkStickerCrossChatPolicy(
+	conversations: PluginContext["conversations"],
+	target: ResolvedStickerTarget,
+	callerConversationId: string | undefined,
+): Promise<PluginConversationSummary | undefined> {
+	if (conversations === undefined) {
+		throw new Error("cross-chat-target-denied");
+	}
+	let list: readonly PluginConversationSummary[];
+	try {
+		list = await conversations.list();
+	} catch {
+		throw new Error("cross-chat-target-denied");
+	}
+	if (target.outboundTarget !== undefined) {
+		const ot = target.outboundTarget;
+		const match = list.find(
+			(entry) =>
+				entry.kind === ot.kind && entry.platformConversationId === ot.platformConversationId,
+		);
+		if (match === undefined) {
+			throw new Error("cross-chat-target-unknown");
+		}
+		if (match.muted === true) {
+			throw new Error("cross-chat-target-muted");
+		}
+		let policy: ConversationPolicy | undefined;
+		try {
+			policy = await conversations.getPolicy(match.id);
+		} catch {
+			throw new Error("cross-chat-target-denied");
+		}
+		if (policy === undefined) {
+			throw new Error("cross-chat-target-unknown");
+		}
+		const trigger = policy.trigger;
+		const access =
+			ot.kind === "group" ? (trigger?.groupAccess ?? "open") : (trigger?.privateAccess ?? "open");
+		if (policy.enabled === false || access === "disabled") {
+			throw new Error("cross-chat-target-disabled");
+		}
+		if (
+			access === "allowlist" &&
+			Array.isArray(trigger?.allowlist) &&
+			!trigger.allowlist.includes(ot.platformConversationId)
+		) {
+			throw new Error("cross-chat-target-not-allowed");
+		}
+		const allowedTargets = (policy as { allowedTargets?: readonly string[] }).allowedTargets;
+		if (
+			Array.isArray(allowedTargets) &&
+			!allowedTargets.includes(`${ot.kind}:${ot.platformConversationId}`) &&
+			!allowedTargets.includes(ot.platformConversationId)
+		) {
+			throw new Error("cross-chat-target-not-allowed");
+		}
+
+		if (callerConversationId !== undefined && callerConversationId !== match.id) {
+			try {
+				const callerPolicy = await conversations.getPolicy(callerConversationId);
+				if (callerPolicy !== undefined) {
+					const callerTrigger = callerPolicy.trigger;
+					const callerAccess =
+						ot.kind === "group"
+							? (callerTrigger?.groupAccess ?? "open")
+							: (callerTrigger?.privateAccess ?? "open");
+					if (
+						callerAccess === "allowlist" &&
+						Array.isArray(callerTrigger?.allowlist) &&
+						!callerTrigger.allowlist.includes(ot.platformConversationId)
+					) {
+						throw new Error("cross-chat-target-not-allowed");
+					}
+					const callerAllowed = (callerPolicy as { allowedTargets?: readonly string[] })
+						.allowedTargets;
+					if (
+						Array.isArray(callerAllowed) &&
+						!callerAllowed.includes(`${ot.kind}:${ot.platformConversationId}`) &&
+						!callerAllowed.includes(ot.platformConversationId)
+					) {
+						throw new Error("cross-chat-target-not-allowed");
+					}
+				}
+			} catch (err) {
+				if (err instanceof Error && err.message === "cross-chat-target-not-allowed") {
+					throw err;
+				}
+				throw new Error("cross-chat-target-denied", { cause: err });
+			}
+		}
+		return match;
+	}
+	if (target.explicitConversationId !== undefined) {
+		const cid = target.explicitConversationId;
+		const match = list.find((entry) => entry.id === cid || entry.durableConversationId === cid);
+		if (match === undefined) {
+			throw new Error("cross-chat-target-unknown");
+		}
+		if (match.muted === true) {
+			throw new Error("cross-chat-target-muted");
+		}
+		let policy: ConversationPolicy | undefined;
+		try {
+			policy = await conversations.getPolicy(match.id);
+		} catch {
+			throw new Error("cross-chat-target-denied");
+		}
+		if (policy === undefined) {
+			throw new Error("cross-chat-target-unknown");
+		}
+		if (policy.enabled === false) {
+			throw new Error("cross-chat-target-disabled");
+		}
+		return match;
+	}
+	return undefined;
+}
 
 const asStringList = (input: Record<string, unknown>, key: string): string[] | undefined => {
 	const value = input[key];
@@ -165,7 +383,7 @@ export function registerStickerTools(
 	});
 	context.tools.register({
 		description:
-			"Select and immediately send the best matching approved sticker in one step by query, emotion, itemId, packId, or tags. All enabled packs in the library are approved for use in chat (unless explicitly restricted to a different personaId). Use sticker-meme.list_packs or omit filters to browse available packs. The sticker is delivered to this conversation right away; do not write sticker directives or markers in your reply.",
+			"Select and immediately send the best matching approved sticker in one step by query, emotion, itemId, packId, or tags. Supports sending to the current chat (when target is omitted) or an explicit private/group target or conversation (subject to cross-chat policy). All enabled packs in the library are approved for use in chat (unless explicitly restricted to a different personaId). Use sticker-meme.list_packs or omit filters to browse available packs. The sticker is delivered right away; do not write sticker directives or markers in your reply.",
 		async execute(input, invocation) {
 			const startedAt = Date.now();
 			const conversationId = invocation.conversationId;
@@ -177,6 +395,25 @@ export function registerStickerTools(
 				});
 				return text("A conversation is required to send a sticker.");
 			}
+			const targetResolution = resolveStickerTarget(input, invocation);
+			let targetMatch: PluginConversationSummary | undefined;
+			if (targetResolution.isCrossChat) {
+				try {
+					targetMatch = await checkStickerCrossChatPolicy(
+						context.conversations,
+						targetResolution,
+						conversationId,
+					);
+				} catch (error) {
+					const reason = error instanceof Error ? error.message : String(error);
+					log.debug("sticker tool rejected", {
+						durationMs: elapsedMs(startedAt),
+						reason,
+						tool: "sticker-meme.send",
+					});
+					throw error;
+				}
+			}
 			const itemId = asString(input, "itemId");
 			const search = searchInput(input);
 			traceLog(log, "sticker tool invoked", {
@@ -184,9 +421,14 @@ export function registerStickerTools(
 				itemId: itemId ?? null,
 				tool: "sticker-meme.send",
 			});
+			const effectiveConversationId =
+				targetMatch?.id ??
+				targetMatch?.durableConversationId ??
+				targetResolution.explicitConversationId ??
+				conversationId;
 			const { item, matchedBy, pack } = await selection.resolveForSend({
 				...search,
-				conversationId,
+				conversationId: effectiveConversationId,
 				...(itemId === undefined ? {} : { itemId }),
 			});
 			const outbound = context.outbound;
@@ -198,10 +440,23 @@ export function registerStickerTools(
 				});
 				return text("Sticker sending is unavailable: this host exposes no outbound channel.");
 			}
-			await outbound.sendToConversation({
-				conversationId,
-				parts: [toStickerMessagePart(item)],
-			});
+			if (targetResolution.outboundTarget !== undefined) {
+				await outbound.send({
+					originConversationId: conversationId,
+					parts: [toStickerMessagePart(item)],
+					target: targetResolution.outboundTarget,
+				});
+			} else if (targetResolution.explicitConversationId !== undefined) {
+				await outbound.sendToConversation({
+					conversationId: effectiveConversationId,
+					parts: [toStickerMessagePart(item)],
+				});
+			} else {
+				await outbound.sendToConversation({
+					conversationId,
+					parts: [toStickerMessagePart(item)],
+				});
+			}
 			log.debug("sticker tool completed", {
 				durationMs: elapsedMs(startedAt),
 				itemId: item.id,
@@ -216,6 +471,12 @@ export function registerStickerTools(
 					packId: pack.id,
 					packName: pack.name,
 					sent: true,
+					...(targetResolution.outboundTarget === undefined
+						? {}
+						: { target: targetResolution.outboundTarget }),
+					...(targetResolution.isCrossChat
+						? { targetConversationId: effectiveConversationId }
+						: {}),
 				}),
 			);
 		},
@@ -223,9 +484,18 @@ export function registerStickerTools(
 		name: "sticker-meme.send",
 		parameters: {
 			properties: {
+				conversationId: {
+					description:
+						"Target conversation ID when sending across conversations. Defaults to the current conversation.",
+					type: "string",
+				},
 				emotion: {
 					description:
 						"Emotion id or natural-language alias, for example happy or 开心. Comma-separate to allow any of several.",
+					type: "string",
+				},
+				groupId: {
+					description: "Target group ID (e.g. QQ group number) when sending across conversations.",
 					type: "string",
 				},
 				itemId: { type: "string" },
@@ -237,6 +507,21 @@ export function registerStickerTools(
 					type: "string",
 				},
 				tags: { items: { type: "string" }, type: "array" },
+				target: {
+					additionalProperties: true,
+					description:
+						"Explicit cross-conversation outbound target, e.g. { kind: 'group', platformConversationId: '12345' }.",
+					properties: {
+						channelId: { type: "string" },
+						kind: { enum: ["private", "group", "webui", "workspace"], type: "string" },
+						platformConversationId: { type: "string" },
+					},
+					type: "object",
+				},
+				userId: {
+					description: "Target user ID (e.g. QQ user number) when sending across conversations.",
+					type: "string",
+				},
 			},
 			type: "object",
 		},
@@ -248,7 +533,7 @@ export function registerStickerTools(
 			surface: "chat",
 			timeoutMs: 15_000,
 		},
-		requiredPermissions: ["media.read", "conversation.read"],
+		requiredPermissions: ["media.read", "conversation.read", "channel.send"],
 	});
 	context.tools.register({
 		description:
