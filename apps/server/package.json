@@ -12,7 +12,7 @@
 		"@better-auth/drizzle-adapter": "1.7.22",
 		"@earendil-works/pi-ai": "1.5.2",
 		"@earendil-works/pi-coding-agent": "1.5.2",
-		"@orpc/server": "1.16.2",
+		"@orpc/server": "1.16.4",
 		"@tsukaima-plugin/mcp": "workspace:*",
 		"@tsukaima-plugin/onebot-napcat": "workspace:*",
 		"@tsukaima-plugin/openai-compatible": "workspace:*",
