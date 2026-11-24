@@ -1,6 +1,7 @@
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { isPlainObject, mapValues } from "es-toolkit";
+import { auth, UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import {
@@ -11,8 +12,23 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { MCP_SERVERS_STORAGE_KEY } from "./manifest.ts";
 import {
+	McpOAuthClientProvider,
+	McpOAuthStore,
+	defaultOAuthRedirectUrl,
+	oauthSecretsForRedaction,
+	oauthSnapshotFor,
+	parseOAuthCallbackUrl,
+	validateCallbackOrigin,
+	type McpOAuthCallbackOutcome,
+	type McpOAuthCallbackParams,
+	type McpOAuthHost,
+	type PersistedMcpOAuthState,
+} from "./oauth.ts";
+import {
 	MCP_SECRET_MASK,
 	mcpServerConfigSchema,
+	type McpHttpAuth,
+	type McpOAuthCompleteInput,
 	type McpServerConfig,
 	type McpServerConfigView,
 	type McpServerCreate,
@@ -47,6 +63,8 @@ export interface McpManagerOptions {
 	readonly clientName?: string;
 	readonly clientVersion?: string;
 	readonly logger: PluginLogger;
+	readonly oauthHost?: McpOAuthHost;
+	readonly onChanged?: () => Promise<void> | void;
 	readonly registerTool: (tool: PluginTool) => void;
 	readonly storage: PluginStorage;
 	readonly unregisterTool: (name: string) => void;
@@ -100,19 +118,48 @@ function secretKeys(transport: McpTransport): string[] {
 	if (transport.type === "stdio") {
 		return Object.keys(transport.env ?? {}).map((key) => `env:${key}`);
 	}
-	return Object.keys(transport.headers ?? {}).map((key) => `header:${key}`);
+	const keys = Object.keys(transport.headers ?? {}).map((key) => `header:${key}`);
+	if (transport.auth?.type === "bearer") {
+		keys.push("auth:token");
+	} else if (transport.auth?.type === "oauth") {
+		if (transport.auth.clientSecret !== undefined) keys.push("auth:clientSecret");
+		if (transport.auth.privateKey !== undefined) keys.push("auth:privateKey");
+	}
+	return keys;
 }
 
 function allSecretValues(transport: McpTransport): string[] {
-	return transport.type === "stdio"
-		? Object.values(transport.env ?? {})
-		: Object.values(transport.headers ?? {});
+	if (transport.type === "stdio") {
+		return Object.values(transport.env ?? {});
+	}
+	const values = Object.values(transport.headers ?? {});
+	if (transport.auth?.type === "bearer") {
+		values.push(transport.auth.token);
+	} else if (transport.auth?.type === "oauth") {
+		if (transport.auth.clientSecret !== undefined) values.push(transport.auth.clientSecret);
+		if (transport.auth.privateKey !== undefined) values.push(transport.auth.privateKey);
+	}
+	return values;
 }
 
-function secretValues(transport: McpTransport): string[] {
-	return allSecretValues(transport).filter(
+function secretValues(transport: McpTransport, oauthState?: PersistedMcpOAuthState): string[] {
+	return [...allSecretValues(transport), ...oauthSecretsForRedaction(oauthState)].filter(
 		(value) => value.trim().length > 0 && value !== MCP_SECRET_MASK,
 	);
+}
+
+function maskAuth(
+	authConfig: McpHttpAuth,
+): Extract<McpServerConfigView["transport"], { type: "http" }>["auth"] {
+	if (authConfig.type === "none") return authConfig;
+	if (authConfig.type === "bearer") {
+		return { token: MCP_SECRET_MASK, type: "bearer" };
+	}
+	return {
+		...authConfig,
+		...(authConfig.clientSecret === undefined ? {} : { clientSecret: MCP_SECRET_MASK }),
+		...(authConfig.privateKey === undefined ? {} : { privateKey: MCP_SECRET_MASK }),
+	};
 }
 
 function maskTransport(transport: McpTransport): McpServerConfigView["transport"] {
@@ -130,6 +177,7 @@ function maskTransport(transport: McpTransport): McpServerConfigView["transport"
 		};
 	}
 	return {
+		...(transport.auth === undefined ? {} : { auth: maskAuth(transport.auth) }),
 		...(transport.headers === undefined
 			? {}
 			: {
@@ -140,13 +188,41 @@ function maskTransport(transport: McpTransport): McpServerConfigView["transport"
 	};
 }
 
-function redactSecrets(message: string, transport: McpTransport): string {
+function redactSecrets(
+	message: string,
+	transport: McpTransport,
+	oauthState?: PersistedMcpOAuthState,
+): string {
 	let redacted = message;
-	for (const secret of secretValues(transport)) {
+	for (const secret of secretValues(transport, oauthState)) {
 		if (secret.length < 4) continue;
 		redacted = redacted.split(secret).join(MCP_SECRET_MASK);
 	}
 	return redacted;
+}
+
+function preserveAuthSecrets(
+	next: McpHttpAuth | undefined,
+	previous: McpHttpAuth | undefined,
+): McpHttpAuth | undefined {
+	if (next === undefined) return undefined;
+	if (next.type === "bearer") {
+		if (next.token !== MCP_SECRET_MASK || previous?.type !== "bearer") return next;
+		return { ...next, token: previous.token };
+	}
+	if (next.type === "oauth") {
+		if (previous?.type !== "oauth") return next;
+		return {
+			...next,
+			...(next.clientSecret === MCP_SECRET_MASK && previous.clientSecret !== undefined
+				? { clientSecret: previous.clientSecret }
+				: {}),
+			...(next.privateKey === MCP_SECRET_MASK && previous.privateKey !== undefined
+				? { privateKey: previous.privateKey }
+				: {}),
+		};
+	}
+	return next;
 }
 
 /** Editing a server through the masked WebUI view must not erase stored credentials. */
@@ -161,14 +237,33 @@ function preserveSecrets(next: McpTransport, previous: McpTransport): McpTranspo
 			),
 		};
 	}
-	if (next.headers === undefined) return next;
 	const previousHeaders = previous.type === "http" ? (previous.headers ?? {}) : {};
+	const headers =
+		next.headers === undefined
+			? undefined
+			: mapValues(next.headers, (value, key) =>
+					value === MCP_SECRET_MASK ? (previousHeaders[key] ?? value) : value,
+				);
+	const authConfig = preserveAuthSecrets(
+		next.auth,
+		previous.type === "http" ? previous.auth : undefined,
+	);
 	return {
-		...next,
-		headers: mapValues(next.headers, (value, key) =>
-			value === MCP_SECRET_MASK ? (previousHeaders[key] ?? value) : value,
-		),
+		...(authConfig === undefined ? {} : { auth: authConfig }),
+		...(headers === undefined ? {} : { headers }),
+		type: "http",
+		url: next.url,
 	};
+}
+
+function oauthIdentityChanged(previous: McpTransport, next: McpTransport): boolean {
+	if (previous.type !== next.type) return true;
+	if (previous.type !== "http" || next.type !== "http") return false;
+	if (previous.url !== next.url) return true;
+	const prevAuth = previous.auth?.type === "oauth" ? previous.auth : undefined;
+	const nextAuth = next.auth?.type === "oauth" ? next.auth : undefined;
+	if (prevAuth === undefined && nextAuth === undefined) return false;
+	return JSON.stringify(prevAuth) !== JSON.stringify(nextAuth);
 }
 
 function sseFetchWithHeaders(headers: Record<string, string>) {
@@ -330,7 +425,25 @@ function describeSpawnFailure(error: unknown, transport: McpTransport): string {
 	}); ${message}`;
 }
 
-function transportFor(config: McpTransport): Transport {
+function effectiveHttpHeaders(
+	config: Extract<McpTransport, { type: "http" }>,
+): Record<string, string> | undefined {
+	const base = config.headers === undefined ? {} : { ...config.headers };
+	if (config.auth?.type === "oauth") {
+		// Prevent static headers from overwriting the dynamic OAuth Bearer token.
+		for (const key of Object.keys(base)) {
+			if (key.toLowerCase() === "authorization") delete base[key];
+		}
+	} else if (config.auth?.type === "bearer") {
+		for (const key of Object.keys(base)) {
+			if (key.toLowerCase() === "authorization") delete base[key];
+		}
+		base.Authorization = `Bearer ${config.auth.token}`;
+	}
+	return Object.keys(base).length === 0 ? undefined : base;
+}
+
+function transportFor(config: McpTransport, authProvider?: McpOAuthClientProvider): Transport {
 	if (config.type === "stdio") {
 		const resolved = resolveStdioCommand(config.command, config.args);
 		const env = stdioEnvironment(config.env);
@@ -350,21 +463,27 @@ function transportFor(config: McpTransport): Transport {
 			stderr: "ignore",
 		});
 	}
-	return new StreamableHTTPClientTransport(
-		new URL(config.url),
-		config.headers === undefined ? {} : { requestInit: { headers: config.headers } },
-	);
+	const headers = effectiveHttpHeaders(config);
+	return new StreamableHTTPClientTransport(new URL(config.url), {
+		...(authProvider === undefined ? {} : { authProvider }),
+		...(headers === undefined ? {} : { requestInit: { headers } }),
+	});
 }
 
-function sseTransportFor(config: Extract<McpTransport, { type: "http" }>): Transport {
-	const options =
-		config.headers === undefined
+function sseTransportFor(
+	config: Extract<McpTransport, { type: "http" }>,
+	authProvider?: McpOAuthClientProvider,
+): Transport {
+	const headers = effectiveHttpHeaders(config);
+	return new SSEClientTransport(new URL(config.url), {
+		...(authProvider === undefined ? {} : { authProvider }),
+		...(headers === undefined
 			? {}
 			: {
-					eventSourceInit: { fetch: sseFetchWithHeaders(config.headers) as never },
-					requestInit: { headers: config.headers },
-				};
-	return new SSEClientTransport(new URL(config.url), options);
+					eventSourceInit: { fetch: sseFetchWithHeaders(headers) as never },
+					requestInit: { headers },
+				}),
+	});
 }
 
 function normalizedContent(blocks: readonly unknown[]): McpToolContent[] {
@@ -444,11 +563,14 @@ function canonicalToolName(serverId: string, toolName: string): string {
  */
 export class McpManager {
 	readonly #options: McpManagerOptions;
+	readonly #oauthStore: McpOAuthStore;
 	readonly #records = new Map<string, McpServerRecord>();
+	#callbackDisposer: (() => void) | undefined;
 	#started = false;
 
 	constructor(options: McpManagerOptions) {
 		this.#options = options;
+		this.#oauthStore = new McpOAuthStore(options.storage);
 	}
 
 	get started(): boolean {
@@ -458,6 +580,10 @@ export class McpManager {
 	async start(): Promise<void> {
 		if (this.#started) return;
 		this.#started = true;
+		await this.#oauthStore.load();
+		this.#callbackDisposer = this.#options.oauthHost?.registerCallbackHandler?.((params) =>
+			this.handleOAuthCallback(params),
+		);
 		const configs = await this.#load();
 		const connecting: string[] = [];
 		for (const config of configs) {
@@ -479,6 +605,8 @@ export class McpManager {
 
 	async stop(): Promise<void> {
 		this.#started = false;
+		this.#callbackDisposer?.();
+		this.#callbackDisposer = undefined;
 		for (const id of this.#records.keys()) {
 			await this.#disconnect(id);
 		}
@@ -559,6 +687,9 @@ export class McpManager {
 				JSON.stringify(previous.transport) !== JSON.stringify(next.transport) ||
 				previous.timeoutMs !== next.timeoutMs);
 		record.config = next;
+		if (oauthIdentityChanged(previous.transport, next.transport)) {
+			await this.#oauthStore.delete(next.id);
+		}
 		await this.#persist();
 		await this.#audit("mcp.server.update", next.id, next, "ok");
 		if (reconnected) {
@@ -577,6 +708,7 @@ export class McpManager {
 		const record = this.#records.get(id);
 		await this.#disconnect(id);
 		this.#records.delete(id);
+		await this.#oauthStore.delete(id);
 		await this.#persist();
 		await this.#audit("mcp.server.delete", id, record?.config, "ok");
 		return { deleted: record !== undefined, id };
@@ -605,6 +737,206 @@ export class McpManager {
 		if (record.config.enabled) await this.#connect(id);
 		await this.#audit("mcp.server.reconnect", id, record.config, "ok");
 		return this.#snapshot(record);
+	}
+
+	async startOAuth(id: string, callbackOrigin?: string): Promise<McpServerSnapshot> {
+		const record = this.#records.get(id);
+		if (record === undefined) throw new Error(`Unknown MCP server ${id}`);
+		if (!record.config.enabled) throw new Error(`MCP server ${id} is disabled`);
+		if (record.config.transport.type !== "http" || record.config.transport.auth?.type !== "oauth") {
+			throw new Error(`MCP server ${id} is not configured for OAuth`);
+		}
+		const validatedOrigin =
+			callbackOrigin === undefined ? undefined : validateCallbackOrigin(callbackOrigin);
+		await this.#disconnect(id);
+		await this.#oauthStore.update(id, (current) => {
+			const {
+				codeVerifier: _verifier,
+				lastAuthError: _error,
+				pending: _pending,
+				tokenExpiresAt: _expiry,
+				tokens: _tokens,
+				...rest
+			} = current;
+			return rest;
+		});
+		await this.#connect(
+			id,
+			validatedOrigin === undefined ? {} : { callbackOrigin: validatedOrigin },
+		);
+		await this.#audit("mcp.server.oauth.start", id, record.config, "ok");
+		return this.#snapshot(record);
+	}
+
+	async completeOAuth(input: McpOAuthCompleteInput): Promise<McpServerSnapshot> {
+		const record = this.#records.get(input.id);
+		if (record === undefined) throw new Error(`Unknown MCP server ${input.id}`);
+		if (!record.config.enabled) throw new Error(`MCP server ${input.id} is disabled`);
+		if (record.config.transport.type !== "http" || record.config.transport.auth?.type !== "oauth") {
+			throw new Error(`MCP server ${input.id} is not configured for OAuth`);
+		}
+		const authConfig = record.config.transport.auth;
+		if (authConfig.grantType !== "authorization_code") {
+			throw new Error(`MCP server ${input.id} does not use authorization_code OAuth`);
+		}
+
+		const parsed =
+			input.callbackUrl !== undefined
+				? parseOAuthCallbackUrl(input.callbackUrl)
+				: {
+						...(input.code === undefined ? {} : { code: input.code }),
+						...(input.state === undefined ? {} : { state: input.state }),
+					};
+		if (parsed.error !== undefined) {
+			const message =
+				parsed.errorDescription === undefined
+					? parsed.error
+					: `${parsed.error}: ${parsed.errorDescription}`;
+			await this.#recordAuthError(input.id, record, message);
+			throw new Error(`OAuth authorization failed: ${message}`);
+		}
+		if (parsed.code === undefined || parsed.code.length === 0) {
+			throw new Error("OAuth authorization code is missing");
+		}
+
+		await this.#oauthStore.load();
+		const currentState = this.#oauthStore.get(input.id);
+		const pending = currentState?.pending;
+		if (pending !== undefined) {
+			const expiresMs = Date.parse(pending.expiresAt);
+			if (!Number.isFinite(expiresMs) || expiresMs <= Date.now()) {
+				await this.#oauthStore.update(input.id, (current) => {
+					const { pending: _removed, ...rest } = current;
+					return rest;
+				});
+				throw new Error("OAuth authorization session expired; start authorization again");
+			}
+			if (parsed.state !== undefined && parsed.state !== pending.state) {
+				throw new Error("OAuth state parameter mismatch");
+			}
+		}
+
+		const redirectUrl =
+			pending?.redirectUrl ?? defaultOAuthRedirectUrl(this.#options.oauthHost?.publicUrl);
+		await this.#oauthStore.update(input.id, (current) => {
+			const { pending: _removed, ...rest } = current;
+			return rest;
+		});
+
+		try {
+			const provider = new McpOAuthClientProvider({
+				authConfig,
+				redirectUrl,
+				serverId: input.id,
+				store: this.#oauthStore,
+			});
+			await auth(provider, {
+				authorizationCode: parsed.code,
+				serverUrl: record.config.transport.url,
+			});
+		} catch (error) {
+			const reason = redactSecrets(
+				shortMessage(error),
+				record.config.transport,
+				this.#oauthStore.get(input.id),
+			);
+			await this.#recordAuthError(input.id, record, reason);
+			throw new Error(`OAuth token exchange failed: ${reason}`, { cause: error });
+		}
+
+		await this.#disconnect(input.id);
+		await this.#connect(input.id);
+		await this.#audit("mcp.server.oauth.complete", input.id, record.config, "ok");
+		return this.#snapshot(record);
+	}
+
+	async clearOAuth(id: string): Promise<McpServerSnapshot> {
+		const record = this.#records.get(id);
+		if (record === undefined) throw new Error(`Unknown MCP server ${id}`);
+		await this.#disconnect(id);
+		await this.#oauthStore.delete(id);
+		if (
+			record.config.enabled &&
+			record.config.transport.type === "http" &&
+			record.config.transport.auth?.type === "oauth"
+		) {
+			record.state = "auth_required";
+		}
+		await this.#audit("mcp.server.oauth.clear", id, record.config, "ok");
+		return this.#snapshot(record);
+	}
+
+	async handleOAuthCallback(params: McpOAuthCallbackParams): Promise<McpOAuthCallbackOutcome> {
+		if (params.state === undefined || params.state.length === 0) {
+			return { error: "Missing OAuth state parameter", ok: false };
+		}
+		const matched = await this.#oauthStore.consumePendingState(params.state);
+		if (matched === undefined) {
+			return { error: "Invalid or expired OAuth state parameter", ok: false };
+		}
+		const record = this.#records.get(matched.serverId);
+		if (
+			record === undefined ||
+			record.config.transport.type !== "http" ||
+			record.config.transport.auth?.type !== "oauth"
+		) {
+			return {
+				error: "MCP server is not configured for OAuth",
+				ok: false,
+				serverId: matched.serverId,
+			};
+		}
+		if (params.error !== undefined) {
+			const message =
+				params.errorDescription === undefined
+					? params.error
+					: `${params.error}: ${params.errorDescription}`;
+			await this.#recordAuthError(matched.serverId, record, message);
+			await this.#options.onChanged?.();
+			return { error: message, ok: false, serverId: matched.serverId };
+		}
+		if (params.code === undefined || params.code.length === 0) {
+			const message = "Missing OAuth authorization code";
+			await this.#recordAuthError(matched.serverId, record, message);
+			await this.#options.onChanged?.();
+			return { error: message, ok: false, serverId: matched.serverId };
+		}
+
+		try {
+			const provider = new McpOAuthClientProvider({
+				authConfig: record.config.transport.auth,
+				redirectUrl: matched.pending.redirectUrl,
+				serverId: matched.serverId,
+				store: this.#oauthStore,
+			});
+			await auth(provider, {
+				authorizationCode: params.code,
+				serverUrl: record.config.transport.url,
+			});
+			await this.#disconnect(matched.serverId);
+			if (record.config.enabled) {
+				await this.#connect(matched.serverId);
+			}
+			await this.#audit("mcp.server.oauth.complete", matched.serverId, record.config, "ok");
+			await this.#options.onChanged?.();
+			return { ok: true, serverId: matched.serverId };
+		} catch (error) {
+			const reason = redactSecrets(
+				shortMessage(error),
+				record.config.transport,
+				this.#oauthStore.get(matched.serverId),
+			);
+			await this.#recordAuthError(matched.serverId, record, reason);
+			await this.#audit(
+				"mcp.server.oauth.complete",
+				matched.serverId,
+				record.config,
+				"failed",
+				reason,
+			);
+			await this.#options.onChanged?.();
+			return { error: reason, ok: false, serverId: matched.serverId };
+		}
 	}
 
 	/**
@@ -651,10 +983,21 @@ export class McpManager {
 					cause: error,
 				});
 			}
+			if (error instanceof UnauthorizedError) {
+				record.state = "auth_required";
+				record.client = undefined;
+				record.tools = [];
+				record.connectedAt = undefined;
+				await this.#syncTools(record);
+				await client.close().catch(() => undefined);
+				await this.#options.onChanged?.();
+				throw new Error(`MCP server ${serverId} requires OAuth re-authorization`, { cause: error });
+			}
 			throw new Error(
 				`MCP tool ${serverId}.${toolName} failed: ${redactSecrets(
 					shortMessage(error),
 					record.config.transport,
+					this.#oauthStore.get(serverId),
 				)}`,
 				{ cause: error },
 			);
@@ -664,7 +1007,21 @@ export class McpManager {
 		}
 	}
 
-	async #connect(id: string): Promise<void> {
+	async #recordAuthError(id: string, record: McpServerRecord, message: string): Promise<void> {
+		record.state = "error";
+		record.lastError = message;
+		record.client = undefined;
+		record.tools = [];
+		record.connectedAt = undefined;
+		await this.#syncTools(record);
+		await this.#oauthStore.update(id, (current) => ({
+			...current,
+			lastAuthError: message,
+			updatedAt: new Date().toISOString(),
+		}));
+	}
+
+	async #connect(id: string, options: { readonly callbackOrigin?: string } = {}): Promise<void> {
 		const record = this.#records.get(id);
 		if (record === undefined) return;
 		record.state = "connecting";
@@ -680,19 +1037,33 @@ export class McpManager {
 			},
 			{ capabilities: {} },
 		);
+		const authProvider =
+			config.transport.type === "http" && config.transport.auth?.type === "oauth"
+				? new McpOAuthClientProvider({
+						authConfig: config.transport.auth,
+						redirectUrl: defaultOAuthRedirectUrl(
+							this.#options.oauthHost?.publicUrl,
+							options.callbackOrigin,
+						),
+						serverId: id,
+						store: this.#oauthStore,
+					})
+				: undefined;
 		try {
-			let transport = transportFor(config.transport);
+			let transport = transportFor(config.transport, authProvider);
 			try {
 				await client.connect(transport, { signal: controller.signal });
 			} catch (error) {
 				if (
+					error instanceof UnauthorizedError ||
+					authProvider?.hasCapturedRedirect === true ||
 					config.transport.type !== "http" ||
 					!/(?:\/sse)(?:[/?#]|$)/iu.test(config.transport.url)
 				) {
 					throw error;
 				}
 				await transport.close?.().catch(() => undefined);
-				transport = sseTransportFor(config.transport);
+				transport = sseTransportFor(config.transport, authProvider);
 				await client.connect(transport, { signal: controller.signal });
 			}
 			const tools = await this.#listTools(client, controller.signal);
@@ -712,7 +1083,23 @@ export class McpManager {
 			});
 		} catch (error) {
 			await client.close().catch(() => undefined);
-			const reason = redactSecrets(describeSpawnFailure(error, config.transport), config.transport);
+			if (error instanceof UnauthorizedError || authProvider?.hasCapturedRedirect === true) {
+				if (this.#records.get(id) === record && record.config === config) {
+					record.state = "auth_required";
+					record.lastError = undefined;
+					record.client = undefined;
+					record.tools = [];
+					record.connectedAt = undefined;
+					await this.#syncTools(record);
+				}
+				this.#options.logger.info("MCP server requires OAuth authorization", { serverId: id });
+				return;
+			}
+			const reason = redactSecrets(
+				describeSpawnFailure(error, config.transport),
+				config.transport,
+				this.#oauthStore.get(id),
+			);
 			if (this.#records.get(id) === record && record.config === config) {
 				record.state = "error";
 				record.lastError = reason;
@@ -868,6 +1255,14 @@ export class McpManager {
 	#snapshot(record: McpServerRecord): McpServerSnapshot {
 		const config = record.config;
 		const values = allSecretValues(config.transport);
+		const oauth =
+			config.transport.type === "http" && config.transport.auth?.type === "oauth"
+				? oauthSnapshotFor(
+						config.transport.auth,
+						this.#oauthStore.get(config.id),
+						defaultOAuthRedirectUrl(this.#options.oauthHost?.publicUrl),
+					)
+				: undefined;
 		return {
 			allowedTools: [...(config.allowedTools ?? [])],
 			configured: values.every((value) => value.trim().length > 0),
@@ -889,6 +1284,7 @@ export class McpManager {
 			transport: maskTransport(config.transport),
 			...(record.connectedAt === undefined ? {} : { connectedAt: record.connectedAt }),
 			...(record.lastError === undefined ? {} : { lastError: record.lastError }),
+			...(oauth === undefined ? {} : { oauth }),
 		};
 	}
 

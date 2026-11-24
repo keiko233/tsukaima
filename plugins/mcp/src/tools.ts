@@ -1,4 +1,6 @@
 import {
+	mcpOAuthCompleteInputSchema,
+	mcpOAuthStartInputSchema,
 	mcpServerCreateSchema,
 	mcpServerIdInputSchema,
 	mcpServerToggleInputSchema,
@@ -7,6 +9,10 @@ import {
 import type { PluginContext, PluginTool, ToolResult } from "@tsukaima/sdk";
 import { z } from "zod";
 import {
+	MCP_CLEAR_OAUTH_MODEL_NAME,
+	MCP_CLEAR_OAUTH_TOOL,
+	MCP_COMPLETE_OAUTH_MODEL_NAME,
+	MCP_COMPLETE_OAUTH_TOOL,
 	MCP_INSTALL_SERVER_MODEL_NAME,
 	MCP_INSTALL_SERVER_TOOL,
 	MCP_LIST_SERVERS_MODEL_NAME,
@@ -15,6 +21,8 @@ import {
 	MCP_RECONNECT_SERVER_TOOL,
 	MCP_REMOVE_SERVER_MODEL_NAME,
 	MCP_REMOVE_SERVER_TOOL,
+	MCP_START_OAUTH_MODEL_NAME,
+	MCP_START_OAUTH_TOOL,
 	MCP_TOGGLE_SERVER_MODEL_NAME,
 	MCP_TOGGLE_SERVER_TOOL,
 	MCP_UPDATE_SERVER_MODEL_NAME,
@@ -32,6 +40,9 @@ export const MCP_ADMIN_TOOL_NAMES = [
 	MCP_TOGGLE_SERVER_TOOL,
 	MCP_RECONNECT_SERVER_TOOL,
 	MCP_REMOVE_SERVER_TOOL,
+	MCP_START_OAUTH_TOOL,
+	MCP_COMPLETE_OAUTH_TOOL,
+	MCP_CLEAR_OAUTH_TOOL,
 ] as const;
 
 const AUDIT_ACTION = "mcp.admin-tool";
@@ -226,6 +237,38 @@ export function createMcpTools(
 			parse: (raw) => mcpServerIdInputSchema.parse(raw),
 			run: async (current, input) => await current.delete(input.id),
 			summary: serverInputSummary,
+		}),
+		tool({
+			description:
+				"Start or restart OAuth authorization for one HTTP MCP server and return the authorization URL when user consent is required.",
+			modelName: MCP_START_OAUTH_MODEL_NAME,
+			mutates: true,
+			name: MCP_START_OAUTH_TOOL,
+			parameters: z.toJSONSchema(mcpOAuthStartInputSchema),
+			parse: (raw) => mcpOAuthStartInputSchema.parse(raw),
+			run: async (current, input) => await current.startOAuth(input.id, input.callbackOrigin),
+			summary: (input) => ({ id: input.id }),
+		}),
+		tool({
+			description:
+				"Complete an in-flight MCP OAuth authorization using a pasted callback URL or authorization code.",
+			modelName: MCP_COMPLETE_OAUTH_MODEL_NAME,
+			mutates: true,
+			name: MCP_COMPLETE_OAUTH_TOOL,
+			parameters: z.toJSONSchema(mcpOAuthCompleteInputSchema),
+			parse: (raw) => mcpOAuthCompleteInputSchema.parse(raw),
+			run: async (current, input) => await current.completeOAuth(input),
+			summary: (input) => ({ id: input.id }),
+		}),
+		tool({
+			description: "Clear stored OAuth tokens and registration state for one MCP server.",
+			modelName: MCP_CLEAR_OAUTH_MODEL_NAME,
+			mutates: true,
+			name: MCP_CLEAR_OAUTH_TOOL,
+			parameters: z.toJSONSchema(mcpServerIdInputSchema),
+			parse: (raw) => mcpServerIdInputSchema.parse(raw),
+			run: async (current, input) => await current.clearOAuth(input.id),
+			summary: (input) => ({ id: input.id }),
 		}),
 	];
 }

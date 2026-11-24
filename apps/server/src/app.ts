@@ -2,6 +2,7 @@ import { Elysia } from "elysia";
 import { RPCHandler } from "@orpc/server/fetch";
 import { ResponseHeadersPlugin } from "@orpc/server/plugins";
 import { media } from "@tsukaima/db";
+import { MCP_OAUTH_CALLBACK_PATH, type McpOAuthCallbackOutcome } from "@tsukaima-plugin/mcp";
 import type { TsukaimaPlugin } from "@tsukaima/sdk";
 import { eq } from "drizzle-orm";
 import { appRouter } from "./rpc/index.ts";
@@ -27,6 +28,75 @@ const SAFE_MEDIA_MIME =
 function safeMediaMime(mimeType: string): string {
 	const base = mimeType.split(";")[0]?.trim().toLowerCase() ?? "";
 	return SAFE_MEDIA_MIME.test(base) ? base : "application/octet-stream";
+}
+
+function escapeHtml(text: string): string {
+	return text
+		.replace(/&/gu, "&amp;")
+		.replace(/</gu, "&lt;")
+		.replace(/>/gu, "&gt;")
+		.replace(/"/gu, "&quot;")
+		.replace(/'/gu, "&#39;");
+}
+
+function escapeInlineJson(value: unknown): string {
+	return JSON.stringify(value)
+		.replace(/</gu, "\\u003c")
+		.replace(/>/gu, "\\u003e")
+		.replace(/&/gu, "\\u0026")
+		.replace(/\u2028/gu, "\\u2028")
+		.replace(/\u2029/gu, "\\u2029");
+}
+
+function mcpOAuthCallbackResponse(outcome: McpOAuthCallbackOutcome): Response {
+	const title = outcome.ok ? "MCP Authorization Complete" : "MCP Authorization Failed";
+	const detail = outcome.ok
+		? "Authorization succeeded. You can close this window and return to Tsukaima."
+		: (outcome.error ?? "Authorization could not be completed.");
+	const payload = {
+		...(outcome.error === undefined ? {} : { error: outcome.error }),
+		ok: outcome.ok,
+		...(outcome.serverId === undefined ? {} : { serverId: outcome.serverId }),
+		type: "tsukaima:mcp-oauth-callback",
+	};
+	const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>${escapeHtml(title)}</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:2rem;background:#0f1115;color:#e5e7eb;display:flex;min-height:100vh;align-items:center;justify-content:center}
+main{max-width:28rem;padding:1.5rem;border:1px solid #272b36;border-radius:0.75rem;background:#161922}
+h1{font-size:1.05rem;margin:0 0 0.5rem}
+p{font-size:0.875rem;line-height:1.5;color:#9ca3af;margin:0}
+</style>
+</head>
+<body>
+<main>
+<h1>${escapeHtml(title)}</h1>
+<p>${escapeHtml(detail)}</p>
+</main>
+<script>
+try {
+  if (window.opener && !window.opener.closed) {
+    window.opener.postMessage(${escapeInlineJson(payload)}, window.location.origin);
+    window.close();
+  }
+} catch {}
+</script>
+</body>
+</html>`;
+	return new Response(html, {
+		headers: {
+			"cache-control": "no-store",
+			"content-security-policy":
+				"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+			"content-type": "text/html; charset=utf-8",
+			"x-content-type-options": "nosniff",
+		},
+		status: outcome.ok ? 200 : 400,
+	});
 }
 
 /**
@@ -206,6 +276,20 @@ export function createApp(
 			},
 			{ parse: "none" },
 		)
+		.get(MCP_OAUTH_CALLBACK_PATH, async ({ request }) => {
+			const params = new URL(request.url).searchParams;
+			const code = params.get("code") ?? undefined;
+			const error = params.get("error") ?? undefined;
+			const errorDescription = params.get("error_description") ?? undefined;
+			const state = params.get("state") ?? undefined;
+			const outcome = await lifecycle.handleMcpOAuthCallback({
+				...(code === undefined ? {} : { code }),
+				...(error === undefined ? {} : { error }),
+				...(errorDescription === undefined ? {} : { errorDescription }),
+				...(state === undefined ? {} : { state }),
+			});
+			return mcpOAuthCallbackResponse(outcome);
+		})
 		.all(
 			"/rpc/*",
 			async ({ request }: { request: Request }) => {

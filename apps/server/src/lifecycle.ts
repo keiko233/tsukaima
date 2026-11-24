@@ -50,6 +50,12 @@ import {
 	type TsukaimaPlugin,
 } from "@tsukaima/sdk";
 import {
+	MCP_OAUTH_HOST_BINDING,
+	type McpOAuthCallbackOutcome,
+	type McpOAuthCallbackParams,
+	type McpOAuthHost,
+} from "@tsukaima-plugin/mcp";
+import {
 	ONEBOT_AUDIO_TRANSCRIBE_BINDING,
 	ONEBOT_CHANNEL_KIND,
 	ONEBOT_MENTION_NAME_BINDING,
@@ -303,6 +309,9 @@ export class TsukaimaLifecycle {
 	private readonly customLoggerProvided: boolean;
 	private dailyFileSink: DailyFileLogSink | undefined;
 	private removeFileSink: (() => void) | undefined;
+	private mcpOAuthCallbackHandler:
+		| ((params: McpOAuthCallbackParams) => Promise<McpOAuthCallbackOutcome>)
+		| undefined;
 
 	conversationHost: PiDurableConversationHost | undefined;
 	domainDatabase: TsukaimaDatabase | undefined;
@@ -1049,6 +1058,18 @@ export class TsukaimaLifecycle {
 			replyDispatcher: this.replyDispatcher,
 		});
 		const pluginBindings = new Map(options?.pluginBindings ?? []);
+		const oauthHost: McpOAuthHost = {
+			publicUrl: this.config.publicUrl,
+			registerCallbackHandler: (handler) => {
+				this.mcpOAuthCallbackHandler = handler;
+				return () => {
+					if (this.mcpOAuthCallbackHandler === handler) {
+						this.mcpOAuthCallbackHandler = undefined;
+					}
+				};
+			},
+		};
+		pluginBindings.set(MCP_OAUTH_HOST_BINDING, oauthHost);
 		pluginBindings.set(MEMORY_SERVICE_BINDING, this.memory);
 		pluginBindings.set(CHAT_HISTORY_SERVICE_BINDING, this.chatHistory);
 		pluginBindings.set(SOCIAL_PROFILE_BINDING, this.socialProfiles);
@@ -2221,6 +2242,14 @@ export class TsukaimaLifecycle {
 	/** Gate readiness on a service that depends on the database but must precede traffic. */
 	setBeforeReady(callback: () => Promise<void>): void {
 		this.beforeReadyCallback = callback;
+	}
+
+	/** Handles an incoming MCP OAuth browser callback via the active MCP plugin instance. */
+	async handleMcpOAuthCallback(params: McpOAuthCallbackParams): Promise<McpOAuthCallbackOutcome> {
+		if (this.mcpOAuthCallbackHandler === undefined) {
+			return { error: "MCP OAuth handler is not active", ok: false };
+		}
+		return this.mcpOAuthCallbackHandler(params);
 	}
 
 	/** Run one isolated SQLite + blob backup/restore drill and return its secret-free report. */

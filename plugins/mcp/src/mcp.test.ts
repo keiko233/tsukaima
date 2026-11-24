@@ -1,25 +1,39 @@
 import { describe, expect, test } from "bun:test";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { mcpServerSnapshotSchema, type McpServerSnapshot } from "@tsukaima/contracts";
+import {
+	mcpServerCreateSchema,
+	mcpServerSnapshotSchema,
+	mcpServerUpdateSchema,
+	type McpServerSnapshot,
+} from "@tsukaima/contracts";
 import {
 	createPluginContext,
 	LocalStorageBridge,
 	type AuditEntry,
 	type PluginContext,
 } from "@tsukaima/sdk";
+import { z } from "zod";
 import {
 	MCP_ADMIN_TOOL_NAMES,
+	MCP_CLEAR_OAUTH_TOOL,
+	MCP_COMPLETE_OAUTH_TOOL,
 	MCP_INSTALL_SERVER_MODEL_NAME,
 	MCP_INSTALL_SERVER_TOOL,
 	MCP_LIST_SERVERS_MODEL_NAME,
 	MCP_LIST_SERVERS_TOOL,
+	MCP_OAUTH_HOST_BINDING,
 	MCP_RECONNECT_SERVER_TOOL,
 	MCP_REMOVE_SERVER_TOOL,
+	MCP_START_OAUTH_TOOL,
 	MCP_TOGGLE_SERVER_TOOL,
 	MCP_UPDATE_SERVER_TOOL,
 	mcpPlugin,
+	type McpOAuthCallbackOutcome,
+	type McpOAuthCallbackParams,
+	type McpOAuthHost,
 } from "./index.ts";
 import { mcpManifest } from "./manifest.ts";
 import { stdioEnvironment } from "./service.ts";
@@ -28,13 +42,25 @@ const FIXTURE = new URL("./fixtures/mcp-stdio-server.ts", import.meta.url).pathn
 const ENV_FIXTURE = new URL("./fixtures/mcp-env-stdio-server.ts", import.meta.url).pathname;
 const SERVER_ID = "synthetic-mcp";
 
-function makeContext(storage = new LocalStorageBridge(), audits: AuditEntry[] = []): PluginContext {
+function makeContext(
+	storage = new LocalStorageBridge(),
+	audits: AuditEntry[] = [],
+	dependencies?: ReadonlyMap<string, unknown>,
+): PluginContext {
 	return createPluginContext({
 		audit: {
 			record: async (entry) => {
 				audits.push(entry);
 			},
 		},
+		...(dependencies === undefined
+			? {}
+			: {
+					dependencies: {
+						get: <T = unknown>(key: string): T | undefined =>
+							dependencies.get(key) as T | undefined,
+					},
+				}),
 		grantedPermissions: mcpManifest.permissions,
 		manifest: mcpManifest,
 		pluginId: "mcp",
@@ -631,6 +657,684 @@ describe("mcp plugin", () => {
 			expect(nonAdminAllowed.result.content).toEqual([{ text: "public", type: "text" }]);
 		} finally {
 			await mcpPlugin.teardown?.(context);
+		}
+	});
+
+	test("generates JSON Schemas for create and update admin tools", () => {
+		expect(() => z.toJSONSchema(mcpServerCreateSchema)).not.toThrow();
+		expect(() => z.toJSONSchema(mcpServerUpdateSchema)).not.toThrow();
+	});
+
+	test("supports HTTP bearer token authentication with secret masking and preservation", async () => {
+		const expectedToken = "synthetic-bearer-token-value";
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				const url = new URL(request.url);
+				if (url.pathname !== "/mcp") return new Response("Not found", { status: 404 });
+				if (request.headers.get("authorization") !== `Bearer ${expectedToken}`) {
+					return new Response("Unauthorized", { status: 401 });
+				}
+				if (request.method === "GET") return new Response(null, { status: 405 });
+				const body = (await request.json()) as {
+					id?: string | number;
+					method: string;
+					params?: { arguments?: Record<string, unknown>; name?: string };
+				};
+				if (body.method === "initialize") {
+					return Response.json({
+						id: body.id,
+						jsonrpc: "2.0",
+						result: {
+							capabilities: { tools: {} },
+							protocolVersion: "2025-03-26",
+							serverInfo: { name: "synthetic-bearer-mcp", version: "1.0.0" },
+						},
+					});
+				}
+				if (body.method === "notifications/initialized") {
+					return new Response(null, { status: 202 });
+				}
+				if (body.method === "tools/list") {
+					return Response.json({
+						id: body.id,
+						jsonrpc: "2.0",
+						result: {
+							tools: [
+								{
+									description: "Ping over HTTP bearer auth",
+									inputSchema: { properties: { msg: { type: "string" } }, type: "object" },
+									name: "ping",
+								},
+							],
+						},
+					});
+				}
+				if (body.method === "tools/call") {
+					return Response.json({
+						id: body.id,
+						jsonrpc: "2.0",
+						result: {
+							content: [
+								{ text: `pong:${String(body.params?.arguments?.msg ?? "")}`, type: "text" },
+							],
+						},
+					});
+				}
+				return new Response("Unsupported", { status: 400 });
+			},
+		});
+
+		const context = makeContext();
+		await mcpPlugin.setup(context);
+		try {
+			const created = parseSnapshot(
+				await rpc(context, "mcp.create", {
+					deferred: true,
+					enabled: true,
+					id: "synthetic-bearer",
+					name: "Synthetic Bearer MCP",
+					surface: "both",
+					timeoutMs: 5_000,
+					transport: {
+						auth: { token: expectedToken, type: "bearer" },
+						type: "http",
+						url: `${server.url.origin}/mcp`,
+					},
+				}),
+			);
+			expect(created.state).toBe("connected");
+			expect(created.secretKeys).toEqual(["auth:token"]);
+			expect(JSON.stringify(created)).not.toContain(expectedToken);
+
+			const updated = parseSnapshot(
+				await rpc(context, "mcp.update", {
+					id: "synthetic-bearer",
+					transport: {
+						auth: { token: "***", type: "bearer" },
+						type: "http",
+						url: `${server.url.origin}/mcp`,
+					},
+				}),
+			);
+			expect(updated.state).toBe("connected");
+			expect(JSON.stringify(updated)).not.toContain(expectedToken);
+
+			const called = await context.tools.invoke(
+				"mcp.synthetic-bearer.ping",
+				{ msg: "ok" },
+				{ chatKind: "webui" },
+			);
+			expect(called.ok).toBe(true);
+			if (!called.ok) throw new Error("expected ping result");
+			expect(called.result.content).toEqual([{ text: "pong:ok", type: "text" }]);
+		} finally {
+			await mcpPlugin.teardown?.(context);
+			await server.stop(true);
+		}
+	});
+
+	test("supports OAuth 2.1 Authorization Code + PKCE + DCR, callback completion, refresh, and persistence", async () => {
+		let currentAccessToken = "example-access-token-1";
+		let currentRefreshToken = "example-refresh-token-1";
+		let rejectRefresh = false;
+		let registeredClientId = "";
+		let registeredClientSecret = "";
+		let lastIssuedCode = "";
+		let lastCodeChallenge = "";
+		let lastRedirectUri = "";
+		let lastResource = "";
+		const tokenRequests: string[] = [];
+
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request): Promise<Response> {
+				const url = new URL(request.url);
+				const origin = url.origin;
+				if (url.pathname === "/.well-known/oauth-protected-resource") {
+					return Response.json({
+						authorization_servers: [origin],
+						resource: `${origin}/mcp`,
+						scopes_supported: ["mcp:read"],
+					});
+				}
+				if (url.pathname === "/.well-known/oauth-authorization-server") {
+					return Response.json({
+						authorization_endpoint: `${origin}/authorize`,
+						code_challenge_methods_supported: ["S256"],
+						grant_types_supported: ["authorization_code", "refresh_token"],
+						issuer: origin,
+						registration_endpoint: `${origin}/register`,
+						response_types_supported: ["code"],
+						token_endpoint: `${origin}/token`,
+						token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
+					});
+				}
+				if (url.pathname === "/register" && request.method === "POST") {
+					const body = (await request.json()) as { redirect_uris?: string[] };
+					registeredClientId = "dcr-client-123";
+					registeredClientSecret = "dcr-secret-xyz";
+					return Response.json(
+						{
+							client_id: registeredClientId,
+							client_secret: registeredClientSecret,
+							grant_types: ["authorization_code", "refresh_token"],
+							redirect_uris: body.redirect_uris ?? [],
+							response_types: ["code"],
+							token_endpoint_auth_method: "client_secret_basic",
+						},
+						{ status: 201 },
+					);
+				}
+				if (url.pathname === "/token" && request.method === "POST") {
+					const form = new URLSearchParams(await request.text());
+					const grantType = form.get("grant_type") ?? "";
+					tokenRequests.push(grantType);
+					const authHeader = request.headers.get("authorization") ?? "";
+					const expectedBasic = `Basic ${Buffer.from(`${registeredClientId}:${registeredClientSecret}`).toString("base64")}`;
+					if (authHeader !== expectedBasic) {
+						return Response.json({ error: "invalid_client" }, { status: 401 });
+					}
+					if (grantType === "authorization_code") {
+						const code = form.get("code");
+						const verifier = form.get("code_verifier") ?? "";
+						const challenge = createHash("sha256").update(verifier).digest("base64url");
+						if (
+							code !== lastIssuedCode ||
+							challenge !== lastCodeChallenge ||
+							form.get("redirect_uri") !== lastRedirectUri ||
+							form.get("resource") !== lastResource
+						) {
+							return Response.json({ error: "invalid_grant" }, { status: 400 });
+						}
+						return Response.json({
+							access_token: currentAccessToken,
+							expires_in: 3600,
+							refresh_token: currentRefreshToken,
+							scope: "mcp:read",
+							token_type: "Bearer",
+						});
+					}
+					if (grantType === "refresh_token") {
+						if (rejectRefresh || form.get("refresh_token") !== currentRefreshToken) {
+							return Response.json({ error: "invalid_grant" }, { status: 400 });
+						}
+						currentAccessToken = "example-access-token-2";
+						currentRefreshToken = "example-refresh-token-2";
+						return Response.json({
+							access_token: currentAccessToken,
+							expires_in: 3600,
+							refresh_token: currentRefreshToken,
+							scope: "mcp:read",
+							token_type: "Bearer",
+						});
+					}
+					return Response.json({ error: "unsupported_grant_type" }, { status: 400 });
+				}
+				if (url.pathname === "/mcp") {
+					if (request.headers.get("authorization") !== `Bearer ${currentAccessToken}`) {
+						return new Response("Unauthorized", {
+							headers: {
+								"www-authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="mcp:read"`,
+							},
+							status: 401,
+						});
+					}
+					if (request.method === "GET") return new Response(null, { status: 405 });
+					const body = (await request.json()) as {
+						id?: string | number;
+						method: string;
+						params?: { arguments?: Record<string, unknown> };
+					};
+					if (body.method === "initialize") {
+						return Response.json({
+							id: body.id,
+							jsonrpc: "2.0",
+							result: {
+								capabilities: { tools: {} },
+								protocolVersion: "2025-03-26",
+								serverInfo: { name: "synthetic-oauth-mcp", version: "1.0.0" },
+							},
+						});
+					}
+					if (body.method === "notifications/initialized") {
+						return new Response(null, { status: 202 });
+					}
+					if (body.method === "tools/list") {
+						return Response.json({
+							id: body.id,
+							jsonrpc: "2.0",
+							result: {
+								tools: [
+									{
+										description: "Read protected item",
+										inputSchema: { properties: {}, type: "object" },
+										name: "whoami",
+									},
+								],
+							},
+						});
+					}
+					if (body.method === "tools/call") {
+						return Response.json({
+							id: body.id,
+							jsonrpc: "2.0",
+							result: {
+								content: [{ text: `token=${currentAccessToken}`, type: "text" }],
+							},
+						});
+					}
+				}
+				return new Response("Not found", { status: 404 });
+			},
+		});
+
+		let registeredCallback:
+			| ((params: McpOAuthCallbackParams) => Promise<McpOAuthCallbackOutcome>)
+			| undefined;
+		const oauthHost: McpOAuthHost = {
+			publicUrl: "https://webui.example.test",
+			registerCallbackHandler(handler) {
+				registeredCallback = handler;
+				return () => {
+					registeredCallback = undefined;
+				};
+			},
+		};
+		const storage = new LocalStorageBridge();
+		const deps = new Map<string, unknown>([[MCP_OAUTH_HOST_BINDING, oauthHost]]);
+		const firstContext = makeContext(storage, [], deps);
+		await mcpPlugin.setup(firstContext);
+		try {
+			const created = parseSnapshot(
+				await rpc(firstContext, "mcp.create", {
+					deferred: true,
+					enabled: true,
+					id: "synthetic-oauth",
+					name: "Synthetic OAuth MCP",
+					surface: "both",
+					timeoutMs: 5_000,
+					transport: {
+						auth: { grantType: "authorization_code", type: "oauth" },
+						type: "http",
+						url: `${server.url.origin}/mcp`,
+					},
+				}),
+			);
+			expect(created.state).toBe("auth_required");
+			expect(created.oauth?.status).toBe("pending");
+			expect(created.oauth?.clientId).toBe("dcr-client-123");
+			expect(created.oauth?.redirectUrl).toBe("https://webui.example.test/api/mcp/oauth/callback");
+			const authUrl = new URL(created.oauth?.authorizationUrl ?? "");
+			expect(authUrl.origin).toBe(server.url.origin);
+			expect(authUrl.pathname).toBe("/authorize");
+			lastCodeChallenge = authUrl.searchParams.get("code_challenge") ?? "";
+			lastRedirectUri = authUrl.searchParams.get("redirect_uri") ?? "";
+			lastResource = authUrl.searchParams.get("resource") ?? "";
+			const stateParam = authUrl.searchParams.get("state") ?? "";
+			expect(lastCodeChallenge.length).toBeGreaterThan(10);
+			expect(stateParam.length).toBeGreaterThan(10);
+			expect(JSON.stringify(created)).not.toContain(registeredClientSecret);
+
+			lastIssuedCode = "synthetic-auth-code-1";
+			const outcome = await registeredCallback?.({ code: lastIssuedCode, state: stateParam });
+			expect(outcome).toEqual({ ok: true, serverId: "synthetic-oauth" });
+
+			// Replaying the same single-use state must be rejected.
+			const replay = await registeredCallback?.({ code: lastIssuedCode, state: stateParam });
+			expect(replay?.ok).toBe(false);
+
+			const connected = (await listServers(firstContext))[0];
+			expect(connected?.state).toBe("connected");
+			expect(connected?.oauth?.status).toBe("authorized");
+			expect(connected?.oauth?.hasRefreshToken).toBe(true);
+			expect(JSON.stringify(connected)).not.toContain(currentAccessToken);
+			expect(JSON.stringify(connected)).not.toContain(currentRefreshToken);
+
+			const whoami = await firstContext.tools.invoke(
+				"mcp.synthetic-oauth.whoami",
+				{},
+				{ chatKind: "webui" },
+			);
+			expect(whoami.ok).toBe(true);
+			if (!whoami.ok) throw new Error("expected whoami result");
+			expect(whoami.result.content).toEqual([
+				{ text: "token=example-access-token-1", type: "text" },
+			]);
+
+			// Simulate access token expiration on the MCP server -> reconnect refreshes automatically.
+			currentAccessToken = "example-access-token-expired-on-server";
+			const refreshed = parseSnapshot(
+				await rpc(firstContext, "mcp.reconnect", { id: "synthetic-oauth" }),
+			);
+			expect(refreshed.state).toBe("connected");
+			expect(tokenRequests).toContain("refresh_token");
+
+			// Simulate refresh token revocation -> transitions back to auth_required with new URL.
+			currentAccessToken = "example-access-token-revoked";
+			rejectRefresh = true;
+			const needsReauth = parseSnapshot(
+				await rpc(firstContext, "mcp.reconnect", { id: "synthetic-oauth" }),
+			);
+			expect(needsReauth.state).toBe("auth_required");
+			expect(needsReauth.oauth?.status).toBe("pending");
+			const nextAuthUrl = new URL(needsReauth.oauth?.authorizationUrl ?? "");
+			lastCodeChallenge = nextAuthUrl.searchParams.get("code_challenge") ?? "";
+			lastRedirectUri = nextAuthUrl.searchParams.get("redirect_uri") ?? "";
+			lastResource = nextAuthUrl.searchParams.get("resource") ?? "";
+			lastIssuedCode = "synthetic-auth-code-2";
+			rejectRefresh = false;
+			currentAccessToken = "example-access-token-3";
+			const completed = parseSnapshot(
+				await rpc(firstContext, "mcp.completeOAuth", {
+					callbackUrl: `${lastRedirectUri}?code=${lastIssuedCode}&state=${nextAuthUrl.searchParams.get("state")}`,
+					id: "synthetic-oauth",
+				}),
+			);
+			expect(completed.state).toBe("connected");
+		} finally {
+			await mcpPlugin.teardown?.(firstContext);
+		}
+
+		// Restoring from persistent plugin storage connects immediately with saved tokens.
+		const secondContext = makeContext(storage, [], deps);
+		await mcpPlugin.setup(secondContext);
+		try {
+			const restored = (await listServers(secondContext))[0];
+			expect(restored?.state).toBe("connected");
+			expect(restored?.oauth?.status).toBe("authorized");
+			expect(secondContext.tools.list().map((tool) => tool.name)).toContain(
+				"mcp.synthetic-oauth.whoami",
+			);
+		} finally {
+			await mcpPlugin.teardown?.(secondContext);
+			await server.stop(true);
+		}
+	});
+
+	test("supports OAuth 2.0 Client Credentials with client_secret_basic and private_key_jwt", async () => {
+		const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+			modulusLength: 2048,
+			privateKeyEncoding: { format: "pem", type: "pkcs8" },
+			publicKeyEncoding: { format: "pem", type: "spki" },
+		});
+		void publicKey;
+		const secretToken = "example-m2m-secret-token";
+		const jwtToken = "example-m2m-jwt-token";
+		const clientSecret = "example-m2m-client-secret";
+		let seenJwtAssertion = "";
+
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request): Promise<Response> {
+				const url = new URL(request.url);
+				const origin = url.origin;
+				if (url.pathname === "/.well-known/oauth-authorization-server") {
+					return Response.json({
+						authorization_endpoint: `${origin}/authorize`,
+						issuer: origin,
+						response_types_supported: ["code"],
+						token_endpoint: `${origin}/token`,
+						token_endpoint_auth_methods_supported: ["client_secret_basic", "private_key_jwt"],
+					});
+				}
+				if (url.pathname === "/token" && request.method === "POST") {
+					const form = new URLSearchParams(await request.text());
+					if (form.get("grant_type") !== "client_credentials") {
+						return Response.json({ error: "unsupported_grant_type" }, { status: 400 });
+					}
+					const assertion = form.get("client_assertion");
+					if (
+						assertion !== null &&
+						form.get("client_assertion_type") ===
+							"urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+					) {
+						seenJwtAssertion = assertion;
+						return Response.json({
+							access_token: jwtToken,
+							expires_in: 3600,
+							token_type: "Bearer",
+						});
+					}
+					const expectedBasic = `Basic ${Buffer.from(`m2m-secret-client:${clientSecret}`).toString("base64")}`;
+					if (request.headers.get("authorization") === expectedBasic) {
+						return Response.json({
+							access_token: secretToken,
+							expires_in: 3600,
+							token_type: "Bearer",
+						});
+					}
+					return Response.json({ error: "invalid_client" }, { status: 401 });
+				}
+				if (url.pathname === "/mcp") {
+					const authHeader = request.headers.get("authorization");
+					if (authHeader !== `Bearer ${secretToken}` && authHeader !== `Bearer ${jwtToken}`) {
+						return new Response("Unauthorized", { status: 401 });
+					}
+					if (request.method === "GET") return new Response(null, { status: 405 });
+					const body = (await request.json()) as { id?: string | number; method: string };
+					if (body.method === "initialize") {
+						return Response.json({
+							id: body.id,
+							jsonrpc: "2.0",
+							result: {
+								capabilities: { tools: {} },
+								protocolVersion: "2025-03-26",
+								serverInfo: { name: "synthetic-m2m-mcp", version: "1.0.0" },
+							},
+						});
+					}
+					if (body.method === "notifications/initialized") {
+						return new Response(null, { status: 202 });
+					}
+					if (body.method === "tools/list") {
+						return Response.json({
+							id: body.id,
+							jsonrpc: "2.0",
+							result: {
+								tools: [
+									{
+										description: "Machine status",
+										inputSchema: { properties: {}, type: "object" },
+										name: "status",
+									},
+								],
+							},
+						});
+					}
+				}
+				return new Response("Not found", { status: 404 });
+			},
+		});
+
+		const context = makeContext();
+		await mcpPlugin.setup(context);
+		try {
+			const basicCreated = parseSnapshot(
+				await rpc(context, "mcp.create", {
+					deferred: true,
+					enabled: true,
+					id: "synthetic-m2m-basic",
+					name: "Synthetic M2M Basic",
+					surface: "both",
+					timeoutMs: 5_000,
+					transport: {
+						auth: {
+							clientId: "m2m-secret-client",
+							clientSecret,
+							expectedIssuer: server.url.origin,
+							grantType: "client_credentials",
+							scope: "tools:read",
+							type: "oauth",
+						},
+						type: "http",
+						url: `${server.url.origin}/mcp`,
+					},
+				}),
+			);
+			expect(basicCreated.state).toBe("connected");
+			expect(basicCreated.oauth?.status).toBe("authorized");
+			expect(basicCreated.oauth?.grantType).toBe("client_credentials");
+			expect(basicCreated.secretKeys).toEqual(["auth:clientSecret"]);
+			expect(JSON.stringify(basicCreated)).not.toContain(clientSecret);
+			expect(JSON.stringify(basicCreated)).not.toContain(secretToken);
+
+			const jwtCreated = parseSnapshot(
+				await rpc(context, "mcp.create", {
+					deferred: true,
+					enabled: true,
+					id: "synthetic-m2m-jwt",
+					name: "Synthetic M2M JWT",
+					surface: "both",
+					timeoutMs: 5_000,
+					transport: {
+						auth: {
+							algorithm: "RS256",
+							clientId: "m2m-jwt-client",
+							expectedIssuer: server.url.origin,
+							grantType: "client_credentials",
+							privateKey,
+							tokenEndpointAuthMethod: "private_key_jwt",
+							type: "oauth",
+						},
+						type: "http",
+						url: `${server.url.origin}/mcp`,
+					},
+				}),
+			);
+			expect(jwtCreated.state).toBe("connected");
+			expect(jwtCreated.oauth?.status).toBe("authorized");
+			expect(jwtCreated.secretKeys).toEqual(["auth:privateKey"]);
+			expect(seenJwtAssertion.split(".")).toHaveLength(3);
+			expect(JSON.stringify(jwtCreated)).not.toContain("PRIVATE KEY");
+			expect(JSON.stringify(jwtCreated)).not.toContain(jwtToken);
+
+			// Pinning a mismatched expectedIssuer must refuse to send credentials.
+			const mismatch = parseSnapshot(
+				await rpc(context, "mcp.create", {
+					deferred: true,
+					enabled: true,
+					id: "synthetic-m2m-mismatch",
+					name: "Synthetic M2M Mismatch",
+					surface: "both",
+					timeoutMs: 5_000,
+					transport: {
+						auth: {
+							clientId: "m2m-secret-client",
+							clientSecret,
+							expectedIssuer: "https://unexpected-issuer.invalid",
+							grantType: "client_credentials",
+							type: "oauth",
+						},
+						type: "http",
+						url: `${server.url.origin}/mcp`,
+					},
+				}),
+			);
+			expect(mismatch.state).toBe("error");
+			expect(JSON.stringify(mismatch)).not.toContain(clientSecret);
+		} finally {
+			await mcpPlugin.teardown?.(context);
+			await server.stop(true);
+		}
+	});
+
+	test("admin OAuth tools enforce admin gates and audit without leaking secrets", async () => {
+		const audits: AuditEntry[] = [];
+		const context = makeContext(new LocalStorageBridge(), audits);
+		await mcpPlugin.setup(context);
+		const clientSecret = "synthetic-admin-oauth-secret";
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request): Response {
+				const url = new URL(request.url);
+				const origin = url.origin;
+				if (url.pathname === "/.well-known/oauth-authorization-server") {
+					return Response.json({
+						authorization_endpoint: `${origin}/authorize`,
+						code_challenge_methods_supported: ["S256"],
+						issuer: origin,
+						response_types_supported: ["code"],
+						token_endpoint: `${origin}/token`,
+					});
+				}
+				if (url.pathname === "/mcp") {
+					return new Response("Unauthorized", { status: 401 });
+				}
+				return new Response("Not found", { status: 404 });
+			},
+		});
+		try {
+			await rpc(context, "mcp.create", {
+				deferred: true,
+				enabled: true,
+				id: "synthetic-admin-oauth",
+				name: "Synthetic Admin OAuth",
+				surface: "both",
+				timeoutMs: 5_000,
+				transport: {
+					auth: {
+						clientId: "pre-reg-client",
+						clientSecret,
+						grantType: "authorization_code",
+						type: "oauth",
+					},
+					type: "http",
+					url: `${server.url.origin}/mcp`,
+				},
+			});
+
+			for (const [toolName, payload] of [
+				[MCP_START_OAUTH_TOOL, { id: "synthetic-admin-oauth" }],
+				[MCP_COMPLETE_OAUTH_TOOL, { code: "abc", id: "synthetic-admin-oauth" }],
+				[MCP_CLEAR_OAUTH_TOOL, { id: "synthetic-admin-oauth" }],
+			] as const) {
+				const denied = await context.tools.invoke(toolName, payload, {
+					chatKind: "private",
+					isAdmin: false,
+					senderPlatformId: "10003",
+				});
+				expect(denied.ok).toBe(true);
+				if (!denied.ok) throw new Error("expected denial");
+				expect(JSON.parse(toolText(denied))).toEqual({ error: "admin_required" });
+			}
+
+			const started = parseSnapshot(
+				JSON.parse(
+					(
+						await invokeTool(
+							context,
+							MCP_START_OAUTH_TOOL,
+							{ callbackOrigin: "https://panel.example.test", id: "synthetic-admin-oauth" },
+							{ chatKind: "webui" },
+						)
+					).text,
+				),
+			);
+			expect(started.state).toBe("auth_required");
+			expect(started.oauth?.redirectUrl).toBe("https://panel.example.test/api/mcp/oauth/callback");
+
+			const cleared = parseSnapshot(
+				JSON.parse(
+					(
+						await invokeTool(
+							context,
+							MCP_CLEAR_OAUTH_TOOL,
+							{ id: "synthetic-admin-oauth" },
+							{ chatKind: "webui" },
+						)
+					).text,
+				),
+			);
+			expect(cleared.oauth?.status).toBe("unauthenticated");
+			expect(JSON.stringify(audits)).not.toContain(clientSecret);
+		} finally {
+			await mcpPlugin.teardown?.(context);
+			await server.stop(true);
 		}
 	});
 });

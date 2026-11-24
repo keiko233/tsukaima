@@ -1,4 +1,6 @@
 import {
+	mcpOAuthCompleteInputSchema,
+	mcpOAuthStartInputSchema,
 	mcpServerCreateSchema,
 	mcpServerIdInputSchema,
 	mcpServerToggleInputSchema,
@@ -48,4 +50,18 @@ export function registerMcpRpc(
 		const parsed = mcpServerToggleInputSchema.parse(input);
 		return changed(() => manager.toggle(parsed.id, parsed.enabled));
 	});
+
+	register("startOAuth", async (input) => {
+		const parsed = mcpOAuthStartInputSchema.parse(input);
+		return changed(() => manager.startOAuth(parsed.id, parsed.callbackOrigin));
+	});
+
+	register("completeOAuth", async (input) => {
+		const parsed = mcpOAuthCompleteInputSchema.parse(input);
+		return changed(() => manager.completeOAuth(parsed));
+	});
+
+	register("clearOAuth", async (input) =>
+		changed(() => manager.clearOAuth(mcpServerIdInputSchema.parse(input).id)),
+	);
 }
