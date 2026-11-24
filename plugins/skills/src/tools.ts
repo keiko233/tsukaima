@@ -149,6 +149,17 @@ export function registerSkillsTools(context: PluginContext, catalog: SkillCatalo
 			const detail = await catalog.loadDetail(name);
 			if (detail === undefined) return text({ error: "unknown_skill" });
 			const lines = [detail.body.trim()];
+			const metadata = detail.metadata;
+			if (metadata !== undefined && Object.keys(metadata).length > 0) {
+				const entries = Object.entries(metadata)
+					.toSorted(([left], [right]) => left.localeCompare(right))
+					.slice(0, 12);
+				lines.push(
+					"",
+					"Skill metadata:",
+					...entries.map(([key, value]) => `- ${key}: ${value.slice(0, 256)}`),
+				);
+			}
 			if (detail.resources.length > 0) {
 				lines.push("", "Bundled files:", ...detail.resources.map((entry) => `- ${entry.path}`));
 			}

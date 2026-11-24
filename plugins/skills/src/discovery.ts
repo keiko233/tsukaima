@@ -1,10 +1,11 @@
 import type { Dirent } from "node:fs";
 import { readdir, realpath, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import {
 	SKILL_DOCUMENT_MAX_BYTES,
 	SKILL_MAX_SKILLS,
 	SKILL_RESOURCE_LIST_MAX,
+	SKILL_RESOURCE_MAX_BYTES,
 	type SkillDiagnostic,
 	type SkillResource,
 } from "@tsukaima/contracts";
@@ -18,8 +19,15 @@ import {
 	type PathFailure,
 } from "./paths.ts";
 
+/** Container directories above a leaf skill are categories; cap the tree to stay bounded. */
+const MAX_SKILL_DIRECTORY_DEPTH = 4;
+/** Resource listing includes `scripts/` and `references/` at their natural depth. */
+const MAX_RESOURCE_DIRECTORY_DEPTH = 3;
+
 export interface SkillRecord {
 	readonly allowedTools?: readonly string[];
+	/** Slash-separated container path between the root and the skill, if any. */
+	readonly category?: string;
 	readonly compatibility?: string;
 	readonly description: string;
 	/** Real path of the skill directory; never exposed outside the plugin runtime. */
@@ -46,6 +54,22 @@ export interface ScanOptions {
 export interface SkillResourceListing {
 	readonly resources: readonly SkillResource[];
 	readonly truncated: boolean;
+}
+
+export interface WalkSkillResourcesOptions {
+	readonly allowResources?: boolean;
+	readonly maxBytes?: number;
+	readonly maxEntries?: number;
+}
+
+interface ScanState {
+	limitReached: boolean;
+	readonly visited: Set<string>;
+}
+
+interface DirectoryContentsResult {
+	readonly childDirectories: number;
+	readonly found: number;
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -112,10 +136,19 @@ function documentDiagnostic(
 	}
 }
 
+function categoryFor(rootReal: string, directoryReal: string): string | undefined {
+	const parent = dirname(directoryReal);
+	const rel = relative(rootReal, parent);
+	if (rel.length === 0 || rel.startsWith("..")) return undefined;
+	const normalized = rel.split(sep).join("/");
+	return normalized.length === 0 ? undefined : normalized;
+}
+
 /** Builds the record used by the catalog after a document passed parsing and validation. */
 function recordFor(
 	fields: SkillFields,
 	input: {
+		readonly category: string | undefined;
 		readonly directory: string;
 		readonly enabled: boolean;
 		readonly fingerprint: string;
@@ -130,19 +163,189 @@ function recordFor(
 		name: fields.name,
 		rootIndex: input.rootIndex,
 		...(fields.allowedTools === undefined ? {} : { allowedTools: fields.allowedTools }),
+		...(input.category === undefined ? {} : { category: input.category }),
 		...(fields.compatibility === undefined ? {} : { compatibility: fields.compatibility }),
 		...(fields.license === undefined ? {} : { license: fields.license }),
 		...(fields.metadata === undefined ? {} : { metadata: fields.metadata }),
+		...(fields.tags === undefined ? {} : { tags: fields.tags }),
+		...(fields.version === undefined ? {} : { version: fields.version }),
+		...(fields.requires === undefined ? {} : { requires: fields.requires }),
+		...(fields.env === undefined ? {} : { env: fields.env }),
 	};
+}
+
+function isSkippedDirectory(name: string): boolean {
+	return name.startsWith(".") || name === "node_modules";
+}
+
+async function readDirectoryEntries(directoryReal: string): Promise<Dirent[]> {
+	try {
+		const entries = await readdir(directoryReal, { withFileTypes: true });
+		entries.sort((left, right) => left.name.localeCompare(right.name));
+		return entries;
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Scans direct children of `parentReal`. Each child may be a skill leaf or a category container;
+ * a container is only reported as missing when it has no skill and no nested directory at all.
+ */
+async function scanDirectoryContents(
+	config: SkillsConfig,
+	rootReal: string,
+	rootIndex: number,
+	parentReal: string,
+	depth: number,
+	state: ScanState,
+	skills: SkillRecord[],
+	diagnostics: SkillDiagnostic[],
+	maxSkills: number,
+): Promise<DirectoryContentsResult> {
+	const entries = await readDirectoryEntries(parentReal);
+	let childDirectories = 0;
+	let found = 0;
+	for (const entry of entries) {
+		if (isSkippedDirectory(entry.name)) continue;
+		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+		let directory: string;
+		try {
+			directory = await realpath(join(parentReal, entry.name));
+			const info = await stat(directory);
+			if (!info.isDirectory()) continue;
+		} catch {
+			continue;
+		}
+		if (!isInside(rootReal, directory)) {
+			diagnostics.push(
+				skillDiagnostic(
+					"escapes_root",
+					"warning",
+					"skill directory resolves outside its configured root",
+					rootIndex,
+					entry.name,
+				),
+			);
+			continue;
+		}
+		// Visiting a real directory once prevents symlink cycles and duplicate category walks.
+		if (state.visited.has(directory)) continue;
+		state.visited.add(directory);
+		childDirectories += 1;
+		found += await scanCandidateDirectory(
+			config,
+			rootReal,
+			rootIndex,
+			directory,
+			entry.name,
+			depth,
+			state,
+			skills,
+			diagnostics,
+			maxSkills,
+		);
+	}
+	return { childDirectories, found };
+}
+
+async function scanCandidateDirectory(
+	config: SkillsConfig,
+	rootReal: string,
+	rootIndex: number,
+	directory: string,
+	directoryName: string,
+	depth: number,
+	state: ScanState,
+	skills: SkillRecord[],
+	diagnostics: SkillDiagnostic[],
+	maxSkills: number,
+): Promise<number> {
+	const marked = await resolveInside(directory, "SKILL.md");
+	if (!marked.ok) {
+		if (marked.reason !== "not_found") {
+			diagnostics.push(documentDiagnostic(rootIndex, directoryName, marked.reason));
+			return 0;
+		}
+		if (depth >= MAX_SKILL_DIRECTORY_DEPTH) return 0;
+		const contents = await scanDirectoryContents(
+			config,
+			rootReal,
+			rootIndex,
+			directory,
+			depth + 1,
+			state,
+			skills,
+			diagnostics,
+			maxSkills,
+		);
+		if (contents.found === 0 && contents.childDirectories === 0) {
+			diagnostics.push(documentDiagnostic(rootIndex, directoryName, "not_found"));
+		}
+		return contents.found;
+	}
+	const document = await readFileInside(directory, "SKILL.md", SKILL_DOCUMENT_MAX_BYTES);
+	if (!document.ok) {
+		diagnostics.push(documentDiagnostic(rootIndex, directoryName, document.reason));
+		return 0;
+	}
+	const parsed = parseSkillDocument(document.value.text);
+	if (!parsed.ok) {
+		diagnostics.push(
+			skillDiagnostic("invalid_frontmatter", "error", parsed.message, rootIndex, directoryName),
+		);
+		return 0;
+	}
+	const validated = validateSkillFields(parsed.document.frontmatter, directoryName);
+	for (const diagnostic of validated.diagnostics) {
+		diagnostics.push({ ...diagnostic, rootIndex });
+	}
+	if (validated.fields === undefined) return 0;
+	const fields = validated.fields;
+	if (skills.some((skill) => skill.name === fields.name)) {
+		diagnostics.push(
+			skillDiagnostic(
+				"duplicate_name",
+				"warning",
+				"another skill already uses this name; the first one wins",
+				rootIndex,
+				fields.name,
+			),
+		);
+		return 1;
+	}
+	if (skills.length >= maxSkills) {
+		if (!state.limitReached) {
+			state.limitReached = true;
+			diagnostics.push(
+				skillDiagnostic(
+					"limit_reached",
+					"warning",
+					`skill catalog stopped at ${maxSkills} entries`,
+					rootIndex,
+				),
+			);
+		}
+		return 1;
+	}
+	skills.push(
+		recordFor(fields, {
+			category: categoryFor(rootReal, directory),
+			directory,
+			enabled: !config.disabled.has(fields.name),
+			fingerprint: `${document.value.text.length}:${String(Bun.hash(document.value.text))}`,
+			rootIndex,
+		}),
+	);
+	return 1;
 }
 
 async function scanRoot(
 	config: SkillsConfig,
 	root: string,
 	rootIndex: number,
-	seen: Set<string>,
+	state: ScanState,
 	maxSkills: number,
-	state: { limitReached: boolean },
 	skills: SkillRecord[],
 	diagnostics: SkillDiagnostic[],
 ): Promise<void> {
@@ -174,10 +377,19 @@ async function scanRoot(
 		);
 		return;
 	}
-
-	let entries: Dirent[];
+	state.visited.add(rootReal);
 	try {
-		entries = await readdir(rootReal, { withFileTypes: true });
+		await scanDirectoryContents(
+			config,
+			rootReal,
+			rootIndex,
+			rootReal,
+			1,
+			state,
+			skills,
+			diagnostics,
+			maxSkills,
+		);
 	} catch {
 		diagnostics.push(
 			skillDiagnostic(
@@ -187,97 +399,14 @@ async function scanRoot(
 				rootIndex,
 			),
 		);
-		return;
-	}
-	entries.sort((left, right) => left.name.localeCompare(right.name));
-	for (const entry of entries) {
-		if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-		let directory: string;
-		try {
-			directory = await realpath(join(rootReal, entry.name));
-			const info = await stat(directory);
-			if (!info.isDirectory()) continue;
-		} catch {
-			continue;
-		}
-		if (!isInside(rootReal, directory)) {
-			diagnostics.push(
-				skillDiagnostic(
-					"escapes_root",
-					"warning",
-					"skill directory resolves outside its configured root",
-					rootIndex,
-					entry.name,
-				),
-			);
-			continue;
-		}
-
-		const marked = await resolveInside(directory, "SKILL.md");
-		if (!marked.ok) {
-			diagnostics.push(documentDiagnostic(rootIndex, entry.name, marked.reason));
-			continue;
-		}
-		const document = await readFileInside(directory, "SKILL.md", SKILL_DOCUMENT_MAX_BYTES);
-		if (!document.ok) {
-			diagnostics.push(documentDiagnostic(rootIndex, entry.name, document.reason));
-			continue;
-		}
-		const parsed = parseSkillDocument(document.value.text);
-		if (!parsed.ok) {
-			diagnostics.push(
-				skillDiagnostic("invalid_frontmatter", "error", parsed.message, rootIndex, entry.name),
-			);
-			continue;
-		}
-		const validated = validateSkillFields(parsed.document.frontmatter, entry.name);
-		for (const diagnostic of validated.diagnostics) {
-			diagnostics.push({ ...diagnostic, rootIndex });
-		}
-		if (validated.fields === undefined) continue;
-		const fields = validated.fields;
-		if (seen.has(fields.name)) {
-			diagnostics.push(
-				skillDiagnostic(
-					"duplicate_name",
-					"warning",
-					"another skill already uses this name; the first one wins",
-					rootIndex,
-					fields.name,
-				),
-			);
-			continue;
-		}
-		if (skills.length >= maxSkills) {
-			if (!state.limitReached) {
-				state.limitReached = true;
-				diagnostics.push(
-					skillDiagnostic(
-						"limit_reached",
-						"warning",
-						`skill catalog stopped at ${maxSkills} entries`,
-						rootIndex,
-					),
-				);
-			}
-			continue;
-		}
-		seen.add(fields.name);
-		skills.push(
-			recordFor(fields, {
-				directory,
-				enabled: !config.disabled.has(fields.name),
-				fingerprint: `${document.value.text.length}:${String(Bun.hash(document.value.text))}`,
-				rootIndex,
-			}),
-		);
 	}
 }
 
 /**
- * Discovers depth-1 skill directories under every configured root. This function never throws:
- * a broken root or skill becomes a bounded diagnostic and the rest of the catalog still loads.
+ * Discovers skill leaves under every configured root. Both `<root>/<skill>/SKILL.md` and
+ * Hermes-style `<root>/<category>/<skill>/SKILL.md` layouts are supported. This function never
+ * throws: a broken root, category, or skill becomes a bounded diagnostic and the rest of the
+ * catalog still loads.
  */
 export async function scanSkillRoots(
 	config: SkillsConfig,
@@ -286,11 +415,10 @@ export async function scanSkillRoots(
 	const maxSkills = options.maxSkills ?? SKILL_MAX_SKILLS;
 	const skills: SkillRecord[] = [];
 	const diagnostics: SkillDiagnostic[] = [];
-	const seen = new Set<string>();
-	const state = { limitReached: false };
+	const state: ScanState = { limitReached: false, visited: new Set<string>() };
 	for (const [rootIndex, root] of config.paths.entries()) {
 		try {
-			await scanRoot(config, root, rootIndex, seen, maxSkills, state, skills, diagnostics);
+			await scanRoot(config, root, rootIndex, state, maxSkills, skills, diagnostics);
 		} catch {
 			diagnostics.push(
 				skillDiagnostic(
@@ -311,15 +439,23 @@ export async function scanSkillRoots(
 }
 
 /**
- * Lists bundled resource files up to three path segments deep. Hidden entries, SKILL.md, and
- * node_modules are skipped; every candidate still goes through the root-containment check.
+ * Lists bundled resource files. Hidden entries, SKILL.md, and node_modules are skipped; every
+ * candidate still goes through the root-containment check. `scripts/` and `references/` are
+ * ordinary directories, so their files are included. Oversized files are not listed because
+ * `read_skill_resource` could not return them. Pass `allowResources: false` to list nothing.
  */
-export async function walkSkillResources(directoryReal: string): Promise<SkillResourceListing> {
+export async function walkSkillResources(
+	directoryReal: string,
+	options: WalkSkillResourcesOptions = {},
+): Promise<SkillResourceListing> {
+	if (options.allowResources === false) return { resources: [], truncated: false };
+	const maxBytes = options.maxBytes ?? SKILL_RESOURCE_MAX_BYTES;
+	const maxEntries = options.maxEntries ?? SKILL_RESOURCE_LIST_MAX;
 	const resources: SkillResource[] = [];
 	let truncated = false;
-	const walk = async (relative: string, depth: number): Promise<void> => {
+	const walk = async (relativePath: string, depth: number): Promise<void> => {
 		if (truncated) return;
-		const target = relative.length === 0 ? directoryReal : join(directoryReal, relative);
+		const target = relativePath.length === 0 ? directoryReal : join(directoryReal, relativePath);
 		let entries: Dirent[];
 		try {
 			entries = await readdir(target, { withFileTypes: true });
@@ -328,20 +464,20 @@ export async function walkSkillResources(directoryReal: string): Promise<SkillRe
 		}
 		entries.sort((left, right) => left.name.localeCompare(right.name));
 		for (const entry of entries) {
-			if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-			const child = relative.length === 0 ? entry.name : `${relative}/${entry.name}`;
+			if (isSkippedDirectory(entry.name)) continue;
+			const child = relativePath.length === 0 ? entry.name : `${relativePath}/${entry.name}`;
 			if (depth === 1 && entry.name === "SKILL.md") continue;
 			const resolved = await resolveEntryInside(directoryReal, child);
 			if (!resolved.ok) continue;
 			const info = await stat(resolved.value.real).catch(() => undefined);
 			if (info === undefined) continue;
 			if (info.isDirectory()) {
-				if (depth < 3) await walk(child, depth + 1);
+				if (depth < MAX_RESOURCE_DIRECTORY_DEPTH) await walk(child, depth + 1);
 				continue;
 			}
-			if (!info.isFile()) continue;
+			if (!info.isFile() || info.size > maxBytes) continue;
 			resources.push({ bytes: info.size, path: child });
-			if (resources.length >= SKILL_RESOURCE_LIST_MAX) {
+			if (resources.length >= maxEntries) {
 				truncated = true;
 				return;
 			}

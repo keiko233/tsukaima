@@ -40,7 +40,18 @@ interface CatalogMemo {
 	readonly text: string | undefined;
 }
 
+function summaryMetadata(record: SkillRecord): Record<string, string> | undefined {
+	const metadata: Record<string, string> = {
+		...(record.metadata === undefined ? {} : record.metadata),
+	};
+	if (record.category !== undefined && metadata.category === undefined) {
+		metadata.category = record.category;
+	}
+	return Object.keys(metadata).length === 0 ? undefined : metadata;
+}
+
 function summaryOf(record: SkillRecord): SkillSummary {
+	const metadata = summaryMetadata(record);
 	return {
 		description: record.description,
 		enabled: record.enabled,
@@ -49,7 +60,7 @@ function summaryOf(record: SkillRecord): SkillSummary {
 		...(record.allowedTools === undefined ? {} : { allowedTools: [...record.allowedTools] }),
 		...(record.compatibility === undefined ? {} : { compatibility: record.compatibility }),
 		...(record.license === undefined ? {} : { license: record.license }),
-		...(record.metadata === undefined ? {} : { metadata: record.metadata }),
+		...(metadata === undefined ? {} : { metadata }),
 	};
 }
 
@@ -57,8 +68,22 @@ function safeDescription(description: string): string {
 	return description.replace(/</gu, "‹").replace(/>/gu, "›");
 }
 
+function safeMetadataValue(value: string): string {
+	return safeDescription(value.replace(/\s+/gu, " ")).slice(0, 256);
+}
+
 function entryFor(record: SkillRecord): string {
-	return `- name: ${record.name}\n  description: ${safeDescription(record.description)}\n  location: skill://${record.name}/SKILL.md\n`;
+	const metadata = summaryMetadata(record);
+	const extras = [
+		record.category === undefined
+			? undefined
+			: `  category: ${safeMetadataValue(record.category)}\n`,
+		metadata?.version === undefined
+			? undefined
+			: `  version: ${safeMetadataValue(metadata.version)}\n`,
+		metadata?.tags === undefined ? undefined : `  tags: ${safeMetadataValue(metadata.tags)}\n`,
+	];
+	return `- name: ${record.name}\n  description: ${safeDescription(record.description)}\n${extras.join("")}  location: skill://${record.name}/SKILL.md\n`;
 }
 
 function emptySnapshot(roots: number): SkillsSnapshot {
@@ -165,7 +190,9 @@ export class SkillCatalog {
 		if (!document.ok) return undefined;
 		const parsed = parseSkillDocument(document.value.text);
 		if (!parsed.ok) return undefined;
-		const listing: SkillResourceListing = await walkSkillResources(record.directory);
+		const listing: SkillResourceListing = this.#config.allowResources
+			? await walkSkillResources(record.directory, { maxBytes: SKILL_RESOURCE_MAX_BYTES })
+			: { resources: [], truncated: false };
 		const body =
 			parsed.document.body.length > SKILL_BODY_MAX_CHARS
 				? parsed.document.body.slice(0, SKILL_BODY_MAX_CHARS)
