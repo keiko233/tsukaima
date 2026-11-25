@@ -11,7 +11,7 @@ import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { formatDateTime } from "../lib/format";
 import { Avatar, InlineError } from "../shell/primitives";
-import { requestKindLabel, requestStatusClass, requestStatusLabel } from "../shell/request-meta";
+import { requestKindLabel, requestStatusLabel } from "../shell/request-meta";
 import { Modal, ModalActions } from "../ui/modal";
 import {
 	DetailField,
@@ -19,6 +19,23 @@ import {
 	DirectoryDetailPage,
 	DirectoryEmptyState,
 } from "./directory-page";
+
+type RequestStatus = "pending" | "approved" | "rejected" | "failed" | "uncertain";
+
+function statusInkClass(status: RequestStatus): string {
+	switch (status) {
+		case "pending":
+			return "text-warning";
+		case "approved":
+			return "text-success";
+		case "rejected":
+			return "text-muted-foreground";
+		case "failed":
+			return "text-destructive";
+		case "uncertain":
+			return "text-warning";
+	}
+}
 
 export function RequestDetailPage({ requestId }: { requestId: string }) {
 	const toast = useToast();
@@ -89,8 +106,8 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
 			trailing={
 				<span
 					className={cn(
-						"shrink-0 rounded-full px-2 py-1 text-[9.5px] font-medium",
-						requestStatusClass(selected.status),
+						"shrink-0 font-mono text-[10px] tracking-[0.14em] uppercase",
+						statusInkClass(selected.status),
 					)}
 				>
 					{requestStatusLabel(selected.status)}
@@ -98,9 +115,9 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
 			}
 		>
 			<DetailSection title={m.request_detail()}>
-				<DetailField label={m.request_requester()} value={selected.requesterExternalId} />
+				<DetailField label={m.request_requester()} mono value={selected.requesterExternalId} />
 				{selected.groupExternalId ? (
-					<DetailField label={m.request_group()} value={selected.groupExternalId} />
+					<DetailField label={m.request_group()} mono value={selected.groupExternalId} />
 				) : null}
 				<DetailField label={m.request_time()} value={formatDateTime(selected.createdAt)} />
 				{selected.resolvedAt ? (
@@ -116,16 +133,16 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
 
 			{selected.comment ? (
 				<DetailSection title={m.request_comment()}>
-					<p className="rounded-lg bg-muted px-2.5 py-2 text-[11.5px] leading-5 text-foreground">
+					<p className="border-s-2 border-border ps-3 text-[12px] leading-6 whitespace-pre-wrap text-ink">
 						{selected.comment}
 					</p>
 				</DetailSection>
 			) : null}
 
 			{selected.errorMessage ? (
-				<div className="rounded-xl border border-destructive/25 bg-destructive/5 px-3.5 py-3 text-[11.5px] leading-5 text-destructive">
+				<p className="border-s-2 border-destructive ps-3 text-[12px] leading-6 text-destructive">
 					{selected.errorMessage}
-				</div>
+				</p>
 			) : null}
 
 			{selected.status === "pending" ? (
@@ -153,13 +170,13 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
 							</Button>
 						</div>
 					) : (
-						<p className="rounded-lg border border-border px-2.5 py-2 text-[11px] leading-4 text-muted-foreground">
+						<p className="border-s-2 border-border ps-3 text-[11px] leading-5 text-muted-foreground">
 							{m.request_channel_offline()}
 						</p>
 					)}
 				</DetailSection>
 			) : (
-				<p className="px-1 text-[11px] text-muted-foreground">{m.request_already_handled()}</p>
+				<p className="text-[11px] text-muted-foreground">{m.request_already_handled()}</p>
 			)}
 
 			<Modal
@@ -178,7 +195,7 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
 					{selected.groupExternalId ? (
 						<div className="flex justify-between gap-3">
 							<span className="text-muted-foreground">{m.request_group()}</span>
-							<span>{selected.groupExternalId}</span>
+							<span className="font-mono">{selected.groupExternalId}</span>
 						</div>
 					) : null}
 				</div>
