@@ -58,8 +58,8 @@ RUN mkdir -p /runtime \
 FROM oven/bun:latest AS runtime
 # Pin upstream CLIs so device-flow, token refresh, and runtime tooling stay reproducible.
 ARG GH_VERSION=2.105.0
-# Node ships npm/npx for `npx`-based stdio MCP servers; `uv` runs Python-based servers and skills.
-ARG NODE_VERSION=26.13.1
+# `uv` runs Python-based stdio MCP servers and skills. JavaScript servers use the image's own
+# `bunx` (installed with Bun), so no separate Node/npm toolchain is packaged.
 ARG UV_VERSION=0.13.9
 # Canvas ships bundled shared libraries when it uses a prebuilt binary; a source build links
 # these system libraries instead, so both paths work at runtime. Keep the native build toolchain
@@ -96,26 +96,22 @@ RUN apt-get update \
 	&& install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${gh_arch}/bin/gh" /usr/local/bin/gh \
 	&& rm -rf /var/lib/apt/lists/* /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${gh_arch}"
 
-# Both toolchains land in /usr/local/bin, which the stdio MCP transport prepends to `PATH` and
-# the image PATH below already contains. Pinned tarballs avoid an archive package that lags the
-# Node version `npx` servers expect on Debian.
+# `uv` lands in /usr/local/bin, which the stdio MCP transport prepends to `PATH` and the image
+# PATH below already contains. A pinned tarball avoids an archive package that lags upstream.
 RUN runtime_arch="$(dpkg --print-architecture)" \
 	&& case "$runtime_arch" in \
-		amd64) node_arch=x64; uv_arch=x86_64 ;; \
-		arm64) node_arch=arm64; uv_arch=aarch64 ;; \
+		amd64) uv_arch=x86_64 ;; \
+		arm64) uv_arch=aarch64 ;; \
 		*) echo "unsupported architecture: $runtime_arch" >&2; exit 1 ;; \
 	esac \
-	&& curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.gz" -o /tmp/node.tar.gz \
-	&& tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 \
-		--exclude=CHANGELOG.md --exclude=LICENSE --exclude=README.md \
 	&& curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${uv_arch}-unknown-linux-gnu.tar.gz" -o /tmp/uv.tar.gz \
 	&& tar -xzf /tmp/uv.tar.gz -C /tmp \
 	&& install -m 0755 "/tmp/uv-${uv_arch}-unknown-linux-gnu/uv" "/tmp/uv-${uv_arch}-unknown-linux-gnu/uvx" /usr/local/bin/ \
-	&& rm -rf /tmp/node.tar.gz /tmp/uv.tar.gz "/tmp/uv-${uv_arch}-unknown-linux-gnu"
+	&& rm -rf /tmp/uv.tar.gz "/tmp/uv-${uv_arch}-unknown-linux-gnu"
 
 WORKDIR /app
-# `uv tool`, `pip install --user`, and npm caches write below the running user's home, so the
-# per-user bin directory has to be on PATH for skill scripts and workspace commands too.
+# `uv tool`, `pip install --user`, and Bun package caches write below the running user's home,
+# so the per-user bin directory has to be on PATH for skill scripts and workspace commands too.
 ENV NODE_ENV=production \
 	TSUKAIMA_HOST=0.0.0.0 \
 	TSUKAIMA_PORT=7420 \

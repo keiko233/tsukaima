@@ -712,7 +712,7 @@ function McpPanel() {
 					{form.transportType === "stdio" ? (
 						<Field label={t.t("command")}>
 							<Input
-								placeholder="npx"
+								placeholder="bunx"
 								value={form.command}
 								onChange={(value) => set("command", value)}
 							/>
