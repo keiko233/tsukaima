@@ -156,6 +156,23 @@ export function PolicyWorkspaceDelegationField({ draft, onChange }: PolicyFields
 	);
 }
 
+export function PolicySandboxWorkspaceField({ draft, onChange }: PolicyFieldsProps) {
+	return (
+		<div className="space-y-1">
+			<Toggle
+				checked={draft.sandboxWorkspaceEnabled}
+				label={m.policy_sandbox_workspace()}
+				onChange={(value) =>
+					onChange((current) => ({ ...current, sandboxWorkspaceEnabled: value }))
+				}
+			/>
+			<p className="text-[11px] leading-4 text-muted-foreground">
+				{m.policy_sandbox_workspace_hint()}
+			</p>
+		</div>
+	);
+}
+
 export function PolicyPacingFields({ draft, onChange }: PolicyFieldsProps) {
 	const updatePacing = (patch: Partial<ConversationPolicy["pacing"]>) => {
 		onChange((current) => ({ ...current, pacing: { ...current.pacing, ...patch } }));

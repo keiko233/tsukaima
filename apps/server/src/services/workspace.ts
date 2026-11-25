@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { and, count, desc, eq, isNull } from "drizzle-orm";
 import type {
 	MessageDeliveryMode,
 	ThinkingLevel,
+	WorkspaceKind,
 	WorkspaceDetail,
 	WorkspaceProposalSummary,
 	WorkspaceSummary,
@@ -25,9 +28,19 @@ import type { ConversationPolicyService } from "./conversation-policy.ts";
 import type { SessionMessagingService } from "./session-messaging.ts";
 import type { WorkspaceReferenceService } from "./workspace-references.ts";
 import type { WorkspaceTodoService } from "./workspace-todos.ts";
+import {
+	collectSandboxOutputs,
+	describeStagedInputs,
+	stageSandboxInputs,
+	type SandboxOutputFile,
+	type SandboxStagedInput,
+} from "./sandbox-files.ts";
+import type { MediaService } from "./media-service.ts";
 import { inspectWorkspaceGit } from "./workspace-git.ts";
+import { SANDBOX_MAX_ACTIVE_PER_PARENT } from "./workspace-authorization.ts";
 
 const WORKSPACE_CAPABILITIES = ["coding"];
+const SANDBOX_CAPABILITIES = ["sandbox"];
 const DEFAULT_WORKSPACE_TITLE = "New workspace";
 
 export interface WorkspaceServiceOptions {
@@ -36,13 +49,16 @@ export interface WorkspaceServiceOptions {
 	readonly createTask: (input: {
 		readonly baseRef: string;
 		readonly goal: string;
+		readonly sandbox?: boolean;
 		readonly sourceConversationId: string;
 	}) => Promise<string>;
 	readonly database: () => TsukaimaDatabase | undefined;
+	readonly dataDir: string;
 	readonly host: () => PiDurableConversationHost | undefined;
 	readonly isRunning?: (sessionId: string) => boolean;
 	readonly logger: Logger;
 	readonly messaging: SessionMessagingService;
+	readonly media: MediaService;
 	readonly policy: ConversationPolicyService;
 	readonly references: WorkspaceReferenceService;
 	readonly repositoryRoot: string;
@@ -57,6 +73,7 @@ export interface CreateWorkspaceInput {
 	readonly requestedBy?: string;
 	readonly tags?: readonly string[];
 	readonly thinking?: ThinkingLevel;
+	readonly workspaceKind?: WorkspaceKind;
 }
 
 /** A workspace model may omit the provider; the active conversation provider is the default. */
@@ -69,6 +86,7 @@ export interface CreateWorkspaceResult {
 	readonly chatId: string;
 	readonly sessionId: string;
 	readonly taskId: string | null;
+	readonly workspaceKind: WorkspaceKind;
 }
 
 export interface StartWorkspaceTaskInput {
@@ -77,6 +95,11 @@ export interface StartWorkspaceTaskInput {
 		readonly messageId?: string | undefined;
 		readonly sessionId: string;
 	}[];
+}
+
+export interface SandboxRequester {
+	readonly isAdmin: boolean;
+	readonly senderPlatformId: string | undefined;
 }
 
 type WorkspaceRow = typeof workspaceSessions.$inferSelect;
@@ -121,9 +144,11 @@ export class WorkspaceService {
 	readonly #audit: WorkspaceServiceOptions["audit"];
 	readonly #createTask: WorkspaceServiceOptions["createTask"];
 	readonly #database: WorkspaceServiceOptions["database"];
+	readonly #dataDir: string;
 	readonly #host: WorkspaceServiceOptions["host"];
 	readonly #isRunning: WorkspaceServiceOptions["isRunning"];
 	readonly #logger: Logger;
+	readonly #media: MediaService;
 	readonly #messaging: SessionMessagingService;
 	readonly #policy: ConversationPolicyService;
 	readonly #references: WorkspaceReferenceService;
@@ -136,9 +161,11 @@ export class WorkspaceService {
 		this.#audit = options.audit;
 		this.#createTask = options.createTask;
 		this.#database = options.database;
+		this.#dataDir = options.dataDir;
 		this.#host = options.host;
 		this.#isRunning = options.isRunning;
 		this.#logger = options.logger.child("tsukaima::server::workspace");
+		this.#media = options.media;
 		this.#messaging = options.messaging;
 		this.#policy = options.policy;
 		this.#references = options.references;
@@ -164,12 +191,21 @@ export class WorkspaceService {
 	): Promise<CreateWorkspaceResult> {
 		const database = this.#db();
 		const host = this.#hostRequired();
+		const workspaceKind = input.workspaceKind ?? "coding";
 		const goal = input.goal?.trim() || undefined;
 		// Workspaces are the full-authority coding surface: there is no graded mode to select.
 		const mode = "maintenance";
 		const baseRef = input.baseRef?.trim() || "HEAD";
 		const requestedBy = input.requestedBy ?? "webui-admin";
 		const tags = normalizeTags(input.tags);
+		const ownerUserId =
+			workspaceKind === "sandbox" && requestedBy.startsWith("im:")
+				? requestedBy.slice("im:".length)
+				: undefined;
+		const sandboxPath =
+			workspaceKind === "sandbox"
+				? join(this.#dataDir, "sandbox-workspaces", randomUUID())
+				: undefined;
 		const model = input.model === undefined ? undefined : host.resolveModelRef(input.model);
 		if (input.model !== undefined && model === undefined) {
 			throw new Error(
@@ -228,16 +264,23 @@ export class WorkspaceService {
 					mode,
 					parentSessionId: parentSessionId ?? null,
 					repositoryRoot: this.#repositoryRoot,
+					...(sandboxPath === undefined ? {} : { sandboxPath }),
 					tagsJson: JSON.stringify(tags),
 					taskId: null,
 					updatedAtMs: nowMs,
+					workspaceKind,
+					...(ownerUserId === undefined ? {} : { ownerUserId }),
 				})
 				.run();
 		});
+		if (sandboxPath !== undefined) {
+			await mkdir(join(sandboxPath, "inputs"), { recursive: true });
+			await mkdir(join(sandboxPath, "output"), { recursive: true });
+		}
 		await this.#policy.update({
 			conversationId: sessionId,
 			policy: {
-				capabilities: WORKSPACE_CAPABILITIES,
+				capabilities: workspaceKind === "sandbox" ? SANDBOX_CAPABILITIES : WORKSPACE_CAPABILITIES,
 				...(model === undefined ? {} : { model }),
 				...(input.thinking === undefined ? {} : { thinking: input.thinking }),
 			},
@@ -257,6 +300,7 @@ export class WorkspaceService {
 				sessionId,
 				tags,
 				taskId: null,
+				workspaceKind,
 			},
 			result: "ok",
 			targetId: sessionId,
@@ -271,9 +315,9 @@ export class WorkspaceService {
 		});
 		if (goal !== undefined && options.start !== false) {
 			const taskId = await this.startTask(sessionId, { goal });
-			return { chatId, sessionId, taskId };
+			return { chatId, sessionId, taskId, workspaceKind };
 		}
-		return { chatId, sessionId, taskId: null };
+		return { chatId, sessionId, taskId: null, workspaceKind };
 	}
 
 	/**
@@ -301,11 +345,14 @@ export class WorkspaceService {
 			.limit(1);
 		if (workspace === undefined) throw new Error("workspace_not_found");
 		if (workspace.taskId !== null) return workspace.taskId;
-		const taskId = await this.#createTask({
-			baseRef: workspace.baseRef,
-			goal,
-			sourceConversationId: workspace.parentSessionId ?? "workspace:webui",
-		});
+		const taskId =
+			workspace.workspaceKind === "sandbox"
+				? await this.#createSandboxTask(sessionId, workspace, goal)
+				: await this.#createTask({
+						baseRef: workspace.baseRef,
+						goal,
+						sourceConversationId: workspace.parentSessionId ?? "workspace:webui",
+					});
 		const title = titleFromGoal(goal);
 		const now = new Date().toISOString();
 		const tags = normalizeTags(parseTags(workspace.tagsJson));
@@ -360,6 +407,19 @@ export class WorkspaceService {
 		return taskId;
 	}
 
+	async #createSandboxTask(
+		sessionId: string,
+		workspace: WorkspaceRow,
+		goal: string,
+	): Promise<string> {
+		return await this.#createTask({
+			baseRef: "sandbox",
+			goal,
+			sandbox: true,
+			sourceConversationId: workspace.parentSessionId ?? `sandbox:${sessionId}`,
+		});
+	}
+
 	/**
 	 * Prompt context for the turn that starts a draft. It carries the task contract without
 	 * becoming a second user message in the transcript.
@@ -380,17 +440,40 @@ export class WorkspaceService {
 	async spawnFromSession(
 		sourceSessionId: string,
 		input: {
+			readonly autoStageRecentFiles?: boolean;
 			readonly baseRef?: string;
+			readonly fileNames?: readonly string[];
 			readonly goal?: string;
 			readonly model?: WorkspaceModelSelection;
 			readonly requestedBy?: string;
 			readonly tags?: readonly string[];
 			readonly thinking?: ThinkingLevel;
+			readonly mediaIds?: readonly string[];
+			readonly workspaceKind?: WorkspaceKind;
 		},
 	): Promise<CreateWorkspaceResult> {
 		const source = await this.#messaging.session(sourceSessionId);
+		const workspaceKind = input.workspaceKind ?? "coding";
 		const isImChat = source.chat.kind === "private" || source.chat.kind === "group";
-		if (source.chat.kind !== "webui" && source.chat.kind !== "workspace") {
+		if (workspaceKind === "sandbox") {
+			const effectivePolicy = await this.#policy.effectivePolicy(sourceSessionId);
+			if (effectivePolicy.sandboxWorkspaceEnabled !== true) {
+				throw new Error("Sandbox workspace is not enabled for this conversation");
+			}
+			if (
+				source.chat.kind !== "webui" &&
+				source.chat.kind !== "private" &&
+				source.chat.kind !== "group"
+			) {
+				throw new Error("Sandbox workspace is not available from this conversation");
+			}
+			if (isImChat) {
+				const active = await this.#activeSandboxCount(sourceSessionId);
+				if (active >= SANDBOX_MAX_ACTIVE_PER_PARENT) {
+					throw new Error("sandbox_quota_exceeded");
+				}
+			}
+		} else if (source.chat.kind !== "webui" && source.chat.kind !== "workspace") {
 			if (!isImChat) {
 				throw new Error(
 					"Workspace spawn is only available to authorized chat or workspace sessions",
@@ -409,7 +492,33 @@ export class WorkspaceService {
 			requestedBy: input.requestedBy ?? "chat-agent",
 			...(input.tags === undefined ? {} : { tags: input.tags }),
 			...(input.thinking === undefined ? {} : { thinking: input.thinking }),
+			workspaceKind,
 		});
+		if (workspaceKind === "sandbox") {
+			const staged = await this.#stageSandboxMedia(
+				sourceSessionId,
+				created.sessionId,
+				input.mediaIds ?? [],
+				{
+					autoStageRecentFiles: input.autoStageRecentFiles === true,
+					...(input.fileNames === undefined ? {} : { fileNames: input.fileNames }),
+					...(input.requestedBy !== undefined && input.requestedBy.startsWith("im:")
+						? { senderPlatformId: input.requestedBy.slice("im:".length) }
+						: {}),
+				},
+			);
+			if (staged.length > 0) {
+				const context = describeStagedInputs(staged);
+				await this.#db()
+					.update(workspaceSessions)
+					.set({
+						goal: [input.goal?.trim(), context]
+							.filter((entry): entry is string => entry !== undefined && entry.length > 0)
+							.join("\n\n"),
+					})
+					.where(eq(workspaceSessions.id, created.sessionId));
+			}
+		}
 		const goal = input.goal?.trim();
 		if (goal !== undefined && goal.length > 0 && created.taskId !== null) {
 			await this.sendToWorkspace({
@@ -419,6 +528,54 @@ export class WorkspaceService {
 			});
 		}
 		return created;
+	}
+
+	async #activeSandboxCount(parentSessionId: string): Promise<number> {
+		const [row] = await this.#db()
+			.select({ total: count() })
+			.from(workspaceSessions)
+			.innerJoin(conversations, eq(conversations.id, workspaceSessions.id))
+			.where(
+				and(
+					eq(workspaceSessions.parentSessionId, parentSessionId),
+					eq(workspaceSessions.workspaceKind, "sandbox"),
+					eq(conversations.status, "active"),
+				),
+			);
+		return row?.total ?? 0;
+	}
+
+	async #stageSandboxMedia(
+		sourceSessionId: string,
+		targetSessionId: string,
+		mediaIds: readonly string[],
+		options: {
+			readonly autoStageRecentFiles?: boolean;
+			readonly fileNames?: readonly string[];
+			readonly senderPlatformId?: string;
+		} = {},
+	): Promise<readonly SandboxStagedInput[]> {
+		const [workspace] = await this.#db()
+			.select()
+			.from(workspaceSessions)
+			.where(eq(workspaceSessions.id, targetSessionId))
+			.limit(1);
+		if (workspace?.sandboxPath === null || workspace?.sandboxPath === undefined) return [];
+		return await stageSandboxInputs({
+			...(options.autoStageRecentFiles === undefined
+				? {}
+				: { autoStageRecentFiles: options.autoStageRecentFiles }),
+			database: this.#db(),
+			...(options.fileNames === undefined ? {} : { fileNames: options.fileNames }),
+			logger: this.#logger,
+			media: this.#media,
+			mediaIds,
+			sandboxPath: workspace.sandboxPath,
+			...(options.senderPlatformId === undefined
+				? {}
+				: { senderPlatformId: options.senderPlatformId }),
+			sourceSessionId,
+		});
 	}
 
 	async list(options: { readonly includeArchived?: boolean } = {}): Promise<WorkspaceSummary[]> {
@@ -542,17 +699,28 @@ export class WorkspaceService {
 		const resolvedTaskId = task?.id ?? workspace?.taskId ?? undefined;
 		if (resolvedTaskId === undefined) {
 			if (workspace === undefined) throw new Error("workspace_not_found");
+			const outputFiles =
+				workspace.workspaceKind === "sandbox" && workspace.sandboxPath !== null
+					? await collectSandboxOutputs({
+							logger: this.#logger,
+							media: this.#media,
+							sandboxPath: workspace.sandboxPath,
+							sandboxSessionId: workspace.id,
+						})
+					: [];
 			return {
 				baseRef: workspace.baseRef,
 				goal: workspace.goal,
+				outputFiles,
 				parentSessionId: workspace.parentSessionId,
 				proposals: [],
-				repositoryRoot: workspace.repositoryRoot,
+				repositoryRoot: workspace.workspaceKind === "sandbox" ? "" : workspace.repositoryRoot,
 				sessionId: workspace.id,
 				status: "draft",
 				tags: parseTags(workspace.tagsJson),
 				taskId: null,
 				timeline: [],
+				workspaceKind: workspace.workspaceKind,
 			};
 		}
 		const [resolvedTask] =
@@ -593,16 +761,28 @@ export class WorkspaceService {
 			baseRef: resolvedWorkspace.baseRef,
 			goal: resolvedWorkspace.goal,
 			latestReply: latestReply?.contentText ?? null,
+			outputFiles:
+				resolvedWorkspace.workspaceKind === "sandbox" && resolvedWorkspace.sandboxPath !== null
+					? await collectSandboxOutputs({
+							logger: this.#logger,
+							media: this.#media,
+							sandboxPath: resolvedWorkspace.sandboxPath,
+							sandboxSessionId: resolvedWorkspace.id,
+						})
+					: [],
 			parentSessionId: resolvedWorkspace.parentSessionId,
 			proposals: await this.#proposals(resolvedTaskId),
-			repositoryRoot: resolvedWorkspace.repositoryRoot,
+			repositoryRoot:
+				resolvedWorkspace.workspaceKind === "sandbox" ? "" : resolvedWorkspace.repositoryRoot,
 			running: this.#isRunning?.(resolvedWorkspace.id) ?? false,
 			sessionId: resolvedWorkspace.id,
 			status: resolvedTask.status,
 			tags: parseTags(resolvedWorkspace.tagsJson),
 			taskId: resolvedTask.id,
 			timeline: JSON.parse(resolvedTask.timelineJson) as unknown,
-			worktreePath: resolvedTask.worktreePath,
+			workspaceKind: resolvedWorkspace.workspaceKind,
+			worktreePath:
+				resolvedWorkspace.workspaceKind === "sandbox" ? undefined : resolvedTask.worktreePath,
 		};
 	}
 
@@ -644,20 +824,40 @@ export class WorkspaceService {
 
 	async sendToWorkspace(input: {
 		readonly deliveryMode?: MessageDeliveryMode;
+		readonly fileNames?: readonly string[];
+		readonly mediaIds?: readonly string[];
+		readonly sourceSessionId?: string;
 		readonly sessionId: string;
 		readonly text: string;
 	}): Promise<Record<string, unknown>> {
 		const [workspace] = await this.#db()
-			.select({ id: workspaceSessions.id })
+			.select({
+				ownerUserId: workspaceSessions.ownerUserId,
+				workspaceKind: workspaceSessions.workspaceKind,
+			})
 			.from(workspaceSessions)
 			.where(eq(workspaceSessions.id, input.sessionId))
 			.limit(1);
 		if (workspace === undefined) throw new Error("workspace_not_found");
+		const staged =
+			workspace.workspaceKind === "sandbox" &&
+			input.sourceSessionId !== undefined &&
+			(input.mediaIds !== undefined || input.fileNames !== undefined)
+				? await this.stageInputsForSandbox({
+						...(input.fileNames === undefined ? {} : { fileNames: input.fileNames }),
+						mediaIds: input.mediaIds ?? [],
+						sandboxSessionId: input.sessionId,
+						...(workspace.ownerUserId === null ? {} : { senderPlatformId: workspace.ownerUserId }),
+						sourceSessionId: input.sourceSessionId,
+					})
+				: [];
+		const stagedContext = describeStagedInputs(staged);
+		const text = stagedContext.length === 0 ? input.text : `${input.text}\n\n${stagedContext}`;
 		const result = await this.#messaging.sendAgentMessage({
 			deliveryMode: input.deliveryMode ?? "steer",
 			sessionId: input.sessionId,
 			source: "session-tool",
-			text: input.text,
+			text,
 		});
 		return {
 			deliveryMode: result.mode,
@@ -665,6 +865,109 @@ export class WorkspaceService {
 			sessionId: input.sessionId,
 			ok: true,
 		};
+	}
+
+	async sandboxStatus(input: {
+		readonly requester: SandboxRequester;
+		readonly sessionId: string;
+		readonly sourceSessionId: string;
+	}): Promise<Record<string, unknown>> {
+		const workspace = await this.#sandboxTarget(input.sessionId, input.sourceSessionId);
+		const requester = input.requester;
+		if (
+			workspace.ownerUserId !== null &&
+			requester.isAdmin !== true &&
+			requester.senderPlatformId !== workspace.ownerUserId
+		) {
+			throw new Error("sandbox_owner_mismatch");
+		}
+		return await this.status({ sessionId: workspace.id });
+	}
+
+	async sandboxSend(input: {
+		readonly deliveryMode?: MessageDeliveryMode;
+		readonly fileNames?: readonly string[];
+		readonly mediaIds?: readonly string[];
+		readonly requester: SandboxRequester;
+		readonly sessionId: string;
+		readonly sourceSessionId: string;
+		readonly text: string;
+	}): Promise<Record<string, unknown>> {
+		const workspace = await this.#sandboxTarget(input.sessionId, input.sourceSessionId);
+		if (
+			workspace.ownerUserId !== null &&
+			input.requester.isAdmin !== true &&
+			input.requester.senderPlatformId !== workspace.ownerUserId
+		) {
+			throw new Error("sandbox_owner_mismatch");
+		}
+		return await this.sendToWorkspace({
+			...(input.deliveryMode === undefined ? {} : { deliveryMode: input.deliveryMode }),
+			...(input.fileNames === undefined ? {} : { fileNames: input.fileNames }),
+			...(input.mediaIds === undefined ? {} : { mediaIds: input.mediaIds }),
+			sessionId: workspace.id,
+			sourceSessionId: input.sourceSessionId,
+			text: input.text,
+		});
+	}
+
+	async #sandboxTarget(sessionId: string, sourceSessionId: string): Promise<WorkspaceRow> {
+		const [workspace] = await this.#db()
+			.select()
+			.from(workspaceSessions)
+			.where(eq(workspaceSessions.id, sessionId))
+			.limit(1);
+		if (workspace === undefined || workspace.workspaceKind !== "sandbox") {
+			throw new Error("sandbox_workspace_not_found");
+		}
+		if (workspace.parentSessionId !== sourceSessionId) {
+			throw new Error("sandbox_scope_mismatch");
+		}
+		return workspace;
+	}
+
+	async stageInputsForSandbox(input: {
+		readonly fileNames?: readonly string[];
+		readonly mediaIds: readonly string[];
+		readonly sandboxSessionId: string;
+		readonly senderPlatformId?: string;
+		readonly sourceSessionId: string;
+	}): Promise<readonly SandboxStagedInput[]> {
+		const [workspace] = await this.#db()
+			.select({ workspaceKind: workspaceSessions.workspaceKind })
+			.from(workspaceSessions)
+			.where(eq(workspaceSessions.id, input.sandboxSessionId))
+			.limit(1);
+		if (workspace?.workspaceKind !== "sandbox") throw new Error("sandbox_workspace_not_found");
+		return await this.#stageSandboxMedia(
+			input.sourceSessionId,
+			input.sandboxSessionId,
+			input.mediaIds,
+			{
+				...(input.fileNames === undefined ? {} : { fileNames: input.fileNames }),
+				...(input.senderPlatformId === undefined
+					? {}
+					: { senderPlatformId: input.senderPlatformId }),
+			},
+		);
+	}
+
+	async collectSandboxOutputs(sandboxSessionId: string): Promise<readonly SandboxOutputFile[]> {
+		const [workspace] = await this.#db()
+			.select({
+				sandboxPath: workspaceSessions.sandboxPath,
+				workspaceKind: workspaceSessions.workspaceKind,
+			})
+			.from(workspaceSessions)
+			.where(eq(workspaceSessions.id, sandboxSessionId))
+			.limit(1);
+		if (workspace?.workspaceKind !== "sandbox" || workspace.sandboxPath === null) return [];
+		return await collectSandboxOutputs({
+			logger: this.#logger,
+			media: this.#media,
+			sandboxPath: workspace.sandboxPath,
+			sandboxSessionId,
+		});
 	}
 
 	async listTodos(sessionId: string): Promise<WorkspaceTodo[]> {
@@ -740,12 +1043,14 @@ export class WorkspaceService {
 							triggerClassification: latest.triggerClassification,
 						},
 			parentSessionId: input.workspace.parentSessionId,
-			repositoryRoot: input.workspace.repositoryRoot,
+			repositoryRoot:
+				input.workspace.workspaceKind === "sandbox" ? "" : input.workspace.repositoryRoot,
 			tags: parseTags(input.workspace.tagsJson),
 			taskId: input.workspace.taskId,
 			taskStatus: input.taskStatus,
 			title: input.chat.title,
 			updatedAt: input.session.updatedAt,
+			workspaceKind: input.workspace.workspaceKind,
 		};
 	}
 }

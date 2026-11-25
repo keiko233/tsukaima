@@ -21,6 +21,7 @@ import {
 } from "@tsukaima/core";
 import {
 	createHostSandbox,
+	createScratchBubblewrapSandbox,
 	DomainCodingStore,
 	reconcileRestartDeployment,
 	WorktreeManager,
@@ -145,7 +146,10 @@ import { InboundMediaResolver } from "./services/inbound-media.ts";
 import { resolveImCallerContext } from "./services/im-caller-context.ts";
 import { computeOmittedSessionTools } from "./services/session-tool-policy.ts";
 import { isDirectSendToolName } from "./services/tool-names.ts";
-import { authorizeWorkspaceToolCall } from "./services/workspace-authorization.ts";
+import {
+	authorizeSandboxToolCall,
+	authorizeWorkspaceToolCall,
+} from "./services/workspace-authorization.ts";
 import { MediaService } from "./services/media-service.ts";
 import { HookBus } from "./services/hook-bus.ts";
 import { createMentionIdentityStore } from "./services/mention-identity-store.ts";
@@ -191,6 +195,7 @@ import { WorkspaceSqlService } from "./services/workspace-sql.ts";
 import { WorkspaceTodoService } from "./services/workspace-todos.ts";
 import {
 	IM_WORKSPACE_DELEGATION_TOOL_NAMES,
+	SANDBOX_WORKSPACE_TOOL_NAMES,
 	WORKSPACE_TOOL_NAMES,
 	createWorkspaceToolsExtension,
 } from "./services/workspace-tools.ts";
@@ -199,6 +204,7 @@ import {
 	createPiModelRuntime,
 	isWorkspaceWorktreeCheckout,
 	WORKSPACE_NATIVE_TASK_CONSTRAINTS,
+	SANDBOX_TASK_CONSTRAINTS,
 	WorkspaceNativeRunner,
 	type WorkspaceRunFinishedEvent,
 } from "./services/workspace-native-runner.ts";
@@ -797,11 +803,15 @@ export class TsukaimaLifecycle {
 			return row?.id;
 		};
 		const workspaceWorktreeRoot = join(config.dataDir, "worktrees");
+		const sandboxWorkspaceRoot = join(config.dataDir, "sandbox-workspaces");
 		const workspaceSandbox = {
 			repositoryPath: config.repositoryRoot,
 			worktreeRoot: workspaceWorktreeRoot,
 		};
 		const workspaceSandboxProvider = createHostSandbox(workspaceSandbox);
+		const sandboxWorkspaceProvider = createScratchBubblewrapSandbox({
+			sandboxRoot: sandboxWorkspaceRoot,
+		});
 		this.workspaceNative = new WorkspaceNativeRunner({
 			agentDirRoot: join(config.dataDir, "workspace-agents"),
 			audit: (entry) => this.writeAudit(entry),
@@ -812,6 +822,7 @@ export class TsukaimaLifecycle {
 			},
 			ensureWorktree: async (taskId) => await this.ensureWorkspaceWorktree(taskId),
 			executor: async () => await workspaceSandboxProvider(),
+			sandboxExecutor: async () => await sandboxWorkspaceProvider(),
 			gitIdentity: () => readGitIdentity(this.domainDatabase),
 			logger: this.runtimeLog,
 			runs: () => this.conversationRuns,
@@ -833,6 +844,8 @@ export class TsukaimaLifecycle {
 			},
 			authorizeCoding: async (sessionId) =>
 				(await this.conversationPolicy.effectivePolicy(sessionId)).capabilities.includes("coding"),
+			authorizeSandbox: async (sessionId) =>
+				(await this.conversationPolicy.effectivePolicy(sessionId)).capabilities.includes("sandbox"),
 			references: workspaceReferences,
 			resolveAgentSettings: async (sessionId) => {
 				const settings = await this.conversationPolicy.agentSettingsForConversation(sessionId);
@@ -847,6 +860,17 @@ export class TsukaimaLifecycle {
 			repositoryRoot: config.repositoryRoot,
 			runtimeRestart: this.restartCoordinator,
 			sessionDirRoot: join(config.dataDir, "workspace-sessions"),
+			sandboxRoot: sandboxWorkspaceRoot,
+			sandboxPrompt: (input) =>
+				[
+					"You are the dedicated Tsukaima isolated sandbox agent.",
+					"You work only inside a disposable scratch workspace with no network, no repository, and no host data.",
+					"User attachments staged for this task are under inputs/. Generated deliverables must be written under output/.",
+					"Use one simple allowlisted command per bash call; use write to create scripts, then run them with python3, bun, or node for complex transformations.",
+					"Never claim to have sent a file yourself: the parent chat receives output media ids after the run.",
+					`Sandbox session id: ${input.sessionId}`,
+					`Task goal: ${input.goal ?? "(the current user request)"}`,
+				].join("\n"),
 			taskPrompt: async (input) =>
 				[
 					"You are the dedicated Tsukaima workspace coding agent.",
@@ -942,9 +966,11 @@ export class TsukaimaLifecycle {
 			audit: (entry) => this.writeAudit(entry),
 			createTask: async (input) => await this.createWorkspaceTask(input),
 			database: () => this.domainDatabase,
+			dataDir: config.dataDir,
 			host: () => this.conversationHost,
 			isRunning: (sessionId) => this.workspaceNative.isRunning(sessionId),
 			logger: this.runtimeLog,
+			media: this.media,
 			messaging: this.sessionMessaging,
 			policy: this.conversationPolicy,
 			references: workspaceReferences,
@@ -985,6 +1011,7 @@ export class TsukaimaLifecycle {
 			workspace: this.workspace,
 		});
 		const imDelegationTools = new Set<string>(IM_WORKSPACE_DELEGATION_TOOL_NAMES);
+		const sandboxTools = new Set<string>(SANDBOX_WORKSPACE_TOOL_NAMES);
 		this.workspaceToolsExtension = createWorkspaceToolsExtension({
 			audit: (entry) => this.writeAudit(entry),
 			authorizeCaller: async (durableConversationId, toolName) => {
@@ -1012,6 +1039,26 @@ export class TsukaimaLifecycle {
 					policy,
 					toolName,
 				});
+			},
+			authorizeSandboxCaller: async (durableConversationId, toolName) => {
+				const caller = await resolveImCallerContext({
+					conversationId: durableConversationId,
+					database: this.domainDatabase,
+					overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
+					settings: this.pluginSettings,
+				});
+				let policy: { readonly sandboxWorkspaceEnabled: boolean } | undefined;
+				if (caller.domainConversationId !== undefined && sandboxTools.has(toolName)) {
+					try {
+						policy = await this.conversationPolicy.effectivePolicy(caller.domainConversationId);
+					} catch (error) {
+						this.runtimeLog.warn("sandbox tool policy read failed; denying caller", {
+							conversationId: durableConversationId,
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
+				}
+				return authorizeSandboxToolCall({ caller, policy, toolName });
 			},
 			gitIdentity: () => readGitIdentity(this.domainDatabase),
 			logger: this.runtimeLog,
@@ -1594,6 +1641,7 @@ export class TsukaimaLifecycle {
 		durableConversationId: string,
 		policy: {
 			readonly capabilities: readonly string[];
+			readonly sandboxWorkspaceEnabled?: boolean;
 			readonly workspaceDelegationEnabled?: boolean;
 		},
 	): Promise<void> {
@@ -1653,6 +1701,7 @@ export class TsukaimaLifecycle {
 			kind,
 			proactiveTools,
 			readFailed,
+			sandboxWorkspaceEnabled: policy.sandboxWorkspaceEnabled === true,
 			workspaceDelegationEnabled: policy.workspaceDelegationEnabled === true,
 		});
 		try {
@@ -1670,13 +1719,65 @@ export class TsukaimaLifecycle {
 		const database = this.domainDatabase;
 		if (database === undefined) return;
 		const [workspace] = await database
-			.select({ parentSessionId: workspaceSessions.parentSessionId })
+			.select({
+				parentSessionId: workspaceSessions.parentSessionId,
+				workspaceKind: workspaceSessions.workspaceKind,
+			})
 			.from(workspaceSessions)
 			.where(eq(workspaceSessions.id, event.sessionId))
 			.limit(1);
 		const parentSessionId = workspace?.parentSessionId;
 		if (parentSessionId === null || parentSessionId === undefined) return;
 		const summary = event.assistantText.trim();
+		if ((workspace?.workspaceKind ?? event.workspaceKind) === "sandbox") {
+			const outputFiles = await this.workspace.collectSandboxOutputs(event.sessionId);
+			const lines = [
+				"[Sandbox workspace finished]",
+				`sandboxSessionId: ${event.sessionId}`,
+				...(event.failure === undefined ? [] : [`error: ${event.failure}`]),
+				...(summary.length === 0 ? [] : [`summary:\n${summary}`]),
+				...(outputFiles.length === 0
+					? []
+					: [
+							"outputFiles:",
+							...outputFiles.map(
+								(output) =>
+									`- ${output.fileName} · mediaId=${output.mediaId} · ${output.mimeType} · ${output.sizeBytes} bytes`,
+							),
+						]),
+				`Use sandbox_status({ sessionId: "${event.sessionId}" }) for details. When sending output files to the user, pass the listed mediaId values to onebot-napcat.send.`,
+			];
+			try {
+				await this.sessionMessaging.sendAgentMessage({
+					deliveryMode: "follow-up",
+					direction: "system",
+					...(outputFiles.length === 0
+						? {}
+						: {
+								parts: [
+									{ text: lines.join("\n"), type: "text" as const },
+									...outputFiles.map((output) => ({
+										fileName: output.fileName,
+										mediaId: output.mediaId,
+										mimeType: output.mimeType,
+										sizeBytes: output.sizeBytes,
+										type: "file" as const,
+									})),
+								],
+							}),
+					sessionId: parentSessionId,
+					source: "session-tool",
+					text: lines.join("\n"),
+				});
+			} catch (error) {
+				this.runtimeLog.warn("failed to notify parent session of sandbox completion", {
+					error: error instanceof Error ? error.message : String(error),
+					parentSessionId,
+					sandboxSessionId: event.sessionId,
+				});
+			}
+			return;
+		}
 		const lines = [
 			"[Workspace subagent finished]",
 			`workspaceSessionId: ${event.sessionId}`,
@@ -1705,14 +1806,23 @@ export class TsukaimaLifecycle {
 	private async createWorkspaceTask(input: {
 		readonly baseRef: string;
 		readonly goal: string;
+		readonly sandbox?: boolean;
 		readonly sourceConversationId: string;
 	}): Promise<string> {
-		const constraints = {
-			allowedCommands: [...WORKSPACE_NATIVE_TASK_CONSTRAINTS.allowedCommands],
-			maxOutputBytes: WORKSPACE_NATIVE_TASK_CONSTRAINTS.maxOutputBytes,
-			pathAllowlist: [...WORKSPACE_NATIVE_TASK_CONSTRAINTS.pathAllowlist],
-			timeoutMs: WORKSPACE_NATIVE_TASK_CONSTRAINTS.timeoutMs,
-		};
+		const constraints =
+			input.sandbox === true
+				? {
+						allowedCommands: [...SANDBOX_TASK_CONSTRAINTS.allowedCommands],
+						maxOutputBytes: SANDBOX_TASK_CONSTRAINTS.maxOutputBytes,
+						pathAllowlist: [...SANDBOX_TASK_CONSTRAINTS.pathAllowlist],
+						timeoutMs: SANDBOX_TASK_CONSTRAINTS.timeoutMs,
+					}
+				: {
+						allowedCommands: [...WORKSPACE_NATIVE_TASK_CONSTRAINTS.allowedCommands],
+						maxOutputBytes: WORKSPACE_NATIVE_TASK_CONSTRAINTS.maxOutputBytes,
+						pathAllowlist: [...WORKSPACE_NATIVE_TASK_CONSTRAINTS.pathAllowlist],
+						timeoutMs: WORKSPACE_NATIVE_TASK_CONSTRAINTS.timeoutMs,
+					};
 		const task = await this.codingStore.createTask({
 			baseRef: input.baseRef,
 			constraints,
@@ -1876,6 +1986,7 @@ export class TsukaimaLifecycle {
 	async start(): Promise<void> {
 		this.transition("prepare-directories");
 		await mkdir(join(this.config.dataDir, "blobs"), { recursive: true });
+		await mkdir(join(this.config.dataDir, "sandbox-workspaces"), { recursive: true });
 		if (
 			this.config.logDir !== undefined &&
 			!this.customLoggerProvided &&
@@ -2726,7 +2837,7 @@ export class TsukaimaLifecycle {
 	 * sees a placeholder.
 	 */
 	private async ingestInboundMedia(part: MessagePart, channelId: string): Promise<MessagePart> {
-		if (part.type !== "image" && part.type !== "sticker") return part;
+		if (part.type !== "file" && part.type !== "image" && part.type !== "sticker") return part;
 		// QQ native faces have no downloadable bytes; they stay a sticker summary, not a fetch failure.
 		if (part.channelRef?.startsWith("face:") === true) return part;
 		// Already content-addressed: the bytes are here.

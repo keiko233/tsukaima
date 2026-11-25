@@ -99,6 +99,8 @@ export function WorkspaceInspectorTabs({
 	workspace?: WorkspaceDetail | null;
 }) {
 	const selected = workspaceTab(activeTab);
+	const isSandbox = workspace?.workspace.workspaceKind === "sandbox";
+	const effectiveSelected = isSandbox && selected === "git" ? "context" : selected;
 	const todoItems = (workspace?.todos ?? []).map((todo) => ({
 		detail: todo.status === "in_progress" ? m.context_title() : undefined,
 		id: todo.id,
@@ -126,7 +128,7 @@ export function WorkspaceInspectorTabs({
 			</div>
 			<Tabs
 				variant="underline"
-				value={selected}
+				value={effectiveSelected}
 				onValueChange={(value) => {
 					if (
 						value === "context" ||
@@ -176,18 +178,22 @@ export function WorkspaceInspectorTabs({
 						>
 							{m.workspace_inspector_sessions()}
 						</TabsTrigger>
-						<TabsTrigger
-							value="git"
-							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
-						>
-							Git
-						</TabsTrigger>
-						<TabsTrigger
-							value="data"
-							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
-						>
-							{m.workspace_inspector_data()}
-						</TabsTrigger>
+						{isSandbox ? null : (
+							<TabsTrigger
+								value="git"
+								className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
+							>
+								Git
+							</TabsTrigger>
+						)}
+						{isSandbox ? null : (
+							<TabsTrigger
+								value="data"
+								className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
+							>
+								{m.workspace_inspector_data()}
+							</TabsTrigger>
+						)}
 						<TabsTrigger
 							value="schedules"
 							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
@@ -202,6 +208,11 @@ export function WorkspaceInspectorTabs({
 							<span className="truncate text-[11px] font-medium text-foreground">
 								{workspace?.workspace.title ?? session.title}
 							</span>
+							{isSandbox ? (
+								<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+									{m.workspace_sandbox_badge()}
+								</span>
+							) : null}
 							<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
 								{workspace?.workspace.taskStatus ?? m.workspace_status_draft()}
 							</span>
@@ -222,7 +233,7 @@ export function WorkspaceInspectorTabs({
 					<SessionModelView sessionId={session.id} surface="workspace" />
 				</TabsContent>
 				<TabsContent value="git" className="mt-0 flex min-h-0 flex-1 flex-col">
-					{selected === "git" ? (
+					{effectiveSelected === "git" && !isSandbox ? (
 						<WorkspaceGitPanel key={session.id} sessionId={session.id} />
 					) : null}
 				</TabsContent>

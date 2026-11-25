@@ -6,6 +6,7 @@ import { CODING_AGENT_TOOL_NAMES } from "./coding-agent-tools.ts";
 import { PROMPT_TOOL_NAMES } from "./prompt-tools.ts";
 import {
 	IM_WORKSPACE_DELEGATION_TOOL_NAMES,
+	SANDBOX_WORKSPACE_TOOL_NAMES,
 	WORKSPACE_CODING_TOOL_NAMES,
 	WORKSPACE_TOOL_NAMES,
 } from "./workspace-tools.ts";
@@ -22,6 +23,7 @@ export interface ComputeOmittedSessionToolsInput {
 	readonly proactiveTools: readonly string[];
 	/** True when the conversation kind could not be read; forces fail-closed omissions. */
 	readonly readFailed?: boolean;
+	readonly sandboxWorkspaceEnabled?: boolean;
 	readonly workspaceDelegationEnabled: boolean;
 }
 
@@ -48,12 +50,19 @@ export function computeOmittedSessionTools(
 		for (const name of WORKSPACE_CODING_TOOL_NAMES) removed.add(name);
 	}
 	const isImChat = input.kind === "private" || input.kind === "group";
+	const isSandboxWorkspace =
+		!readFailed && input.kind === "workspace" && input.capabilities.includes("sandbox");
+	const sandboxAllowed =
+		!readFailed &&
+		input.sandboxWorkspaceEnabled === true &&
+		(input.kind === "webui" || input.kind === "private" || input.kind === "group");
 	// Admin terminal/file, settings, and runtime maintenance tools stay discoverable on the
 	// admin-capable surfaces (WebUI, workspace, and IM) but every IM execution is additionally
 	// admin-gated at runtime. Unknown kinds and transient reads must lose them so a failed lookup
 	// cannot widen the surface.
 	const adminOpsVisible =
-		!readFailed && (input.kind === "webui" || input.kind === "workspace" || isImChat);
+		!readFailed &&
+		(input.kind === "webui" || (input.kind === "workspace" && codingAllowed) || isImChat);
 	if (!adminOpsVisible) {
 		for (const name of ADMIN_OPS_TOOL_NAMES) removed.add(name);
 		for (const name of ADMIN_SETTINGS_TOOL_NAMES) removed.add(name);
@@ -67,21 +76,38 @@ export function computeOmittedSessionTools(
 		// Coding tools are already omitted above; the branch stays explicit so the surface rule
 		// matches the documented role policy.
 	} else if (input.kind === "workspace") {
-		removed.add("workspace_spawn");
+		if (isSandboxWorkspace) {
+			for (const name of WORKSPACE_TOOL_NAMES) removed.add(name);
+		} else {
+			removed.add("workspace_spawn");
+		}
 	} else if (isImChat && !readFailed) {
 		for (const name of input.proactiveTools) removed.add(name);
 		if (input.workspaceDelegationEnabled === true) {
 			const delegation = new Set<string>(IM_WORKSPACE_DELEGATION_TOOL_NAMES);
 			for (const name of WORKSPACE_TOOL_NAMES) {
-				if (!delegation.has(name)) removed.add(name);
+				const isSandboxTool = (SANDBOX_WORKSPACE_TOOL_NAMES as readonly string[]).includes(name);
+				if (!delegation.has(name) && !(sandboxAllowed && isSandboxTool)) removed.add(name);
 			}
 		} else {
-			for (const name of WORKSPACE_TOOL_NAMES) removed.add(name);
+			// Sandbox tools are governed by their own policy switch, not the admin-only
+			// coding delegation switch, so a plain chat keeps them when sandbox is enabled.
+			for (const name of WORKSPACE_TOOL_NAMES) {
+				if (
+					!sandboxAllowed ||
+					!(SANDBOX_WORKSPACE_TOOL_NAMES as readonly string[]).includes(name)
+				) {
+					removed.add(name);
+				}
+			}
 		}
 	} else {
 		for (const name of WORKSPACE_TOOL_NAMES) removed.add(name);
 		for (const name of SCHEDULE_TOOL_NAMES) removed.add(name);
 		for (const name of input.proactiveTools) removed.add(name);
+	}
+	if (!sandboxAllowed) {
+		for (const name of SANDBOX_WORKSPACE_TOOL_NAMES) removed.add(name);
 	}
 	// Prompt tools are discoverable on WebUI, coding workspaces, and IM chats. IM execution is
 	// still gated at runtime to a verified administrator inside `prompt-tools.ts`; unknown

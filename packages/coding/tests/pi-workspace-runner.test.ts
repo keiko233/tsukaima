@@ -52,6 +52,7 @@ interface RunnerOptions {
 	readonly pathAllowlist?: readonly string[];
 	readonly requireIsolatedSandbox?: boolean;
 	readonly responses?: readonly ReturnType<typeof fauxAssistantMessage>[];
+	readonly sandboxMode?: boolean;
 	readonly sessionFile?: string;
 	readonly thinkingLevel?: PiWorkspaceRunnerConfig["thinkingLevel"];
 }
@@ -137,6 +138,7 @@ async function createRunner(
 		...(options.requireIsolatedSandbox === undefined
 			? {}
 			: { requireIsolatedSandbox: options.requireIsolatedSandbox }),
+		...(options.sandboxMode === undefined ? {} : { sandboxMode: options.sandboxMode }),
 		agentDir: context.agentDir,
 		allowedCommands: options.allowedCommands ?? ["echo", "sleep"],
 		executor: options.executor ?? createTestExecutor,
@@ -146,6 +148,7 @@ async function createRunner(
 		sessionFile: options.sessionFile ?? join(context.root, `session-${crypto.randomUUID()}.jsonl`),
 		thinkingLevel: options.thinkingLevel ?? "off",
 		worktreePath: context.worktreePath,
+		...(options.sandboxMode === true ? { worktreeRoot: context.root } : {}),
 	});
 	disposers.push(async () => await runner.dispose());
 	return { faux: fauxRuntime.faux, runner };
@@ -600,5 +603,82 @@ describe("PiWorkspaceRunner host bash mode", () => {
 		expect(end).toBeDefined();
 		expect(eventText(end!)).toContain("hello.ts");
 		expect(eventText(end!)).toContain("HELLO");
+	});
+});
+
+describe("PiWorkspaceRunner scratch sandbox mode", () => {
+	test("accepts the root allowlist only in sandbox mode", async () => {
+		await expect(
+			createRunner({ pathAllowlist: ["."], requireIsolatedSandbox: false }),
+		).rejects.toThrow("pathAllowlist");
+		const runner = await createRunner({ pathAllowlist: ["."], sandboxMode: true });
+		expect(runner.runner.activeToolNames).toContain("read");
+	});
+
+	test("rejects a non-isolated executor even when isolation was not separately requested", async () => {
+		await expect(
+			createRunner({
+				executor: async () => ({
+					id: "host",
+					isolated: false,
+					exec: async () => {
+						throw new Error("should not run");
+					},
+				}),
+				pathAllowlist: ["."],
+				sandboxMode: true,
+			}),
+		).rejects.toBeInstanceOf(SandboxUnavailableError);
+	});
+
+	test("requires the governed bash tool and isolated executor for sandbox mode", async () => {
+		await expect(
+			createRunner({
+				nativeTools: ["read"],
+				pathAllowlist: ["."],
+				sandboxMode: true,
+			}),
+		).rejects.toBeInstanceOf(SandboxUnavailableError);
+		const fauxRuntime = await createFauxRuntime();
+		await expect(
+			createPiWorkspaceRunner({
+				agentDir: context.agentDir,
+				allowedCommands: ["echo"],
+				bashMode: "host",
+				executor: createTestExecutor,
+				model: fauxRuntime.model,
+				modelRuntime: fauxRuntime.runtime,
+				pathAllowlist: ["."],
+				sandboxMode: true,
+				sessionFile: join(context.root, `session-${crypto.randomUUID()}.jsonl`),
+				worktreePath: context.worktreePath,
+				worktreeRoot: context.root,
+			}),
+		).rejects.toThrow("sandboxMode requires governed bash");
+	});
+
+	test("still rejects parent traversal and symlink escapes in scratch allowlists", async () => {
+		const parent = await createRunner({
+			pathAllowlist: ["."],
+			responses: [
+				fauxAssistantMessage([fauxToolCall("read", { path: "../outside-secret.txt" })], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage("parent rejected"),
+			],
+			sandboxMode: true,
+		});
+		const symlinkRunner = await createRunner({
+			pathAllowlist: ["."],
+			responses: [
+				fauxAssistantMessage([fauxToolCall("read", { path: "src/link.ts" })], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage("symlink rejected"),
+			],
+			sandboxMode: true,
+		});
+		expect((await parent.runner.run("read parent")).toolErrors).toBe(1);
+		expect((await symlinkRunner.runner.run("read symlink")).toolErrors).toBe(1);
 	});
 });

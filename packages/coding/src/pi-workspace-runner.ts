@@ -102,6 +102,12 @@ export interface PiWorkspaceRunnerConfig {
 	readonly pathAllowlist: readonly string[];
 	/** Commands the native `bash` tool may run in governed mode. */
 	readonly allowedCommands: readonly string[];
+	/**
+	 * Scratch workspace mode. Allows the root allowlist entry `"."`, and requires the executor to
+	 * be OS-isolated with governed bash. Traversal, absolute escapes, and symlinks are still
+	 * rejected by the same allowlist check as coding worktrees.
+	 */
+	readonly sandboxMode?: boolean;
 	/** How `bash` executes commands: `"governed"` (default) or `"host"` (direct shell in worktree). */
 	readonly bashMode?: "governed" | "host";
 	/**
@@ -171,6 +177,7 @@ interface ResolvedRunnerConfig {
 	readonly maxWriteBytes: number;
 	readonly nativeTools: readonly PiWorkspaceNativeToolName[];
 	readonly pathAllowlist: readonly string[];
+	readonly sandboxMode: boolean;
 	readonly timeoutMs: number;
 	readonly worktreePath: string;
 }
@@ -202,6 +209,14 @@ export class PiWorkspaceRunner {
 			resolved.nativeTools.includes("bash") && resolved.bashMode === "governed"
 				? await this.#config.executor()
 				: undefined;
+		if (
+			this.#config.sandboxMode === true &&
+			(resolved.bashMode !== "governed" || !resolved.nativeTools.includes("bash"))
+		) {
+			throw new SandboxUnavailableError("scratch sandbox mode requires the governed bash tool", {
+				code: "backend_not_isolated",
+			});
+		}
 		if (
 			executor !== undefined &&
 			(this.#config.requireIsolatedSandbox ?? true) &&
@@ -237,7 +252,9 @@ export class PiWorkspaceRunner {
 								allowedCommands: resolved.allowedCommands,
 								executor: async () => executor,
 								maxOutputBytes: resolved.maxOutputBytes,
-								snapshot: executor.isolated,
+								// Scratch sandboxes bind their own session directory writable and are already
+								// disposable, so a per-command snapshot would only fail closed.
+								snapshot: executor.isolated && !resolved.sandboxMode,
 								timeoutMs: resolved.timeoutMs,
 								worktreePath: resolved.worktreePath,
 								writable: true,
@@ -251,6 +268,15 @@ export class PiWorkspaceRunner {
 			},
 			resolved.nativeTools,
 		);
+		if (
+			this.#config.requireIsolatedSandbox === true &&
+			executor !== undefined &&
+			executor.isolated !== true
+		) {
+			throw new SandboxUnavailableError("sandbox execution requires an isolated executor", {
+				code: "backend_not_isolated",
+			});
+		}
 		const customTools = [...tools, ...resolved.additionalTools];
 		const activeToolNames = [
 			...resolved.nativeTools,
@@ -835,7 +861,10 @@ async function resolveConfig(config: PiWorkspaceRunnerConfig): Promise<ResolvedR
 		throw invalidConfig("agentDir must be outside the worktree");
 	}
 	const bashMode = config.bashMode ?? "governed";
-	const pathAllowlist = validateAllowlist(config.pathAllowlist);
+	const pathAllowlist = validateAllowlist(config.pathAllowlist, config.sandboxMode === true);
+	if (config.sandboxMode === true && bashMode !== "governed") {
+		throw invalidConfig("sandboxMode requires governed bash");
+	}
 	const allowedCommands = validateCommands(config.allowedCommands);
 	const nativeTools = validateNativeTools(config.nativeTools);
 	const additionalTools = validateAdditionalTools(config.additionalTools);
@@ -866,6 +895,7 @@ async function resolveConfig(config: PiWorkspaceRunnerConfig): Promise<ResolvedR
 		maxOutputBytes,
 		maxWriteBytes,
 		pathAllowlist,
+		sandboxMode: config.sandboxMode === true,
 		nativeTools,
 		timeoutMs,
 	};
@@ -916,13 +946,20 @@ async function resolveSessionManager(
 	return SessionManager.open(sessionFile, sessionDir, worktreePath);
 }
 
-function validateAllowlist(entries: readonly string[]): readonly string[] {
+function validateAllowlist(entries: readonly string[], sandboxMode: boolean): readonly string[] {
 	if (entries.length === 0) throw invalidConfig("pathAllowlist must not be empty");
 	const unique = new Set<string>();
 	for (const entry of entries) {
 		const normalized = entry.replace(/\/+$/u, "");
-		if (normalized.length === 0 || normalized === ".") {
+		if (normalized.length === 0) {
 			throw invalidConfig(`pathAllowlist entry is invalid: ${entry}`);
+		}
+		if (normalized === ".") {
+			if (!sandboxMode) {
+				throw invalidConfig(`pathAllowlist entry is invalid: ${entry}`);
+			}
+			unique.add(".");
+			continue;
 		}
 		if (normalized.includes("\0") || isAbsolute(normalized) || normalized.startsWith("..")) {
 			throw invalidConfig(`pathAllowlist entry must be worktree-relative: ${entry}`);

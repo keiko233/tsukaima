@@ -11,6 +11,7 @@ import {
 	migrateDomainDatabase,
 	openDomainDatabase,
 	type TsukaimaDatabase,
+	workspaceSessions,
 } from "@tsukaima/db";
 import type { DurableExtension } from "@tsukaima/core";
 import type { AuditEntry } from "@tsukaima/sdk";
@@ -112,6 +113,18 @@ async function seedConversation(
 		title: "Synthetic admin settings chat",
 		updatedAt: now,
 	});
+	if (input.kind === "workspace") {
+		await database.insert(workspaceSessions).values({
+			baseRef: "HEAD",
+			chatObjectId: chatId,
+			createdAtMs: Date.now(),
+			id: sessionId,
+			mode: "maintenance",
+			repositoryRoot: process.cwd(),
+			updatedAtMs: Date.now(),
+			workspaceKind: "coding",
+		});
+	}
 	let occurredAtMs = Date.now() - 60_000;
 	for (const message of input.messages ?? []) {
 		occurredAtMs += 1_000;
@@ -302,15 +315,35 @@ function createExtension(input: {
 }
 
 describe("admin settings authorization", () => {
-	test("webui and workspace are allowed while unknown kinds and missing callers fail closed", () => {
-		for (const chatKind of ["webui", "workspace"] as const) {
-			expect(
-				authorizeAdminSettingsToolCall({
-					caller: { chatKind, domainConversationId: "session-synthetic" },
-					toolName: "settings_get",
-				}),
-			).toMatchObject({ allowed: true });
-		}
+	test("webui and coding workspaces are allowed while sandbox workspaces and unknown kinds fail closed", () => {
+		expect(
+			authorizeAdminSettingsToolCall({
+				caller: { chatKind: "webui", domainConversationId: "session-synthetic" },
+				toolName: "settings_get",
+			}),
+		).toMatchObject({ allowed: true });
+		expect(
+			authorizeAdminSettingsToolCall({
+				caller: {
+					chatKind: "workspace",
+					domainConversationId: "session-synthetic",
+					isAdmin: true,
+					workspaceKind: "coding",
+				},
+				toolName: "settings_get",
+			}),
+		).toMatchObject({ allowed: true });
+		expect(
+			authorizeAdminSettingsToolCall({
+				caller: {
+					chatKind: "workspace",
+					domainConversationId: "session-synthetic",
+					isAdmin: false,
+					workspaceKind: "sandbox",
+				},
+				toolName: "settings_get",
+			}),
+		).toMatchObject({ allowed: false, reason: "admin_required" });
 		for (const caller of [
 			{},
 			{ chatKind: "task" },

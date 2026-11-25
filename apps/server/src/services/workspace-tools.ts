@@ -23,8 +23,15 @@ export const IM_WORKSPACE_DELEGATION_TOOL_NAMES = [
 	"workspace_send",
 	"session_lookup",
 ] as const;
+/** Isolated document/data workspaces available to ordinary private/group chat participants. */
+export const SANDBOX_WORKSPACE_TOOL_NAMES = [
+	"sandbox_spawn",
+	"sandbox_status",
+	"sandbox_send",
+] as const;
 export const WORKSPACE_TOOL_NAMES = [
 	...IM_WORKSPACE_DELEGATION_TOOL_NAMES,
+	...SANDBOX_WORKSPACE_TOOL_NAMES,
 	"hook_schedule",
 	"hook_list",
 	...WORKSPACE_CODING_TOOL_NAMES,
@@ -48,6 +55,10 @@ export interface WorkspaceToolsOptions {
 	 * callers must satisfy BOTH `policy.workspaceDelegationEnabled === true` and trusted admin status.
 	 */
 	readonly authorizeCaller?: (
+		durableConversationId: string,
+		toolName: string,
+	) => Promise<WorkspaceCallerAuthorization>;
+	readonly authorizeSandboxCaller?: (
 		durableConversationId: string,
 		toolName: string,
 	) => Promise<WorkspaceCallerAuthorization>;
@@ -152,6 +163,12 @@ function callerPayload(
 	};
 }
 
+function auditAction(name: string): string {
+	return (SANDBOX_WORKSPACE_TOOL_NAMES as readonly string[]).includes(name)
+		? `sandbox-tool.${name}`
+		: `workspace-tool.${name}`;
+}
+
 /**
  * Host-owned tools shared by chat and workspace sessions. Visibility is filtered per
  * conversation in the lifecycle; IM conversations only receive `IM_WORKSPACE_DELEGATION_TOOL_NAMES`
@@ -180,6 +197,7 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 		conversationId: string,
 		body: (auth: WorkspaceCallerAuthorization | undefined) => Promise<T>,
 		extraAudit?: (result: T) => Record<string, unknown>,
+		authorize: WorkspaceToolsOptions["authorizeCaller"] = options.authorizeCaller,
 	): Promise<
 		| { output: { text: string; type: "text" }[] }
 		| {
@@ -188,13 +206,13 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 		  }
 	> => {
 		let auth: WorkspaceCallerAuthorization | undefined;
-		if (options.authorizeCaller !== undefined) {
+		if (authorize !== undefined) {
 			try {
-				auth = await options.authorizeCaller(conversationId, name);
+				auth = await authorize(conversationId, name);
 			} catch (error) {
 				const reason = error instanceof Error ? error.message : "authorization_check_failed";
 				await audit({
-					action: `workspace-tool.${name}`,
+					action: auditAction(name),
 					actorId: "unknown",
 					actorKind: "agent",
 					payload: { conversationId, reason },
@@ -207,7 +225,7 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 			if (!auth.allowed) {
 				const reason = auth.reason ?? "workspace_delegation_denied";
 				await audit({
-					action: `workspace-tool.${name}`,
+					action: auditAction(name),
 					actorId: auth.callerId ?? "unknown",
 					actorKind: auth.callerId === undefined ? "agent" : "user",
 					payload: callerPayload(conversationId, auth, { reason }),
@@ -230,7 +248,7 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 		try {
 			const result = await body(auth);
 			await audit({
-				action: `workspace-tool.${name}`,
+				action: auditAction(name),
 				...(isImCaller && auth?.callerId !== undefined ? { actorId: auth.callerId } : {}),
 				actorKind: isImCaller && auth?.callerId !== undefined ? "user" : "agent",
 				payload: callerPayload(conversationId, auth, extraAudit?.(result)),
@@ -242,7 +260,7 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			await audit({
-				action: `workspace-tool.${name}`,
+				action: auditAction(name),
 				...(isImCaller && auth?.callerId !== undefined ? { actorId: auth.callerId } : {}),
 				actorKind: isImCaller && auth?.callerId !== undefined ? "user" : "agent",
 				payload: callerPayload(conversationId, auth),
@@ -410,6 +428,179 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 		},
 	});
 
+	const sandboxSpawn = tool({
+		deferred: false,
+		description:
+			"Spawn an isolated sandbox workspace for document, file, data, or scripting work. The sandbox has no network, no repository, and no host data. Staged user attachments appear in inputs/; files written under output/ are returned as media artifacts. Use this for ordinary chat tasks that need real command execution.",
+		name: "sandbox_spawn",
+		parameters: {
+			properties: {
+				effort: {
+					enum: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+					type: "string",
+				},
+				fileNames: {
+					description:
+						"Attachment file names from this same chat (e.g. from [file: name]) to stage into inputs/. When both fileNames and mediaIds are omitted, recent file attachments from this caller are staged automatically.",
+					items: { type: "string" },
+					type: "array",
+				},
+				goal: {
+					description: "Concrete document/data goal and the expected output file(s) under output/.",
+					type: "string",
+				},
+				mediaIds: {
+					description: "Media ids from this same chat turn/message to stage into inputs/.",
+					items: { type: "string" },
+					type: "array",
+				},
+				model: { description: "Model id from the active provider's catalog.", type: "string" },
+				modelProvider: {
+					description: "Provider id; must be the active provider. Defaults to it.",
+					type: "string",
+				},
+			},
+			required: ["goal"],
+			type: "object",
+		},
+		surface: "chat",
+		async execute(args, api) {
+			const input = record(args);
+			return run(
+				"sandbox_spawn",
+				String(api.conversationId),
+				async (auth) => {
+					const sourceSessionId = await resolveCurrentSession(String(api.conversationId));
+					const mediaIds = Array.isArray(input.mediaIds)
+						? input.mediaIds.filter((value): value is string => typeof value === "string")
+						: [];
+					const fileNames = Array.isArray(input.fileNames)
+						? input.fileNames.filter((value): value is string => typeof value === "string")
+						: [];
+					const result = await options.workspace.spawnFromSession(sourceSessionId, {
+						autoStageRecentFiles: mediaIds.length === 0 && fileNames.length === 0,
+						...(fileNames.length === 0 ? {} : { fileNames }),
+						...(stringValue(input, "model") === undefined
+							? {}
+							: {
+									model: {
+										modelId: stringValue(input, "model")!,
+										...(stringValue(input, "modelProvider") === undefined
+											? {}
+											: { providerId: stringValue(input, "modelProvider")! }),
+									},
+								}),
+						goal: stringValue(input, "goal", true)!,
+						...(mediaIds.length === 0 ? {} : { mediaIds }),
+						...(auth?.callerId === undefined ? {} : { requestedBy: `im:${auth.callerId}` }),
+						...(thinkingLevel(input.effort) === undefined
+							? {}
+							: { thinking: thinkingLevel(input.effort)! }),
+						workspaceKind: "sandbox",
+					});
+					return {
+						...result,
+						next: "The sandbox agent is running. Use sandbox_status to read its reply and outputFiles, then sandbox_send for follow-up instructions.",
+						parentSessionId: sourceSessionId,
+						status: "spawned",
+					};
+				},
+				(result) => ({ spawnedSessionId: result.sessionId, taskId: result.taskId }),
+				options.authorizeSandboxCaller,
+			);
+		},
+	});
+
+	const sandboxStatus = tool({
+		deferred: false,
+		description:
+			"Read an isolated sandbox workspace you own in this chat. Returns its reply, status, staged inputs, and output media artifacts.",
+		name: "sandbox_status",
+		parameters: {
+			properties: { sessionId: { type: "string" } },
+			required: ["sessionId"],
+			type: "object",
+		},
+		surface: "chat",
+		async execute(args, api) {
+			const input = record(args);
+			return run(
+				"sandbox_status",
+				String(api.conversationId),
+				async (auth) => {
+					const sourceSessionId = await resolveCurrentSession(String(api.conversationId));
+					return await options.workspace.sandboxStatus({
+						requester: {
+							isAdmin: auth?.isAdmin === true,
+							senderPlatformId: auth?.callerId,
+						},
+						sessionId: stringValue(input, "sessionId", true)!,
+						sourceSessionId,
+					});
+				},
+				undefined,
+				options.authorizeSandboxCaller,
+			);
+		},
+	});
+
+	const sandboxSend = tool({
+		deferred: false,
+		description:
+			"Send a follow-up instruction or interrupt to an isolated sandbox workspace you own in this chat. Optional fileNames or mediaIds from this same chat are staged into inputs/ for the sandbox.",
+		name: "sandbox_send",
+		parameters: {
+			properties: {
+				fileNames: {
+					description: "Attachment file names from this same chat session to stage into inputs/.",
+					items: { type: "string" },
+					type: "array",
+				},
+				mediaIds: {
+					description: "Media ids from this same chat session to stage into inputs/.",
+					items: { type: "string" },
+					type: "array",
+				},
+				mode: { enum: ["steer", "interrupt", "follow-up"], type: "string" },
+				sessionId: { type: "string" },
+				text: { type: "string" },
+			},
+			required: ["sessionId", "text"],
+			type: "object",
+		},
+		surface: "chat",
+		async execute(args, api) {
+			const input = record(args);
+			return run(
+				"sandbox_send",
+				String(api.conversationId),
+				async (auth) => {
+					const sourceSessionId = await resolveCurrentSession(String(api.conversationId));
+					const mediaIds = Array.isArray(input.mediaIds)
+						? input.mediaIds.filter((value): value is string => typeof value === "string")
+						: [];
+					const fileNames = Array.isArray(input.fileNames)
+						? input.fileNames.filter((value): value is string => typeof value === "string")
+						: [];
+					return await options.workspace.sandboxSend({
+						deliveryMode: deliveryMode(input.mode),
+						...(fileNames.length === 0 ? {} : { fileNames }),
+						...(mediaIds.length === 0 ? {} : { mediaIds }),
+						requester: {
+							isAdmin: auth?.isAdmin === true,
+							senderPlatformId: auth?.callerId,
+						},
+						sessionId: stringValue(input, "sessionId", true)!,
+						sourceSessionId,
+						text: stringValue(input, "text", true)!,
+					});
+				},
+				undefined,
+				options.authorizeSandboxCaller,
+			);
+		},
+	});
+
 	const scheduleHook = tool({
 		description:
 			"Create a durable prompt hook. next-turn injects context before the next agent turn, after-restart submits a reserved turn on the next process boot, and at submits at an ISO time. Use after-restart when you tell a user you will return after maintenance.",
@@ -539,6 +730,17 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 
 	return {
 		name: WORKSPACE_TOOLS_EXTENSION_NAME,
-		tools: [spawn, status, gitIdentity, send, lookupSessions, scheduleHook, listHooks],
+		tools: [
+			spawn,
+			status,
+			gitIdentity,
+			send,
+			sandboxSpawn,
+			sandboxStatus,
+			sandboxSend,
+			lookupSessions,
+			scheduleHook,
+			listHooks,
+		],
 	};
 }

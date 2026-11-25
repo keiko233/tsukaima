@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { eq } from "drizzle-orm";
 import {
 	chatObjects,
 	conversations,
@@ -10,6 +11,7 @@ import {
 	migrateDomainDatabase,
 	openDomainDatabase,
 	type TsukaimaDatabase,
+	workspaceSessions,
 } from "@tsukaima/db";
 import type { DurableExtension } from "@tsukaima/core";
 import type { AuditEntry } from "@tsukaima/sdk";
@@ -110,6 +112,18 @@ async function seedConversation(
 		title: "Synthetic admin ops chat",
 		updatedAt: now,
 	});
+	if (input.kind === "workspace") {
+		await database.insert(workspaceSessions).values({
+			baseRef: "HEAD",
+			chatObjectId: chatId,
+			createdAtMs: Date.now(),
+			id: sessionId,
+			mode: "maintenance",
+			repositoryRoot: process.cwd(),
+			updatedAtMs: Date.now(),
+			workspaceKind: "coding",
+		});
+	}
 	let occurredAtMs = Date.now() - 60_000;
 	for (const message of input.messages ?? []) {
 		occurredAtMs += 1_000;
@@ -207,15 +221,35 @@ function createExtension(input: {
 }
 
 describe("admin ops authorization", () => {
-	test("webui and workspace are allowed while unknown kinds and missing callers fail closed", () => {
-		for (const chatKind of ["webui", "workspace"] as const) {
-			expect(
-				authorizeAdminOpsToolCall({
-					caller: { chatKind, domainConversationId: "session-synthetic" },
-					toolName: "admin_exec",
-				}),
-			).toMatchObject({ allowed: true });
-		}
+	test("webui and coding workspaces are allowed while sandbox workspaces and unknown kinds fail closed", () => {
+		expect(
+			authorizeAdminOpsToolCall({
+				caller: { chatKind: "webui", domainConversationId: "session-synthetic" },
+				toolName: "admin_exec",
+			}),
+		).toMatchObject({ allowed: true });
+		expect(
+			authorizeAdminOpsToolCall({
+				caller: {
+					chatKind: "workspace",
+					domainConversationId: "session-synthetic",
+					isAdmin: true,
+					workspaceKind: "coding",
+				},
+				toolName: "admin_exec",
+			}),
+		).toMatchObject({ allowed: true });
+		expect(
+			authorizeAdminOpsToolCall({
+				caller: {
+					chatKind: "workspace",
+					domainConversationId: "session-synthetic",
+					isAdmin: false,
+					workspaceKind: "sandbox",
+				},
+				toolName: "admin_exec",
+			}),
+		).toMatchObject({ allowed: false, reason: "admin_required" });
 		for (const caller of [
 			{},
 			{ chatKind: "task" },
@@ -274,6 +308,19 @@ describe("admin ops authorization", () => {
 				expect(caller.isAdmin).toBe(true);
 				expect(caller.role).toBe("admin");
 			}
+			const sandbox = await seedConversation(harness.database, { kind: "workspace" });
+			await harness.database
+				.update(workspaceSessions)
+				.set({ workspaceKind: "sandbox" })
+				.where(eq(workspaceSessions.id, sandbox.sessionId));
+			const sandboxCaller = await resolveImCallerContext({
+				conversationId: sandbox.durableConversationId,
+				database: harness.database,
+				settings: settingsWithAdmins([]),
+			});
+			expect(sandboxCaller.chatKind).toBe("workspace");
+			expect(sandboxCaller.isAdmin).toBe(false);
+			expect(sandboxCaller.role).toBeUndefined();
 			const webui = await seedConversation(harness.database, { kind: "webui" });
 			const explicitlyDenied = await resolveImCallerContext({
 				conversationId: webui.durableConversationId,

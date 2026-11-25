@@ -15,7 +15,7 @@ export interface InboundMediaChannel {
 	fetchMedia?(part: MessagePart): Promise<Uint8Array | undefined>;
 }
 
-type InboundMediaPart = Extract<MessagePart, { type: "image" | "sticker" }>;
+type InboundMediaPart = Extract<MessagePart, { type: "file" | "image" | "sticker" }>;
 
 export type InboundMediaResolution =
 	| {
@@ -113,10 +113,19 @@ export class InboundMediaResolver {
 		const channelResult = await this.#fromChannel(part, channel);
 		if (channelResult.kind === "bytes") {
 			try {
-				const stored = await this.#media.storeFetchedBytes(
-					channelResult.bytes,
-					this.#storeInput(part, true),
-				);
+				const stored =
+					part.type === "file"
+						? await this.#media.store({
+								bytes: channelResult.bytes,
+								...(part.mimeType === undefined ? {} : { mimeType: part.mimeType }),
+								kind: "file",
+								...(part.sourceUrl === undefined ? {} : { sourceUrl: part.sourceUrl }),
+								source: "channel",
+							})
+						: await this.#media.storeFetchedBytes(
+								channelResult.bytes,
+								this.#storeInput(part, true),
+							);
 				return { kind: "stored", stored, via: "channel" };
 			} catch (error) {
 				this.#logger.warn("inbound channel media could not be stored", {
@@ -151,13 +160,13 @@ export class InboundMediaResolver {
 		part: InboundMediaPart,
 		withSourceUrl: boolean,
 	): {
-		readonly kind: "image" | "sticker";
+		readonly kind: "file" | "image" | "sticker";
 		readonly mimeType?: string;
 		readonly source: "channel";
 		readonly sourceUrl?: string;
 	} {
 		return {
-			kind: part.type === "sticker" ? "sticker" : "image",
+			kind: part.type === "file" ? "file" : part.type === "sticker" ? "sticker" : "image",
 			...(part.mimeType === undefined ? {} : { mimeType: part.mimeType }),
 			source: "channel",
 			...(withSourceUrl && part.sourceUrl !== undefined ? { sourceUrl: part.sourceUrl } : {}),

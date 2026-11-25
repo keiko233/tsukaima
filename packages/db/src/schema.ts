@@ -933,9 +933,14 @@ export const workspaceSessions = sqliteTable(
 			onDelete: "set null",
 		}),
 		repositoryRoot: text("repository_root").notNull(),
+		sandboxPath: text("sandbox_path"),
 		tagsJson: text("tags_json").notNull().default("[]"),
 		taskId: text("task_id").references(() => codingTasks.id, { onDelete: "set null" }),
 		updatedAtMs: integer("updated_at_ms").notNull(),
+		workspaceKind: text("workspace_kind", { enum: ["coding", "sandbox"] })
+			.notNull()
+			.default("coding"),
+		ownerUserId: text("owner_user_id"),
 	},
 	(table) => [
 		index("workspace_sessions_task_idx").on(table.taskId),

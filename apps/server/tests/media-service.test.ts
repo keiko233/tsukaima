@@ -174,6 +174,40 @@ describe("MediaService", () => {
 		}
 	});
 
+	test("storeFromUrl accepts documents through the document allowlist and rejects images", async () => {
+		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-media-doc-"));
+		directories.push(directory);
+		const database = await openDomainDatabase(join(directory, "domain.sqlite"));
+		migrateDomainDatabase(database);
+		const service = new MediaService({
+			blobsDir: join(directory, "blobs"),
+			database: () => database,
+			logger,
+			resolve: async () => ["93.184.216.34"],
+			transport: async (input) =>
+				new Response(new TextEncoder().encode("synthetic document"), {
+					headers: {
+						"content-type": input.url.pathname.endsWith(".png") ? "image/png" : "text/markdown",
+					},
+				}),
+		});
+		try {
+			const stored = await service.storeFromUrl("https://cdn.example/report.md", {
+				kind: "file",
+				source: "channel",
+			});
+			expect(stored).toMatchObject({ kind: "file", mimeType: "text/markdown" });
+			await expect(
+				service.storeFromUrl("https://cdn.example/report.png", {
+					kind: "file",
+					source: "channel",
+				}),
+			).rejects.toThrow("content type");
+		} finally {
+			database.$client.close();
+		}
+	});
+
 	test("the default transport sends the validated hostname while connecting to the pinned IP", async () => {
 		const { createServer } = await import("node:http");
 		const seen: { host: string | undefined; url: string | undefined } = {

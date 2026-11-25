@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import { Code2, Plus, Search } from "lucide-react";
+import { Box, Code2, Plus, Search } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import { Input } from "@tsukaima/ui/components/motion/input";
@@ -142,10 +142,19 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate: () => void }) {
 								)}
 							>
 								<span className="flex min-w-0 items-center gap-1.5">
-									<Code2 className="size-3.5 shrink-0" />
+									{workspace.workspaceKind === "sandbox" ? (
+										<Box className="size-3.5 shrink-0 text-muted-foreground" />
+									) : (
+										<Code2 className="size-3.5 shrink-0" />
+									)}
 									<span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground">
 										{workspace.title}
 									</span>
+									{workspace.workspaceKind === "sandbox" ? (
+										<span className="shrink-0 rounded bg-muted px-1 text-[8.5px] leading-3.5 font-medium text-muted-foreground">
+											{m.workspace_sandbox_badge()}
+										</span>
+									) : null}
 									<span
 										className={cn(
 											"shrink-0 rounded px-1 text-[8.5px] leading-3.5 font-medium",

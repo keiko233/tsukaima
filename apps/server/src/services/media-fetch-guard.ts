@@ -50,6 +50,8 @@ export interface MediaFetchPolicy {
 	readonly timeoutMs: number;
 	/** Exact MIME types accepted after normalization. */
 	readonly allowedContentTypes: readonly string[];
+	/** Document mode accepts the shared text/document allowlist instead of image/media types. */
+	readonly mode?: "document" | "media";
 }
 
 export const DEFAULT_MEDIA_FETCH_POLICY: MediaFetchPolicy = Object.freeze({
@@ -67,6 +69,40 @@ export const DEFAULT_MEDIA_FETCH_POLICY: MediaFetchPolicy = Object.freeze({
 	maxRedirects: 3,
 	timeoutMs: 15_000,
 });
+
+/** Document/archive/text types safe to store as a file attachment. */
+export const DOCUMENT_MEDIA_CONTENT_TYPES: readonly string[] = Object.freeze([
+	"application/epub+zip",
+	"application/json",
+	"application/msword",
+	"application/octet-stream",
+	"application/ogg",
+	"application/pdf",
+	"application/rtf",
+	"application/vnd.ms-excel",
+	"application/vnd.ms-powerpoint",
+	"application/vnd.oasis.opendocument.presentation",
+	"application/vnd.oasis.opendocument.spreadsheet",
+	"application/vnd.oasis.opendocument.text",
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	"application/x-7z-compressed",
+	"application/x-bzip2",
+	"application/x-gzip",
+	"application/x-rar-compressed",
+	"application/x-tar",
+	"application/xml",
+	"application/zip",
+	"text/csv",
+	"text/html",
+	"text/markdown",
+	"text/plain",
+	"text/tab-separated-values",
+	"text/xml",
+]);
+
+export const DOCUMENT_MEDIA_CONTENT_TYPE_PREFIXES: readonly string[] = Object.freeze(["text/"]);
 
 export type MediaDnsResolver = (hostname: string) => Promise<readonly string[]>;
 
@@ -454,7 +490,15 @@ export async function fetchGuardedMedia(
 			throw new MediaFetchError("http_error", `Media fetch returned ${response.status}`);
 		}
 		const mimeType = normalizeMime(response.headers.get("content-type"));
-		if (mimeType === undefined || !policy.allowedContentTypes.includes(mimeType)) {
+		if (
+			mimeType === undefined ||
+			(policy.mode === "document"
+				? !(
+						DOCUMENT_MEDIA_CONTENT_TYPES.includes(mimeType) ||
+						DOCUMENT_MEDIA_CONTENT_TYPE_PREFIXES.some((prefix) => mimeType.startsWith(prefix))
+					)
+				: !policy.allowedContentTypes.includes(mimeType))
+		) {
 			await response.body?.cancel().catch(() => undefined);
 			throw new MediaFetchError(
 				"blocked_content_type",

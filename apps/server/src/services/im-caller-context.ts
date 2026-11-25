@@ -3,6 +3,7 @@ import {
 	chatObjects,
 	conversations as conversationsTable,
 	messages as messagesTable,
+	workspaceSessions as workspaceSessionsTable,
 	type TsukaimaDatabase,
 } from "@tsukaima/db";
 import type { PluginSettingsStore } from "./plugin-settings.ts";
@@ -33,6 +34,7 @@ export interface ResolvedImCallerContext {
 	readonly role?: string;
 	readonly senderPlatformId?: string;
 	readonly userId?: string;
+	readonly workspaceKind?: string;
 }
 
 export interface ResolveImCallerContextInput {
@@ -65,6 +67,7 @@ export async function resolveImCallerContext(
 	let resolvedChatKind = overrides.chatKind;
 	let resolvedSenderPlatformId = overrides.senderPlatformId;
 	let resolvedUserId = overrides.userId;
+	let resolvedWorkspaceKind: string | undefined;
 	const turnBoundSender = overrides.turnBoundSender;
 	const senderIsTurnBound = turnBoundSender !== undefined;
 	if (senderIsTurnBound) {
@@ -78,9 +81,14 @@ export async function resolveImCallerContext(
 	if (conversation !== undefined && database !== undefined) {
 		try {
 			const [row] = await database
-				.select({ chat: chatObjects, conversation: conversationsTable })
+				.select({
+					chat: chatObjects,
+					conversation: conversationsTable,
+					workspaceKind: workspaceSessionsTable.workspaceKind,
+				})
 				.from(conversationsTable)
 				.leftJoin(chatObjects, eq(chatObjects.id, conversationsTable.chatObjectId))
+				.leftJoin(workspaceSessionsTable, eq(workspaceSessionsTable.id, conversationsTable.id))
 				.where(
 					or(
 						eq(conversationsTable.durableConversationId, conversation),
@@ -90,6 +98,7 @@ export async function resolveImCallerContext(
 				.limit(1);
 			if (row !== undefined) {
 				resolvedDomainConversationId = row.conversation.id;
+				resolvedWorkspaceKind = row.workspaceKind ?? undefined;
 				resolvedChannelId = row.conversation.channelId ?? row.chat?.channelId ?? resolvedChannelId;
 				resolvedChatKind = resolvedChatKind ?? row.chat?.kind ?? row.conversation.kind;
 				resolvedPlatformConversationId =
@@ -142,11 +151,21 @@ export async function resolveImCallerContext(
 		} catch {}
 	}
 
-	// WebUI and workspace are already authenticated administrator surfaces; IM kinds still
-	// require an explicit trusted sender below. An explicit `isAdmin: false` override wins.
-	if (resolvedChatKind === "webui" || resolvedChatKind === "workspace") {
+	// WebUI and coding workspaces are authenticated administrator surfaces. A sandbox
+	// workspace is deliberately not: any admin-gated tool must fail even when its caller row
+	// is a workspace conversation. IM kinds still require an explicit trusted sender below.
+	// An explicit `isAdmin: false` override wins.
+	if (resolvedChatKind === "webui") {
 		if (resolvedIsAdmin === undefined) resolvedIsAdmin = true;
 		if (resolvedIsAdmin) resolvedRole = resolvedRole ?? "admin";
+	} else if (resolvedChatKind === "workspace") {
+		if (resolvedWorkspaceKind === "coding") {
+			if (resolvedIsAdmin === undefined) resolvedIsAdmin = true;
+			if (resolvedIsAdmin) resolvedRole = resolvedRole ?? "admin";
+		} else {
+			resolvedIsAdmin = false;
+			resolvedRole = undefined;
+		}
 	}
 
 	// Trusted-admin membership applies to IM conversations only. `task`, `plugin`, and unknown
@@ -187,5 +206,6 @@ export async function resolveImCallerContext(
 			? {}
 			: { senderPlatformId: resolvedSenderPlatformId }),
 		...(resolvedUserId === undefined ? {} : { userId: resolvedUserId }),
+		...(resolvedWorkspaceKind === undefined ? {} : { workspaceKind: resolvedWorkspaceKind }),
 	};
 }
