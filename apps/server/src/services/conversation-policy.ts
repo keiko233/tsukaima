@@ -723,6 +723,9 @@ export class ConversationPolicyService {
 				chatObjectId: session.chatId,
 				conversationId: session.id,
 			});
+			if (persona?.name !== undefined && persona.name.trim().length > 0) {
+				aliases.add(persona.name.trim());
+			}
 			for (const alias of persona?.selfAliases ?? []) aliases.add(alias);
 		} catch (error) {
 			this.#logger.warn("persona alias resolution failed", {

@@ -374,7 +374,9 @@ export class ConversationRouter {
 				!trigger.peerBotSpeaking &&
 				message.mentions.length === 0 &&
 				message.target?.replyToEnvelopeId === undefined &&
-				/(?:[你您妳]|\b(?:you|your|yours)\b)/iu.test(text);
+				/(?:[你您妳?？]|(?:在吗|有人吗|帮我|帮忙|给我|来点|来个|再来|发个|发点|看看|说说|讲讲|教教|查一下|搜一下|翻译|总结|解释|为什么|为啥|怎么|啥意思|是什么)|(?:吗|呢)\s*$|\b(?:you|your|yours|please|help|can you|could you|would you)\b)/iu.test(
+					text,
+				);
 			const allowAmbientReply =
 				policy.gate.ambientGroupReply &&
 				!recentlyActive &&
@@ -382,8 +384,18 @@ export class ConversationRouter {
 				!quietFeedback.quietRequested &&
 				!lowSubstanceReaction &&
 				!botRatioHigh;
+			const throttledActiveCheck =
+				recentlyActive &&
+				!recentActivity &&
+				escalation !== "off" &&
+				!temporaryQuietActive &&
+				!quietFeedback.quietRequested &&
+				!lowSubstanceReaction &&
+				!trigger.peerBotSpeaking &&
+				message.mentions.length === 0 &&
+				message.target?.replyToEnvelopeId === undefined;
 			const classifyAmbient =
-				(allowAmbientReply || (couldAddressBot && !temporaryQuietActive)) &&
+				(allowAmbientReply || (couldAddressBot && !temporaryQuietActive) || throttledActiveCheck) &&
 				trigger.classification === "ambient" &&
 				trigger.reason === "group context only";
 			if (
@@ -423,6 +435,7 @@ export class ConversationRouter {
 						return `${who}: ${(row.contentText ?? "").trim()}`;
 					});
 				const gateDecision = await gate.decideUndirectedGroupReply({
+					...(selfAliases.length > 0 ? { assistantAliases: selfAliases } : {}),
 					conversationId: target.sessionId,
 					messageText: text,
 					policy: policy.gate,
@@ -545,18 +558,18 @@ export class ConversationRouter {
 					cooldownMs,
 					gate: replyGate,
 					reason:
-						trigger.reason === "group context only" && recentlyActive && !recentActivity
-							? temporaryQuietActive || quietFeedback.quietRequested
-								? "temporary quiet mode active"
-								: botRatioHigh
-									? "recent bot share high"
-									: lowSubstanceReaction
-										? "low-substance reaction"
-										: escalation === "off"
-											? "recent activity escalation disabled"
-											: "recent activity escalation throttled"
-							: classifyAmbient && effectiveTrigger.classification === "soft"
-								? effectiveTrigger.reason
+						classifyAmbient && effectiveTrigger.classification === "soft"
+							? effectiveTrigger.reason
+							: trigger.reason === "group context only" && recentlyActive && !recentActivity
+								? temporaryQuietActive || quietFeedback.quietRequested
+									? "temporary quiet mode active"
+									: botRatioHigh
+										? "recent bot share high"
+										: lowSubstanceReaction
+											? "low-substance reaction"
+											: escalation === "off"
+												? "recent activity escalation disabled"
+												: "recent activity escalation throttled"
 								: trigger.reason,
 				},
 				sender,
