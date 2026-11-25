@@ -319,7 +319,7 @@ function resolveStdioCommand(
  * Directories that must be reachable from a spawned stdio server: image-installed tooling lives
  * in `/usr/local/bin`, and per-user installs (`uv tool`, `pip install --user`) land in
  * `~/.local/bin`. The SDK's curated environment already carries `PATH`, but it may miss either
- * directory, which made Python and `npx` servers look uninstalled.
+ * directory, which made Python and `bunx` servers look uninstalled.
  */
 const STDIO_PATH_PREPEND = ["/usr/local/bin", "~/.local/bin"] as const;
 
@@ -332,7 +332,7 @@ function expandHomeDirectory(entry: string, home: string | undefined): string {
 
 /**
  * Builds the environment for a spawned stdio MCP server: the curated defaults, the configured
- * values, and a de-duplicated PATH that reaches the image's Python, uv, and Node tooling.
+ * values, and a de-duplicated PATH that reaches the image's Python, uv, and Bun tooling.
  */
 export function stdioEnvironment(
 	configured: Readonly<Record<string, string>> | undefined,
@@ -399,13 +399,13 @@ function findStdioExecutable(
 
 /**
  * A bare `spawn ENOENT` never says which executable failed, which is the usual symptom of a
- * Python or `npx` server configured against a runtime image that lacks it.
+ * Python or npm-based server configured against a runtime image that lacks it.
  */
 function missingStdioCommandMessage(
 	command: string,
 	env: Readonly<Record<string, string>>,
 ): string {
-	return `MCP stdio command "${command}" was not found. Install python3, uv, or node/npx in the runtime image, or configure an absolute command path. PATH: ${env.PATH ?? ""}`;
+	return `MCP stdio command "${command}" was not found. Install python3, uv, or bun (use bunx for npm-based servers) in the runtime image, or configure an absolute command path. PATH: ${env.PATH ?? ""}`;
 }
 
 /** A spawn error carries its `ENOENT` marker on the error object, not in a plain record. */

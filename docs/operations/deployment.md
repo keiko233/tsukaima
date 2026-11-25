@@ -220,8 +220,9 @@ start the previous image. Never restore data under a newer schema.
 
 The container runs the native Pi workspace agent in worktree mode. The image includes the
 repository `.git` at `/app`, and worktrees live under `/data/worktrees`; each new worktree gets a
-`node_modules` symlink back to the image install. It has `git`, `bun`, and `ripgrep`, but no Docker
-socket and no host checkout, so a proposal cannot replace the running image.
+`node_modules` symlink back to the image install. It has `git`, `bun` (including `bunx`), and
+`ripgrep`, but no Docker socket and no host checkout, so a proposal cannot replace the running
+image.
 
 The runtime image keeps the workspace dev dependencies (Vite, Tailwind, TanStack Router, Paraglide)
 and the native build toolchain (compiler, Python, Cairo/Pango headers) on purpose: an in-container

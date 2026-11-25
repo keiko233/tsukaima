@@ -560,6 +560,7 @@ describe("mcp plugin", () => {
 			expect(broken.state).toBe("error");
 			expect(broken.lastError).toContain(missing);
 			expect(broken.lastError).toContain("was not found");
+			expect(broken.lastError).toContain("bunx");
 		} finally {
 			await mcpPlugin.teardown?.(context);
 		}
