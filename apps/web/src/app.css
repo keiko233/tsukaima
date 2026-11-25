@@ -1,3 +1,4 @@
+@layer ui-sdk;
 @import "tailwindcss";
 @source "../../../packages/ui/src";
 @source "../../../packages/sdk/src";
@@ -5,41 +6,57 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+:root,
+.dark {
+	--background: var(--paper);
+	--foreground: var(--ink);
+	--sidebar: var(--side);
+	--muted: var(--side);
+	--muted-foreground: var(--muted-ink);
+	--border: var(--line);
+	--border-strong: var(--line2);
+	--accent: var(--accent-ink);
+	--accent-soft: color-mix(in oklab, var(--accent) 14%, transparent);
+	--accent-foreground: var(--accent-fg);
+	--neon: var(--sage);
+	--violet: var(--accent-ink);
+	--danger: var(--terra);
+	--success: var(--sage);
+	--warning: var(--amber);
+	--card-foreground: var(--ink);
+	--popover: var(--paper);
+	--popover-foreground: var(--ink);
+	--primary: var(--ink);
+	--primary-foreground: var(--paper);
+	--secondary: var(--card);
+	--secondary-foreground: var(--ink);
+	--destructive: var(--terra);
+	--input: var(--line2);
+	--ring: var(--accent-ink);
+}
+
 :root {
-	/* Paper and ink: warm cream surfaces under charcoal type. */
-	--background: #f6f4f0;
-	--foreground: #292c30;
+	--paper: #f7f5f0;
+	--side: #efece6;
+	--rail: #e8e4dd;
+	--ink: #1f2328;
+	--ink-soft: #3a3e44;
+	--muted-ink: #68645d;
+	--faint: #8e8980;
+	--line: rgb(31 35 40 / 0.09);
+	--line2: rgb(31 35 40 / 0.17);
+	--accent-ink: #48667b;
+	--sage: #3b6b51;
+	--amber: #8e6514;
+	--terra: #b4453c;
 	--card: #fbfaf7;
-	--sidebar: #f1eee8;
-	--muted-foreground: #6b6760;
-	--border: rgb(41 44 48 / 0.1);
-	--border-strong: rgb(41 44 48 / 0.18);
-	--accent-fg: #292c30;
-	--neon: #47735a;
-	/* Mist gray-blue is the accent: fills stay #90a1ae, text uses the deeper tone. */
-	--violet: #5c6b80;
-	--danger: #b4453c;
-	--success: #47735a;
-	--warning: #8a6415;
+	--accent-fg: #fff;
+	--destructive-foreground: #fff;
 	--glass-bg: rgb(251 250 247 / 0.62);
 	--glass-border: rgb(41 44 48 / 0.1);
 	--glass-strong-bg: rgb(251 250 247 / 0.82);
 	--glass-thin-bg: rgb(246 244 240 / 0.5);
 	--glass-shadow: 0 24px 60px -28px rgb(41 44 48 / 0.28);
-	--card-foreground: var(--foreground);
-	--popover: var(--background);
-	--popover-foreground: var(--foreground);
-	--primary: #292c30;
-	--primary-foreground: #f6f4f0;
-	--secondary: var(--card);
-	--secondary-foreground: var(--foreground);
-	--muted: #efece6;
-	--accent: #90a1ae;
-	--accent-foreground: var(--accent-fg);
-	--destructive: var(--danger);
-	--destructive-foreground: #ffffff;
-	--input: var(--border);
-	--ring: #5c7285;
 	--chart-messages: #5c7285;
 	--chart-tools: #a35c45;
 	--chart-persona: #4f7d63;
@@ -55,30 +72,27 @@
 }
 
 .dark {
-	--background: #1b1e22;
-	--foreground: #f2efe9;
-	--card: #23272b;
-	--sidebar: #16181b;
-	--muted-foreground: #a3abb2;
-	--border: rgb(242 239 233 / 0.08);
-	--border-strong: rgb(242 239 233 / 0.16);
-	--accent: #a7b5c0;
-	--accent-fg: #16181b;
-	--muted: #2b3036;
-	--danger: #e0796f;
-	--success: #7fb39a;
-	--warning: #d9ae62;
-	--violet: #a3b0c0;
-	--neon: #7fb39a;
+	--paper: #131518;
+	--side: #181b1f;
+	--rail: #0f1114;
+	--ink: #ece8e0;
+	--ink-soft: #cfcbc2;
+	--muted-ink: #9a958c;
+	--faint: #6e6b64;
+	--line: rgb(236 232 224 / 0.085);
+	--line2: rgb(236 232 224 / 0.16);
+	--accent-ink: #8faec4;
+	--sage: #7bb395;
+	--amber: #d7ab57;
+	--terra: #e27c72;
+	--card: #181b1f;
+	--accent-fg: #131518;
+	--destructive-foreground: #131518;
 	--glass-bg: rgb(27 30 34 / 0.66);
 	--glass-border: rgb(242 239 233 / 0.09);
 	--glass-strong-bg: rgb(35 39 43 / 0.76);
 	--glass-thin-bg: rgb(22 24 27 / 0.55);
 	--glass-shadow: 0 24px 60px -24px rgb(0 0 0 / 0.55);
-	--primary: #90a1ae;
-	--primary-foreground: #16181b;
-	--destructive-foreground: #16181b;
-	--ring: #90a1ae;
 	--chart-messages: #90a1ae;
 	--chart-tools: #d29a72;
 	--chart-persona: #86b39b;
@@ -89,11 +103,17 @@
 	--chart-buffer: #6e7378;
 	--chart-deferred: #7d8288;
 	--chart-free: #343a41;
-	--log-bg: #17191c;
+	--log-bg: #0f1114;
 	color-scheme: dark;
 }
 
 @theme inline {
+	--font-serif:
+		"Newsreader Variable", "Noto Serif SC", "Songti SC", "Source Han Serif SC", Georgia, serif;
+	--font-sans:
+		"IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+	--font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
 	--ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 	--ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
 	--ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
@@ -117,7 +137,9 @@
 	--color-secondary-foreground: var(--secondary-foreground);
 	--color-muted: var(--muted);
 	--color-muted-foreground: var(--muted-foreground);
-	--color-accent: var(--accent);
+	--color-accent: var(--accent-soft);
+	--color-accent-soft: var(--accent-soft);
+	--color-accent-ink: var(--accent);
 	--color-accent-foreground: var(--accent-foreground);
 	--color-destructive: var(--destructive);
 	--color-destructive-foreground: var(--destructive-foreground);
@@ -134,6 +156,17 @@
 	--color-chart-deferred: var(--chart-deferred);
 	--color-chart-free: var(--chart-free);
 	--color-log: var(--log-bg);
+	--color-paper: var(--paper);
+	--color-ink: var(--ink);
+	--color-ink-soft: var(--ink-soft);
+	--color-faint: var(--faint);
+	--color-rail: var(--rail);
+	--color-line: var(--line);
+	--color-line2: var(--line2);
+	--color-sage: var(--sage);
+	--color-amber: var(--amber);
+	--color-terra: var(--terra);
+	--color-danger: var(--danger);
 }
 
 @theme {
@@ -179,9 +212,7 @@
 	body {
 		background: var(--background);
 		color: var(--foreground);
-		font-family:
-			"Inter", "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
-			"Microsoft YaHei", system-ui, sans-serif;
+		font-family: var(--font-sans);
 		font-size: 13.5px;
 		line-height: 1.5;
 		font-synthesis: none;
@@ -191,6 +222,11 @@
 
 	button:not(:disabled) {
 		cursor: pointer;
+	}
+
+	:focus-visible {
+		outline: 2px solid var(--ring);
+		outline-offset: 2px;
 	}
 
 	::selection {
@@ -334,10 +370,7 @@
 		color: var(--shiki-dark, var(--runtime-log-light-color, currentColor)) !important;
 		font-style: var(--shiki-dark-font-style, var(--shiki-light-font-style, inherit));
 		font-weight: var(--shiki-dark-font-weight, var(--shiki-light-font-weight, inherit));
-		text-decoration: var(
-			--shiki-dark-text-decoration,
-			var(--shiki-light-text-decoration, none)
-		);
+		text-decoration: var(--shiki-dark-text-decoration, var(--shiki-light-text-decoration, none));
 	}
 }
 

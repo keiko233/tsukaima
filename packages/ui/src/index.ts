@@ -45,3 +45,55 @@ export { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/motion/ta
 export { LocaleProvider, useLocale, useMessages } from "./lib/i18n.tsx";
 export type { LocaleMessages, Messages } from "./lib/i18n.tsx";
 export { cn } from "./lib/utils.ts";
+export {
+	Disclosure,
+	DisclosurePanel,
+	DisclosureTrigger,
+} from "./components/editorial/disclosure.tsx";
+export type { DisclosureProps } from "./components/editorial/disclosure.tsx";
+export {
+	EditorialDialog,
+	EditorialDialogBackdrop,
+	EditorialDialogClose,
+	EditorialDialogContent,
+	EditorialDialogDescription,
+	EditorialDialogTitle,
+	EditorialDialogTrigger,
+} from "./components/editorial/dialog.tsx";
+export { ExpandableRow } from "./components/editorial/expandable-row.tsx";
+export type { ExpandableRowProps } from "./components/editorial/expandable-row.tsx";
+export { EditorialGroup } from "./components/editorial/group.tsx";
+export type { EditorialGroupProps } from "./components/editorial/group.tsx";
+export { KpiStrip } from "./components/editorial/kpi-strip.tsx";
+export type { KpiItem, KpiStripProps } from "./components/editorial/kpi-strip.tsx";
+export { EditorialPageHeader } from "./components/editorial/page-header.tsx";
+export type { EditorialPageHeaderProps } from "./components/editorial/page-header.tsx";
+export {
+	EditorialPopover,
+	EditorialPopoverClose,
+	EditorialPopoverContent,
+	EditorialPopoverDescription,
+	EditorialPopoverTitle,
+	EditorialPopoverTrigger,
+} from "./components/editorial/popover.tsx";
+export { PreferenceRow } from "./components/editorial/preference-row.tsx";
+export type { PreferenceRowProps } from "./components/editorial/preference-row.tsx";
+export { SegmentedControl } from "./components/editorial/segmented-control.tsx";
+export type { SegmentedControlProps } from "./components/editorial/segmented-control.tsx";
+export {
+	EditorialSelect,
+	EditorialSelectContent,
+	EditorialSelectItem,
+	EditorialSelectTrigger,
+	EditorialSelectValue,
+} from "./components/editorial/select.tsx";
+export type { EditorialSelectProps } from "./components/editorial/select.tsx";
+export { EditorialSwitch } from "./components/editorial/switch.tsx";
+export type { EditorialSwitchProps } from "./components/editorial/switch.tsx";
+export {
+	EditorialTabs,
+	EditorialTabsContent,
+	EditorialTabsList,
+	EditorialTabsTrigger,
+} from "./components/editorial/tabs.tsx";
+export type { EditorialTabsProps } from "./components/editorial/tabs.tsx";

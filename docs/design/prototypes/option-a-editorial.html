@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tsukaima · Paper &amp; Ink Editorial (Selected Design)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+	--paper:#F7F5F0;--side:#EFECE6;--rail:#E8E4DD;
+	--ink:#1F2328;--ink-soft:#3A3E44;--muted:#68645D;--faint:#8E8980;
+	--line:rgba(31,35,40,.09);--line2:rgba(31,35,40,.17);
+	--accent:#48667B;--accent-soft:rgba(72,102,123,.10);
+	--sage:#3B6B51;--amber:#8E6514;--terra:#B4453C;
+	--hover:rgba(31,35,40,.038);--active:rgba(31,35,40,.065);
+	--field-bg:rgba(255,255,255,.48);--select-bg:#F7F5F0;
+	--serif:"Newsreader","Noto Serif SC",Georgia,serif;
+	--sans:"IBM Plex Sans","Noto Sans SC","PingFang SC",system-ui,sans-serif;
+	--mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+	color-scheme:light;
+}
+:root[data-theme="dark"]{
+	--paper:#131518;--side:#181B1F;--rail:#0F1114;
+	--ink:#ECE8E0;--ink-soft:#CFCBC2;--muted:#9A958C;--faint:#6E6B64;
+	--line:rgba(236,232,224,.085);--line2:rgba(236,232,224,.16);
+	--accent:#8FAEC4;--accent-soft:rgba(143,174,196,.13);
+	--sage:#7BB395;--amber:#D7AB57;--terra:#E27C72;
+	--hover:rgba(236,232,224,.045);--active:rgba(236,232,224,.08);
+	--field-bg:rgba(236,232,224,.03);--select-bg:#181B1F;
+	color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+	background:var(--paper);color:var(--ink);
+	font:400 13.5px/1.6 var(--sans);
+	font-feature-settings:"cv02","cv03","cv04";
+	-webkit-font-smoothing:antialiased;
+	transition:background .2s ease,color .2s ease;
+}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select{font:inherit;color:var(--ink)}
+.app{display:grid;grid-template-columns:52px 232px 1fr;height:100vh;min-width:0}
+
+/* rail */
+.rail{background:var(--rail);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px}
+.rail .logo{margin-bottom:10px}
+.rbtn{width:36px;height:36px;border-radius:8px;display:grid;place-items:center;color:var(--muted);position:relative;transition:background .15s,color .15s}
+.rbtn:hover{background:var(--hover);color:var(--ink)}
+.rbtn.on{color:var(--ink);background:var(--active)}
+.rbtn.on::before{content:"";position:absolute;left:-8px;top:9px;bottom:9px;width:2px;background:var(--accent);border-radius:2px}
+.rbtn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.rail .spacer{flex:1}
+
+/* sidebar */
+.side{background:var(--side);border-right:1px solid var(--line);padding:18px 12px;overflow:auto}
+.side h6{margin:18px 8px 6px;font:600 10.5px/1 var(--sans);letter-spacing:.09em;text-transform:uppercase;color:var(--faint)}
+.side h6:first-child{margin-top:4px}
+.nav{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:6px 8px;border-radius:6px;color:var(--muted);font-size:13px;transition:background .12s,color .12s}
+.nav:hover{background:var(--hover);color:var(--ink)}
+.nav.on{color:var(--ink);font-weight:500;background:var(--active)}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none}
+.dot.ok{background:var(--sage)}.dot.warn{background:var(--amber)}.dot.err{background:var(--terra)}
+.nav .ct{margin-left:auto;font:11.5px var(--mono);color:var(--faint);font-variant-numeric:tabular-nums}
+
+/* main */
+main{overflow:auto;min-width:0}
+.view{display:none;max-width:940px;margin:0 auto;padding:36px 48px 84px}
+.view.on{display:block}
+.eyebrow{font:500 11.5px var(--mono);color:var(--muted);letter-spacing:.03em}
+.head{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;padding-bottom:18px}
+.head h1{
+	font:500 32px/1.15 var(--serif);font-optical-sizing:auto;
+	margin:6px 0 0;letter-spacing:-.018em;color:var(--ink);
+}
+.meta{display:flex;gap:14px;align-items:center;color:var(--muted);font-size:12.5px;margin-top:8px;flex-wrap:wrap}
+.meta .sep{width:1px;height:12px;background:var(--line2)}
+.meta .mono{font-family:var(--mono);font-size:12px}
+.status{display:inline-flex;align-items:center;gap:6px;color:var(--sage);font-weight:500}
+.head .r{margin-left:auto;display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12.5px}
+
+/* switch */
+.sw{width:34px;height:20px;border-radius:20px;background:var(--line2);position:relative;transition:.16s;flex:none}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--paper);transition:.16s;box-shadow:0 1px 2px rgba(0,0,0,.22)}
+.sw.on{background:var(--accent)}.sw.on::after{left:16px}
+
+/* tabs */
+.tabs{display:flex;gap:26px;border-bottom:1px solid var(--line);margin-bottom:28px}
+.tab{padding:10px 0;color:var(--muted);position:relative;font-size:13.5px;transition:color .12s}
+.tab:hover{color:var(--ink)}
+.tab.on{color:var(--ink);font-weight:500}
+.tab.on::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--accent)}
+.pane{display:none}.pane.on{display:block}
+
+/* kpi */
+.kpis{display:flex;margin-bottom:32px}
+.kpi{flex:1;padding:0 22px;border-left:1px solid var(--line)}
+.kpi:first-child{padding-left:0;border-left:0}
+.kpi b{display:block;font:400 32px/1.1 var(--serif);font-optical-sizing:auto;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.kpi span{color:var(--muted);font-size:12px;letter-spacing:.01em}
+
+/* section */
+.sec{display:flex;align-items:baseline;justify-content:space-between;margin:0 0 6px}
+.sec h2{font:600 11px var(--sans);letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:0}
+.link{color:var(--accent);font-size:12.5px;font-weight:500}
+.link:hover{text-decoration:underline;text-underline-offset:3px}
+
+/* rows */
+.rows{border-top:1px solid var(--line)}
+.row{border-bottom:1px solid var(--line)}
+.rh{display:grid;grid-template-columns:16px minmax(0,1.2fr) minmax(0,1.4fr) 96px 68px 16px;gap:14px;align-items:center;padding:13px 6px;width:100%;text-align:left;transition:background .12s}
+.rh:hover{background:var(--hover)}
+.rh .nm{font-weight:500;color:var(--ink)}
+.rh .sub{color:var(--muted);font:12px var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rh .num{font:12px var(--mono);color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.chev{width:14px;height:14px;stroke:var(--faint);fill:none;stroke-width:1.8;transition:transform .15s}
+.row.open .chev{transform:rotate(90deg);stroke:var(--accent)}
+.tag{font-size:12px;color:var(--muted);font-weight:500}
+.tag.ok{color:var(--sage)}.tag.warn{color:var(--amber)}.tag.err{color:var(--terra)}
+.exp{display:none;margin:0 0 18px 34px;padding:4px 0 4px 18px;border-left:2px solid var(--accent)}
+.row.open .exp{display:block}
+.note{display:flex;gap:12px;align-items:baseline;padding:2px 0 12px;color:var(--ink-soft);font-size:13px}
+.note strong{color:var(--amber);font-weight:600;font-family:var(--mono);font-size:12px}
+.note .act{margin-left:auto;white-space:nowrap}
+.tools{font:12px/1.95 var(--mono);color:var(--muted);columns:2;column-gap:32px}
+.tools div{break-inside:avoid;display:flex;gap:10px}
+.tools i{font-style:normal;color:var(--ink)}
+.tools em{font-style:normal;color:var(--amber);font-size:11px}
+.kv{display:grid;grid-template-columns:112px 1fr;gap:5px 16px;font-size:12.5px;margin-bottom:10px}
+.kv dt{color:var(--muted)}.kv dd{margin:0;font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
+
+/* pref rows */
+.pref{display:grid;grid-template-columns:minmax(0,1fr) minmax(220px,300px);gap:24px;align-items:center;padding:16px 0;border-bottom:1px solid var(--line)}
+.pref:first-of-type{border-top:1px solid var(--line)}
+.pref .l b{display:block;font-weight:500;color:var(--ink)}
+.pref .l span{color:var(--muted);font-size:12.5px}
+.field{width:100%;background:var(--field-bg);border:1px solid var(--line2);border-radius:6px;padding:7px 10px;outline:none;font-size:13px;transition:border-color .15s,box-shadow .15s}
+.field:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.field.mono{font-family:var(--mono);font-size:12px}
+select.field{appearance:none;background-color:var(--select-bg);background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 15px) 50%,calc(100% - 10px) 50%;background-size:5px 5px;background-repeat:no-repeat;padding-right:28px}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:6px;overflow:hidden}
+.seg button{padding:5px 12px;color:var(--muted);border-left:1px solid var(--line2);font-size:12.5px;transition:background .12s,color .12s}
+.seg button:first-child{border-left:0}
+.seg button.on{background:var(--ink);color:var(--paper);font-weight:500}
+.ctl{display:flex;justify-content:flex-end;gap:8px;align-items:center}
+.grp{margin-top:38px}
+.grp:first-child{margin-top:0}
+.grp>h3{font:500 20px var(--serif);font-optical-sizing:auto;margin:0 0 3px;letter-spacing:-.01em}
+.grp>p{color:var(--muted);margin:0 0 14px;font-size:12.5px}
+
+/* model list */
+.search{display:flex;align-items:center;gap:10px;margin:8px 0 0;padding:10px 0;border-bottom:1px solid var(--line)}
+.search input{flex:1;border:0;background:transparent;outline:none;font-size:13px}
+.model{border-bottom:1px solid var(--line);padding:12px 0}
+.mrow{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.mrow .id{font:500 12.5px var(--mono);min-width:190px;color:var(--ink)}
+.pills{display:flex;gap:6px;flex-wrap:wrap}
+.pill{font-size:11.5px;padding:2px 9px;border-radius:99px;border:1px solid var(--line2);color:var(--muted);transition:.12s}
+.pill:hover{border-color:var(--accent);color:var(--ink)}
+.pill.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:500}
+.mrow .more{margin-left:auto;color:var(--muted);font-size:12px}
+.params{display:none;margin:12px 0 4px 2px;padding-left:16px;border-left:2px solid var(--accent);gap:10px 26px;grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
+.model.open .params{display:grid}
+.params label{font-size:11.5px;color:var(--muted);display:block}
+.params input{width:100%;border:0;border-bottom:1px solid var(--line2);background:transparent;padding:3px 0;font:12.5px var(--mono);outline:none;font-variant-numeric:tabular-nums}
+.params input:focus{border-color:var(--accent)}
+
+/* upgrade strip */
+.strip{display:flex;flex-wrap:wrap;border-top:1px solid var(--ink);border-bottom:1px solid var(--line);margin-bottom:30px}
+.strip>div{padding:14px 18px;border-left:1px solid var(--line);flex:1;min-width:115px}
+.strip>div:first-child{border-left:0;padding-left:0}
+.strip span{display:block;font-size:11.5px;color:var(--muted)}
+.strip b{font:500 13.5px var(--mono);font-variant-numeric:tabular-nums}
+.strip .actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex:1.4}
+.btn{padding:6px 13px;border-radius:6px;border:1px solid var(--line2);font-size:12.5px;font-weight:500;transition:background .12s}
+.btn:hover{background:var(--hover)}
+.btn.pri{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--muted);font-size:11.5px;letter-spacing:.02em;padding:8px 10px 8px 0;border-bottom:1px solid var(--line2)}
+td{padding:11px 10px 11px 0;border-bottom:1px solid var(--line);vertical-align:top}
+td.m{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+
+/* chat */
+.chat{display:grid;grid-template-columns:minmax(0,1fr) 310px;height:100vh}
+.chat.on{display:grid;max-width:none;padding:0}
+.thread{overflow:auto;padding:36px 48px 120px;position:relative}
+.thread .in{max-width:640px;margin:0 auto}
+.msg{padding:16px 0;border-bottom:1px solid var(--line)}
+.msg .who{display:flex;gap:10px;align-items:baseline;font-size:12.5px;margin-bottom:5px}
+.msg .who b{font-weight:600}
+.msg .who time{color:var(--faint);font:11.5px var(--mono);font-variant-numeric:tabular-nums}
+.msg.bot .who b{color:var(--accent)}
+.msg p{margin:0;font:400 15.5px/1.72 var(--serif);font-optical-sizing:auto;color:var(--ink-soft)}
+.toolcall{margin-top:10px;padding-left:12px;border-left:2px solid var(--line2);font:12px/1.85 var(--mono);color:var(--muted)}
+.toolcall i{font-style:normal;color:var(--sage)}
+.composer{position:sticky;bottom:0;margin:24px auto 0;max-width:640px;background:var(--paper);border-top:1px solid var(--ink);padding:12px 0;display:flex;gap:10px;align-items:center}
+.composer input{flex:1;border:0;background:transparent;outline:none;font:15px var(--serif)}
+.insp{border-left:1px solid var(--line);background:var(--side);padding:28px 22px;overflow:auto}
+.insp h4{font:500 20px var(--serif);font-optical-sizing:auto;margin:4px 0 2px;font-variant-numeric:tabular-nums}
+.bar{display:flex;height:7px;border-radius:2px;overflow:hidden;margin:18px 0 6px;gap:2px}
+.bar i{display:block}
+.barlbl{display:flex;justify-content:space-between;font:11px var(--mono);color:var(--muted);margin-bottom:20px;font-variant-numeric:tabular-nums}
+.ctx td{padding:8px 0;font-size:12.5px}
+.ctx td:last-child{text-align:right;font:12px var(--mono);font-variant-numeric:tabular-nums}
+.ctx .sw2{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:8px;vertical-align:1px}
+.ctx tr.tot td{border-bottom:0;border-top:1px solid var(--ink);font-weight:600}
+
+@media (max-width:1080px){.app{grid-template-columns:52px 196px 1fr}.view{padding:28px 28px 64px}.chat{grid-template-columns:1fr}.insp{display:none}}
+@media (max-width:820px){.app{grid-template-columns:52px 1fr}.side{display:none}.rh{grid-template-columns:16px 1fr 78px 16px}.rh .sub,.rh .num.t{display:none}.tools{columns:1}.pref{grid-template-columns:1fr}.ctl{justify-content:flex-start}.kpis{flex-wrap:wrap;row-gap:14px}.kpi{flex:1 0 45%}}
+</style>
+</head>
+<body>
+<div class="app">
+	<nav class="rail">
+		<svg class="logo" width="32" height="32" viewBox="0 0 1024 1024" aria-label="Tsukaima">
+			<rect width="1024" height="1024" rx="212" fill="#292C30"/>
+			<g transform="translate(184 323) scale(5)" fill="none" stroke="#F4F1EB" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M23 4 V57 C23 70 28 77 42 77"/>
+				<path d="M6 27 H44"/>
+				<path d="M109 30 C96 21 72 22 67 36 C61 51 83 53 97 56 C113 60 113 72 99 78 C88 83 72 78 63 71"/>
+			</g>
+			<circle cx="836" cy="707" r="26" fill="#90A1AE"/>
+		</svg>
+		<button class="rbtn" data-go="chat" title="Chat"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg></button>
+		<button class="rbtn on" data-go="mcp" title="Plugins"><svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v4a6 6 0 0 1-12 0zM12 18v3"/></svg></button>
+		<button class="rbtn" data-go="general" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg></button>
+		<div class="spacer"></div>
+		<button class="rbtn" id="tt" title="Toggle Dark / Light theme" aria-label="Toggle theme">
+			<svg id="ticon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+		</button>
+	</nav>
+	<aside class="side">
+		<h6>会话 Chat</h6>
+		<button class="nav" data-go="chat"><span class="dot ok"></span>测试群 · sandbox<span class="ct">12</span></button>
+		<button class="nav" data-go="chat"><span class="dot"></span>Ops review<span class="ct">3</span></button>
+		<h6>插件 Plugins</h6>
+		<button class="nav on" data-go="mcp"><span class="dot ok"></span>MCP Servers</button>
+		<button class="nav" data-go="openai"><span class="dot ok"></span>OpenAI-Compatible</button>
+		<button class="nav"><span class="dot warn"></span>Sticker Meme</button>
+		<button class="nav"><span class="dot"></span>OneBot / NapCat</button>
+		<h6>设置 Settings</h6>
+		<button class="nav" data-go="general"><span class="dot"></span>General 通用</button>
+		<button class="nav" data-go="general" data-tab="upg"><span class="dot"></span>Upgrades &amp; Git</button>
+	</aside>
+	<main>
+		<!-- MCP -->
+		<section class="view on" id="v-mcp">
+			<div class="head">
+				<div>
+					<div class="eyebrow">plugins / mcp</div>
+					<h1>MCP Servers</h1>
+					<div class="meta"><span class="status"><span class="dot ok"></span>Connected</span><span class="sep"></span><span class="mono">v0.32.0</span><span class="sep"></span><span class="mono">builtin · @tsukaima/plugin-mcp</span></div>
+				</div>
+				<div class="r">Enabled <button class="sw on" aria-label="Enable plugin"></button></div>
+			</div>
+			<div class="tabs" data-tabs>
+				<button class="tab on" data-p="srv">Servers</button><button class="tab" data-p="cfg">Config</button><button class="tab" data-p="man">Manifest</button>
+			</div>
+			<div class="pane on" data-pane="srv">
+				<div class="kpis">
+					<div class="kpi"><b>4</b><span>Connected</span></div>
+					<div class="kpi"><b style="color:var(--amber)">1</b><span>Auth required</span></div>
+					<div class="kpi"><b>28</b><span>Tools exposed</span></div>
+					<div class="kpi"><b>3</b><span>Deferred</span></div>
+				</div>
+				<div class="sec"><h2>Servers · 5</h2><button class="link">+ Add server</button></div>
+				<div class="rows">
+					<div class="row open">
+						<button class="rh"><span class="dot warn"></span><span class="nm">linear</span><span class="sub">https://mcp.linear.app/sse</span><span class="tag warn">Auth required</span><span class="num t">0 tools</span><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></button>
+						<div class="exp">
+							<div class="note"><strong>OAuth</strong><span>需要重新授权 — token expired 2026-11-24 09:12 UTC.</span><button class="link act">Authorize →</button></div>
+							<dl class="kv"><dt>Transport</dt><dd>sse</dd><dt>Scope</dt><dd>admin, workspace</dd><dt>Last error</dt><dd style="color:var(--terra)">401 invalid_token</dd></dl>
+						</div>
+					</div>
+					<div class="row">
+						<button class="rh"><span class="dot ok"></span><span class="nm">filesystem</span><span class="sub">stdio · npx @mcp/server-filesystem ./sandbox</span><span class="tag ok">Connected</span><span class="num t">11 tools</span><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></button>
+						<div class="exp">
+							<dl class="kv"><dt>Transport</dt><dd>stdio</dd><dt>Scope</dt><dd>workspace only</dd><dt>Latency</dt><dd>p50 14ms · p95 41ms</dd></dl>
+							<div class="tools">
+								<div><i>read_file</i></div><div><i>write_file</i></div><div><i>list_directory</i></div><div><i>search_files</i></div><div><i>move_file</i></div><div><i>get_file_info</i></div><div><i>create_directory</i></div><div><i>edit_file</i> <em>deferred</em></div><div><i>directory_tree</i></div><div><i>read_multiple</i></div><div><i>list_allowed</i></div>
+							</div>
+						</div>
+					</div>
+					<div class="row">
+						<button class="rh"><span class="dot ok"></span><span class="nm">github</span><span class="sub">https://api.githubcopilot.com/mcp</span><span class="tag ok">Connected</span><span class="num t">9 tools</span><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></button>
+						<div class="exp"><div class="tools"><div><i>search_issues</i></div><div><i>get_pull_request</i></div><div><i>create_issue</i> <em>deferred</em></div><div><i>list_commits</i></div><div><i>get_file_contents</i></div><div><i>list_branches</i></div><div><i>create_branch</i> <em>deferred</em></div><div><i>add_comment</i></div><div><i>search_code</i></div></div></div>
+					</div>
+					<div class="row">
+						<button class="rh"><span class="dot ok"></span><span class="nm">fetch</span><span class="sub">stdio · uvx mcp-server-fetch</span><span class="tag ok">Connected</span><span class="num t">2 tools</span><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></button>
+						<div class="exp"><div class="tools"><div><i>fetch</i></div><div><i>fetch_markdown</i></div></div></div>
+					</div>
+					<div class="row">
+						<button class="rh"><span class="dot ok"></span><span class="nm">memory</span><span class="sub">stdio · bun run plugins/memory-mcp</span><span class="tag ok">Connected</span><span class="num t">6 tools</span><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></button>
+						<div class="exp"><div class="tools"><div><i>remember</i></div><div><i>recall</i></div><div><i>forget</i> <em>deferred</em></div><div><i>list_entities</i></div><div><i>link</i></div><div><i>summarize</i></div></div></div>
+					</div>
+				</div>
+			</div>
+			<div class="pane" data-pane="cfg">
+				<div class="pref"><div class="l"><b>Tool discovery</b><span>超过阈值时延迟加载工具 schema</span></div><div class="ctl"><input class="field mono" value="24 tools"></div></div>
+				<div class="pref"><div class="l"><b>Expose to chat sessions</b><span>Chat 会话仅可见只读工具</span></div><div class="ctl"><button class="sw"></button></div></div>
+				<div class="pref"><div class="l"><b>Call timeout</b><span>Per-tool invocation limit</span></div><div class="ctl"><input class="field mono" value="30000 ms"></div></div>
+			</div>
+			<div class="pane" data-pane="man"><table><tr><th>Key</th><th>Value</th></tr><tr><td>id</td><td class="m">@tsukaima/plugin-mcp</td></tr><tr><td>version</td><td class="m">0.32.0</td></tr><tr><td>capabilities</td><td class="m">tools, prompts, oauth</td></tr><tr><td>surfaces</td><td class="m">workspace, admin</td></tr></table></div>
+		</section>
+
+		<!-- OpenAI -->
+		<section class="view" id="v-openai">
+			<div class="head">
+				<div><div class="eyebrow">plugins / provider</div><h1>OpenAI-Compatible</h1>
+				<div class="meta"><span class="status"><span class="dot ok"></span>Reachable · 182ms</span><span class="sep"></span><span class="mono">v0.32.0</span><span class="sep"></span><span>14 models</span></div></div>
+				<div class="r">Enabled <button class="sw on"></button></div>
+			</div>
+			<div class="grp">
+				<div class="pref"><div class="l"><b>Endpoint</b><span>Base URL for /v1/chat/completions</span></div><div class="ctl"><input class="field mono" value="https://llm.example.internal/v1"></div></div>
+				<div class="pref"><div class="l"><b>API Key</b><span>存储于 secret store，不会回显</span></div><div class="ctl"><input class="field mono" type="password" value="sk-placeholder-0000"><button class="link">Test</button></div></div>
+			</div>
+			<div class="grp">
+				<h3>Models</h3><p>点击能力标签切换；展开以编辑采样参数。</p>
+				<div class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="color:var(--muted)"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="q" placeholder="Filter models…"><span class="tag" id="qc">5 shown</span></div>
+				<div id="models"></div>
+			</div>
+		</section>
+
+		<!-- General -->
+		<section class="view" id="v-general">
+			<div class="head"><div><div class="eyebrow">settings</div><h1 id="gt">General</h1><div class="meta"><span>Changes save automatically</span><span class="sep"></span><span class="mono">tsukaima 0.32.0</span></div></div></div>
+			<div class="tabs" data-tabs><button class="tab on" data-p="gen">General 通用</button><button class="tab" data-p="upg">Upgrades &amp; Git</button></div>
+			<div class="pane on" data-pane="gen">
+				<div class="grp"><h3>界面 Interface</h3><p>Language and display preferences.</p>
+					<div class="pref"><div class="l"><b>Language</b><span>WebUI 语言</span></div><div class="ctl"><div class="seg"><button class="on">中文</button><button>English</button></div></div></div>
+					<div class="pref"><div class="l"><b>Appearance</b><span>深色 / 浅色纸墨主题</span></div><div class="ctl"><div class="seg" id="tseg"><button data-th="dark" class="on">Dark</button><button data-th="light">Light</button></div></div></div>
+				</div>
+				<div class="grp"><h3>模型 Models</h3><p>Default models for new chat and workspace sessions.</p>
+					<div class="pref"><div class="l"><b>Chat model</b><span>IM / 群聊会话默认模型</span></div><div class="ctl"><select class="field"><option>openai-compat / qwen3-235b</option><option>openai-compat / glm-4.6</option></select></div></div>
+					<div class="pref"><div class="l"><b>Workspace model</b><span>Coding tasks in governed worktrees</span></div><div class="ctl"><select class="field"><option>openai-compat / kimi-k2</option></select></div></div>
+					<div class="pref"><div class="l"><b>Thinking effort</b><span>推理强度</span></div><div class="ctl"><div class="seg"><button>Low</button><button class="on">Medium</button><button>High</button></div></div></div>
+				</div>
+				<div class="grp"><h3>运行时 Runtime</h3><p>Logging and message classifiers.</p>
+					<div class="pref"><div class="l"><b>Log level</b><span>Server log verbosity</span></div><div class="ctl"><select class="field"><option>info</option><option>debug</option><option>warn</option></select></div></div>
+					<div class="pref"><div class="l"><b>Reply classifier</b><span>判断群消息是否需要回复</span></div><div class="ctl"><button class="sw on"></button></div></div>
+					<div class="pref"><div class="l"><b>Sticker classifier</b><span>Vision labels for incoming stickers</span></div><div class="ctl"><button class="sw on"></button></div></div>
+				</div>
+			</div>
+			<div class="pane" data-pane="upg">
+				<div class="strip">
+					<div><span>Version</span><b>0.32.0</b></div>
+					<div><span>Branch</span><b>main</b></div>
+					<div><span>Commit</span><b>5422b46</b></div>
+					<div><span>Working tree</span><b style="color:var(--sage)">clean</b></div>
+					<div><span>Upstream</span><b style="color:var(--amber)">2 behind</b></div>
+					<div class="actions"><button class="btn">Fetch</button><button class="btn pri">Graceful restart</button></div>
+				</div>
+				<div class="sec"><h2>History</h2><button class="link">View audit log</button></div>
+				<table>
+					<tr><th>Version</th><th>Commit</th><th>Summary</th><th>When</th><th>Result</th></tr>
+					<tr><td class="m">0.32.0</td><td class="m">5422b46</td><td>expose graceful restart tools to admin agents</td><td class="m">11-25 22:10</td><td class="tag ok">applied</td></tr>
+					<tr><td class="m">0.31.2</td><td class="m">9b63185</td><td>retry transient vision provider failures</td><td class="m">11-24 18:42</td><td class="tag ok">applied</td></tr>
+					<tr><td class="m">0.31.1</td><td class="m">b495d36</td><td>reclassify replaces stale labels</td><td class="m">11-23 09:05</td><td class="tag err">rolled back</td></tr>
+					<tr><td class="m">0.31.0</td><td class="m">33429ca</td><td>unified seq-ordered timeline</td><td class="m">11-21 15:30</td><td class="tag ok">applied</td></tr>
+				</table>
+			</div>
+		</section>
+
+		<!-- Chat -->
+		<section class="view chat" id="v-chat">
+			<div class="thread"><div class="in">
+				<div class="eyebrow">chat / 测试群 · sandbox</div>
+				<h1 style="font:500 28px var(--serif);margin:6px 0 18px">测试群</h1>
+				<div class="msg"><div class="who"><b>user_alpha</b><time>21:02</time></div><p>今天的部署跑完了吗？顺便看一下 sticker 分类有没有报错。</p></div>
+				<div class="msg bot"><div class="who"><b>tsukaima</b><time>21:02</time></div><p>部署已完成，当前版本 0.32.0。Sticker 分类器过去一小时有 2 次视觉服务超时，已自动重试成功。</p>
+					<div class="toolcall"><i>✓</i> workspace.status · 120ms<br><i>✓</i> logs.query level=warn since=1h · 340ms</div></div>
+				<div class="msg"><div class="who"><b>user_beta</b><time>21:04</time></div><p>Can you summarize what changed since 0.31?</p></div>
+				<div class="msg bot"><div class="who"><b>tsukaima</b><time>21:04</time></div><p>Three things: graceful restart tools for admin agents, retries for vision failures, and reclassification now replaces stale labels instead of merging.</p></div>
+				<div class="composer"><input placeholder="写点什么… Message 测试群"><button class="btn pri">Send</button></div>
+			</div></div>
+			<aside class="insp">
+				<div class="eyebrow">context window</div>
+				<h4>48.2k <span style="color:var(--muted);font-size:13.5px;font-family:var(--sans)">/ 128k tokens</span></h4>
+				<div class="bar" id="bar"></div>
+				<div class="barlbl"><span>0</span><span>37.7%</span><span>128k</span></div>
+				<table class="ctx" id="ctx"></table>
+				<p style="color:var(--muted);font-size:12px;margin-top:20px">Compaction triggers at 80%. 下一次压缩预计在约 54k tokens 后。</p>
+			</aside>
+		</section>
+	</main>
+</div>
+<script>
+const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
+function go(v,tab){
+	$$('.view').forEach(e=>e.classList.toggle('on',e.id==='v-'+v));
+	$$('[data-go]').forEach(e=>e.classList.toggle('on',e.dataset.go===v&&(!tab||e.dataset.tab===tab||e.classList.contains('rbtn'))));
+	const rv={mcp:'mcp',openai:'mcp',general:'general',chat:'chat'}[v];
+	$$('.rbtn[data-go]').forEach(e=>e.classList.toggle('on',e.dataset.go===rv));
+	if(v==='general')setTab($('#v-general'),tab||'gen');
+}
+function setTab(view,p){
+	$$('.tab',view).forEach(t=>t.classList.toggle('on',t.dataset.p===p));
+	$$('.pane',view).forEach(t=>t.classList.toggle('on',t.dataset.pane===p));
+	if(view.id==='v-general')$('#gt').textContent=p==='upg'?'Upgrades & Git':'General';
+}
+$$('[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go,b.dataset.tab));
+$$('.tab').forEach(t=>t.onclick=()=>setTab(t.closest('.view'),t.dataset.p));
+$$('.rh').forEach(r=>r.onclick=()=>r.parentElement.classList.toggle('open'));
+const root=document.documentElement;
+function applyTheme(t){
+	root.dataset.theme=t;
+	$('#ticon').innerHTML=t==='dark'
+		?'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>'
+		:'<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>';
+	$$('#tseg button').forEach(b=>b.classList.toggle('on',b.dataset.th===t));
+}
+$('#tt').onclick=()=>applyTheme(root.dataset.theme==='dark'?'light':'dark');
+document.addEventListener('click',e=>{
+	const s=e.target.closest('.sw');if(s)s.classList.toggle('on');
+	const g=e.target.closest('.seg button');if(g){$$('button',g.parentElement).forEach(x=>x.classList.remove('on'));g.classList.add('on');if(g.dataset.th)applyTheme(g.dataset.th)}
+	const p=e.target.closest('.pill');if(p)p.classList.toggle('on');
+	const m=e.target.closest('.more');if(m)m.closest('.model').classList.toggle('open');
+});
+const CAPS=['Tools','Reasoning','Image','Audio','Sidechat'];
+const MODELS=[['qwen3-235b-a22b',[1,1,0,0,1],'131072'],['glm-4.6',[1,1,0,0,0],'202752'],['kimi-k2-instruct',[1,0,0,0,1],'131072'],['qwen2.5-vl-72b',[0,0,1,0,0],'32768'],['whisper-large-v3',[0,0,0,1,0],'—']];
+$('#models').innerHTML=MODELS.map(([id,c,ctx])=>`<div class="model" data-id="${id}"><div class="mrow"><span class="id">${id}</span><span class="pills">${CAPS.map((k,i)=>`<button class="pill${c[i]?' on':''}">${k}</button>`).join('')}</span><button class="more">Parameters ▸</button></div><div class="params"><div><label>Context</label><input value="${ctx}"></div><div><label>Max output</label><input value="8192"></div><div><label>Temperature</label><input value="0.7"></div><div><label>Top-p</label><input value="0.95"></div></div></div>`).join('');
+$('#q').oninput=e=>{const q=e.target.value.toLowerCase();let n=0;$$('.model').forEach(m=>{const s=m.dataset.id.includes(q);m.style.display=s?'':'none';n+=s});$('#qc').textContent=n+' shown'};
+const SEG=[['System prompt',6.1,'var(--accent)'],['Tools & schemas',9.4,'var(--sage)'],['Memory',4.8,'var(--amber)'],['History',26.3,'var(--ink-soft)'],['Pending input',1.6,'var(--terra)']];
+$('#bar').innerHTML=SEG.map(([,v,c])=>`<i style="width:${v/128*100}%;background:${c}"></i>`).join('')+'<i style="flex:1;background:var(--line)"></i>';
+$('#ctx').innerHTML=SEG.map(([n,v,c])=>`<tr><td><span class="sw2" style="background:${c}"></span>${n}</td><td>${v.toFixed(1)}k</td></tr>`).join('')+'<tr class="tot"><td>Total</td><td>48.2k</td></tr>';
+</script>
+</body>
+</html>

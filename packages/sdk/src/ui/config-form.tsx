@@ -1,18 +1,19 @@
 "use client";
 
-import { isPlainObject } from "es-toolkit";
-import { Input } from "@tsukaima/ui/components/motion/input";
-import { Button } from "@tsukaima/ui/components/motion/button";
+import { PreferenceRow } from "@tsukaima/ui/components/editorial/preference-row";
 import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@tsukaima/ui/components/motion/select";
-import { Switch } from "@tsukaima/ui/components/motion/switch";
-import { useEffect, useState, type ReactNode } from "react";
-import { Field } from "./components.tsx";
+	EditorialSelect,
+	EditorialSelectContent,
+	EditorialSelectItem,
+	EditorialSelectTrigger,
+	EditorialSelectValue,
+} from "@tsukaima/ui/components/editorial/select";
+import { EditorialSwitch } from "@tsukaima/ui/components/editorial/switch";
+import { Button } from "@tsukaima/ui/components/motion/button";
+import { Input } from "@tsukaima/ui/components/motion/input";
+import { isPlainObject } from "es-toolkit";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import { CodeBlock } from "./components.tsx";
 
 type JsonSchemaNode = {
 	readonly anyOf?: readonly JsonSchemaNode[];
@@ -218,6 +219,7 @@ export function PluginConfigForm({
 }: PluginConfigFormProps) {
 	const fields = properties(schema);
 	const keys = Object.keys(fields);
+	const formId = useId();
 	const [draft, setDraft] = useState<Record<string, string>>({});
 
 	useEffect(() => {
@@ -269,131 +271,128 @@ export function PluginConfigForm({
 		setDraft({});
 	};
 
-	const renderControl = (
+	function renderNested(
+		draftKey: string,
+		nested: Record<string, JsonSchemaNode>,
+		current: unknown,
+	): ReactNode {
+		const nestedCurrent = isPlainObject(current) ? current : {};
+		return (
+			<div className="ms-1 border-s-2 border-accent-ink ps-4">
+				{Object.entries(nested).map(([key, field]) =>
+					renderField(`${draftKey}.${key}`, field, nestedCurrent[key], false, key),
+				)}
+			</div>
+		);
+	}
+
+	function renderField(
 		draftKey: string,
 		field: JsonSchemaNode,
 		current: unknown,
 		secret: boolean,
-	): ReactNode => {
+		fallbackLabel = draftKey,
+	): ReactNode {
 		const control = controlFor(field);
 		const currentText = draftText(draftKey, field, current);
 		const configured = secret && secretsSet.includes(draftKey);
+		const label = copy(field.titleKey, field.title) ?? fallbackLabel;
+		const hint = copy(field.descriptionKey, field.description);
+		const fieldKey = encodeURIComponent(JSON.stringify(draftKey));
+		const id = `${formId}-field-${fieldKey}`;
+		const hintId = `${formId}-hint-${fieldKey}`;
+		const a11y = { id, ...(hint === undefined ? {} : { "aria-describedby": hintId }) };
+		const enabled = currentText === "true";
+		let input: ReactNode;
+		let detail: ReactNode;
 		if (control.kind === "boolean") {
-			const enabled = currentText === "true";
-			const detail =
-				control.detail === undefined ? undefined : (
-					<div className="space-y-3 rounded-lg border border-border/60 bg-background/40 p-3">
-						{Object.entries(control.detail).map(([subKey, subField]) => (
-							<Field
-								key={subKey}
-								hint={copy(subField.descriptionKey, subField.description)}
-								label={copy(subField.titleKey, subField.title) ?? subKey}
-							>
-								{renderControl(
-									`${draftKey}.${subKey}`,
-									subField,
-									isPlainObject(current) ? (current as Record<string, unknown>)[subKey] : undefined,
-									false,
-								)}
-							</Field>
-						))}
-					</div>
-				);
-			return (
-				<div className="space-y-3">
-					<Switch
-						ariaLabel={copy(field.titleKey, field.title) ?? draftKey}
-						checked={enabled}
-						onCheckedChange={(checked) => setField(draftKey, String(checked))}
-					/>
-					{enabled ? detail : null}
-				</div>
+			input = (
+				<EditorialSwitch
+					{...a11y}
+					aria-label={label}
+					checked={enabled}
+					onCheckedChange={(checked) => setField(draftKey, String(checked))}
+				/>
 			);
-		}
-		if (control.kind === "enum") {
+			if (enabled && control.detail !== undefined)
+				detail = renderNested(draftKey, control.detail, current);
+		} else if (control.kind === "enum") {
 			const optionLabel = (option: string) => copy(control.labels?.[option], undefined) ?? option;
-			const defaultOption = typeof field.default === "string" ? field.default : undefined;
-			return (
-				<Select value={currentText} onValueChange={(next) => setField(draftKey, next)}>
-					<SelectTrigger className="w-full">
-						<SelectValue
-							placeholder={
-								currentText.length > 0
-									? optionLabel(currentText)
-									: defaultOption === undefined
-										? undefined
-										: optionLabel(defaultOption)
-							}
-						/>
-					</SelectTrigger>
-					<SelectContent>
+			input = (
+				<EditorialSelect
+					value={currentText || null}
+					itemToLabel={optionLabel}
+					onValueChange={(next) => setField(draftKey, next)}
+				>
+					<EditorialSelectTrigger {...a11y} aria-label={label} className="w-full sm:min-w-40">
+						<EditorialSelectValue />
+					</EditorialSelectTrigger>
+					<EditorialSelectContent keepMounted>
 						{control.options.map((option) => (
-							<SelectItem key={option} value={option}>
+							<EditorialSelectItem key={option} value={option}>
 								{optionLabel(option)}
-							</SelectItem>
+							</EditorialSelectItem>
 						))}
-					</SelectContent>
-				</Select>
+					</EditorialSelectContent>
+				</EditorialSelect>
 			);
-		}
-		if (control.kind === "object") {
-			const nestedCurrent = isPlainObject(current) ? current : {};
-			return (
-				<div className="space-y-3 rounded-lg border border-border/60 bg-background/40 p-3">
-					{Object.entries(control.properties).map(([subKey, subField]) => (
-						<Field
-							key={subKey}
-							hint={copy(subField.descriptionKey, subField.description)}
-							label={copy(subField.titleKey, subField.title) ?? subKey}
-						>
-							{renderControl(`${draftKey}.${subKey}`, subField, nestedCurrent[subKey], false)}
-						</Field>
-					))}
-				</div>
-			);
-		}
-		if (control.kind === "unsupported") {
-			return (
-				<div className="space-y-1">
+		} else if (control.kind === "object") {
+			detail = renderNested(draftKey, control.properties, current);
+		} else if (control.kind === "unsupported") {
+			detail = (
+				<div className="space-y-1 pb-2">
 					<p className="text-xs text-muted-foreground">
 						{labels.unsupported ?? "Edit this value in the plugin configuration JSON."}
 					</p>
-					{current === undefined ? null : (
-						<pre className="overflow-auto rounded-md border border-border bg-background/60 p-2 font-mono text-[11px] leading-5">
-							{JSON.stringify(current, null, 2)}
-						</pre>
-					)}
+					{current === undefined ? null : <CodeBlock>{JSON.stringify(current, null, 2)}</CodeBlock>}
 				</div>
 			);
+		} else {
+			input = (
+				<Input
+					{...a11y}
+					className="w-full sm:w-56"
+					classNames={{
+						field:
+							"h-7 rounded-sm border-muted-foreground focus-within:ring-0 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring",
+						input: "placeholder:text-muted-foreground",
+					}}
+					type={secret ? "password" : control.kind === "number" ? "number" : "text"}
+					placeholder={
+						configured
+							? (labels.configured ?? "Configured; enter a new value to replace it")
+							: secret
+								? (labels.unset ?? "Not configured")
+								: undefined
+					}
+					value={currentText}
+					onChange={(next) => setField(draftKey, next)}
+				/>
+			);
 		}
-		return (
-			<Input
-				type={secret ? "password" : control.kind === "number" ? "number" : "text"}
-				placeholder={
-					configured
-						? (labels.configured ?? "Configured; enter a new value to replace it")
-						: secret
-							? (labels.unset ?? "Not configured")
-							: undefined
-				}
-				value={currentText}
-				onChange={(next) => setField(draftKey, next)}
-			/>
-		);
-	};
-
-	const renderField = (key: string): ReactNode => {
-		const field = fields[key] ?? {};
-		return (
-			<Field
-				key={key}
-				hint={copy(field.descriptionKey, field.description)}
-				label={copy(field.titleKey, field.title) ?? key}
+		const hasDetails =
+			detail !== undefined || (control.kind === "boolean" && control.detail !== undefined);
+		const row = (
+			<PreferenceRow
+				key={draftKey}
+				label={label}
+				hint={hint}
+				hintId={hintId}
+				{...(hasDetails ? { className: "border-b-0" } : {})}
+				{...(input === undefined ? {} : { htmlFor: id })}
 			>
-				{renderControl(key, field, value[key], secretKeys.includes(key))}
-			</Field>
+				{input}
+			</PreferenceRow>
 		);
-	};
+		return hasDetails ? (
+			<div key={draftKey} className="border-b border-border/70 last:border-b-0">
+				{row}
+				{detail}
+			</div>
+		) : (
+			row
+		);
+	}
 
 	const grouped: { readonly heading: string | undefined; readonly keys: readonly string[] }[] =
 		groups === undefined || groups.length === 0
@@ -411,14 +410,16 @@ export function PluginConfigForm({
 
 	return (
 		<div className="space-y-5">
-			{grouped.map((group, index) => (
-				<section key={group.heading ?? `group-${index}`} className="space-y-3">
+			{grouped.map((group) => (
+				<section key={JSON.stringify([group.heading, group.keys])}>
 					{group.heading === undefined ? null : (
 						<h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
 							{group.heading}
 						</h4>
 					)}
-					{group.keys.map((key) => renderField(key))}
+					{group.keys.map((key) =>
+						renderField(key, fields[key] ?? {}, value[key], secretKeys.includes(key)),
+					)}
 				</section>
 			))}
 			<Button disabled={saving} size="sm" onClick={() => void save()}>
