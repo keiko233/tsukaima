@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "../src/logging.ts";
@@ -88,6 +88,7 @@ function recordingExec(options: {
 function preparer(input: {
 	readonly repo: PreparedRepository;
 	readonly exec?: RuntimeUpdatePreparerExec;
+	readonly renameDir?: (source: string, destination: string) => Promise<void>;
 }): RuntimeUpdatePreparer {
 	return new RuntimeUpdatePreparer({
 		dependencyInstaller: {
@@ -97,6 +98,7 @@ function preparer(input: {
 		},
 		...(input.exec === undefined ? {} : { exec: input.exec }),
 		logger: input.repo.logger,
+		...(input.renameDir === undefined ? {} : { renameDir: input.renameDir }),
 		repositoryRoot: input.repo.root,
 		timeoutMs: 30_000,
 		webDistDir: input.repo.webDistDir,
@@ -175,5 +177,62 @@ describe("RuntimeUpdatePreparer", () => {
 
 		expect(repo.installCalls).toHaveLength(1);
 		expect(commands).toHaveLength(0);
+	});
+
+	test("falls back to copy and remove when rename hits EXDEV on overlayfs lowerdir", async () => {
+		const repo = await repository();
+		await mkdir(join(repo.webDistDir, "assets"), { recursive: true });
+		await writeFile(join(repo.webDistDir, "index.html"), "<title>old</title>");
+		await writeFile(join(repo.webDistDir, "assets/app.js"), "console.log('old');");
+		const commands: RecordedCommand[] = [];
+		const service = preparer({
+			exec: recordingExec({ commands }),
+			renameDir: async (source, destination) => {
+				if (source === repo.webDistDir) {
+					const error = Object.assign(
+						new Error(
+							`EXDEV: cross-device link not permitted, rename '${source}' -> '${destination}'`,
+						),
+						{ code: "EXDEV" },
+					);
+					throw error;
+				}
+				await rename(source, destination);
+			},
+			repo,
+		});
+
+		await service.prepare();
+
+		expect(await readFile(join(repo.webDistDir, "index.html"), "utf8")).toContain("built");
+		const siblings = await readdir(repo.appDir);
+		expect(siblings.some((name) => name.startsWith(".dist-staging-"))).toBe(false);
+		expect(siblings.some((name) => name.startsWith(".dist-backup-"))).toBe(false);
+	});
+
+	test("restores the previous dist when swap fails after EXDEV backup", async () => {
+		const repo = await repository();
+		await mkdir(repo.webDistDir, { recursive: true });
+		await writeFile(join(repo.webDistDir, "index.html"), "<title>old</title>");
+		const commands: RecordedCommand[] = [];
+		const service = preparer({
+			exec: recordingExec({ commands }),
+			renameDir: async (source, destination) => {
+				if (source === repo.webDistDir) {
+					throw Object.assign(new Error("EXDEV"), { code: "EXDEV" });
+				}
+				if (source.includes(".dist-staging-")) {
+					throw Object.assign(new Error("EACCES: synthetic swap failure"), { code: "EACCES" });
+				}
+				await rename(source, destination);
+			},
+			repo,
+		});
+
+		await expect(service.prepare()).rejects.toThrow("synthetic swap failure");
+		expect(await readFile(join(repo.webDistDir, "index.html"), "utf8")).toContain("old");
+		const siblings = await readdir(repo.appDir);
+		expect(siblings.some((name) => name.startsWith(".dist-staging-"))).toBe(false);
+		expect(siblings.some((name) => name.startsWith(".dist-backup-"))).toBe(false);
 	});
 });
