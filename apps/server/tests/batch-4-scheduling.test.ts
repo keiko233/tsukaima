@@ -319,6 +319,36 @@ function parseToolOutput(result: unknown): Record<string, unknown> {
 }
 
 describe("ScheduleService + ScheduleExecutionService quiet-hours behavior", () => {
+	test("a daily reminder sends a fresh dated instruction at each occurrence", async () => {
+		const { clock, schedules, sessionId, submitted } = await createSchedulingHarness();
+		const first = "2026-11-17T12:00:00.000Z";
+		const second = "2026-11-18T12:00:00.000Z";
+		const prompt = "Synthetic daily reminder";
+		await schedules.create({
+			actionKind: "agent_turn",
+			ownerId: "webui-admin",
+			ownerKind: "user",
+			prompt,
+			recurrence: { kind: "calendar", startDate: "2026-11-17", time: "20:00" },
+			source: "webui",
+			targetSessionId: sessionId,
+			timeZone: "Asia/Taipei",
+			title: "Synthetic daily schedule",
+		});
+		for (const due of [first, second]) {
+			clock.now = Date.parse(due);
+			await schedules.tick();
+		}
+		expect(submitted).toHaveLength(2);
+		const turns = submitted as readonly { context: string; requestId: string; text: string }[];
+		expect(turns[0]?.requestId).not.toBe(turns[1]?.requestId);
+		for (const [index, at] of [first, second].entries()) {
+			expect(turns[index]?.text).toBe(prompt);
+			expect(turns[index]?.context).toContain(at);
+			expect(turns[index]?.context).toContain("send the reminder anew");
+		}
+	});
+
 	test("a one-off reminder inside quiet hours stays active, defers without burning attempts, then executes after quiet end", async () => {
 		const harness = await createSchedulingHarness();
 		const { clock, database, policy, schedules, sessionId, submitted } = harness;

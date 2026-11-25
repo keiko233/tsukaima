@@ -177,7 +177,12 @@ import { OutboundService } from "./services/outbound.ts";
 import { RequestService } from "./services/request-service.ts";
 import { RepositoryService } from "./services/repository-service.ts";
 import { ScheduleExecutionService } from "./services/schedule-executor.ts";
-import { ScheduleService } from "./services/schedule-service.ts";
+import {
+	SCHEDULE_OCCURRENCE_REQUEST_PREFIX,
+	type SchedulePrincipal,
+	type ScheduledTurn,
+	ScheduleService,
+} from "./services/schedule-service.ts";
 import { SCHEDULE_TOOL_NAMES, createScheduleToolsExtension } from "./services/schedule-tools.ts";
 import { SessionMessagingService } from "./services/session-messaging.ts";
 import { UpgradeService } from "./services/upgrade-service.ts";
@@ -357,7 +362,10 @@ export class TsukaimaLifecycle {
 	 * cannot upgrade the caller's admin status mid-turn. The exact request id is the only cleanup
 	 * key: one submission can settle without disturbing another still running in the conversation.
 	 */
-	private readonly turnSenders = new Map<string, Map<string, string | null>>();
+	private readonly turnSenders = new Map<
+		string,
+		Map<string, { readonly sender: string | null; readonly scheduled: boolean }>
+	>();
 	processedMessageCount = 0;
 	providerRestartRequired = false;
 	routingPolicies: readonly ModelPolicy[] = [];
@@ -928,10 +936,12 @@ export class TsukaimaLifecycle {
 			},
 		});
 		this.scheduleToolsExtension = createScheduleToolsExtension({
+			adminPrincipal: (conversationId, turn) => this.scheduleAdminPrincipal(conversationId, turn),
 			audit: (entry) => this.writeAudit(entry),
 			logger: this.runtimeLog,
 			messaging: this.sessionMessaging,
 			resolveSessionId,
+			scheduledTurn: (conversationId) => this.boundScheduledTurn(conversationId),
 			schedules: this.schedules,
 		});
 		this.workspace = new WorkspaceService({
@@ -1314,6 +1324,10 @@ export class TsukaimaLifecycle {
 			conversationRole: (conversationId) =>
 				this.conversationPolicy.roleForDurableConversation(conversationId),
 			turnSender: (conversationId) => this.boundTurnSender(conversationId),
+			scheduledMcpPrincipal: async (conversationId) => {
+				const turn = await this.boundScheduledTurn(conversationId);
+				return turn === undefined ? undefined : this.scheduleAdminPrincipal(conversationId, turn);
+			},
 			conversations: this.pluginConversations,
 			followUps: this.followUpIntents,
 			database: () => this.domainDatabase,
@@ -2098,6 +2112,14 @@ export class TsukaimaLifecycle {
 				if (turn.midRun !== true) this.replyDispatcher.beginTurn(turn.conversationId);
 				this.noteTurnSender(turn);
 			},
+			onSubmissionResumed: ({ conversationId, placed, requestId }) => {
+				const hasBinding = this.turnSenders.has(conversationId);
+				this.noteTurnSender({
+					conversationId,
+					submissionRequestId: requestId,
+					whenBusy: placed && hasBinding ? "steer" : "follow-up",
+				});
+			},
 			// A submission settles exactly once, whatever its outcome: a dispatched answer, empty
 			// final text, an interrupted run, `unanswered`, or a refused submit. Deleting the exact
 			// request id keeps a stale admin binding from authorizing a later non-admin turn.
@@ -2212,7 +2234,12 @@ export class TsukaimaLifecycle {
 				? undefined
 				: createPluginToolsExtension(
 						() => this.pluginHost.tools(),
-						(name, input, context) => this.pluginHost.invokeTool(name, input, context),
+						// PluginHost resolves caller authority again at invocation, after the tool wait.
+						(name, input, { conversationId, signal } = {}) =>
+							this.pluginHost.invokeTool(name, input, {
+								...(conversationId === undefined ? {} : { conversationId }),
+								...(signal === undefined ? {} : { signal }),
+							}),
 						{
 							audit: (entry) => this.writeAudit(entry),
 							debug: (message, fields) => {
@@ -2663,10 +2690,16 @@ export class TsukaimaLifecycle {
 	 * submission request id, so settlement removes exactly one turn and never shifts another
 	 * turn's sender.
 	 */
-	private noteTurnSender(turn: AdmittedTurn): void {
+	private noteTurnSender(
+		turn: Pick<
+			AdmittedTurn,
+			"conversationId" | "senderExternalId" | "submissionRequestId" | "whenBusy"
+		>,
+	): void {
 		const durableConversationId = turn.conversationId;
+		const scheduled = turn.submissionRequestId.startsWith(SCHEDULE_OCCURRENCE_REQUEST_PREFIX);
 		const sender =
-			turn.senderExternalId === undefined || turn.senderExternalId.trim().length === 0
+			scheduled || turn.senderExternalId === undefined || turn.senderExternalId.trim().length === 0
 				? null
 				: turn.senderExternalId;
 		let entries = this.turnSenders.get(durableConversationId);
@@ -2679,15 +2712,18 @@ export class TsukaimaLifecycle {
 		// neither speaker's admin status can authorize the other's tool call.
 		const mixedSteer =
 			turn.whenBusy === "steer" &&
-			[...entries.values()].some((bound) => bound === null || bound !== sender);
+			[...entries.values()].some((bound) => bound.sender === null || bound.sender !== sender);
 		if (mixedSteer) {
-			for (const submissionRequestId of entries.keys()) {
-				entries.set(submissionRequestId, null);
+			const headRequestId = entries.keys().next().value;
+			for (const [submissionRequestId, binding] of entries) {
+				// Follow-ups already queued for later have their own scheduled context.
+				if (binding.scheduled && submissionRequestId !== headRequestId) continue;
+				entries.set(submissionRequestId, { sender: null, scheduled: false });
 			}
-			entries.set(turn.submissionRequestId, null);
+			entries.set(turn.submissionRequestId, { sender: null, scheduled: false });
 			return;
 		}
-		entries.set(turn.submissionRequestId, sender);
+		entries.set(turn.submissionRequestId, { sender, scheduled });
 	}
 
 	/** Sender bound to the oldest active turn; `undefined` means no turn is currently bound. */
@@ -2695,7 +2731,51 @@ export class TsukaimaLifecycle {
 		const entries = this.turnSenders.get(durableConversationId);
 		if (entries === undefined) return undefined;
 		// Map iteration follows insertion order, so the first value is the active head.
-		for (const sender of entries.values()) return sender;
+		for (const { sender } of entries.values()) return sender;
+		return undefined;
+	}
+
+	private async boundScheduledTurn(conversationId: string): Promise<ScheduledTurn | undefined> {
+		const entries = this.turnSenders.get(conversationId);
+		const head = entries?.entries().next().value;
+		if (head === undefined || !head[1].scheduled) return undefined;
+		const sessionId = this.sessionIdForDurableConversation(conversationId);
+		if (sessionId === undefined) return undefined;
+		const turn = await this.schedules.scheduledTurn(sessionId, head[0]);
+		return entries?.get(head[0]) === head[1] ? turn : undefined;
+	}
+
+	private async scheduleAdminPrincipal(
+		conversationId: string,
+		turn?: ScheduledTurn,
+	): Promise<SchedulePrincipal | undefined> {
+		const head = this.turnSenders.get(conversationId)?.entries().next().value;
+		if (head === undefined) return undefined;
+		const [requestId, bound] = head;
+		const scheduled =
+			turn ?? (bound.scheduled ? await this.boundScheduledTurn(conversationId) : undefined);
+		if (
+			scheduled !== undefined &&
+			(!bound.scheduled ||
+				requestId !== `${SCHEDULE_OCCURRENCE_REQUEST_PREFIX}${scheduled.occurrenceId}`)
+		)
+			return undefined;
+		const principal = scheduled?.principal;
+		if (principal?.kind === "webui") return principal;
+		const sender = principal?.id ?? bound?.sender;
+		if (sender === undefined || sender === null) return undefined;
+		const caller = await resolveImCallerContext({
+			conversationId,
+			database: this.domainDatabase,
+			overrides: { turnBoundSender: sender },
+			settings: this.pluginSettings,
+		});
+		if (
+			this.turnSenders.get(conversationId)?.values().next().value === bound &&
+			(caller.chatKind === "private" || caller.chatKind === "group") &&
+			caller.isAdmin === true
+		)
+			return { id: sender, kind: "im" };
 		return undefined;
 	}
 

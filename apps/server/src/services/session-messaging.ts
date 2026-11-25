@@ -378,6 +378,7 @@ export class SessionMessagingService {
 						source: { messageId: id, receivedAtMs: Date.now(), timestampMs: Date.now() },
 					},
 					forceSubmit: true,
+					...(input.source === "scheduler" ? { isolated: true } : {}),
 					...(input.requestId === undefined ? {} : { requestId: input.requestId }),
 					submittedAtMs: Date.now(),
 					...(attachedContext.length === 0 ? {} : { attachedContext }),
