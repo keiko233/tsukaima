@@ -3,15 +3,16 @@
 import {
 	Alert,
 	Button,
+	EditorialSwitch,
 	EmptyState,
 	Field,
 	Input,
 	PluginPage,
 	PluginSection,
+	PreferenceRow,
 	ProgressBar,
 	Spinner,
 	StatGrid,
-	Switch,
 	cn,
 	definePluginUi,
 	usePluginConfig,
@@ -248,6 +249,10 @@ const telegramSetName = (pack: StickerPack): string | undefined => {
 	return typeof name === "string" && name.length > 0 ? name : undefined;
 };
 
+/** Native controls share one hairline so no control needs a nested bordered wrapper. */
+const controlClass = "h-9 rounded-sm border border-line2 bg-paper px-2 text-sm text-ink";
+const textareaClass = "w-full rounded-sm border border-line2 bg-paper px-3 py-2 text-xs text-ink";
+
 function JobProgressCard({ job }: { job: JobProgressRow }) {
 	const t = usePluginI18n();
 	const stageLabel = t.t(`progress_stage_${job.stage}`);
@@ -265,10 +270,7 @@ function JobProgressCard({ job }: { job: JobProgressRow }) {
 			: null;
 
 	return (
-		<div
-			aria-live="polite"
-			className="space-y-2 rounded-lg border border-border bg-background/60 p-3"
-		>
+		<div aria-live="polite" className="ms-1 space-y-2 border-s-2 border-accent-ink py-2 ps-4">
 			<div className="flex flex-wrap items-center justify-between gap-2">
 				<div className="flex min-w-0 items-center gap-2 text-xs font-medium">
 					{job.status === "running" ? <Spinner /> : null}
@@ -278,7 +280,7 @@ function JobProgressCard({ job }: { job: JobProgressRow }) {
 							: `${job.packTitle} · ${stageLabel}`}
 					</span>
 				</div>
-				<div className="text-[11px] tabular-nums text-muted-foreground">
+				<div className="font-mono text-[11px] tabular-nums text-muted-foreground">
 					{percent === null ? countsLabel : `${percent}% · ${countsLabel}`}
 				</div>
 			</div>
@@ -289,10 +291,10 @@ function JobProgressCard({ job }: { job: JobProgressRow }) {
 					<div className="text-xs text-muted-foreground">{progressLabel}</div>
 					<div
 						aria-label={progressLabel}
-						className="h-1.5 overflow-hidden rounded-full bg-muted"
+						className="h-1 overflow-hidden bg-muted"
 						role="progressbar"
 					>
-						<div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
+						<div className="h-full w-1/3 animate-pulse bg-accent-ink" />
 					</div>
 				</div>
 			)}
@@ -313,7 +315,9 @@ function StickerMediaPreview({
 }) {
 	const src = `data:${mimeType};base64,${preview}`;
 	if (mimeType.toLowerCase().startsWith("video/")) {
-		return <video aria-label={alt} autoPlay className={className} loop muted playsInline src={src} />;
+		return (
+			<video aria-label={alt} autoPlay className={className} loop muted playsInline src={src} />
+		);
 	}
 	return <img alt={alt} className={className} src={src} />;
 }
@@ -390,12 +394,12 @@ function StickerInspector({
 		}
 	};
 	return (
-		<div className="mt-3 space-y-3 rounded-xl border border-border bg-background/60 p-3">
+		<div className="mt-3 space-y-3 border-t border-line pt-3">
 			<div className="flex flex-wrap items-start justify-between gap-2">
 				<div className="flex min-w-0 items-center gap-3">
-					<div className="flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border">
+					<div className="flex size-20 shrink-0 items-center justify-center overflow-hidden border border-border">
 						{preview === undefined ? (
-							<span className="text-[10px] text-muted-foreground">{t.t("item_preview")}</span>
+							<span className="text-[11px] text-muted-foreground">{t.t("item_preview")}</span>
 						) : (
 							<StickerMediaPreview
 								alt={item.name}
@@ -412,12 +416,9 @@ function StickerInspector({
 							{t.t("item_usage", { count: String(item.useCount) })} · {item.score}
 						</div>
 						{item.semantic === undefined || item.semantic.labels.length === 0 ? null : (
-							<div className="mt-1 flex flex-wrap gap-1">
+							<div className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
 								{item.semantic.labels.slice(0, 6).map((label) => (
-									<span
-										key={label}
-										className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary"
-									>
+									<span key={label} className="text-[11px] text-accent-ink">
 										{label}
 									</span>
 								))}
@@ -429,7 +430,7 @@ function StickerInspector({
 					</div>
 				</div>
 				<div className="flex items-center gap-2">
-					<Switch
+					<EditorialSwitch
 						ariaLabel={t.t("item_enabled")}
 						checked={item.enabled}
 						onCheckedChange={() => void toggleEnabled()}
@@ -443,7 +444,8 @@ function StickerInspector({
 				{packs.length > 0 ? (
 					<Field label={t.t("item_pack")}>
 						<select
-							className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+							aria-label={t.t("item_pack")}
+							className={cn("w-full", controlClass)}
 							value={packId}
 							onChange={(event) => setPackId(event.target.value)}
 						>
@@ -459,24 +461,25 @@ function StickerInspector({
 					</Field>
 				) : null}
 				<Field label={t.t("item_name")}>
-					<Input value={name} onChange={setName} />
+					<Input aria-label={t.t("item_name")} value={name} onChange={setName} />
 				</Field>
 				<Field label={t.t("item_description")}>
 					<textarea
-						className="min-h-20 w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm"
+						aria-label={t.t("item_description")}
+						className={cn("min-h-20 resize-y text-sm", textareaClass)}
 						rows={3}
 						value={description}
 						onChange={(event) => setDescription(event.target.value)}
 					/>
 				</Field>
 				<Field label={t.t("item_keywords")}>
-					<Input value={keywords} onChange={setKeywords} />
+					<Input aria-label={t.t("item_keywords")} value={keywords} onChange={setKeywords} />
 				</Field>
 				<Field label={t.t("item_emotions")}>
-					<Input value={emotions} onChange={setEmotions} />
+					<Input aria-label={t.t("item_emotions")} value={emotions} onChange={setEmotions} />
 				</Field>
 				<Field label={t.t("item_score")}>
-					<Input type="number" value={score} onChange={setScore} />
+					<Input aria-label={t.t("item_score")} type="number" value={score} onChange={setScore} />
 				</Field>
 			</div>
 			<div className="flex flex-wrap items-center justify-between gap-2">
@@ -534,15 +537,15 @@ function StickerThumbnailGrid({
 								aria-label={item.name}
 								aria-pressed={isSelected}
 								className={cn(
-									"group relative aspect-square overflow-hidden rounded-lg border border-border bg-background/60 p-1 transition hover:border-primary/50",
-									isSelected && "ring-2 ring-primary",
+									"group relative aspect-square overflow-hidden border border-border p-1 transition-colors hover:border-accent-ink",
+									isSelected && "border-accent-ink",
 									!item.enabled && "opacity-50",
 								)}
 								type="button"
 								onClick={() => setSelectedId(isSelected ? null : item.id)}
 							>
 								{preview === undefined ? (
-									<span className="flex size-full items-center justify-center text-center text-[10px] text-muted-foreground">
+									<span className="flex size-full items-center justify-center text-center text-[11px] text-muted-foreground">
 										{previewErrors[item.id] ? t.t("preview_failed") : t.t("item_preview")}
 									</span>
 								) : (
@@ -554,12 +557,12 @@ function StickerThumbnailGrid({
 									/>
 								)}
 								{missing ? (
-									<span className="absolute inset-x-0 bottom-0 bg-warning/20 px-1 text-center text-[9px] text-warning">
+									<span className="absolute inset-x-0 bottom-0 bg-warning/20 px-1 text-center text-[11px] text-warning">
 										{t.t("status_missing")}
 									</span>
 								) : null}
 								{!item.enabled ? (
-									<span className="absolute left-1 top-1 rounded bg-background/80 px-1 text-[9px] text-muted-foreground">
+									<span className="absolute left-1 top-1 bg-background/80 px-1 text-[11px] text-muted-foreground">
 										{t.t("item_disabled_short")}
 									</span>
 								) : null}
@@ -665,11 +668,11 @@ function PackAccordion({
 		}
 	};
 	return (
-		<div className="rounded-xl border border-border bg-background/40">
-			<div className="flex items-start gap-2 p-3">
+		<div className="border-t border-line">
+			<div className="flex items-start gap-2 py-3">
 				<button
 					aria-expanded={expanded}
-					className="flex min-w-0 flex-1 items-center gap-2 text-left"
+					className="flex min-w-0 flex-1 items-center gap-2 text-start"
 					type="button"
 					onClick={toggle}
 				>
@@ -680,7 +683,7 @@ function PackAccordion({
 						)}
 					/>
 					<span className="min-w-0">
-						<span className="block truncate text-sm font-medium">{pack.name}</span>
+						<span className="block truncate text-sm font-medium text-ink">{pack.name}</span>
 						<span className="block text-[11px] text-muted-foreground">
 							{t.t(`source_${pack.source}`)} ·{" "}
 							{t.t("pack_items", { count: String(pack.itemCount) })}
@@ -715,7 +718,7 @@ function PackAccordion({
 						>
 							{editing ? t.t("pack_edit_done") : t.t("edit")}
 						</Button>
-						<Switch
+						<EditorialSwitch
 							ariaLabel={t.t("pack_enabled")}
 							checked={pack.enabled}
 							onCheckedChange={() => {
@@ -729,10 +732,10 @@ function PackAccordion({
 				)}
 			</div>
 			{editing ? (
-				<div className="space-y-2 border-t border-border p-3">
+				<div className="ms-1 space-y-2 border-s-2 border-accent-ink py-2 ps-4">
 					<div className="grid gap-2 sm:grid-cols-3">
 						<Field label={t.t("pack_name")}>
-							<Input value={name} onChange={setName} />
+							<Input aria-label={t.t("pack_name")} value={name} onChange={setName} />
 						</Field>
 						<Field label={t.t("pack_tags")}>
 							<Input value={tags} onChange={setTags} />
@@ -749,7 +752,7 @@ function PackAccordion({
 				</div>
 			) : null}
 			{expanded ? (
-				<div className="border-t border-border p-3">
+				<div className="ms-1 border-s-2 border-accent-ink py-1 ps-4">
 					<StickerThumbnailGrid
 						emptyText={t.t("pack_items_empty")}
 						items={items}
@@ -831,7 +834,7 @@ function CandidateRow({
 		}
 	};
 	return (
-		<div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border px-3 py-2">
+		<div className="flex flex-wrap items-center justify-between gap-2 border-t border-line py-2">
 			<div className="min-w-0">
 				<div className="truncate text-sm font-medium">{candidate.name}</div>
 				<div className="truncate text-[11px] text-muted-foreground">
@@ -840,20 +843,14 @@ function CandidateRow({
 						? ""
 						: ` · ${t.t("candidate_source")}: ${candidate.sourceConversationId}`}
 				</div>
-				<div className="mt-1 flex flex-wrap gap-1">
+				<div className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
 					{candidate.keywords.map((keyword) => (
-						<span
-							key={keyword}
-							className="rounded-full border border-border px-1.5 py-0.5 text-[10px]"
-						>
+						<span key={keyword} className="text-[11px] text-muted-foreground">
 							{keyword}
 						</span>
 					))}
 					{candidate.emotions.map((emotion) => (
-						<span
-							key={emotion}
-							className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary"
-						>
+						<span key={emotion} className="text-[11px] text-accent-ink">
 							{emotion}
 						</span>
 					))}
@@ -1119,9 +1116,7 @@ function StickerPanel() {
 				...(qqStealPackId.trim().length > 0 ? { packId: qqStealPackId.trim() } : {}),
 				...(entry.sha256 ? { sha256: entry.sha256 } : {}),
 			});
-			toast.success(
-				t.t("qq_steal_success", { name: result.item.name, pack: result.pack.name }),
-			);
+			toast.success(t.t("qq_steal_success", { name: result.item.name, pack: result.pack.name }));
 			await Promise.all([refresh(), loadQqMedia()]);
 		} catch (error) {
 			toast.error(t.t("qq_steal_failed"), error instanceof Error ? error.message : String(error));
@@ -1603,7 +1598,7 @@ function StickerPanel() {
 			title={t.t("title")}
 		>
 			{loading && stats === null ? (
-				<div className="flex items-center rounded-lg border border-border bg-background/60 px-3 py-2">
+				<div className="flex items-center border-t border-border pt-4">
 					<Spinner label={t.t("loading_library")} />
 				</div>
 			) : null}
@@ -1623,6 +1618,7 @@ function StickerPanel() {
 				<div className="space-y-3">
 					<Field label={t.t("url_import_url")}>
 						<Input
+							aria-label={t.t("url_import_url")}
 							placeholder={t.t("url_import_url_placeholder")}
 							value={stickerUrl}
 							onChange={setStickerUrl}
@@ -1631,7 +1627,8 @@ function StickerPanel() {
 					<div className="grid gap-3 sm:grid-cols-2">
 						<Field label={t.t("url_import_pack")}>
 							<select
-								className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+								className={cn("w-full", controlClass)}
+								aria-label={t.t("url_import_pack")}
 								value={urlPackId}
 								onChange={(event) => setUrlPackId(event.target.value)}
 							>
@@ -1644,13 +1641,21 @@ function StickerPanel() {
 							</select>
 						</Field>
 						<Field label={t.t("url_import_name")}>
-							<Input value={urlName} onChange={setUrlName} />
+							<Input aria-label={t.t("url_import_name")} value={urlName} onChange={setUrlName} />
 						</Field>
 						<Field label={t.t("url_import_keywords")}>
-							<Input value={urlKeywords} onChange={setUrlKeywords} />
+							<Input
+								aria-label={t.t("url_import_keywords")}
+								value={urlKeywords}
+								onChange={setUrlKeywords}
+							/>
 						</Field>
 						<Field label={t.t("url_import_emotions")}>
-							<Input value={urlEmotions} onChange={setUrlEmotions} />
+							<Input
+								aria-label={t.t("url_import_emotions")}
+								value={urlEmotions}
+								onChange={setUrlEmotions}
+							/>
 						</Field>
 					</div>
 					<Button
@@ -1684,7 +1689,8 @@ function StickerPanel() {
 					<div className="flex flex-wrap items-end justify-between gap-3">
 						<Field label={t.t("url_import_pack")}>
 							<select
-								className="h-9 min-w-52 rounded-md border border-border bg-background px-2 text-sm"
+								className={cn("min-w-52", controlClass)}
+								aria-label={t.t("url_import_pack")}
 								value={qqStealPackId}
 								onChange={(event) => setQqStealPackId(event.target.value)}
 							>
@@ -1710,16 +1716,13 @@ function StickerPanel() {
 					{qqMedia.length === 0 ? (
 						<EmptyState title={t.t("qq_steal_empty")} />
 					) : (
-						<div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+						<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
 							{qqMedia.map((entry) => {
 								const previewBase64 = qqPreviews[entry.mediaId];
 								const isStealing = stealingMediaId === entry.mediaId;
 								return (
-									<div
-										key={entry.mediaId}
-										className="flex flex-col justify-between gap-2 rounded-md border border-border bg-background p-2"
-									>
-										<div className="flex h-24 items-center justify-center overflow-hidden rounded bg-muted/40">
+									<div key={entry.mediaId} className="space-y-1">
+										<div className="flex h-24 items-center justify-center overflow-hidden border border-border bg-muted/40">
 											{previewBase64 !== undefined ? (
 												<img
 													alt={entry.previewText ?? entry.partType}
@@ -1727,16 +1730,14 @@ function StickerPanel() {
 													src={`data:${entry.mimeType};base64,${previewBase64}`}
 												/>
 											) : (
-												<span className="text-[11px] text-muted-foreground">
-													{entry.partType}
-												</span>
+												<span className="text-[11px] text-muted-foreground">{entry.partType}</span>
 											)}
 										</div>
 										<div className="space-y-1">
 											<div className="truncate text-[11px] font-medium">
 												{entry.previewText ?? entry.partType}
 											</div>
-											<div className="truncate text-[10px] text-muted-foreground">
+											<div className="truncate text-[11px] text-muted-foreground">
 												{entry.conversationTitle}
 											</div>
 											<Button
@@ -1769,6 +1770,7 @@ function StickerPanel() {
 				<div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
 					<Field label={t.t("telegram_bot_token")}>
 						<Input
+							aria-label={t.t("telegram_bot_token")}
 							placeholder={
 								tokenConfigured
 									? t.t("telegram_token_placeholder_configured")
@@ -1811,31 +1813,31 @@ function StickerPanel() {
 				<div className="space-y-3">
 					<Field label={t.t("telegram_url")}>
 						<Input
+							aria-label={t.t("telegram_url")}
 							placeholder={t.t("telegram_url_placeholder")}
 							value={telegramUrl}
 							onChange={setTelegramUrl}
 						/>
 					</Field>
-					<div className="flex flex-wrap items-center gap-4">
-						<label className="flex items-center gap-2 text-xs">
-							<Switch
+					<div>
+						<PreferenceRow label={t.t("import_dry_run")}>
+							<EditorialSwitch
 								ariaLabel={t.t("import_dry_run")}
 								checked={dryRun}
 								onCheckedChange={setDryRun}
 							/>
-							{t.t("import_dry_run")}
-						</label>
-						<label className="flex items-center gap-2 text-xs">
-							<Switch
+						</PreferenceRow>
+						<PreferenceRow label={t.t("telegram_include_animated")}>
+							<EditorialSwitch
 								ariaLabel={t.t("telegram_include_animated")}
 								checked={telegramAnimated}
 								onCheckedChange={setTelegramAnimated}
 							/>
-							{t.t("telegram_include_animated")}
-						</label>
-						<Field label={t.t("telegram_animated_format")}>
+						</PreferenceRow>
+						<PreferenceRow label={t.t("telegram_animated_format")}>
 							<select
-								className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+								className={cn("w-full", controlClass)}
+								aria-label={t.t("telegram_animated_format")}
 								value={telegramAnimatedFormat}
 								onChange={(event) =>
 									setTelegramAnimatedFormat(event.target.value as TelegramAnimatedFormat)
@@ -1844,10 +1846,11 @@ function StickerPanel() {
 								<option value="gif">{t.t("telegram_animated_gif")}</option>
 								<option value="thumbnail">{t.t("telegram_animated_thumbnail")}</option>
 							</select>
-						</Field>
-						<Field label={t.t("telegram_video_format")}>
+						</PreferenceRow>
+						<PreferenceRow label={t.t("telegram_video_format")}>
 							<select
-								className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+								className={cn("w-full", controlClass)}
+								aria-label={t.t("telegram_video_format")}
 								value={telegramVideoFormat}
 								onChange={(event) =>
 									setTelegramVideoFormat(event.target.value as TelegramVideoFormat)
@@ -1856,10 +1859,11 @@ function StickerPanel() {
 								<option value="gif">{t.t("telegram_video_gif")}</option>
 								<option value="thumbnail">{t.t("telegram_video_thumbnail")}</option>
 							</select>
-						</Field>
-						<Field label={t.t("semantic_mode")}>
+						</PreferenceRow>
+						<PreferenceRow label={t.t("semantic_mode")}>
 							<select
-								className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+								aria-label={t.t("semantic_mode")}
+								className={cn("w-full", controlClass)}
 								value={semanticMode}
 								onChange={(event) => setSemanticMode(event.target.value as SemanticMode)}
 							>
@@ -1867,42 +1871,46 @@ function StickerPanel() {
 								<option value="auto">{t.t("semantic_mode_auto")}</option>
 								<option value="vision">{t.t("semantic_mode_vision")}</option>
 							</select>
-						</Field>
-						<Field label={t.t("semantic_model")}>
+						</PreferenceRow>
+						<PreferenceRow label={t.t("semantic_model")}>
 							<select
-								className="h-9 min-w-52 rounded-md border border-border bg-background px-2 text-sm"
+								aria-label={t.t("semantic_model")}
+								className={cn("w-full", controlClass)}
 								value={selectedModelChoice}
 								onChange={(event) => setSelectedModelChoice(event.target.value)}
 							>
 								{modelSelectOptions}
 							</select>
-						</Field>
-						<Field label={t.t("import_concurrency")}>
+						</PreferenceRow>
+						<PreferenceRow label={t.t("import_concurrency")}>
 							<Input
+								aria-label={t.t("import_concurrency")}
+								className="w-28"
 								max={16}
 								min={1}
 								type="number"
 								value={importConcurrency}
 								onChange={setImportConcurrency}
 							/>
-						</Field>
-						<Field label={t.t("semantic_concurrency")}>
+						</PreferenceRow>
+						<PreferenceRow label={t.t("semantic_concurrency")}>
 							<Input
+								aria-label={t.t("semantic_concurrency")}
+								className="w-28"
 								max={16}
 								min={1}
 								type="number"
 								value={semanticConcurrency}
 								onChange={setSemanticConcurrency}
 							/>
-						</Field>
-						<label className="flex items-center gap-2 text-xs">
-							<Switch
+						</PreferenceRow>
+						<PreferenceRow label={t.t("telegram_background_semantic")}>
+							<EditorialSwitch
 								ariaLabel={t.t("telegram_background_semantic")}
 								checked={backgroundSemantic}
 								onCheckedChange={setBackgroundSemantic}
 							/>
-							{t.t("telegram_background_semantic")}
-						</label>
+						</PreferenceRow>
 					</div>
 					<Button
 						disabled={telegramBusy || telegramUrl.trim().length === 0}
@@ -1937,10 +1945,11 @@ function StickerPanel() {
 
 			<PluginSection description={t.t("semantic_hint")} title={t.t("semantic")}>
 				<div className="space-y-3">
-					<div className="flex flex-wrap items-end gap-3">
-						<Field label={t.t("semantic_mode")}>
+					<div>
+						<PreferenceRow label={t.t("semantic_mode")}>
 							<select
-								className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+								aria-label={t.t("semantic_mode")}
+								className={cn("w-full", controlClass)}
 								value={semanticMode}
 								onChange={(event) => setSemanticMode(event.target.value as SemanticMode)}
 							>
@@ -1948,55 +1957,55 @@ function StickerPanel() {
 								<option value="auto">{t.t("semantic_mode_auto")}</option>
 								<option value="vision">{t.t("semantic_mode_vision")}</option>
 							</select>
-						</Field>
-						<Field label={t.t("semantic_model")}>
+						</PreferenceRow>
+						<PreferenceRow label={t.t("semantic_model")}>
 							<select
-								className="h-9 min-w-52 rounded-md border border-border bg-background px-2 text-sm"
+								aria-label={t.t("semantic_model")}
+								className={cn("w-full", controlClass)}
 								value={selectedModelChoice}
 								onChange={(event) => setSelectedModelChoice(event.target.value)}
 							>
 								{modelSelectOptions}
 							</select>
-						</Field>
-						<Button
-							disabled={savingModel}
-							leadingIcon={<Save />}
-							loading={savingModel}
-							size="sm"
-							variant="secondary"
-							onClick={() => void saveModelSettings()}
-						>
-							{t.t("semantic_model_save")}
-						</Button>
+						</PreferenceRow>
 					</div>
 					{availableModels.length === 0 && !configuredCustom ? (
 						<div className="text-[11px] text-muted-foreground">{t.t("semantic_models_empty")}</div>
 					) : null}
-					<div className="flex flex-wrap items-end gap-3">
-						<Field label={t.t("semantic_pack")}>
-							<select
-								className="h-9 min-w-52 rounded-md border border-border bg-background px-2 text-sm"
-								value={reclassifyPackId}
-								onChange={(event) => setReclassifyPackId(event.target.value)}
-							>
-								{packs.map((pack) => (
-									<option key={pack.id} value={pack.id}>
-										{pack.name}
-									</option>
-								))}
-							</select>
-						</Field>
-						<Button
-							disabled={reclassifyBusy || reclassifyPackId.length === 0}
-							leadingIcon={<Sparkles />}
-							loading={reclassifyBusy}
-							size="sm"
-							variant="secondary"
-							onClick={() => void reclassify()}
+					<Button
+						disabled={savingModel}
+						leadingIcon={<Save />}
+						loading={savingModel}
+						size="sm"
+						variant="secondary"
+						onClick={() => void saveModelSettings()}
+					>
+						{t.t("semantic_model_save")}
+					</Button>
+					<PreferenceRow label={t.t("semantic_pack")}>
+						<select
+							aria-label={t.t("semantic_pack")}
+							className={cn("w-full", controlClass)}
+							value={reclassifyPackId}
+							onChange={(event) => setReclassifyPackId(event.target.value)}
 						>
-							{reclassifyBusy ? t.t("semantic_reclassifying") : t.t("semantic_reclassify")}
-						</Button>
-					</div>
+							{packs.map((pack) => (
+								<option key={pack.id} value={pack.id}>
+									{pack.name}
+								</option>
+							))}
+						</select>
+					</PreferenceRow>
+					<Button
+						disabled={reclassifyBusy || reclassifyPackId.length === 0}
+						leadingIcon={<Sparkles />}
+						loading={reclassifyBusy}
+						size="sm"
+						variant="secondary"
+						onClick={() => void reclassify()}
+					>
+						{reclassifyBusy ? t.t("semantic_reclassifying") : t.t("semantic_reclassify")}
+					</Button>
 					{reclassifyProgress !== null && reclassifyProgress.status === "running" ? (
 						<JobProgressCard job={reclassifyProgress} />
 					) : null}
@@ -2018,17 +2027,17 @@ function StickerPanel() {
 
 			<PluginSection description={t.t("prompt_hint")} title={t.t("prompt_section")}>
 				<div className="space-y-3">
-					<div className="flex flex-wrap items-center gap-2">
-						<span className="text-xs text-muted-foreground">{t.t("prompt_enabled")}</span>
-						<Switch
+					<PreferenceRow label={t.t("prompt_enabled")}>
+						<EditorialSwitch
 							ariaLabel={t.t("prompt_enabled")}
 							checked={promptEnabled}
 							onCheckedChange={setPromptEnabled}
 						/>
-					</div>
+					</PreferenceRow>
 					<Field label={t.t("prompt_text")}>
 						<textarea
-							className="min-h-24 w-full rounded-md border border-border bg-background px-3 py-2 text-xs"
+							aria-label={t.t("prompt_text")}
+							className={cn("min-h-24", textareaClass)}
 							disabled={!promptEnabled}
 							maxLength={STICKER_DECISION_PROMPT_MAX_CHARS}
 							placeholder={DEFAULT_STICKER_DECISION_PROMPT}
@@ -2074,7 +2083,7 @@ function StickerPanel() {
 				{packs.length === 0 && orphanedItems.length === 0 ? (
 					<EmptyState description={t.t("packs_empty")} title={t.t("packs")} />
 				) : (
-					<div className="space-y-2">
+					<div>
 						{packs.map((pack) => (
 							<PackAccordion
 								key={pack.id}
@@ -2119,7 +2128,7 @@ function StickerPanel() {
 				{candidates.length === 0 ? (
 					<EmptyState title={t.t("candidates_empty")} />
 				) : (
-					<div className="space-y-2">
+					<div>
 						{candidates.map((candidate) => (
 							<CandidateRow key={candidate.id} candidate={candidate} onChanged={refresh} />
 						))}
@@ -2129,16 +2138,15 @@ function StickerPanel() {
 
 			<PluginSection description={t.t("export_hint")} title={t.t("legacy_import")}>
 				<div className="space-y-3">
-					<div className="flex flex-wrap items-center gap-2">
-						<span className="text-xs text-muted-foreground">{t.t("import_dry_run")}</span>
-						<Switch
+					<PreferenceRow label={t.t("import_dry_run")}>
+						<EditorialSwitch
 							ariaLabel={t.t("import_dry_run")}
 							checked={dryRun}
 							onCheckedChange={setDryRun}
 						/>
-					</div>
+					</PreferenceRow>
 					<Field label={t.t("import_directory")}>
-						<Input value={directory} onChange={setDirectory} />
+						<Input aria-label={t.t("import_directory")} value={directory} onChange={setDirectory} />
 					</Field>
 					<div className="flex flex-wrap gap-2">
 						<Button
@@ -2162,7 +2170,8 @@ function StickerPanel() {
 					</div>
 					<Field label={t.t("import_bundle")}>
 						<textarea
-							className="min-h-24 w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
+							aria-label={t.t("import_bundle")}
+							className={cn("min-h-24 font-mono", textareaClass)}
 							value={bundle}
 							onChange={(event) => setBundle(event.target.value)}
 						/>
@@ -2196,7 +2205,8 @@ function StickerPanel() {
 					{exported.length === 0 ? null : (
 						<Field label={t.t("bundle_output")}>
 							<textarea
-								className="min-h-40 w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
+								aria-label={t.t("bundle_output")}
+								className={cn("min-h-40 font-mono", textareaClass)}
 								readOnly
 								value={exported}
 							/>
@@ -2206,7 +2216,7 @@ function StickerPanel() {
 			</PluginSection>
 
 			<PluginSection title={plugin.name}>
-				<div className="text-xs text-muted-foreground">
+				<div className="font-mono text-[11px] text-muted-foreground">
 					{t.t("plugin_identity", { id: plugin.id, version: plugin.version })}
 				</div>
 			</PluginSection>

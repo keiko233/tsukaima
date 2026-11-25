@@ -4,7 +4,9 @@ import type { SkillDetail, SkillsSnapshot, SkillSummary } from "@tsukaima/contra
 import {
 	Alert,
 	Button,
+	CodeBlock,
 	EmptyState,
+	ExpandableRow,
 	PluginPage,
 	PluginSection,
 	StatGrid,
@@ -29,6 +31,7 @@ function errorMessage(error: unknown): string {
 
 function SkillRow({
 	busy,
+	detail,
 	onPreview,
 	skill,
 	previewLabel,
@@ -36,32 +39,68 @@ function SkillRow({
 	scopeLabel,
 }: {
 	readonly busy: boolean;
+	readonly detail: SkillDetail | null;
 	readonly onPreview: () => void;
 	readonly previewLabel: string;
 	readonly disabledLabel: string;
 	readonly scopeLabel: string;
 	readonly skill: SkillSummary;
 }) {
+	const metadata = Object.entries(skill.metadata ?? {});
 	return (
-		<div className="flex flex-wrap items-start justify-between gap-2 rounded-xl border border-border bg-background/40 p-3">
-			<div className="min-w-0">
-				<div className="flex flex-wrap items-center gap-2">
-					<span className="font-mono text-sm font-medium">{skill.name}</span>
-					<span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10.5px] text-muted-foreground">
-						{scopeLabel}
-					</span>
+		<ExpandableRow
+			summary={
+				<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+					<span className="font-mono">{skill.name}</span>
+					<span className="text-[11px] text-muted-foreground">{scopeLabel}</span>
 					{skill.enabled ? null : (
-						<span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10.5px] text-muted-foreground">
-							{disabledLabel}
-						</span>
+						<span className="text-[11px] text-muted-foreground">{disabledLabel}</span>
 					)}
-				</div>
-				<p className="mt-1 text-xs text-muted-foreground">{skill.description}</p>
+					<span className="min-w-0 truncate text-[11px] text-muted-foreground">
+						{skill.description}
+					</span>
+				</span>
+			}
+		>
+			<div className="space-y-3">
+				<p className="text-xs text-muted-foreground">{skill.description}</p>
+				{metadata.length === 0 ? null : (
+					<dl className="text-[11px]">
+						{metadata.map(([key, value]) => (
+							<div
+								key={key}
+								className="flex flex-wrap items-baseline gap-x-3 border-b border-border/60 py-1 last:border-b-0"
+							>
+								<dt className="font-mono text-muted-foreground">{key}</dt>
+								<dd className="min-w-0 break-words">{value}</dd>
+							</div>
+						))}
+					</dl>
+				)}
+				{detail === null ? null : (
+					<div className="space-y-2">
+						<div className="font-mono text-[11px] text-muted-foreground">{`skill://${detail.name}/SKILL.md`}</div>
+						<CodeBlock className="max-h-80">{detail.body}</CodeBlock>
+						{detail.resources.length === 0 ? null : (
+							<div>
+								{detail.resources.map((resource) => (
+									<div
+										key={resource.path}
+										className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border/60 py-1 font-mono text-[11px] last:border-b-0"
+									>
+										<span className="break-all">{resource.path}</span>
+										<span className="tabular-nums text-muted-foreground">{resource.bytes}</span>
+									</div>
+								))}
+							</div>
+						)}
+					</div>
+				)}
+				<Button disabled={busy} size="xs" variant="secondary" onClick={onPreview}>
+					{previewLabel}
+				</Button>
 			</div>
-			<Button disabled={busy} size="sm" variant="secondary" onClick={onPreview}>
-				{previewLabel}
-			</Button>
-		</div>
+		</ExpandableRow>
 	);
 }
 
@@ -154,16 +193,15 @@ function SkillsPanel() {
 						title={t.t("empty")}
 					/>
 				) : (
-					<div className="space-y-2">
+					<div>
 						{skills.map((skill) => (
 							<SkillRow
 								busy={busy}
+								detail={detail !== null && detail.name === skill.name ? detail : null}
 								disabledLabel={t.t("disabled_badge")}
 								key={skill.name}
 								previewLabel={t.t("preview")}
-								scopeLabel={
-									skill.scope === "everyone" ? t.t("scope_everyone") : t.t("scope_admin")
-								}
+								scopeLabel={skill.scope === "everyone" ? t.t("scope_everyone") : t.t("scope_admin")}
 								skill={skill}
 								onPreview={() => void preview(skill.name)}
 							/>
@@ -171,32 +209,16 @@ function SkillsPanel() {
 					</div>
 				)}
 			</PluginSection>
-			{detail === null ? null : (
-				<PluginSection title={`${detail.name} · skill://${detail.name}/SKILL.md`}>
-					<div className="space-y-3">
-						<p className="text-xs text-muted-foreground">{detail.description}</p>
-						<pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/40 p-3 text-xs">
-							{detail.body}
-						</pre>
-						{detail.resources.length === 0 ? null : (
-							<div className="text-xs text-muted-foreground">
-								{detail.resources.map((resource) => (
-									<div className="font-mono" key={resource.path}>
-										{resource.path}
-									</div>
-								))}
-							</div>
-						)}
-					</div>
-				</PluginSection>
-			)}
 			{diagnostics.length === 0 ? null : (
 				<PluginSection title={t.t("diagnostics")}>
-					<ul className="space-y-1 text-xs">
-						{diagnostics.map((diagnostic, index) => (
-							<li className="text-muted-foreground" key={`${diagnostic.code}-${index}`}>
-								<span className="font-mono text-foreground">{diagnostic.code}</span>{" "}
-								{diagnostic.message}
+					<ul className="text-xs">
+						{diagnostics.map((diagnostic) => (
+							<li
+								className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border/60 py-1.5 text-muted-foreground last:border-b-0"
+								key={`${diagnostic.code}:${diagnostic.name ?? ""}:${diagnostic.rootIndex ?? 0}:${diagnostic.message}`}
+							>
+								<span className="font-mono text-[11px] text-ink">{diagnostic.code}</span>
+								<span className="min-w-0 break-words">{diagnostic.message}</span>
 							</li>
 						))}
 					</ul>

@@ -10,20 +10,37 @@ import { clamp } from "es-toolkit";
 import {
 	Alert,
 	Button,
+	EditorialSelect,
+	EditorialSelectContent,
+	EditorialSelectItem,
+	EditorialSelectTrigger,
+	EditorialSelectValue,
+	EditorialSwitch,
 	EmptyState,
-	Field,
+	ExpandableRow,
 	Input,
+	KeyValueList,
 	PluginPage,
 	PluginSection,
+	PreferenceRow,
 	StatGrid,
-	Switch,
+	StatusDot,
 	definePluginUi,
 	usePluginI18n,
 	usePluginPanel,
 	usePluginToast,
 } from "@tsukaima/sdk/ui";
-import { ExternalLink, KeyRound, Pencil, Plus, RefreshCw, ShieldOff, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+	ExternalLink,
+	KeyRound,
+	Pencil,
+	Plus,
+	RefreshCw,
+	ShieldOff,
+	Trash2,
+	X,
+} from "lucide-react";
+import { useEffect, useId, useState } from "react";
 import { i18n } from "./i18n.ts";
 import { MCP_PLUGIN_ID } from "./manifest.ts";
 
@@ -195,26 +212,12 @@ function formFromSnapshot(server: McpServerSnapshot): FormState {
 	};
 }
 
-function stateLabel(
-	t: (key: string) => string,
-	state: McpServerSnapshot["state"],
-): string {
+function stateLabel(t: (key: string) => string, state: McpServerSnapshot["state"]): string {
 	if (state === "connected") return t("state_connected");
 	if (state === "connecting") return t("state_connecting");
 	if (state === "auth_required") return t("state_auth_required");
 	if (state === "error") return t("state_error");
 	return t("state_disconnected");
-}
-
-function stateClass(state: McpServerSnapshot["state"]): string {
-	if (state === "connected") {
-		return "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
-	}
-	if (state === "error") return "border-destructive/30 bg-destructive/10 text-destructive";
-	if (state === "connecting" || state === "auth_required") {
-		return "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400";
-	}
-	return "border-border bg-muted/40 text-muted-foreground";
 }
 
 function oauthStatusLabel(t: (key: string) => string, oauth: McpOAuthSnapshot): string {
@@ -224,7 +227,7 @@ function oauthStatusLabel(t: (key: string) => string, oauth: McpOAuthSnapshot): 
 	return t("oauth_status_unauthenticated");
 }
 
-function ServerCard({
+function ServerRow({
 	busy,
 	onAuthorize,
 	onClearOAuth,
@@ -265,161 +268,189 @@ function ServerCard({
 			oauth.status === "pending" ||
 			oauth.status === "error" ||
 			oauth.clientId !== undefined);
+	const statusLevel =
+		server.state === "connected"
+			? "ok"
+			: server.state === "error"
+				? "error"
+				: server.state === "connecting" || server.state === "auth_required"
+					? "warning"
+					: "unknown";
 	return (
-		<div className="space-y-2 rounded-xl border border-border bg-background/40 p-3">
-			<div className="flex flex-wrap items-start justify-between gap-2">
-				<div className="min-w-0">
-					<div className="truncate text-sm font-medium">{server.name}</div>
-					<div className="truncate font-mono text-[10.5px] text-muted-foreground">
-						{server.id} · {transportLabel}
-					</div>
-				</div>
-				<div className="flex items-center gap-2">
-					<span className="inline-flex items-center rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground">
-						{scope}
-					</span>
-					<span
-						className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10.5px] font-medium ${stateClass(server.state)}`}
-					>
-						{stateLabel(t.t, server.state)}
-					</span>
-					<Switch
-						ariaLabel={server.enabled ? t.t("disable") : t.t("enable")}
-						checked={server.enabled}
-						disabled={busy}
-						onCheckedChange={onToggle}
-					/>
-				</div>
-			</div>
-			<div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2">
-				<div>
-					{t.t("tools_count", { count: server.tools.length })} ·{" "}
-					{server.deferred ? t.t("deferred_short") : t.t("eager_short")} · {surface}
-				</div>
-				<div>
-					{server.secretKeys.length === 0
-						? t.t("no_secrets")
-						: `${t.t("secret_keys")}: ${server.secretKeys.join(", ")}`}
-				</div>
-			</div>
-			{oauth === undefined ? null : (
-				<div className="space-y-2 rounded-lg border border-border/70 bg-muted/20 px-2.5 py-2 text-[11px]">
-					<div className="flex flex-wrap items-center justify-between gap-2">
-						<span className="font-medium text-foreground">{oauthStatusLabel(t.t, oauth)}</span>
-						<span className="font-mono text-[10.5px] text-muted-foreground">
-							{oauth.grantType}
-							{oauth.clientId === undefined ? "" : ` · ${oauth.clientId}`}
+		<div className="grid items-start gap-x-4 border-t border-line sm:grid-cols-[minmax(0,1fr)_auto]">
+			<ExpandableRow
+				className="border-t-0"
+				summary={
+					<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+						<StatusDot level={statusLevel} />
+						<span className="break-words">{server.name}</span>
+						<span className="break-all font-mono text-[11px] text-muted-foreground">
+							{transportLabel}
 						</span>
+						<span className="text-[11px] text-muted-foreground">
+							{scope} · {stateLabel(t.t, server.state)}
+						</span>
+						<span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+							{t.t("tools_count", { count: server.tools.length })}
+						</span>
+					</span>
+				}
+			>
+				<div className="space-y-3">
+					<KeyValueList
+						className="text-xs [&>div]:border-0"
+						items={[
+							{ label: t.t("id"), value: <code>{server.id}</code> },
+							{ label: t.t("surface"), value: surface },
+							{
+								label: t.t("deferred"),
+								value: server.deferred ? t.t("deferred_short") : t.t("eager_short"),
+							},
+							{
+								label: t.t("secret_keys"),
+								value:
+									server.secretKeys.length === 0 ? (
+										t.t("no_secrets")
+									) : (
+										<code>{server.secretKeys.join(", ")}</code>
+									),
+							},
+						]}
+					/>
+					{oauth === undefined ? null : (
+						<div className="space-y-2 text-xs">
+							<div className="flex flex-wrap items-center justify-between gap-2">
+								<span className="font-medium text-foreground">{oauthStatusLabel(t.t, oauth)}</span>
+								<span className="font-mono text-[11px] text-muted-foreground">
+									{oauth.grantType}
+									{oauth.clientId === undefined ? "" : ` · ${oauth.clientId}`}
+								</span>
+							</div>
+							{oauth.issuer !== undefined || oauth.scope !== undefined ? (
+								<div className="truncate text-[11px] text-muted-foreground">
+									{oauth.issuer ?? ""}
+									{oauth.issuer !== undefined && oauth.scope !== undefined ? " · " : ""}
+									{oauth.scope === undefined ? "" : `${t.t("oauth_scope")}: ${oauth.scope}`}
+								</div>
+							) : null}
+							{oauth.status === "pending" && oauth.authorizationUrl !== undefined ? (
+								<div className="space-y-1.5 pt-1">
+									<div className="text-[11px] text-muted-foreground">
+										{t.t("oauth_pending_hint")}
+									</div>
+									<div className="flex flex-wrap items-center gap-2">
+										<a
+											className="inline-flex items-center gap-1 py-1 text-[11px] font-medium text-accent-ink hover:underline"
+											href={oauth.authorizationUrl}
+											rel="noreferrer"
+											target="_blank"
+										>
+											<ExternalLink className="size-3" />
+											{t.t("oauth_open_url")}
+										</a>
+									</div>
+									<div className="flex flex-wrap items-center gap-1.5">
+										<div className="min-w-0 flex-1">
+											<Input
+												aria-label={t.t("oauth_callback_placeholder")}
+												placeholder={t.t("oauth_callback_placeholder")}
+												value={callbackInput}
+												onChange={setCallbackInput}
+											/>
+										</div>
+										<Button
+											disabled={busy || callbackInput.trim() === ""}
+											size="xs"
+											variant="secondary"
+											onClick={async () => {
+												const ok = await onCompleteOAuth(callbackInput.trim());
+												if (ok) setCallbackInput("");
+											}}
+										>
+											{t.t("oauth_complete")}
+										</Button>
+									</div>
+								</div>
+							) : null}
+						</div>
+					)}
+					<div className="flex flex-wrap gap-1.5 empty:hidden">
+						{oauth?.grantType === "authorization_code" ? (
+							<Button
+								disabled={busy || !server.enabled}
+								leadingIcon={<KeyRound />}
+								size="xs"
+								variant={server.state === "auth_required" ? "primary" : "secondary"}
+								onClick={onAuthorize}
+							>
+								{oauth.status === "authorized" ? t.t("oauth_reauthorize") : t.t("oauth_authorize")}
+							</Button>
+						) : null}
+						{showClearOAuth ? (
+							<Button
+								disabled={busy}
+								leadingIcon={<ShieldOff />}
+								size="xs"
+								variant="ghost"
+								onClick={onClearOAuth}
+							>
+								{t.t("oauth_clear")}
+							</Button>
+						) : null}
 					</div>
-					{oauth.issuer !== undefined || oauth.scope !== undefined ? (
-						<div className="truncate text-[10.5px] text-muted-foreground">
-							{oauth.issuer ?? ""}
-							{oauth.issuer !== undefined && oauth.scope !== undefined ? " · " : ""}
-							{oauth.scope === undefined ? "" : `scope: ${oauth.scope}`}
-						</div>
-					) : null}
-					{oauth.status === "pending" && oauth.authorizationUrl !== undefined ? (
-						<div className="space-y-1.5 pt-1">
-							<div className="text-[10.5px] text-muted-foreground">{t.t("oauth_pending_hint")}</div>
-							<div className="flex flex-wrap items-center gap-2">
-								<a
-									className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-primary hover:bg-muted"
-									href={oauth.authorizationUrl}
-									rel="noreferrer"
-									target="_blank"
-								>
-									<ExternalLink className="size-3" />
-									{t.t("oauth_open_url")}
-								</a>
-							</div>
-							<div className="flex flex-wrap items-center gap-1.5">
-								<div className="min-w-0 flex-1">
-									<Input
-										placeholder={t.t("oauth_callback_placeholder")}
-										value={callbackInput}
-										onChange={setCallbackInput}
-									/>
-								</div>
-								<Button
-									disabled={busy || callbackInput.trim() === ""}
-									size="xs"
-									variant="secondary"
-									onClick={async () => {
-										const ok = await onCompleteOAuth(callbackInput.trim());
-										if (ok) setCallbackInput("");
-									}}
-								>
-									{t.t("oauth_complete")}
-								</Button>
-							</div>
-						</div>
-					) : null}
+					{server.lastError === undefined ? null : <Alert tone="warning">{server.lastError}</Alert>}
+					{server.tools.length === 0 ? null : (
+						<ul className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
+							{server.tools.map((tool) => (
+								<li key={tool.name} className="min-w-0 break-words">
+									<div className="font-mono text-[11px] font-medium">{tool.name}</div>
+									{tool.description === undefined ? null : (
+										<div className="line-clamp-2 text-[11px] text-muted-foreground">
+											{tool.description}
+										</div>
+									)}
+								</li>
+							))}
+						</ul>
+					)}
 				</div>
-			)}
-			{server.lastError === undefined ? null : <Alert tone="warning">{server.lastError}</Alert>}
-			{server.tools.length === 0 ? null : (
-				<div className="space-y-1">
-					{server.tools.map((tool) => (
-						<div key={tool.name} className="rounded-md border border-border/70 px-2.5 py-1.5">
-							<div className="font-mono text-[11px] font-medium">{tool.name}</div>
-							{tool.description === undefined ? null : (
-								<div className="line-clamp-2 text-[10.5px] text-muted-foreground">
-									{tool.description}
-								</div>
-							)}
-						</div>
-					))}
-				</div>
-			)}
-			<div className="flex flex-wrap justify-end gap-1.5">
-				{oauth?.grantType === "authorization_code" ? (
-					<Button
-						disabled={busy || !server.enabled}
-						leadingIcon={<KeyRound />}
-						size="xs"
-						variant={server.state === "auth_required" ? "primary" : "secondary"}
-						onClick={onAuthorize}
-					>
-						{oauth.status === "authorized" ? t.t("oauth_reauthorize") : t.t("oauth_authorize")}
-					</Button>
-				) : null}
-				{showClearOAuth ? (
-					<Button
-						disabled={busy}
-						leadingIcon={<ShieldOff />}
-						size="xs"
-						variant="ghost"
-						onClick={onClearOAuth}
-					>
-						{t.t("oauth_clear")}
-					</Button>
-				) : null}
+			</ExpandableRow>
+			<div className="flex flex-wrap items-center gap-1 pb-2 sm:justify-end sm:py-2">
+				<EditorialSwitch
+					aria-label={t.t("enable")}
+					checked={server.enabled}
+					disabled={busy}
+					onCheckedChange={onToggle}
+				/>
 				<Button
 					disabled={busy}
-					leadingIcon={<Pencil />}
-					size="xs"
+					aria-label={t.t("edit")}
+					title={t.t("edit")}
+					size="iconSm"
 					variant="ghost"
 					onClick={onEdit}
 				>
-					{t.t("edit")}
+					<Pencil />
 				</Button>
 				<Button
 					disabled={busy || !server.enabled}
-					leadingIcon={<RefreshCw />}
-					size="xs"
+					aria-label={t.t("reconnect")}
+					title={t.t("reconnect")}
+					size="iconSm"
 					variant="secondary"
 					onClick={onReconnect}
 				>
-					{t.t("reconnect")}
+					<RefreshCw />
 				</Button>
 				<Button
 					disabled={busy}
-					leadingIcon={<Trash2 />}
-					size="xs"
+					aria-label={t.t("delete")}
+					title={t.t("delete")}
+					size="iconSm"
 					variant="danger"
 					onClick={onDelete}
 				>
-					{t.t("delete")}
+					<Trash2 />
 				</Button>
 			</div>
 		</div>
@@ -427,6 +458,7 @@ function ServerCard({
 }
 
 function McpPanel() {
+	const formId = useId();
 	const t = usePluginI18n();
 	const panel = usePluginPanel();
 	const toast = usePluginToast();
@@ -439,9 +471,7 @@ function McpPanel() {
 	const refresh = async (): Promise<void> => {
 		setLoading(true);
 		try {
-			const result = await panel.rpc.call<{ servers?: readonly McpServerSnapshot[] }>(
-				rpc("list"),
-			);
+			const result = await panel.rpc.call<{ servers?: readonly McpServerSnapshot[] }>(rpc("list"));
 			setServers(result.servers ?? []);
 		} catch (error) {
 			toast.error(t.t("action_failed"), String(error));
@@ -658,273 +688,342 @@ function McpPanel() {
 				}
 				title={form.editingId === undefined ? t.t("new_server") : t.t("edit_server")}
 			>
-				<div className="grid gap-2.5 sm:grid-cols-2">
-					<Field label={t.t("name")}>
-						<Input value={form.name} onChange={(value) => set("name", value)} />
-					</Field>
-					<Field label={t.t("id")}>
-						<Input
-							disabled={form.editingId !== undefined}
-							value={form.id}
-							onChange={(value) => set("id", value)}
-						/>
-					</Field>
-					<Field label={t.t("transport")}>
-						<label className="flex items-center gap-2 text-xs">
-							<select
-								className="min-h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
-								disabled={form.editingId !== undefined}
-								value={form.transportType}
-								onChange={(event) =>
-									set("transportType", event.target.value as TransportType)
-								}
-							>
-								<option value="stdio">{t.t("transport_stdio")}</option>
-								<option value="http">{t.t("transport_http")}</option>
-							</select>
-						</label>
-					</Field>
-					<Field label={t.t("surface")}>
-						<label className="flex items-center gap-2 text-xs">
-							<select
-								className="min-h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
-								value={form.surface}
-								onChange={(event) => set("surface", event.target.value as Surface)}
-							>
-								<option value="both">{t.t("surface_both")}</option>
-								<option value="chat">{t.t("surface_chat")}</option>
-								<option value="workspace">{t.t("surface_workspace")}</option>
-							</select>
-						</label>
-					</Field>
-					<Field label={t.t("scope")}>
-						<label className="flex items-center gap-2 text-xs">
-							<select
-								className="min-h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
-								value={form.scope}
-								onChange={(event) => set("scope", event.target.value as Scope)}
-							>
-								<option value="admin">{t.t("scope_admin")}</option>
-								<option value="everyone">{t.t("scope_everyone")}</option>
-							</select>
-						</label>
-					</Field>
-					{form.transportType === "stdio" ? (
-						<Field label={t.t("command")}>
-							<Input
-								placeholder="bunx"
-								value={form.command}
-								onChange={(value) => set("command", value)}
-							/>
-						</Field>
-					) : (
-						<Field label={t.t("url")}>
-							<Input
-								placeholder="https://example.invalid/mcp"
-								value={form.url}
-								onChange={(value) => set("url", value)}
-							/>
-						</Field>
-					)}
-					<Field label={t.t("timeout")}>
-						<Input
-							type="number"
-							value={form.timeoutMs}
-							onChange={(value) => set("timeoutMs", value)}
-						/>
-					</Field>
-				</div>
+				<PreferenceRow htmlFor={`${formId}-name`} label={t.t("name")}>
+					<Input id={`${formId}-name`} value={form.name} onChange={(value) => set("name", value)} />
+				</PreferenceRow>
+				<PreferenceRow htmlFor={`${formId}-id`} label={t.t("id")}>
+					<Input
+						id={`${formId}-id`}
+						disabled={form.editingId !== undefined}
+						value={form.id}
+						onChange={(value) => set("id", value)}
+					/>
+				</PreferenceRow>
+				<PreferenceRow htmlFor={`${formId}-transport`} label={t.t("transport")}>
+					<EditorialSelect
+						disabled={form.editingId !== undefined}
+						value={form.transportType}
+						onValueChange={(value) => set("transportType", value)}
+					>
+						<EditorialSelectTrigger aria-label={t.t("transport")} id={`${formId}-transport`}>
+							<EditorialSelectValue />
+						</EditorialSelectTrigger>
+						<EditorialSelectContent>
+							<EditorialSelectItem value="stdio">{t.t("transport_stdio")}</EditorialSelectItem>
+							<EditorialSelectItem value="http">{t.t("transport_http")}</EditorialSelectItem>
+						</EditorialSelectContent>
+					</EditorialSelect>
+				</PreferenceRow>
+				<PreferenceRow htmlFor={`${formId}-surface`} label={t.t("surface")}>
+					<EditorialSelect value={form.surface} onValueChange={(value) => set("surface", value)}>
+						<EditorialSelectTrigger aria-label={t.t("surface")} id={`${formId}-surface`}>
+							<EditorialSelectValue />
+						</EditorialSelectTrigger>
+						<EditorialSelectContent>
+							<EditorialSelectItem value="both">{t.t("surface_both")}</EditorialSelectItem>
+							<EditorialSelectItem value="chat">{t.t("surface_chat")}</EditorialSelectItem>
+							<EditorialSelectItem value="workspace">
+								{t.t("surface_workspace")}
+							</EditorialSelectItem>
+						</EditorialSelectContent>
+					</EditorialSelect>
+				</PreferenceRow>
+				<PreferenceRow htmlFor={`${formId}-scope`} label={t.t("scope")}>
+					<EditorialSelect value={form.scope} onValueChange={(value) => set("scope", value)}>
+						<EditorialSelectTrigger aria-label={t.t("scope")} id={`${formId}-scope`}>
+							<EditorialSelectValue />
+						</EditorialSelectTrigger>
+						<EditorialSelectContent>
+							<EditorialSelectItem value="admin">{t.t("scope_admin")}</EditorialSelectItem>
+							<EditorialSelectItem value="everyone">{t.t("scope_everyone")}</EditorialSelectItem>
+						</EditorialSelectContent>
+					</EditorialSelect>
+				</PreferenceRow>
 				{form.transportType === "stdio" ? (
-					<div className="mt-2 grid gap-2.5 sm:grid-cols-2">
-						<Field label={t.t("args")} hint={t.t("args_hint")}>
+					<PreferenceRow htmlFor={`${formId}-command`} label={t.t("command")}>
+						<Input
+							id={`${formId}-command`}
+							placeholder="bunx"
+							value={form.command}
+							onChange={(value) => set("command", value)}
+						/>
+					</PreferenceRow>
+				) : (
+					<PreferenceRow htmlFor={`${formId}-url`} label={t.t("url")}>
+						<Input
+							id={`${formId}-url`}
+							placeholder="https://example.invalid/mcp"
+							value={form.url}
+							onChange={(value) => set("url", value)}
+						/>
+					</PreferenceRow>
+				)}
+				<PreferenceRow htmlFor={`${formId}-timeout`} label={t.t("timeout")}>
+					<Input
+						id={`${formId}-timeout`}
+						type="number"
+						value={form.timeoutMs}
+						onChange={(value) => set("timeoutMs", value)}
+					/>
+				</PreferenceRow>
+				{form.transportType === "stdio" ? (
+					<>
+						<PreferenceRow htmlFor={`${formId}-args`} label={t.t("args")} hint={t.t("args_hint")}>
 							<textarea
+								id={`${formId}-args`}
 								className="min-h-20 w-full rounded-md border border-border bg-background px-2.5 py-2 font-mono text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
 								value={form.args}
 								onChange={(event) => set("args", event.target.value)}
 							/>
-						</Field>
-						<Field label={t.t("cwd")}>
-							<Input value={form.cwd} onChange={(value) => set("cwd", value)} />
-						</Field>
-						<Field label={t.t("env")} hint={t.t("env_hint")}>
+						</PreferenceRow>
+						<PreferenceRow htmlFor={`${formId}-cwd`} label={t.t("cwd")}>
+							<Input
+								id={`${formId}-cwd`}
+								value={form.cwd}
+								onChange={(value) => set("cwd", value)}
+							/>
+						</PreferenceRow>
+						<PreferenceRow htmlFor={`${formId}-env`} label={t.t("env")} hint={t.t("env_hint")}>
 							<textarea
+								id={`${formId}-env`}
 								className="min-h-20 w-full rounded-md border border-border bg-background px-2.5 py-2 font-mono text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
 								value={form.env}
 								onChange={(event) => set("env", event.target.value)}
 							/>
-						</Field>
-					</div>
+						</PreferenceRow>
+					</>
 				) : (
-					<div className="mt-2 space-y-2.5">
-						<div className="grid gap-2.5 sm:grid-cols-2">
-							<Field label={t.t("auth_mode")}>
-								<label className="flex items-center gap-2 text-xs">
-									<select
-										className="min-h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
-										value={form.authMode}
-										onChange={(event) => set("authMode", event.target.value as AuthMode)}
-									>
-										<option value="none">{t.t("auth_none")}</option>
-										<option value="bearer">{t.t("auth_bearer")}</option>
-										<option value="oauth_authorization_code">
-											{t.t("auth_oauth_authorization_code")}
-										</option>
-										<option value="oauth_client_credentials">
-											{t.t("auth_oauth_client_credentials")}
-										</option>
-									</select>
-								</label>
-							</Field>
-							{form.authMode === "bearer" ? (
-								<Field label={t.t("bearer_token")}>
-									<Input
-										type="password"
-										value={form.bearerToken}
-										onChange={(value) => set("bearerToken", value)}
-									/>
-								</Field>
-							) : null}
-						</div>
+					<>
+						<PreferenceRow htmlFor={`${formId}-auth_mode`} label={t.t("auth_mode")}>
+							<EditorialSelect
+								value={form.authMode}
+								onValueChange={(value) => set("authMode", value)}
+							>
+								<EditorialSelectTrigger aria-label={t.t("auth_mode")} id={`${formId}-auth_mode`}>
+									<EditorialSelectValue />
+								</EditorialSelectTrigger>
+								<EditorialSelectContent>
+									<EditorialSelectItem value="none">{t.t("auth_none")}</EditorialSelectItem>
+									<EditorialSelectItem value="bearer">{t.t("auth_bearer")}</EditorialSelectItem>
+									<EditorialSelectItem value="oauth_authorization_code">
+										{t.t("auth_oauth_authorization_code")}
+									</EditorialSelectItem>
+									<EditorialSelectItem value="oauth_client_credentials">
+										{t.t("auth_oauth_client_credentials")}
+									</EditorialSelectItem>
+								</EditorialSelectContent>
+							</EditorialSelect>
+						</PreferenceRow>
+						{form.authMode === "bearer" ? (
+							<PreferenceRow htmlFor={`${formId}-bearer_token`} label={t.t("bearer_token")}>
+								<Input
+									id={`${formId}-bearer_token`}
+									type="password"
+									value={form.bearerToken}
+									onChange={(value) => set("bearerToken", value)}
+								/>
+							</PreferenceRow>
+						) : null}
 						{form.authMode === "oauth_authorization_code" ||
 						form.authMode === "oauth_client_credentials" ? (
-							<div className="grid gap-2.5 sm:grid-cols-2">
-								<Field label={t.t("oauth_client_id")} hint={t.t("oauth_client_id_hint")}>
+							<>
+								<PreferenceRow
+									htmlFor={`${formId}-oauth_client_id`}
+									label={t.t("oauth_client_id")}
+									hint={t.t("oauth_client_id_hint")}
+								>
 									<Input
+										id={`${formId}-oauth_client_id`}
 										value={form.oauthClientId}
 										onChange={(value) => set("oauthClientId", value)}
 									/>
-								</Field>
-								<Field label={t.t("oauth_client_secret")}>
+								</PreferenceRow>
+								<PreferenceRow
+									htmlFor={`${formId}-oauth_client_secret`}
+									label={t.t("oauth_client_secret")}
+								>
 									<Input
+										id={`${formId}-oauth_client_secret`}
 										type="password"
 										value={form.oauthClientSecret}
 										onChange={(value) => set("oauthClientSecret", value)}
 									/>
-								</Field>
-								<Field label={t.t("oauth_scope")} hint={t.t("oauth_scope_hint")}>
+								</PreferenceRow>
+								<PreferenceRow
+									htmlFor={`${formId}-oauth_scope`}
+									label={t.t("oauth_scope")}
+									hint={t.t("oauth_scope_hint")}
+								>
 									<Input
+										id={`${formId}-oauth_scope`}
 										placeholder="read write"
 										value={form.oauthScope}
 										onChange={(value) => set("oauthScope", value)}
 									/>
-								</Field>
-								<Field label={t.t("oauth_token_auth_method")}>
-									<label className="flex items-center gap-2 text-xs">
-										<select
-											className="min-h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
-											value={form.oauthTokenAuthMethod}
-											onChange={(event) =>
-												set(
-													"oauthTokenAuthMethod",
-													event.target.value as "" | McpOAuthTokenAuthMethod,
-												)
-											}
+								</PreferenceRow>
+								<PreferenceRow
+									htmlFor={`${formId}-oauth_token_auth_method`}
+									label={t.t("oauth_token_auth_method")}
+								>
+									<EditorialSelect<"auto" | McpOAuthTokenAuthMethod>
+										value={form.oauthTokenAuthMethod || "auto"}
+										onValueChange={(value) =>
+											set("oauthTokenAuthMethod", value === "auto" ? "" : value)
+										}
+									>
+										<EditorialSelectTrigger
+											aria-label={t.t("oauth_token_auth_method")}
+											id={`${formId}-oauth_token_auth_method`}
 										>
-											<option value="">{t.t("oauth_auth_method_auto")}</option>
-											<option value="client_secret_basic">client_secret_basic</option>
-											<option value="client_secret_post">client_secret_post</option>
+											<EditorialSelectValue />
+										</EditorialSelectTrigger>
+										<EditorialSelectContent>
+											<EditorialSelectItem value="auto">
+												{t.t("oauth_auth_method_auto")}
+											</EditorialSelectItem>
+											<EditorialSelectItem value="client_secret_basic">
+												client_secret_basic
+											</EditorialSelectItem>
+											<EditorialSelectItem value="client_secret_post">
+												client_secret_post
+											</EditorialSelectItem>
 											{form.authMode === "oauth_authorization_code" ? (
-												<option value="none">none (PKCE public client)</option>
+												<EditorialSelectItem value="none">
+													none (PKCE public client)
+												</EditorialSelectItem>
 											) : (
-												<option value="private_key_jwt">private_key_jwt</option>
+												<EditorialSelectItem value="private_key_jwt">
+													private_key_jwt
+												</EditorialSelectItem>
 											)}
-										</select>
-									</label>
-								</Field>
-								<Field
+										</EditorialSelectContent>
+									</EditorialSelect>
+								</PreferenceRow>
+								<PreferenceRow
+									htmlFor={`${formId}-oauth_expected_issuer`}
 									label={t.t("oauth_expected_issuer")}
 									hint={t.t("oauth_expected_issuer_hint")}
 								>
 									<Input
+										id={`${formId}-oauth_expected_issuer`}
 										placeholder="https://auth.example.invalid"
 										value={form.oauthExpectedIssuer}
 										onChange={(value) => set("oauthExpectedIssuer", value)}
 									/>
-								</Field>
+								</PreferenceRow>
 								{form.authMode === "oauth_authorization_code" ? (
 									<>
-										<Field
+										<PreferenceRow
+											htmlFor={`${formId}-oauth_redirect_uri`}
 											label={t.t("oauth_redirect_uri")}
 											hint={t.t("oauth_redirect_uri_hint", {
 												url: defaultCallbackDisplayUrl(),
 											})}
 										>
 											<Input
+												id={`${formId}-oauth_redirect_uri`}
 												placeholder={defaultCallbackDisplayUrl()}
 												value={form.oauthRedirectUri}
 												onChange={(value) => set("oauthRedirectUri", value)}
 											/>
-										</Field>
-										<Field label={t.t("oauth_client_metadata_url")}>
+										</PreferenceRow>
+										<PreferenceRow
+											htmlFor={`${formId}-oauth_client_metadata_url`}
+											label={t.t("oauth_client_metadata_url")}
+										>
 											<Input
+												id={`${formId}-oauth_client_metadata_url`}
 												placeholder="https://client.example.invalid/oauth-metadata.json"
 												value={form.oauthClientMetadataUrl}
 												onChange={(value) => set("oauthClientMetadataUrl", value)}
 											/>
-										</Field>
+										</PreferenceRow>
 									</>
 								) : (
 									<>
-										<Field label={t.t("oauth_algorithm")}>
+										<PreferenceRow
+											htmlFor={`${formId}-oauth_algorithm`}
+											label={t.t("oauth_algorithm")}
+										>
 											<Input
+												id={`${formId}-oauth_algorithm`}
 												placeholder="RS256"
 												value={form.oauthAlgorithm}
 												onChange={(value) => set("oauthAlgorithm", value)}
 											/>
-										</Field>
-										<Field label={t.t("oauth_private_key")} hint={t.t("oauth_private_key_hint")}>
+										</PreferenceRow>
+										<PreferenceRow
+											htmlFor={`${formId}-oauth_private_key`}
+											label={t.t("oauth_private_key")}
+											hint={t.t("oauth_private_key_hint")}
+										>
 											<textarea
+												id={`${formId}-oauth_private_key`}
 												className="min-h-20 w-full rounded-md border border-border bg-background px-2.5 py-2 font-mono text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
 												value={form.oauthPrivateKey}
 												onChange={(event) => set("oauthPrivateKey", event.target.value)}
 											/>
-										</Field>
+										</PreferenceRow>
 									</>
 								)}
-							</div>
+							</>
 						) : null}
-						<Field label={t.t("headers")} hint={t.t("headers_hint")}>
+						<PreferenceRow
+							htmlFor={`${formId}-headers`}
+							label={t.t("headers")}
+							hint={t.t("headers_hint")}
+						>
 							<textarea
+								id={`${formId}-headers`}
 								className="min-h-20 w-full rounded-md border border-border bg-background px-2.5 py-2 font-mono text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
 								value={form.headers}
 								onChange={(event) => set("headers", event.target.value)}
 							/>
-						</Field>
-					</div>
+						</PreferenceRow>
+					</>
 				)}
-				<div className="mt-2 grid gap-2.5 sm:grid-cols-2">
-					<Field label={t.t("allowed_tools")} hint={t.t("tool_filter_hint")}>
+				<>
+					<PreferenceRow
+						htmlFor={`${formId}-allowed_tools`}
+						label={t.t("allowed_tools")}
+						hint={t.t("tool_filter_hint")}
+					>
 						<Input
+							id={`${formId}-allowed_tools`}
 							value={form.allowedTools}
 							onChange={(value) => set("allowedTools", value)}
 						/>
-					</Field>
-					<Field label={t.t("disabled_tools")} hint={t.t("tool_filter_hint")}>
+					</PreferenceRow>
+					<PreferenceRow
+						htmlFor={`${formId}-disabled_tools`}
+						label={t.t("disabled_tools")}
+						hint={t.t("tool_filter_hint")}
+					>
 						<Input
+							id={`${formId}-disabled_tools`}
 							value={form.disabledTools}
 							onChange={(value) => set("disabledTools", value)}
 						/>
-					</Field>
-				</div>
-				<div className="mt-2 flex flex-wrap items-center gap-4">
-					<label className="flex items-center gap-2 text-xs">
-						<Switch
-							ariaLabel={t.t("enabled")}
-							checked={form.enabled}
-							onCheckedChange={(checked) => set("enabled", checked)}
-						/>
-						{t.t("enabled")}
-					</label>
-					<label className="flex items-center gap-2 text-xs">
-						<Switch
-							ariaLabel={t.t("deferred")}
-							checked={form.deferred}
-							onCheckedChange={(checked) => set("deferred", checked)}
-						/>
-						{t.t("deferred")}
-					</label>
-					<span className="text-[11px] text-muted-foreground">{t.t("deferred_hint")}</span>
-				</div>
+					</PreferenceRow>
+				</>
+				<PreferenceRow label={t.t("enabled")} htmlFor={`${formId}-enabled`}>
+					<EditorialSwitch
+						id={`${formId}-enabled`}
+						checked={form.enabled}
+						onCheckedChange={(checked) => set("enabled", checked)}
+					/>
+				</PreferenceRow>
+				<PreferenceRow
+					label={t.t("deferred")}
+					hint={t.t("deferred_hint")}
+					htmlFor={`${formId}-deferred`}
+				>
+					<EditorialSwitch
+						id={`${formId}-deferred`}
+						checked={form.deferred}
+						onCheckedChange={(checked) => set("deferred", checked)}
+					/>
+				</PreferenceRow>
 				<div className="mt-3 flex justify-end">
 					<Button
 						disabled={busy || form.name.trim() === ""}
@@ -940,6 +1039,7 @@ function McpPanel() {
 			<PluginSection title={t.t("servers")}>
 				<div className="mb-2 flex justify-end">
 					<Input
+						aria-label={t.t("search_hint")}
 						placeholder={t.t("search_hint")}
 						value={search}
 						onChange={setSearch}
@@ -950,9 +1050,9 @@ function McpPanel() {
 				) : filtered.length === 0 ? (
 					<EmptyState title={noServers ? t.t("no_servers") : t.t("no_matches")} />
 				) : (
-					<div className="space-y-2">
+					<div>
 						{filtered.map((server) => (
-							<ServerCard
+							<ServerRow
 								key={server.id}
 								busy={busy}
 								server={server}
@@ -965,10 +1065,7 @@ function McpPanel() {
 								}
 								onCompleteOAuth={(value) => completeOAuthServer(server.id, value)}
 								onDelete={() =>
-									void run(
-										() => panel.rpc.call(rpc("delete"), { id: server.id }),
-										t.t("deleted"),
-									)
+									void run(() => panel.rpc.call(rpc("delete"), { id: server.id }), t.t("deleted"))
 								}
 								onEdit={() => setForm(formFromSnapshot(server))}
 								onReconnect={() =>

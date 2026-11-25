@@ -6,6 +6,7 @@ import {
 	PluginPage,
 	PluginSection,
 	StatGrid,
+	StatusBadge,
 	definePluginUi,
 	usePluginConfig,
 	usePluginI18n,
@@ -31,29 +32,36 @@ function ConnectionPanel() {
 	const [busy, setBusy] = useState(false);
 	const metrics = status?.metrics ?? {};
 	const details = status?.details ?? {};
+	const statusLabel =
+		status !== null && status.level === "ok"
+			? i18nValue.t("status_connected")
+			: i18nValue.t("status_disconnected");
 
 	return (
 		<PluginPage
 			actions={
-				<Button
-					disabled={busy}
-					size="sm"
-					variant="secondary"
-					onClick={async () => {
-						setBusy(true);
-						try {
-							await rpc.call(rpcName("reconnect"));
-							toast.success(i18nValue.t("reconnect_started"));
-							await refresh();
-						} catch (error) {
-							toast.error(i18nValue.t("reconnect_failed"), String(error));
-						} finally {
-							setBusy(false);
-						}
-					}}
-				>
-					{i18nValue.t("reconnect")}
-				</Button>
+				<>
+					<StatusBadge label={statusLabel} status={status} />
+					<Button
+						disabled={busy}
+						size="sm"
+						variant="secondary"
+						onClick={async () => {
+							setBusy(true);
+							try {
+								await rpc.call(rpcName("reconnect"));
+								toast.success(i18nValue.t("reconnect_started"));
+								await refresh();
+							} catch (error) {
+								toast.error(i18nValue.t("reconnect_failed"), String(error));
+							} finally {
+								setBusy(false);
+							}
+						}}
+					>
+						{i18nValue.t("reconnect")}
+					</Button>
+				</>
 			}
 			description={i18nValue.t("connection_hint")}
 			title={i18nValue.t("connection_title")}
@@ -78,7 +86,7 @@ function SettingsPanel() {
 	const config = usePluginConfig();
 	return (
 		<PluginPage description={i18nValue.t("settings_hint")} title={i18nValue.t("panel_settings")}>
-			<PluginSection title={plugin.name}>
+			<PluginSection>
 				<PluginConfigForm
 					groups={[
 						{
