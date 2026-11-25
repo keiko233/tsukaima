@@ -373,10 +373,11 @@ export function injectTurnContext(
 	timestamp: number,
 ): Message[] {
 	let index = messages.length;
+	// A system refresh can follow the run's first input. Only a final assistant response
+	// marks the preceding run, so the observation still goes before the new input.
 	while (index > 0) {
 		const previous = messages[index - 1];
 		if (previous === undefined) break;
-		if (previous.role === "system") break;
 		if (previous.role === "assistant" && previous.stopReason !== "toolUse") break;
 		index -= 1;
 	}

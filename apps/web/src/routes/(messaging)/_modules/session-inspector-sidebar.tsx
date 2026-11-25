@@ -10,8 +10,13 @@ import type {
 	SessionDetail,
 	WorkspaceDetail,
 } from "@tsukaima/contracts";
+import {
+	EditorialTabs,
+	EditorialTabsContent,
+	EditorialTabsList,
+	EditorialTabsTrigger,
+} from "@tsukaima/ui";
 import { Button } from "@tsukaima/ui/components/motion/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@tsukaima/ui/components/motion/tabs";
 import { orpc } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
@@ -363,8 +368,8 @@ export function SessionInspectorSidebar({
 
 	return (
 		<div className="flex h-full min-h-0 flex-col">
-			<div className="flex h-9 items-center justify-between gap-2 border-b border-border/60 px-3">
-				<h2 className="text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+			<div className="flex h-9 items-center justify-between gap-2 border-b border-border px-3">
+				<h2 className="text-[11px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
 					{m.inspector_title()}
 				</h2>
 				{onClose ? (
@@ -382,8 +387,7 @@ export function SessionInspectorSidebar({
 				) : null}
 			</div>
 
-			<Tabs
-				variant="underline"
+			<EditorialTabs
 				value={activeTab}
 				onValueChange={(value) => {
 					if (isInspectorTab(value)) {
@@ -392,73 +396,56 @@ export function SessionInspectorSidebar({
 				}}
 				className="flex min-h-0 flex-1 flex-col"
 			>
-				<div className="shrink-0 border-b border-border/70 px-1.5">
-					<TabsList className="w-full justify-between gap-0">
-						<TabsTrigger
-							value="context"
-							indicatorClassName="h-px"
-							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
-						>
+				<div className="shrink-0 px-2">
+					<EditorialTabsList
+						aria-label={m.inspector_title()}
+						className="flex-nowrap overflow-x-auto"
+					>
+						<EditorialTabsTrigger value="context" className="min-h-8 px-2 text-[11px]">
 							{m.inspector_tab_context()}
-						</TabsTrigger>
-						<TabsTrigger
-							value="commands"
-							indicatorClassName="h-px"
-							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
-						>
+						</EditorialTabsTrigger>
+						<EditorialTabsTrigger value="commands" className="min-h-8 px-2 text-[11px]">
 							<span className="inline-flex items-center gap-1">
 								{m.inspector_tab_commands()}
 								{isRunning ? (
 									<span
 										aria-hidden="true"
-										className="size-1.5 animate-pulse rounded-full bg-amber-500"
+										className="size-1.5 animate-pulse rounded-full bg-warning"
 									/>
 								) : null}
 							</span>
-						</TabsTrigger>
-						<TabsTrigger
-							value="trigger"
-							indicatorClassName="h-px"
-							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
-						>
+						</EditorialTabsTrigger>
+						<EditorialTabsTrigger value="trigger" className="min-h-8 px-2 text-[11px]">
 							{m.inspector_tab_trigger()}
-						</TabsTrigger>
-						<TabsTrigger
-							value="model"
-							indicatorClassName="h-px"
-							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
-						>
+						</EditorialTabsTrigger>
+						<EditorialTabsTrigger value="model" className="min-h-8 px-2 text-[11px]">
 							{m.inspector_tab_model()}
-						</TabsTrigger>
-						<TabsTrigger
-							value="pacing"
-							indicatorClassName="h-px"
-							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
-						>
+						</EditorialTabsTrigger>
+						<EditorialTabsTrigger value="pacing" className="min-h-8 px-2 text-[11px]">
 							{m.inspector_tab_pacing()}
-						</TabsTrigger>
-						<TabsTrigger
-							value="persona"
-							indicatorClassName="h-px"
-							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
-						>
+						</EditorialTabsTrigger>
+						<EditorialTabsTrigger value="persona" className="min-h-8 px-2 text-[11px]">
 							{m.inspector_tab_persona()}
-						</TabsTrigger>
-						<TabsTrigger
-							value="schedules"
-							indicatorClassName="h-px"
-							className="min-h-0 flex-1 justify-center px-0.5 pt-1 pb-1.5 text-[11px] font-normal"
-						>
+						</EditorialTabsTrigger>
+						<EditorialTabsTrigger value="schedules" className="min-h-8 px-2 text-[11px]">
 							{m.tasks_inspector_tab()}
-						</TabsTrigger>
-					</TabsList>
+						</EditorialTabsTrigger>
+					</EditorialTabsList>
 				</div>
 
-				<TabsContent value="context" className="mt-0 flex min-h-0 flex-1 flex-col">
+				<EditorialTabsContent
+					value="context"
+					keepMounted={false}
+					className="mt-0 flex min-h-0 flex-1 flex-col"
+				>
 					<ContextPanel embedded enabled={activeTab === "context"} sessionId={sessionId} />
-				</TabsContent>
+				</EditorialTabsContent>
 
-				<TabsContent value="commands" className="mt-0 flex min-h-0 flex-1 flex-col">
+				<EditorialTabsContent
+					value="commands"
+					keepMounted={false}
+					className="mt-0 flex min-h-0 flex-1 flex-col"
+				>
 					<SessionCommandsView
 						abortResult={abortResult}
 						aborting={abortMutation.isPending}
@@ -499,9 +486,13 @@ export function SessionInspectorSidebar({
 						sessionTitle={session.title}
 						updatingSession={updateSessionMutation.isPending || setReceivingMutation.isPending}
 					/>
-				</TabsContent>
+				</EditorialTabsContent>
 
-				<TabsContent value="trigger" className="mt-0 flex min-h-0 flex-1 flex-col">
+				<EditorialTabsContent
+					value="trigger"
+					keepMounted={false}
+					className="mt-0 flex min-h-0 flex-1 flex-col"
+				>
 					<PolicyTriggerTabView
 						dirty={dirty}
 						draft={draft}
@@ -514,13 +505,21 @@ export function SessionInspectorSidebar({
 						onSave={handleSavePolicy}
 						saving={savePolicy.isPending}
 					/>
-				</TabsContent>
+				</EditorialTabsContent>
 
-				<TabsContent value="model" className="mt-0 flex min-h-0 flex-1 flex-col">
+				<EditorialTabsContent
+					value="model"
+					keepMounted={false}
+					className="mt-0 flex min-h-0 flex-1 flex-col"
+				>
 					<SessionModelView sessionId={sessionId} surface="chat" />
-				</TabsContent>
+				</EditorialTabsContent>
 
-				<TabsContent value="pacing" className="mt-0 flex min-h-0 flex-1 flex-col">
+				<EditorialTabsContent
+					value="pacing"
+					keepMounted={false}
+					className="mt-0 flex min-h-0 flex-1 flex-col"
+				>
 					<PolicyPacingTabView
 						dirty={dirty}
 						draft={draft}
@@ -534,9 +533,13 @@ export function SessionInspectorSidebar({
 						saving={savePolicy.isPending}
 						sidechatModels={settings.data?.models}
 					/>
-				</TabsContent>
+				</EditorialTabsContent>
 
-				<TabsContent value="persona" className="mt-0 flex min-h-0 flex-1 flex-col">
+				<EditorialTabsContent
+					value="persona"
+					keepMounted={false}
+					className="mt-0 flex min-h-0 flex-1 flex-col"
+				>
 					<PolicyPersonaTabView
 						binding={bindPersona.isPending}
 						errorMessage={personas.error ? errorMessage(personas.error) : undefined}
@@ -571,11 +574,16 @@ export function SessionInspectorSidebar({
 						personas={personas.data ?? []}
 						savingPersona={savePersona.isPending}
 					/>
-				</TabsContent>
-				<TabsContent value="schedules" className="mt-0 flex min-h-0 flex-1 flex-col">
+				</EditorialTabsContent>
+
+				<EditorialTabsContent
+					value="schedules"
+					keepMounted={false}
+					className="mt-0 flex min-h-0 flex-1 flex-col"
+				>
 					<SessionSchedulesView sessionId={sessionId} />
-				</TabsContent>
-			</Tabs>
+				</EditorialTabsContent>
+			</EditorialTabs>
 		</div>
 	);
 }

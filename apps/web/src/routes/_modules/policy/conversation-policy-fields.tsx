@@ -11,12 +11,15 @@ import {
 } from "@tsukaima/contracts";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@tsukaima/ui/components/motion/select";
+	EditorialSelect,
+	EditorialSelectContent,
+	EditorialSelectItem,
+	EditorialSelectTrigger,
+	EditorialSelectValue,
+	EditorialSwitch,
+	PreferenceRow,
+} from "@tsukaima/ui";
+import { useId, type ReactNode } from "react";
 import { m } from "@/paraglide/messages";
 
 export const fieldClass =
@@ -34,7 +37,7 @@ export function Field({
 	label: string;
 }) {
 	return (
-		<label className="flex flex-col gap-1 text-[11px] font-medium text-foreground">
+		<label className="flex flex-col gap-1 border-b border-border/70 py-2 text-xs font-medium text-foreground">
 			<span>{label}</span>
 			{children}
 			{hint ? <span className="font-normal leading-4 text-muted-foreground">{hint}</span> : null}
@@ -51,16 +54,49 @@ export function Toggle({
 	label: string;
 	onChange: (value: boolean) => void;
 }) {
+	const id = useId();
 	return (
-		<label className="flex items-center gap-2 text-xs text-foreground">
-			<input
-				type="checkbox"
-				checked={checked}
-				onChange={(event) => onChange(event.target.checked)}
-				className="size-3.5 rounded border-border accent-primary"
-			/>
-			<span>{label}</span>
-		</label>
+		<PreferenceRow label={label} htmlFor={id} className="text-xs">
+			<EditorialSwitch id={id} aria-label={label} checked={checked} onCheckedChange={onChange} />
+		</PreferenceRow>
+	);
+}
+
+function PolicySelectField<Value extends string>({
+	children,
+	hint,
+	label,
+	value,
+	onValueChange,
+}: {
+	children: ReactNode;
+	hint?: string;
+	label: string;
+	value: Value;
+	onValueChange: (value: Value) => void;
+}) {
+	const id = useId();
+	const hintId = hint === undefined ? undefined : `${id}-hint`;
+	return (
+		<PreferenceRow
+			label={label}
+			htmlFor={id}
+			hint={hint}
+			{...(hintId === undefined ? {} : { hintId })}
+			className="text-xs"
+		>
+			<EditorialSelect value={value} onValueChange={onValueChange}>
+				<EditorialSelectTrigger
+					id={id}
+					aria-label={label}
+					aria-describedby={hintId}
+					className="w-full"
+				>
+					<EditorialSelectValue />
+				</EditorialSelectTrigger>
+				<EditorialSelectContent>{children}</EditorialSelectContent>
+			</EditorialSelect>
+		</PreferenceRow>
 	);
 }
 
@@ -425,38 +461,33 @@ export function PolicySidechatFields({
 			<p className="text-[11px] leading-4 text-muted-foreground">
 				{m.policy_sidechat_interject_hint()}
 			</p>
-			<Field label={m.policy_sidechat_model()} hint={m.policy_sidechat_model_hint()}>
-				<Select
-					value={selected}
-					onValueChange={(value) =>
-						updateSidechat({ model: value === POLICY_DEFAULT_MODEL ? undefined : value })
-					}
-				>
-					<SelectTrigger className="w-full">
-						<SelectValue placeholder={m.policy_sidechat_model_default()} />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectItem value={POLICY_DEFAULT_MODEL}>
-							{m.policy_sidechat_model_default()}
-						</SelectItem>
-						{NATIVE_DECISION_MODELS.map((model) => (
-							<SelectItem key={model.id} value={model.id}>
-								{model.label} · {model.apiKeyEnv}
-							</SelectItem>
-						))}
-						{models.map((model) => (
-							<SelectItem key={model.id} value={model.id}>
-								{modelOptionLabel(model)}
-							</SelectItem>
-						))}
-						{missing ? (
-							<SelectItem value={draft.sidechat.model ?? ""}>
-								{`${draft.sidechat.model} · ${m.policy_sidechat_model_unavailable()}`}
-							</SelectItem>
-						) : null}
-					</SelectContent>
-				</Select>
-			</Field>
+			<PolicySelectField
+				label={m.policy_sidechat_model()}
+				hint={m.policy_sidechat_model_hint()}
+				value={selected}
+				onValueChange={(value) =>
+					updateSidechat({ model: value === POLICY_DEFAULT_MODEL ? undefined : value })
+				}
+			>
+				<EditorialSelectItem value={POLICY_DEFAULT_MODEL}>
+					{m.policy_sidechat_model_default()}
+				</EditorialSelectItem>
+				{NATIVE_DECISION_MODELS.map((model) => (
+					<EditorialSelectItem key={model.id} value={model.id}>
+						{`${model.label} · ${model.apiKeyEnv}`}
+					</EditorialSelectItem>
+				))}
+				{models.map((model) => (
+					<EditorialSelectItem key={model.id} value={model.id}>
+						{modelOptionLabel(model)}
+					</EditorialSelectItem>
+				))}
+				{missing ? (
+					<EditorialSelectItem value={draft.sidechat.model ?? ""}>
+						{`${draft.sidechat.model} · ${m.policy_sidechat_model_unavailable()}`}
+					</EditorialSelectItem>
+				) : null}
+			</PolicySelectField>
 			<div className="grid grid-cols-3 gap-2.5">
 				<Field label={m.policy_sidechat_timeout()}>
 					<input
@@ -514,21 +545,18 @@ export function PolicyGenerationFields({ draft, onChange }: PolicyFieldsProps) {
 		<>
 			<p className="text-[11px] leading-4 text-muted-foreground">{m.policy_generation_hint()}</p>
 			<div className="grid grid-cols-2 gap-2.5">
-				<Field label={m.policy_length_truncation()}>
-					<select
-						className={fieldClass}
-						value={draft.generation.lengthTruncation}
-						onChange={(event) =>
-							updateGeneration({
-								lengthTruncation: event.target
-									.value as ConversationPolicy["generation"]["lengthTruncation"],
-							})
-						}
-					>
-						<option value="continue">{m.policy_length_truncation_continue()}</option>
-						<option value="surface">{m.policy_length_truncation_surface()}</option>
-					</select>
-				</Field>
+				<PolicySelectField
+					label={m.policy_length_truncation()}
+					value={draft.generation.lengthTruncation}
+					onValueChange={(lengthTruncation) => updateGeneration({ lengthTruncation })}
+				>
+					<EditorialSelectItem value="continue">
+						{m.policy_length_truncation_continue()}
+					</EditorialSelectItem>
+					<EditorialSelectItem value="surface">
+						{m.policy_length_truncation_surface()}
+					</EditorialSelectItem>
+				</PolicySelectField>
 				<Field label={m.policy_max_length_continuations()}>
 					<input
 						type="number"
@@ -733,22 +761,22 @@ export function PolicyCrossSessionFields({ draft, onChange }: PolicyFieldsProps)
 					/>
 				</Field>
 			</div>
-			<Field hint={m.policy_cross_session_private_hint()} label={m.policy_cross_session_private()}>
-				<select
-					className={fieldClass}
-					value={draft.crossSession.privateToGroup}
-					onChange={(event) =>
-						updateCrossSession({
-							privateToGroup: event.target
-								.value as ConversationPolicy["crossSession"]["privateToGroup"],
-						})
-					}
-				>
-					<option value="none">{m.policy_cross_session_privacy_none()}</option>
-					<option value="indicator">{m.policy_cross_session_privacy_indicator()}</option>
-					<option value="text">{m.policy_cross_session_privacy_text()}</option>
-				</select>
-			</Field>
+			<PolicySelectField
+				hint={m.policy_cross_session_private_hint()}
+				label={m.policy_cross_session_private()}
+				value={draft.crossSession.privateToGroup}
+				onValueChange={(privateToGroup) => updateCrossSession({ privateToGroup })}
+			>
+				<EditorialSelectItem value="none">
+					{m.policy_cross_session_privacy_none()}
+				</EditorialSelectItem>
+				<EditorialSelectItem value="indicator">
+					{m.policy_cross_session_privacy_indicator()}
+				</EditorialSelectItem>
+				<EditorialSelectItem value="text">
+					{m.policy_cross_session_privacy_text()}
+				</EditorialSelectItem>
+			</PolicySelectField>
 		</>
 	);
 }

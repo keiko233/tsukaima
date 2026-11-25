@@ -1,33 +1,35 @@
 "use client";
 
 import type { PluginStatusLevel, PluginStatusSnapshot } from "@tsukaima/contracts";
+import { EditorialGroup } from "@tsukaima/ui/components/editorial/group";
+import { KpiStrip } from "@tsukaima/ui/components/editorial/kpi-strip";
 import { Loader } from "@tsukaima/ui/components/motion/loader";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { AlertTriangle, CheckCircle2, CircleHelp, Info, XCircle } from "lucide-react";
-import type { ComponentPropsWithRef, ReactNode } from "react";
+import { Children, isValidElement, type ComponentPropsWithRef, type ReactNode } from "react";
 
 export function PluginPage({
 	title,
 	description,
 	actions,
 	children,
+	embedded = true,
 }: {
 	title: ReactNode;
 	description?: ReactNode;
 	actions?: ReactNode;
 	children: ReactNode;
+	embedded?: boolean;
 }) {
 	return (
 		<section className="space-y-5">
-			<header className="flex flex-wrap items-start justify-between gap-3">
-				<div className="min-w-0">
-					<h2 className="text-lg font-semibold tracking-tight">{title}</h2>
-					{description ? (
-						<p className="mt-1 text-sm text-muted-foreground">{description}</p>
-					) : null}
+			<h2 className={embedded ? "sr-only" : "font-serif text-2xl text-ink"}>{title}</h2>
+			{(description != null || actions != null) && (
+				<div className="flex flex-wrap items-center justify-between gap-3">
+					{description != null && <p className="text-sm text-muted-foreground">{description}</p>}
+					{actions != null && <div className="ms-auto flex items-center gap-2">{actions}</div>}
 				</div>
-				{actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
-			</header>
+			)}
 			{children}
 		</section>
 	);
@@ -47,20 +49,14 @@ export function PluginSection({
 	className?: string;
 }) {
 	return (
-		<section className={cn("rounded-xl border border-border bg-card/40", className)}>
-			{title !== undefined || actions !== undefined ? (
-				<div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-3">
-					<div className="min-w-0">
-						{title ? <h3 className="text-sm font-medium">{title}</h3> : null}
-						{description ? (
-							<p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
-						) : null}
-					</div>
-					{actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
-				</div>
-			) : null}
-			<div className="p-4">{children}</div>
-		</section>
+		<EditorialGroup
+			title={title}
+			description={description}
+			actions={actions}
+			className={cn("first:border-t-0 first:pt-0", className)}
+		>
+			{children}
+		</EditorialGroup>
 	);
 }
 
@@ -117,7 +113,7 @@ export function StatusBadge({
 	return (
 		<span
 			className={cn(
-				"inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs font-medium",
+				"inline-flex items-center gap-1.5 text-xs",
 				LEVEL_STYLE[level].text,
 				disabled && "opacity-60",
 				className,
@@ -139,22 +135,25 @@ export function ProgressBar({
 	total?: number;
 	label?: string;
 }) {
-	const ratio = total === undefined ? 0 : Math.min(1, Math.max(0, current / total));
+	const ratio = total === undefined || total <= 0 ? 0 : Math.min(1, Math.max(0, current / total));
 	return (
 		<div className="space-y-1.5">
 			<div className="flex items-center justify-between text-xs text-muted-foreground">
 				<span>{label}</span>
-				<span>{total === undefined ? current : `${current} / ${total}`}</span>
+				<span className="font-mono tabular-nums">
+					{total === undefined ? current : `${current} / ${total}`}
+				</span>
 			</div>
 			<div
 				role="progressbar"
+				aria-label={label}
 				aria-valuemax={total}
 				aria-valuemin={0}
 				aria-valuenow={current}
-				className="h-1.5 overflow-hidden rounded-full bg-muted"
+				className="h-1 overflow-hidden bg-muted"
 			>
 				<div
-					className="h-full rounded-full bg-primary transition-[width] duration-300"
+					className="h-full bg-accent-ink transition-[width] duration-300"
 					style={{ width: `${ratio * 100}%` }}
 				/>
 			</div>
@@ -163,12 +162,7 @@ export function ProgressBar({
 }
 
 export function Stat({ label, value }: { label: ReactNode; value: ReactNode }) {
-	return (
-		<div className="rounded-lg border border-border bg-background/50 px-3 py-2.5">
-			<div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
-			<div className="mt-1 truncate text-base font-medium tabular-nums">{value}</div>
-		</div>
-	);
+	return <KpiStrip items={[{ label, value }]} className="grid-cols-1" />;
 }
 
 export function StatGrid({
@@ -178,35 +172,32 @@ export function StatGrid({
 	items: readonly { readonly label: ReactNode; readonly value: ReactNode }[];
 	className?: string;
 }) {
-	return (
-		<div className={cn("grid grid-cols-2 gap-2 sm:grid-cols-3", className)}>
-			{items.map((item, index) => (
-				<Stat key={index} label={item.label} value={item.value} />
-			))}
-		</div>
-	);
+	return <KpiStrip items={items} {...(className === undefined ? {} : { className })} />;
 }
 
 export function KeyValueList({
 	items,
 	className,
 }: {
-	items: readonly { readonly label: ReactNode; readonly value: ReactNode }[];
+	items: readonly { readonly id?: string; readonly label: ReactNode; readonly value: ReactNode }[];
 	className?: string;
 }) {
 	return (
-		<dl
-			className={cn(
-				"grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[minmax(7rem,auto)_1fr]",
-				className,
+		<dl className={cn("grid text-sm sm:grid-cols-[minmax(7rem,auto)_1fr]", className)}>
+			{Children.toArray(
+				items.map(({ id, label, value }) => {
+					const key = id ?? (isValidElement(label) ? label.key : String(label));
+					return (
+						<div
+							key={key ?? undefined}
+							className="grid gap-x-4 gap-y-1 border-b border-border/60 py-2 last:border-b-0 sm:col-span-2 sm:grid-cols-subgrid"
+						>
+							<dt className="text-muted-foreground">{label}</dt>
+							<dd className="min-w-0 break-words">{value}</dd>
+						</div>
+					);
+				}),
 			)}
-		>
-			{items.map((item, index) => (
-				<div key={index} className="contents">
-					<dt className="text-muted-foreground">{item.label}</dt>
-					<dd className="min-w-0 break-words">{item.value}</dd>
-				</div>
-			))}
 		</dl>
 	);
 }
@@ -223,10 +214,10 @@ export function EmptyState({
 	action?: ReactNode;
 }) {
 	return (
-		<div className="grid place-items-center rounded-xl border border-dashed border-border px-6 py-10 text-center">
+		<div className="grid place-items-center border-t border-border px-6 py-10 text-center">
 			<div className="max-w-md space-y-2">
 				{icon ? <div className="mx-auto text-muted-foreground">{icon}</div> : null}
-				<div className="text-sm font-medium">{title}</div>
+				<div className="font-serif text-lg text-ink">{title}</div>
 				{description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
 				{action ? <div className="pt-2">{action}</div> : null}
 			</div>
@@ -235,10 +226,10 @@ export function EmptyState({
 }
 
 const ALERT_STYLE = {
-	danger: "border-destructive/30 bg-destructive/10 text-destructive",
-	info: "border-border bg-muted/40 text-foreground",
-	success: "border-success/30 bg-success/10 text-foreground",
-	warning: "border-warning/30 bg-warning/10 text-foreground",
+	danger: "border-destructive text-destructive",
+	info: "border-accent-ink text-foreground",
+	success: "border-success text-foreground",
+	warning: "border-warning text-foreground",
 } as const;
 
 export function Alert({
@@ -253,7 +244,7 @@ export function Alert({
 	return (
 		<div
 			role={tone === "danger" ? "alert" : "status"}
-			className={cn("rounded-lg border px-3 py-2.5 text-sm", ALERT_STYLE[tone])}
+			className={cn("border-s-2 px-3 py-2.5 text-sm", ALERT_STYLE[tone])}
 		>
 			<div className="flex items-start gap-2">
 				<span className="mt-0.5 shrink-0">
@@ -269,7 +260,7 @@ export function Alert({
 				</span>
 				<div className="min-w-0 space-y-1">
 					{title ? <div className="font-medium">{title}</div> : null}
-					{children ? <div className="text-xs leading-5 opacity-90">{children}</div> : null}
+					{children ? <div className="text-xs leading-5">{children}</div> : null}
 				</div>
 			</div>
 		</div>
@@ -309,7 +300,7 @@ export function CodeBlock({ children, className }: { children: ReactNode; classN
 	return (
 		<pre
 			className={cn(
-				"max-h-72 overflow-auto rounded-lg border border-border bg-background/70 p-3 font-mono text-[11px] leading-5",
+				"max-h-72 overflow-auto rounded-sm border border-line bg-muted/50 p-3 font-mono text-[11px] leading-5 tabular-nums",
 				className,
 			)}
 		>

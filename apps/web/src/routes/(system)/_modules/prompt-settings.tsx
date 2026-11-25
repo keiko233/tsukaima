@@ -1,8 +1,18 @@
+"use client";
+
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useState, type ReactNode } from "react";
 import type { PersonaSummary, PromptKey } from "@tsukaima/contracts";
+import {
+	Disclosure,
+	DisclosurePanel,
+	DisclosureTrigger,
+	EditorialGroup,
+	EditorialSwitch,
+	PreferenceRow,
+	cn,
+} from "@tsukaima/ui";
 import { Button } from "@tsukaima/ui/components/motion/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
 import { orpc } from "@/lib/api";
 import { m } from "@/paraglide/messages";
 
@@ -15,16 +25,22 @@ const labels: Record<PromptKey, () => string> = {
 	sidechat: m.prompts_sidechat,
 };
 
-function PromptCard({ title, children }: { title: string; children: ReactNode }) {
-	return (
-		<Card size="compact">
-			<CardHeader>
-				<CardTitle as="h2">{title}</CardTitle>
-			</CardHeader>
-			<CardContent className="space-y-2">{children}</CardContent>
-		</Card>
-	);
-}
+const PROMPT_KEYS: readonly PromptKey[] = [
+	"chat-system",
+	"chat-compaction",
+	"coding-system",
+	"workspace-task",
+	"sidechat",
+	"memory-extraction",
+];
+
+const inputClass =
+	"h-8 w-full rounded-sm border border-border bg-paper px-2.5 text-xs text-ink outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+type Selection =
+	| { kind: "template"; key: PromptKey }
+	| { kind: "persona"; id: string }
+	| { kind: "new" };
 
 function PromptText({
 	label,
@@ -37,13 +53,16 @@ function PromptText({
 }) {
 	const id = useId();
 	return (
-		<div className="space-y-1">
-			<label htmlFor={id} className="text-xs font-medium">
+		<div className="space-y-1.5">
+			<label
+				htmlFor={id}
+				className="block text-[11px] font-medium tracking-[0.14em] text-muted-foreground uppercase"
+			>
 				{label}
 			</label>
 			<textarea
 				id={id}
-				className="block min-h-32 w-full rounded-md border bg-background p-2 font-mono text-xs"
+				className="block min-h-72 w-full resize-y rounded-sm border border-border bg-paper p-3 font-mono text-xs leading-5 text-ink outline-none focus-visible:ring-2 focus-visible:ring-ring"
 				maxLength={20_000}
 				value={value}
 				onChange={(event) => onChange(event.target.value)}
@@ -59,6 +78,21 @@ function ErrorText({ error }: { error: Error | null }) {
 				{error.message}
 			</p>
 		)
+	);
+}
+
+function EditorHeading({ children, meta }: { children: ReactNode; meta?: ReactNode }) {
+	return (
+		<div className="flex flex-wrap items-baseline justify-between gap-2">
+			<h2 className="font-serif text-lg text-ink">{children}</h2>
+			{meta == null ? null : <span className="text-xs text-muted-foreground">{meta}</span>}
+		</div>
+	);
+}
+
+function ActionBar({ children }: { children: ReactNode }) {
+	return (
+		<div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">{children}</div>
 	);
 }
 
@@ -84,9 +118,9 @@ function TemplateEditor({
 			},
 		}),
 	);
-	const title = labels[promptKey]();
 	return (
-		<PromptCard title={title}>
+		<div className="space-y-4">
+			<EditorHeading>{labels[promptKey]()}</EditorHeading>
 			<PromptText
 				label={m.prompts_text()}
 				value={draft?.text ?? override ?? defaultText}
@@ -94,13 +128,17 @@ function TemplateEditor({
 					setDraft({ text, expected: draft?.expected === undefined ? override : draft.expected })
 				}
 			/>
-			<details className="text-xs">
-				<summary>{m.prompts_builtin()}</summary>
-				<pre className="mt-2 whitespace-pre-wrap break-words">
-					{defaultText || m.prompts_empty()}
-				</pre>
-			</details>
-			<div className="flex flex-wrap gap-2">
+			<Disclosure>
+				<DisclosureTrigger className="text-xs text-muted-foreground">
+					{m.prompts_builtin()}
+				</DisclosureTrigger>
+				<DisclosurePanel>
+					<pre className="font-mono text-xs whitespace-pre-wrap break-words text-muted-foreground">
+						{defaultText || m.prompts_empty()}
+					</pre>
+				</DisclosurePanel>
+			</Disclosure>
+			<ActionBar>
 				<Button
 					size="sm"
 					disabled={!draft || mutation.isPending}
@@ -138,9 +176,9 @@ function TemplateEditor({
 						{m.prompts_reload()}
 					</Button>
 				)}
-			</div>
+			</ActionBar>
 			<ErrorText error={mutation.error} />
-		</PromptCard>
+		</div>
 	);
 }
 
@@ -158,17 +196,23 @@ function PersonaEditor({ persona, isGlobal }: { persona: PersonaSummary; isGloba
 	);
 	const bind = useMutation(orpc.admin.personas.bindPersona.mutationOptions({ onSuccess: refresh }));
 	return (
-		<PromptCard title={persona.name}>
-			<p className="text-xs text-muted-foreground">
-				{m.prompts_persona_version({ version: String(persona.version) })}
-				{isGlobal && ` · ${m.prompts_global()}`}
-			</p>
+		<div className="space-y-4">
+			<EditorHeading
+				meta={
+					<>
+						{m.prompts_persona_version({ version: String(persona.version) })}
+						{isGlobal && ` · ${m.prompts_global()}`}
+					</>
+				}
+			>
+				{persona.name}
+			</EditorHeading>
 			<PromptText
 				label={m.prompts_persona()}
 				value={draft?.text ?? persona.prompt}
 				onChange={(text) => setDraft({ text, version: draft?.version ?? persona.version })}
 			/>
-			<div className="flex flex-wrap gap-2">
+			<ActionBar>
 				<Button
 					size="sm"
 					disabled={!draft?.text.trim() || draft.text === persona.prompt || save.isPending}
@@ -200,9 +244,9 @@ function PersonaEditor({ persona, isGlobal }: { persona: PersonaSummary; isGloba
 						{m.prompts_reload()}
 					</Button>
 				)}
-			</div>
+			</ActionBar>
 			<ErrorText error={save.error ?? bind.error} />
-		</PromptCard>
+		</div>
 	);
 }
 
@@ -222,41 +266,86 @@ function NewPersona() {
 		}),
 	);
 	return (
-		<PromptCard title={m.prompts_create_persona()}>
-			<form
-				className="space-y-2"
-				onSubmit={(event) => {
-					event.preventDefault();
-					create.mutate({ name, summary, prompt });
-				}}
-			>
-				<label className="block text-xs">
-					{m.prompts_persona_name()}
+		<form
+			className="space-y-4"
+			onSubmit={(event) => {
+				event.preventDefault();
+				create.mutate({ name, summary, prompt });
+			}}
+		>
+			<EditorHeading>{m.prompts_create_persona()}</EditorHeading>
+			<div className="grid gap-3 sm:grid-cols-2">
+				<label className="space-y-1.5 text-xs">
+					<span className="block text-[11px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
+						{m.prompts_persona_name()}
+					</span>
 					<input
-						className="block w-full rounded-md border bg-background p-2"
+						className={inputClass}
 						required
 						maxLength={120}
 						value={name}
 						onChange={(event) => setName(event.target.value)}
 					/>
 				</label>
-				<label className="block text-xs">
-					{m.prompts_persona_summary()}
+				<label className="space-y-1.5 text-xs">
+					<span className="block text-[11px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
+						{m.prompts_persona_summary()}
+					</span>
 					<input
-						className="block w-full rounded-md border bg-background p-2"
+						className={inputClass}
 						required
 						maxLength={1_000}
 						value={summary}
 						onChange={(event) => setSummary(event.target.value)}
 					/>
 				</label>
-				<PromptText label={m.prompts_persona()} value={prompt} onChange={setPrompt} />
+			</div>
+			<PromptText label={m.prompts_persona()} value={prompt} onChange={setPrompt} />
+			<ActionBar>
 				<Button type="submit" size="sm" disabled={create.isPending || !prompt.trim()}>
 					{m.prompts_create_persona()}
 				</Button>
-				<ErrorText error={create.error} />
-			</form>
-		</PromptCard>
+			</ActionBar>
+			<ErrorText error={create.error} />
+		</form>
+	);
+}
+
+function SelectorGroup({ children, title }: { children: ReactNode; title: string }) {
+	return (
+		<div>
+			<h3 className="px-3 pb-1 text-[11px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
+				{title}
+			</h3>
+			<ul>{children}</ul>
+		</div>
+	);
+}
+
+function SelectorItem({
+	children,
+	onClick,
+	selected,
+}: {
+	children: ReactNode;
+	onClick: () => void;
+	selected: boolean;
+}) {
+	return (
+		<li>
+			<button
+				type="button"
+				aria-current={selected ? "true" : undefined}
+				onClick={onClick}
+				className={cn(
+					"flex w-full items-center border-s-2 border-transparent py-2 pe-2 ps-3 text-start text-[13px] text-muted-foreground transition-colors",
+					"hover:bg-accent-soft hover:text-ink focus-visible:bg-accent-soft focus-visible:text-ink focus-visible:outline-none",
+					selected && "border-accent-ink bg-accent-soft font-medium text-ink",
+				)}
+			>
+				<span className="min-w-0 truncate">{children}</span>
+			</button>
+		</li>
 	);
 }
 
@@ -271,35 +360,93 @@ export function PromptSettings() {
 			onSuccess: () => client.invalidateQueries({ queryKey: orpc.admin.prompts.agentAccess.key() }),
 		}),
 	);
+	const [selection, setSelection] = useState<Selection>({
+		kind: "template",
+		key: "chat-system",
+	});
+	const accessId = useId();
 	const globalPersona = bindings.data?.find((binding) => binding.isActive && binding.isGlobal);
+	const activePersonas = (personas.data ?? []).filter((persona) => persona.isActive);
+	const selectedTemplate =
+		selection.kind === "template"
+			? prompts.data?.find((entry) => entry.key === selection.key)
+			: undefined;
+	const selectedPersona =
+		selection.kind === "persona"
+			? activePersonas.find((persona) => persona.id === selection.id)
+			: undefined;
+
 	return (
-		<div className="space-y-4">
-			<PromptCard title={m.prompts_agent_access()}>
-				<label className="flex items-start gap-2 text-xs">
-					<input
-						type="checkbox"
+		<div className="space-y-6">
+			<EditorialGroup>
+				<PreferenceRow
+					label={m.prompts_agent_access()}
+					hint={m.prompts_agent_description()}
+					htmlFor={accessId}
+				>
+					<EditorialSwitch
+						id={accessId}
 						checked={access.data ?? false}
 						disabled={access.data === undefined || setAccess.isPending}
-						onChange={(event) => setAccess.mutate(event.target.checked)}
+						onCheckedChange={(checked) => setAccess.mutate(checked)}
 					/>
-					{m.prompts_agent_description()}
-				</label>
+				</PreferenceRow>
 				<ErrorText error={access.error ?? setAccess.error} />
-			</PromptCard>
+			</EditorialGroup>
 			<ErrorText error={prompts.error ?? personas.error ?? bindings.error} />
-			{prompts.data?.map(({ key, ...view }) => (
-				<TemplateEditor key={key} promptKey={key} {...view} />
-			))}
-			{personas.data
-				?.filter((persona) => persona.isActive)
-				.map((persona) => (
-					<PersonaEditor
-						key={persona.id}
-						persona={persona}
-						isGlobal={globalPersona?.personaId === persona.id}
-					/>
-				))}
-			<NewPersona />
+			<div className="grid gap-5 md:grid-cols-[13.5rem_minmax(0,1fr)] md:gap-0">
+				<nav
+					aria-label={m.prompts_title()}
+					className="flex flex-col gap-4 md:border-e md:border-border md:pe-4"
+				>
+					<SelectorGroup title={m.prompts_title()}>
+						{PROMPT_KEYS.map((key) => (
+							<SelectorItem
+								key={key}
+								selected={selection.kind === "template" && selection.key === key}
+								onClick={() => setSelection({ kind: "template", key })}
+							>
+								{labels[key]()}
+							</SelectorItem>
+						))}
+					</SelectorGroup>
+					<SelectorGroup title={m.prompts_persona()}>
+						{activePersonas.map((persona) => (
+							<SelectorItem
+								key={persona.id}
+								selected={selection.kind === "persona" && selection.id === persona.id}
+								onClick={() => setSelection({ kind: "persona", id: persona.id })}
+							>
+								{persona.name}
+							</SelectorItem>
+						))}
+						<SelectorItem
+							selected={selection.kind === "new"}
+							onClick={() => setSelection({ kind: "new" })}
+						>
+							+ {m.prompts_create_persona()}
+						</SelectorItem>
+					</SelectorGroup>
+				</nav>
+				<div className="min-w-0 md:ps-5">
+					{selectedTemplate === undefined ? null : (
+						<TemplateEditor
+							key={selectedTemplate.key}
+							promptKey={selectedTemplate.key}
+							defaultText={selectedTemplate.defaultText}
+							override={selectedTemplate.override}
+						/>
+					)}
+					{selectedPersona === undefined ? null : (
+						<PersonaEditor
+							key={selectedPersona.id}
+							persona={selectedPersona}
+							isGlobal={globalPersona?.personaId === selectedPersona.id}
+						/>
+					)}
+					{selection.kind === "new" ? <NewPersona /> : null}
+				</div>
+			</div>
 		</div>
 	);
 }

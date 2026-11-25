@@ -3,13 +3,15 @@
 import {
 	Alert,
 	Button,
+	EditorialSwitch,
 	EmptyState,
+	ExpandableRow,
 	Field,
 	Input,
 	PluginPage,
 	PluginSection,
+	PreferenceRow,
 	StatGrid,
-	Switch,
 	definePluginUi,
 	usePluginI18n,
 	usePluginPanel,
@@ -64,7 +66,11 @@ interface DecisionRow {
 interface OverviewResponse {
 	readonly enabled: boolean;
 	readonly globalPolicy: ProactivePolicy;
-	readonly overrides: readonly { readonly policy: ProactivePolicy; readonly scope: string; readonly scopeId: string }[];
+	readonly overrides: readonly {
+		readonly policy: ProactivePolicy;
+		readonly scope: string;
+		readonly scopeId: string;
+	}[];
 	readonly recentTasks: readonly ScheduledTaskRow[];
 	readonly stats: {
 		readonly decisions: number;
@@ -84,13 +90,7 @@ function minutes(ms: number): string {
 const toMs = (value: string): number => Math.max(0, Math.round(Number(value) || 0)) * 60_000;
 const toRatio = (value: string): number => Math.min(1, Math.max(0, Number(value) || 0));
 
-function TaskCard({
-	onChanged,
-	task,
-}: {
-	onChanged: () => Promise<void>;
-	task: ScheduledTaskRow;
-}) {
+function TaskRow({ onChanged, task }: { onChanged: () => Promise<void>; task: ScheduledTaskRow }) {
 	const t = usePluginI18n();
 	const panel = usePluginPanel();
 	const toast = usePluginToast();
@@ -118,42 +118,44 @@ function TaskCard({
 		}
 	};
 	return (
-		<div className="space-y-2 rounded-xl border border-border bg-background/40 p-3">
-			<div className="flex flex-wrap items-center justify-between gap-2">
-				<div className="min-w-0">
-					<div className="text-sm font-medium">
-						{task.kind} · {task.status}
-					</div>
-					<div className="text-[11px] text-muted-foreground">
-						{task.conversationId} · {new Date(task.scheduledForMs).toISOString()} ·{" "}
+		<ExpandableRow
+			summary={
+				<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+					<span className="font-medium">{task.kind}</span>
+					<span className="text-[11px] text-muted-foreground">{task.status}</span>
+					<span className="break-all font-mono text-[11px] text-muted-foreground">
+						{task.conversationId}
+					</span>
+					<span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+						{new Date(task.scheduledForMs).toISOString()}
+					</span>
+					<span className="font-mono text-[11px] tabular-nums text-muted-foreground">
 						{task.attempts}/{task.maxAttempts}
-					</div>
+					</span>
+				</span>
+			}
+		>
+			<div className="space-y-3">
+				<Field label={t.t("task_prompt")}>
+					<Input aria-label={t.t("task_prompt")} value={prompt} onChange={setPrompt} />
+				</Field>
+				{task.lastError === null ? null : <Alert tone="warning">{task.lastError}</Alert>}
+				<div className="flex flex-wrap items-center justify-between gap-2">
+					<Button leadingIcon={<Ban />} size="xs" variant="danger" onClick={() => void cancel()}>
+						{t.t("task_cancel")}
+					</Button>
+					<Button
+						disabled={saving}
+						leadingIcon={<Save />}
+						size="xs"
+						variant="secondary"
+						onClick={() => void updatePrompt()}
+					>
+						{t.t("task_update_prompt")}
+					</Button>
 				</div>
-				<Button
-					leadingIcon={<Ban />}
-					size="xs"
-					variant="danger"
-					onClick={() => void cancel()}
-				>
-					{t.t("task_cancel")}
-				</Button>
 			</div>
-			<Field label={t.t("task_prompt")}>
-				<Input value={prompt} onChange={setPrompt} />
-			</Field>
-			<div className="flex justify-end">
-				<Button
-					disabled={saving}
-					leadingIcon={<Save />}
-					size="xs"
-					variant="secondary"
-					onClick={() => void updatePrompt()}
-				>
-					{t.t("task_update_prompt")}
-				</Button>
-			</div>
-			{task.lastError === null ? null : <Alert tone="warning">{task.lastError}</Alert>}
-		</div>
+		</ExpandableRow>
 	);
 }
 
@@ -336,7 +338,10 @@ function SchedulerPanel() {
 			<PluginSection title={t.t("overview")}>
 				<StatGrid
 					items={[
-						{ label: t.t("stats_enabled"), value: overview?.enabled ? t.t("enabled") : t.t("disabled") },
+						{
+							label: t.t("stats_enabled"),
+							value: overview?.enabled ? t.t("enabled") : t.t("disabled"),
+						},
 						{ label: t.t("stats_tasks"), value: stats?.tasks ?? 0 },
 						{ label: t.t("stats_pending"), value: stats?.pending ?? 0 },
 						{ label: t.t("stats_decisions"), value: stats?.decisions ?? 0 },
@@ -344,7 +349,7 @@ function SchedulerPanel() {
 						{ label: t.t("stats_skipped"), value: stats?.skipped ?? 0 },
 					]}
 				/>
-				<div className="mt-3 flex justify-end">
+				<div className="flex justify-end border-t border-border pt-4">
 					<Button leadingIcon={<Play />} size="sm" onClick={() => void runTick()}>
 						{t.t("tick")}
 					</Button>
@@ -352,59 +357,115 @@ function SchedulerPanel() {
 			</PluginSection>
 
 			<PluginSection description={t.t("policy_description")} title={t.t("policy")}>
-				<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-					<label className="flex items-center gap-2 text-xs">
-						<Switch ariaLabel={t.t("policy_enabled")} checked={enabled} onCheckedChange={setEnabled} />
-						{t.t("policy_enabled")}
-					</label>
-					<label className="flex items-center gap-2 text-xs">
-						<Switch
+				<div>
+					<PreferenceRow label={t.t("policy_enabled")}>
+						<EditorialSwitch
+							ariaLabel={t.t("policy_enabled")}
+							checked={enabled}
+							onCheckedChange={setEnabled}
+						/>
+					</PreferenceRow>
+					<PreferenceRow label={t.t("policy_bubble_gate")}>
+						<EditorialSwitch
 							ariaLabel={t.t("policy_bubble_gate")}
 							checked={bubbleGate}
 							onCheckedChange={setBubbleGate}
 						/>
-						{t.t("policy_bubble_gate")}
-					</label>
-					<Field label={t.t("policy_daily_cap")}>
-						<Input type="number" value={dailyCap} onChange={setDailyCap} />
-					</Field>
-					<Field label={t.t("policy_hourly_cap")}>
-						<Input type="number" value={hourlyCap} onChange={setHourlyCap} />
-					</Field>
-					<Field label={t.t("policy_cooldown")}>
-						<Input type="number" value={cooldown} onChange={setCooldown} />
-					</Field>
-					<Field label={t.t("policy_backoff")}>
-						<Input type="number" value={backoff} onChange={setBackoff} />
-					</Field>
-					<Field label={t.t("policy_min_messages")}>
-						<Input type="number" value={minMessages} onChange={setMinMessages} />
-					</Field>
-					<Field label={t.t("policy_min_idle")}>
-						<Input type="number" value={minIdle} onChange={setMinIdle} />
-					</Field>
-					<Field label={t.t("policy_max_idle")}>
-						<Input type="number" value={maxIdle} onChange={setMaxIdle} />
-					</Field>
-					<Field label={t.t("policy_min_warmness")}>
-						<Input type="number" value={minWarmness} onChange={setMinWarmness} />
-					</Field>
-					<Field label={t.t("policy_probability")}>
-						<Input type="number" value={probability} onChange={setProbability} />
-					</Field>
-					<Field label={t.t("policy_quiet_ranges")}>
-						<Input value={quietRanges} onChange={setQuietRanges} />
-					</Field>
+					</PreferenceRow>
+					<PreferenceRow label={t.t("policy_daily_cap")}>
+						<Input
+							aria-label={t.t("policy_daily_cap")}
+							className="w-28"
+							type="number"
+							value={dailyCap}
+							onChange={setDailyCap}
+						/>
+					</PreferenceRow>
+					<PreferenceRow label={t.t("policy_hourly_cap")}>
+						<Input
+							aria-label={t.t("policy_hourly_cap")}
+							className="w-28"
+							type="number"
+							value={hourlyCap}
+							onChange={setHourlyCap}
+						/>
+					</PreferenceRow>
+					<PreferenceRow label={t.t("policy_cooldown")}>
+						<Input
+							aria-label={t.t("policy_cooldown")}
+							className="w-28"
+							type="number"
+							value={cooldown}
+							onChange={setCooldown}
+						/>
+					</PreferenceRow>
+					<PreferenceRow label={t.t("policy_backoff")}>
+						<Input
+							aria-label={t.t("policy_backoff")}
+							className="w-28"
+							type="number"
+							value={backoff}
+							onChange={setBackoff}
+						/>
+					</PreferenceRow>
+					<PreferenceRow label={t.t("policy_min_messages")}>
+						<Input
+							aria-label={t.t("policy_min_messages")}
+							className="w-28"
+							type="number"
+							value={minMessages}
+							onChange={setMinMessages}
+						/>
+					</PreferenceRow>
+					<PreferenceRow label={t.t("policy_min_idle")}>
+						<Input
+							aria-label={t.t("policy_min_idle")}
+							className="w-28"
+							type="number"
+							value={minIdle}
+							onChange={setMinIdle}
+						/>
+					</PreferenceRow>
+					<PreferenceRow label={t.t("policy_max_idle")}>
+						<Input
+							aria-label={t.t("policy_max_idle")}
+							className="w-28"
+							type="number"
+							value={maxIdle}
+							onChange={setMaxIdle}
+						/>
+					</PreferenceRow>
+					<PreferenceRow label={t.t("policy_min_warmness")}>
+						<Input
+							aria-label={t.t("policy_min_warmness")}
+							className="w-28"
+							type="number"
+							value={minWarmness}
+							onChange={setMinWarmness}
+						/>
+					</PreferenceRow>
+					<PreferenceRow label={t.t("policy_probability")}>
+						<Input
+							aria-label={t.t("policy_probability")}
+							className="w-28"
+							type="number"
+							value={probability}
+							onChange={setProbability}
+						/>
+					</PreferenceRow>
+					<PreferenceRow label={t.t("policy_quiet")} hint={t.t("policy_quiet_ranges")}>
+						<Input aria-label={t.t("policy_quiet")} value={quietRanges} onChange={setQuietRanges} />
+					</PreferenceRow>
 				</div>
-				<div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-					<label className="flex items-center gap-2 text-xs">
-						<Switch
+				<div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+					<span className="flex items-center gap-2">
+						<EditorialSwitch
 							ariaLabel={t.t("policy_reset_arm")}
 							checked={resetArmed}
 							onCheckedChange={setResetArmed}
 						/>
-						{t.t("policy_reset_arm")}
-					</label>
+						<span className="text-xs text-muted-foreground">{t.t("policy_reset_arm")}</span>
+					</span>
 					<div className="flex gap-2">
 						<Button
 							disabled={!resetArmed}
@@ -423,75 +484,110 @@ function SchedulerPanel() {
 			</PluginSection>
 
 			<PluginSection title={t.t("tasks")}>
-				<div className="grid gap-2 sm:grid-cols-[1fr_8rem_8rem_auto]">
+				<div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_8rem_auto] sm:items-end">
 					<Field label={t.t("task_conversation")}>
 						<Input
 							placeholder={t.t("conversation_placeholder")}
+							aria-label={t.t("task_conversation")}
 							value={createConversation}
 							onChange={setCreateConversation}
 						/>
 					</Field>
 					<Field label={t.t("task_kind")}>
-						<Input value={createKind} onChange={setCreateKind} />
+						<Input aria-label={t.t("task_kind")} value={createKind} onChange={setCreateKind} />
 					</Field>
 					<Field label={t.t("task_delay")}>
-						<Input type="number" value={createDelay} onChange={setCreateDelay} />
+						<Input
+							aria-label={t.t("task_delay")}
+							type="number"
+							value={createDelay}
+							onChange={setCreateDelay}
+						/>
 					</Field>
-					<div className="flex items-end">
-						<Button
-							disabled={createConversation.trim().length === 0 || createPrompt.trim().length === 0}
-							size="sm"
-							onClick={() => void createTask()}
-						>
-							{t.t("task_create")}
-						</Button>
-					</div>
+					<Button
+						disabled={createConversation.trim().length === 0 || createPrompt.trim().length === 0}
+						size="sm"
+						onClick={() => void createTask()}
+					>
+						{t.t("task_create")}
+					</Button>
 				</div>
-				<Field label={t.t("task_prompt")}>
-					<Input value={createPrompt} onChange={setCreatePrompt} />
-				</Field>
+				<div className="pt-3">
+					<Field label={t.t("task_prompt")}>
+						<Input
+							aria-label={t.t("task_prompt")}
+							value={createPrompt}
+							onChange={setCreatePrompt}
+						/>
+					</Field>
+				</div>
 				{tasks.length === 0 ? (
 					<EmptyState title={t.t("tasks_empty")} />
 				) : (
-					<div className="mt-3 space-y-2">
+					<div className="mt-3">
 						{tasks.map((task) => (
-							<TaskCard key={task.id} onChanged={refresh} task={task} />
+							<TaskRow key={task.id} onChanged={refresh} task={task} />
 						))}
 					</div>
 				)}
 			</PluginSection>
 
 			<PluginSection description={t.t("simulate_description")} title={t.t("simulate")}>
-				<div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+				<div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
 					<Field label={t.t("task_conversation")}>
 						<Input
 							placeholder={t.t("conversation_placeholder")}
+							aria-label={t.t("task_conversation")}
 							value={simulateConversation}
 							onChange={setSimulateConversation}
 						/>
 					</Field>
-					<div className="flex items-end">
-						<Button leadingIcon={<Play />} size="sm" variant="secondary" onClick={() => void runSimulation()}>
-							{t.t("simulate_run")}
-						</Button>
-					</div>
+					<Button
+						leadingIcon={<Play />}
+						size="sm"
+						variant="secondary"
+						onClick={() => void runSimulation()}
+					>
+						{t.t("simulate_run")}
+					</Button>
 				</div>
-				<Alert tone="info">{t.t("simulate_only")}</Alert>
+				<div className="pt-3">
+					<Alert tone="info">{t.t("simulate_only")}</Alert>
+				</div>
 				{simulations.length === 0 ? null : (
-					<div className="mt-2 space-y-2">
+					<div className="mt-2">
 						{simulations.map((row) => (
-							<div key={row.conversationId} className="rounded-lg border border-border p-2 text-xs">
-								<div className="font-medium">
-									{row.conversationId} · {row.eligible ? t.t("gate_passed") : t.t("gate_blocked")}
-								</div>
-								<div className="mt-1 flex flex-wrap gap-1">
-									{row.gates.map((gate) => (
-										<span key={`${row.conversationId}:${gate.gate}`} className="rounded bg-muted px-1.5 py-0.5">
-											{gate.gate}: {gate.status}
+							<ExpandableRow
+								key={row.conversationId}
+								defaultOpen
+								summary={
+									<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+										<span className="break-all font-mono text-[11px]">{row.conversationId}</span>
+										<span className="text-[11px] text-muted-foreground">
+											{row.eligible ? t.t("gate_passed") : t.t("gate_blocked")}
 										</span>
+									</span>
+								}
+							>
+								<ul className="text-xs">
+									{row.gates.map((gate) => (
+										<li
+											key={`${row.conversationId}:${gate.gate}`}
+											className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border/60 py-1.5 last:border-b-0"
+										>
+											<span className="font-mono text-[11px]">{gate.gate}</span>
+											<span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+												{gate.status}
+											</span>
+											{gate.reason === undefined ? null : (
+												<span className="min-w-0 break-words text-muted-foreground">
+													{gate.reason}
+												</span>
+											)}
+										</li>
 									))}
-								</div>
-							</div>
+								</ul>
+							</ExpandableRow>
 						))}
 					</div>
 				)}
@@ -501,14 +597,26 @@ function SchedulerPanel() {
 				{decisions.length === 0 ? (
 					<EmptyState title={t.t("decisions_empty")} />
 				) : (
-					<div className="space-y-1 text-xs">
+					<div className="text-xs">
+						<div className="hidden gap-x-4 border-b border-border py-1.5 text-[11px] tracking-wide text-muted-foreground uppercase sm:grid sm:grid-cols-[6rem_7rem_8rem_minmax(0,1fr)_11rem]">
+							<span>{t.t("task_kind")}</span>
+							<span>{t.t("decision_gate")}</span>
+							<span>{t.t("decision_outcome")}</span>
+							<span>{t.t("decision_marker")}</span>
+							<span aria-hidden="true" />
+						</div>
 						{decisions.map((decision) => (
-							<div key={decision.id} className="flex flex-wrap justify-between gap-2 rounded border border-border px-2 py-1">
+							<div
+								key={decision.id}
+								className="grid gap-x-4 gap-y-1 border-b border-border/60 py-2 font-mono tabular-nums last:border-b-0 sm:grid-cols-[6rem_7rem_8rem_minmax(0,1fr)_11rem]"
+							>
 								<span>{decision.kind}</span>
 								<span>{decision.gateResult}</span>
 								<span>{decision.deliveryStatus ?? t.t("none")}</span>
-								<span>{decision.marker ?? t.t("none")}</span>
-								<span>{new Date(decision.createdAtMs).toISOString()}</span>
+								<span className="break-all">{decision.marker ?? t.t("none")}</span>
+								<span className="text-muted-foreground sm:text-end">
+									{new Date(decision.createdAtMs).toISOString()}
+								</span>
 							</div>
 						))}
 					</div>
@@ -516,7 +624,7 @@ function SchedulerPanel() {
 			</PluginSection>
 
 			<PluginSection title={panel.plugin.name}>
-				<div className="text-xs text-muted-foreground">
+				<div className="font-mono text-[11px] text-muted-foreground">
 					{t.t("plugin_identity", { id: panel.plugin.id, version: panel.plugin.version })}
 				</div>
 			</PluginSection>

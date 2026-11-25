@@ -83,6 +83,10 @@ describe("server lifecycle with fake model", () => {
 			const readyzAfter = await app.handle(new Request("http://localhost/readyz"));
 			expect(readyzAfter.status).toBe(204);
 
+			const dataEntries = await readdir(directory);
+			expect(dataEntries).toEqual(expect.arrayContaining(["blobs", "skills", "mcp"]));
+			expect(await readdir(join(directory, "mcp"))).toContain("bin");
+
 			await lifecycle.stop();
 			const stopResponse = await app.handle(new Request("http://localhost/healthz"));
 			expect(stopResponse.status).toBe(503);

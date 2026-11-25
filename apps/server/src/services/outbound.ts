@@ -29,12 +29,15 @@ import type { ChannelRegistry } from "./channel-registry.ts";
 import type { ConversationRouter } from "./conversation-router.ts";
 import type { ConversationRunService } from "./conversation-runs.ts";
 import type { HookBus } from "./hook-bus.ts";
+import type { LiveRunCache } from "./live-run-cache.ts";
 
 export interface OutboundServiceOptions {
 	readonly audit?: (entry: AuditEntry) => Promise<void>;
 	readonly channels: ChannelRegistry;
 	readonly database: () => TsukaimaDatabase | undefined;
 	readonly hooks?: HookBus;
+	/** Live rounds and segment view advanced when a mid-turn send closes a segment. */
+	readonly liveRuns?: LiveRunCache | undefined;
 	readonly logger: Logger;
 	/**
 	 * Report a successful channel send to the reply dispatcher, so a final answer repeating the
@@ -77,6 +80,7 @@ export class OutboundService {
 	readonly #channels: ChannelRegistry;
 	readonly #database: () => TsukaimaDatabase | undefined;
 	readonly #hooks: HookBus | undefined;
+	readonly #liveRuns: OutboundServiceOptions["liveRuns"];
 	readonly #logger: Logger;
 	readonly #onDirectSend: OutboundServiceOptions["onDirectSend"];
 	readonly #onToolSend: OutboundServiceOptions["onToolSend"];
@@ -89,6 +93,7 @@ export class OutboundService {
 		this.#channels = options.channels;
 		this.#database = options.database;
 		this.#hooks = options.hooks;
+		this.#liveRuns = options.liveRuns;
 		this.#logger = options.logger;
 		this.#onDirectSend = options.onDirectSend;
 		this.#onToolSend = options.onToolSend;
@@ -201,6 +206,16 @@ export class OutboundService {
 			senderExternalId: "tsukaima",
 			updatedAt: now,
 		});
+		if (anchor !== undefined && runs !== undefined) {
+			const split = await runs.splitSegmentForOutbound({
+				conversationId: session.sessionId,
+				currentRounds: this.#liveRuns?.currentRounds(session.sessionId),
+				finalMessageId: id,
+			});
+			if (split !== undefined) {
+				await this.#liveRuns?.advanceSegment(session.sessionId, split.segment);
+			}
+		}
 		const recordEmission = () => {
 			// Only real chat text counts as a direct send; a sticker/media-only part renders as
 			// placeholder text and must never block narration or the final reply.
@@ -379,6 +394,16 @@ export class OutboundService {
 			senderExternalId: "tsukaima",
 			updatedAt: now,
 		});
+		if (originMatches && anchor !== undefined && runs !== undefined) {
+			const split = await runs.splitSegmentForOutbound({
+				conversationId: resolved.sessionId,
+				currentRounds: this.#liveRuns?.currentRounds(resolved.sessionId),
+				finalMessageId: id,
+			});
+			if (split !== undefined) {
+				await this.#liveRuns?.advanceSegment(resolved.sessionId, split.segment);
+			}
+		}
 		this.#logger.debug("plugin outbound send recorded", {
 			conversationId: resolved.sessionId,
 			messageId: id,

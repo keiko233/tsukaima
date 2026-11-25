@@ -789,6 +789,56 @@ describe("admin ops execution safety", () => {
 		}
 	});
 
+	test("defaults relative paths and omitted cwd to explicit root instead of repository root", async () => {
+		const harness = await createHarness();
+		try {
+			const repoRoot = join(harness.directory, "repo");
+			const dataRoot = join(harness.directory, "data");
+			await fs.mkdir(repoRoot);
+			await fs.mkdir(dataRoot);
+			const session = await seedConversation(harness.database, { kind: "webui" });
+			const extension = createAdminOpsToolsExtension({
+				allowedRoots: [dataRoot, repoRoot],
+				authorize: async (durableConversationId, toolName) => {
+					const caller = await resolveImCallerContext({
+						conversationId: durableConversationId,
+						database: harness.database,
+						settings: settingsWithAdmins([]),
+					});
+					return authorizeAdminOpsToolCall({ caller, toolName });
+				},
+				logger,
+				root: dataRoot,
+			});
+
+			const execResult = await invokeTool(
+				extension,
+				"admin_exec",
+				{ command: "pwd" },
+				session.durableConversationId,
+			);
+			const realDataRoot = await fs.realpath(dataRoot);
+			expect(decodeResult(execResult)).toMatchObject({
+				cwd: realDataRoot,
+				exitCode: 0,
+			});
+			expect(String(decodeResult(execResult).stdout).trim()).toBe(realDataRoot);
+
+			const writeResult = await invokeTool(
+				extension,
+				"admin_file_write",
+				{ content: "data-only", createDirs: true, path: "mcp/bin/marker.txt" },
+				session.durableConversationId,
+			);
+			expect(decodeResult(writeResult)).toMatchObject({
+				path: join(realDataRoot, "mcp", "bin", "marker.txt"),
+			});
+			expect(await fs.readdir(repoRoot)).toEqual([]);
+		} finally {
+			await harness.cleanup();
+		}
+	});
+
 	test("invalid authorization setups fail closed instead of allowing execution", async () => {
 		const harness = await createHarness();
 		try {

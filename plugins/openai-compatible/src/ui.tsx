@@ -3,17 +3,18 @@
 import {
 	Alert,
 	Button,
+	EditorialSelect,
+	EditorialSelectContent,
+	EditorialSelectItem,
+	EditorialSelectTrigger,
+	EditorialSelectValue,
+	EditorialSwitch,
 	EmptyState,
 	Field,
 	Input,
 	PluginPage,
 	PluginSection,
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-	Switch,
+	PreferenceRow,
 	definePluginUi,
 	usePluginConfig,
 	usePluginI18n,
@@ -22,7 +23,7 @@ import {
 	usePluginToast,
 } from "@tsukaima/sdk/ui";
 import { Plus, RefreshCw, Save, Search, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import {
 	createOpenAiCompatibleModel,
 	modelCapabilities,
@@ -54,13 +55,19 @@ function CapabilityButton({
 	onClick: () => void;
 }) {
 	return (
-		<Button size="xs" variant={active ? "soft" : "outline"} aria-pressed={active} onClick={onClick}>
+		<Button
+			size="xs"
+			variant="ghost"
+			className="rounded-full bg-muted text-muted-foreground aria-pressed:bg-accent-soft aria-pressed:text-accent-ink"
+			aria-pressed={active}
+			onClick={onClick}
+		>
 			{label}
 		</Button>
 	);
 }
 
-function ModelCard({
+function ModelRow({
 	isDefault,
 	model,
 	onChange,
@@ -138,10 +145,10 @@ function ModelCard({
 	};
 
 	return (
-		<div className="rounded-xl border border-border bg-background/40 p-3">
+		<div className="border-t border-line py-3">
 			<div className="flex flex-wrap items-start justify-between gap-3">
 				<div className="flex min-w-0 items-start gap-3">
-					<Switch
+					<EditorialSwitch
 						ariaLabel={t.t("model_enabled")}
 						checked={model.enabled}
 						onCheckedChange={(enabled) => onChange({ ...model, enabled })}
@@ -153,15 +160,12 @@ function ModelCard({
 						)}
 						<div className="mt-1.5 flex flex-wrap gap-1">
 							{isDefault ? (
-								<span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
+								<span className="text-[11px] font-medium text-accent-ink">
 									{t.t("default_model")}
 								</span>
 							) : null}
 							{capabilities.map((capability) => (
-								<span
-									key={capability}
-									className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground"
-								>
+								<span key={capability} className="font-mono text-[11px] text-muted-foreground">
 									{capability}
 								</span>
 							))}
@@ -184,7 +188,7 @@ function ModelCard({
 				</div>
 			</div>
 
-			<div className="mt-3 flex flex-wrap items-end gap-2 border-t border-border/70 pt-3">
+			<div className="mt-2 flex flex-wrap items-center gap-2">
 				<CapabilityButton
 					active={model.supportsTools}
 					label={t.t("capability_tools")}
@@ -213,7 +217,7 @@ function ModelCard({
 				{model.supportsReasoning ? (
 					<div className="ml-auto flex items-center gap-2">
 						<span className="text-[11px] text-muted-foreground">{t.t("reasoning_effort")}</span>
-						<Select
+						<EditorialSelect
 							value={model.defaultReasoningLevel}
 							onValueChange={(value) =>
 								onChange({
@@ -222,26 +226,26 @@ function ModelCard({
 								})
 							}
 						>
-							<SelectTrigger className="w-32">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
+							<EditorialSelectTrigger aria-label={t.t("reasoning_effort")} className="w-28">
+								<EditorialSelectValue />
+							</EditorialSelectTrigger>
+							<EditorialSelectContent>
 								{openAiCompatibleReasoningLevelSchema.options.map((level) => (
-									<SelectItem key={level} value={level}>
+									<EditorialSelectItem key={level} value={level}>
 										{level}
-									</SelectItem>
+									</EditorialSelectItem>
 								))}
-							</SelectContent>
-						</Select>
+							</EditorialSelectContent>
+						</EditorialSelect>
 					</div>
 				) : null}
 			</div>
 
-			<details className="mt-3 border-t border-border/70 pt-2">
-				<summary className="cursor-pointer text-xs text-muted-foreground">
+			<details className="mt-2">
+				<summary className="cursor-pointer py-1 text-xs text-muted-foreground hover:text-accent-ink">
 					{t.t("advanced_parameters")}
 				</summary>
-				<div className="mt-3 grid gap-3 sm:grid-cols-2">
+				<div className="ms-1 mt-2 grid gap-3 border-s-2 border-accent-ink py-3 ps-4 sm:grid-cols-2">
 					<Field label={t.t("context_window")}>
 						<Input
 							type="number"
@@ -335,7 +339,8 @@ function ModelCard({
 
 function ProviderPanel() {
 	const i18nValue = usePluginI18n();
-	const { plugin, status } = usePluginPanel();
+	const { status } = usePluginPanel();
+	const connectionId = useId();
 	const config = usePluginConfig();
 	const rpc = usePluginRpc();
 	const toast = usePluginToast();
@@ -465,28 +470,33 @@ function ProviderPanel() {
 			) : null}
 
 			<PluginSection title={i18nValue.t("connection_section")}>
-				<div className="grid gap-3 sm:grid-cols-2">
-					<Field label={i18nValue.t("base_url")}>
-						<Input placeholder="https://api.example.com/v1" value={baseUrl} onChange={setBaseUrl} />
-					</Field>
-					<Field
-						hint={
-							config.secretsSet.includes("apiKey")
-								? i18nValue.t("api_key_configured")
-								: i18nValue.t("api_key_hint")
+				<PreferenceRow htmlFor={`${connectionId}-url`} label={i18nValue.t("base_url")}>
+					<Input
+						id={`${connectionId}-url`}
+						placeholder="https://api.example.com/v1"
+						value={baseUrl}
+						onChange={setBaseUrl}
+					/>
+				</PreferenceRow>
+				<PreferenceRow
+					htmlFor={`${connectionId}-key`}
+					hint={
+						config.secretsSet.includes("apiKey")
+							? i18nValue.t("api_key_configured")
+							: i18nValue.t("api_key_hint")
+					}
+					label={i18nValue.t("api_key")}
+				>
+					<Input
+						id={`${connectionId}-key`}
+						type="password"
+						placeholder={
+							config.secretsSet.includes("apiKey") ? i18nValue.t("keep_secret") : "sk-..."
 						}
-						label={i18nValue.t("api_key")}
-					>
-						<Input
-							type="password"
-							placeholder={
-								config.secretsSet.includes("apiKey") ? i18nValue.t("keep_secret") : "sk-..."
-							}
-							value={apiKey}
-							onChange={setApiKey}
-						/>
-					</Field>
-				</div>
+						value={apiKey}
+						onChange={setApiKey}
+					/>
+				</PreferenceRow>
 			</PluginSection>
 
 			<PluginSection
@@ -510,14 +520,16 @@ function ProviderPanel() {
 				<div className="space-y-3">
 					<div className="flex flex-wrap gap-2">
 						<Input
-							className="min-w-52 flex-1"
+							aria-label={i18nValue.t("search_models")}
+							className="min-w-0 flex-1 basis-44"
 							leftIcon={<Search />}
 							placeholder={i18nValue.t("search_models")}
 							value={query}
 							onChange={setQuery}
 						/>
 						<Input
-							className="min-w-52 flex-1"
+							aria-label={i18nValue.t("model_id_placeholder")}
+							className="min-w-0 flex-1 basis-44"
 							placeholder={i18nValue.t("model_id_placeholder")}
 							value={newModelId}
 							onChange={setNewModelId}
@@ -544,9 +556,9 @@ function ProviderPanel() {
 							title={i18nValue.t("no_matching_models")}
 						/>
 					) : (
-						<div className="space-y-2">
+						<div>
 							{filteredModels.map((model) => (
-								<ModelCard
+								<ModelRow
 									key={model.id}
 									isDefault={model.id === defaultModelId}
 									model={model}
@@ -559,15 +571,6 @@ function ProviderPanel() {
 						</div>
 					)}
 					<p className="text-[11px] text-muted-foreground">{i18nValue.t("default_model_hint")}</p>
-				</div>
-			</PluginSection>
-
-			<PluginSection title={plugin.name}>
-				<div className="text-xs text-muted-foreground">
-					{i18nValue.t("plugin_identity", {
-						id: plugin.id,
-						version: plugin.version,
-					})}
 				</div>
 			</PluginSection>
 		</PluginPage>

@@ -16,6 +16,7 @@ import type {
 	ScheduleExecutor,
 	ScheduleSnapshot,
 } from "./schedule-service.ts";
+import { SCHEDULE_OCCURRENCE_REQUEST_PREFIX } from "./schedule-service.ts";
 import { isInQuietHours, nextQuietHoursEndMs } from "./schedule-time.ts";
 import type { SessionMessagingService } from "./session-messaging.ts";
 
@@ -131,7 +132,10 @@ export class ScheduleExecutionService implements ScheduleExecutor {
 			}
 		}
 		const messageId = `schedule:${occurrence.id}`;
-		const requestId = `schedule:${snapshot.scheduleId}:${occurrence.scheduledFor}`;
+		const requestId =
+			snapshot.occurrenceRequest === true
+				? `${SCHEDULE_OCCURRENCE_REQUEST_PREFIX}${occurrence.id}`
+				: `schedule:${snapshot.scheduleId}:${occurrence.scheduledFor}`;
 		if (snapshot.actionKind === "notify") {
 			const result = await this.#notify({ target, snapshot, messageId });
 			await this.#audit?.({
@@ -149,7 +153,16 @@ export class ScheduleExecutionService implements ScheduleExecutor {
 			return result;
 		}
 		const sent = await this.#messaging.sendAgentMessage({
-			context: `[Scheduled task] ${snapshot.title}`,
+			context: [
+				`[Scheduled task] ${snapshot.title}`,
+				`This is a new scheduled execution. Scheduled for ${occurrence.scheduledFor} (schedule time zone: ${snapshot.timeZone}).`,
+				"Carry out the task in the scheduler message for this occurrence. For a fixed reminder, send the reminder anew. Use earlier chat for context, and only use it to skip or defer when the task explicitly makes that a condition.",
+				snapshot.occurrenceRequest === true && snapshot.actionKind === "agent_turn"
+					? "If this task calls for another check, use schedule_continue to arrange one follow-up. If no further check is needed, finish normally."
+					: "",
+			]
+				.filter(Boolean)
+				.join("\n"),
 			deliveryMode: "follow-up",
 			direction: "system",
 			messageId,

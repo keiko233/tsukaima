@@ -1,31 +1,72 @@
-import type { ReactNode } from "react";
+"use client";
 
-export function SystemPageHeader({ description, title }: { description: string; title: string }) {
+import type { ReactNode } from "react";
+import { EditorialPageHeader } from "@tsukaima/ui";
+import { cn } from "@tsukaima/ui/lib/utils";
+
+export function SystemPageHeader({
+	actions,
+	className,
+	description,
+	eyebrow,
+	meta,
+	tabs,
+	title,
+}: {
+	actions?: ReactNode;
+	className?: string;
+	description: string;
+	eyebrow?: ReactNode;
+	meta?: ReactNode;
+	tabs?: ReactNode;
+	title: string;
+}) {
 	return (
-		<header className="mb-4 flex items-start justify-between gap-4">
-			<div>
-				<h1 className="text-[17px] font-semibold tracking-tight">{title}</h1>
-				<p className="mt-0.5 text-[12px] leading-5 text-muted-foreground">{description}</p>
-			</div>
-		</header>
+		<EditorialPageHeader
+			{...(eyebrow === undefined ? {} : { eyebrow })}
+			{...(actions === undefined ? {} : { actions })}
+			{...(tabs === undefined ? {} : { tabs })}
+			className={cn("mb-4", className)}
+			meta={meta ?? <span>{description}</span>}
+			title={title}
+		/>
 	);
 }
 
 export function SystemPage({
+	actions,
 	children,
-	title,
 	description,
+	eyebrow,
 	fill = false,
+	meta,
+	tabs,
+	title,
 }: {
+	actions?: ReactNode;
 	children: ReactNode;
 	description: string;
+	eyebrow?: ReactNode;
 	fill?: boolean;
+	meta?: ReactNode;
+	tabs?: ReactNode;
 	title: string;
 }) {
+	const header = (
+		<SystemPageHeader
+			{...(eyebrow === undefined ? {} : { eyebrow })}
+			{...(meta === undefined ? {} : { meta })}
+			{...(actions === undefined ? {} : { actions })}
+			{...(tabs === undefined ? {} : { tabs })}
+			description={description}
+			title={title}
+		/>
+	);
+
 	if (fill) {
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
-				<SystemPageHeader description={description} title={title} />
+				{header}
 				<div className="flex min-h-0 flex-1 flex-col">{children}</div>
 			</div>
 		);
@@ -33,7 +74,7 @@ export function SystemPage({
 
 	return (
 		<div>
-			<SystemPageHeader description={description} title={title} />
+			{header}
 			{children}
 		</div>
 	);

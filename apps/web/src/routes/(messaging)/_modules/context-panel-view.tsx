@@ -82,21 +82,21 @@ function BreakdownRow({
 	tokens,
 }: BreakdownRowProps) {
 	return (
-		<div className="grid grid-cols-[auto_1fr_auto_2.6rem] items-center gap-2 py-px text-[11.5px] leading-[18px]">
-			<span className={cn("size-2 shrink-0 rounded-[2px]", colorClass)} aria-hidden="true" />
+		<div className="grid grid-cols-[auto_1fr_auto_2.6rem] items-center gap-2 border-b border-border/40 py-1 text-[11px] leading-4 last:border-b-0">
+			<span className={cn("size-2 shrink-0", colorClass)} aria-hidden="true" />
 			<span
 				title={title}
 				className={cn(
-					"min-w-0 truncate text-foreground/90",
+					"min-w-0 truncate text-ink",
 					dotted && "underline decoration-muted-foreground/45 decoration-dotted underline-offset-4",
 				)}
 			>
 				{label}
 			</span>
-			<span className="tabular-nums text-right text-foreground/90">
+			<span className="font-mono tabular-nums text-right text-ink">
 				{formatCompactTokens(tokens)}
 			</span>
-			<span className="tabular-nums text-right text-muted-foreground">{percentText}</span>
+			<span className="font-mono tabular-nums text-right text-muted-foreground">{percentText}</span>
 		</div>
 	);
 }
@@ -116,13 +116,13 @@ function AccordionGroup({ children, count, label, open, onToggle }: AccordionGro
 				type="button"
 				aria-expanded={open}
 				onClick={onToggle}
-				className="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-[11.5px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+				className="flex w-full items-center gap-1.5 border-b border-border/40 py-1.5 text-left text-[11px] text-muted-foreground transition-colors outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-ring"
 			>
 				<ChevronRight
 					className={cn("size-3 shrink-0 transition-transform duration-150", open && "rotate-90")}
 				/>
-				<span className="min-w-0 flex-1 truncate text-foreground/90">{label}</span>
-				<span className="tabular-nums text-muted-foreground">{count}</span>
+				<span className="min-w-0 flex-1 truncate text-ink">{label}</span>
+				<span className="font-mono tabular-nums text-muted-foreground">{count}</span>
 			</button>
 			{open ? <div className="mt-1 space-y-1.5 pl-5 pr-1 pb-2">{children}</div> : null}
 		</div>
@@ -227,8 +227,8 @@ export function ContextPanelContent({
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			{embedded ? null : (
-				<div className="flex h-9 items-center justify-between gap-2 border-b border-border/60 px-3">
-					<h2 className="text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+				<div className="flex h-9 items-center justify-between gap-2 border-b border-border px-3">
+					<h2 className="text-[11px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
 						{m.context_title()}
 					</h2>
 					<div className="flex items-center gap-0.5">
@@ -266,13 +266,13 @@ export function ContextPanelContent({
 				) : (
 					<div>
 						<div className="flex items-center justify-between gap-2">
-							<span className="text-[13px] font-medium tabular-nums text-foreground">
+							<span className="font-serif text-[15px] tabular-nums text-ink">
 								{m.context_used_headline({
 									percent: formatHeadlinePercent(stats.usedPercent, stats.contextWindow),
 								})}
 							</span>
 							<div className="flex items-center gap-1">
-								<span className="text-[11px] tabular-nums text-muted-foreground">
+								<span className="font-mono text-[11px] tabular-nums text-muted-foreground">
 									{formatCompactTokens(stats.usedTokens)} /{" "}
 									{stats.contextWindow > 0 ? formatCompactTokens(stats.contextWindow) : "—"}
 								</span>
@@ -281,7 +281,7 @@ export function ContextPanelContent({
 						</div>
 
 						<div
-							className="mt-1.5 flex h-1 w-full overflow-hidden rounded-full bg-chart-free"
+							className="mt-2 flex h-1.5 w-full overflow-hidden bg-chart-free"
 							role="progressbar"
 							aria-valuenow={Math.round(stats.usedPercent)}
 							aria-valuemin={0}
@@ -292,14 +292,17 @@ export function ContextPanelContent({
 								return (
 									<div
 										key={segment.key}
-										className={cn("h-full min-w-[2px] shrink-0", segment.colorClass)}
+										className={cn(
+											"h-full min-w-[2px] shrink-0 border-e border-background/60 last:border-e-0",
+											segment.colorClass,
+										)}
 										style={{ width: `${widthPercent}%` }}
 									/>
 								);
 							})}
 						</div>
 
-						<div className="mt-2.5 space-y-0.5">
+						<div className="mt-3 border-t border-border/60">
 							<BreakdownRow
 								colorClass="bg-chart-messages"
 								label={m.context_category_messages()}
@@ -374,7 +377,7 @@ export function ContextPanelContent({
 							) : null}
 						</div>
 
-						<div className="mt-2.5 space-y-0.5">
+						<div className="border-t border-border/60">
 							{stats.autocompact.enabled || stats.autocompact.bufferTokens > 0 ? (
 								<BreakdownRow
 									colorClass="bg-chart-buffer"
@@ -387,7 +390,7 @@ export function ContextPanelContent({
 								/>
 							) : null}
 							{stats.autocompact.enabled && stats.contextWindow > 0 ? (
-								<p className="pl-4 pr-1 text-[10.5px] leading-4 text-muted-foreground">
+								<p className="py-1 pl-4 text-[11px] leading-4 text-muted-foreground">
 									{m.context_autocompact_threshold({
 										tokens: formatCompactTokens(
 											Math.max(0, stats.contextWindow - stats.autocompact.bufferTokens),
@@ -411,7 +414,7 @@ export function ContextPanelContent({
 							) : null}
 						</div>
 
-						<div className="mt-2.5 space-y-0.5 border-t border-border/60 pt-1.5">
+						<div className="mt-3 border-t border-border/60">
 							<AccordionGroup
 								count={stats.memories.items.length}
 								label={m.context_group_memories()}
@@ -436,17 +439,16 @@ export function ContextPanelContent({
 										{stats.memories.items.map((item, index) => (
 											<div
 												key={item.id ?? `${item.tier}-${index}`}
-												className="rounded-md border border-border/50 bg-background/60 px-2 py-1.5 text-[11px]"
+												className="border-s-2 border-border py-0.5 ps-2 text-[11px]"
 											>
-												<div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-													<span className="rounded bg-muted px-1.5 py-0.5 font-medium text-foreground/80">
-														{memoryTierLabel(item.tier)}
-													</span>
+												<div className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+													<span className="font-medium text-ink">{memoryTierLabel(item.tier)}</span>
+													<span aria-hidden="true">·</span>
 													<span className="truncate">
 														{item.scope}/{item.kind}
 													</span>
 												</div>
-												<p className="mt-1 line-clamp-2 text-foreground/90">{item.summary}</p>
+												<p className="mt-0.5 line-clamp-2 text-ink">{item.summary}</p>
 											</div>
 										))}
 									</>
@@ -469,16 +471,14 @@ export function ContextPanelContent({
 											className="flex items-center justify-between gap-2 text-[11px]"
 										>
 											<span className="flex min-w-0 items-center gap-1.5">
-												<span className="truncate font-mono text-[10.5px] text-foreground/90">
-													{tool.name}
-												</span>
+												<span className="truncate font-mono text-[11px] text-ink">{tool.name}</span>
 												{tool.deferred ? (
-													<span className="shrink-0 rounded bg-muted px-1 py-0.2 text-[9.5px] text-muted-foreground">
-														{m.context_tool_deferred_badge()}
+													<span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+														· {m.context_tool_deferred_badge()}
 													</span>
 												) : null}
 											</span>
-											<span className="shrink-0 tabular-nums text-muted-foreground">
+											<span className="shrink-0 font-mono tabular-nums text-muted-foreground">
 												{formatCompactTokens(tool.tokens)}
 											</span>
 										</div>
@@ -495,15 +495,15 @@ export function ContextPanelContent({
 								{stats.sections.map((section) => (
 									<div key={section.key} className="space-y-1 text-[11px]">
 										<div className="flex items-center justify-between gap-2">
-											<span className="truncate text-foreground/90">
+											<span className="truncate text-ink">
 												{localizedSectionLabel(section.key, section.label)}
 											</span>
-											<span className="shrink-0 tabular-nums text-muted-foreground">
+											<span className="shrink-0 font-mono tabular-nums text-muted-foreground">
 												{formatCompactTokens(section.tokens)}
 											</span>
 										</div>
 										{section.text && (
-											<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border p-2">
+											<pre className="max-h-64 overflow-auto rounded-sm border border-line bg-muted/50 p-2 font-mono text-[11px] break-words whitespace-pre-wrap">
 												{section.text}
 											</pre>
 										)}
@@ -512,9 +512,9 @@ export function ContextPanelContent({
 							</AccordionGroup>
 						</div>
 
-						<div className="mt-3 space-y-1 border-t border-border/60 pt-2 text-[10.5px] text-muted-foreground">
+						<div className="mt-3 space-y-1 border-t border-border/60 pt-2 text-[11px] text-muted-foreground">
 							<div
-								className="truncate font-mono text-[10.5px]"
+								className="truncate font-mono text-[11px]"
 								title={`${stats.model.providerId}/${stats.model.modelId}`}
 							>
 								{stats.model.providerId}/{stats.model.modelId}
@@ -530,7 +530,7 @@ export function ContextPanelContent({
 								{stats.compacted ? (
 									<>
 										<span aria-hidden="true">·</span>
-										<span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-foreground/80">
+										<span className="font-mono text-[11px] text-accent-ink">
 											{m.context_compacted_badge()}
 										</span>
 									</>

@@ -212,7 +212,7 @@ export function AdminShell({ children }: { readonly children?: ReactNode }) {
 									onPointerUp={endResize}
 									onPointerCancel={endResize}
 									onKeyDown={resizeByKeyboard}
-									className="absolute inset-y-0 -right-[3px] z-20 w-[5px] cursor-col-resize touch-none outline-none hover:bg-primary/25 focus-visible:bg-primary/30"
+									className="absolute inset-y-0 -right-[3px] z-20 w-[5px] cursor-col-resize touch-none outline-none hover:bg-[var(--accent-ink)]/25 focus-visible:bg-[var(--accent-ink)]/35"
 								/>
 							) : null}
 						</aside>

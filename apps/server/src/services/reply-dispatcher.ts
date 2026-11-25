@@ -716,12 +716,30 @@ export class ReplyDispatcher {
 		) {
 			return { deliveryStatus: "skipped", reason: "rate_limited" };
 		}
-		const narrationText = this.#sanitizeOutboundText(
+		let narrationText = this.#sanitizeOutboundText(
 			narration.text,
 			policy,
 			narration.conversationId,
 			narration.narrationId,
 		);
+		if (narration.kind === "stream-line") {
+			const turnToolSends = this.#shownText(narration.conversationId).sentTexts;
+			if (turnToolSends.length > 0) {
+				const deduped = suppressDuplicateTextParts(
+					[{ text: narrationText, type: "text" }],
+					turnToolSends,
+				);
+				const remaining = deduped
+					.filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
+					.map((part) => part.text)
+					.join("\n")
+					.trim();
+				if (remaining.length === 0) {
+					return { deliveryStatus: "skipped", reason: "already_sent_via_tool" };
+				}
+				narrationText = remaining;
+			}
+		}
 		const transformed = await this.#transformReply({
 			channelId: session.channelId,
 			chatKind: session.chatKind,

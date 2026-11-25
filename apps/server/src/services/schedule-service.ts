@@ -32,10 +32,40 @@ import {
 type ScheduleRow = typeof schedules.$inferSelect;
 type OccurrenceRow = typeof scheduleOccurrences.$inferSelect;
 
+export const SCHEDULE_OCCURRENCE_REQUEST_PREFIX = "schedule-occurrence:";
+const CONTINUATION_KEY_PREFIX = "schedule-continuation:";
+export const ADMIN_CHAT_SCHEDULE_SOURCE = "admin-chat-tool";
+
+export type SchedulePrincipal =
+	| { readonly kind: "im"; readonly id: string }
+	| { readonly kind: "webui"; readonly id: "webui-admin" };
+
+export interface ScheduledTurn {
+	readonly occurrenceId: string;
+	readonly scheduleId: string;
+	readonly principal?: SchedulePrincipal;
+	readonly respectQuietHours: boolean;
+	readonly timeZone: string;
+	readonly title: string;
+}
+
+function schedulePrincipal(row: ScheduleRow): SchedulePrincipal | undefined {
+	if (row.ownerKind !== "user") return undefined;
+	if (
+		row.ownerId === "webui-admin" &&
+		(row.source === "webui" || row.source === "webui-continuation")
+	) {
+		return { id: "webui-admin", kind: "webui" };
+	}
+	if (row.source === ADMIN_CHAT_SCHEDULE_SOURCE) return { id: row.ownerId, kind: "im" };
+	return undefined;
+}
+
 export interface ScheduleSnapshot {
 	readonly actionKind: ScheduleRow["actionKind"];
 	readonly chatObjectId: string | null;
 	readonly flexWindowMs: number | null;
+	readonly occurrenceRequest?: true;
 	readonly prompt: string;
 	readonly recurrenceKind: ScheduleRecurrence["kind"];
 	readonly respectQuietHours: boolean;
@@ -259,6 +289,7 @@ function snapshotFrom(row: ScheduleRow): ScheduleSnapshot {
 		actionKind: row.actionKind,
 		chatObjectId: row.targetChatObjectId,
 		flexWindowMs: decoded.flexWindowMs,
+		occurrenceRequest: true,
 		prompt: row.prompt,
 		recurrenceKind: decoded.recurrence?.kind ?? row.recurrenceKind,
 		respectQuietHours: row.respectQuietHours,
@@ -399,7 +430,82 @@ export class ScheduleService {
 		return { expired: expiredRows.length, repaired };
 	}
 
+	async scheduledTurn(sessionId: string, requestId: string): Promise<ScheduledTurn | undefined> {
+		if (!requestId.startsWith(SCHEDULE_OCCURRENCE_REQUEST_PREFIX)) return undefined;
+		const occurrenceId = requestId.slice(SCHEDULE_OCCURRENCE_REQUEST_PREFIX.length);
+		const [match] = await this.#db()
+			.select({ occurrence: scheduleOccurrences, schedule: schedules })
+			.from(scheduleOccurrences)
+			.innerJoin(schedules, eq(scheduleOccurrences.scheduleId, schedules.id))
+			.where(
+				and(eq(scheduleOccurrences.id, occurrenceId), eq(schedules.targetSessionId, sessionId)),
+			);
+		if (match === undefined) return undefined;
+		const snapshot = parseJson<Partial<ScheduleSnapshot>>(match.occurrence.snapshotJson, {});
+		if (
+			snapshot.occurrenceRequest !== true ||
+			snapshot.sessionId !== sessionId ||
+			snapshot.actionKind !== "agent_turn" ||
+			match.occurrence.startedAtMs === null
+		)
+			return undefined;
+		const principal =
+			match.schedule.status === "active" || match.schedule.status === "completed"
+				? schedulePrincipal(match.schedule)
+				: undefined;
+		return {
+			occurrenceId,
+			...(principal === undefined ? {} : { principal }),
+			respectQuietHours: snapshot.respectQuietHours ?? true,
+			scheduleId: match.schedule.id,
+			timeZone: snapshot.timeZone ?? "UTC",
+			title: snapshot.title ?? "Scheduled follow-up",
+		};
+	}
+
+	async continueTurn(input: {
+		readonly atMs: number;
+		readonly prompt: string;
+		readonly principal?: SchedulePrincipal;
+		readonly sessionId: string;
+		readonly turn: ScheduledTurn;
+	}): Promise<ScheduleDetail> {
+		const { atMs, prompt, sessionId, turn } = input;
+		const principal =
+			input.principal?.id === turn.principal?.id && input.principal?.kind === turn.principal?.kind
+				? turn.principal
+				: undefined;
+		return await this.#create(
+			{
+				actionKind: "agent_turn",
+				dedupeKey: `${CONTINUATION_KEY_PREFIX}${turn.occurrenceId}`,
+				ownerId: principal?.id ?? "agent",
+				ownerKind: principal === undefined ? "agent" : "user",
+				prompt,
+				recurrence: { at: new Date(atMs).toISOString(), kind: "once" },
+				respectQuietHours: turn.respectQuietHours,
+				source:
+					principal?.kind === "webui"
+						? "webui-continuation"
+						: principal?.kind === "im"
+							? ADMIN_CHAT_SCHEDULE_SOURCE
+							: "chat-tool",
+				targetSessionId: sessionId,
+				timeZone: turn.timeZone,
+				title: turn.title,
+			},
+			turn,
+		);
+	}
+
 	async create(input: CreateScheduleInput): Promise<ScheduleDetail> {
+		if (input.dedupeKey?.startsWith(CONTINUATION_KEY_PREFIX) === true) {
+			throw new Error("Reserved schedule dedupe key");
+		}
+		return await this.#create(input);
+	}
+
+	async #create(input: CreateScheduleInput, continuation?: ScheduledTurn): Promise<ScheduleDetail> {
 		const database = this.#db();
 		const now = this.#now();
 		if (!isValidTimeZone(input.timeZone)) throw new Error(`Invalid time zone: ${input.timeZone}`);
@@ -433,60 +539,113 @@ export class ScheduleService {
 		const flexWindowMs = input.flexWindowMs ?? null;
 		const graceMs = input.graceMs ?? (flexWindowMs !== null ? flexWindowMs : defaults.graceMs);
 		const maxAttempts = input.maxAttempts ?? 3;
-		const next = nextOccurrence({
-			afterMs: now - 1,
-			recurrence,
-			timeZone: input.timeZone,
-		});
-		if (next === undefined) throw new Error("Schedule has no future occurrence");
-		if (input.dedupeKey !== undefined) {
+		const existingSchedule = async (dedupeKey: string) => {
 			const [existing] = await database
-				.select({ id: schedules.id })
+				.select({
+					id: schedules.id,
+					ownerId: schedules.ownerId,
+					ownerKind: schedules.ownerKind,
+					sessionId: schedules.targetSessionId,
+					source: schedules.source,
+				})
 				.from(schedules)
-				.where(eq(schedules.dedupeKey, input.dedupeKey))
+				.where(eq(schedules.dedupeKey, dedupeKey))
 				.limit(1);
-			if (existing !== undefined) {
-				const detail = await this.get(existing.id);
-				if (detail !== null) return detail;
+			if (existing === undefined) return null;
+			if (
+				existing.sessionId !== input.targetSessionId ||
+				(continuation === undefined &&
+					(existing.ownerId !== input.ownerId ||
+						existing.ownerKind !== input.ownerKind ||
+						existing.source !== input.source))
+			) {
+				throw new Error("Schedule dedupe key is already in use");
 			}
+			return await this.get(existing.id);
+		};
+		if (input.dedupeKey !== undefined) {
+			const existing = await existingSchedule(input.dedupeKey);
+			if (existing !== null) return existing;
 		}
+		const next = nextOccurrence({ afterMs: now - 1, recurrence, timeZone: input.timeZone });
+		if (next === undefined) throw new Error("Schedule has no future occurrence");
 		const id = randomUUID();
-		await database.insert(schedules).values({
-			actionKind: input.actionKind,
-			catchUp,
-			createdAtMs: now,
-			dedupeKey: input.dedupeKey ?? null,
-			graceMs,
-			id,
-			maxAttempts,
-			maxRuns: input.maxRuns ?? null,
-			nextRunAtMs: next,
-			ownerId: input.ownerId,
-			ownerKind: input.ownerKind,
-			ownerPluginId: input.ownerPluginId ?? null,
-			prompt: input.prompt,
-			recurrenceJson: encodeRecurrenceJson(recurrence, {
-				cancelIfReplied: input.cancelIfReplied === true,
-				flexWindowMs,
-			}),
-			recurrenceKind: recurrence.kind,
-			respectQuietHours: input.respectQuietHours ?? false,
-			revision: 1,
-			runCount: 0,
-			source: input.source,
-			status: "active",
-			targetChatObjectId: target.chat.id,
-			targetSessionId: target.session.id,
-			timeZone: input.timeZone,
-			title: input.title,
-			updatedAtMs: now,
-		});
+		const insert = (db: Pick<TsukaimaDatabase, "insert">) =>
+			db
+				.insert(schedules)
+				.values({
+					actionKind: input.actionKind,
+					catchUp,
+					createdAtMs: now,
+					dedupeKey: input.dedupeKey ?? null,
+					graceMs,
+					id,
+					maxAttempts,
+					maxRuns: input.maxRuns ?? null,
+					nextRunAtMs: next,
+					ownerId: input.ownerId,
+					ownerKind: input.ownerKind,
+					ownerPluginId: input.ownerPluginId ?? null,
+					prompt: input.prompt,
+					recurrenceJson: encodeRecurrenceJson(recurrence, {
+						cancelIfReplied: input.cancelIfReplied === true,
+						flexWindowMs,
+					}),
+					recurrenceKind: recurrence.kind,
+					respectQuietHours: input.respectQuietHours ?? false,
+					revision: 1,
+					runCount: 0,
+					source: input.source,
+					status: "active",
+					targetChatObjectId: target.chat.id,
+					targetSessionId: target.session.id,
+					timeZone: input.timeZone,
+					title: input.title,
+					updatedAtMs: now,
+				})
+				.onConflictDoNothing()
+				.returning({ id: schedules.id })
+				.get();
+		const inserted =
+			continuation === undefined
+				? insert(database)
+				: database.transaction(
+						(tx) => {
+							const parent = tx
+								.select({ status: schedules.status })
+								.from(schedules)
+								.where(
+									and(
+										eq(schedules.id, continuation.scheduleId),
+										eq(schedules.targetSessionId, input.targetSessionId),
+									),
+								)
+								.get();
+							if (parent?.status !== "active" && parent?.status !== "completed") {
+								throw new Error("Parent schedule is no longer active");
+							}
+							return insert(tx);
+						},
+						{ behavior: "immediate" },
+					);
+		if (inserted === undefined) {
+			const existing =
+				input.dedupeKey === undefined ? null : await existingSchedule(input.dedupeKey);
+			if (existing !== null) return existing;
+			throw new Error("Schedule was not persisted");
+		}
 		await this.#recordAudit({
 			action: "schedule.create",
 			actorId: input.ownerId,
 			actorKind: input.ownerKind === "plugin" ? "plugin" : input.ownerKind,
 			payload: {
 				actionKind: input.actionKind,
+				...(continuation === undefined
+					? {}
+					: {
+							parentOccurrenceId: continuation.occurrenceId,
+							parentScheduleId: continuation.scheduleId,
+						}),
 				recurrenceKind: recurrence.kind,
 				sessionId: target.session.id,
 			},
@@ -971,15 +1130,30 @@ export class ScheduleService {
 				)
 				.returning();
 			if (claimed === undefined) continue;
-			await database
-				.update(scheduleOccurrences)
-				.set({ startedAtMs: now, status: "running", updatedAtMs: now })
-				.where(eq(scheduleOccurrences.id, claimed.id));
 			const rawSnapshot = parseJson<Partial<ScheduleSnapshot>>(claimed.snapshotJson, {});
+			// A legacy occurrence that has never started has no old submission key to preserve.
+			const occurrenceRequest =
+				rawSnapshot.occurrenceRequest === true || claimed.startedAtMs === null;
+			const [running] = await database
+				.update(scheduleOccurrences)
+				.set({
+					...(occurrenceRequest && rawSnapshot.occurrenceRequest !== true
+						? { snapshotJson: JSON.stringify({ ...rawSnapshot, occurrenceRequest: true }) }
+						: {}),
+					startedAtMs: now,
+					status: "running",
+					updatedAtMs: now,
+				})
+				.where(
+					and(eq(scheduleOccurrences.id, claimed.id), eq(scheduleOccurrences.status, "claimed")),
+				)
+				.returning();
+			if (running === undefined) continue;
 			const snapshot: ScheduleSnapshot = {
 				actionKind: rawSnapshot.actionKind ?? "agent_turn",
 				chatObjectId: rawSnapshot.chatObjectId ?? null,
 				flexWindowMs: rawSnapshot.flexWindowMs ?? null,
+				...(occurrenceRequest ? { occurrenceRequest: true } : {}),
 				prompt: rawSnapshot.prompt ?? "",
 				recurrenceKind: rawSnapshot.recurrenceKind ?? "once",
 				respectQuietHours: rawSnapshot.respectQuietHours ?? false,
@@ -991,7 +1165,7 @@ export class ScheduleService {
 			};
 			try {
 				const result = await this.#executor.execute({
-					occurrence: occurrenceFrom({ ...claimed, status: "running", startedAtMs: now }),
+					occurrence: occurrenceFrom(running),
 					snapshot,
 				});
 				await this.#settleResult(claimed, result);

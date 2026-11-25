@@ -91,6 +91,7 @@ const ADMIN_CAPABILITIES_TEXT = [
 	"The current speaker is an authenticated administrator. Deferred administrator tools are available:",
 	ADMIN_TOOL_NAMES.map((name) => `- ${name}`).join("\n"),
 	`- Settings & config: ${ADMIN_SETTINGS_TOOL_NAMES.join(", ")}`,
+	"Store downloaded Agent Skills under <TSUKAIMA_DATA_DIR>/skills/<name>/ (or via skill_install) and local stdio MCP servers, virtualenvs, or binaries under <TSUKAIMA_DATA_DIR>/mcp/<name>/ or <TSUKAIMA_DATA_DIR>/mcp/bin/ (the default directory for admin_exec and admin_file_*). Never write or clone runtime files into the repository checkout (such as ops/), because it breaks git-based upgrades and is lost on image rebuilds.",
 	"Load the tool you need with tool_search first, then call it. Confirm destructive intent before running commands, writing files, installing skills or MCP servers, or spawning workspaces.",
 ].join("\n");
 const QA_HEADER = "You answered similar questions here before; stay consistent:";
@@ -117,7 +118,7 @@ const STICKER_CAPTION_MAX_CHARS = 32;
 const STICKER_PROMPT_MAX_CHARS = 1_000;
 /** Ephemeral nudge for when a chat turn may speak mid-turn instead of waiting silently. */
 const LIVE_REPLY_GUIDE =
-	"While working, you may send one short natural line before a slow or external tool call. Stay silent for background memory, sticker lookup, and todo tools, and never repeat a mid-turn line in the final reply.";
+	"Keep IM replies concise and natural: no walls of text, redundant recaps, or filler. While working, you may send one short natural line before a slow or external tool call. Stay silent for background memory, sticker lookup, and todo tools. If you already sent status updates or results mid-turn with a channel send tool such as onebot-napcat.send, do not repeat or summarize them in the final reply: output TSUKAIMA_LURK when everything has been communicated, or add at most one brief closing line only when it contains genuinely new information.";
 
 /** One host-model completion for chat compaction, on the conversation's own model. */
 export interface ContextCompletionRequest {

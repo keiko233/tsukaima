@@ -3,6 +3,7 @@
 import { ChevronLeft, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "@tsukaima/ui/components/motion/button";
+import { EditorialGroup } from "@tsukaima/ui";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { useShellNavigation } from "../shell/admin-shell";
@@ -18,12 +19,10 @@ export function DirectoryEmptyState({
 }) {
 	return (
 		<div className="grid h-full place-items-center px-6">
-			<div className="flex max-w-xs flex-col items-center text-center">
-				<span className="grid size-10 place-items-center rounded-xl bg-muted text-muted-foreground">
-					<Icon className="size-5" />
-				</span>
-				<h1 className="mt-3 text-[14px] font-semibold tracking-tight">{title}</h1>
-				<p className="mt-1 text-[11.5px] leading-5 text-muted-foreground">{description}</p>
+			<div className="flex max-w-xs flex-col items-center border-t border-border pt-6 text-center">
+				<Icon className="size-5 text-faint" aria-hidden="true" />
+				<h1 className="mt-3 font-serif text-xl text-ink">{title}</h1>
+				<p className="mt-1 text-[12px] leading-5 text-muted-foreground">{description}</p>
 			</div>
 		</div>
 	);
@@ -53,22 +52,24 @@ export function DirectoryDetailPage({
 						size="sm"
 						onClick={showSidebar}
 						leadingIcon={<ChevronLeft />}
-						className="mb-2 -ml-1 h-7 rounded-md px-1.5 text-[11px]"
+						className="mb-2 -ml-1 h-7 px-1.5 text-[11px]"
 					>
 						{m.back()}
 					</Button>
 				) : null}
-				<header className="mb-4 flex min-w-0 items-center gap-3">
+				<header className="flex min-w-0 items-start gap-3 border-b border-border pb-4">
 					{leading}
 					<div className="min-w-0 flex-1">
-						<h1 className="truncate text-[17px] font-semibold tracking-tight">{title}</h1>
+						<h1 className="truncate font-serif text-2xl text-ink">{title}</h1>
 						{subtitle ? (
-							<p className="truncate text-[11.5px] text-muted-foreground">{subtitle}</p>
+							<p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+								{subtitle}
+							</p>
 						) : null}
 					</div>
 					{trailing}
 				</header>
-				<div className="space-y-3">{children}</div>
+				<div className="space-y-4 pt-4">{children}</div>
 			</div>
 		</div>
 	);
@@ -84,20 +85,29 @@ export function DetailSection({
 	title: string;
 }) {
 	return (
-		<section className={cn("rounded-xl border border-border bg-card/40", className)}>
-			<h2 className="border-b border-border px-3.5 py-2 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
-				{title}
-			</h2>
-			<div className="p-3.5">{children}</div>
-		</section>
+		<EditorialGroup title={title} {...(className === undefined ? {} : { className })}>
+			{children}
+		</EditorialGroup>
 	);
 }
 
-export function DetailField({ label, value }: { label: string; value: string }) {
+export function DetailField({
+	label,
+	mono = false,
+	value,
+}: {
+	label: string;
+	mono?: boolean;
+	value: string;
+}) {
 	return (
-		<div className="flex items-start justify-between gap-4 py-1 text-xs">
+		<div className="flex items-start justify-between gap-4 border-b border-border/60 py-1.5 text-xs last:border-b-0">
 			<span className="shrink-0 text-muted-foreground">{label}</span>
-			<span className="min-w-0 text-right text-foreground">{value}</span>
+			<span
+				className={cn("min-w-0 break-all text-right text-ink", mono && "font-mono text-[11px]")}
+			>
+				{value}
+			</span>
 		</div>
 	);
 }
