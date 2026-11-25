@@ -26,7 +26,7 @@ entrypoint.
 | --- | --- |
 | Bun latest | Runtime for the server, plugins, and tools; the image uses `oven/bun:latest`. |
 | Single writer process | Only one server may open `domain.sqlite` and `durable.sqlite` for writes. |
-| Writable data directory | `TSUKAIMA_DATA_DIR` holds both databases, `blobs/`, plugin worktrees, and drill output. |
+| Writable data directory | `TSUKAIMA_DATA_DIR` holds both databases, `blobs/`, `skills/`, `mcp/` (`mcp/bin/` and per-server dirs), plugin DBs, worktrees, and drill output. |
 | Reverse proxy (recommended) | Terminate TLS, forward `/api`, `/rpc`, `/events`, and the WebUI. List it in `TSUKAIMA_TRUSTED_PROXIES`. |
 | NapCat instance | OneBot v11 WebSocket server; see [NapCat setup](#3-napcat-websocket-setup). |
 | Chromium (E2E only) | `bunx playwright install chromium` for `bun run test:e2e`. |

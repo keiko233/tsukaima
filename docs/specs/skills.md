@@ -23,7 +23,7 @@ per-conversation enable/disable in v1.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `paths` | string array | `[]` | Skill roots. `TSUKAIMA_SKILLS_PATHS` is the environment fallback; it accepts the platform path delimiter and newlines. |
+| `paths` | string array | `[]` | Skill roots. Defaults to `<TSUKAIMA_DATA_DIR>/skills` when empty; `TSUKAIMA_SKILLS_PATHS` is the environment fallback and accepts the platform path delimiter and newlines. |
 | `disabled` | string array | `[]` | Skill names that stay in the catalog but are not offered to models. |
 | `scope` | `"admin" \| "everyone"` | `"admin"` | Default access scope for skills without a per-skill override. |
 | `everyoneSkills` | string array | `[]` | Skill names usable by everyone even when the default scope is `"admin"`. |

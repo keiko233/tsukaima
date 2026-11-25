@@ -101,7 +101,7 @@ The bootstrap creates or configures:
 | Path or setting | Purpose |
 | --- | --- |
 | `<deployment-root>/repo` | Repository checkout on the configured branch |
-| `<deployment-root>/data` | Container data mount, owned by uid/gid 1000 |
+| `<deployment-root>/data` | Container data mount (`/data`), owned by uid/gid 1000; holds databases, `blobs/`, `skills/`, `mcp/`, `gh/`, `logs/`, `plugins/`, and `worktrees/` |
 | `<deployment-root>/secrets/runtime.env` | Auth secret and initial administrator, mode 0600 |
 | `<deployment-root>/secrets/initial-admin-password.txt` | Generated first password, mode 0600 |
 | `<deployment-root>/backups` | Pre-deploy data archives, three retained |
@@ -247,6 +247,12 @@ Promote a proposal by applying it to the deployment branch, bumping `VERSION`, c
 running `bun run ops:deploy`. The host build remains the only path that replaces the running image.
 The container's `.git` is replaced with each image, so durable work belongs in the proposal record
 or a commit, not in a container worktree.
+
+Likewise, downloaded Agent Skills and locally executed stdio MCP servers belong on the persistent
+`/data` volume—`<data>/skills/<name>/` for skills, `<data>/mcp/<name>/` for cloned MCP server
+checkouts/virtualenvs/configs, and `<data>/mcp/bin/` for standalone MCP binaries—never inside `/app`
+(for example `ops/`). Keeping them under `/data` preserves them across image rebuilds and keeps
+the live Git checkout clean for Settings → Upgrades.
 
 ## 8. Upstream upgrades from Settings
 

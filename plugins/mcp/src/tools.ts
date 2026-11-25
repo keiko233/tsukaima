@@ -188,7 +188,7 @@ export function createMcpTools(
 		}),
 		tool({
 			description:
-				"Install an MCP server. Provide the same fields as the MCP settings form; scope defaults to admin (or set everyone); secret env/header values are stored masked.",
+				"Install an MCP server. Provide the same fields as the MCP settings form; scope defaults to admin (or set everyone); secret env/header values are stored masked. For local stdio servers that fetch repositories, virtualenvs, or binaries, store those files under <TSUKAIMA_DATA_DIR>/mcp/<name>/ or <TSUKAIMA_DATA_DIR>/mcp/bin/ (never inside the repository checkout such as ops/).",
 			modelName: MCP_INSTALL_SERVER_MODEL_NAME,
 			mutates: true,
 			name: MCP_INSTALL_SERVER_TOOL,

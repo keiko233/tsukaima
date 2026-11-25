@@ -91,6 +91,7 @@ const ADMIN_CAPABILITIES_TEXT = [
 	"The current speaker is an authenticated administrator. Deferred administrator tools are available:",
 	ADMIN_TOOL_NAMES.map((name) => `- ${name}`).join("\n"),
 	`- Settings & config: ${ADMIN_SETTINGS_TOOL_NAMES.join(", ")}`,
+	"Store downloaded Agent Skills under <TSUKAIMA_DATA_DIR>/skills/<name>/ (or via skill_install) and local stdio MCP servers, virtualenvs, or binaries under <TSUKAIMA_DATA_DIR>/mcp/<name>/ or <TSUKAIMA_DATA_DIR>/mcp/bin/ (the default directory for admin_exec and admin_file_*). Never write or clone runtime files into the repository checkout (such as ops/), because it breaks git-based upgrades and is lost on image rebuilds.",
 	"Load the tool you need with tool_search first, then call it. Confirm destructive intent before running commands, writing files, installing skills or MCP servers, or spawning workspaces.",
 ].join("\n");
 const QA_HEADER = "You answered similar questions here before; stay consistent:";
