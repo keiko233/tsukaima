@@ -63,6 +63,12 @@ export interface OpenSegmentInput {
 	readonly seq?: number | undefined;
 }
 
+export interface CloseSegmentForOutboundInput {
+	readonly conversationId: string;
+	readonly currentRounds?: readonly RunRound[] | undefined;
+	readonly finalMessageId: string;
+}
+
 export interface SplitSegmentForSteerInput {
 	readonly conversationId: string;
 	readonly currentRounds?: readonly RunRound[] | undefined;
@@ -284,14 +290,20 @@ export class ConversationRunService {
 		return { anchor: toAnchor(segment), run, segment };
 	}
 
-	async #latestInboundMessageId(conversationId: string): Promise<string | null> {
+	async #latestInboundMessage(
+		conversationId: string,
+	): Promise<{ readonly id: string; readonly seq: number } | undefined> {
 		const [row] = await this.#db()
-			.select({ id: messages.id })
+			.select({ id: messages.id, seq: messages.seq })
 			.from(messages)
 			.where(and(eq(messages.conversationId, conversationId), eq(messages.direction, "inbound")))
 			.orderBy(desc(messages.seq), desc(messages.occurredAt), desc(messages.id))
 			.limit(1);
-		return row?.id ?? null;
+		return row;
+	}
+
+	async #latestInboundMessageId(conversationId: string): Promise<string | null> {
+		return (await this.#latestInboundMessage(conversationId))?.id ?? null;
 	}
 
 	async activeRun(conversationId: string): Promise<RunRow | undefined> {
@@ -445,14 +457,16 @@ export class ConversationRunService {
 		const segment = await this.getLatestSegmentForRun(run.id, "running");
 		if (segment === undefined) return undefined;
 		const endedAt = this.#iso();
+		const nextRounds =
+			input.currentRounds === undefined || input.currentRounds.length === 0
+				? undefined
+				: input.currentRounds;
 		await database
 			.update(conversationRunSegments)
 			.set({
 				durationMs: durationMs(segment.startedAt, endedAt),
 				endedAt,
-				...(input.currentRounds === undefined
-					? {}
-					: { roundsJson: JSON.stringify(input.currentRounds) }),
+				...(nextRounds === undefined ? {} : { roundsJson: JSON.stringify(nextRounds) }),
 				status: "steered",
 				updatedAt: endedAt,
 			})
@@ -499,6 +513,54 @@ export class ConversationRunService {
 			.limit(1);
 		if (segment === undefined) throw new Error("Failed to open run segment");
 		return toAnchor(segment);
+	}
+
+	/**
+	 * Close the running segment at a mid-turn outbound message and open its continuation.
+	 *
+	 * The message row anchors the closed segment, so the transcript renders the work that led
+	 * to it. The continuation starts after that message and owns everything that follows.
+	 */
+	async splitSegmentForOutbound(input: CloseSegmentForOutboundInput): Promise<
+		| {
+				readonly closedSegment: RunSegmentSummary;
+				readonly segment: ConversationRunAnchor;
+		  }
+		| undefined
+	> {
+		const database = this.#db();
+		const run = await this.activeRun(input.conversationId);
+		if (run === undefined) return undefined;
+		const segment = await this.getLatestSegmentForRun(run.id, "running");
+		if (segment === undefined) return undefined;
+		const currentRounds =
+			input.currentRounds === undefined || input.currentRounds.length === 0
+				? undefined
+				: input.currentRounds;
+		const endedAt = this.#iso();
+		await database
+			.update(conversationRunSegments)
+			.set({
+				durationMs: durationMs(segment.startedAt, endedAt),
+				endedAt,
+				finalMessageId: input.finalMessageId,
+				...(currentRounds === undefined ? {} : { roundsJson: JSON.stringify(currentRounds) }),
+				status: "completed",
+				updatedAt: endedAt,
+			})
+			.where(eq(conversationRunSegments.id, segment.id));
+		const [closed] = await database
+			.select()
+			.from(conversationRunSegments)
+			.where(eq(conversationRunSegments.id, segment.id))
+			.limit(1);
+		if (closed === undefined) return undefined;
+		const next = await this.openSegment({
+			conversationId: input.conversationId,
+			runId: run.id,
+			triggerKind: "initial",
+		});
+		return { closedSegment: toSegmentSummary(closed), segment: next };
 	}
 
 	/**
@@ -566,8 +628,9 @@ export class ConversationRunService {
 			(await this.getLatestSegmentForRun(run.id));
 		if (segment === undefined) return undefined;
 		const endedAt = this.#iso();
-		const roundsJson =
-			currentRounds === undefined ? segment.roundsJson : JSON.stringify(currentRounds);
+		const nextRounds =
+			currentRounds === undefined || currentRounds.length === 0 ? undefined : currentRounds;
+		const roundsJson = nextRounds === undefined ? segment.roundsJson : JSON.stringify(nextRounds);
 		await database
 			.update(conversationRunSegments)
 			.set({
@@ -600,16 +663,13 @@ export class ConversationRunService {
 	 */
 	async settleRun(input: SettleConversationRunInput): Promise<RunSegmentSummary | undefined> {
 		const database = this.#db();
-		const run =
-			input.runId === undefined
-				? ((await this.activeRun(input.conversationId)) ??
-					(await this.getLatestRun(input.conversationId)))
-				: await this.getRun(input.runId);
+		const latest =
+			input.runId === undefined ? await this.getLatestRun(input.conversationId) : undefined;
+		const run = input.runId === undefined ? latest : await this.getRun(input.runId);
 		if (run === undefined) return undefined;
-		const segment =
+		let segment =
 			input.segmentId === undefined
-				? ((await this.getLatestSegmentForRun(run.id, "running")) ??
-					(await this.getLatestSegmentForRun(run.id)))
+				? undefined
 				: (
 						await database
 							.select()
@@ -617,6 +677,12 @@ export class ConversationRunService {
 							.where(eq(conversationRunSegments.id, input.segmentId))
 							.limit(1)
 					)[0];
+		if (segment === undefined && input.finalMessageId !== undefined) {
+			segment = await this.getLatestSegmentForRun(run.id, "running");
+		}
+		if (segment === undefined && (await this.activeRun(input.conversationId)) !== undefined) {
+			segment = await this.getLatestSegmentForRun(run.id, "running");
+		}
 		if (segment === undefined) return undefined;
 		const endedAt = this.#iso();
 		await database
@@ -726,13 +792,22 @@ export class ConversationRunService {
 		const active = await this.activeAnchor(input.conversationId);
 		if (active !== undefined || input.createIfMissing !== true) return active;
 		const latest = await this.getLatestRun(input.conversationId);
-		if (
-			latest !== undefined &&
-			input.durableRunKey !== undefined &&
-			latest.durableRunKey === input.durableRunKey
-		) {
-			const segment = await this.getLatestSegmentForRun(latest.id);
-			if (segment !== undefined) return toAnchor(segment);
+		if (input.durableRunKey !== undefined) {
+			if (latest !== undefined && latest.durableRunKey === input.durableRunKey) {
+				const segment = await this.getLatestSegmentForRun(latest.id);
+				if (segment !== undefined) return toAnchor(segment);
+			}
+		} else if (latest !== undefined) {
+			// A second answer for an already-settled turn must not mint a new empty run. A real
+			// follow-up owns an inbound row newer than the latest segment; live execution creates
+			// its next run from its own snapshot before any answer can exist.
+			const [segment, inbound] = await Promise.all([
+				this.getLatestSegmentForRun(latest.id),
+				this.#latestInboundMessage(input.conversationId),
+			]);
+			if (segment !== undefined && (inbound === undefined || inbound.seq <= segment.seq)) {
+				return undefined;
+			}
 		}
 		return (
 			await this.startRun({

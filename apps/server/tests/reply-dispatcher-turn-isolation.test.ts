@@ -284,6 +284,63 @@ describe("reply dispatcher turn isolation", () => {
 		}
 	});
 
+	test("a streamed line already sent by a channel tool is not delivered twice", async () => {
+		const { lifecycle } = await createHarness();
+		try {
+			const dispatcher = lifecycle.replyDispatcher;
+			dispatcher.beginTurn("durable-1");
+			dispatcher.recordTurnToolSend({
+				durableConversationId: "durable-1",
+				text: "Status: synthetic work is finished.",
+			});
+			const duplicate = await dispatcher.handleNarration({
+				conversationId: "durable-1",
+				kind: "stream-line",
+				narrationId: "stream:run-tool:0",
+				text: "Status: synthetic work is finished.",
+				toolNames: [],
+			});
+			expect(duplicate).toMatchObject({
+				deliveryStatus: "skipped",
+				reason: "already_sent_via_tool",
+			});
+			const final = await dispatcher.handleAnswer(
+				answer({ entryId: "answer-after-tool-stream", text: "A genuinely new closing line." }),
+			);
+			expect(final).toMatchObject({
+				deliveryStatus: "sent",
+				text: "A genuinely new closing line.",
+			});
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("a partially duplicated streamed line keeps only its new text", async () => {
+		const { lifecycle } = await createHarness();
+		try {
+			const dispatcher = lifecycle.replyDispatcher;
+			dispatcher.beginTurn("durable-1");
+			dispatcher.recordTurnToolSend({
+				durableConversationId: "durable-1",
+				text: "Status: synthetic work is finished.",
+			});
+			const partial = await dispatcher.handleNarration({
+				conversationId: "durable-1",
+				kind: "stream-line",
+				narrationId: "stream:run-tool:1",
+				text: "Status: synthetic work is finished.\nOne new closing detail.",
+				toolNames: [],
+			});
+			expect(partial).toMatchObject({
+				deliveryStatus: "sent",
+				text: "One new closing detail.",
+			});
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
 	test("streamed lines separated by blank lines are stripped cleanly from the final answer", async () => {
 		const { lifecycle } = await createHarness();
 		try {

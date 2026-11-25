@@ -547,6 +547,7 @@ export class TsukaimaLifecycle {
 			pacing: this.conversationPacing,
 			policy: this.conversationPolicy,
 			promptContext: async (sessionId) => this.promptHooks.renderContext(sessionId),
+			liveRuns: this.liveRuns,
 			runs: () => this.conversationRuns,
 		});
 		this.outbound = new OutboundService({
@@ -554,6 +555,7 @@ export class TsukaimaLifecycle {
 			channels: this.channels,
 			database: () => this.domainDatabase,
 			hooks: this.hooks,
+			liveRuns: this.liveRuns,
 			logger: this.runtimeLog,
 			onDirectSend: (durableConversationId, text) =>
 				this.replyDispatcher.noteDirectSend(durableConversationId, text),
@@ -2110,6 +2112,15 @@ export class TsukaimaLifecycle {
 			},
 			onLiveRun: (state) => {
 				this.forwardLiveRun(state);
+			},
+			onRunInterrupted: async ({ conversationId }) => {
+				const sessionId = this.sessionIdForDurableConversation(conversationId);
+				if (sessionId === undefined) return;
+				await this.conversationRuns.interruptActiveRun(
+					sessionId,
+					this.liveRuns.currentRounds(sessionId),
+				);
+				await this.liveRuns.markInterrupted(sessionId).catch(() => undefined);
 			},
 			// Detached on purpose: the generation hook must not wait for channel sends (the tool
 			// round would stall) or for the conversation lock (a background turn holding it may be

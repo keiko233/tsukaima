@@ -253,6 +253,143 @@ describe("conversation-scoped immediate outbound", () => {
 		}
 	});
 
+	test("a same-conversation mid-turn tool send splits the running segment", async () => {
+		const { lifecycle } = await createLifecycle();
+		try {
+			const session = await createExternalSession(lifecycle, {
+				kind: "private",
+				platformConversationId: "user-1",
+			});
+			const run = await lifecycle.conversationRuns.startRun({
+				conversationId: session.sessionId,
+				triggerMessageId: null,
+			});
+			await lifecycle.liveRuns.record(session.sessionId, {
+				attempt: 1,
+				conversationId: session.sessionId,
+				draftTools: [],
+				failure: undefined,
+				generationStartedAtMs: undefined,
+				model: undefined,
+				partialText: "synthetic partial",
+				partialThinking: "synthetic outbound split round",
+				retry: undefined,
+				settled: false,
+				startedAtMs: Date.now(),
+				tools: [],
+				turns: 1,
+			});
+
+			const result = await lifecycle.outbound.send("onebot-napcat", {
+				originConversationId: session.durableConversationId,
+				parts: [{ text: "Mid-turn status.", type: "text" }],
+				target: {
+					channelId: "onebot",
+					kind: "private",
+					platformConversationId: "user-1",
+				},
+			});
+			expect(result.platformMessageId).toBeDefined();
+
+			const rows = await outboundRows(lifecycle, session.sessionId);
+			expect(rows).toHaveLength(1);
+			const segments = await lifecycle.conversationRuns.listSegmentsForConversation(
+				session.sessionId,
+			);
+			expect(segments).toHaveLength(2);
+			const [closed, continuation] = segments;
+			const [messageRow] = await lifecycle
+				.domainDatabase!.select({ id: messages.id, seq: messages.seq })
+				.from(messages)
+				.where(
+					and(eq(messages.conversationId, session.sessionId), eq(messages.direction, "outbound")),
+				)
+				.limit(1);
+			expect(closed).toMatchObject({
+				finalMessageId: messageRow?.id,
+				runId: run.anchor.runId,
+				segmentIndex: 0,
+				status: "completed",
+				triggerKind: "initial",
+			});
+			expect(closed?.rounds).toMatchObject([
+				{ thinking: "synthetic outbound split round", toolCalls: [] },
+			]);
+			expect(continuation).toMatchObject({
+				runId: run.anchor.runId,
+				segmentIndex: 1,
+				status: "running",
+				triggerKind: "initial",
+				triggerMessageId: null,
+			});
+			expect(continuation?.seq).toBeGreaterThan(messageRow?.seq ?? 0);
+			expect(await lifecycle.liveRuns.segmentAnchor(session.sessionId)).toMatchObject({
+				runId: run.anchor.runId,
+				segmentId: continuation?.id,
+				segmentIndex: 1,
+			});
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("a cross-conversation tool send leaves the target run segment unchanged", async () => {
+		const { lifecycle } = await createLifecycle();
+		try {
+			const session = await createExternalSession(lifecycle, {
+				kind: "group",
+				platformConversationId: "group-1",
+			});
+			const run = await lifecycle.conversationRuns.startRun({
+				conversationId: session.sessionId,
+				triggerMessageId: null,
+			});
+			await lifecycle.liveRuns.record(session.sessionId, {
+				attempt: undefined,
+				conversationId: session.sessionId,
+				draftTools: [],
+				failure: undefined,
+				generationStartedAtMs: undefined,
+				model: undefined,
+				partialText: "synthetic cross-chat target partial",
+				partialThinking: undefined,
+				retry: undefined,
+				runId: "synthetic-cross-chat-run",
+				settled: false,
+				startedAtMs: Date.now(),
+				tools: [],
+				turns: 0,
+			});
+
+			await lifecycle.outbound.send("onebot-napcat", {
+				originConversationId: "synthetic-other-conversation",
+				parts: [{ text: "Cross-chat note.", type: "text" }],
+				target: {
+					channelId: "onebot",
+					kind: "group",
+					platformConversationId: "group-1",
+				},
+			});
+
+			const segments = await lifecycle.conversationRuns.listSegmentsForConversation(
+				session.sessionId,
+			);
+			expect(segments).toHaveLength(1);
+			expect(segments[0]).toMatchObject({
+				finalMessageId: null,
+				runId: run.anchor.runId,
+				segmentIndex: 0,
+				status: "running",
+			});
+			expect(await lifecycle.liveRuns.segmentAnchor(session.sessionId)).toMatchObject({
+				runId: run.anchor.runId,
+				segmentId: run.anchor.segmentId,
+			});
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
 	test("transforms text with sticker markers via reply.transform hook before sending to external channel", async () => {
 		const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-outbound-conversation-"));
 		directories.push(directory);

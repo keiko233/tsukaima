@@ -549,6 +549,9 @@ export class LiveRunCache {
 		const signature = JSON.stringify(rounds);
 		if (this.#roundSignatures.get(sessionId) === signature) return rounds;
 		this.#roundSignatures.set(sessionId, signature);
+		// A frozen segment already carries the rounds the caller captured. An empty live
+		// timeline created after a steer or outbound split must not erase them.
+		if (rounds.length === 0) return rounds;
 		try {
 			await this.#runs.syncSegmentRounds(anchor.segmentId, rounds);
 		} catch {
