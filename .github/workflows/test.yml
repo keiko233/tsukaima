@@ -17,7 +17,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg ripgrep
       - run: bun install --frozen-lockfile
@@ -34,7 +34,7 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.65.0-noble
       options: --ipc=host
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # This image ships Node.js and npm but lacks the unzip required by setup-bun.
       - run: npm install --global bun@1.4.5
       - run: bun install --frozen-lockfile
