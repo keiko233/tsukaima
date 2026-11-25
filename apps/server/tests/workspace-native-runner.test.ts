@@ -274,6 +274,89 @@ describe("workspace native Pi integration", () => {
 		expect(requestBodies.join("\n")).not.toContain("db_query");
 	}, 60_000);
 
+	test("offers the durable graceful restart tools to a governed workspace turn", async () => {
+		const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-native-restart-"));
+		directories.push(root);
+		const requests: string[][] = [];
+		const model = createOpenAICompatibleModelPort(
+			{
+				apiKey: "test-key",
+				baseUrl: "http://native-workspace.invalid/v1",
+				fetch: (async (_input, init) => {
+					const body = JSON.parse(String(init?.body ?? "{}")) as {
+						messages?: readonly { readonly role?: string }[];
+						tools?: readonly { readonly function?: { readonly name?: string } }[];
+					};
+					const offered = (body.tools ?? []).map((tool) => tool.function?.name ?? "");
+					requests.push(offered);
+					const last = body.messages?.at(-1);
+					if (last?.role === "user" && offered.includes("runtime_restart")) {
+						return Response.json({
+							choices: [
+								{
+									finish_reason: "tool_calls",
+									message: {
+										content: null,
+										tool_calls: [
+											{
+												function: {
+													arguments: JSON.stringify({
+														delaySeconds: 86_400,
+														reason: "workspace maintenance",
+													}),
+													name: "runtime_restart",
+												},
+												id: "native-restart-1",
+												type: "function",
+											},
+										],
+									},
+								},
+							],
+							id: "scripted-native-restart",
+							model: "scripted-native",
+							usage: { completion_tokens: 1, prompt_tokens: 1, total_tokens: 2 },
+						});
+					}
+					return Response.json({
+						choices: [{ finish_reason: "stop", message: { content: "Restart scheduled." } }],
+						id: "scripted-native-restart-text",
+						model: "scripted-native",
+						usage: { completion_tokens: 1, prompt_tokens: 1, total_tokens: 2 },
+					});
+				}) as typeof fetch,
+			},
+			[{ capabilities: ["basic-chat", "tool-use"], modelId: "scripted-native" }],
+		);
+		const { lifecycle } = await start({ model: model as never, root });
+		const workspace = await lifecycle.workspace.create({
+			goal: "Schedule a maintenance restart.",
+			requestedBy: "test-admin",
+		});
+		const database = lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("Database not ready");
+		await lifecycle.sessionMessaging.sendAgentMessage({
+			messageId: "native-restart-message",
+			sessionId: workspace.sessionId,
+			source: "webui",
+			text: "Schedule a graceful restart.",
+		});
+		const answer = await waitFor(
+			async () => (await nativeAnswers(database, workspace.sessionId))[0],
+		);
+		expect(answer.contentText).toContain("Restart scheduled");
+		expect(requests[0]).toContain("runtime_restart");
+		expect(requests[0]).toContain("runtime_restart_status");
+		expect(requests[0]).toContain("runtime_restart_cancel");
+		const status = await lifecycle.restartStatus();
+		expect(status).toMatchObject({
+			mode: "restart",
+			reason: "workspace maintenance",
+			requestedBy: "workspace-agent",
+			status: "scheduled",
+		});
+	}, 60_000);
+
 	test("keeps multi-turn live tool state bounded and free of duplicate rounds", async () => {
 		const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-native-multiturn-"));
 		directories.push(root);

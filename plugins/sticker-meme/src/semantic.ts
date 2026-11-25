@@ -658,6 +658,191 @@ export interface VisionSemanticOptions {
 		readonly model: string;
 		readonly prompt: string;
 	}) => Promise<string>;
+	/** Test seam for retry backoff; defaults to a real timer. */
+	readonly sleep?: (milliseconds: number) => Promise<void>;
+}
+
+const VISION_MAX_TOKENS = 2048;
+
+/** Transient failures get three extra attempts (four requests total). */
+const VISION_MAX_TRANSIENT_RETRIES = 3;
+const VISION_MAX_TRANSIENT_ATTEMPTS = VISION_MAX_TRANSIENT_RETRIES + 1;
+/** Empty successful responses keep their own retry, independent of the transient budget. */
+const VISION_MAX_EMPTY_RETRIES = 1;
+const VISION_MAX_REQUEST_ATTEMPTS = VISION_MAX_TRANSIENT_ATTEMPTS + VISION_MAX_EMPTY_RETRIES;
+const VISION_RETRY_BASE_DELAYS_MS = [500, 1_500, 3_500] as const;
+const VISION_RETRY_MAX_DELAY_MS = 10_000;
+const VISION_RETRY_JITTER_RATIO = 0.3;
+const VISION_RETRY_ELAPSED_MULTIPLIER = 3;
+
+const TRANSIENT_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
+const PERMANENT_HTTP_STATUSES = new Set([400, 401, 403, 404, 422]);
+const TRANSIENT_ERROR_PATTERNS = [
+	"rate limit",
+	"ratelimit",
+	"too many requests",
+	"overloaded",
+	"server error",
+	"internal server error",
+	"bad gateway",
+	"service unavailable",
+	"gateway timeout",
+	"timeout",
+	"timed out",
+	"aborterror",
+	"abort",
+	"econnreset",
+	"etimedout",
+	"enotfound",
+	"eai_again",
+	"fetch failed",
+	"socket hang up",
+	"terminated",
+	"network error",
+	"econnrefused",
+] as const;
+const PERMANENT_ERROR_PATTERNS = [
+	"invalid json",
+	"invalid response",
+	"invalid api key",
+	"invalid_api_key",
+	"missing api key",
+	"api key",
+	"unauthorized",
+	"forbidden",
+	"bad request",
+	"unprocessable",
+	"not enabled",
+	"not configured",
+	"not available from any configured provider",
+	"requires semantic",
+] as const;
+
+interface VisionRetryErrorInfo {
+	readonly transient: boolean;
+	readonly reason: string;
+	readonly retryAfterMs?: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function numericStatus(value: unknown): number | undefined {
+	if (typeof value === "number" && Number.isInteger(value) && value >= 100) return value;
+	if (typeof value === "string" && /^\d{3}$/u.test(value)) return Number(value);
+	return undefined;
+}
+
+function visionErrorStatus(error: unknown): number | undefined {
+	if (!isRecord(error)) return undefined;
+	const direct =
+		numericStatus(error.status) ?? numericStatus(error.statusCode) ?? numericStatus(error.code);
+	if (direct !== undefined) return direct;
+	if (isRecord(error.response)) {
+		const responseStatus =
+			numericStatus(error.response.status) ?? numericStatus(error.response.statusCode);
+		if (responseStatus !== undefined) return responseStatus;
+	}
+	if (isRecord(error.cause)) return visionErrorStatus(error.cause);
+	return undefined;
+}
+
+function collectVisionErrorText(error: unknown, seen = new Set<unknown>()): string {
+	if (error === undefined || error === null || seen.has(error)) return "";
+	seen.add(error);
+	if (typeof error === "string") return error;
+	if (!isRecord(error)) return String(error);
+	const parts: string[] = [];
+	for (const key of ["name", "message", "code", "type", "status", "statusCode"]) {
+		const value = error[key];
+		if (typeof value === "string" || typeof value === "number") parts.push(String(value));
+	}
+	if (isRecord(error.response) && typeof error.response.status !== "undefined") {
+		parts.push(String(error.response.status));
+	}
+	const causeText = collectVisionErrorText(error.cause, seen);
+	if (causeText.length > 0) parts.push(causeText);
+	return parts.join(" ");
+}
+
+function visionErrorReason(error: unknown, status: number | undefined): string {
+	const text = collectVisionErrorText(error).replace(/\s+/gu, " ").trim();
+	const base = text.length > 0 ? text : "unknown error";
+	const prefix = status === undefined ? "" : `${status} `;
+	return `${prefix}${base}`.slice(0, 180);
+}
+
+function visionRetryAfterHeader(error: unknown): string | undefined {
+	if (!isRecord(error)) return undefined;
+	const headers = error.headers;
+	if (!isRecord(headers)) return undefined;
+	if (typeof headers.get === "function") {
+		const value = (headers.get as (name: string) => unknown)("retry-after");
+		return typeof value === "string" ? value : undefined;
+	}
+	for (const [key, value] of Object.entries(headers)) {
+		if (key.toLowerCase() !== "retry-after") continue;
+		if (typeof value === "string") return value;
+		if (typeof value === "number") return String(value);
+		if (Array.isArray(value) && typeof value[0] === "string") return value[0];
+	}
+	return undefined;
+}
+
+function parseVisionRetryAfterMs(value: string | undefined): number | undefined {
+	if (value === undefined) return undefined;
+	const trimmed = value.trim();
+	if (trimmed.length === 0) return undefined;
+	if (/^\d+(\.\d+)?$/u.test(trimmed)) {
+		const seconds = Number(trimmed);
+		if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+		return Math.min(VISION_RETRY_MAX_DELAY_MS, Math.round(seconds * 1_000));
+	}
+	const retryAt = Date.parse(trimmed);
+	if (Number.isNaN(retryAt)) return undefined;
+	return Math.min(VISION_RETRY_MAX_DELAY_MS, Math.max(0, retryAt - Date.now()));
+}
+
+function classifyVisionRetryError(error: unknown): VisionRetryErrorInfo {
+	const status = visionErrorStatus(error);
+	const text = collectVisionErrorText(error).toLowerCase();
+	const retryAfterMs = parseVisionRetryAfterMs(visionRetryAfterHeader(error));
+	const reason = visionErrorReason(error, status);
+	if (status !== undefined) {
+		if (PERMANENT_HTTP_STATUSES.has(status)) return { reason, transient: false };
+		if (TRANSIENT_HTTP_STATUSES.has(status)) {
+			return { reason, ...(retryAfterMs === undefined ? {} : { retryAfterMs }), transient: true };
+		}
+	}
+	if (TRANSIENT_ERROR_PATTERNS.some((pattern) => text.includes(pattern))) {
+		return { reason, ...(retryAfterMs === undefined ? {} : { retryAfterMs }), transient: true };
+	}
+	if (PERMANENT_ERROR_PATTERNS.some((pattern) => text.includes(pattern))) {
+		return { reason, transient: false };
+	}
+	return { reason, transient: false };
+}
+
+function visionRetryDelayMs(options: {
+	readonly attemptIndex: number;
+	readonly elapsedMs: number;
+	readonly retryAfterMs?: number;
+	readonly timeoutMs: number;
+}): number | undefined {
+	const delayIndex = Math.min(options.attemptIndex, VISION_RETRY_BASE_DELAYS_MS.length - 1);
+	const baseDelay = VISION_RETRY_BASE_DELAYS_MS[delayIndex] ?? 3_500;
+	const jitteredDelay = Math.round(
+		baseDelay * (1 + (Math.random() * 2 - 1) * VISION_RETRY_JITTER_RATIO),
+	);
+	const delayMs =
+		options.retryAfterMs === undefined
+			? jitteredDelay
+			: Math.min(VISION_RETRY_MAX_DELAY_MS, Math.max(0, options.retryAfterMs));
+	if (options.elapsedMs + delayMs > options.timeoutMs * VISION_RETRY_ELAPSED_MULTIPLIER) {
+		return undefined;
+	}
+	return delayMs;
 }
 
 const visionResponseSchema = z.object({
@@ -733,6 +918,7 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 				readonly prompt: string;
 		  }) => Promise<string>)
 		| undefined;
+	readonly #sleep: (milliseconds: number) => Promise<void>;
 
 	constructor(options: VisionSemanticOptions) {
 		this.#apiKey = options.apiKey;
@@ -749,6 +935,13 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 					logger: options.logger,
 				}));
 		this.#complete = options.complete;
+		this.#sleep =
+			options.sleep ??
+			(async (milliseconds) => {
+				await new Promise<void>((resolve) => {
+					setTimeout(resolve, milliseconds);
+				});
+			});
 		this.name =
 			options.providerId === undefined
 				? `vision:${options.model}`
@@ -869,48 +1062,115 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 			mimeType,
 			model: this.#model,
 		});
-		if (this.#complete !== undefined) {
-			const content = await this.#complete({
-				base64,
-				imageDataUrl,
-				mimeType,
-				model: this.#model,
-				prompt,
+		const requestOnce = async (): Promise<string> => {
+			if (this.#complete !== undefined) {
+				return await this.#complete({
+					base64,
+					imageDataUrl,
+					mimeType,
+					model: this.#model,
+					prompt,
+				});
+			}
+			if (this.#apiKey === undefined || this.#apiKey.length === 0) {
+				throw new Error("Semantic vision mode requires semanticApiKey and semanticModel");
+			}
+			const { default: OpenAI } = await import("openai");
+			const client = new OpenAI({
+				apiKey: this.#apiKey,
+				...(this.#baseUrl === undefined ? {} : { baseURL: this.#baseUrl }),
+				maxRetries: 0,
+				timeout: this.#timeoutMs,
 			});
-			this.#logger?.trace?.("vision provider request completed", {
-				contentLength: content.length,
+			const response = await client.chat.completions.create({
+				max_tokens: VISION_MAX_TOKENS,
+				messages: [
+					{
+						content: [
+							{ text: prompt, type: "text" },
+							{ image_url: { url: imageDataUrl }, type: "image_url" },
+						],
+						role: "user",
+					},
+				],
+				model: this.#model,
+				response_format: { type: "json_object" },
+				temperature: 0.2,
+			});
+			return response.choices[0]?.message.content ?? "";
+		};
+		let content = "";
+		let attempt = 0;
+		let transientRetries = 0;
+		let emptyRetries = 0;
+		let retried = false;
+		const retryStartedAt = Date.now();
+		for (;;) {
+			attempt += 1;
+			try {
+				content = await requestOnce();
+			} catch (error) {
+				const info = classifyVisionRetryError(error);
+				if (!info.transient) throw error;
+				if (transientRetries >= VISION_MAX_TRANSIENT_RETRIES) {
+					this.#logger?.warn("vision provider request retries exhausted", {
+						attempt,
+						error: info.reason,
+						maxAttempts: VISION_MAX_TRANSIENT_ATTEMPTS,
+						model: this.#model,
+					});
+					throw error;
+				}
+				const delayMs = visionRetryDelayMs({
+					attemptIndex: transientRetries,
+					elapsedMs: Date.now() - retryStartedAt,
+					...(info.retryAfterMs === undefined ? {} : { retryAfterMs: info.retryAfterMs }),
+					timeoutMs: this.#timeoutMs,
+				});
+				if (delayMs === undefined) {
+					this.#logger?.warn("vision provider request retry time budget exhausted", {
+						attempt,
+						error: info.reason,
+						maxAttempts: VISION_MAX_TRANSIENT_ATTEMPTS,
+						model: this.#model,
+					});
+					throw error;
+				}
+				transientRetries += 1;
+				retried = true;
+				this.#logger?.warn("vision provider request failed; retrying", {
+					attempt,
+					delayMs,
+					error: info.reason,
+					maxAttempts: VISION_MAX_TRANSIENT_ATTEMPTS,
+					model: this.#model,
+				});
+				await this.#sleep(delayMs);
+				continue;
+			}
+			if (content.trim().length > 0) break;
+			if (emptyRetries >= VISION_MAX_EMPTY_RETRIES) {
+				this.#logger?.warn("vision provider returned no content; retries exhausted", {
+					attempt,
+					maxAttempts: VISION_MAX_REQUEST_ATTEMPTS,
+					model: this.#model,
+				});
+				throw new Error(`Vision classifier returned no content (${base.labels.join("-")})`);
+			}
+			emptyRetries += 1;
+			retried = true;
+			this.#logger?.warn("vision provider returned no content; retrying", {
+				attempt,
+				delayMs: 0,
+				maxAttempts: VISION_MAX_REQUEST_ATTEMPTS,
 				model: this.#model,
 			});
-			return content;
 		}
-		if (this.#apiKey === undefined || this.#apiKey.length === 0) {
-			throw new Error("Semantic vision mode requires semanticApiKey and semanticModel");
-		}
-		const { default: OpenAI } = await import("openai");
-		const client = new OpenAI({
-			apiKey: this.#apiKey,
-			...(this.#baseUrl === undefined ? {} : { baseURL: this.#baseUrl }),
-			maxRetries: 0,
-			timeout: this.#timeoutMs,
-		});
-		const response = await client.chat.completions.create({
-			max_tokens: 900,
-			messages: [
-				{
-					content: [
-						{ text: prompt, type: "text" },
-						{ image_url: { url: imageDataUrl }, type: "image_url" },
-					],
-					role: "user",
-				},
-			],
-			model: this.#model,
-			response_format: { type: "json_object" },
-			temperature: 0.2,
-		});
-		const content = response.choices[0]?.message.content ?? "";
-		if (content.length === 0) {
-			throw new Error(`Vision classifier returned no content (${base.labels.join("-")})`);
+		if (retried) {
+			this.#logger?.trace?.("vision provider request succeeded after retry", {
+				attempts: attempt,
+				model: this.#model,
+			});
 		}
 		this.#logger?.trace?.("vision provider request completed", {
 			contentLength: content.length,
@@ -943,7 +1203,7 @@ function createHostModelClassifier(options: {
 	return new VisionSemanticClassifier({
 		complete: async ({ base64, mimeType, prompt }) => {
 			const response = await options.models.complete({
-				maxTokens: 900,
+				maxTokens: VISION_MAX_TOKENS,
 				messages: [
 					{
 						content: [
@@ -958,9 +1218,6 @@ function createHostModelClassifier(options: {
 				signal: AbortSignal.timeout(options.timeoutMs),
 				temperature: 0.2,
 			});
-			if (response.text.length === 0) {
-				throw new Error("Vision classifier returned no content");
-			}
 			return response.text;
 		},
 		...(options.logger === undefined ? {} : { logger: options.logger }),

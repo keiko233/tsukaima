@@ -1,6 +1,6 @@
 {
 	"name": "@tsukaima-plugin/onebot-napcat",
-	"version": "0.31.2",
+	"version": "0.32.0",
 	"private": true,
 	"type": "module",
 	"exports": {

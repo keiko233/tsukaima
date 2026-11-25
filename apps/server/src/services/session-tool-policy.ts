@@ -1,4 +1,5 @@
 import { ADMIN_OPS_TOOL_NAMES } from "./admin-ops-tools.ts";
+import { ADMIN_RUNTIME_TOOL_NAMES } from "./admin-runtime-tools.ts";
 import { ADMIN_SETTINGS_TOOL_NAMES } from "./admin-settings-tools.ts";
 import { CHAT_SELF_TUNE_TOOL_NAMES } from "./chat-self-tune-tools.ts";
 import { CODING_AGENT_TOOL_NAMES } from "./coding-agent-tools.ts";
@@ -47,14 +48,16 @@ export function computeOmittedSessionTools(
 		for (const name of WORKSPACE_CODING_TOOL_NAMES) removed.add(name);
 	}
 	const isImChat = input.kind === "private" || input.kind === "group";
-	// Admin terminal/file tools stay discoverable on the admin-capable surfaces (WebUI, workspace,
-	// and IM) but every IM execution is additionally admin-gated at runtime. Unknown kinds and
-	// transient reads must lose them so a failed lookup cannot widen the surface.
+	// Admin terminal/file, settings, and runtime maintenance tools stay discoverable on the
+	// admin-capable surfaces (WebUI, workspace, and IM) but every IM execution is additionally
+	// admin-gated at runtime. Unknown kinds and transient reads must lose them so a failed lookup
+	// cannot widen the surface.
 	const adminOpsVisible =
 		!readFailed && (input.kind === "webui" || input.kind === "workspace" || isImChat);
 	if (!adminOpsVisible) {
 		for (const name of ADMIN_OPS_TOOL_NAMES) removed.add(name);
 		for (const name of ADMIN_SETTINGS_TOOL_NAMES) removed.add(name);
+		for (const name of ADMIN_RUNTIME_TOOL_NAMES) removed.add(name);
 	}
 	const chatSelfTuneVisible = !readFailed && (input.kind === "webui" || isImChat);
 	if (!chatSelfTuneVisible) {

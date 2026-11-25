@@ -219,6 +219,12 @@ The model and workspace cannot invoke Docker or the host deployer. `RestartReloa
 maps an approved deployment reload into a deferred update intent; the actual version switch
 remains a host responsibility.
 
+WebUI, governed workspace, and trusted-admin IM turns expose `runtime_restart`,
+`runtime_restart_status`, and `runtime_restart_cancel`. The restart tool only creates the same
+durable intent as the Settings maintenance card (default 60 seconds, optional `update` mode); it
+never calls `process.exit()` itself. Non-admin IM and unknown surfaces are denied at runtime, and
+every allowed or denied call is audited.
+
 ## API and UI
 
 Admin procedures:

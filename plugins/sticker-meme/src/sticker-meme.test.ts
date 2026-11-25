@@ -3234,6 +3234,129 @@ describe("QQ chat sticker stealing", () => {
 	});
 });
 
+describe("sticker semantic reclassification", () => {
+	// oxlint-disable-next-line unicorn/consistent-function-scoping
+	function reclassifyContext(
+		fixture: ReturnType<typeof baseFixture>,
+		registry: LocalModelRegistry,
+		settings: Record<string, unknown>,
+	): Map<string, (input: unknown) => Promise<unknown> | unknown> {
+		const handlers = new Map<string, (input: unknown) => Promise<unknown> | unknown>();
+		const context = {
+			logger: createLogCapture().logger,
+			media: fixture.media,
+			models: registry,
+			rpc: {
+				list: () => [],
+				register: (method: string, handler: (input: unknown) => Promise<unknown> | unknown) => {
+					handlers.set(method, handler);
+					return () => {};
+				},
+			},
+			settings: {
+				get: async () => settings,
+				onChange: () => () => {},
+			},
+			ui: { setStatus: () => undefined },
+		} as unknown as PluginContext;
+		const importService = new StickerImportService({
+			media: fixture.media,
+			repository: fixture.repository,
+		});
+		const learning = new LearningService({
+			media: fixture.media,
+			repository: fixture.repository,
+		});
+		registerStickerRpc(context, {
+			importService,
+			learning,
+			repository: fixture.repository,
+		});
+		return handlers;
+	}
+
+	test("replaces stale heuristic emotions and keywords with the new profile", async () => {
+		const fixture = baseFixture();
+		await fixture.repository.savePack({ id: "pack-main", name: "Happy Pack" });
+		const item = await seedItem(fixture.repository, fixture.media, {
+			emotions: ["sleepy"],
+			id: "stale-fish",
+			keywords: ["sleepy"],
+		});
+		await fixture.repository.updateItem(item.id, {
+			description: "stale heuristic description",
+		});
+
+		const registry = new LocalModelRegistry();
+		registry.registerProvider({
+			id: "provider-vision",
+			createPort: () => {
+				throw new Error("port not used");
+			},
+			listModels: () => [
+				{ capabilities: ["basic-chat", "vision"], id: "vision-fake", input: ["text", "image"] },
+			],
+			complete: async (request) => ({
+				modelId: request.modelId ?? "vision-fake",
+				providerId: request.providerId ?? "provider-vision",
+				text: JSON.stringify({
+					confidence: 0.9,
+					description: "A blue fish waves from a fishbowl.",
+					emotions: ["happy"],
+					keywords: ["fish", "blue"],
+					labels: ["happy"],
+				}),
+			}),
+		});
+		const handlers = reclassifyContext(fixture, registry, {
+			semanticMode: "vision",
+			semanticModel: "vision-fake",
+			semanticProviderId: "provider-vision",
+		});
+
+		const result = (await handlers.get("semantic.reclassify")?.({ packId: "pack-main" })) as {
+			skipped: number;
+			updated: number;
+		};
+		expect(result).toMatchObject({ skipped: 0, updated: 1 });
+
+		const stored = await fixture.repository.getItem(item.id);
+		expect(stored?.description).toBe("A blue fish waves from a fishbowl.");
+		expect(stored?.emotions).toEqual(["happy"]);
+		expect(stored?.emotions).not.toContain("sleepy");
+		expect(stored?.keywords).not.toContain("sleepy");
+	});
+
+	test("does not report an unchanged heuristic fallback result as updated", async () => {
+		const fixture = baseFixture();
+		await fixture.repository.savePack({ id: "pack-main", name: "Main Pack" });
+		const item = await seedItem(fixture.repository, fixture.media, { id: "unchanged" });
+		const profile = classifyStickerSemantics({ title: "Main Pack" });
+		await fixture.repository.updateItem(item.id, {
+			description: profile.description,
+			emotions: profile.emotions,
+			keywords: profile.keywords,
+			semantic: profile,
+		});
+
+		const registry = new LocalModelRegistry();
+		const handlers = reclassifyContext(fixture, registry, { semanticMode: "heuristic" });
+		let updates = 0;
+		const updateItem = fixture.repository.updateItem.bind(fixture.repository);
+		fixture.repository.updateItem = async (id, patch) => {
+			updates += 1;
+			return await updateItem(id, patch);
+		};
+
+		const result = (await handlers.get("semantic.reclassify")?.({ packId: "pack-main" })) as {
+			skipped: number;
+			updated: number;
+		};
+		expect(result).toMatchObject({ skipped: 1, updated: 0 });
+		expect(updates).toBe(0);
+	});
+});
+
 describe("sticker decision prompt hints", () => {
 	test("injects decision prompt only when stickers exist and honors plugin settings", async () => {
 		const fixture = baseFixture();

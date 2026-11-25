@@ -35,6 +35,12 @@ import type { ConversationRunAnchor, ConversationRunService } from "./conversati
 import type { WorkspaceReferenceService } from "./workspace-references.ts";
 import type { WorkspaceTodoService } from "./workspace-todos.ts";
 import type { GitIdentity } from "./git-identity.ts";
+import {
+	RUNTIME_RESTART_DEFAULT_DELAY_SECONDS,
+	RUNTIME_RESTART_MAX_DELAY_SECONDS,
+	RUNTIME_RESTART_MAX_REASON_LENGTH,
+	type AdminRuntimeRestartPort,
+} from "./admin-runtime-tools.ts";
 
 export const WORKSPACE_NATIVE_LIVE_RUN_INTERVAL_MS = 120;
 
@@ -134,6 +140,8 @@ export interface WorkspaceNativeRunnerOptions {
 	}) => Promise<{ readonly model: Model<Api>; readonly runtime: ModelRuntime }>;
 	readonly repositoryRoot: string;
 	readonly runs?: (() => ConversationRunService | undefined) | undefined;
+	/** Durable restart coordinator exposed to governed workspace turns. */
+	readonly runtimeRestart?: AdminRuntimeRestartPort | undefined;
 	readonly sessionDirRoot: string;
 	readonly taskPrompt: (input: {
 		readonly baseRef: string;
@@ -566,7 +574,7 @@ export class WorkspaceNativeRunner {
 					taskId: context.taskId,
 				}),
 			],
-			additionalTools: this.#additionalTools(context),
+			additionalTools: [...this.#additionalTools(context), ...this.#runtimeRestartTools()],
 			executor: this.#options.executor,
 			...(worktreeTask.constraints.maxOutputBytes === undefined
 				? {}
@@ -622,6 +630,89 @@ export class WorkspaceNativeRunner {
 	#composePrompt(text: string, context: string | undefined): string {
 		const attached = (context ?? "").trim();
 		return attached.length === 0 ? text : `${attached}\n\n${text}`;
+	}
+
+	/**
+	 * Workspace surfaces already pass coding authorization before a native run starts. The
+	 * coordinator owns intent, countdown hooks, and supervisor shutdown; these tools only schedule
+	 * or cancel that durable work.
+	 */
+	#runtimeRestartTools(): ToolDefinition[] {
+		const restart = this.#options.runtimeRestart;
+		if (restart === undefined) return [];
+		return [
+			defineTool({
+				description:
+					"Schedule a graceful runtime restart from this governed workspace. The restart is durable and shows every chat the countdown before the supervisor stops and restarts the process.",
+				execute: async (_id, args) => {
+					const input = recordOf(args);
+					const delaySeconds =
+						typeof input.delaySeconds === "number"
+							? input.delaySeconds
+							: RUNTIME_RESTART_DEFAULT_DELAY_SECONDS;
+					const mode = input.mode === "update" ? "update" : "restart";
+					const reason =
+						typeof input.reason === "string" && input.reason.trim().length > 0
+							? input.reason.trim()
+							: undefined;
+					const status = await restart.schedule({
+						delaySeconds,
+						mode,
+						...(reason === undefined ? {} : { reason }),
+						requestedBy: "workspace-agent",
+					});
+					return toolResult(status);
+				},
+				label: "Runtime restart",
+				name: "runtime_restart",
+				parameters: Type.Object({
+					delaySeconds: Type.Optional(
+						Type.Integer({
+							maximum: RUNTIME_RESTART_MAX_DELAY_SECONDS,
+							minimum: 1,
+						}),
+					),
+					mode: Type.Optional(Type.Union([Type.Literal("restart"), Type.Literal("update")])),
+					reason: Type.Optional(
+						Type.String({
+							maxLength: RUNTIME_RESTART_MAX_REASON_LENGTH,
+							minLength: 1,
+						}),
+					),
+				}),
+			}),
+			defineTool({
+				description:
+					"Read the newest graceful restart intent, including whether it is scheduled, executing, or terminal.",
+				execute: async () => toolResult(await restart.status()),
+				label: "Runtime restart status",
+				name: "runtime_restart_status",
+				parameters: Type.Object({}),
+			}),
+			defineTool({
+				description:
+					"Cancel the active scheduled graceful restart. A restart that is already executing cannot be cancelled.",
+				execute: async (_id, args) => {
+					const input = recordOf(args);
+					const reason =
+						typeof input.reason === "string" && input.reason.trim().length > 0
+							? input.reason.trim()
+							: "cancelled from workspace";
+					const cancelled = await restart.cancel(reason);
+					return toolResult({ cancelled, restart: await restart.status() });
+				},
+				label: "Runtime restart cancel",
+				name: "runtime_restart_cancel",
+				parameters: Type.Object({
+					reason: Type.Optional(
+						Type.String({
+							maxLength: RUNTIME_RESTART_MAX_REASON_LENGTH,
+							minLength: 1,
+						}),
+					),
+				}),
+			}),
+		];
 	}
 
 	#additionalTools(context: WorkspaceContext): ToolDefinition[] {

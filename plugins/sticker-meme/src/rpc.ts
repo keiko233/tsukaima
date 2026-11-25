@@ -85,6 +85,34 @@ function asNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function sameLabels(left: readonly string[], right: readonly string[]): boolean {
+	return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+/**
+ * Reclassify should replace stale heuristic labels, not append to them. A row only counts as
+ * updated when the persisted description or labels actually change; a fallback profile that
+ * matches the stored row is a no-op.
+ */
+function hasProfileChanges(
+	item: {
+		readonly description: string;
+		readonly emotions: readonly string[];
+		readonly keywords: readonly string[];
+	},
+	profile: {
+		readonly description: string;
+		readonly emotions: readonly string[];
+		readonly keywords: readonly string[];
+	},
+): boolean {
+	return (
+		item.description !== profile.description ||
+		!sameLabels(item.emotions, profile.emotions) ||
+		!sameLabels(item.keywords, profile.keywords)
+	);
+}
+
 function settingBoolean(record: Record<string, unknown>, key: string, fallback: boolean): boolean {
 	const value = record[key];
 	return typeof value === "boolean" ? value : fallback;
@@ -427,20 +455,25 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 						mimeType: item.mimeType,
 						title: packs.get(item.packId)?.name ?? item.name,
 					});
-					tracker.update(jobId, {
-						classified: updated,
-						current: processed,
-						currentItem: item.name,
-						skipped,
-						stage: "saving",
-					});
-					await repository.updateItem(item.id, {
-						description: profile.description,
-						emotions: [...item.emotions, ...profile.emotions],
-						keywords: [...item.keywords, ...profile.keywords],
-						semantic: profile,
-					});
-					updated += 1;
+					const changed = hasProfileChanges(item, profile);
+					if (changed) {
+						tracker.update(jobId, {
+							classified: updated,
+							current: processed,
+							currentItem: item.name,
+							skipped,
+							stage: "saving",
+						});
+						await repository.updateItem(item.id, {
+							description: profile.description,
+							emotions: [...profile.emotions],
+							keywords: [...profile.keywords],
+							semantic: profile,
+						});
+						updated += 1;
+					} else {
+						skipped += 1;
+					}
 				}
 				processed += 1;
 				tracker.update(jobId, {
