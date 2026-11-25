@@ -6,6 +6,8 @@ import type { PiDurableConversationHost } from "@tsukaima/core";
 import { chatObjects, conversations, messages, type TsukaimaDatabase } from "@tsukaima/db";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
+import type { ConversationRunAnchor, ConversationRunService } from "./conversation-runs.ts";
+import type { LiveRunCache } from "./live-run-cache.ts";
 import type { PromptHook, PromptHookService } from "./prompt-hooks.ts";
 
 type ChatKind = "private" | "group" | "webui" | "workspace" | "task" | "plugin";
@@ -20,12 +22,17 @@ export interface SessionMessagingOptions {
 		readonly context?: string | undefined;
 		readonly deliveryMode: MessageDeliveryMode;
 		readonly messageId: string;
+		readonly runAnchor?: ConversationRunAnchor | undefined;
 		readonly sessionId: string;
 		readonly text: string;
 	}) => Promise<void>;
 	readonly host: () => PiDurableConversationHost | undefined;
 	readonly logger: Logger;
 	readonly hooks: PromptHookService;
+	/** Live run timeline, used to freeze the segment rounds before a steer splits it. */
+	readonly liveRuns?: LiveRunCache | undefined;
+	/** Durable run/segment store; every message insert reserves its timeline position here. */
+	readonly runs?: (() => ConversationRunService | undefined) | undefined;
 	readonly prepareTurn?: (
 		sessionId: string,
 		input: PrepareTurnInput,
@@ -80,7 +87,7 @@ interface SessionRow {
 }
 
 function whenBusy(mode: MessageDeliveryMode): "steer" | "follow-up" {
-	return mode === "queue" ? "steer" : "follow-up";
+	return mode === "steer" ? "steer" : "follow-up";
 }
 
 /**
@@ -98,9 +105,11 @@ export class SessionMessagingService {
 	readonly #hooks: PromptHookService;
 	readonly #host: SessionMessagingOptions["host"];
 	readonly #logger: Logger;
+	readonly #liveRuns: SessionMessagingOptions["liveRuns"];
 	readonly #notifyMessageReceived: SessionMessagingOptions["notifyMessageReceived"];
 	readonly #policy: SessionMessagingOptions["policy"];
 	readonly #prepareTurn: SessionMessagingOptions["prepareTurn"];
+	readonly #runs: SessionMessagingOptions["runs"];
 
 	constructor(options: SessionMessagingOptions) {
 		this.#abortWorkspace = options.abortWorkspace;
@@ -111,10 +120,12 @@ export class SessionMessagingService {
 		this.#dispatchWorkspace = options.dispatchWorkspace;
 		this.#hooks = options.hooks;
 		this.#host = options.host;
+		this.#liveRuns = options.liveRuns;
 		this.#logger = options.logger.child("tsukaima::server::session-messaging");
 		this.#notifyMessageReceived = options.notifyMessageReceived;
 		this.#policy = options.policy;
 		this.#prepareTurn = options.prepareTurn;
+		this.#runs = options.runs;
 	}
 
 	#db(): TsukaimaDatabase {
@@ -197,23 +208,70 @@ export class SessionMessagingService {
 		if (chat.status !== "active") throw new Error("Chat object is archived");
 		const text = input.text.trim();
 		if (text.length === 0) throw new Error("Message is empty");
-		const deliveryMode = input.deliveryMode ?? "queue";
 		const direction = input.direction ?? "inbound";
-		const now = new Date().toISOString();
 		const id = input.messageId ?? randomUUID();
+		const requestedMode = input.deliveryMode ?? "steer";
 		const senderName =
 			input.senderName ?? (direction === "system" ? "Tsukaima scheduler" : "WebUI admin");
 		const senderExternalId =
 			input.senderExternalId ?? (direction === "system" ? "tsukaima-system" : "webui-admin");
 		const parts: MessagePart[] = [{ text, type: "text" }];
+		const runs = this.#runs?.();
 
-		if (deliveryMode === "interrupt") {
+		const [existing] = await database
+			.select({
+				deliveryMode: messages.deliveryMode,
+				deliveryStatus: messages.deliveryStatus,
+				id: messages.id,
+				occurredAt: messages.occurredAt,
+				seq: messages.seq,
+			})
+			.from(messages)
+			.where(eq(messages.id, id))
+			.limit(1);
+		if (
+			existing !== undefined &&
+			(existing.deliveryStatus === "accepted" || existing.deliveryStatus === "sent")
+		) {
+			return {
+				chatObjectId: chat.id,
+				durableConversationId: session.durableConversationId,
+				messageId: id,
+				mode: (existing.deliveryMode as MessageDeliveryMode | null) ?? requestedMode,
+			};
+		}
+
+		const activeAnchor = await runs?.activeAnchor(session.id);
+		let busy = activeAnchor !== undefined;
+		if (!busy && chat.kind !== "workspace") {
+			try {
+				busy = (await host.conversationActivity(session.durableConversationId))?.busy === true;
+			} catch {
+				busy = false;
+			}
+		}
+		const deliveryMode: MessageDeliveryMode = busy ? requestedMode : "steer";
+		let storedDeliveryMode: MessageDeliveryMode | null = busy ? requestedMode : null;
+		let occurredAt = new Date().toISOString();
+		let seq = existing?.seq !== undefined && existing.seq > 0 ? existing.seq : -1;
+
+		if (busy && requestedMode === "interrupt") {
 			const workspaceAborted = (await this.#abortWorkspace?.(session.id)) === true;
 			if (!workspaceAborted) {
 				this.#cancelPendingOutput?.(session.durableConversationId);
 				await host.abortConversation(session.durableConversationId);
 			}
+			// Abort first, then freeze the run at the position it actually reached. The
+			// interrupting message must be allocated after that position, never before it.
+			await runs?.interruptActiveRun(session.id, this.#liveRuns?.currentRounds(session.id));
+			await this.#liveRuns?.markInterrupted(session.id);
+			occurredAt = new Date().toISOString();
+			if (seq < 0) seq = (await runs?.allocateSeq(session.id)) ?? 0;
 		}
+		if (seq < 0 && !(busy && deliveryMode === "steer" && runs !== undefined)) {
+			seq = (await runs?.allocateSeq(session.id)) ?? 0;
+		}
+
 		const preparedContext = await this.#prepareTurn?.(session.id, {
 			...(input.references === undefined ? {} : { references: input.references }),
 			text,
@@ -236,46 +294,57 @@ export class SessionMessagingService {
 			.filter((entry): entry is string => entry !== undefined && entry.trim().length > 0)
 			.join("\n\n");
 
-		const [existing] = await database
-			.select({
-				deliveryStatus: messages.deliveryStatus,
-				id: messages.id,
-			})
-			.from(messages)
-			.where(eq(messages.id, id))
-			.limit(1);
-		if (
-			existing !== undefined &&
-			(existing.deliveryStatus === "accepted" || existing.deliveryStatus === "sent")
-		) {
-			return {
-				chatObjectId: chat.id,
-				durableConversationId: session.durableConversationId,
-				messageId: id,
-				mode: deliveryMode,
-			};
-		}
-		if (existing === undefined) {
-			await database.insert(messages).values({
-				chatObjectId: chat.id,
-				contentText: text,
+		let runAnchor: ConversationRunAnchor | undefined;
+		let persisted = false;
+		if (busy && deliveryMode === "steer" && runs !== undefined) {
+			const closed = await runs.closeActiveSegmentForSteer({
 				conversationId: session.id,
-				direction,
-				deliveryStatus: "pending",
-				id,
-				ingestedAt: now,
-				kind: "webui",
-				occurredAt: now,
-				partsJson: JSON.stringify(parts),
-				senderDisplayName: senderName,
-				senderExternalId,
-				updatedAt: now,
+				currentRounds: this.#liveRuns?.currentRounds(session.id),
 			});
-		} else {
-			await database
-				.update(messages)
-				.set({ deliveryStatus: "pending", updatedAt: now })
-				.where(eq(messages.id, id));
+			if (closed !== undefined) {
+				// Freeze the old segment first, then place the steer message after it and open the
+				// continuation after the message, so the transcript interleaves strictly.
+				if (seq < 0) seq = (await runs.allocateSeq(session.id)) ?? 0;
+				await this.#persistUserMessage(database, {
+					chat,
+					deliveryMode: storedDeliveryMode,
+					direction,
+					existing,
+					id,
+					now: occurredAt,
+					parts,
+					seq,
+					session,
+					senderExternalId,
+					senderName,
+					text,
+				});
+				persisted = true;
+				runAnchor = await runs.openSegment({
+					conversationId: session.id,
+					runId: closed.runId,
+					triggerKind: "steer",
+					triggerMessageId: id,
+				});
+				await this.#liveRuns?.advanceSegment(session.id, runAnchor);
+			}
+		}
+		if (!persisted) {
+			if (seq < 0) seq = (await runs?.allocateSeq(session.id)) ?? 0;
+			await this.#persistUserMessage(database, {
+				chat,
+				deliveryMode: storedDeliveryMode,
+				direction,
+				existing,
+				id,
+				now: occurredAt,
+				parts,
+				seq,
+				session,
+				senderExternalId,
+				senderName,
+				text,
+			});
 		}
 		try {
 			if (chat.kind === "workspace" && this.#dispatchWorkspace !== undefined) {
@@ -286,6 +355,7 @@ export class SessionMessagingService {
 					...(workspaceContext.length === 0 ? {} : { context: workspaceContext }),
 					deliveryMode,
 					messageId: id,
+					...(runAnchor === undefined ? {} : { runAnchor }),
 					sessionId: session.id,
 					text,
 				});
@@ -314,7 +384,7 @@ export class SessionMessagingService {
 					...(hookContext === undefined || hookContext.trim().length === 0
 						? {}
 						: { turnContext: { classification: "direct" as const, promptHooks: hookContext } }),
-					whenBusy: whenBusy(deliveryMode),
+					...(busy && deliveryMode !== "interrupt" ? { whenBusy: whenBusy(deliveryMode) } : {}),
 				});
 			}
 			await database
@@ -346,6 +416,7 @@ export class SessionMessagingService {
 				chatKind: chat.kind,
 				deliveryMode,
 				source: input.source ?? "session-tool",
+				...(storedDeliveryMode === null ? { idle: true } : {}),
 			},
 			result: "ok",
 			targetId: session.id,
@@ -363,6 +434,54 @@ export class SessionMessagingService {
 			messageId: id,
 			mode: deliveryMode,
 		};
+	}
+
+	async #persistUserMessage(
+		database: TsukaimaDatabase,
+		input: {
+			readonly chat: SessionRow["chat"];
+			readonly deliveryMode: MessageDeliveryMode | null;
+			readonly direction: "inbound" | "system";
+			readonly existing: { readonly id: string } | undefined;
+			readonly id: string;
+			readonly now: string;
+			readonly parts: readonly MessagePart[];
+			readonly seq: number;
+			readonly session: SessionRow["session"];
+			readonly senderExternalId: string;
+			readonly senderName: string;
+			readonly text: string;
+		},
+	): Promise<void> {
+		if (input.existing === undefined) {
+			await database.insert(messages).values({
+				chatObjectId: input.chat.id,
+				contentText: input.text,
+				conversationId: input.session.id,
+				deliveryMode: input.deliveryMode,
+				deliveryStatus: "pending",
+				direction: input.direction,
+				id: input.id,
+				ingestedAt: input.now,
+				kind: "webui",
+				occurredAt: input.now,
+				partsJson: JSON.stringify(input.parts),
+				seq: input.seq,
+				senderDisplayName: input.senderName,
+				senderExternalId: input.senderExternalId,
+				updatedAt: input.now,
+			});
+			return;
+		}
+		await database
+			.update(messages)
+			.set({
+				deliveryMode: input.deliveryMode,
+				deliveryStatus: "pending",
+				...(input.seq === 0 ? {} : { seq: input.seq }),
+				updatedAt: input.now,
+			})
+			.where(eq(messages.id, input.id));
 	}
 
 	async dispatchResumeHook(hook: PromptHook): Promise<void> {

@@ -10,6 +10,7 @@ import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
+import type { ConversationRunService } from "./conversation-runs.ts";
 import type {
 	ScheduleExecutionResult,
 	ScheduleExecutor,
@@ -26,6 +27,7 @@ export interface ScheduleExecutorOptions {
 	readonly messaging: SessionMessagingService;
 	readonly now?: () => number;
 	readonly policy: ConversationPolicyService;
+	readonly runs?: (() => ConversationRunService | undefined) | undefined;
 }
 
 function errorMessage(error: unknown): string {
@@ -45,6 +47,7 @@ export class ScheduleExecutionService implements ScheduleExecutor {
 	readonly #messaging: SessionMessagingService;
 	readonly #now: () => number;
 	readonly #policy: ConversationPolicyService;
+	readonly #runs: ScheduleExecutorOptions["runs"];
 
 	constructor(options: ScheduleExecutorOptions) {
 		this.#audit = options.audit;
@@ -54,6 +57,7 @@ export class ScheduleExecutionService implements ScheduleExecutor {
 		this.#messaging = options.messaging;
 		this.#now = options.now ?? Date.now;
 		this.#policy = options.policy;
+		this.#runs = options.runs;
 	}
 
 	#db(): TsukaimaDatabase {
@@ -182,6 +186,8 @@ export class ScheduleExecutionService implements ScheduleExecutor {
 			.limit(1);
 		if (existing?.deliveryStatus === "sent") return { messageId, result: { reused: true } };
 		const now = new Date(this.#now()).toISOString();
+		const runs = this.#runs?.();
+		const seq = existing === undefined ? ((await runs?.allocateSeq(target.session.id)) ?? 0) : 0;
 		if (existing === undefined) {
 			await database.insert(messages).values({
 				chatObjectId: target.chat.id,
@@ -194,6 +200,7 @@ export class ScheduleExecutionService implements ScheduleExecutor {
 				kind: "scheduler",
 				occurredAt: now,
 				partsJson: JSON.stringify([{ text: snapshot.prompt, type: "text" }]),
+				seq,
 				senderDisplayName: "Tsukaima scheduler",
 				senderExternalId: "tsukaima-scheduler",
 				updatedAt: now,

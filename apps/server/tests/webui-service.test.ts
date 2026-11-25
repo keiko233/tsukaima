@@ -292,6 +292,7 @@ describe("WebUI chat and session service", () => {
 				// Later than the live traffic above, so it is also the chat's preview row.
 				occurredAt: "2026-12-01T00:00:00.000Z",
 				partsJson: JSON.stringify([{ text: mentionText, type: "text" }]),
+				seq: 100,
 				senderDisplayName: "Observer",
 				senderExternalId: "user-2",
 			});
@@ -456,137 +457,94 @@ describe("WebUI chat and session service", () => {
 		}
 	});
 
-	test("listRunSteps preserves chronological order when cached thinking exceeds durable thinking", async () => {
+	test("expands a persisted run segment and its structured rounds by entry, run, or segment", async () => {
 		const lifecycle = await createLifecycle();
-		await lifecycle.start();
 		try {
 			const chat = await createLocalChat(lifecycle, {
 				sessionTitle: "Session 1",
 				title: "RunSteps Order",
 			});
 			const database = lifecycle.domainDatabase!;
-			const host = lifecycle.conversationHost!;
-			const [sessionRow] = await database
-				.select({ durableConversationId: conversations.durableConversationId })
-				.from(conversations)
-				.where(eq(conversations.id, chat.sessionId))
-				.limit(1);
-			const durableId = sessionRow!.durableConversationId;
 			const entryId = "entry-order-1";
-			host.listEntries = (async () => [
+			const run = await lifecycle.conversationRuns.startRun({
+				conversationId: chat.sessionId,
+				durableRunKey: "run-order-1",
+			});
+			const rounds = [
 				{
-					conversationId: durableId,
-					data: {},
-					id: "entry-win",
-					kind: "tsukaima.activityWindow",
-					occurredAtMs: 1000,
-				},
-				{
-					conversationId: durableId,
-					data: {},
-					id: "entry-tool-call",
-					kind: "pi.assistant",
-					model: [
+					model: { modelId: "model-1", providerId: "provider-1" },
+					roundIndex: 0,
+					stopReason: "toolUse" as const,
+					thinking: "first thought",
+					toolCalls: [
 						{
-							content: [{ arguments: { path: "a.ts" }, id: "c1", name: "read", type: "toolCall" }],
-							role: "assistant",
-							stopReason: "toolUse",
-						},
-					],
-					occurredAtMs: 1001,
-				},
-				{
-					conversationId: durableId,
-					data: {},
-					id: "entry-tool-res",
-					kind: "pi.tool-result",
-					model: [
-						{
-							content: [{ text: "ok", type: "text" }],
-							role: "toolResult",
-							toolCallId: "c1",
+							argumentsText: '{"path":"a.ts"}',
+							callId: "c1",
+							isError: false,
+							output: "ok",
 							toolName: "read",
 						},
 					],
-					occurredAtMs: 1002,
 				},
 				{
-					conversationId: durableId,
-					data: {},
-					id: entryId,
-					kind: "pi.assistant",
-					model: [
-						{
-							content: [{ text: "done", type: "text" }],
-							role: "assistant",
-							stopReason: "stop",
-						},
-					],
-					occurredAtMs: 1003,
+					roundIndex: 1,
+					stopReason: "stop" as const,
+					thinking: "second thought",
+					toolCalls: [],
 				},
-			]) as unknown as typeof host.listEntries;
-			await lifecycle.liveRuns.record(chat.sessionId, {
-				attempt: 1,
-				conversationId: durableId,
-				draftTools: [],
-				failure: undefined,
-				generationStartedAtMs: undefined,
-				model: undefined,
-				partialText: undefined,
-				partialThinking: "first thought",
-				retry: undefined,
-				runId: "run-1",
-				settled: false,
-				startedAtMs: 1000,
-				tools: [],
-				turns: 1,
+			];
+			await lifecycle.conversationRuns.syncSegmentRounds(run.anchor.segmentId, rounds);
+			const seq = await lifecycle.conversationRuns.allocateSeq(chat.sessionId);
+			const occurredAt = new Date().toISOString();
+			await database.insert(messagesTable).values({
+				contentText: "done",
+				conversationId: chat.sessionId,
+				deliveryStatus: "sent",
+				direction: "outbound",
+				durableEntryId: entryId,
+				id: "answer-row",
+				ingestedAt: occurredAt,
+				kind: "assistant",
+				occurredAt,
+				partsJson: JSON.stringify([{ text: "done", type: "text" }]),
+				runId: run.anchor.runId,
+				segmentIndex: 0,
+				seq,
+				senderDisplayName: "Tsukaima",
+				senderExternalId: "tsukaima",
+				updatedAt: occurredAt,
 			});
-			await lifecycle.liveRuns.record(chat.sessionId, {
-				attempt: 1,
-				conversationId: durableId,
-				draftTools: [],
-				failure: undefined,
-				generationStartedAtMs: undefined,
-				model: undefined,
-				partialText: undefined,
-				partialThinking: "first thought",
-				retry: undefined,
-				runId: "run-1",
-				settled: false,
-				startedAtMs: 1000,
-				tools: [
-					{
-						argumentsText: undefined,
-						callId: "c1",
-						output: "ok",
-						status: "done",
-						toolName: "read",
-					},
-				],
-				turns: 1,
+			await lifecycle.conversationRuns.settleRun({
+				conversationId: chat.sessionId,
+				finalMessageId: "answer-row",
+				rounds,
+				status: "completed",
 			});
-			await lifecycle.liveRuns.record(chat.sessionId, {
-				attempt: 1,
-				conversationId: durableId,
-				draftTools: [],
-				failure: undefined,
-				generationStartedAtMs: undefined,
-				model: undefined,
-				partialText: "done",
-				partialThinking: "second thought",
-				retry: undefined,
-				runId: "run-1",
-				settled: true,
-				startedAtMs: 1000,
-				tools: [],
-				turns: 2,
-			});
-			await lifecycle.liveRuns.finalizeAnswer(chat.sessionId, entryId);
 
-			const result = await listRunSteps(lifecycle, { entryId, sessionId: chat.sessionId });
-			const kinds = result.steps.map((step) => step.kind);
+			const byEntry = await listRunSteps(lifecycle, { entryId, sessionId: chat.sessionId });
+			expect(byEntry.segment?.id).toBe(run.anchor.segmentId);
+			expect(byEntry.rounds).toEqual(rounds);
+			const kinds = byEntry.steps.map((step) => step.kind);
 			expect(kinds.indexOf("thinking")).toBeLessThan(kinds.indexOf("tool"));
 			expect(kinds.lastIndexOf("thinking")).toBeGreaterThan(kinds.indexOf("tool"));
+			expect(byEntry.durationSeconds).toBeGreaterThanOrEqual(0);
+
+			const byRun = await listRunSteps(lifecycle, {
+				runId: run.anchor.runId,
+				sessionId: chat.sessionId,
+			});
+			expect(byRun.segment?.id).toBe(run.anchor.segmentId);
+			const bySegment = await listRunSteps(lifecycle, {
+				runSegmentId: run.anchor.segmentId,
+				sessionId: chat.sessionId,
+			});
+			expect(bySegment.segment?.id).toBe(run.anchor.segmentId);
+			expect(
+				await listRunSteps(lifecycle, { entryId: "missing", sessionId: chat.sessionId }),
+			).toEqual({
+				rounds: [],
+				steps: [],
+			});
 		} finally {
 			await lifecycle.stop();
 		}

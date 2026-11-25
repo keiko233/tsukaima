@@ -413,7 +413,7 @@ export class WorkspaceService {
 		const goal = input.goal?.trim();
 		if (goal !== undefined && goal.length > 0 && created.taskId !== null) {
 			await this.sendToWorkspace({
-				deliveryMode: "queue",
+				deliveryMode: "steer",
 				sessionId: created.sessionId,
 				text: goal,
 			});
@@ -654,7 +654,7 @@ export class WorkspaceService {
 			.limit(1);
 		if (workspace === undefined) throw new Error("workspace_not_found");
 		const result = await this.#messaging.sendAgentMessage({
-			deliveryMode: input.deliveryMode ?? "queue",
+			deliveryMode: input.deliveryMode ?? "steer",
 			sessionId: input.sessionId,
 			source: "session-tool",
 			text: input.text,
@@ -716,6 +716,7 @@ export class WorkspaceService {
 					? null
 					: {
 							contentText: latest.contentText ?? "",
+							deliveryMode: latest.deliveryMode,
 							direction: latest.direction,
 							deliveryStatus: latest.deliveryStatus,
 							durableEntryId: latest.durableEntryId,
@@ -725,6 +726,9 @@ export class WorkspaceService {
 							parts: [],
 							platformMessageId: latest.platformMessageId,
 							replyToMessageId: latest.replyToMessageId,
+							runId: latest.runId,
+							segmentIndex: latest.segmentIndex,
+							seq: latest.seq,
 							senderDisplayName: latest.senderDisplayName ?? "Unknown",
 							senderExternalId: latest.senderExternalId,
 							senderKind:

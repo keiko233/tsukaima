@@ -31,6 +31,7 @@ import { calculateContextTokens, estimateTextTokens } from "@earendil-works/pi-a
 import { Type } from "typebox";
 import type { Logger } from "../logging.ts";
 import { record as recordOf } from "../records.ts";
+import type { ConversationRunAnchor, ConversationRunService } from "./conversation-runs.ts";
 import type { WorkspaceReferenceService } from "./workspace-references.ts";
 import type { WorkspaceTodoService } from "./workspace-todos.ts";
 import type { GitIdentity } from "./git-identity.ts";
@@ -85,8 +86,10 @@ export interface WorkspaceTaskWorktree {
 
 export interface WorkspaceNativeDispatchInput {
 	readonly context?: string | undefined;
-	readonly deliveryMode: "follow-up" | "interrupt" | "queue";
+	readonly deliveryMode: "follow-up" | "interrupt" | "steer";
 	readonly messageId: string;
+	/** Anchor already opened by the shared ingress for a steer; the run itself continues. */
+	readonly runAnchor?: ConversationRunAnchor | undefined;
 	readonly sessionId: string;
 	readonly text: string;
 }
@@ -130,6 +133,7 @@ export interface WorkspaceNativeRunnerOptions {
 		readonly providerId: string;
 	}) => Promise<{ readonly model: Model<Api>; readonly runtime: ModelRuntime }>;
 	readonly repositoryRoot: string;
+	readonly runs?: (() => ConversationRunService | undefined) | undefined;
 	readonly sessionDirRoot: string;
 	readonly taskPrompt: (input: {
 		readonly baseRef: string;
@@ -359,10 +363,21 @@ export class WorkspaceNativeRunner {
 			if (native.activeRun !== undefined) {
 				if (native.session.isStreaming()) {
 					if (input.deliveryMode === "follow-up") {
-						await native.session.queue(prompt, "followUp");
+						// A follow-up waits for the current turn to settle, then runs as its own run
+						// anchored after its user message. Queueing it into the active native turn
+						// would mix both turns into one segment.
+						const previous = native.activeRun;
+						const followUp = (async () => {
+							await previous.catch(() => undefined);
+							await this.#startRun(native, context, prompt, input.messageId);
+						})();
+						native.activeRun = followUp;
+						void followUp.finally(() => {
+							if (native.activeRun === followUp) native.activeRun = undefined;
+						});
 						return;
 					}
-					if (input.deliveryMode === "queue") {
+					if (input.deliveryMode === "steer") {
 						await native.session.queue(prompt, "steer");
 						return;
 					}
@@ -378,7 +393,7 @@ export class WorkspaceNativeRunner {
 				}
 			}
 			if (native.activeRun !== undefined) await native.activeRun.catch(() => undefined);
-			this.#startRun(native, context, prompt);
+			await this.#startRun(native, context, prompt, input.messageId, input.runAnchor);
 		});
 	}
 
@@ -704,7 +719,25 @@ export class WorkspaceNativeRunner {
 		];
 	}
 
-	#startRun(native: NativeSession, context: WorkspaceContext, prompt: string): void {
+	async #startRun(
+		native: NativeSession,
+		context: WorkspaceContext,
+		prompt: string,
+		messageId: string,
+		runAnchor?: ConversationRunAnchor,
+	): Promise<void> {
+		const runs = this.#options.runs?.();
+		const runId = runAnchor?.runId ?? randomUUID();
+		if (runs !== undefined && runAnchor === undefined) {
+			await runs
+				.startRun({
+					conversationId: context.sessionId,
+					durableRunKey: runId,
+					runId,
+					triggerMessageId: messageId,
+				})
+				.catch(() => undefined);
+		}
 		const state: NativeRunState = {
 			attempt: 1,
 			conversationId: context.sessionId,
@@ -715,7 +748,7 @@ export class WorkspaceNativeRunner {
 			partialText: undefined,
 			partialThinking: undefined,
 			retry: undefined,
-			runId: randomUUID(),
+			runId,
 			sessionId: context.sessionId,
 			settled: false,
 			startedAtMs: Date.now(),
@@ -878,6 +911,14 @@ export class WorkspaceNativeRunner {
 		const database = this.#db();
 		const entryId = `native-${randomUUID()}`;
 		const now = new Date().toISOString();
+		const runs = this.#options.runs?.();
+		const anchor = await runs?.anchorForMessage({
+			conversationId: context.sessionId,
+			createIfMissing: true,
+			durableRunKey: state.runId,
+		});
+		const seq = (await runs?.allocateSeq(context.sessionId)) ?? 0;
+		const messageId = randomUUID();
 		await database
 			.insert(messages)
 			.values({
@@ -887,11 +928,13 @@ export class WorkspaceNativeRunner {
 				deliveryStatus: "sent",
 				direction: "outbound",
 				durableEntryId: entryId,
-				id: randomUUID(),
+				id: messageId,
 				ingestedAt: now,
 				kind: "workspace",
 				occurredAt: now,
 				partsJson: JSON.stringify([{ text, type: "text" }]),
+				...(anchor === undefined ? {} : { runId: anchor.runId, segmentIndex: anchor.segmentIndex }),
+				seq,
 				senderDisplayName: "Tsukaima",
 				senderExternalId: "tsukaima",
 				updatedAt: now,
@@ -911,6 +954,13 @@ export class WorkspaceNativeRunner {
 		state.settled = true;
 		this.#options.onLiveRun(context.sessionId, context.durableConversationId, snapshotOf(state));
 		await this.#options.finalizeLiveRun(context.sessionId, entryId);
+		await runs
+			?.settleRun({
+				conversationId: context.sessionId,
+				finalMessageId: messageId,
+				status: state.failure === undefined ? "completed" : "failed",
+			})
+			.catch(() => undefined);
 		this.#options.emitAfterReply({
 			channelId: null,
 			chatObjectId: context.chatObjectId,

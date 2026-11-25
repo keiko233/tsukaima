@@ -87,7 +87,7 @@ describe("workspace sessions", () => {
 		expect(chatList.some((chat) => chat.id === parent.chatId)).toBe(true);
 
 		const sent = await lifecycle.sessionMessaging.sendAgentMessage({
-			deliveryMode: "queue",
+			deliveryMode: "steer",
 			sessionId: workspace.sessionId,
 			source: "webui",
 			text: "Also cover the restart countdown wording.",

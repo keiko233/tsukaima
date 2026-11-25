@@ -1,4 +1,4 @@
-import type { RunStep } from "@tsukaima/contracts";
+import type { RunRound, RunStep, RunToolCall } from "@tsukaima/contracts";
 import type { LiveRunSnapshot } from "@tsukaima/core";
 
 /** Cap for a model retry error shown in the live timeline. */
@@ -17,7 +17,28 @@ function clip(value: string, max: number): string {
 interface DraftTool {
 	argumentsText: string | undefined;
 	callId: string;
+	roundIndex: number;
 	toolName: string;
+}
+
+interface MutableRunRound {
+	failure: string | undefined;
+	intermediateText: string;
+	model: { readonly modelId: string; readonly providerId: string } | undefined;
+	readonly roundIndex: number;
+	readonly startedAtMs: number;
+	stopReason: RunRound["stopReason"];
+	thinking: string;
+	durationMs: number | undefined;
+	toolCalls: RunToolCall[];
+}
+
+function joinedText(current: string, next: string): string {
+	const left = current.trim();
+	const right = next.trim();
+	if (right.length === 0) return left;
+	if (left.length === 0) return right;
+	return `${left}\n${right}`;
 }
 
 /**
@@ -43,6 +64,9 @@ export class LiveRunTimeline {
 	#text = "";
 	#drafts = new Map<string, DraftTool>();
 	#tools: LiveRunSnapshot["tools"] = [];
+	/** Structured rounds of this segment; a steer replaces the timeline instance entirely. */
+	#rounds: MutableRunRound[] = [];
+	#currentRoundIndex: number | undefined;
 	/** Tool calls already committed as steps, so a repeated snapshot cannot duplicate them. */
 	#committedToolCalls = new Set<string>();
 
@@ -53,6 +77,28 @@ export class LiveRunTimeline {
 	/** Steps accumulated so far, as a snapshot the caller can store without later mutation. */
 	get steps(): RunStep[] {
 		return [...this.#steps];
+	}
+
+	/**
+	 * Structured rounds of the current segment. Current-round partial text and pending tool calls
+	 * are included, so a live reader renders the same unit a settled segment stores.
+	 */
+	get rounds(): RunRound[] {
+		return this.#rounds.map((round, index) => {
+			const live = index === this.#currentRoundIndex;
+			const thinking = joinedText(round.thinking, live ? this.#thinking : "");
+			const text = joinedText(round.intermediateText, live ? this.#text : "");
+			return {
+				...(round.failure === undefined ? {} : { failure: round.failure }),
+				...(round.durationMs === undefined ? {} : { durationMs: round.durationMs }),
+				...(text.length === 0 || round.toolCalls.length === 0 ? {} : { intermediateText: text }),
+				...(round.model === undefined ? {} : { model: round.model }),
+				roundIndex: round.roundIndex,
+				...(round.stopReason === undefined ? {} : { stopReason: round.stopReason }),
+				...(thinking.length === 0 ? {} : { thinking }),
+				toolCalls: round.toolCalls.map((tool) => ({ ...tool })),
+			};
+		});
 	}
 
 	/** Reasoning of the current round that has not been committed to `steps` yet. */
@@ -131,6 +177,7 @@ export class LiveRunTimeline {
 			if (this.#tools.length > 0) this.#commitTools();
 		}
 
+		this.#syncRoundTools(snapshot);
 		this.#turns = snapshot.turns;
 		return this.steps;
 	}
@@ -180,6 +227,19 @@ export class LiveRunTimeline {
 		now: number,
 	): void {
 		this.#callCount += 1;
+		this.#rounds.push({
+			durationMs: undefined,
+			failure: undefined,
+			intermediateText: "",
+			model:
+				model === undefined ? undefined : { modelId: model.modelId, providerId: model.providerId },
+			roundIndex: this.#rounds.length,
+			startedAtMs: Math.max(0, Math.min(startedAtMs, now)),
+			stopReason: undefined,
+			thinking: "",
+			toolCalls: [],
+		});
+		this.#currentRoundIndex = this.#rounds.length - 1;
 		const step: RunStep = {
 			attempt,
 			call: this.#callCount,
@@ -212,6 +272,11 @@ export class LiveRunTimeline {
 			startedAtMs: start,
 			...(model === undefined ? {} : { modelId: model.modelId, providerId: model.providerId }),
 		};
+		const round =
+			this.#currentRoundIndex === undefined ? undefined : this.#rounds[this.#currentRoundIndex];
+		if (round !== undefined && model !== undefined) {
+			round.model = { modelId: model.modelId, providerId: model.providerId };
+		}
 	}
 
 	#finishModel(status: "retry" | "done" | "failed", error: string | undefined, now: number): void {
@@ -220,12 +285,25 @@ export class LiveRunTimeline {
 		const step = this.#steps[index];
 		if (step === undefined || step.kind !== "model") return;
 		if (step.status !== "running" && step.status !== "retry" && status !== "failed") return;
+		const endedAtMs = Math.max(step.startedAtMs, Math.floor(now));
 		this.#steps[index] = {
 			...step,
-			endedAtMs: Math.max(step.startedAtMs, Math.floor(now)),
+			endedAtMs,
 			status,
 			...(error === undefined ? {} : { error: clip(error, MAX_STEP_TEXT_CHARS) }),
 		};
+		const round =
+			this.#currentRoundIndex === undefined ? undefined : this.#rounds[this.#currentRoundIndex];
+		if (round !== undefined) {
+			round.durationMs = Math.max(0, endedAtMs - round.startedAtMs);
+			if (error !== undefined) round.failure = clip(error, MAX_STEP_TEXT_CHARS);
+			round.stopReason =
+				status === "retry" || status === "failed"
+					? "error"
+					: this.#tools.length > 0 || this.#drafts.size > 0
+						? "toolUse"
+						: "stop";
+		}
 	}
 
 	#rememberDrafts(drafts: LiveRunSnapshot["draftTools"]): void {
@@ -234,6 +312,7 @@ export class LiveRunTimeline {
 			this.#drafts.set(draft.callId, {
 				argumentsText: draft.argumentsText,
 				callId: draft.callId,
+				roundIndex: this.#currentRoundIndex ?? Math.max(0, this.#rounds.length - 1),
 				toolName: draft.toolName,
 			});
 		}
@@ -244,11 +323,16 @@ export class LiveRunTimeline {
 	 * leaves the tool-call arguments for `#commitTools`, which pairs them with the tool output.
 	 */
 	#commitRoundContent(options: { keepDrafts?: boolean } = {}): void {
+		const round =
+			this.#currentRoundIndex === undefined ? undefined : this.#rounds[this.#currentRoundIndex];
 		if (this.#thinking.trim().length > 0) {
 			this.#steps.push({ kind: "thinking", text: this.#thinking });
+			if (round !== undefined) round.thinking = joinedText(round.thinking, this.#thinking);
 		}
 		if (this.#text.trim().length > 0) {
 			this.#steps.push({ kind: "text", text: this.#text });
+			if (round !== undefined)
+				round.intermediateText = joinedText(round.intermediateText, this.#text);
 		}
 		this.#thinking = "";
 		this.#text = "";
@@ -268,6 +352,24 @@ export class LiveRunTimeline {
 	}
 
 	#commitTools(): void {
+		const round =
+			this.#currentRoundIndex === undefined ? undefined : this.#rounds[this.#currentRoundIndex];
+		if (round !== undefined) {
+			for (const tool of this.#tools) {
+				this.#upsertRoundTool(round, {
+					argumentsText: clip(
+						tool.argumentsText ?? this.#drafts.get(tool.callId)?.argumentsText ?? "",
+						LIVE_RUN_TOOL_ARGUMENTS_MAX_CHARS,
+					),
+					callId: tool.callId,
+					isError: false,
+					output: clip(tool.output ?? "", LIVE_RUN_TOOL_OUTPUT_MAX_CHARS),
+					status: "done",
+					toolName: tool.toolName,
+				});
+			}
+			if (round.toolCalls.length > 0) round.stopReason = "toolUse";
+		}
 		for (const tool of this.#tools) {
 			if (this.#committedToolCalls.has(tool.callId)) continue;
 			this.#committedToolCalls.add(tool.callId);
@@ -285,5 +387,44 @@ export class LiveRunTimeline {
 		}
 		this.#tools = [];
 		this.#drafts.clear();
+	}
+
+	/** Keep each structured round's tool calls in sync with the live snapshot. */
+	#syncRoundTools(snapshot: LiveRunSnapshot): void {
+		const roundIndex = this.#currentRoundIndex ?? Math.max(0, this.#rounds.length - 1);
+		const round = this.#rounds[roundIndex];
+		if (round === undefined) return;
+		for (const draft of snapshot.draftTools) {
+			if (this.#committedToolCalls.has(draft.callId)) continue;
+			if (snapshot.tools.some((tool) => tool.callId === draft.callId)) continue;
+			this.#upsertRoundTool(round, {
+				argumentsText: clip(draft.argumentsText ?? "", LIVE_RUN_TOOL_ARGUMENTS_MAX_CHARS),
+				callId: draft.callId,
+				isError: false,
+				output: "",
+				status: "pending",
+				toolName: draft.toolName,
+			});
+		}
+		for (const tool of snapshot.tools) {
+			if (this.#committedToolCalls.has(tool.callId)) continue;
+			this.#upsertRoundTool(round, {
+				argumentsText: clip(
+					tool.argumentsText ?? this.#drafts.get(tool.callId)?.argumentsText ?? "",
+					LIVE_RUN_TOOL_ARGUMENTS_MAX_CHARS,
+				),
+				callId: tool.callId,
+				isError: false,
+				output: clip(tool.output ?? "", LIVE_RUN_TOOL_OUTPUT_MAX_CHARS),
+				status: tool.status,
+				toolName: tool.toolName,
+			});
+		}
+	}
+
+	#upsertRoundTool(round: MutableRunRound, call: RunToolCall): void {
+		const index = round.toolCalls.findIndex((tool) => tool.callId === call.callId);
+		if (index === -1) round.toolCalls.push(call);
+		else round.toolCalls[index] = call;
 	}
 }

@@ -6,6 +6,7 @@ import {
 	messageQuoteSchema,
 	type MessageDeliveryMode,
 	type MessagePage,
+	type RunSegmentSummary,
 	type MessagePart,
 	type MessageReplyPreview,
 	type MessageSummary as ContractMessageSummary,
@@ -34,7 +35,7 @@ import {
 	replaceMentionIds,
 	type MentionLabelScope,
 } from "./mention-labels.ts";
-import { collectRunSteps } from "./run-steps.ts";
+import { roundsToRunSteps } from "./conversation-runs.ts";
 import { computeOmittedSessionTools } from "./session-tool-policy.ts";
 
 type ChatKind = "private" | "group" | "webui" | "workspace" | "task" | "plugin";
@@ -276,6 +277,7 @@ function toMessageSummary(
 	const replyTo = buildReplyPreview(row, replyTarget, displayText);
 	return {
 		contentText: displayText(row.contentText ?? ""),
+		deliveryMode: row.deliveryMode,
 		direction: row.direction,
 		deliveryStatus: row.deliveryStatus,
 		durableEntryId: row.durableEntryId,
@@ -289,6 +291,9 @@ function toMessageSummary(
 		...(replyTo === undefined ? {} : { replyTo }),
 		replyToMessageId: row.replyToMessageId,
 		replyDecision,
+		runId: row.runId,
+		segmentIndex: row.segmentIndex,
+		seq: row.seq,
 		senderDisplayName: row.senderDisplayName ?? (isWebui ? "WebUI" : "Unknown"),
 		senderExternalId: row.senderExternalId,
 		// The WebUI operator is the system side of a local conversation, not a channel user: it
@@ -335,6 +340,7 @@ const MAX_MESSAGE_PAGE_SIZE = 200;
 interface MessageCursor {
 	id: string;
 	occurredAt: string;
+	seq: number;
 }
 
 /** Raised for a cursor the service did not mint; the RPC layer maps it to INVALID_INPUT. */
@@ -360,7 +366,11 @@ function decodeMessageCursor(cursor: string): MessageCursor {
 				typeof record.occurredAt === "string" &&
 				record.occurredAt.length > 0
 			) {
-				return { id: record.id, occurredAt: record.occurredAt };
+				return {
+					id: record.id,
+					occurredAt: record.occurredAt,
+					seq: typeof record.seq === "number" && record.seq > 0 ? record.seq : 0,
+				};
 			}
 		}
 	} catch {
@@ -406,7 +416,7 @@ export async function listChats(
 		const ranked = database
 			.select({
 				id: messages.id,
-				rank: sql<number>`row_number() over (partition by ${messages.conversationId} order by ${messages.occurredAt} desc, ${messages.id} desc)`.as(
+				rank: sql<number>`row_number() over (partition by ${messages.conversationId} order by case when ${messages.seq} > 0 then 1 else 0 end desc, ${messages.seq} desc, ${messages.occurredAt} desc, ${messages.id} desc)`.as(
 					"message_rank",
 				),
 			})
@@ -664,6 +674,10 @@ export async function abortSessionRun(
 		? false
 		: lifecycle.replyDispatcher.cancelPendingOutput(session.durableConversationId);
 	if (!workspaceAborted) await host.abortConversation(session.durableConversationId);
+	await lifecycle.conversationRuns
+		.interruptActiveRun(sessionId, lifecycle.liveRuns.currentRounds(sessionId))
+		.catch(() => undefined);
+	await lifecycle.liveRuns.markInterrupted(sessionId).catch(() => undefined);
 	await lifecycle.writeAudit({
 		action: "session.abort",
 		actorKind: "user",
@@ -855,11 +869,12 @@ export async function listMessages(
 		.where(eq(conversations.id, sessionId))
 		.limit(1);
 	if (session === undefined) throw new Error("Session not found");
+	const seqGroup = sql<number>`case when ${messages.seq} > 0 then 1 else 0 end`;
 	const rows = await database
 		.select()
 		.from(messages)
 		.where(eq(messages.conversationId, sessionId))
-		.orderBy(asc(messages.occurredAt), asc(messages.id));
+		.orderBy(asc(seqGroup), asc(messages.seq), asc(messages.occurredAt), asc(messages.id));
 	return toMessageSummaries(database, rows, [session]);
 }
 
@@ -888,14 +903,28 @@ export async function listMessagePage(
 		MAX_MESSAGE_PAGE_SIZE,
 	);
 	const cursor = input.cursor === undefined ? null : decodeMessageCursor(input.cursor);
+	const seqGroup = sql<number>`case when ${messages.seq} > 0 then 1 else 0 end`;
+	const cursorGroup = cursor === null ? 1 : cursor.seq > 0 ? 1 : 0;
 	const filters =
 		cursor === null
 			? eq(messages.conversationId, input.sessionId)
 			: and(
 					eq(messages.conversationId, input.sessionId),
 					or(
-						lt(messages.occurredAt, cursor.occurredAt),
-						and(eq(messages.occurredAt, cursor.occurredAt), lt(messages.id, cursor.id)),
+						lt(seqGroup, cursorGroup),
+						and(
+							eq(seqGroup, cursorGroup),
+							or(
+								lt(messages.seq, cursor.seq),
+								and(
+									eq(messages.seq, cursor.seq),
+									or(
+										lt(messages.occurredAt, cursor.occurredAt),
+										and(eq(messages.occurredAt, cursor.occurredAt), lt(messages.id, cursor.id)),
+									),
+								),
+							),
+						),
 					),
 				);
 
@@ -904,17 +933,34 @@ export async function listMessagePage(
 		.select()
 		.from(messages)
 		.where(filters)
-		.orderBy(desc(messages.occurredAt), desc(messages.id))
+		.orderBy(desc(seqGroup), desc(messages.seq), desc(messages.occurredAt), desc(messages.id))
 		.limit(limit + 1);
 	const pageRows = rows.slice(0, limit);
 	const oldest = pageRows.at(-1);
 	const orderedRows = pageRows.toReversed();
+	const seqs = orderedRows.map((row) => row.seq).filter((seq) => seq > 0);
+	const minSeq = seqs.length === 0 ? 0 : Math.min(...seqs);
+	const maxSeq = seqs.length === 0 ? minSeq : Math.max(...seqs);
+	const runSegments =
+		orderedRows.length === 0
+			? input.cursor === undefined
+				? await lifecycle.conversationRuns.listSegmentsForConversation(input.sessionId)
+				: []
+			: await lifecycle.conversationRuns.listSegmentsForConversation(
+					input.sessionId,
+					input.cursor === undefined ? { minSeq } : { maxSeq, minSeq },
+				);
 	return {
 		messages: await toMessageSummaries(database, orderedRows, [session]),
 		nextCursor:
 			rows.length > limit && oldest !== undefined
-				? encodeMessageCursor({ id: oldest.id, occurredAt: oldest.occurredAt })
+				? encodeMessageCursor({
+						id: oldest.id,
+						occurredAt: oldest.occurredAt,
+						seq: oldest.seq,
+					})
 				: null,
+		runSegments,
 	};
 }
 
@@ -962,49 +1008,43 @@ export async function getSessionMessage(
  */
 export async function listRunSteps(
 	lifecycle: TsukaimaLifecycle,
-	input: { entryId: string; sessionId: string },
-): Promise<{ durationSeconds?: number; steps: RunStep[] }> {
+	input: {
+		entryId?: string | undefined;
+		runId?: string | undefined;
+		runSegmentId?: string | undefined;
+		sessionId: string;
+	},
+): Promise<{
+	durationSeconds?: number;
+	rounds: RunSegmentSummary["rounds"];
+	segment?: RunSegmentSummary;
+	steps: RunStep[];
+}> {
 	const database = requireDatabase(lifecycle);
-	const host = lifecycle.conversationHost;
-	if (host === undefined) throw new Error("Conversation host is not ready");
 	const [session] = await database
-		.select({ durableConversationId: conversations.durableConversationId })
+		.select({ id: conversations.id })
 		.from(conversations)
 		.where(eq(conversations.id, input.sessionId))
 		.limit(1);
 	if (session === undefined) throw new Error("Session not found");
-	const entries = await host.listEntries(session.durableConversationId, 500, input.entryId);
-	const durable = collectRunSteps(
-		entries.map((entry) => ({
-			data: entry.data,
-			id: String(entry.id),
-			kind: entry.kind,
-			model: entry.model,
-		})),
-		input.entryId,
-	);
-	// `pi.live` is cleared when a run settles, and some providers do not copy reasoning into
-	// the durable assistant entry. The KV cache kept the final live process chain keyed by the
-	// durable answer id, so the transcript can still show what the agent thought and ran.
-	const cached = await lifecycle.liveRuns.final(input.entryId);
-	if (cached?.sessionId !== input.sessionId) return durable;
-	const durationSeconds = durable.durationSeconds ?? cached.durationSeconds;
-	const withDuration = durationSeconds === undefined ? {} : { durationSeconds };
-	const cachedThinking = cached.steps.filter((step) => step.kind === "thinking");
-	const durableThinking = durable.steps.filter((step) => step.kind === "thinking");
-	if (durable.steps.length === 0) {
-		return { ...withDuration, steps: [...cached.steps] };
+	const runs = lifecycle.conversationRuns;
+	let segment: RunSegmentSummary | undefined;
+	if (input.runSegmentId !== undefined) {
+		segment = await runs.getSegmentById(input.runSegmentId);
+	} else if (input.runId !== undefined) {
+		segment = await runs.getLatestSegmentSummaryForRun(input.runId);
+	} else if (input.entryId !== undefined) {
+		segment = await runs.getSegmentForEntry(input.sessionId, input.entryId);
 	}
-	// Durable is authoritative for tools and text, but some providers keep reasoning only in
-	// the live generation. If the cached chain has reasoning the transcript lost, keep all of
-	// it instead of dropping the earlier rounds because the final entry happens to carry one.
-	if (cachedThinking.length > durableThinking.length) {
-		return {
-			...withDuration,
-			steps: [...cached.steps],
-		};
-	}
-	return durable;
+	if (segment === undefined) return { rounds: [], steps: [] };
+	const durationSeconds =
+		segment.durationMs === null ? undefined : Math.round((segment.durationMs / 1_000) * 10) / 10;
+	return {
+		...(durationSeconds === undefined ? {} : { durationSeconds }),
+		rounds: segment.rounds,
+		segment,
+		steps: roundsToRunSteps(segment.rounds),
+	};
 }
 
 export async function sendMessage(
@@ -1044,6 +1084,9 @@ export async function sendMessage(
 			throw new Error("External chat has no channel");
 		}
 		const channelKind = lifecycle.channels.get(channelId)?.kind;
+		const runs = lifecycle.conversationRuns;
+		const activeAnchor = await runs.activeAnchor(session.session.id);
+		const seq = await runs.allocateSeq(session.session.id);
 		await database.insert(messages).values({
 			chatObjectId: session.chat.id,
 			contentText: text,
@@ -1055,6 +1098,10 @@ export async function sendMessage(
 			kind: toMessageKind(channelKind),
 			occurredAt: now,
 			partsJson: JSON.stringify([{ text, type: "text" }]),
+			...(activeAnchor === undefined
+				? {}
+				: { runId: activeAnchor.runId, segmentIndex: activeAnchor.segmentIndex }),
+			seq,
 			senderDisplayName: "WebUI admin",
 			senderExternalId: "webui-admin",
 			updatedAt: now,

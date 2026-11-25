@@ -122,6 +122,7 @@ import { NativeDecisionModels } from "./services/decision-models.ts";
 import { ConversationPacingTracker } from "./services/conversation-pacing.ts";
 import { ConversationPolicyService } from "./services/conversation-policy.ts";
 import { ConversationRouter } from "./services/conversation-router.ts";
+import { ConversationRunService } from "./services/conversation-runs.ts";
 import { DrizzleContextProvider } from "./services/context-provider.ts";
 import { ChatSnapshotService } from "./services/chat-snapshot.ts";
 import {
@@ -276,6 +277,7 @@ export class TsukaimaLifecycle {
 	readonly conversationPacing: ConversationPacingTracker;
 	readonly conversationPolicy: ConversationPolicyService;
 	readonly conversationRouter: ConversationRouter;
+	readonly conversationRuns: ConversationRunService;
 	readonly hooks: HookBus;
 	readonly pluginHost: PluginHost;
 	readonly pluginMigrations: MigrationRegistry;
@@ -399,7 +401,10 @@ export class TsukaimaLifecycle {
 			},
 			path: join(config.dataDir, "cache.sqlite"),
 		});
-		this.liveRuns = new LiveRunCache(this.cache);
+		this.conversationRuns = new ConversationRunService({
+			database: () => this.domainDatabase,
+		});
+		this.liveRuns = new LiveRunCache(this.cache, { runs: this.conversationRuns });
 		this.backupDrillRoot = options?.backupDrill?.root ?? config.backupDrillRoot;
 		this.modelOverride = options?.model;
 		this.conversationGateOverride = options?.conversationGate;
@@ -522,9 +527,19 @@ export class TsukaimaLifecycle {
 					targetSessionId: sessionId,
 				});
 			},
+			onInboundPersisted: ({ chatObjectId, classification, envelope, sessionId }) => {
+				this.hooks.emitDetached("message.received", {
+					channelId: envelope.channelId,
+					chatObjectId,
+					classification,
+					envelope,
+					sessionId,
+				});
+			},
 			pacing: this.conversationPacing,
 			policy: this.conversationPolicy,
 			promptContext: async (sessionId) => this.promptHooks.renderContext(sessionId),
+			runs: () => this.conversationRuns,
 		});
 		this.outbound = new OutboundService({
 			audit: (entry) => this.writeAudit(entry),
@@ -534,6 +549,7 @@ export class TsukaimaLifecycle {
 			logger: this.runtimeLog,
 			onDirectSend: (durableConversationId, text) =>
 				this.replyDispatcher.noteDirectSend(durableConversationId, text),
+			runs: () => this.conversationRuns,
 			onToolSend: (sent) => {
 				// Stickers/media/files are recorded so they never look like chat text: only a text
 				// send suppresses a later preamble or a repeated final reply.
@@ -740,6 +756,7 @@ export class TsukaimaLifecycle {
 			logger: this.runtimeLog,
 			pacing: this.conversationPacing,
 			policy: this.conversationPolicy,
+			runs: () => this.conversationRuns,
 			...(options?.reply?.pendingGraceMs === undefined
 				? {}
 				: { pendingGraceMs: options.reply.pendingGraceMs }),
@@ -789,6 +806,7 @@ export class TsukaimaLifecycle {
 			executor: async () => await workspaceSandboxProvider(),
 			gitIdentity: () => readGitIdentity(this.domainDatabase),
 			logger: this.runtimeLog,
+			runs: () => this.conversationRuns,
 			onLiveRun: (sessionId, durableConversationId, snapshot) => {
 				this.hooks.emitDetached("agent.activity", {
 					...snapshot,
@@ -845,6 +863,7 @@ export class TsukaimaLifecycle {
 			dispatchWorkspace: async (input) => await this.workspaceNative.dispatch(input),
 			hooks: this.promptHooks,
 			host: () => this.conversationHost,
+			liveRuns: this.liveRuns,
 			logger: this.runtimeLog,
 			prepareTurn: async (sessionId, input) => {
 				const database = this.domainDatabase;
@@ -873,6 +892,7 @@ export class TsukaimaLifecycle {
 				ensureHostPolicy: (sessionId, durableConversationId) =>
 					this.conversationPolicy.ensureHostPolicy(sessionId, durableConversationId),
 			},
+			runs: () => this.conversationRuns,
 		});
 		const scheduleExecution = new ScheduleExecutionService({
 			audit: (entry) => this.writeAudit(entry),
@@ -881,6 +901,7 @@ export class TsukaimaLifecycle {
 			logger: this.runtimeLog,
 			messaging: this.sessionMessaging,
 			policy: this.conversationPolicy,
+			runs: () => this.conversationRuns,
 		});
 		this.schedules = new ScheduleService({
 			audit: (entry) => this.writeAudit(entry),
@@ -2576,13 +2597,6 @@ export class TsukaimaLifecycle {
 						error: error instanceof Error ? error.message : String(error),
 						sessionId: result.sessionId,
 					});
-				});
-				this.hooks.emitDetached("message.received", {
-					channelId,
-					chatObjectId: result.chatObjectId,
-					classification: result.classification,
-					envelope: result.envelope ?? envelope,
-					sessionId: result.sessionId,
 				});
 			}
 		} catch (error) {
