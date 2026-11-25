@@ -222,6 +222,9 @@ describe("built-in plugin panels", () => {
 		expect(html).toContain("Import workers");
 		expect(html).toContain("Semantic workers");
 		expect(html).toContain("Classify in a separate background job");
+		expect(html).toContain("Turn prompt injection");
+		expect(html).toContain("Inject sticker decision prompt");
+		expect(html).toContain("Save prompt settings");
 		expect(html).toContain("Expand a pack to browse its stickers");
 		expect(html).not.toContain("No items in this view.");
 		const zh = renderPanel(stickerUi, stickerI18n.bind("zh-cn"), stickerPlugin);
@@ -239,6 +242,9 @@ describe("built-in plugin panels", () => {
 		expect(zh).toContain("导入并发数");
 		expect(zh).toContain("语义并发数");
 		expect(zh).toContain("在独立后台任务中分类");
+		expect(zh).toContain("回合提示词注入");
+		expect(zh).toContain("启用表情包决策提示词注入");
+		expect(zh).toContain("保存提示词设置");
 		expect(zh).toContain("展开表情包即可浏览素材");
 	});
 });

@@ -37,6 +37,7 @@ import { pickBy } from "es-toolkit";
 import { useEffect, useRef, useState } from "react";
 import { i18n } from "./i18n.ts";
 import { STICKER_MEME_PLUGIN_ID } from "./manifest.ts";
+import { DEFAULT_STICKER_DECISION_PROMPT, STICKER_DECISION_PROMPT_MAX_CHARS } from "./prompt.ts";
 
 /** Browser-safe view of the fields this panel receives over plugin RPC. */
 interface StickerPack {
@@ -928,6 +929,12 @@ function StickerPanel() {
 		typeof config.value.semanticProviderId === "string" ? config.value.semanticProviderId : "";
 	const configModelId =
 		typeof config.value.semanticModel === "string" ? config.value.semanticModel : "";
+	const configPromptEnabled = config.value.promptEnabled !== false;
+	const configPromptText =
+		typeof config.value.promptText === "string" ? config.value.promptText : "";
+	const [promptEnabled, setPromptEnabled] = useState(configPromptEnabled);
+	const [promptText, setPromptText] = useState(configPromptText);
+	const [savingPrompt, setSavingPrompt] = useState(false);
 	const [semanticMode, setSemanticMode] = useState<SemanticMode>(
 		configMode === "heuristic" || configMode === "auto" || configMode === "vision"
 			? configMode
@@ -979,6 +986,11 @@ function StickerPanel() {
 			}
 		}
 	}, [availableModels, configMode, configModelId, configProviderId, configuredCustom]);
+
+	useEffect(() => {
+		setPromptEnabled(configPromptEnabled);
+		setPromptText(configPromptText);
+	}, [configPromptEnabled, configPromptText]);
 
 	const refresh = async (): Promise<void> => {
 		setLoading(true);
@@ -1282,6 +1294,23 @@ function StickerPanel() {
 			toast.error(t.t("semantic_model_save_failed"), String(error));
 		} finally {
 			setSavingModel(false);
+		}
+	};
+
+	const savePromptSettings = async () => {
+		setSavingPrompt(true);
+		try {
+			const trimmed = promptText.trim();
+			await config.save({
+				promptEnabled,
+				promptText: trimmed.length === 0 ? null : trimmed,
+			});
+			toast.success(t.t("prompt_saved"));
+			await refresh();
+		} catch (error) {
+			toast.error(t.t("prompt_save_failed"), String(error));
+		} finally {
+			setSavingPrompt(false);
 		}
 	};
 
@@ -1984,6 +2013,51 @@ function StickerPanel() {
 							})}
 						</Alert>
 					)}
+				</div>
+			</PluginSection>
+
+			<PluginSection description={t.t("prompt_hint")} title={t.t("prompt_section")}>
+				<div className="space-y-3">
+					<div className="flex flex-wrap items-center gap-2">
+						<span className="text-xs text-muted-foreground">{t.t("prompt_enabled")}</span>
+						<Switch
+							ariaLabel={t.t("prompt_enabled")}
+							checked={promptEnabled}
+							onCheckedChange={setPromptEnabled}
+						/>
+					</div>
+					<Field label={t.t("prompt_text")}>
+						<textarea
+							className="min-h-24 w-full rounded-md border border-border bg-background px-3 py-2 text-xs"
+							disabled={!promptEnabled}
+							maxLength={STICKER_DECISION_PROMPT_MAX_CHARS}
+							placeholder={DEFAULT_STICKER_DECISION_PROMPT}
+							value={promptText}
+							onChange={(event) => setPromptText(event.target.value)}
+						/>
+					</Field>
+					<div className="flex flex-wrap gap-2">
+						<Button
+							disabled={savingPrompt}
+							leadingIcon={<Save />}
+							loading={savingPrompt}
+							size="sm"
+							variant="secondary"
+							onClick={() => void savePromptSettings()}
+						>
+							{t.t("prompt_save")}
+						</Button>
+						{promptText.trim().length > 0 ? (
+							<Button
+								disabled={savingPrompt}
+								size="sm"
+								variant="ghost"
+								onClick={() => setPromptText("")}
+							>
+								{t.t("prompt_reset")}
+							</Button>
+						) : null}
+					</div>
 				</div>
 			</PluginSection>
 

@@ -177,5 +177,13 @@
 	"uncategorized_hint": "Stickers without a pack or without emotion/keyword tags. Click any sticker to assign a pack or tags.",
 	"uncategorized_empty": "All stickers are categorized.",
 	"uncategorized_pack_name": "Uncategorized (no pack)",
-	"item_pack": "Sticker pack"
+	"item_pack": "Sticker pack",
+	"prompt_section": "Turn prompt injection",
+	"prompt_hint": "Injects a short decision prompt into chat turns when stickers are available so the model actively considers sending a sticker while thinking.",
+	"prompt_enabled": "Inject sticker decision prompt",
+	"prompt_text": "Custom prompt (optional)",
+	"prompt_save": "Save prompt settings",
+	"prompt_reset": "Use built-in default",
+	"prompt_saved": "Sticker prompt settings saved",
+	"prompt_save_failed": "Could not save sticker prompt settings"
 }

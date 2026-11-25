@@ -43,6 +43,7 @@ const MIGRATIONS = readdirSync(new URL("../migrations", import.meta.url))
 	}));
 import { createStickerReplyTransform } from "./output.ts";
 import { StickerProgressTracker } from "./progress.ts";
+import { DEFAULT_STICKER_DECISION_PROMPT } from "./prompt.ts";
 import { StickerRepository } from "./repository.ts";
 import { registerStickerRpc } from "./rpc.ts";
 import { StickerSelectionService } from "./selection.ts";
@@ -3230,5 +3231,82 @@ describe("QQ chat sticker stealing", () => {
 				packId: "pack-does-not-exist",
 			}),
 		).rejects.toThrow("Pack not found");
+	});
+});
+
+describe("sticker decision prompt hints", () => {
+	test("injects decision prompt only when stickers exist and honors plugin settings", async () => {
+		const fixture = baseFixture();
+		const repository = new StickerRepository(fixture.database);
+		const selection = new StickerSelectionService({ media: fixture.media, repository });
+		const learning = new LearningService({
+			media: fixture.media,
+			repository,
+		});
+		let settingsValue: Record<string, unknown> = {};
+		const rpcHandlers = new Map<string, (input: unknown) => Promise<unknown> | unknown>();
+		const rpcContext = {
+			database: fixture.database,
+			logger: {
+				child: () => rpcContext.logger,
+				debug: () => {},
+				error: () => {},
+				info: () => {},
+				warn: () => {},
+			},
+			media: fixture.media,
+			rpc: {
+				list: () => [],
+				register: (method: string, handler: (input: unknown) => Promise<unknown> | unknown) => {
+					rpcHandlers.set(method, handler);
+					return () => {};
+				},
+			},
+			settings: {
+				get: async () => settingsValue,
+				onChange: () => () => {},
+			},
+		} as unknown as PluginContext;
+		registerStickerRpc(rpcContext, {
+			importService: new StickerImportService({ media: fixture.media, repository }),
+			learning,
+			repository,
+			selection,
+		});
+
+		const emptyHints = (await rpcHandlers.get("hints")?.({ limit: 3 })) as {
+			captions: string[];
+			packs: unknown[];
+			prompt?: string;
+		};
+		expect(emptyHints.captions).toEqual([]);
+		expect(emptyHints.packs).toEqual([]);
+		expect(emptyHints.prompt).toBeUndefined();
+
+		await repository.savePack({ id: "pack-main", name: "Main Pack", source: "builtin" });
+		await seedItem(repository, fixture.media, { id: "hint-smile" });
+		const defaultHints = (await rpcHandlers.get("hints")?.({ limit: 3 })) as {
+			captions: string[];
+			packs: Array<{ name: string; itemCount: number }>;
+			prompt?: string;
+		};
+		expect(defaultHints.packs).toHaveLength(1);
+		expect(defaultHints.prompt).toBe(DEFAULT_STICKER_DECISION_PROMPT);
+
+		settingsValue = { promptText: "  Think first whether to drop a funny meme here.  " };
+		const customHints = (await rpcHandlers.get("hints")?.({ limit: 3 })) as {
+			prompt?: string;
+		};
+		expect(customHints.prompt).toBe("Think first whether to drop a funny meme here.");
+
+		settingsValue = { promptEnabled: false, promptText: "Should stay hidden" };
+		const disabledHints = (await rpcHandlers.get("hints")?.({ limit: 3 })) as {
+			captions: string[];
+			packs: Array<{ name: string; itemCount: number }>;
+			prompt?: string;
+		};
+		expect(disabledHints.captions).toEqual(["hint-smile"]);
+		expect(disabledHints.packs).toHaveLength(1);
+		expect(disabledHints.prompt).toBeUndefined();
 	});
 });

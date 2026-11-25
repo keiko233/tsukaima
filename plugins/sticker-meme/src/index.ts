@@ -63,6 +63,11 @@ export {
 	type StickerSearchInput,
 	type StickerSendResolution,
 } from "./selection.ts";
+export {
+	DEFAULT_STICKER_DECISION_PROMPT,
+	resolveStickerDecisionPrompt,
+	STICKER_DECISION_PROMPT_MAX_CHARS,
+} from "./prompt.ts";
 export { registerStickerRpc } from "./rpc.ts";
 export {
 	classifyStickerSemantics,

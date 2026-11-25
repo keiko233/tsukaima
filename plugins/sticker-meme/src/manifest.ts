@@ -37,6 +37,19 @@ export const stickerMemeManifest: PluginManifest = pluginManifestSchema.parse({
 				},
 				type: "object",
 			},
+			promptEnabled: {
+				default: true,
+				description:
+					"Inject a sticker decision prompt into chat turns so the model proactively considers sending a sticker while thinking.",
+				title: "Inject sticker decision prompt",
+				type: "boolean",
+			},
+			promptText: {
+				description:
+					"Optional custom prompt injected into chat turns when stickers are available. Leave empty to use the built-in default.",
+				title: "Custom sticker prompt",
+				type: "string",
+			},
 			semanticApiKey: {
 				description: "Secret API key for the optional OpenAI-compatible vision classifier.",
 				title: "Semantic model API key",
