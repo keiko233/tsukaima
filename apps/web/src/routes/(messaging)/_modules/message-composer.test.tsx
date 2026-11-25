@@ -12,12 +12,12 @@ mock.module("@/paraglide/messages", () => ({
 		composer_reference_placeholder: () => "Search sessions...",
 		composer_reference_remove: () => "Remove reference",
 		delivery_mode: () => "Delivery mode",
-		delivery_mode_follow_up: () => "Follow up",
-		delivery_mode_follow_up_hint: () => "Wait for the current turn.",
+		delivery_mode_follow_up: () => "Follow-up",
+		delivery_mode_follow_up_hint: () => "Wait for the current turn to finish, then run separately.",
 		delivery_mode_interrupt: () => "Interrupt",
-		delivery_mode_interrupt_hint: () => "Interrupt the current turn.",
-		delivery_mode_queue: () => "Queue",
-		delivery_mode_queue_hint: () => "Queue for the next boundary.",
+		delivery_mode_interrupt_hint: () => "Stop the current generation immediately and answer this now.",
+		delivery_mode_steer: () => "Steer",
+		delivery_mode_steer_hint: () => "Inject into the active run after the current step finishes.",
 		loading: () => "Loading...",
 		send_to_channel: () => "Send to channel",
 		send_to_tsukaima: () => "Talk to Tsukaima",
@@ -95,7 +95,7 @@ describe("MessageComposer", () => {
 	test("hides the Tsukaima target selector and shows only channel hint for external chats", () => {
 		const html = renderComposer({ channelConnected: true, externalEligible: true });
 		expect(html).not.toContain("Talk to Tsukaima");
-		expect(html).not.toContain("Queue");
+		expect(html).not.toContain("Steer");
 		expect(html).toContain("This sends directly to the external chat.");
 	});
 
@@ -105,10 +105,18 @@ describe("MessageComposer", () => {
 		expect(html).toContain("Channel is not connected.");
 	});
 
-	test("keeps Tsukaima delivery mode selector for non-external chats", () => {
+	test("defaults to steer and keeps the delivery mode selector for non-external chats", () => {
 		const html = renderComposer({ channelConnected: false, externalEligible: false });
-		expect(html).toContain("Queue");
-		expect(html).toContain("Queue for the next boundary.");
+		expect(html).toContain("Steer");
+		expect(html).toContain("Inject into the active run after the current step finishes.");
 		expect(html).toContain("This creates a Tsukaima turn in this session only.");
+	});
+
+	test("migrates a stored queue mode to steer", () => {
+		localStorage.setItem("tsukaima.webui.delivery-mode.session-1", "queue");
+		const html = renderComposer({ channelConnected: false, externalEligible: false });
+		expect(html).toContain("Steer");
+		expect(html).not.toContain("Queue");
+		expect(localStorage.getItem("tsukaima.webui.delivery-mode.session-1")).toBe("steer");
 	});
 });

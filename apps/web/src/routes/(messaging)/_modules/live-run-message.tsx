@@ -14,6 +14,7 @@ import type { LiveRunPhase, LiveRunState, RunStep } from "@tsukaima/contracts";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 import { MessageText } from "./message-text";
+import { RunRoundsView } from "./run-step-items";
 import { ToolCallRow } from "./tool-call-row";
 
 function elapsedSeconds(startedAtMs: number, now: number): number {
@@ -43,6 +44,15 @@ function phaseLabel(phase: LiveRunPhase | undefined, working: boolean): string {
 		case undefined:
 			return m.live_run_phase_queued();
 	}
+}
+
+function statusLabel(run: LiveRunState, working: boolean): string {
+	if (run.failure !== undefined) return m.live_run_failed();
+	// A steered or interrupted segment is frozen even when its run continues in another segment.
+	if (run.status === "steered") return m.run_segment_status_steered();
+	if (run.status === "interrupted") return m.run_segment_status_interrupted();
+	if (run.status === "failed") return m.live_run_failed();
+	return phaseLabel(run.phase, working);
 }
 
 function modelStatusText(
@@ -183,9 +193,9 @@ export interface LiveRunMessageProps {
  * settles.
  *
  * Activity comes first because it is the *process* that produced the text: reading top-down, the
- * steps explain the answer instead of trailing it. `steps` holds finished model calls, reasoning,
- * and tool calls; the current request adds its partial thinking, draft tool calls, and running
- * tools below them. A slow model therefore reads as model call #1 working, not a hung bot.
+ * steps explain the answer instead of trailing it. `run.rounds` groups each model call with its
+ * reasoning, tools, and intermediate text; older snapshots without rounds fall back to `steps`.
+ * A slow model therefore reads as model call #1 working, not a hung bot.
  */
 export function LiveRunMessage({
 	run,
@@ -201,15 +211,39 @@ export function LiveRunMessage({
 	const partial = stripDeliveredPreview(rawPartial, deliveredTexts);
 	const thinking = run.partialThinking ?? "";
 	const elapsed = elapsedSeconds(run.startedAtMs, now);
+	const structured = run.rounds !== undefined;
+	const rounds = run.rounds ?? [];
+	const activeRound = structured
+		? {
+				...(run.model === undefined ? {} : { model: run.model }),
+				...(thinking.length === 0 ? {} : { thinking }),
+				tools: run.tools,
+				draftTools: run.draftTools ?? [],
+				...(partial.length === 0 ? {} : { text: partial }),
+				working,
+			}
+		: undefined;
+	const activeHasBody =
+		thinking.length > 0 ||
+		partial.length > 0 ||
+		run.tools.length > 0 ||
+		(run.draftTools?.length ?? 0) > 0;
 	const steps = run.steps ?? [];
 	const draftTools = run.draftTools ?? [];
 	const tools = run.tools;
 	// A failed run keeps the partial in the bubble. The timeline also records it as the final
 	// round's text step, so hide that duplicate while keeping earlier rounds' preambles.
 	const visibleSteps = steps.filter((step) => step.kind !== "text" || step.text !== rawPartial);
-	const hasActivity =
+	const hasLegacyActivity =
 		visibleSteps.length > 0 || thinking.length > 0 || draftTools.length > 0 || tools.length > 0;
+	const hasActivity = structured
+		? rounds.length > 0 || activeHasBody
+		: hasLegacyActivity;
 	const expanded = working || !collapsed;
+	// Structured rounds own the partial answer inside the active round. The legacy view keeps it
+	// in a ghost bubble below the step list, and a settled/failed structured run still needs the
+	// final partial visible even though it has no active round.
+	const showPartialBubble = !structured ? partial.length > 0 : !working && partial.length > 0;
 
 	return (
 		<Message from="assistant" align="start" className="gap-2">
@@ -221,7 +255,7 @@ export function LiveRunMessage({
 					<span className="font-medium text-foreground">{m.message_sender_tsukaima()}</span>
 					<span aria-hidden="true">·</span>
 					<span className={cn(working ? "text-primary" : "text-destructive")}>
-						{run.failure === undefined ? phaseLabel(run.phase, working) : m.live_run_failed()}
+						{statusLabel(run, working)}
 					</span>
 					{hasActivity ? (
 						<>
@@ -245,7 +279,15 @@ export function LiveRunMessage({
 						<span className="tabular-nums text-muted-foreground/60">{elapsed}s</span>
 					)}
 				</MessageHeader>
-				{expanded && hasActivity ? (
+				{expanded && structured && hasActivity ? (
+					<RunRoundsView
+						activeRound={working ? activeRound : undefined}
+						className="max-w-[46rem]"
+						markdown={markdown}
+						rounds={rounds}
+					/>
+				) : null}
+				{expanded && !structured && hasLegacyActivity ? (
 					<ul className="flex w-full max-w-[46rem] flex-col items-start gap-1.5">
 						{visibleSteps.map((step, index) => (
 							<li
@@ -301,7 +343,7 @@ export function LiveRunMessage({
 				{run.failure === undefined ? null : (
 					<p className="text-left text-[11px] text-destructive">{run.failure}</p>
 				)}
-				{partial.length > 0 ? (
+				{showPartialBubble ? (
 					<MessageBubble variant="ghost" className="max-w-full">
 						<MessageBubbleContent className="max-w-[46rem]">
 							<div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { AtSign, ListEnd, X, Zap } from "lucide-react";
+import { AtSign, CornerDownRight, ListEnd, X, Zap } from "lucide-react";
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PromptInput } from "@tsukaima/ui/components/agents/prompt-input";
@@ -17,6 +17,25 @@ import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 
 type DeliveryTarget = "channel" | "tsukaima";
+
+/** Read the per-session mode, upgrading the old `queue` value written before steer existed. */
+function storedDeliveryMode(key: string): MessageDeliveryMode {
+	let stored: string | null = null;
+	try {
+		stored = localStorage.getItem(key);
+	} catch {
+		return "steer";
+	}
+	if (stored === "queue") {
+		try {
+			localStorage.setItem(key, "steer");
+		} catch {
+			// Storage can be unavailable; the in-memory default is still steer.
+		}
+		return "steer";
+	}
+	return stored === "interrupt" || stored === "follow-up" || stored === "steer" ? stored : "steer";
+}
 
 export function MessageComposer({
 	channelConnected,
@@ -43,10 +62,7 @@ export function MessageComposer({
 	const draftKey = `tsukaima.webui.draft.${sessionId}`;
 	const modeKey = `tsukaima.webui.delivery-mode.${sessionId}`;
 	const [text, setText] = useState(() => localStorage.getItem(draftKey) ?? "");
-	const [mode, setMode] = useState<MessageDeliveryMode>(() => {
-		const stored = localStorage.getItem(modeKey);
-		return stored === "interrupt" || stored === "follow-up" ? stored : "queue";
-	});
+	const [mode, setMode] = useState<MessageDeliveryMode>(() => storedDeliveryMode(modeKey));
 	// External chats only send directly to the channel from the WebUI; internal Tsukaima turns
 	// are not exposed in the external composer so operator interventions never surface as chat UX.
 	const target: DeliveryTarget = externalEligible ? "channel" : "tsukaima";
@@ -187,32 +203,26 @@ export function MessageComposer({
 					<span className="flex min-w-0 items-center gap-1.5">
 						{mode === "interrupt" ? (
 							<Zap className="size-3 text-muted-foreground" />
-						) : (
+						) : mode === "follow-up" ? (
 							<ListEnd className="size-3 text-muted-foreground" />
+						) : (
+							<CornerDownRight className="size-3 text-muted-foreground" />
 						)}
 						<span className="truncate text-muted-foreground">
 							{mode === "interrupt"
 								? m.delivery_mode_interrupt()
 								: mode === "follow-up"
 									? m.delivery_mode_follow_up()
-									: m.delivery_mode_queue()}
+									: m.delivery_mode_steer()}
 						</span>
 					</span>
 				</SelectTrigger>
 				<SelectContent className="right-auto w-64 shadow-none">
-					<SelectItem value="queue" className="py-2">
+					<SelectItem value="steer" className="py-2">
 						<span className="block">
-							<span className="block text-sm text-foreground">{m.delivery_mode_queue()}</span>
+							<span className="block text-sm text-foreground">{m.delivery_mode_steer()}</span>
 							<span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
-								{m.delivery_mode_queue_hint()}
-							</span>
-						</span>
-					</SelectItem>
-					<SelectItem value="interrupt" className="py-2">
-						<span className="block">
-							<span className="block text-sm text-foreground">{m.delivery_mode_interrupt()}</span>
-							<span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
-								{m.delivery_mode_interrupt_hint()}
+								{m.delivery_mode_steer_hint()}
 							</span>
 						</span>
 					</SelectItem>
@@ -221,6 +231,14 @@ export function MessageComposer({
 							<span className="block text-sm text-foreground">{m.delivery_mode_follow_up()}</span>
 							<span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
 								{m.delivery_mode_follow_up_hint()}
+							</span>
+						</span>
+					</SelectItem>
+					<SelectItem value="interrupt" className="py-2">
+						<span className="block">
+							<span className="block text-sm text-foreground">{m.delivery_mode_interrupt()}</span>
+							<span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
+								{m.delivery_mode_interrupt_hint()}
 							</span>
 						</span>
 					</SelectItem>

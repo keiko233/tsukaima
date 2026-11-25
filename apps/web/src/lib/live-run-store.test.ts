@@ -165,4 +165,91 @@ describe("live run store", () => {
 		expect(stored?.tools).toHaveLength(1);
 		expect(stored?.tools[0]?.toolName).toBe("web_search");
 	});
+	test("keeps the timeline anchor and structured rounds across deltas", () => {
+		setLiveRun(
+			"session-1",
+			run({
+				revision: 1,
+				runId: "run-1",
+				segmentId: "segment-1",
+				segmentIndex: 0,
+				seq: 2,
+				status: "running",
+				triggerKind: "initial",
+			}),
+		);
+		applyRunDelta(
+			"session-1",
+			{
+				rounds: [
+					{
+						roundIndex: 0,
+						stopReason: "stop",
+						thinking: "first round",
+						toolCalls: [],
+					},
+				],
+				segmentId: "segment-2",
+				segmentIndex: 1,
+				seq: 4,
+				status: "steered",
+				triggerKind: "steer",
+			},
+			2,
+		);
+		expect(getLiveRun("session-1")).toMatchObject({
+			rounds: [{ roundIndex: 0, thinking: "first round" }],
+			runId: "run-1",
+			segmentId: "segment-2",
+			segmentIndex: 1,
+			seq: 4,
+			status: "steered",
+			triggerKind: "steer",
+		});
+	});
+
+	test("notifies when only the segment metadata or rounds changed", () => {
+		let notifications = 0;
+		const unsubscribe = subscribeLiveRuns(() => {
+			notifications += 1;
+		});
+		try {
+			setLiveRun(
+				"session-1",
+				run({
+					revision: 1,
+					runId: "run-1",
+					segmentId: "segment-1",
+					status: "running",
+					seq: 2,
+				}),
+			);
+			expect(notifications).toBe(1);
+			setLiveRun(
+				"session-1",
+				run({
+					revision: 2,
+					runId: "run-1",
+					segmentId: "segment-1",
+					seq: 2,
+					status: "steered",
+				}),
+			);
+			expect(notifications).toBe(2);
+			setLiveRun(
+				"session-1",
+				run({
+					revision: 3,
+					rounds: [{ roundIndex: 0, stopReason: "stop", thinking: "done", toolCalls: [] }],
+					runId: "run-1",
+					segmentId: "segment-1",
+					seq: 2,
+					status: "steered",
+				}),
+			);
+			expect(notifications).toBe(3);
+		} finally {
+			unsubscribe();
+		}
+	});
 });

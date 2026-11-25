@@ -5,7 +5,7 @@ import { liveEventSchema, type LiveEvent } from "@tsukaima/contracts";
 import type { PluginRow } from "@tsukaima/contracts";
 import { useEffect } from "react";
 import { orpc } from "./api";
-import { applyRunDelta, setLiveRun } from "./live-run-store";
+import { applyRunDelta, getLiveRun, setLiveRun } from "./live-run-store";
 import { invalidateMessageLists, refreshMessageInCache } from "./message-cache";
 import { runtimeUrl } from "./runtime-url";
 
@@ -33,6 +33,11 @@ function refreshConversation(queryClient: QueryClient): void {
 		queryClient.invalidateQueries({ queryKey: orpc.admin.groups.key() }),
 		queryClient.invalidateQueries({ queryKey: orpc.admin.users.key() }),
 	]);
+}
+
+/** Refetch only one conversation after its run gained durable rows or segments. */
+function refreshSessionMessages(queryClient: QueryClient, sessionId: string): void {
+	void invalidateMessageLists(queryClient, sessionId);
 }
 
 function refreshDiagnostics(queryClient: QueryClient): void {
@@ -106,17 +111,34 @@ function applyLiveEvent(queryClient: QueryClient, event: LiveEvent): void {
 		case "run.state": {
 			// Snapshot from the KV cache on connect, or the terminal `run: null`. Written to its
 			// own store so a 100ms partial does not invalidate the transcript and diagnostics.
+			const previousSegmentId = getLiveRun(event.sessionId)?.segmentId;
 			setLiveRun(event.sessionId, event.run);
+			const switchedSegment =
+				event.run?.segmentId !== undefined && event.run.segmentId !== previousSegmentId;
 			if (event.run === null || event.run.settled) {
 				refreshConversation(queryClient);
+				refreshSessionMessages(queryClient, event.sessionId);
+			} else if (switchedSegment) {
+				// A steer froze the old segment and opened a new one; reload the transcript so the
+				// steering message and both segments render in their durable order immediately.
+				refreshSessionMessages(queryClient, event.sessionId);
 			}
 			return;
 		}
 		case "run.delta": {
 			// Only the fields that moved arrive here. The store merges them and orders them by
 			// revision, so a delta that races a reconnect snapshot never rewinds the view.
+			const previousSegmentId = getLiveRun(event.sessionId)?.segmentId;
 			applyRunDelta(event.sessionId, event.patch, event.revision);
-			if (event.patch.settled === true) refreshConversation(queryClient);
+			const nextSegmentId = getLiveRun(event.sessionId)?.segmentId;
+			const switchedSegment =
+				event.patch.segmentId !== undefined && nextSegmentId !== previousSegmentId;
+			if (event.patch.settled === true) {
+				refreshConversation(queryClient);
+				refreshSessionMessages(queryClient, event.sessionId);
+			} else if (switchedSegment) {
+				refreshSessionMessages(queryClient, event.sessionId);
+			}
 			return;
 		}
 	}
