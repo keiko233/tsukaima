@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.29
 
 # Dependencies live in a prepared image (ops/deploy/prepare-deps.sh) tagged with the lockfile and
 # workspace-manifest hash. A deploy reuses that image, so an ordinary image build never runs
