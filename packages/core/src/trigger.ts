@@ -305,7 +305,11 @@ export function buildTurnCue(input: TurnCueInput): string | undefined {
 			`The latest message is ${result.mediaOnly === "sticker" ? "a sticker" : "an image"} only.`,
 		);
 	}
-	lines.push(`If joining in would be noise, reply with exactly ${LURK_MARKER} and nothing else.`);
+	lines.push(
+		"Default to staying silent unless you are clearly invited or have something genuinely natural and worthwhile to add.",
+		"Never force a reply or awkwardly chime in when others are talking to each other, when you cannot naturally connect to the topic, or when the latest message is just a brief reaction/acknowledgment.",
+		`When staying silent is better, reply with exactly ${LURK_MARKER} and nothing else.`,
+	);
 	return lines.join("\n");
 }
 

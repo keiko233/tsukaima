@@ -132,6 +132,12 @@ export const conversationPacingPolicySchema = z
 		maxImmediateOutputMessages: z.number().int().min(1).default(6),
 		stripMarkdown: z.boolean().default(true),
 		quietHours: quietHoursSchema.optional(),
+		/**
+		 * Optional epoch-ms deadline for temporary quiet/lurk mode in this conversation. While
+		 * active, undirected group chime-ins are suppressed and direct replies are nudged to stay
+		 * brief or lurk.
+		 */
+		quietUntilMs: z.number().int().min(0).optional(),
 		maxRepliesPerMinute: z.number().int().min(0).default(20),
 		allowedTools: z.array(z.string().min(1)).optional(),
 	})
@@ -660,6 +666,7 @@ const pacingPolicyPatchSchema = z
 		maxImmediateOutputMessages: z.number().int().min(1).optional(),
 		stripMarkdown: z.boolean().optional(),
 		quietHours: quietHoursSchema.optional(),
+		quietUntilMs: z.number().int().min(0).nullish(),
 		maxRepliesPerMinute: z.number().int().min(0).optional(),
 		allowedTools: z.array(z.string().min(1)).nullish(),
 	})

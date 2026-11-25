@@ -148,6 +148,7 @@ export function mergeConversationPolicy(
 	const sidechatPatch = patch.sidechat;
 	const pacing = mergeSection<ConversationPacingPolicy>(base.pacing, pacingPatch);
 	if (pacingPatch?.allowedTools === null) delete pacing.allowedTools;
+	if (pacingPatch?.quietUntilMs === null) delete pacing.quietUntilMs;
 	const trigger = mergeSection<ConversationTriggerPolicy>(base.trigger, triggerPatch);
 	const sidechat = mergeSection<ConversationPolicy["sidechat"]>(base.sidechat, sidechatPatch);
 	if (sidechatPatch?.model === null) delete sidechat.model;

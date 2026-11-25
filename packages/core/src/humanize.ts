@@ -225,7 +225,7 @@ interface MetaLeakRule {
 
 /** Internal ephemeral-context section names rendered as tags by `renderTurnContextBlock`. */
 const EPHEMERAL_SECTION_NAMES =
-	"clock|observation|memories|cross-session|consistency|style-avoid|rhythm-nudge|prompt-hooks|cue|stickers";
+	"clock|observation|memories|cross-session|consistency|style-avoid|rhythm-nudge|participation|prompt-hooks|cue|stickers";
 
 /**
  * Outbound meta-leak patterns stripped before channel delivery.

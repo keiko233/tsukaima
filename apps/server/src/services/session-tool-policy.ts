@@ -1,5 +1,6 @@
 import { ADMIN_OPS_TOOL_NAMES } from "./admin-ops-tools.ts";
 import { ADMIN_SETTINGS_TOOL_NAMES } from "./admin-settings-tools.ts";
+import { CHAT_SELF_TUNE_TOOL_NAMES } from "./chat-self-tune-tools.ts";
 import { CODING_AGENT_TOOL_NAMES } from "./coding-agent-tools.ts";
 import { PROMPT_TOOL_NAMES } from "./prompt-tools.ts";
 import {
@@ -54,6 +55,10 @@ export function computeOmittedSessionTools(
 	if (!adminOpsVisible) {
 		for (const name of ADMIN_OPS_TOOL_NAMES) removed.add(name);
 		for (const name of ADMIN_SETTINGS_TOOL_NAMES) removed.add(name);
+	}
+	const chatSelfTuneVisible = !readFailed && (input.kind === "webui" || isImChat);
+	if (!chatSelfTuneVisible) {
+		for (const name of CHAT_SELF_TUNE_TOOL_NAMES) removed.add(name);
 	}
 	if (input.kind === "webui" && !readFailed) {
 		// Coding tools are already omitted above; the branch stays explicit so the surface rule

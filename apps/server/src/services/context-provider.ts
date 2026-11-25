@@ -5,6 +5,7 @@ import {
 	detectRigidRhythm,
 	formatLocalClock,
 	formatLocalDateTime,
+	LURK_MARKER,
 	needsRepetitionRewrite,
 	TURN_MEMORIES_KEY,
 	type ChatCompactionRequest,
@@ -36,6 +37,7 @@ import { queryCrossSession, renderCrossSession } from "./cross-session.ts";
 import { renderWarmStateLines } from "./memory-consolidation.ts";
 import { MemoryService, type RankedMemory } from "./memory-service.ts";
 import { ADMIN_SETTINGS_TOOL_NAMES } from "./admin-settings-tools.ts";
+import { detectQuietFeedback, isLowSubstanceReaction } from "./social-profile.ts";
 
 /**
  * Persona character ceiling for the static system prefix. Personas are the single most
@@ -363,10 +365,14 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			if (session.chatKind === "group") {
 				lines.push(
 					"- This is a group chat. Keep track of who is talking to whom; not every message is meant for you.",
-					"- Join in when you are addressed or genuinely have something to add; otherwise let the others talk.",
+					"- Join in only when you are addressed or genuinely have something natural to add; never force a reply or awkwardly chime in when you cannot connect to the topic or when the exchange has naturally ended.",
+					"- You can self-adjust your chat rhythm and quietness for this conversation with chat_settings_adjust, and leave durable context notes for upcoming turns with chat_context_note, whenever someone asks you to talk less, quiet down, or follow a room preference. Never mention these tools in chat.",
 				);
 			} else if (session.chatKind === "private") {
-				lines.push("- This is a private one-on-one chat.");
+				lines.push(
+					"- This is a private one-on-one chat.",
+					"- You can adjust your own chat rhythm and quietness for this conversation with chat_settings_adjust or leave context notes for upcoming turns with chat_context_note when helpful, without mentioning these tools in chat.",
+				);
 			}
 			lines.push("- Every line break in your reply is sent as a separate chat message.");
 			if (policy.memoryEnabled) {
@@ -568,9 +574,17 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		let consistency: string | undefined;
 		let styleAvoid: string | undefined;
 		let rhythmNudge: string | undefined;
+		let participation: string | undefined;
 		if (chat && session !== undefined) {
 			try {
 				const policy = await this.#policyService.effectivePolicy(session.sessionId);
+				participation = await this.#renderParticipationGuidance(
+					database,
+					session,
+					policy,
+					request,
+					soft,
+				);
 				if (speaker !== undefined && remaining > 0 && policy.memoryEnabled) {
 					crossSession = await this.#crossSession(
 						database,
@@ -630,6 +644,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		// Budget-exempt: the administrator needs the deferred tool list even in a tight turn.
 		push("admin-capabilities", adminCapabilities);
 		if (chat) push("live-replies", LIVE_REPLY_GUIDE);
+		push("participation", participation);
 		push("prompt-hooks", hooks);
 		push("cue", cue);
 		this.#logger.debug("rendered turn context", {
@@ -1280,6 +1295,76 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			used += line.length + 1;
 		}
 		return lines.length > 1 ? lines.join("\n") : undefined;
+	}
+
+	async #renderParticipationGuidance(
+		database: TsukaimaDatabase,
+		session: { readonly chatKind: string; readonly sessionId: string },
+		policy: ConversationPolicy,
+		request: TurnContextRequest,
+		soft: boolean,
+	): Promise<string | undefined> {
+		const notes: string[] = [];
+		const nowMs = request.nowMs;
+		const latestText = (request.inputs ?? [])
+			.map((input) => input.text?.trim() ?? "")
+			.filter((value) => value.length > 0)
+			.join("\n");
+
+		if (policy.pacing.quietUntilMs !== undefined && policy.pacing.quietUntilMs > nowMs) {
+			const mins = Math.max(1, Math.ceil((policy.pacing.quietUntilMs - nowMs) / 60_000));
+			notes.push(
+				`Temporary quiet mode is active for ~${mins} more minute(s). Stay silent (${LURK_MARKER}) unless directly asked something substantive, and keep any reply very brief.`,
+			);
+		}
+
+		if (latestText.length > 0 && detectQuietFeedback(latestText).quietRequested) {
+			notes.push(
+				`Someone in this chat is asking you to be quieter or stop interrupting. Respect it immediately without arguing or over-apologizing: consider calling chat_settings_adjust (e.g. posture="quiet" or quietMinutes) and/or chat_context_note, then reply very briefly or output ${LURK_MARKER} to stay silent.`,
+			);
+		}
+
+		if (session.chatKind === "group") {
+			if (latestText.length > 0 && isLowSubstanceReaction(latestText)) {
+				notes.push(
+					`The latest message looks like a brief reaction or acknowledgment ("${snippet(latestText, 30)}"). Do not force a follow-up if the exchange is naturally done; reply with ${LURK_MARKER}.`,
+				);
+			}
+			const windowSize = Math.max(4, policy.social.selfRatioWindowMessages);
+			const recent = await database
+				.select({ direction: messages.direction })
+				.from(messages)
+				.where(
+					and(
+						eq(messages.conversationId, session.sessionId),
+						ne(messages.direction, "system"),
+						ne(messages.kind, "tool"),
+					),
+				)
+				.orderBy(desc(messages.occurredAt), desc(messages.id))
+				.limit(windowSize);
+			if (recent.length >= 4) {
+				const outbound = recent.filter((row) => row.direction === "outbound").length;
+				const ratio = outbound / recent.length;
+				if (ratio >= policy.social.maxSelfMessageRatio) {
+					notes.push(
+						`You sent ${outbound} of the last ${recent.length} messages in this group. Avoid dominating the room: stay brief or reply ${LURK_MARKER} unless directly needed.`,
+					);
+				}
+			}
+			let trailingBot = 0;
+			for (const row of recent) {
+				if (row.direction === "outbound") trailingBot += 1;
+				else break;
+			}
+			if (trailingBot >= 2 && soft) {
+				notes.push(
+					`Your last ${trailingBot} messages here had no direct reply; prefer ${LURK_MARKER} over chiming in again.`,
+				);
+			}
+		}
+
+		return notes.length === 0 ? undefined : notes.join("\n");
 	}
 
 	async #recentOutboundReplies(
