@@ -683,6 +683,170 @@ describe("OpenAI-compatible provider", () => {
 		]);
 	});
 
+	test("replays tool-result images to vision models after the contiguous tool run", async () => {
+		const fetch = mock(async () => textResponse()) as unknown as FetchMock;
+		const streams = createOpenAICompatibleStreams({
+			apiKey: "test-key",
+			baseUrl: "https://model.example/v1",
+			fetch: fetch as unknown as FetchFunction,
+		});
+		const visionModel: TestModel = { ...model, input: ["text", "image"] };
+		const context = normalizeContext({
+			messages: [
+				{ content: "inspect the sticker", role: "user", timestamp: 1 },
+				{
+					api: "openai-compatible",
+					content: [
+						{
+							arguments: { itemId: "sticker-1" },
+							id: "call-view",
+							name: "sticker-meme.view",
+							type: "toolCall",
+						},
+						{
+							arguments: { path: "/tmp/a" },
+							id: "call-read",
+							name: "read_file",
+							type: "toolCall",
+						},
+					],
+					model: model.id,
+					provider: model.provider,
+					role: "assistant",
+					stopReason: "toolUse",
+					timestamp: 2,
+					usage: {
+						cacheRead: 0,
+						cacheWrite: 0,
+						cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+						input: 1,
+						output: 1,
+						totalTokens: 2,
+					},
+				},
+				{
+					content: [
+						{ text: '{"itemId":"sticker-1"}', type: "text" },
+						{ data: "aW1hZ2U=", mimeType: "image/png", type: "image" },
+					],
+					isError: false,
+					role: "toolResult",
+					timestamp: 3,
+					toolCallId: "call-view",
+					toolName: "sticker-meme.view",
+				},
+				{
+					content: [{ text: "file contents", type: "text" }],
+					isError: false,
+					role: "toolResult",
+					timestamp: 4,
+					toolCallId: "call-read",
+					toolName: "read_file",
+				},
+			],
+		} satisfies Context);
+		for await (const event of streams.stream(visionModel, context)) void event;
+
+		const request = (fetch.mock.calls[0] as [string, RequestInit])[1];
+		const sent = JSON.parse(request.body as string).messages;
+		expect(sent).toEqual([
+			{ content: "inspect the sticker", role: "user" },
+			{
+				content: null,
+				role: "assistant",
+				tool_calls: [
+					{
+						function: {
+							arguments: '{"itemId":"sticker-1"}',
+							name: "sticker-meme.view",
+						},
+						id: "call-view",
+						type: "function",
+					},
+					{
+						function: { arguments: '{"path":"/tmp/a"}', name: "read_file" },
+						id: "call-read",
+						type: "function",
+					},
+				],
+			},
+			{ content: '{"itemId":"sticker-1"}', role: "tool", tool_call_id: "call-view" },
+			{ content: "file contents", role: "tool", tool_call_id: "call-read" },
+			{
+				content: [
+					{ text: "Image returned by sticker-meme.view.", type: "text" },
+					{
+						image_url: { url: "data:image/png;base64,aW1hZ2U=" },
+						type: "image_url",
+					},
+				],
+				role: "user",
+			},
+		]);
+	});
+
+	test("keeps tool-result images out of text-only model requests", async () => {
+		const fetch = mock(async () => textResponse()) as unknown as FetchMock;
+		const streams = createOpenAICompatibleStreams({
+			apiKey: "test-key",
+			baseUrl: "https://model.example/v1",
+			fetch: fetch as unknown as FetchFunction,
+		});
+		const context = normalizeContext({
+			messages: [
+				{ content: "inspect the sticker", role: "user", timestamp: 1 },
+				{
+					api: "openai-compatible",
+					content: [
+						{
+							arguments: { itemId: "sticker-1" },
+							id: "call-view",
+							name: "sticker-meme.view",
+							type: "toolCall",
+						},
+					],
+					model: model.id,
+					provider: model.provider,
+					role: "assistant",
+					stopReason: "toolUse",
+					timestamp: 2,
+					usage: {
+						cacheRead: 0,
+						cacheWrite: 0,
+						cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+						input: 1,
+						output: 1,
+						totalTokens: 2,
+					},
+				},
+				{
+					content: [
+						{ text: '{"itemId":"sticker-1"}', type: "text" },
+						{ data: "aW1hZ2U=", mimeType: "image/png", type: "image" },
+					],
+					isError: false,
+					role: "toolResult",
+					timestamp: 3,
+					toolCallId: "call-view",
+					toolName: "sticker-meme.view",
+				},
+			],
+		} satisfies Context);
+		for await (const event of streams.stream(model, context)) void event;
+
+		const request = (fetch.mock.calls[0] as [string, RequestInit])[1];
+		const body = JSON.parse(request.body as string);
+		expect(body.messages.at(-1)).toEqual({
+			content: '{"itemId":"sticker-1"}',
+			role: "tool",
+			tool_call_id: "call-view",
+		});
+		expect(body.messages.filter((message: { role: string }) => message.role === "user")).toEqual([
+			{ content: "inspect the sticker", role: "user" },
+		]);
+		expect(JSON.stringify(body.messages)).not.toContain("image_url");
+	});
+
 	test("serializes temperature, top_p, and stop from request options and model defaults", async () => {
 		const fetch = mock(async () => textResponse()) as unknown as FetchMock;
 		const streams = createOpenAICompatibleStreams(

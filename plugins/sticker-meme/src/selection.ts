@@ -711,6 +711,36 @@ export class StickerSelectionService {
 		};
 	}
 
+	/**
+	 * Resolves one sticker for visual inspection without recording a use or issuing a token.
+	 * Applies the same selectability checks as sending (enabled pack, enabled/approved/non-revoked
+	 * item, existing media) and throws a reason-tagged error when the item is not viewable.
+	 */
+	async resolveForView(
+		input: StickerSearchInput & { readonly itemId?: string },
+	): Promise<{ readonly item: StickerItem; readonly pack: StickerPack }> {
+		let item: StickerItem | undefined;
+		let pack: StickerPack | undefined;
+		if (input.itemId !== undefined) {
+			item = await this.#repository.getItem(input.itemId);
+			if (item !== undefined) pack = await this.#repository.getPack(item.packId);
+		} else {
+			const [best] = await this.search({ ...input, limit: 1 });
+			if (best !== undefined) {
+				item = await this.#repository.getItem(best.itemId);
+				if (item !== undefined) pack = await this.#repository.getPack(item.packId);
+			}
+		}
+		if (item === undefined || pack === undefined) {
+			throw new Error("No sticker candidate matched");
+		}
+		const denial = await this.#selectable(item, pack);
+		if (denial !== undefined) {
+			throw new Error(`Sticker is not viewable: ${denial}`);
+		}
+		return { item, pack };
+	}
+
 	async #selectable(item: StickerItem, pack: StickerPack): Promise<string | undefined> {
 		if (!pack.enabled) return "pack_disabled";
 		if (!item.enabled) return "item_disabled";
