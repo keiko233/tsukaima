@@ -5,13 +5,6 @@ import { Check, Pin, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { MemoryRow, MemoryScope, MemoryStatus } from "@tsukaima/contracts";
 import { Button } from "@tsukaima/ui/components/motion/button";
-import {
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
-} from "@tsukaima/ui/components/motion/card";
 import { Input } from "@tsukaima/ui/components/motion/input";
 import { orpc } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
@@ -44,9 +37,9 @@ const KINDS = [
 const STATUSES: readonly MemoryStatus[] = ["active", "pending", "rejected", "expired", "revoked"];
 
 const fieldClass =
-	"h-8 w-full rounded-md border border-border bg-background px-2 text-[12px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+	"h-8 w-full rounded-sm border border-line2 bg-transparent px-2 text-[12px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-ring";
 const textareaClass =
-	"min-h-16 w-full rounded-md border border-border bg-background px-2 py-1.5 text-[12px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+	"min-h-16 w-full rounded-sm border border-line2 bg-transparent px-2 py-1.5 text-[12px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 function StatusFilter({
 	value,
@@ -167,9 +160,7 @@ export function MemoriesPage({ embedded = false }: { embedded?: boolean } = {}) 
 			onError: (error) =>
 				toast.error(m.memories_action_failed(), { description: errorMessage(error) }),
 			onSuccess: async (result) => {
-				toast.success(
-					result.created ? m.memories_compacted() : m.memories_nothing_to_compact(),
-				);
+				toast.success(result.created ? m.memories_compacted() : m.memories_nothing_to_compact());
 				await invalidate();
 			},
 		}),
@@ -195,141 +186,137 @@ export function MemoriesPage({ embedded = false }: { embedded?: boolean } = {}) 
 
 	const body = (
 		<>
-			<Card size="compact">
-				<CardHeader>
-					<CardTitle as="h2">{m.memories_list_title()}</CardTitle>
-					<CardDescription>{m.memories_list_description()}</CardDescription>
-				</CardHeader>
-				<CardContent className="space-y-3">
-					<div className="grid gap-2 lg:grid-cols-4">
+			<section className="space-y-3">
+				<header>
+					<h2 className="font-serif text-lg text-ink">{m.memories_list_title()}</h2>
+					<p className="mt-0.5 text-xs text-muted-foreground">{m.memories_list_description()}</p>
+				</header>
+				<div className="grid gap-2 lg:grid-cols-4">
+					<Input
+						aria-label={m.memories_search_placeholder()}
+						placeholder={m.memories_search_placeholder()}
+						value={search}
+						onChange={setSearch}
+						leftIcon={<Search />}
+					/>
+					<select
+						aria-label={m.memories_filter_scope()}
+						className={fieldClass}
+						value={scope}
+						onChange={(event) => setScope(event.target.value as MemoryScope | "")}
+					>
+						<option value="">{m.memories_filter_all_scopes()}</option>
+						{SCOPES.map((value) => (
+							<option key={value} value={value}>
+								{m.memories_scope({ scope: value })}
+							</option>
+						))}
+					</select>
+					<select
+						aria-label={m.memories_filter_kind()}
+						className={fieldClass}
+						value={kind}
+						onChange={(event) => setKind(event.target.value)}
+					>
+						<option value="">{m.memories_filter_all_kinds()}</option>
+						{KINDS.map((value) => (
+							<option key={value} value={value}>
+								{m.memories_kind({ kind: value })}
+							</option>
+						))}
+					</select>
+					<StatusFilter value={status} onChange={setStatus} />
+				</div>
+				<div className="flex flex-wrap items-end gap-2">
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={expire.isPending}
+						onClick={() => expire.mutate(undefined)}
+					>
+						<RefreshCw className="size-3.5" />
+						{m.memories_run_expiry()}
+					</Button>
+					<div className="flex flex-1 flex-wrap items-center gap-2">
 						<Input
-							aria-label={m.memories_search_placeholder()}
-							placeholder={m.memories_search_placeholder()}
-							value={search}
-							onChange={setSearch}
-							leftIcon={<Search />}
+							aria-label={m.memories_compact_conversation()}
+							placeholder={m.memories_compact_conversation()}
+							value={compactConversationId}
+							onChange={setCompactConversationId}
+							classNames={{ field: "h-8 min-w-52", root: "max-w-sm gap-0" }}
 						/>
-						<select
-							aria-label={m.memories_filter_scope()}
-							className={fieldClass}
-							value={scope}
-							onChange={(event) => setScope(event.target.value as MemoryScope | "")}
-						>
-							<option value="">{m.memories_filter_all_scopes()}</option>
-							{SCOPES.map((value) => (
-								<option key={value} value={value}>
-									{m.memories_scope({ scope: value })}
-								</option>
-							))}
-						</select>
-						<select
-							aria-label={m.memories_filter_kind()}
-							className={fieldClass}
-							value={kind}
-							onChange={(event) => setKind(event.target.value)}
-						>
-							<option value="">{m.memories_filter_all_kinds()}</option>
-							{KINDS.map((value) => (
-								<option key={value} value={value}>
-									{m.memories_kind({ kind: value })}
-								</option>
-							))}
-						</select>
-						<StatusFilter value={status} onChange={setStatus} />
-					</div>
-					<div className="flex flex-wrap items-end gap-2">
 						<Button
 							variant="outline"
 							size="sm"
-							disabled={expire.isPending}
-							onClick={() => expire.mutate(undefined)}
+							disabled={compact.isPending || compactConversationId.trim() === ""}
+							onClick={() => compact.mutate({ conversationId: compactConversationId.trim() })}
 						>
-							<RefreshCw className="size-3.5" />
-							{m.memories_run_expiry()}
+							{m.memories_compact()}
 						</Button>
-						<div className="flex flex-1 flex-wrap items-center gap-2">
-							<Input
-								aria-label={m.memories_compact_conversation()}
-								placeholder={m.memories_compact_conversation()}
-								value={compactConversationId}
-								onChange={setCompactConversationId}
-								classNames={{ field: "h-8 min-w-52", root: "max-w-sm gap-0" }}
-							/>
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={compact.isPending || compactConversationId.trim() === ""}
-								onClick={() =>
-									compact.mutate({ conversationId: compactConversationId.trim() })
-								}
-							>
-								{m.memories_compact()}
-							</Button>
-						</div>
 					</div>
-					{memories.isPending ? (
-						<p className="text-sm text-muted-foreground">{m.loading()}</p>
-					) : memories.isError ? (
-						<p className="text-sm text-destructive">{errorMessage(memories.error)}</p>
-					) : (
-						<>
-							<MemoryRows emptyLabel={m.memories_empty()} memories={memories.data} />
-							<div className="flex flex-wrap gap-2">
-								{memories.data?.map((memory) => (
-									<div
-										key={`actions-${memory.id}`}
-										className="flex items-center gap-1 rounded-lg border border-border px-2 py-1"
+				</div>
+				{memories.isPending ? (
+					<p className="text-sm text-muted-foreground">{m.loading()}</p>
+				) : memories.isError ? (
+					<p className="text-sm text-destructive">{errorMessage(memories.error)}</p>
+				) : (
+					<>
+						<MemoryRows emptyLabel={m.memories_empty()} memories={memories.data} />
+						<div className="divide-y divide-border/60 border-t border-border">
+							{memories.data?.map((memory) => (
+								<div
+									key={`actions-${memory.id}`}
+									className="flex flex-wrap items-center gap-1 py-1"
+								>
+									<span className="min-w-0 max-w-40 truncate font-mono text-[11px] text-muted-foreground">
+										{memory.summary}
+									</span>
+									{memory.status === "pending" ? (
+										<>
+											<Button
+												size="sm"
+												variant="ghost"
+												onClick={() => action.mutate({ id: memory.id })}
+											>
+												<Check className="size-3.5" />
+												{m.memories_approve()}
+											</Button>
+											<Button
+												size="sm"
+												variant="ghost"
+												onClick={() => reject.mutate({ id: memory.id })}
+											>
+												<X className="size-3.5" />
+												{m.memories_reject()}
+											</Button>
+										</>
+									) : null}
+									<Button size="sm" variant="ghost" onClick={() => openEdit(memory)}>
+										{m.memories_edit()}
+									</Button>
+									<Button
+										size="sm"
+										variant="ghost"
+										onClick={() => pin.mutate({ id: memory.id, pinned: !memory.pinned })}
 									>
-										<span className="max-w-40 truncate text-xs text-muted-foreground">
-											{memory.summary}
-										</span>
-										{memory.status === "pending" ? (
-											<>
-												<Button
-													size="sm"
-													variant="ghost"
-													onClick={() => action.mutate({ id: memory.id })}
-												>
-													<Check className="size-3.5" />
-													{m.memories_approve()}
-												</Button>
-												<Button
-													size="sm"
-													variant="ghost"
-													onClick={() => reject.mutate({ id: memory.id })}
-												>
-													<X className="size-3.5" />
-													{m.memories_reject()}
-												</Button>
-											</>
-										) : null}
-										<Button size="sm" variant="ghost" onClick={() => openEdit(memory)}>
-											{m.memories_edit()}
-										</Button>
-										<Button
-											size="sm"
-											variant="ghost"
-											onClick={() => pin.mutate({ id: memory.id, pinned: !memory.pinned })}
-										>
-											<Pin className="size-3.5" />
-											{memory.pinned ? m.memories_unpin() : m.memories_pin()}
-										</Button>
-										<Button
-											size="sm"
-											variant="ghost"
-											disabled={memory.status === "revoked"}
-											onClick={() => revoke.mutate({ id: memory.id })}
-										>
-											<Trash2 className="size-3.5" />
-											{m.memories_revoke()}
-										</Button>
-									</div>
-								))}
-							</div>
-						</>
-					)}
-				</CardContent>
-			</Card>
+										<Pin className="size-3.5" />
+										{memory.pinned ? m.memories_unpin() : m.memories_pin()}
+									</Button>
+									<Button
+										size="sm"
+										variant="ghost"
+										disabled={memory.status === "revoked"}
+										onClick={() => revoke.mutate({ id: memory.id })}
+									>
+										<Trash2 className="size-3.5" />
+										{m.memories_revoke()}
+									</Button>
+								</div>
+							))}
+						</div>
+					</>
+				)}
+			</section>
 			<Modal
 				open={editing !== undefined}
 				onOpenChange={(open) => {
@@ -377,9 +364,7 @@ export function MemoriesPage({ embedded = false }: { embedded?: boolean } = {}) 
 								value={expiresAt === "" ? "" : expiresAt.slice(0, 16)}
 								onChange={(event) =>
 									setExpiresAt(
-										event.target.value === ""
-											? ""
-											: new Date(event.target.value).toISOString(),
+										event.target.value === "" ? "" : new Date(event.target.value).toISOString(),
 									)
 								}
 							/>

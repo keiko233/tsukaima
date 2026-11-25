@@ -19,12 +19,13 @@ import {
 	type LucideIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Button } from "@tsukaima/ui/components/motion/button";
 import {
-	MorphPopover,
-	MorphPopoverContent,
-	MorphPopoverTrigger,
-} from "@tsukaima/ui/components/motion/popover-morph";
+	EditorialPopover,
+	EditorialPopoverClose,
+	EditorialPopoverContent,
+	EditorialPopoverTitle,
+	EditorialPopoverTrigger,
+} from "@tsukaima/ui";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { orpc } from "@/lib/api";
 import { authClient, authSessionQueryKey, authSessionQueryOptions } from "@/lib/auth";
@@ -42,6 +43,9 @@ type RailDestination =
 	| "/users"
 	| "/workspace";
 
+const RAIL_ITEM_CLASS =
+	"relative grid size-9 place-items-center text-muted-foreground outline-none transition-colors hover:bg-ink/5 hover:text-ink focus-visible:ring-2 focus-visible:ring-ring";
+
 function destinationActive(destination: RailDestination, pathname: string): boolean {
 	if (destination === "/") return pathname === "/" || pathname.startsWith("/chat/");
 	if (destination === "/workspace") {
@@ -50,38 +54,51 @@ function destinationActive(destination: RailDestination, pathname: string): bool
 	return pathname === destination || pathname.startsWith(`${destination}/`);
 }
 
-function RailItem({
+function ActiveBar() {
+	return (
+		<span
+			aria-hidden="true"
+			className="absolute top-1/2 -left-2 h-4 w-0.5 -translate-y-1/2 bg-[var(--accent-ink)]"
+		/>
+	);
+}
+
+function RailBadge({ count }: { count: number }) {
+	if (count <= 0) return null;
+	return (
+		<span className="absolute -top-0.5 -right-1 grid min-w-3.5 place-items-center rounded-full bg-[var(--accent-ink)] px-1 font-mono text-[9px] leading-3.5 tabular-nums text-accent-foreground">
+			{count > 99 ? "99+" : count}
+		</span>
+	);
+}
+
+function RailButton({
 	active = false,
 	badge,
 	icon: Icon,
 	label,
 	onClick,
+	pressed,
 }: {
 	active?: boolean;
 	badge?: number;
 	icon: LucideIcon;
 	label: string;
-	onClick?: () => void;
+	onClick: () => void;
+	pressed?: boolean;
 }) {
 	return (
 		<button
 			type="button"
 			aria-label={label}
-			aria-pressed={onClick === undefined ? undefined : active}
+			aria-pressed={pressed}
 			title={label}
 			onClick={onClick}
-			className={cn(
-				"relative grid size-9 place-items-center rounded-lg text-muted-foreground outline-none transition-colors",
-				"hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
-				active && "bg-accent/30 text-foreground hover:bg-accent/40 hover:text-foreground",
-			)}
+			className={cn(RAIL_ITEM_CLASS, active && "text-ink")}
 		>
-			<Icon className="size-[18px]" />
-			{badge !== undefined && badge > 0 ? (
-				<span className="absolute top-0.5 right-0.5 grid min-w-3.5 place-items-center rounded-full bg-primary px-1 text-[8.5px] leading-3.5 font-medium text-primary-foreground">
-					{badge > 99 ? "99+" : badge}
-				</span>
-			) : null}
+			{active ? <ActiveBar /> : null}
+			<Icon className="size-[18px]" aria-hidden="true" />
+			{badge === undefined ? null : <RailBadge count={badge} />}
 		</button>
 	);
 }
@@ -106,18 +123,11 @@ function RailLink({
 			aria-current={active ? "page" : undefined}
 			aria-label={label}
 			title={label}
-			className={cn(
-				"relative grid size-9 place-items-center rounded-lg text-muted-foreground outline-none transition-colors",
-				"hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
-				active && "bg-accent/30 text-foreground hover:bg-accent/40 hover:text-foreground",
-			)}
+			className={cn(RAIL_ITEM_CLASS, active && "text-ink")}
 		>
-			<Icon className="size-[18px]" />
-			{badge !== undefined && badge > 0 ? (
-				<span className="absolute top-0.5 right-0.5 grid min-w-3.5 place-items-center rounded-full bg-primary px-1 text-[8.5px] leading-3.5 font-medium text-primary-foreground">
-					{badge > 99 ? "99+" : badge}
-				</span>
-			) : null}
+			{active ? <ActiveBar /> : null}
+			<Icon className="size-[18px]" aria-hidden="true" />
+			{badge === undefined ? null : <RailBadge count={badge} />}
 		</Link>
 	);
 }
@@ -177,21 +187,15 @@ export function AppRail() {
 		<>
 			<nav
 				aria-label="Tsukaima"
-				className="scrollbar-hide flex h-full w-[52px] shrink-0 flex-col items-center overflow-x-hidden overflow-y-auto border-r border-border bg-sidebar py-2"
+				className="scrollbar-hide flex h-full w-[52px] shrink-0 flex-col items-center overflow-x-hidden overflow-y-auto border-r border-border bg-rail py-2"
 			>
 				<Link
 					to="/"
 					aria-label="Tsukaima"
 					title="Tsukaima"
-					className="grid size-8 shrink-0 place-items-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					className="grid size-8 shrink-0 place-items-center outline-none focus-visible:ring-2 focus-visible:ring-ring"
 				>
-					<img
-						src="/brand/tsukaima-square.svg"
-						alt=""
-						className="size-8 rounded-lg"
-						width={32}
-						height={32}
-					/>
+					<img src="/brand/tsukaima-square.svg" alt="" className="size-8" width={32} height={32} />
 				</Link>
 
 				<div className="scrollbar-hide mt-3 flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-x-hidden overflow-y-auto">
@@ -248,61 +252,52 @@ export function AppRail() {
 						label={m.nav_settings()}
 						to="/settings"
 					/>
-					<RailItem
+					<RailButton
 						active={logsOpen}
 						icon={Terminal}
 						label={`${m.logs_title()} (${m.logs_shortcut()})`}
 						onClick={() => setLogsOpen((value) => !value)}
+						pressed={logsOpen}
 					/>
-					<MorphPopover open={moreOpen} onOpenChange={setMoreOpen}>
-						<MorphPopoverTrigger>
-							<Button
-								type="button"
-								variant="ghost"
-								size="iconLg"
-								aria-label={m.nav_more()}
-								title={m.nav_more()}
-								className="size-9 rounded-lg p-0 text-muted-foreground hover:text-foreground"
-							>
-								<MoreHorizontal className="size-[18px]" />
-							</Button>
-						</MorphPopoverTrigger>
-						<MorphPopoverContent
-							align="start"
-							side="top"
-							sideOffset={8}
-							radius={10}
-							className="w-52 p-1"
+					<RailButton
+						icon={theme === "dark" ? Sun : Moon}
+						label={m.theme_toggle()}
+						onClick={toggleTheme}
+					/>
+					<EditorialPopover open={moreOpen} onOpenChange={setMoreOpen}>
+						<EditorialPopoverTrigger
+							aria-label={m.nav_more()}
+							title={m.nav_more()}
+							className={cn(RAIL_ITEM_CLASS, moreOpen && "text-ink")}
 						>
-							<Button
-								className="h-auto justify-start rounded-md px-2 py-1.5 text-xs"
-								fullWidth
-								leadingIcon={theme === "dark" ? <Sun /> : <Moon />}
-								onClick={toggleTheme}
-								variant="ghost"
-							>
-								{m.theme_toggle()}
-							</Button>
-							<div className="my-1 h-px bg-border" />
+							<MoreHorizontal className="size-[18px]" aria-hidden="true" />
+						</EditorialPopoverTrigger>
+						<EditorialPopoverContent side="right" align="end" className="w-56 p-2">
+							<EditorialPopoverTitle className="sr-only">{m.nav_more()}</EditorialPopoverTitle>
 							{session.data?.user === undefined ? null : (
-								<div className="truncate px-2 pb-1 text-[10.5px] text-muted-foreground">
-									{m.auth_signed_in_as({
-										username: session.data.user.username ?? session.data.user.name,
-									})}
+								<div className="px-1 pb-2">
+									<div className="text-[10px] tracking-[0.14em] text-faint uppercase">
+										{m.nav_more()}
+									</div>
+									<div className="mt-0.5 truncate text-xs text-ink">
+										{m.auth_signed_in_as({
+											username: session.data.user.username ?? session.data.user.name,
+										})}
+									</div>
 								</div>
 							)}
-							<Button
-								className="h-auto justify-start rounded-md px-2 py-1.5 text-xs"
-								disabled={signOut.isPending}
-								fullWidth
-								leadingIcon={<LogOut />}
-								onClick={() => signOut.mutate()}
-								variant="ghost"
-							>
-								{m.auth_sign_out()}
-							</Button>
-						</MorphPopoverContent>
-					</MorphPopover>
+							<div className="border-t border-border pt-1">
+								<EditorialPopoverClose
+									disabled={signOut.isPending}
+									onClick={() => signOut.mutate()}
+									className="flex h-8 w-full items-center gap-2 rounded-sm px-1.5 text-start text-xs text-ink outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+								>
+									<LogOut className="size-3.5" aria-hidden="true" />
+									{m.auth_sign_out()}
+								</EditorialPopoverClose>
+							</div>
+						</EditorialPopoverContent>
+					</EditorialPopover>
 				</div>
 			</nav>
 			<LogPanel open={logsOpen} onClose={() => setLogsOpen(false)} />

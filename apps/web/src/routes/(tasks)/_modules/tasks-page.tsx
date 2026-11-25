@@ -20,8 +20,10 @@ import type {
 	ScheduleRecurrence,
 	ScheduleSummary,
 } from "@tsukaima/contracts";
+import { Checkbox } from "@tsukaima/ui/components/motion/checkbox";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import { Input } from "@tsukaima/ui/components/motion/input";
+import { EditorialGroup, EditorialSwitch, KpiStrip } from "@tsukaima/ui";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { orpc } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
@@ -31,9 +33,9 @@ import { Modal, ModalActions } from "../../_modules/ui/modal";
 import { SystemPage } from "../../(system)/_modules/page-header";
 
 const fieldClass =
-	"h-8 w-full rounded-md border border-border bg-background px-2 text-[12px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+	"h-8 w-full rounded-sm border border-line2 bg-transparent px-2 text-[12px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-ring";
 const textareaClass =
-	"min-h-20 w-full rounded-md border border-border bg-background px-2 py-1.5 text-[12px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+	"min-h-20 w-full rounded-sm border border-line2 bg-transparent px-2 py-1.5 text-[12px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 function statusLabel(status: ScheduleSummary["status"]): string {
 	switch (status) {
@@ -99,14 +101,14 @@ function recurrenceLabel(recurrence: ScheduleRecurrence): string {
 function statusClass(status: ScheduleSummary["status"]): string {
 	switch (status) {
 		case "active":
-			return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
+			return "text-sage";
 		case "failed":
 		case "cancelled":
-			return "bg-destructive/10 text-destructive";
+			return "text-destructive";
 		case "paused":
-			return "bg-amber-500/10 text-amber-600 dark:text-amber-400";
+			return "text-warning";
 		default:
-			return "bg-muted text-muted-foreground";
+			return "text-muted-foreground";
 	}
 }
 
@@ -247,14 +249,14 @@ export function TasksSidebar({
 									</span>
 									<span
 										className={cn(
-											"shrink-0 rounded px-1 text-[8.5px] leading-3.5 font-medium",
+											"shrink-0 font-mono text-[10px] tracking-wide uppercase",
 											statusClass(schedule.status),
 										)}
 									>
 										{statusLabel(schedule.status)}
 									</span>
 								</span>
-								<span className="flex min-w-0 items-center gap-1 pl-5 text-[10px] leading-3.5 text-muted-foreground/75">
+								<span className="flex min-w-0 items-center gap-1 pl-5 font-mono text-[10px] leading-4 text-muted-foreground/75">
 									<span className="truncate">{schedule.targetSessionTitle}</span>
 									<span aria-hidden="true">·</span>
 									<span className="shrink-0 tabular-nums">{nextRunText(schedule)}</span>
@@ -281,7 +283,7 @@ function TargetPicker({ onChange, value }: { onChange: (value: string) => void; 
 				value={search}
 				onChange={setSearch}
 			/>
-			<div className="max-h-32 overflow-y-auto rounded-md border border-border">
+			<div className="max-h-32 divide-y divide-border/60 overflow-y-auto border-y border-border">
 				{(sessions.data ?? []).length === 0 ? (
 					<p className="px-2 py-2 text-[11px] text-muted-foreground">{m.tasks_no_targets()}</p>
 				) : (
@@ -463,25 +465,21 @@ function CreateTaskForm({ onCreated }: { onCreated: (schedule: ScheduleDetail) =
 			{recurrenceKind === "calendar" ? (
 				<fieldset className="space-y-1">
 					<legend className="text-[11px] text-muted-foreground">{m.tasks_weekdays()}</legend>
-					<div className="flex flex-wrap gap-1">
+					<div className="flex flex-wrap gap-x-3 gap-y-1.5">
 						{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((label, day) => (
-							<label
+							<Checkbox
 								key={label}
-								className="flex items-center gap-1 rounded border border-border px-1.5 py-1 text-[10px]"
-							>
-								<input
-									checked={days.includes(day)}
-									type="checkbox"
-									onChange={(event) =>
-										setDays((current) =>
-											event.target.checked
-												? [...current, day].toSorted()
-												: current.filter((value) => value !== day),
-										)
-									}
-								/>
-								{label}
-							</label>
+								checked={days.includes(day)}
+								label={label}
+								onCheckedChange={(checked) =>
+									setDays((current) =>
+										checked
+											? [...current, day].toSorted()
+											: current.filter((value) => value !== day),
+									)
+								}
+								className="text-[11px]"
+							/>
 						))}
 					</div>
 				</fieldset>
@@ -499,18 +497,19 @@ function CreateTaskForm({ onCreated }: { onCreated: (schedule: ScheduleDetail) =
 						<option value="all">{m.tasks_catch_up_all()}</option>
 					</select>
 				</label>
-				<label className="flex items-end gap-2 pb-1 text-[11px] text-muted-foreground">
-					<input
+				<div className="flex items-end pb-1">
+					<EditorialSwitch
 						checked={respectQuietHours}
-						type="checkbox"
-						onChange={(event) => setRespectQuietHours(event.target.checked)}
+						label={m.tasks_respect_quiet_hours()}
+						onCheckedChange={setRespectQuietHours}
 					/>
-					<span>{m.tasks_respect_quiet_hours()}</span>
-				</label>
+				</div>
 			</div>
-			<div className="rounded-md border border-border bg-muted/30 px-2 py-1.5">
-				<p className="text-[10px] font-medium text-muted-foreground">{m.tasks_preview()}</p>
-				<p className="mt-1 text-[10.5px] leading-4 text-foreground">
+			<div className="border-s-2 border-border ps-3">
+				<p className="text-[11px] tracking-wide text-muted-foreground uppercase">
+					{m.tasks_preview()}
+				</p>
+				<p className="mt-1 font-mono text-[11px] leading-5 text-ink">
 					{(preview.data?.nextRuns ?? []).map((run) => formatDateTime(run)).join(" · ") || "—"}
 				</p>
 			</div>
@@ -578,13 +577,13 @@ export function TasksIndexPage() {
 				) : schedules.isError ? (
 					<p className="text-xs text-destructive">{m.tasks_load_failed()}</p>
 				) : visibleSchedules.length === 0 ? (
-					<div className="rounded-lg border border-dashed border-border px-4 py-10 text-center">
-						<CalendarClock className="mx-auto size-5 text-muted-foreground" />
-						<p className="mt-2 text-sm font-medium">{m.tasks_empty_title()}</p>
+					<div className="border-t border-border py-10 text-center">
+						<CalendarClock className="mx-auto size-5 text-faint" aria-hidden="true" />
+						<p className="mt-2 font-serif text-lg text-ink">{m.tasks_empty_title()}</p>
 						<p className="mt-1 text-xs text-muted-foreground">{m.tasks_empty()}</p>
 					</div>
 				) : (
-					<div className="divide-y divide-border rounded-lg border border-border">
+					<div className="divide-y divide-border border-t border-border">
 						{visibleSchedules.map((schedule) => (
 							<Link
 								key={schedule.id}
@@ -598,19 +597,19 @@ export function TasksIndexPage() {
 										<span className="truncate text-[12.5px] font-medium">{schedule.title}</span>
 										<span
 											className={cn(
-												"rounded px-1 text-[9px] font-medium",
+												"font-mono text-[11px] tracking-wide uppercase",
 												statusClass(schedule.status),
 											)}
 										>
 											{statusLabel(schedule.status)}
 										</span>
 									</span>
-									<span className="mt-0.5 block truncate text-[10.5px] text-muted-foreground">
+									<span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">
 										{schedule.targetSessionTitle} · {actionLabel(schedule.actionKind)} ·{" "}
 										{recurrenceLabel(schedule.recurrence)}
 									</span>
 								</span>
-								<span className="shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+								<span className="shrink-0 text-right font-mono text-[11px] text-muted-foreground tabular-nums">
 									{nextRunText(schedule)}
 								</span>
 							</Link>
@@ -715,19 +714,20 @@ export function TaskDetailPage() {
 	return (
 		<div className="mx-auto flex min-h-full w-full max-w-4xl flex-col px-4 py-4 sm:px-5">
 			<SystemPage description={m.tasks_description()} title={schedule.title}>
-				<div className="flex flex-wrap items-center gap-1.5">
+				<div className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
 					<span
 						className={cn(
-							"rounded px-1.5 py-0.5 text-[10px] font-medium",
+							"font-mono text-[11px] tracking-[0.14em] uppercase",
 							statusClass(schedule.status),
 						)}
 					>
 						{statusLabel(schedule.status)}
 					</span>
-					<span className="text-[10.5px] text-muted-foreground">
-						{actionLabel(schedule.actionKind)} · {recurrenceLabel(schedule.recurrence)}
+					<span className="font-mono text-[11px] text-muted-foreground">
+						{actionLabel(schedule.actionKind)} · {recurrenceLabel(schedule.recurrence)} ·{" "}
+						{m.tasks_revision({ revision: schedule.revision })}
 					</span>
-					<div className="ml-auto flex flex-wrap gap-1">
+					<div className="ms-auto flex flex-wrap gap-1">
 						{schedule.status === "active" ? (
 							<Button size="xs" variant="outline" onClick={() => pause.mutate({ scheduleId })}>
 								<Pause className="size-3" />
@@ -773,86 +773,81 @@ export function TaskDetailPage() {
 									: "/chat/$sessionId"
 							}
 							params={{ sessionId: schedule.targetSessionId }}
-							className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10.5px] text-muted-foreground hover:text-foreground"
+							className="inline-flex items-center gap-1 border-b border-border pb-0.5 text-[11px] text-muted-foreground hover:text-ink"
 						>
-							<ExternalLink className="size-3" />
+							<ExternalLink className="size-3" aria-hidden="true" />
 							{m.tasks_open_session()}
 						</Link>
 					</div>
 				</div>
-				<div className="mt-3 grid gap-3 sm:grid-cols-2">
-					<section className="rounded-lg border border-border p-3">
-						<h2 className="text-[11px] font-semibold">{m.tasks_prompt_label()}</h2>
-						<p className="mt-1 whitespace-pre-wrap text-[11.5px] leading-5 text-muted-foreground">
+
+				<KpiStrip
+					className="mt-4"
+					items={[
+						{ label: m.tasks_next_run(), value: nextRunText(schedule) },
+						{
+							label: m.tasks_last_run(),
+							value:
+								schedule.lastRunAt === null
+									? m.tasks_never_run()
+									: formatDateTime(schedule.lastRunAt),
+						},
+						{ label: m.tasks_occurrences(), value: schedule.occurrences.length },
+					]}
+				/>
+
+				<div className="mt-5 grid gap-5 border-t border-border pt-4 sm:grid-cols-2">
+					<EditorialGroup className="border-t-0 pt-0" title={m.tasks_prompt_label()}>
+						<p className="text-[12.5px] leading-6 whitespace-pre-wrap text-ink">
 							{schedule.prompt}
 						</p>
-					</section>
-					<section className="space-y-1.5 rounded-lg border border-border p-3 text-[11px]">
-						<div className="flex justify-between gap-2">
-							<span className="text-muted-foreground">{m.tasks_target()}</span>
-							<span className="truncate text-right">{schedule.targetSessionTitle}</span>
-						</div>
-						<div className="flex justify-between gap-2">
-							<span className="text-muted-foreground">{m.tasks_time_zone()}</span>
-							<span>{schedule.timeZone}</span>
-						</div>
-						<div className="flex justify-between gap-2">
-							<span className="text-muted-foreground">{m.tasks_next_run()}</span>
-							<span>{nextRunText(schedule)}</span>
-						</div>
-						<div className="flex justify-between gap-2">
-							<span className="text-muted-foreground">{m.tasks_last_run()}</span>
-							<span>
-								{schedule.lastRunAt === null
-									? m.tasks_never_run()
-									: formatDateTime(schedule.lastRunAt)}
-							</span>
-						</div>
-						<div className="flex justify-between gap-2">
-							<span className="text-muted-foreground">
-								{m.tasks_run_count({ count: schedule.runCount })}
-							</span>
-							<span>{m.tasks_revision({ revision: schedule.revision })}</span>
-						</div>
-						<div className="flex justify-between gap-2">
-							<span className="text-muted-foreground">{m.tasks_catch_up()}</span>
-							<span>{schedule.catchUp}</span>
-						</div>
-						<div className="flex justify-between gap-2">
-							<span className="text-muted-foreground">{m.tasks_respect_quiet_hours()}</span>
-							<span>{schedule.respectQuietHours ? "✓" : "—"}</span>
-						</div>
-					</section>
+					</EditorialGroup>
+					<EditorialGroup className="border-t-0 pt-0" title={m.tasks_target()}>
+						<dl className="text-[12px]">
+							{[
+								[m.tasks_target(), schedule.targetSessionTitle],
+								[m.tasks_time_zone(), schedule.timeZone],
+								[m.tasks_catch_up(), schedule.catchUp],
+								[m.tasks_respect_quiet_hours(), schedule.respectQuietHours ? "✓" : "—"],
+							].map(([label, value]) => (
+								<div
+									key={label}
+									className="flex items-baseline justify-between gap-3 border-b border-border/60 py-1.5 last:border-b-0"
+								>
+									<dt className="shrink-0 text-muted-foreground">{label}</dt>
+									<dd className="min-w-0 truncate text-right font-mono text-[11px] text-ink tabular-nums">
+										{value}
+									</dd>
+								</div>
+							))}
+						</dl>
+					</EditorialGroup>
 				</div>
-				<section className="mt-3 rounded-lg border border-border">
-					<h2 className="border-b border-border px-3 py-2 text-[11px] font-semibold">
-						{m.tasks_occurrences()}
-					</h2>
+
+				<EditorialGroup className="mt-5" title={m.tasks_occurrences()}>
 					{schedule.occurrences.length === 0 ? (
-						<p className="px-3 py-4 text-[11px] text-muted-foreground">
-							{m.tasks_occurrence_empty()}
-						</p>
+						<p className="text-[11px] text-muted-foreground">{m.tasks_occurrence_empty()}</p>
 					) : (
-						<div className="divide-y divide-border">
+						<div className="divide-y divide-border/60">
 							{schedule.occurrences.map((occurrence) => (
-								<div key={occurrence.id} className="flex items-center gap-2 px-3 py-2 text-[11px]">
-									<span className="w-36 shrink-0 tabular-nums text-muted-foreground">
+								<div key={occurrence.id} className="flex items-center gap-2 py-1.5 text-[11px]">
+									<span className="w-36 shrink-0 font-mono text-muted-foreground tabular-nums">
 										{formatDateTime(occurrence.scheduledFor)}
 									</span>
-									<span className="rounded bg-muted px-1 py-0.5 text-[9.5px]">
+									<span className="shrink-0 border-b border-border font-mono text-[11px] text-ink">
 										{occurrenceLabel(occurrence.status)}
 									</span>
 									<span className="min-w-0 flex-1 truncate text-muted-foreground">
 										{occurrence.error ?? ""}
 									</span>
-									<span className="shrink-0 text-[9.5px] text-muted-foreground">
+									<span className="shrink-0 font-mono text-[11px] text-faint tabular-nums">
 										{occurrence.attempt}
 									</span>
 								</div>
 							))}
 						</div>
 					)}
-				</section>
+				</EditorialGroup>
 			</SystemPage>
 			<Modal
 				open={editOpen}

@@ -265,47 +265,53 @@ export function ChatPage({
 					}
 					name={detail.title}
 				/>
-				<div className="flex min-w-0 flex-1 items-center gap-1.5 text-[11px] text-muted-foreground">
-					<h1 className="min-w-0 shrink truncate text-[13px] font-semibold text-foreground">
+				<div className="flex min-w-0 flex-1 items-baseline gap-2 text-[11px] text-muted-foreground">
+					<h1 className="min-w-0 shrink truncate font-serif text-[17px] leading-6 text-ink">
 						{detail.title}
 					</h1>
 					{detail.isReceiving &&
 					(detail.chat.kind === "private" || detail.chat.kind === "group") ? (
-						<span className="shrink-0 rounded bg-primary/10 px-1.5 text-[9.5px] leading-4 font-medium text-primary">
+						<span className="shrink-0 font-mono text-[10px] tracking-[0.14em] text-accent-ink uppercase">
 							{m.receiving()}
 						</span>
 					) : null}
 					{archived ? (
-						<span className="shrink-0 rounded bg-muted px-1.5 text-[9.5px] leading-4 text-muted-foreground">
+						<span className="shrink-0 font-mono text-[10px] tracking-[0.14em] text-muted-foreground uppercase">
 							{m.archived()}
 						</span>
 					) : null}
 					{surface === "workspace" ? (
-						<span className="shrink-0 rounded bg-violet/10 px-1.5 text-[9.5px] leading-4 font-medium text-violet">
+						<span className="shrink-0 font-mono text-[10px] tracking-[0.14em] text-violet uppercase">
 							{m.workspace_kind()}
 						</span>
 					) : null}
-					<span aria-hidden="true" className="hidden text-muted-foreground/45 sm:inline">
+					<span aria-hidden="true" className="hidden text-faint sm:inline">
 						·
 					</span>
-					<span className="hidden min-w-0 truncate sm:inline">{detail.chat.title}</span>
-					<span aria-hidden="true" className="hidden text-muted-foreground/45 md:inline">
+					<span className="hidden min-w-0 truncate font-mono text-[11px] sm:inline">
+						{detail.chat.title}
+					</span>
+					<span aria-hidden="true" className="hidden text-faint md:inline">
 						·
 					</span>
-					<span className="hidden shrink-0 md:inline">{chatKindLabel(detail.chat.kind)}</span>
+					<span className="hidden shrink-0 text-[11px] md:inline">
+						{chatKindLabel(detail.chat.kind)}
+					</span>
 					{detail.channelId ? (
 						<>
-							<span aria-hidden="true" className="hidden text-muted-foreground/45 xl:inline">
+							<span aria-hidden="true" className="hidden text-faint xl:inline">
 								·
 							</span>
-							<span className="hidden min-w-0 truncate xl:inline">{detail.channelId}</span>
+							<span className="hidden min-w-0 truncate font-mono text-[11px] xl:inline">
+								{detail.channelId}
+							</span>
 						</>
 					) : null}
 					{externalEligible ? (
 						<span
 							className={cn(
-								"ml-1 inline-flex shrink-0 items-center gap-1 text-[10.5px]",
-								channelConnected ? "text-(--color-success)" : "text-destructive",
+								"ml-1 inline-flex shrink-0 items-center gap-1 font-mono text-[11px]",
+								channelConnected ? "text-sage" : "text-destructive",
 							)}
 						>
 							<Circle className="size-1.5 fill-current" />
@@ -341,10 +347,7 @@ export function ChatPage({
 					>
 						<PanelRight className="size-3.5" />
 						{liveRun !== undefined ? (
-							<span
-								aria-hidden="true"
-								className="size-1.5 animate-pulse rounded-full bg-amber-500"
-							/>
+							<span aria-hidden="true" className="size-1.5 animate-pulse rounded-full bg-warning" />
 						) : null}
 					</Button>
 				</div>
@@ -353,12 +356,12 @@ export function ChatPage({
 			<div className="flex min-h-0 flex-1">
 				<div className="flex min-w-0 flex-1 flex-col">
 					{archived ? (
-						<div className="border-b border-border bg-muted/40 px-3.5 py-1.5 text-[11px] text-muted-foreground">
+						<div className="border-b border-border px-3.5 py-1.5 text-[11px] text-muted-foreground">
 							{m.session_archived_notice()}
 						</div>
 					) : null}
 					{surface === "workspace" && workspaceDetail !== undefined && workspaceDetail !== null ? (
-						<div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-muted/25 px-3.5 py-1.5 text-[10.5px] text-muted-foreground">
+						<div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3.5 py-1.5 font-mono text-[11px] text-muted-foreground">
 							<span>
 								{m.workspace_task()}:{" "}
 								<span className="font-medium text-foreground">
@@ -382,7 +385,7 @@ export function ChatPage({
 							{workspaceDetail.workspace.tags.length > 0 ? (
 								<span className="flex items-center gap-1">
 									{workspaceDetail.workspace.tags.map((tag) => (
-										<span key={tag} className="rounded bg-muted px-1.5 py-0.5 text-[9.5px]">
+										<span key={tag} className="border-b border-border text-[11px]">
 											{tag}
 										</span>
 									))}
@@ -437,7 +440,7 @@ export function ChatPage({
 				{wideContextPane && desktopContextOpen ? (
 					<aside
 						aria-label={m.inspector_title()}
-						className="w-[280px] shrink-0 border-l border-border bg-sidebar/60 xl:w-[300px]"
+						className="w-[280px] shrink-0 border-l border-border bg-sidebar xl:w-[300px]"
 					>
 						<SessionInspectorSidebar
 							activeTab={inspectorTab}
@@ -462,7 +465,7 @@ export function ChatPage({
 					/>
 					<aside
 						aria-label={m.inspector_title()}
-						className="relative z-10 h-full w-[320px] max-w-[90vw] border-l border-border bg-background shadow-xl"
+						className="relative z-10 h-full w-[320px] max-w-[90vw] border-l border-border bg-sidebar shadow-xl"
 					>
 						<SessionInspectorSidebar
 							activeTab={inspectorTab}
@@ -484,12 +487,10 @@ export function ChatEmptyState() {
 	const { mobile, showSidebar } = useShellNavigation();
 	return (
 		<div className="grid h-full place-items-center px-6">
-			<div className="flex max-w-xs flex-col items-center text-center">
-				<span className="grid size-10 place-items-center rounded-xl bg-muted text-muted-foreground">
-					<MessageCircle className="size-5" />
-				</span>
-				<h1 className="mt-3 text-[14px] font-semibold tracking-tight">{m.welcome_title()}</h1>
-				<p className="mt-1 text-[11.5px] leading-5 text-muted-foreground">
+			<div className="flex max-w-xs flex-col items-center border-t border-border pt-6 text-center">
+				<MessageCircle className="size-5 text-faint" aria-hidden="true" />
+				<h1 className="mt-3 font-serif text-xl text-ink">{m.welcome_title()}</h1>
+				<p className="mt-1 text-[12px] leading-5 text-muted-foreground">
 					{m.welcome_description()}
 				</p>
 				{mobile ? (
