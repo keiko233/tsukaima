@@ -3728,7 +3728,11 @@ export class PiDurableConversationHost {
 					// An unreadable blob stays a placeholder; it must not fail the turn.
 				}
 				if (resolved === undefined) {
-					textParts.push(`[${messagePart.type} unavailable]`);
+					textParts.push(
+						messagePart.type === "sticker" && messagePart.channelRef?.startsWith("face:") === true
+							? messagePartText(messagePart)
+							: `[${messagePart.type} unavailable]`,
+					);
 					continue;
 				}
 				flushText();

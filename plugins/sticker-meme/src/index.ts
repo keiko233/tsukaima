@@ -96,6 +96,13 @@ export {
 	type TelegramVideoFormat,
 } from "./telegram-import.ts";
 export {
+	buildAnimatedFrameSheet,
+	isAnimatedImage,
+	isAnimatedWebp,
+	type FrameSheet,
+	type FrameSheetOptions,
+} from "./frame-sheet.ts";
+export {
 	detectStickerMediaFormat,
 	normalizeStickerMedia,
 	type DetectedStickerFormat,

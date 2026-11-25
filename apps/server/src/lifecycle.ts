@@ -62,6 +62,7 @@ import {
 	ONEBOT_VIDEO_FRAME_EXTRACTOR_BINDING,
 } from "@tsukaima-plugin/onebot-napcat";
 import { parseSkillsConfig } from "@tsukaima-plugin/skills";
+import { buildAnimatedFrameSheet, isAnimatedImage } from "@tsukaima-plugin/sticker-meme";
 import {
 	MigrationRegistry,
 	PluginDatabaseStore,
@@ -2146,17 +2147,28 @@ export class TsukaimaLifecycle {
 				isDirectSendToolName(this.pluginHost.resolveModelToolName(toolName) ?? toolName),
 			hasDirectSend: (conversationId) => this.replyDispatcher.hasDirectSendThisTurn(conversationId),
 			resolveImage: async (part) => {
-				if (part.type !== "image") return undefined;
+				if (part.type !== "image" && part.type !== "sticker") return undefined;
+				if (part.channelRef?.startsWith("face:") === true) return undefined;
 				// Only bytes already in the media store can be shown to the model. A part that only
 				// carries a remote URL has not been fetched, so it stays a placeholder rather than
 				// blocking the turn on an outbound request.
 				const sha256 = part.sha256 ?? (await this.mediaShaFor(part.mediaId));
 				if (sha256 === undefined) return undefined;
 				try {
-					const bytes = await this.media.readBytes(sha256);
+					let bytes = await this.media.readBytes(sha256);
+					let mimeType = part.mimeType ?? "image/png";
+					if (isAnimatedImage(mimeType, bytes)) {
+						const sheet = await buildAnimatedFrameSheet(bytes, mimeType, {
+							logger: this.runtimeLog,
+						});
+						if (sheet !== undefined) {
+							bytes = sheet.bytes;
+							mimeType = sheet.mimeType;
+						}
+					}
 					return {
 						data: Buffer.from(bytes).toString("base64"),
-						mimeType: part.mimeType ?? "image/png",
+						mimeType,
 					};
 				} catch {
 					return undefined;

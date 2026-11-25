@@ -481,6 +481,8 @@ const syncPart = (
 			return textPart(segment);
 		case "face":
 			return facePart(segment);
+		case "mface":
+			return displayMedia(segment, "sticker");
 		case "image":
 			return displayMedia(segment, isStickerImage(segment) ? "sticker" : "image");
 		case "record":

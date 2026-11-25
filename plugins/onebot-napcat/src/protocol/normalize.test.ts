@@ -131,6 +131,10 @@ describe("OneBot inbound segment fidelity", () => {
 			{ data: { file: "a.gif", sub_type: 1, summary: "[动画表情]" }, type: "image" },
 			{ data: { emoji_id: "e1", emoji_package_id: "1", file: "b.gif" }, type: "image" },
 			{ data: { file: "c.webp", summary: "sticker" }, type: "image" },
+			{
+				data: { emoji_id: "m1", summary: "[商城表情]", url: "https://example.test/m1.gif" },
+				type: "mface",
+			},
 		];
 		for (const segment of cases) {
 			const envelope = normalizeOneBotEvent(message([segment]), config);

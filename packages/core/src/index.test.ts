@@ -505,6 +505,27 @@ describe("PiDurableConversationHost", () => {
 		]);
 	});
 
+	test("preserves native face sticker summary when no image bytes exist", async () => {
+		const content = await runImageTurnWithVision(true, {
+			messages: [
+				{
+					id: "native-face-turn",
+					parts: [
+						{ text: "hello", type: "text" },
+						{ channelRef: "face:14", previewText: "face 14", type: "sticker" },
+					],
+				},
+			],
+			resolveImage: async () => undefined,
+		});
+		expect(content).toEqual([
+			{
+				text: expect.stringMatching(/^\[\d{2}:\d{2}\] Tester: hello \[sticker: face 14\]$/),
+				type: "text",
+			},
+		]);
+	});
+
 	test("updates existing conversations when setModel switches provider or after reopening storage", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "tsukaima-core-model-sync-"));
 		const dbPath = join(directory, "durable.sqlite");
