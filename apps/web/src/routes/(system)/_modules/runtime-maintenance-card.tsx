@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Power, RefreshCw, Rocket, Square } from "lucide-react";
 import { Button } from "@tsukaima/ui/components/motion/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
+import { EditorialGroup } from "@tsukaima/ui";
 import { orpc } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
@@ -43,70 +43,69 @@ export function RuntimeMaintenanceCard() {
 	const status = restart.data;
 	const active = status?.status === "scheduled" || status?.status === "executing";
 	return (
-		<Card size="compact">
-			<CardHeader>
-				<CardTitle as="h2">{m.runtime_maintenance_title()}</CardTitle>
-			</CardHeader>
-			<CardContent className="space-y-3">
-				<p className="text-[11px] leading-4 text-muted-foreground">
-					{m.runtime_maintenance_description()}
-				</p>
-				{active ? (
-					<div className="rounded-md border border-amber-500/25 bg-amber-500/5 px-2.5 py-2 text-[11px] text-muted-foreground">
-						<div className="font-medium text-foreground">
+		<EditorialGroup
+			title={m.runtime_maintenance_title()}
+			description={m.runtime_maintenance_description()}
+		>
+			{active ? (
+				<div className="border-b border-border/70 py-3 last:border-b-0">
+					<div className="border-s-2 border-warning ps-3">
+						<div className="text-sm font-medium text-ink">
 							{status.mode === "update" ? m.runtime_update_pending() : m.runtime_restart_pending()}
 						</div>
-						<div className="mt-0.5">
+						<div className="mt-1 text-xs text-muted-foreground tabular-nums">
 							{m.runtime_scheduled_for({ time: new Date(status.executeAt).toLocaleString() })}
 						</div>
-						<div className="mt-0.5">{status.reason}</div>
+						<div className="mt-1 text-xs text-muted-foreground">{status.reason}</div>
 					</div>
-				) : (
-					<p className="text-[11px] text-muted-foreground">{m.runtime_no_restart()}</p>
-				)}
-				<div className="flex flex-wrap gap-1.5">
-					<Button
-						disabled={schedule.isPending || active}
-						leadingIcon={<Power />}
-						size="sm"
-						variant="secondary"
-						onClick={() =>
-							schedule.mutate({
-								delaySeconds: 60,
-								mode: "restart",
-								reason: "restart requested from WebUI",
-							})
-						}
-					>
-						{m.runtime_restart_in_minute()}
-					</Button>
-					<Button
-						disabled={schedule.isPending || active}
-						leadingIcon={<Rocket />}
-						size="sm"
-						onClick={() =>
-							schedule.mutate({
-								delaySeconds: 60,
-								mode: "update",
-								reason: "update requested from WebUI",
-							})
-						}
-					>
-						{m.runtime_update_in_minute()}
-					</Button>
-					{active ? (
-						<Button
-							disabled={cancel.isPending}
-							leadingIcon={cancel.isPending ? <RefreshCw className="animate-spin" /> : <Square />}
-							size="sm"
-							variant="danger"
-							onClick={() => cancel.mutate()}
-						>
-							{m.runtime_cancel_restart()}
-						</Button>
-					) : null}
 				</div>
-			</CardContent>
-		</Card>
+			) : (
+				<p className="border-b border-border/70 py-3 text-xs text-muted-foreground">
+					{m.runtime_no_restart()}
+				</p>
+			)}
+			<div className="flex flex-wrap gap-2 pt-3">
+				<Button
+					disabled={schedule.isPending || active}
+					leadingIcon={<Power />}
+					size="sm"
+					variant="secondary"
+					onClick={() =>
+						schedule.mutate({
+							delaySeconds: 60,
+							mode: "restart",
+							reason: "restart requested from WebUI",
+						})
+					}
+				>
+					{m.runtime_restart_in_minute()}
+				</Button>
+				<Button
+					disabled={schedule.isPending || active}
+					leadingIcon={<Rocket />}
+					size="sm"
+					onClick={() =>
+						schedule.mutate({
+							delaySeconds: 60,
+							mode: "update",
+							reason: "update requested from WebUI",
+						})
+					}
+				>
+					{m.runtime_update_in_minute()}
+				</Button>
+				{active ? (
+					<Button
+						disabled={cancel.isPending}
+						leadingIcon={cancel.isPending ? <RefreshCw className="animate-spin" /> : <Square />}
+						size="sm"
+						variant="danger"
+						onClick={() => cancel.mutate()}
+					>
+						{m.runtime_cancel_restart()}
+					</Button>
+				) : null}
+			</div>
+		</EditorialGroup>
 	);
 }

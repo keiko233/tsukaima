@@ -4,17 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LogIn, LogOut } from "lucide-react";
 import { Button } from "@tsukaima/ui/components/motion/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
-import { cn } from "@tsukaima/ui/lib/utils";
+import { EditorialGroup } from "@tsukaima/ui";
 import { orpc, type GitHubLoginStart, type GitHubRun, type GitHubStatus } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { InlineError } from "../../_modules/shell/primitives";
 
-/**
- * The runtime `gh auth login` device flow. The server starts the CLI and exposes only the
- * one-time code; the token stays in `gh`'s config directory on the data volume.
- */
 function LoginSection({ status }: { readonly status: GitHubStatus }) {
 	const toast = useToast();
 	const queryClient = useQueryClient();
@@ -86,11 +81,11 @@ function LoginSection({ status }: { readonly status: GitHubStatus }) {
 	if (status.configured && status.login !== null) {
 		return (
 			<div className="space-y-2">
-				<div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2 text-[11px]">
+				<div className="flex flex-wrap items-center gap-2 border-b border-border/70 pb-2 text-[11px]">
 					<span className="font-medium text-foreground">
 						{m.github_login_signed_in()} {status.login}
 					</span>
-					<span className="text-muted-foreground">
+					<span className="font-mono tabular-nums text-muted-foreground">
 						{status.host}
 						{status.gitProtocol === null ? "" : ` · ${status.gitProtocol}`}
 					</span>
@@ -111,7 +106,7 @@ function LoginSection({ status }: { readonly status: GitHubStatus }) {
 					</Button>
 				</div>
 				{status.error === null ? null : (
-					<p className="text-[10.5px] leading-4 text-destructive">{status.error}</p>
+					<p className="text-[11px] leading-4 text-destructive">{status.error}</p>
 				)}
 			</div>
 		);
@@ -119,14 +114,14 @@ function LoginSection({ status }: { readonly status: GitHubStatus }) {
 
 	if (device !== null) {
 		return (
-			<div className="space-y-2 rounded-lg border border-border bg-muted/40 px-3 py-2.5">
+			<div className="space-y-2 border-t border-border/70 pt-3">
 				<p className="text-[11px] leading-4 text-muted-foreground">{m.github_login_code_hint()}</p>
 				<div className="flex flex-wrap items-center gap-2">
-					<code className="rounded bg-background px-2 py-1 font-mono text-sm font-semibold tracking-widest">
+					<code className="font-mono tabular-nums text-sm font-semibold tracking-widest">
 						{device.userCode}
 					</code>
 					<a
-						className="text-[11px] font-medium text-primary underline underline-offset-4"
+						className="font-mono text-[11px] text-primary underline underline-offset-4"
 						href={device.verificationUri}
 						rel="noreferrer"
 						target="_blank"
@@ -134,7 +129,7 @@ function LoginSection({ status }: { readonly status: GitHubStatus }) {
 						{device.verificationUri}
 					</a>
 				</div>
-				<p className="text-[10.5px] text-muted-foreground">{m.github_login_waiting()}</p>
+				<p className="text-[11px] text-muted-foreground">{m.github_login_waiting()}</p>
 			</div>
 		);
 	}
@@ -149,7 +144,7 @@ function LoginSection({ status }: { readonly status: GitHubStatus }) {
 			>
 				{m.github_login_start()}
 			</Button>
-			<p className="text-[10.5px] leading-4 text-muted-foreground">{m.github_login_help()}</p>
+			<p className="text-[11px] leading-4 text-muted-foreground">{m.github_login_help()}</p>
 		</div>
 	);
 }
@@ -160,12 +155,8 @@ export function GitHubCard() {
 		staleTime: 15_000,
 	});
 	return (
-		<Card size="compact">
-			<CardHeader>
-				<CardTitle as="h2">{m.github_title()}</CardTitle>
-			</CardHeader>
-			<CardContent className="space-y-3">
-				<p className="text-[11px] leading-4 text-muted-foreground">{m.github_description()}</p>
+		<EditorialGroup title={m.github_title()} description={m.github_description()}>
+			<div className="space-y-3">
 				{status.isError ? (
 					<InlineError
 						message={`${m.github_load_failed()}: ${status.error.message}`}
@@ -177,15 +168,15 @@ export function GitHubCard() {
 				) : (
 					<LoginSection status={status.data} />
 				)}
-			</CardContent>
-		</Card>
+			</div>
+		</EditorialGroup>
 	);
 }
 
 function runTone(run: GitHubRun): string {
-	if (run.conclusion === "success") return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
-	if (run.conclusion === null) return "bg-amber-500/10 text-amber-700 dark:text-amber-400";
-	return "bg-destructive/10 text-destructive";
+	if (run.conclusion === "success") return "text-success";
+	if (run.conclusion === null) return "text-warning";
+	return "text-destructive";
 }
 
 export function GitHubActivityCard() {
@@ -207,14 +198,8 @@ export function GitHubActivityCard() {
 	if (!enabled) return null;
 
 	return (
-		<Card size="compact">
-			<CardHeader>
-				<CardTitle as="h2">{m.github_activity_title()}</CardTitle>
-			</CardHeader>
-			<CardContent className="space-y-3">
-				<p className="text-[11px] leading-4 text-muted-foreground">
-					{m.github_activity_description()}
-				</p>
+		<EditorialGroup title={m.github_activity_title()} description={m.github_activity_description()}>
+			<div className="space-y-3">
 				<div className="space-y-1.5">
 					<h3 className="text-[11px] font-medium text-foreground">{m.github_runs()}</h3>
 					{runs.isError ? (
@@ -228,31 +213,45 @@ export function GitHubActivityCard() {
 					) : runs.data.length === 0 ? (
 						<p className="text-[11px] text-muted-foreground">{m.github_runs_empty()}</p>
 					) : (
-						<ul className="divide-y divide-border/60">
-							{runs.data.map((run) => (
-								<li key={run.id} className="flex flex-wrap items-center gap-2 py-1.5 text-[11px]">
-									<span
-										className={cn(
-											"rounded px-1.5 py-0.5 text-[9.5px] font-medium",
-											runTone(run),
-										)}
-									>
-										{run.conclusion ?? run.status}
-									</span>
-									<a
-										className="truncate font-medium text-foreground underline-offset-4 hover:underline"
-										href={run.url}
-										rel="noreferrer"
-										target="_blank"
-									>
-										{run.name}
-									</a>
-									<span className="ml-auto font-mono text-[10px] text-muted-foreground">
-										{run.headSha.slice(0, 7)}
-									</span>
-								</li>
-							))}
-						</ul>
+						<div className="overflow-x-auto">
+							<table aria-label={m.github_runs()} className="w-full text-xs">
+								<thead className="border-b border-border text-muted-foreground">
+									<tr>
+										<th scope="col" className="py-2 pe-4 text-start font-medium">
+											{m.github_runs()}
+										</th>
+										<th scope="col" className="py-2 pe-4 text-start font-medium">
+											{m.request_status()}
+										</th>
+										<th scope="col" className="py-2 text-start font-medium">
+											{m.upgrade_commit()}
+										</th>
+									</tr>
+								</thead>
+								<tbody className="divide-y divide-border/70">
+									{runs.data.map((run) => (
+										<tr key={run.id}>
+											<td className="py-2 pe-4">
+												<a
+													className="font-medium underline-offset-4 hover:underline"
+													href={run.url}
+													rel="noreferrer"
+													target="_blank"
+												>
+													{run.name}
+												</a>
+											</td>
+											<td className={`py-2 pe-4 font-mono tabular-nums ${runTone(run)}`}>
+												{run.conclusion ?? run.status}
+											</td>
+											<td className="py-2 font-mono tabular-nums text-muted-foreground">
+												{run.headSha.slice(0, 7)}
+											</td>
+										</tr>
+									))}
+								</tbody>
+							</table>
+						</div>
 					)}
 				</div>
 				<div className="space-y-1.5">
@@ -270,8 +269,11 @@ export function GitHubActivityCard() {
 					) : (
 						<ul className="divide-y divide-border/60">
 							{pulls.data.map((pull) => (
-								<li key={pull.number} className="flex flex-wrap items-center gap-2 py-1.5 text-[11px]">
-									<span className="font-mono text-[10px] text-muted-foreground">
+								<li
+									key={pull.number}
+									className="flex flex-wrap items-center gap-2 py-1.5 text-[11px]"
+								>
+									<span className="font-mono tabular-nums text-[11px] text-muted-foreground">
 										#{pull.number}
 									</span>
 									<a
@@ -282,7 +284,7 @@ export function GitHubActivityCard() {
 									>
 										{pull.title}
 									</a>
-									<span className="ml-auto text-[10px] text-muted-foreground">
+									<span className="ml-auto text-[11px] text-muted-foreground">
 										{pull.head} → {pull.base}
 									</span>
 								</li>
@@ -290,7 +292,7 @@ export function GitHubActivityCard() {
 						</ul>
 					)}
 				</div>
-			</CardContent>
-		</Card>
+			</div>
+		</EditorialGroup>
 	);
 }
