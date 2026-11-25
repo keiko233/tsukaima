@@ -577,7 +577,11 @@ export class TsukaimaLifecycle {
 				if (typeof result !== "object" || result === null) {
 					return undefined;
 				}
-				const record = result as { readonly captions?: unknown; readonly packs?: unknown };
+				const record = result as {
+					readonly captions?: unknown;
+					readonly packs?: unknown;
+					readonly prompt?: unknown;
+				};
 				const captions = Array.isArray(record.captions)
 					? record.captions.filter((entry): entry is string => typeof entry === "string")
 					: undefined;
@@ -589,9 +593,14 @@ export class TsukaimaLifecycle {
 							return [{ itemCount: item.itemCount, name: item.name }];
 						})
 					: undefined;
+				const prompt =
+					typeof record.prompt === "string" && record.prompt.trim().length > 0
+						? record.prompt.trim()
+						: undefined;
 				return {
 					...(captions === undefined ? {} : { captions }),
 					...(packs === undefined ? {} : { packs }),
+					...(prompt === undefined ? {} : { prompt }),
 				};
 			},
 			skillCatalog: async (surface, isAdmin) => {

@@ -578,6 +578,45 @@ describe("DrizzleContextProvider", () => {
 			expect(packsOnlySection).toBeDefined();
 			expect(packsOnlySection?.text).toBe("Available sticker packs: Solo Pack (42)");
 			expect(packsOnlySection?.text).not.toContain("Sticker captions");
+
+			// Test budget-exempt sticker prompt rendering even when remaining budget is tight
+			const promptText = "Before finalizing a reply, consider whether a sticker fits the reaction.";
+			const promptedSections = await provider(database, {
+				stickerHints: async () => ({
+					captions: ["开心"],
+					packs: [{ itemCount: 10, name: "Prompt Pack" }],
+					prompt: promptText,
+				}),
+				turnBudgetChars: 20,
+			}).renderTurnContext({
+				conversationId: "sticker-hints-packs",
+				inputs: [],
+				nowMs: Date.now(),
+				triggers: [],
+			});
+			const promptedSection = promptedSections.find((section) => section.key === "stickers");
+			expect(promptedSection).toBeDefined();
+			expect(promptedSection?.text).toBe(promptText);
+
+			const fullPromptedSections = await provider(database, {
+				stickerHints: async () => ({
+					captions: ["开心"],
+					packs: [{ itemCount: 10, name: "Prompt Pack" }],
+					prompt: promptText,
+				}),
+				turnBudgetChars: 500,
+			}).renderTurnContext({
+				conversationId: "sticker-hints-packs",
+				inputs: [],
+				nowMs: Date.now(),
+				triggers: [],
+			});
+			const fullPromptedSection = fullPromptedSections.find(
+				(section) => section.key === "stickers",
+			);
+			expect(fullPromptedSection?.text).toContain(promptText);
+			expect(fullPromptedSection?.text).toContain("Available sticker packs: Prompt Pack (10)");
+			expect(fullPromptedSection?.text).toContain("- 开心");
 		} finally {
 			database.$client.close();
 		}

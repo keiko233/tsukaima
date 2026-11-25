@@ -177,5 +177,13 @@
 	"uncategorized_hint": "尚未归属表情包或尚未设置情绪/关键词标签的表情包，点击即可编辑所属表情包与标签。",
 	"uncategorized_empty": "所有表情包均已分类。",
 	"uncategorized_pack_name": "未分类（无所属表情包）",
-	"item_pack": "所属表情包"
+	"item_pack": "所属表情包",
+	"prompt_section": "回合提示词注入",
+	"prompt_hint": "在聊天回合且有可用表情包时自动注入一段决策提示，让模型在思考回复时主动评估是否顺手发送表情包。",
+	"prompt_enabled": "启用表情包决策提示词注入",
+	"prompt_text": "自定义提示词（可选，留空使用默认）",
+	"prompt_save": "保存提示词设置",
+	"prompt_reset": "恢复默认提示词",
+	"prompt_saved": "表情包提示词设置已保存",
+	"prompt_save_failed": "保存表情包提示词设置失败"
 }

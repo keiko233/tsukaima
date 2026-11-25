@@ -11,6 +11,7 @@ import {
 	type OneBotTransportFactory,
 } from "@tsukaima-plugin/onebot-napcat";
 import type { MessagePart } from "@tsukaima/contracts";
+import { DEFAULT_STICKER_DECISION_PROMPT } from "@tsukaima-plugin/sticker-meme";
 import { createApp } from "../src/app.ts";
 
 const directories: string[] = [];
@@ -207,7 +208,22 @@ describe("sticker-meme host integration", () => {
 			});
 			const stickerSection = turnSections.find((section) => section.key === "stickers");
 			expect(stickerSection).toBeDefined();
+			expect(stickerSection?.text).toContain(DEFAULT_STICKER_DECISION_PROMPT);
 			expect(stickerSection?.text).toContain("Available sticker packs: Test pack (2)");
+
+			await lifecycle.updatePluginConfig("sticker-meme", { promptEnabled: false });
+			const disabledPromptSections = await lifecycle.contextProvider.renderTurnContext({
+				conversationId: durableConversationId,
+				inputs: [],
+				nowMs: Date.now(),
+				triggers: [],
+			});
+			const disabledStickerSection = disabledPromptSections.find(
+				(section) => section.key === "stickers",
+			);
+			expect(disabledStickerSection?.text).not.toContain(DEFAULT_STICKER_DECISION_PROMPT);
+			expect(disabledStickerSection?.text).toContain("Available sticker packs: Test pack (2)");
+			await lifecycle.updatePluginConfig("sticker-meme", { promptEnabled: true });
 
 			const search = (await lifecycle.pluginHost.invokeTool(
 				"sticker-meme.search",

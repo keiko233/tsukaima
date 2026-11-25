@@ -17,6 +17,7 @@ import {
 	type StickerImportService,
 } from "./import-service.ts";
 import { StickerProgressTracker } from "./progress.ts";
+import { resolveStickerDecisionPrompt } from "./prompt.ts";
 import type { StickerRepository } from "./repository.ts";
 import type { StickerSelectionService } from "./selection.ts";
 import {
@@ -671,9 +672,13 @@ export function registerStickerRpc(context: PluginContext, services: ServiceBag)
 				.filter((pack) => pack.itemCount > 0)
 				.slice(0, 10);
 		}
+		const settings = recordValue((await context.settings?.get()) ?? {});
+		const prompt =
+			packs.length > 0 || hints.length > 0 ? resolveStickerDecisionPrompt(settings) : undefined;
 		return {
 			captions: hints.map((hint) => hint.caption),
 			packs,
+			...(prompt === undefined ? {} : { prompt }),
 		};
 	});
 

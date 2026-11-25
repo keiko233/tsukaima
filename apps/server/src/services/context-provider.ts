@@ -114,6 +114,7 @@ const STICKER_HINTS_HEADER =
 	"Sticker captions you can send (call sticker-meme.send with query or emotion when one fits; never write sticker markers in your reply):";
 const STICKER_HINT_MAX_ITEMS = 3;
 const STICKER_CAPTION_MAX_CHARS = 32;
+const STICKER_PROMPT_MAX_CHARS = 1_000;
 /** Ephemeral nudge for when a chat turn may speak mid-turn instead of waiting silently. */
 const LIVE_REPLY_GUIDE =
 	"While working, you may send one short natural line before a slow or external tool call. Stay silent for background memory, sticker lookup, and todo tools, and never repeat a mid-turn line in the final reply.";
@@ -180,6 +181,7 @@ export interface DrizzleContextProviderOptions {
 export interface StickerHintsPayload {
 	readonly captions?: readonly string[];
 	readonly packs?: readonly { readonly itemCount: number; readonly name: string }[];
+	readonly prompt?: string;
 }
 
 const errorMessage = (error: unknown): string =>
@@ -499,55 +501,65 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			}
 		}
 		let stickerHints: string | undefined;
-		if (
-			chat &&
-			(this.#stickerHints !== undefined || this.#stickerCaptions !== undefined) &&
-			remaining > 0
-		) {
+		if (chat && (this.#stickerHints !== undefined || this.#stickerCaptions !== undefined)) {
 			try {
 				let hintsPayload: StickerHintsPayload | undefined;
 				if (this.#stickerHints !== undefined) {
 					hintsPayload = await this.#stickerHints();
-				} else if (this.#stickerCaptions !== undefined) {
+				} else if (this.#stickerCaptions !== undefined && remaining > 0) {
 					const captions = await this.#stickerCaptions();
 					hintsPayload = captions === undefined ? undefined : { captions };
 				}
-				const captions = hintsPayload?.captions;
-				const packs = hintsPayload?.packs;
-				const cleanedCaptions = [
-					...new Set(
-						(captions ?? [])
-							.map((caption) =>
-								caption
-									.replace(/[\][\r\n]+/gu, " ")
-									.trim()
-									.slice(0, STICKER_CAPTION_MAX_CHARS),
-							)
-							.filter((caption) => caption.length > 0),
-					),
-				].slice(0, STICKER_HINT_MAX_ITEMS);
+				const promptText =
+					typeof hintsPayload?.prompt === "string"
+						? hintsPayload.prompt.trim().slice(0, STICKER_PROMPT_MAX_CHARS)
+						: "";
+				let detailText: string | undefined;
+				if (remaining > 0) {
+					const captions = hintsPayload?.captions;
+					const packs = hintsPayload?.packs;
+					const cleanedCaptions = [
+						...new Set(
+							(captions ?? [])
+								.map((caption) =>
+									caption
+										.replace(/[\][\r\n]+/gu, " ")
+										.trim()
+										.slice(0, STICKER_CAPTION_MAX_CHARS),
+								)
+								.filter((caption) => caption.length > 0),
+						),
+					].slice(0, STICKER_HINT_MAX_ITEMS);
 
-				const packOverview =
-					packs !== undefined && packs.length > 0
-						? `Available sticker packs: ${packs.map((pack) => `${pack.name} (${pack.itemCount})`).join(", ")}`
-						: undefined;
+					const packOverview =
+						packs !== undefined && packs.length > 0
+							? `Available sticker packs: ${packs.map((pack) => `${pack.name} (${pack.itemCount})`).join(", ")}`
+							: undefined;
 
-				const lines: string[] = [];
-				if (packOverview !== undefined) {
-					lines.push(packOverview);
-				}
-				if (cleanedCaptions.length > 0) {
-					lines.push(STICKER_HINTS_HEADER, ...cleanedCaptions.map((caption) => `- ${caption}`));
-				}
-				if (lines.length > 0) {
-					const text = lines.join("\n");
-					if (text.length <= remaining) {
-						stickerHints = text;
-						remaining -= text.length;
-					} else if (packOverview !== undefined && packOverview.length <= remaining) {
-						stickerHints = packOverview;
-						remaining -= packOverview.length;
+					const lines: string[] = [];
+					if (packOverview !== undefined) {
+						lines.push(packOverview);
 					}
+					if (cleanedCaptions.length > 0) {
+						lines.push(STICKER_HINTS_HEADER, ...cleanedCaptions.map((caption) => `- ${caption}`));
+					}
+					if (lines.length > 0) {
+						const text = lines.join("\n");
+						if (text.length <= remaining) {
+							detailText = text;
+							remaining -= text.length;
+						} else if (packOverview !== undefined && packOverview.length <= remaining) {
+							detailText = packOverview;
+							remaining -= packOverview.length;
+						}
+					}
+				}
+				const sectionLines = [
+					...(promptText.length > 0 ? [promptText] : []),
+					...(detailText === undefined ? [] : [detailText]),
+				];
+				if (sectionLines.length > 0) {
+					stickerHints = sectionLines.join("\n");
 				}
 			} catch (error) {
 				this.#logger.debug("sticker captions unavailable", { error: errorMessage(error) });
