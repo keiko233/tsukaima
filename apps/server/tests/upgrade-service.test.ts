@@ -35,6 +35,7 @@ const CONSTRAINTS = {
 
 async function repository(
 	options: {
+		readonly failPreparation?: boolean;
 		readonly omitPreparation?: boolean;
 	} = {},
 ) {
@@ -137,6 +138,15 @@ async function repository(
 			},
 		},
 		workspace,
+		...(options.failPreparation === true
+			? {
+					updatePreparer: {
+						prepare: async () => {
+							throw new Error("synthetic preparation failure");
+						},
+					},
+				}
+			: {}),
 	};
 	if (options.omitPreparation === true) {
 		const { coding: _coding, ensureWorktree: _ensureWorktree, ...rest } = upgradeOptions;
@@ -202,6 +212,41 @@ describe("upstream upgrade service", () => {
 		expect(restarts).toHaveLength(1);
 		expect(git(local, ["show", "HEAD:VERSION"]).trim()).toBe("1.1.0");
 		expect((await service.status())?.restartId).toBe(`restart-${restarts.length}`);
+	});
+
+	test("rolls back the live checkout when preparation fails during fast-forward", async () => {
+		const { local, seed, service } = await repository({ failPreparation: true });
+		await writeFile(join(seed, "VERSION"), "1.1.5\n");
+		git(seed, ["commit", "-am", "upstream release"]);
+		git(seed, ["push"]);
+		const headBefore = currentCommit(local);
+
+		await expect(service.start({ autoFinalize: true })).rejects.toThrow(
+			"synthetic preparation failure",
+		);
+		expect(currentCommit(local)).toBe(headBefore);
+		expect(git(local, ["show", "HEAD:VERSION"]).trim()).toBe("1.0.0");
+		expect((await service.status())?.status).toBe("failed");
+	});
+
+	test("rolls back the live checkout when preparation fails during workspace finalize", async () => {
+		const { local, seed, service } = await repository({ failPreparation: true });
+		await writeFile(join(local, "LOCAL.md"), "local change\n");
+		git(local, ["add", "."]);
+		git(local, ["commit", "-m", "local feature"]);
+		await writeFile(join(seed, "VERSION"), "1.1.6\n");
+		git(seed, ["commit", "-am", "upstream release"]);
+		git(seed, ["push"]);
+		git(local, ["fetch", "origin"]);
+
+		const started = await service.start();
+		const headBefore = currentCommit(local);
+		await expect(service.finalize({ upgradeId: started.upgrade.id })).rejects.toThrow(
+			"synthetic preparation failure",
+		);
+		expect(currentCommit(local)).toBe(headBefore);
+		expect(git(local, ["show", "HEAD:VERSION"]).trim()).toBe("1.0.0");
+		expect((await service.status())?.status).toBe("failed");
 	});
 
 	test("prepares a host-owned workspace proposal without changing the live checkout", async () => {

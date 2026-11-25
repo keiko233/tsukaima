@@ -223,6 +223,11 @@ repository `.git` at `/app`, and worktrees live under `/data/worktrees`; each ne
 `node_modules` symlink back to the image install. It has `git`, `bun`, and `ripgrep`, but no Docker
 socket and no host checkout, so a proposal cannot replace the running image.
 
+The runtime image keeps the workspace dev dependencies (Vite, Tailwind, TanStack Router, Paraglide)
+and the native build toolchain (compiler, Python, Cairo/Pango headers) on purpose: an in-container
+upgrade installs updated packages and rebuilds `@tsukaima/web` without an external
+`FORCE_DEPS=1 bash ops/deploy/deploy.sh` redeploy.
+
 `TSUKAIMA_CODING_SANDBOX` chooses the execution boundary for model-influenced commands:
 
 - `host` (default) runs allowlisted commands (`bun`, `git`, `rg`) directly in the container with a
@@ -262,6 +267,14 @@ leaves an uncommitted workspace untouched. Only after those checks is the pendin
 approved and the exact reviewed commit merged into the live checkout. This changes the source
 checkout only; the host-side image build and container replacement remain operator-controlled as
 described above.
+
+Before the scheduled restart, the runtime installs dependencies (including devDependencies) and
+rebuilds `@tsukaima/web` into a staging directory that is swapped in atomically. If preparation
+fails after a merge, the live checkout is reset to the recorded commit so "Check for updates"
+does not falsely report `up_to_date`. `/healthz` reads the live `VERSION` file from the checkout
+first, so it reports the newly upgraded version after a restart instead of the value baked into
+the container. Routine upgrades therefore no longer need an external
+`FORCE_DEPS=1 bash ops/deploy/deploy.sh` run.
 
 Host preparation does not resolve merge conflicts and does not run repository checks. A conflict
 fails the start before a proposal or live change exists. The proposal records the exact diff and

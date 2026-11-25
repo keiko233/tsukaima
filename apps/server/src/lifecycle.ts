@@ -153,6 +153,7 @@ import { ReplyExpectationStore } from "./services/reply-expectations.ts";
 import { SidechatService, resolveSidechatTarget } from "./services/sidechat.ts";
 import { LiveRunCache } from "./services/live-run-cache.ts";
 import { DependencyInstaller } from "./services/dependency-installer.ts";
+import { RuntimeUpdatePreparer } from "./services/runtime-update-preparer.ts";
 import { PromptHookService } from "./services/prompt-hooks.ts";
 import { PROMPT_TOOL_NAMES, createPromptTools } from "./services/prompt-tools.ts";
 import { PromptService } from "./services/prompts.ts";
@@ -227,6 +228,12 @@ export interface LifecycleOptions {
 	readonly env?: Record<string, string | undefined>;
 	/** Optional dependency installer override (used in tests). */
 	readonly dependencyInstaller?: DependencyInstaller | undefined;
+	/** Optional runtime update preparation override (used in tests). */
+	readonly updatePreparer?:
+		| {
+				prepare(options?: { readonly signal?: AbortSignal | undefined }): Promise<void>;
+		  }
+		| undefined;
 	readonly logger?: Logger;
 	/** Test or embedding override for the model catalog and provider. */
 	readonly model?: ModelPort | undefined;
@@ -296,6 +303,7 @@ export class TsukaimaLifecycle {
 	readonly schedules: ScheduleService;
 	readonly restartCoordinator: RestartCoordinator;
 	readonly dependencyInstaller: DependencyInstaller;
+	readonly updatePreparer: NonNullable<LifecycleOptions["updatePreparer"]>;
 	readonly sessionMessaging: SessionMessagingService;
 	readonly upgrades: UpgradeService;
 	readonly workspace: WorkspaceService;
@@ -420,6 +428,14 @@ export class TsukaimaLifecycle {
 				logger: this.runtimeLog,
 				repositoryRoot: config.repositoryRoot,
 			});
+		this.updatePreparer =
+			options?.updatePreparer ??
+			new RuntimeUpdatePreparer({
+				dependencyInstaller: this.dependencyInstaller,
+				logger: this.runtimeLog,
+				repositoryRoot: config.repositoryRoot,
+				webDistDir: config.webDistDir,
+			});
 		this.restartCoordinator = new RestartCoordinator({
 			audit: (entry) => this.writeAudit(entry),
 			database: () => this.domainDatabase,
@@ -427,7 +443,7 @@ export class TsukaimaLifecycle {
 			logger: this.runtimeLog,
 			onSettled: (intent, outcome) => this.reconcileRestartSettlement(intent, outcome),
 			prepareUpdate: async (_intent) => {
-				await this.dependencyInstaller.install();
+				await this.updatePreparer.prepare();
 			},
 		});
 		this.channels = new ChannelRegistry({
@@ -902,6 +918,7 @@ export class TsukaimaLifecycle {
 				schedule: (input) => this.scheduleRestart(input),
 			},
 			token: () => this.github.gitCredential(),
+			updatePreparer: this.updatePreparer,
 			workspace: this.workspace,
 		});
 		const imDelegationTools = new Set<string>(IM_WORKSPACE_DELEGATION_TOOL_NAMES);
