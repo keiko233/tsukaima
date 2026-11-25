@@ -20,9 +20,9 @@ export function PluginRoute() {
 	}
 	if (plugin === undefined) {
 		return (
-			<div className="grid min-h-64 place-items-center rounded-xl border border-dashed border-border text-center">
+			<div className="grid min-h-64 place-items-center border-t border-line text-center">
 				<div className="space-y-2 p-6">
-					<p className="text-sm font-medium">{m.plugins_unknown()}</p>
+					<p className="font-serif text-lg text-ink">{m.plugins_unknown()}</p>
 					<p className="text-xs text-muted-foreground">{m.plugins_unknown_description()}</p>
 					<Link className="text-xs text-primary underline-offset-4 hover:underline" to="/plugins">
 						{m.plugins_back_to_list()}

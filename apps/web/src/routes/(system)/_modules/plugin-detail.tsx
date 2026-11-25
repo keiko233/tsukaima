@@ -19,6 +19,12 @@ import type { PluginPanelIcon, PluginUiModuleDefinition } from "@tsukaima/sdk/ui
 import {
 	Alert,
 	Button,
+	EditorialPageHeader,
+	EditorialSwitch,
+	EditorialTabs,
+	EditorialTabsContent,
+	EditorialTabsList,
+	EditorialTabsTrigger,
 	EmptyState,
 	KeyValueList,
 	PluginConfigForm,
@@ -268,41 +274,35 @@ function PanelHost({ plugin, ui }: { plugin: PluginRow; ui: PluginUiModuleDefini
 	if (panel === undefined) return null;
 	const Panel = panel.component;
 
+	const content = (
+		<PanelBoundary key={panel.id} pluginId={plugin.id}>
+			<Suspense fallback={<Skeleton className="h-40 w-full" />}>
+				<Panel />
+			</Suspense>
+		</PanelBoundary>
+	);
+
+	if (ui.panels.length === 1) return content;
+
 	return (
-		<div className="space-y-4">
-			{ui.panels.length > 1 ? (
-				<div
-					role="tablist"
-					aria-label={plugin.name}
-					className="flex flex-wrap gap-1 border-b border-border pb-1"
-				>
-					{ui.panels.map((candidate) => {
-						const selected = candidate.id === panel.id;
-						return (
-							<Button
-								key={candidate.id}
-								role="tab"
-								aria-selected={selected}
-								className="rounded-md"
-								leadingIcon={candidate.icon ? PANEL_ICONS[candidate.icon] : undefined}
-								onClick={() => setActive(candidate.id)}
-								size="sm"
-								variant={selected ? "secondary" : "ghost"}
-							>
-								{candidate.title((key) => i18n.t(key))}
-							</Button>
-						);
-					})}
-				</div>
-			) : null}
-			<div role="tabpanel">
-				<PanelBoundary pluginId={plugin.id}>
-					<Suspense fallback={<Skeleton className="h-40 w-full" />}>
-						<Panel />
-					</Suspense>
-				</PanelBoundary>
-			</div>
-		</div>
+		<EditorialTabs value={panel.id} onValueChange={setActive}>
+			<EditorialTabsList aria-label={plugin.name}>
+				{ui.panels.map((candidate) => (
+					<EditorialTabsTrigger
+						key={candidate.id}
+						value={candidate.id}
+						icon={candidate.icon ? PANEL_ICONS[candidate.icon] : undefined}
+					>
+						{candidate.title((key) => i18n.t(key))}
+					</EditorialTabsTrigger>
+				))}
+			</EditorialTabsList>
+			{ui.panels.map((candidate) => (
+				<EditorialTabsContent key={candidate.id} value={candidate.id}>
+					{candidate.id === panel.id ? content : null}
+				</EditorialTabsContent>
+			))}
+		</EditorialTabs>
 	);
 }
 
@@ -423,54 +423,51 @@ export function PluginDetail({ plugin }: { plugin: PluginRow }) {
 
 	return (
 		<div className="space-y-4">
-			<header className="space-y-2">
-				<Button
-					className="-ml-2 md:hidden"
-					leadingIcon={<ArrowLeft />}
-					onClick={() => void navigate({ to: "/plugins" })}
-					size="sm"
-					variant="ghost"
-				>
-					{m.plugins_back()}
-				</Button>
-				<div className="flex flex-wrap items-start justify-between gap-3">
-					<div className="min-w-0">
-						<div className="flex flex-wrap items-center gap-2">
-							<h1 className="truncate text-[16px] font-semibold tracking-tight">{displayName}</h1>
-							<StatusBadge
-								disabled={plugin.enabled !== 1}
-								label={statusLevelLabel(plugin)}
-								stale={isStale(plugin.status)}
-								status={plugin.status}
-							/>
-							<span className="text-xs text-muted-foreground">v{plugin.version}</span>
-						</div>
-						<p className="mt-0.5 text-[12px] text-muted-foreground">
-							{description ?? `${plugin.kind} · ${plugin.runMode}`}
-						</p>
-					</div>
-					<div className="flex flex-wrap items-center gap-2">
+			<Button
+				className="-ml-2 md:hidden"
+				leadingIcon={<ArrowLeft />}
+				onClick={() => void navigate({ to: "/plugins" })}
+				size="sm"
+				variant="ghost"
+			>
+				{m.plugins_back()}
+			</Button>
+			<EditorialPageHeader
+				eyebrow={`${m.nav_plugins()} / ${plugin.id}`}
+				title={displayName}
+				meta={
+					<>
+						<StatusBadge
+							disabled={plugin.enabled !== 1}
+							label={statusLevelLabel(plugin)}
+							stale={isStale(plugin.status)}
+							status={plugin.status}
+						/>
+						<span className="font-mono tabular-nums">v{plugin.version}</span>
+						<span className="font-mono">
+							{plugin.kind} · {plugin.runMode}
+						</span>
+					</>
+				}
+				actions={
+					<>
 						<Button size="sm" variant="secondary" onClick={() => void refreshQuery()}>
 							<RefreshCw className="size-3.5" />
 							{m.plugins_refresh_status()}
 						</Button>
-						<Button
-							size="sm"
-							variant={plugin.enabled === 1 ? "outline" : "primary"}
+						<EditorialSwitch
+							aria-label={m.plugins_enable()}
+							checked={plugin.enabled === 1}
 							disabled={setEnabled.isPending}
-							onClick={() =>
-								setEnabled.mutate({
-									enabled: plugin.enabled !== 1,
-									pluginId: plugin.id,
-								})
-							}
-						>
-							{plugin.enabled === 1 ? m.plugins_disable() : m.plugins_enable()}
-						</Button>
-					</div>
-				</div>
-				{plugin.enabled !== 1 ? <Alert tone="warning">{m.plugins_enabled_hint()}</Alert> : null}
-			</header>
+							onCheckedChange={(enabled) => setEnabled.mutate({ enabled, pluginId: plugin.id })}
+						/>
+					</>
+				}
+			/>
+			{description !== undefined ? (
+				<p className="text-sm text-muted-foreground">{description}</p>
+			) : null}
+			{plugin.enabled !== 1 ? <Alert tone="warning">{m.plugins_enabled_hint()}</Alert> : null}
 
 			{ui.state === "loading" ? <Skeleton className="h-40 w-full" /> : null}
 			{ui.state === "error" ? (
@@ -481,7 +478,7 @@ export function PluginDetail({ plugin }: { plugin: PluginRow }) {
 
 			{showPanels && ui.state === "ready" ? (
 				<PluginPanelProvider value={context}>
-					<PanelHost plugin={plugin} ui={ui.definition} />
+					<PanelHost key={plugin.id} plugin={plugin} ui={ui.definition} />
 				</PluginPanelProvider>
 			) : (
 				<>

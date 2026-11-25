@@ -20,7 +20,7 @@ function statusLabel(plugin: PluginRow): string {
 	return m.plugins_status_unknown();
 }
 
-export function PluginSidebar({ selectedId }: { selectedId?: string }) {
+export function PluginSidebar({ selectedId }: { selectedId?: string | undefined }) {
 	const pluginsQuery = useQuery(orpc.admin.plugins.list.queryOptions());
 	const plugins = pluginsQuery.data ?? [];
 	const [search, setSearch] = useState("");
@@ -36,9 +36,11 @@ export function PluginSidebar({ selectedId }: { selectedId?: string }) {
 
 	return (
 		<nav aria-label={m.nav_plugins()} className="flex min-h-0 flex-1 flex-col">
-			<div className="shrink-0 px-2.5 pb-1.5 pt-2">
-				<h1 className="text-[13px] font-semibold tracking-tight">{m.nav_plugins()}</h1>
-				<p className="mt-0.5 text-[10.5px] text-muted-foreground">{m.plugins_sidebar_description()}</p>
+			<div className="shrink-0 border-b border-line px-4 pb-3 pt-4">
+				<h1 className="font-serif text-lg text-ink">{m.nav_plugins()}</h1>
+				<p className="mt-0.5 text-[11px] text-muted-foreground">
+					{m.plugins_sidebar_description()}
+				</p>
 				<Input
 					aria-label={m.plugins_search_placeholder()}
 					placeholder={m.plugins_search_placeholder()}
@@ -48,7 +50,7 @@ export function PluginSidebar({ selectedId }: { selectedId?: string }) {
 					classNames={{ field: "mt-2 h-8 rounded-md", input: "text-xs", root: "gap-0" }}
 				/>
 			</div>
-			<div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
+			<div className="min-h-0 flex-1 overflow-y-auto pb-2">
 				{pluginsQuery.isPending ? (
 					<div className="space-y-2 px-1 py-2">
 						<Skeleton className="h-11 w-full" />
@@ -63,7 +65,7 @@ export function PluginSidebar({ selectedId }: { selectedId?: string }) {
 						{search.length === 0 ? m.plugins_empty() : m.plugins_no_matches()}
 					</p>
 				) : (
-					<ul className="space-y-1">
+					<ul className="divide-y divide-line">
 						{filtered.map((plugin) => {
 							const selected = plugin.id === selectedId;
 							return (
@@ -78,12 +80,12 @@ export function PluginSidebar({ selectedId }: { selectedId?: string }) {
 											});
 										}}
 										className={cn(
-											"flex w-full items-start gap-2 rounded-md border border-transparent px-1.5 py-1.5 text-left outline-none transition-colors",
-											"hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring",
-											selected && "border-border bg-muted/70",
+											"flex w-full items-center gap-2 border-s-2 border-transparent px-3 py-3 text-start transition-colors",
+											"hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+											selected && "border-accent-ink bg-accent-soft",
 										)}
 									>
-										<span className="mt-1.5 flex size-3 items-center justify-center">
+										<span className="flex size-3 shrink-0 items-center justify-center">
 											{plugin.enabled === 1 ? (
 												<StatusDot level={plugin.status?.level ?? "unknown"} />
 											) : (
@@ -92,12 +94,12 @@ export function PluginSidebar({ selectedId }: { selectedId?: string }) {
 										</span>
 										<span className="min-w-0 flex-1">
 											<span className="flex items-baseline justify-between gap-2">
-												<span className="truncate text-[12.5px] font-medium">{plugin.name}</span>
-												<span className="shrink-0 text-[10px] text-muted-foreground">
+												<span className="truncate text-sm font-medium">{plugin.name}</span>
+												<span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
 													{plugin.version}
 												</span>
 											</span>
-											<span className="flex items-center gap-1.5 text-[10.5px] text-muted-foreground">
+											<span className="sr-only">
 												<span className="truncate">{statusLabel(plugin)}</span>
 											</span>
 										</span>
@@ -125,7 +127,7 @@ export function PluginLayout({ children }: { children: ReactNode }) {
 		<div className="flex min-h-0 flex-1 overflow-hidden">
 			<aside
 				className={cn(
-					"min-h-0 shrink-0 flex-col border-border bg-sidebar md:flex md:w-60 md:border-r lg:w-64",
+					"min-h-0 shrink-0 flex-col border-border bg-sidebar md:flex md:w-64 md:border-e",
 					showList ? "flex w-full" : "hidden",
 				)}
 			>
@@ -147,10 +149,10 @@ export function PluginLayout({ children }: { children: ReactNode }) {
 
 export function PluginListPlaceholder({ children }: { children?: ReactNode }) {
 	return (
-		<div className="grid flex-1 place-items-center px-6 py-16 text-center">
+		<div className="grid flex-1 place-items-center border-t border-line px-6 py-16 text-center">
 			<div className="max-w-xs space-y-1.5">
 				<Puzzle className="mx-auto size-6 text-muted-foreground/70" />
-				<p className="text-[12.5px] font-medium">{m.nav_plugins()}</p>
+				<p className="text-sm font-medium">{m.nav_plugins()}</p>
 				<p className="text-[11px] leading-4 text-muted-foreground">
 					{m.plugins_sidebar_description()}
 				</p>
