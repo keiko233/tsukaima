@@ -1077,13 +1077,15 @@ export class TsukaimaLifecycle {
 				: parseSkillsConfig({ paths: configuredSkillPaths }, process.cwd(), {
 						TSUKAIMA_DATA_DIR: config.dataDir,
 					}).paths;
+		const dataRoot = resolve(config.dataDir);
 		const adminAllowedRoots = [
 			...new Set(
 				[
-					config.repositoryRoot,
-					config.dataDir,
+					dataRoot,
 					resolve(config.dataDir, "skills"),
+					resolve(config.dataDir, "mcp"),
 					...adminSkillRoots,
+					config.repositoryRoot,
 				].map((root) => resolve(root)),
 			),
 		];
@@ -1100,6 +1102,7 @@ export class TsukaimaLifecycle {
 				return authorizeAdminOpsToolCall({ caller, toolName });
 			},
 			logger: this.runtimeLog,
+			root: dataRoot,
 		});
 		this.adminRuntimeToolsExtension = createAdminRuntimeToolsExtension({
 			audit: (entry) => this.writeAudit(entry),
@@ -1892,6 +1895,8 @@ export class TsukaimaLifecycle {
 	async start(): Promise<void> {
 		this.transition("prepare-directories");
 		await mkdir(join(this.config.dataDir, "blobs"), { recursive: true });
+		await mkdir(join(this.config.dataDir, "skills"), { recursive: true });
+		await mkdir(join(this.config.dataDir, "mcp", "bin"), { recursive: true });
 		if (
 			this.config.logDir !== undefined &&
 			!this.customLoggerProvided &&

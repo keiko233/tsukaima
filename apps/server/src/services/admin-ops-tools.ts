@@ -347,7 +347,7 @@ export function createAdminOpsToolsExtension(options: AdminOpsToolsOptions): Dur
 
 	const exec = tool({
 		description:
-			"Admin-only terminal execution. Runs one command through /bin/bash in a validated working directory. Output is bounded and the command is killed after the configured timeout.",
+			"Admin-only terminal execution. Runs one command through /bin/bash in a validated working directory (defaults to the persistent data directory). Store downloaded Agent Skills under skills/<name>/ and local stdio MCP servers, virtualenvs, or binaries under mcp/<name>/ or mcp/bin/ inside the data directory—never in the repository checkout. Output is bounded and the command is killed after the configured timeout.",
 		name: "admin_exec",
 		parameters: {
 			properties: {
@@ -464,7 +464,7 @@ export function createAdminOpsToolsExtension(options: AdminOpsToolsOptions): Dur
 
 	const fileWrite = tool({
 		description:
-			"Admin-only UTF-8 file write inside the allowlisted roots. The content is never copied into logs or audit records.",
+			"Admin-only UTF-8 file write inside the allowlisted roots (relative paths resolve under the persistent data directory). Place downloaded skill or MCP files under skills/ or mcp/, never inside the repository checkout. The content is never copied into logs or audit records.",
 		name: "admin_file_write",
 		parameters: {
 			properties: {
@@ -504,7 +504,7 @@ export function createAdminOpsToolsExtension(options: AdminOpsToolsOptions): Dur
 
 	const fileList = tool({
 		description:
-			"Admin-only directory listing inside the allowlisted roots. Entry names are bounded and no file content is read.",
+			"Admin-only directory listing inside the allowlisted roots (relative paths resolve under the persistent data directory). Entry names are bounded and no file content is read.",
 		name: "admin_file_list",
 		parameters: {
 			properties: { path: { type: "string" } },

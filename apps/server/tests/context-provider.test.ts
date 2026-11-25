@@ -736,6 +736,9 @@ describe("DrizzleContextProvider", () => {
 			expect(admin?.text).toContain("plugin_configure");
 			expect(admin?.text).toContain("persona_manage");
 			expect(admin?.text).toContain("tool_search");
+			expect(admin?.text).toContain("TSUKAIMA_DATA_DIR");
+			expect(admin?.text).toContain("skills/<name>/");
+			expect(admin?.text).toContain("mcp/<name>/");
 
 			const imAdmin = await provider(database, {
 				resolveAdminCaller: async (conversationId) => conversationId === "admin-im",

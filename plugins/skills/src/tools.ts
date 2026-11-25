@@ -495,7 +495,7 @@ export function registerSkillsTools(
 
 	register({
 		description:
-			"Install an Agent Skill for administrators. Content must be a valid SKILL.md with matching frontmatter; bundled files stay inside the skill directory.",
+			"Install an Agent Skill into the configured skill root (defaults to <TSUKAIMA_DATA_DIR>/skills/<name>/) for administrators. Content must be a valid SKILL.md with matching frontmatter; bundled files and any downloaded scripts or assets stay inside that skill directory, never inside the repository checkout.",
 		async execute(raw, invocation) {
 			return await adminExecute({
 				body: async (input) => {
