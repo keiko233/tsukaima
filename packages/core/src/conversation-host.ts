@@ -454,6 +454,11 @@ export interface DurableConversationHostOptions {
 	/** Observe activity-window opens and closes. Errors never affect message processing. */
 	readonly onActivityEvent?: (event: ActivityWindowEvent) => void;
 	/**
+	 * Called after a sidechat interrupt aborts the working run for a conversation. The host only
+	 * aborts the task; the caller owns durable run/segment state and can freeze it here.
+	 */
+	readonly onRunInterrupted?: (input: { readonly conversationId: string }) => Promise<void> | void;
+	/**
 	 * Observe settled assistant answers. Called detached from `append()`/activity flush so a
 	 * slow consumer never blocks ingestion; rejections are caught and logged, never surfaced.
 	 */
@@ -1988,6 +1993,14 @@ export class PiDurableConversationHost {
 							if (outcome === "aborted") {
 								interrupted = true;
 								this.recordInterrupt(conversationId, now);
+								try {
+									await this.options.onRunInterrupted?.({ conversationId });
+								} catch (error) {
+									this.logger.warn("Run interrupt observer failed", {
+										conversationId,
+										error,
+									});
+								}
 							}
 							this.clearBusyHold(conversationId);
 							whenBusy = "follow-up";

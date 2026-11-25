@@ -40,6 +40,7 @@ import { previewText, type Logger } from "../logging.ts";
 import type { ConversationPacingTracker } from "./conversation-pacing.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
 import type { ConversationRunService } from "./conversation-runs.ts";
+import type { LiveRunCache } from "./live-run-cache.ts";
 import { loadMentionLabels } from "./mention-labels.ts";
 import { isValidTimeZone, localParts } from "./schedule-time.ts";
 import { detectQuietFeedback, isLowSubstanceReaction } from "./social-profile.ts";
@@ -104,6 +105,8 @@ export interface ConversationRouterOptions {
 	}) => void;
 	/** Durable run lookup for timeline sequencing and busy delivery-mode labels. */
 	readonly runs?: (() => ConversationRunService | undefined) | undefined;
+	/** Live run view advanced when an inbound steer opens a continuation segment. */
+	readonly liveRuns?: LiveRunCache | undefined;
 	/** IANA time zone for daily session boundaries (defaults to the host's local time zone). */
 	readonly timeZone?: string;
 }
@@ -190,6 +193,7 @@ export class ConversationRouter {
 	readonly #onInboundPersisted: ConversationRouterOptions["onInboundPersisted"];
 	readonly #promptContext: ConversationRouterOptions["promptContext"];
 	readonly #runs: ConversationRouterOptions["runs"];
+	readonly #liveRuns: ConversationRouterOptions["liveRuns"];
 	readonly #timeZone: string;
 	readonly #ingesting = new Set<string>();
 	readonly #ignoredAuditAt = new Map<string, number>();
@@ -221,6 +225,7 @@ export class ConversationRouter {
 		this.#policy = options.policy;
 		this.#promptContext = options.promptContext;
 		this.#runs = options.runs;
+		this.#liveRuns = options.liveRuns;
 		this.#timeZone = resolveRouterTimeZone(options.timeZone);
 	}
 
@@ -586,6 +591,7 @@ export class ConversationRouter {
 					busy,
 					classification: effectiveTrigger.classification,
 					envelope: hydratedMessage,
+					liveRuns: this.#liveRuns,
 					replyDecision,
 					runs,
 					sender,
@@ -630,6 +636,7 @@ export class ConversationRouter {
 												: "recent activity escalation throttled"
 								: trigger.reason,
 					},
+					liveRuns: this.#liveRuns,
 					runs: this.#runs?.(),
 					sender,
 					target,
@@ -873,6 +880,7 @@ export class ConversationRouter {
 			busy: boolean;
 			classification: "ambient" | "direct" | "soft";
 			envelope: MessageEnvelope;
+			liveRuns: LiveRunCache | undefined;
 			replyDecision: InboundReplyDecision;
 			runs: ConversationRunService | undefined;
 			sender: { displayName: string; userId: string };
@@ -882,10 +890,64 @@ export class ConversationRouter {
 		const message = input.envelope;
 		const parts = message.parts;
 		const now = new Date().toISOString();
-		const seq = (await input.runs?.allocateSeq(input.target.sessionId)) ?? 0;
+		const occurredAt = timelineAt(now);
+		if (input.busy && input.runs !== undefined) {
+			const closed = await input.runs.closeActiveSegmentForSteer({
+				conversationId: input.target.sessionId,
+				currentRounds: input.liveRuns?.currentRounds(input.target.sessionId),
+			});
+			if (closed !== undefined) {
+				// Allocate the steer row after the frozen segment, so the transcript interleaves
+				// the old work, the steer, and the continuation in that order.
+				const seq = (await input.runs.allocateSeq(input.target.sessionId)) ?? 0;
+				const messageId = randomUUID();
+				await database
+					.insert(messages)
+					.values({
+						chatObjectId: input.target.chatObjectId,
+						contentText: messageText(parts),
+						conversationId: input.target.sessionId,
+						deliveryMode: "steer",
+						direction: "inbound",
+						id: messageId,
+						ingestedAt: now,
+						kind: message.channelKind,
+						occurredAt,
+						partsJson: JSON.stringify(parts),
+						platformMessageId: message.source.messageId ?? message.id,
+						rawRefJson: JSON.stringify({ ...message, replyDecision: input.replyDecision }),
+						...(message.target?.replyToEnvelopeId === undefined
+							? {}
+							: { replyToMessageId: message.target.replyToEnvelopeId }),
+						senderDisplayName: input.sender.displayName,
+						senderExternalId: message.sender.platformId,
+						seq,
+						senderUserId: input.sender.userId,
+						triggerClassification: input.classification,
+						updatedAt: now,
+					})
+					.onConflictDoNothing();
+				const anchor = await input.runs.openSegment({
+					conversationId: input.target.sessionId,
+					runId: closed.runId,
+					triggerKind: "steer",
+					triggerMessageId: messageId,
+				});
+				await input.liveRuns?.advanceSegment(input.target.sessionId, anchor);
+				await this.#touchInboundTargets(
+					database,
+					input.target,
+					now,
+					message,
+					occurredAt,
+					input.sender,
+				);
+				return;
+			}
+		}
 		// Local clock only: outbound rows are stamped from `Date.now()` and both share this
 		// ordering key, so a remote platform timestamp here would reorder the transcript.
-		const occurredAt = timelineAt(now);
+		const seq = (await input.runs?.allocateSeq(input.target.sessionId)) ?? 0;
 		await database
 			.insert(messages)
 			.values({
@@ -912,24 +974,35 @@ export class ConversationRouter {
 				updatedAt: now,
 			})
 			.onConflictDoNothing();
+		await this.#touchInboundTargets(database, input.target, now, message, occurredAt, input.sender);
+	}
+
+	async #touchInboundTargets(
+		database: TsukaimaDatabase,
+		target: { chatObjectId: string; sessionId: string },
+		now: string,
+		message: MessageEnvelope,
+		occurredAt: string,
+		sender: { userId: string },
+	): Promise<void> {
 		await Promise.all([
 			database
 				.update(chatObjects)
 				.set({ updatedAt: now })
-				.where(eq(chatObjects.id, input.target.chatObjectId)),
+				.where(eq(chatObjects.id, target.chatObjectId)),
 			database
 				.update(conversations)
 				.set({ updatedAt: now })
-				.where(eq(conversations.id, input.target.sessionId)),
+				.where(eq(conversations.id, target.sessionId)),
 		]);
 		if (message.conversationKey.kind === "group") {
 			await database
 				.insert(conversationMembers)
 				.values({
-					conversationId: input.target.sessionId,
+					conversationId: target.sessionId,
 					lastSeenAt: occurredAt,
 					role: message.sender.groupRole === "admin" ? "admin" : "member",
-					userId: input.sender.userId,
+					userId: sender.userId,
 					...(message.sender.groupRole === undefined
 						? {}
 						: { platformRole: message.sender.groupRole }),

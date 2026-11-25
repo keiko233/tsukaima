@@ -312,6 +312,93 @@ describe("ConversationRouter ingestion boundary", () => {
 		}
 	});
 
+	test("splits the running segment when a direct IM message arrives while busy", async () => {
+		const lifecycle = await createLifecycle();
+		try {
+			const database = lifecycle.domainDatabase;
+			if (database === undefined) throw new Error("Domain database is not ready");
+			const first = await lifecycle.conversationRouter.ingest(
+				envelope("busy-1", "first synthetic"),
+			);
+			const run = await lifecycle.conversationRuns.startRun({
+				conversationId: first.sessionId,
+				triggerMessageId: null,
+			});
+			await lifecycle.liveRuns.record(first.sessionId, {
+				attempt: 1,
+				conversationId: first.sessionId,
+				draftTools: [],
+				failure: undefined,
+				generationStartedAtMs: undefined,
+				model: undefined,
+				partialText: "synthetic partial",
+				partialThinking: "synthetic work before the steer",
+				retry: undefined,
+				settled: false,
+				startedAtMs: Date.now(),
+				tools: [],
+				turns: 1,
+			});
+
+			await lifecycle.conversationRouter.ingest(envelope("busy-2", "steer while busy"));
+
+			const segments = await lifecycle.conversationRuns.listSegmentsForConversation(
+				first.sessionId,
+			);
+			expect(segments).toHaveLength(2);
+			const [closed, continuation] = segments;
+			expect(closed).toMatchObject({
+				runId: run.anchor.runId,
+				segmentIndex: 0,
+				status: "steered",
+			});
+			expect(closed?.rounds).toMatchObject([
+				{ thinking: "synthetic work before the steer", toolCalls: [] },
+			]);
+			expect(continuation).toMatchObject({
+				runId: run.anchor.runId,
+				segmentIndex: 1,
+				status: "running",
+				triggerKind: "steer",
+			});
+			const [steerRow] = await database
+				.select({ id: messages.id, seq: messages.seq })
+				.from(messages)
+				.where(eqMessagePlatformId("busy-2"))
+				.limit(1);
+			expect(steerRow?.id).toBe(continuation?.triggerMessageId ?? undefined);
+			expect(steerRow?.seq).toBeGreaterThan(closed?.seq ?? 0);
+			expect(continuation?.seq).toBeGreaterThan(steerRow?.seq ?? 0);
+			expect(await lifecycle.liveRuns.segmentAnchor(first.sessionId)).toMatchObject({
+				runId: run.anchor.runId,
+				segmentId: continuation?.id,
+				segmentIndex: 1,
+			});
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("a settled turn cannot be re-settled through the active-run fallback", async () => {
+		const lifecycle = await createLifecycle();
+		try {
+			const first = await lifecycle.conversationRouter.ingest(
+				envelope("settle-1", "first synthetic turn"),
+			);
+			await lifecycle.conversationRuns.settleRun({
+				conversationId: first.sessionId,
+				status: "completed",
+			});
+			const settled = await lifecycle.conversationRuns.settleRun({
+				conversationId: first.sessionId,
+				status: "suppressed",
+			});
+			expect(settled).toBeUndefined();
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
 	// Regression: a OneBot host runs its own clock. NapCat was observed ~36s ahead of the server,
 	// so an inbound row stamped from the platform clock sorted *after* the assistant reply it
 	// triggered, and the WebUI transcript read out of order. Ordering must use the local clock.
