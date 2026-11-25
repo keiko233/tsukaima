@@ -63,6 +63,51 @@ test("backfills legacy conversations into stable chat objects and receiving sess
 	database.close();
 });
 
+test("creates conversation run tables, timeline columns, and their indexes", async () => {
+	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-migration-"));
+	directories.push(directory);
+	const database = await openDomainDatabase(join(directory, "domain.sqlite"));
+	const raw = database.$client;
+	try {
+		migrateDomainDatabase(database);
+		const tables = raw
+			.query(
+				"SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'conversation%' ORDER BY name",
+			)
+			.all() as { name: string }[];
+		expect(tables.map((table) => table.name)).toEqual(
+			expect.arrayContaining(["conversation_run_segments", "conversation_runs"]),
+		);
+		const indexes = raw
+			.query(
+				`SELECT name FROM sqlite_master WHERE type = 'index' AND (
+					name LIKE 'conversation_run%' OR name LIKE 'messages_%seq%' OR name LIKE 'messages_run%'
+				) ORDER BY name`,
+			)
+			.all() as { name: string }[];
+		expect(indexes.map((index) => index.name)).toEqual([
+			"conversation_run_segments_conversation_seq_idx",
+			"conversation_run_segments_run_index_unique",
+			"conversation_runs_conversation_seq_idx",
+			"conversation_runs_durable_key_idx",
+			"messages_conversation_seq_idx",
+			"messages_run_idx",
+		]);
+		const messageColumns = (
+			raw.query("PRAGMA table_info(messages)").all() as { name: string }[]
+		).map((column) => column.name);
+		expect(messageColumns).toEqual(
+			expect.arrayContaining(["delivery_mode", "run_id", "segment_index", "seq"]),
+		);
+		const conversationColumns = (
+			raw.query("PRAGMA table_info(conversations)").all() as { name: string }[]
+		).map((column) => column.name);
+		expect(conversationColumns).toContain("next_seq");
+	} finally {
+		raw.close();
+	}
+});
+
 test("creates durable schedules and occurrence uniqueness indexes", async () => {
 	const directory = await fs.mkdtemp(join(tmpdir(), "tsukaima-migration-"));
 	directories.push(directory);
