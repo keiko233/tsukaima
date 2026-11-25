@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, rename, rm, stat } from "node:fs/promises";
+import { cp, mkdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { GitCli } from "@tsukaima/coding";
 import type { Logger } from "../logging.ts";
@@ -27,6 +27,10 @@ export interface RuntimeUpdatePreparerOptions {
 	 */
 	readonly exec?: RuntimeUpdatePreparerExec | undefined;
 	readonly logger?: Logger | undefined;
+	/**
+	 * Override for directory rename (used by tests to simulate overlayfs `EXDEV`).
+	 */
+	readonly renameDir?: ((source: string, destination: string) => Promise<void>) | undefined;
 	readonly repositoryRoot: string;
 	readonly timeoutMs?: number | undefined;
 	readonly webDistDir: string;
@@ -100,6 +104,15 @@ async function defaultExec(
 	});
 }
 
+function isExdevError(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error as { code?: unknown }).code === "EXDEV"
+	);
+}
+
 async function pathExists(path: string): Promise<boolean> {
 	try {
 		await stat(path);
@@ -127,6 +140,7 @@ export class RuntimeUpdatePreparer {
 	readonly #exec: RuntimeUpdatePreparerExec;
 	readonly #gitCli: GitCli;
 	readonly #logger: Logger | undefined;
+	readonly #renameDir: (source: string, destination: string) => Promise<void>;
 	readonly #repositoryRoot: string;
 	readonly #timeoutMs: number;
 	readonly #webDistDir: string;
@@ -138,6 +152,7 @@ export class RuntimeUpdatePreparer {
 		this.#exec = options.exec ?? defaultExec;
 		this.#gitCli = new GitCli({ repositoryPath: options.repositoryRoot });
 		this.#logger = options.logger?.child("tsukaima::server::prepare");
+		this.#renameDir = options.renameDir ?? rename;
 		this.#repositoryRoot = options.repositoryRoot;
 		this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		this.#webDistDir = resolve(options.webDistDir);
@@ -239,14 +254,15 @@ export class RuntimeUpdatePreparer {
 			await mkdir(dirname(this.#webDistDir), { recursive: true });
 			if (await pathExists(this.#webDistDir)) {
 				backupDir = join(dirname(this.#webDistDir), `.dist-backup-${randomUUID()}`);
-				await rename(this.#webDistDir, backupDir);
+				await this.#moveDirectory(this.#webDistDir, backupDir);
 			}
 			try {
-				await rename(stagingDir, this.#webDistDir);
+				await this.#moveDirectory(stagingDir, this.#webDistDir);
 			} catch (error) {
 				if (backupDir !== undefined) {
 					try {
-						await rename(backupDir, this.#webDistDir);
+						await rm(this.#webDistDir, { force: true, recursive: true });
+						await this.#moveDirectory(backupDir, this.#webDistDir);
 						backupDir = undefined;
 					} catch (restoreError) {
 						throw new Error(
@@ -259,27 +275,38 @@ export class RuntimeUpdatePreparer {
 				}
 				throw error;
 			}
-			if (backupDir !== undefined) {
+			this.#logger?.info("WebUI rebuilt for runtime update", { webDistDir: this.#webDistDir });
+		} finally {
+			// Leftover staging or backup directories would untrack the checkout and block later upgrades.
+			for (const dir of [stagingDir, backupDir]) {
+				if (dir === undefined) continue;
 				try {
-					await rm(backupDir, { force: true, recursive: true });
+					await rm(dir, { force: true, recursive: true });
 				} catch (error) {
-					this.#logger?.warn("failed to remove previous WebUI dist backup", {
-						backupDir,
+					this.#logger?.warn("failed to remove temporary WebUI build directory", {
+						dir,
 						error: error instanceof Error ? error.message : String(error),
 					});
 				}
 			}
-			this.#logger?.info("WebUI rebuilt for runtime update", { webDistDir: this.#webDistDir });
-		} finally {
-			// A leftover staging directory would untrack the checkout and block later upgrades.
-			try {
-				await rm(stagingDir, { force: true, recursive: true });
-			} catch (error) {
-				this.#logger?.warn("failed to remove WebUI staging directory", {
-					error: error instanceof Error ? error.message : String(error),
-					stagingDir,
-				});
-			}
+		}
+	}
+
+	/**
+	 * Move a directory, falling back to recursive copy + remove on `EXDEV`.
+	 *
+	 * On Docker's `overlay2` (Linux overlayfs without `redirect_dir=on`), `rename(2)` on a
+	 * directory from the read-only image layer (`lowerdir`) returns `EXDEV` even within the
+	 * same parent directory. Copying into the upper layer and removing the old directory avoids
+	 * that kernel restriction.
+	 */
+	async #moveDirectory(source: string, destination: string): Promise<void> {
+		try {
+			await this.#renameDir(source, destination);
+		} catch (error) {
+			if (!isExdevError(error)) throw error;
+			await cp(source, destination, { recursive: true });
+			await rm(source, { force: true, recursive: true });
 		}
 	}
 
