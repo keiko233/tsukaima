@@ -850,6 +850,35 @@ function messageToOpenAI(
 	};
 }
 
+/**
+ * OpenAI-compatible APIs reject image blocks on `role: "tool"` messages, so images returned by
+ * a run of tool calls travel in one follow-up `user` message after the run. Vision-incapable
+ * models never receive that message, which keeps their requests text-only.
+ */
+function toolResultImageMessage(
+	images: readonly {
+		readonly data: string;
+		readonly mimeType: string;
+		readonly toolName: string;
+	}[],
+): OpenAIMessage {
+	const toolNames = [...new Set(images.map((image) => image.toolName))];
+	const label =
+		images.length === 1
+			? `Image returned by ${toolNames.join(", ")}.`
+			: `${images.length} images returned by ${toolNames.join(", ")}.`;
+	return {
+		role: "user",
+		content: [
+			{ type: "text", text: label },
+			...images.map((image) => ({
+				type: "image_url" as const,
+				image_url: { url: `data:${image.mimeType};base64,${image.data}` },
+			})),
+		],
+	};
+}
+
 function openAITools(tools: readonly Tool[]): OpenAITool[] {
 	return tools.map((tool) => ({
 		type: "function",
@@ -1146,10 +1175,28 @@ export function createOpenAICompatibleStreams(
 				for (const [index, message] of requestContext.messages.entries()) {
 					if (message.role === "user") lastUserIndex = index;
 				}
+				const supportsImageInput = requestModel.input.includes("image");
+				let pendingToolImages: { data: string; mimeType: string; toolName: string }[] | undefined;
+				const flushToolImages = () => {
+					if (pendingToolImages !== undefined) {
+						messages.push(toolResultImageMessage(pendingToolImages));
+					}
+					pendingToolImages = undefined;
+				};
 				for (const [index, message] of requestContext.messages.entries()) {
+					// Images belong after the whole contiguous tool run, never between `tool` messages.
+					if (message.role !== "toolResult") flushToolImages();
 					const converted = messageToOpenAI(message, index, lastUserIndex);
 					if (converted) messages.push(converted);
+					if (!supportsImageInput || message.role !== "toolResult") continue;
+					for (const block of message.content) {
+						if (block.type !== "image") continue;
+						const images = pendingToolImages ?? [];
+						images.push({ data: block.data, mimeType: block.mimeType, toolName: message.toolName });
+						pendingToolImages = images;
+					}
 				}
+				flushToolImages();
 				const declaredTools = getCurrentTools(requestContext.messages);
 				const supportsTools = modelConfig?.supportsTools ?? true;
 				const requestedTools = requestOptions?.toolChoice === "none" ? [] : declaredTools;

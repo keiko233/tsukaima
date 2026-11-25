@@ -7,6 +7,8 @@ import type {
 	ToolResult,
 } from "@tsukaima/sdk";
 import type { LearningService } from "./learning.ts";
+import { sanitizeModelText, type StickerItem, type StickerPack } from "./domain.ts";
+import { buildAnimatedFrameSheet, isAnimatedImage } from "./frame-sheet.ts";
 import { elapsedMs, traceLog } from "./logging.ts";
 import { toStickerMessagePart } from "./output.ts";
 import type { StickerSearchInput, StickerSelectionService } from "./selection.ts";
@@ -20,6 +22,9 @@ export interface StickerToolExtras {
 }
 
 const text = (value: string): ToolResult => ({ content: [{ text: value, type: "text" }] });
+
+/** Bounded inspection payload; larger files are rejected instead of base64-encoded. */
+const MAX_VIEW_IMAGE_BYTES = 5 * 1024 * 1024;
 
 const asString = (input: Record<string, unknown>, key: string): string | undefined => {
 	const value = input[key];
@@ -809,4 +814,141 @@ export function registerStickerTools(
 			requiredPermissions: ["media.read", "media.write"],
 		});
 	}
+
+	context.tools.register({
+		description:
+			"Visually inspect one sticker from the library and return its image to you so you can describe what it shows. Resolve it by exact itemId (preferred, from sticker-meme.search or sticker-meme.send), or by query/emotion/packId/personaId/tags to inspect the top search match. Animated stickers are sampled into a single PNG contact sheet whose frames read left-to-right, top-to-bottom. Use this before sending a sticker you have not seen, or when its name and metadata are ambiguous.",
+		async execute(input) {
+			const startedAt = Date.now();
+			const itemId = asString(input, "itemId");
+			const search = searchInput(input);
+			traceLog(log, "sticker tool invoked", {
+				...search,
+				itemId: itemId ?? null,
+				tool: "sticker-meme.view",
+			});
+			let resolved: { readonly item: StickerItem; readonly pack: StickerPack };
+			try {
+				resolved = await selection.resolveForView({
+					...search,
+					...(itemId === undefined ? {} : { itemId }),
+				});
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				log.debug("sticker tool rejected", {
+					durationMs: elapsedMs(startedAt),
+					itemId: itemId ?? null,
+					reason,
+					tool: "sticker-meme.view",
+				});
+				return text(reason);
+			}
+			const { item, pack } = resolved;
+			const media = context.media;
+			if (media === undefined) {
+				return text("Sticker viewing is unavailable: this host exposes no media store.");
+			}
+			let imageBytes: Uint8Array;
+			try {
+				imageBytes = await media.readBytes(item.mediaId);
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				log.debug("sticker tool rejected", {
+					durationMs: elapsedMs(startedAt),
+					itemId: item.id,
+					reason: "media_unreadable",
+					tool: "sticker-meme.view",
+				});
+				return text(`Sticker media is unavailable: ${reason}`);
+			}
+			if (imageBytes.byteLength > MAX_VIEW_IMAGE_BYTES) {
+				log.debug("sticker tool rejected", {
+					durationMs: elapsedMs(startedAt),
+					itemId: item.id,
+					reason: "media_too_large",
+					tool: "sticker-meme.view",
+				});
+				return text(
+					`Sticker image is too large to inspect: ${imageBytes.byteLength} bytes exceeds the ${MAX_VIEW_IMAGE_BYTES}-byte limit.`,
+				);
+			}
+			let imageMimeType = item.mimeType;
+			const animated = isAnimatedImage(item.mimeType, imageBytes);
+			let frameSheetCount: number | undefined;
+			let note: string | undefined;
+			if (animated) {
+				const sheet = await buildAnimatedFrameSheet(imageBytes, item.mimeType, { logger: log });
+				if (sheet !== undefined) {
+					imageBytes = sheet.bytes;
+					imageMimeType = sheet.mimeType;
+					frameSheetCount = sheet.frameCount;
+					note = `Animated sticker sampled into a ${sheet.frameCount}-frame contact sheet; read the frames left-to-right, top-to-bottom as a time sequence.`;
+				}
+			}
+			log.debug("sticker tool completed", {
+				durationMs: elapsedMs(startedAt),
+				frameSheetCount: frameSheetCount ?? null,
+				imageMimeType,
+				itemId: item.id,
+				tool: "sticker-meme.view",
+			});
+			return {
+				content: [
+					{
+						text: JSON.stringify({
+							animated,
+							description: sanitizeModelText(item.description),
+							emotions: item.emotions,
+							...(frameSheetCount === undefined ? {} : { frameSheetCount }),
+							height: item.height,
+							itemId: item.id,
+							keywords: item.keywords,
+							labels: item.semantic.labels,
+							mimeType: item.mimeType,
+							name: sanitizeModelText(item.name),
+							...(note === undefined ? {} : { note }),
+							packId: pack.id,
+							packName: sanitizeModelText(pack.name),
+							width: item.width,
+						}),
+						type: "text",
+					},
+				],
+				images: [{ data: Buffer.from(imageBytes).toString("base64"), mimeType: imageMimeType }],
+			};
+		},
+		lazy: false,
+		name: "sticker-meme.view",
+		parameters: {
+			properties: {
+				emotion: {
+					description:
+						"Emotion id or a natural-language alias, for example happy or 开心, used when itemId is omitted.",
+					type: "string",
+				},
+				itemId: {
+					description:
+						"Exact sticker item id, for example from sticker-meme.search or sticker-meme.send.",
+					type: "string",
+				},
+				packId: { type: "string" },
+				personaId: { type: "string" },
+				query: {
+					description:
+						"Any of several names, characters, emotions, or keywords, used when itemId is omitted.",
+					type: "string",
+				},
+				tags: { items: { type: "string" }, type: "array" },
+			},
+			type: "object",
+		},
+		policy: {
+			lazy: false,
+			maxConcurrent: 4,
+			maxPayloadBytes: 4_096,
+			surface: "chat",
+			timeoutMs: 15_000,
+		},
+		requiredPermissions: ["media.read"],
+	});
 }
