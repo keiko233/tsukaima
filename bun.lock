@@ -14,7 +14,7 @@
     },
     "apps/server": {
       "name": "@tsukaima/server",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@better-auth/drizzle-adapter": "1.7.27",
         "@earendil-works/pi-ai": "1.5.2",
@@ -45,7 +45,7 @@
     },
     "apps/web": {
       "name": "@tsukaima/web",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@orpc/client": "1.16.4",
@@ -63,7 +63,7 @@
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "lucide-react": "^1.72.0",
-        "motion": "^12.23.12",
+        "motion": "^14.0.0",
         "react": "^19.3.1",
         "react-dom": "^19.3.1",
         "react-markdown": "^10.1.0",
@@ -86,7 +86,7 @@
     },
     "packages/cache": {
       "name": "@tsukaima/cache",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@keyv/sqlite": "6.1.0",
         "keyv": "6.1.0",
@@ -98,7 +98,7 @@
     },
     "packages/chaos": {
       "name": "@tsukaima/chaos",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@earendil-works/chord": "1.5.2",
         "@earendil-works/pi-durable": "1.5.2",
@@ -108,7 +108,7 @@
     },
     "packages/coding": {
       "name": "@tsukaima/coding",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@earendil-works/pi-ai": "1.5.2",
         "@earendil-works/pi-coding-agent": "1.5.2",
@@ -121,7 +121,7 @@
     },
     "packages/contracts": {
       "name": "@tsukaima/contracts",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@orpc/contract": "1.16.4",
         "zod": "4.6.7",
@@ -129,7 +129,7 @@
     },
     "packages/core": {
       "name": "@tsukaima/core",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@earendil-works/chord": "1.5.2",
         "@earendil-works/pi-ai": "1.5.2",
@@ -141,7 +141,7 @@
     },
     "packages/db": {
       "name": "@tsukaima/db",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "drizzle-orm": "0.45.4",
       },
@@ -151,7 +151,7 @@
     },
     "packages/durable": {
       "name": "@tsukaima/durable",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@earendil-works/chord": "1.5.2",
         "@earendil-works/pi-durable": "1.5.2",
@@ -159,7 +159,7 @@
     },
     "packages/migration": {
       "name": "@tsukaima/migration",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@tsukaima/db": "workspace:*",
         "drizzle-orm": "0.45.4",
@@ -168,14 +168,14 @@
     },
     "packages/plugin-registry": {
       "name": "@tsukaima/plugin-registry",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@tsukaima/sdk": "workspace:*",
       },
     },
     "packages/sdk": {
       "name": "@tsukaima/sdk",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/ui": "workspace:*",
@@ -200,11 +200,11 @@
     },
     "packages/ui": {
       "name": "@tsukaima/ui",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "clsx": "^2.1.1",
         "lucide-react": "^1.72.0",
-        "motion": "^12.23.12",
+        "motion": "^14.0.0",
         "shiki": "^4.6.0",
         "tailwind-merge": "^3.7.0",
       },
@@ -221,7 +221,7 @@
     },
     "plugins/mcp": {
       "name": "@tsukaima-plugin/mcp",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@modelcontextprotocol/sdk": "1.32.2",
@@ -241,7 +241,7 @@
     },
     "plugins/onebot-napcat": {
       "name": "@tsukaima-plugin/onebot-napcat",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -260,7 +260,7 @@
     },
     "plugins/openai-compatible": {
       "name": "@tsukaima-plugin/openai-compatible",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -279,7 +279,7 @@
     },
     "plugins/proactive-scheduler": {
       "name": "@tsukaima-plugin/proactive-scheduler",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -298,7 +298,7 @@
     },
     "plugins/skills": {
       "name": "@tsukaima-plugin/skills",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -317,7 +317,7 @@
     },
     "plugins/sticker-meme": {
       "name": "@tsukaima-plugin/sticker-meme",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -344,7 +344,7 @@
     },
     "tools/migration": {
       "name": "@tsukaima/migration-cli",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "bin": {
         "tsukaima-migration": "./src/cli.ts",
       },
@@ -354,7 +354,7 @@
     },
     "tools/ops": {
       "name": "@tsukaima/ops",
-      "version": "0.29.0",
+      "version": "0.31.1",
       "bin": {
         "tsukaima-backup-drill": "./backup-drill.ts",
         "tsukaima-secret-scan": "./secret-scan.ts",
@@ -1203,7 +1203,7 @@
 
     "forwarded": ["forwarded@0.2.0", "", {}, "sha512-buRG0fpBtRHSTCOASe6hD258tEubFoRLb4ZNA6NxMVHNw2gOcwHo9wyablzMzOA5z9xA9L1KNjk/Nt6MT9aYow=="],
 
-    "framer-motion": ["framer-motion@12.43.0", "", { "dependencies": { "motion-dom": "^12.43.0", "motion-utils": "^12.39.0", "tslib": "^2.4.0" }, "peerDependencies": { "@emotion/is-prop-valid": "*", "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" }, "optionalPeers": ["@emotion/is-prop-valid", "react", "react-dom"] }, "sha512-1eaL3RvR/kAlbG7UYcpMptEyzPoENO0c6w7ZnB3/hh2vSAz/6uGAFn6fdoqTBguNstf3MsFhJHsD/0DHiclG+g=="],
+    "framer-motion": ["framer-motion@14.14.0", "", { "dependencies": { "motion-dom": "14.14.0", "motion-utils": "14.7.0", "tslib": "^2.4.0" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0", "remix": "^3.1.0" }, "optionalPeers": ["react", "react-dom", "remix"] }, "sha512-fidRX0VzkZdA9OovFiBSzJtt9/jLcJpna78Z+KCqQQZIWoIpN3tOhEXAhhAw/FObUUh+o3Y18yx1F4BP0mVJ8Q=="],
 
     "fresh": ["fresh@2.0.0", "", {}, "sha512-Rx/WycZ60HOaqLKAi6cHRKKI7zxWbJ31MhntmtwMoaTeF7XFH9hhBp8vITaMidfljRQ6eYWCKkaTK+ykVJHP2A=="],
 
@@ -1485,11 +1485,11 @@
 
     "mkdirp-classic": ["mkdirp-classic@0.5.3", "", {}, "sha512-gKLcREMhtuZRwRAfqP3RFW+TK4JqApVBtOIftVgjuABpAtpxhPGaDcfvbhNvD0B8iD1oUr/txX35NjcaY6Ns/A=="],
 
-    "motion": ["motion@12.43.0", "", { "dependencies": { "framer-motion": "^12.43.0", "tslib": "^2.4.0" }, "peerDependencies": { "@emotion/is-prop-valid": "*", "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" }, "optionalPeers": ["@emotion/is-prop-valid", "react", "react-dom"] }, "sha512-BQgQbSa9Hn3/mtbib0MK53y6JSANa+YKUKlaYnWzAVDH424RYQ5LVpV3pNiWH00BA2z4ojsSdMzqT7g2FQwjuQ=="],
+    "motion": ["motion@14.14.0", "", { "dependencies": { "framer-motion": "14.14.0", "tslib": "^2.4.0" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0", "remix": "^3.1.0" }, "optionalPeers": ["react", "react-dom", "remix"] }, "sha512-a306U6sV5VKq1abtzKiinB+UQjiY88jrsvQzWORP3WPv/DFANyoYVlPbdnmJPMEbusyPXB4GyQJVANaq/pSIYQ=="],
 
-    "motion-dom": ["motion-dom@12.43.0", "", { "dependencies": { "motion-utils": "^12.39.0" } }, "sha512-azKON4d9S65PEoFUiQTMTgPheEmzf2QngdRc50AKfJp9Q9mmcBVw22c8eMq9k8kxOFHdL7+WZY7N/5F/lwiDag=="],
+    "motion-dom": ["motion-dom@14.14.0", "", { "dependencies": { "motion-utils": "14.7.0" } }, "sha512-IAxcKhYkuQA2W0Tlx1AvVgImfqEoF3/t3IovbPQJlYkefmGsmrXjn967lMII5VmFmLpQEab4+ZkHo/ijJ4Esig=="],
 
-    "motion-utils": ["motion-utils@12.39.0", "", {}, "sha512-8nadJAJjTtqRkmRF36FoJTrywK9nnFmnPwnSMyxaOCU7GDjN9RTMJIxx9De8ErM+vpPhMccr/6fo5WciyQLnMQ=="],
+    "motion-utils": ["motion-utils@14.7.0", "", {}, "sha512-woO0/Nb7ys75f94fjvQi/6leiHGvZUYkeHUPEZ3vxsV+9OpEVhkxp01x8MlRwX0zt31EqgXsKDAoBoJLC148Tw=="],
 
     "ms": ["ms@2.1.3", "", {}, "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="],
 
