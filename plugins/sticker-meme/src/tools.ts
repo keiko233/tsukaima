@@ -9,7 +9,11 @@ import type {
 import type { LearningService } from "./learning.ts";
 import { elapsedMs, traceLog } from "./logging.ts";
 import { toStickerMessagePart } from "./output.ts";
-import type { StickerSearchInput, StickerSelectionService } from "./selection.ts";
+import {
+	toCompactStickerCandidate,
+	type StickerSearchInput,
+	type StickerSelectionService,
+} from "./selection.ts";
 import type { StickerSemanticClassifier } from "./semantic.ts";
 import type { StickerUrlImportService } from "./url-import.ts";
 
@@ -316,7 +320,7 @@ export function registerStickerTools(
 	});
 	context.tools.register({
 		description:
-			"Search approved, enabled stickers by semantic text, emotion, persona, pack name/id, or tags. Space- or comma-separated query terms are treated as alternatives (OR). All enabled packs in the library are approved for use in chat (unless explicitly restricted to a different personaId). Newly imported packs are available immediately; omit filters or use sticker-meme.list_packs to browse available packs.",
+			"Search approved, enabled stickers by semantic text, emotion, persona, pack name/id, or tags. Space- or comma-separated query terms are treated as alternatives (OR). All enabled packs in the library are approved for use in chat (unless explicitly restricted to a different personaId). Newly imported packs are available immediately; omit filters or use sticker-meme.list_packs to browse available packs. Candidate descriptions are compact previews (about 120 characters) so long vision descriptions do not bloat context; use sticker-meme.view with an itemId to inspect a specific sticker in full detail.",
 		async execute(input) {
 			const startedAt = Date.now();
 			const search = searchInput(input);
@@ -324,7 +328,7 @@ export function registerStickerTools(
 				...search,
 				tool: "sticker-meme.search",
 			});
-			const candidates = await selection.search(search);
+			const candidates = (await selection.search(search)).map(toCompactStickerCandidate);
 			log.debug("sticker tool completed", {
 				candidateCount: candidates.length,
 				durationMs: elapsedMs(startedAt),
