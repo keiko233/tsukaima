@@ -14,7 +14,7 @@
     },
     "apps/server": {
       "name": "@tsukaima/server",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@better-auth/drizzle-adapter": "1.7.27",
         "@earendil-works/pi-ai": "1.5.2",
@@ -45,11 +45,11 @@
     },
     "apps/web": {
       "name": "@tsukaima/web",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
-        "@fontsource-variable/newsreader": "5.3.0",
+        "@fontsource-variable/bricolage-grotesque": "5.3.0",
+        "@fontsource-variable/outfit": "5.3.0",
         "@fontsource/ibm-plex-mono": "5.3.0",
-        "@fontsource/ibm-plex-sans": "5.3.0",
         "@fontsource/noto-sans-sc": "5.3.1",
         "@fontsource/noto-serif-sc": "5.3.1",
         "@inlang/paraglide-js": "^3.2.2",
@@ -67,6 +67,8 @@
         "better-auth": "1.7.27",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
+        "cn-fontsource-lxgw-neo-xi-hei-regular": "1.0.1",
+        "cn-fontsource-smiley-sans-oblique-regular": "1.0.1",
         "lucide-react": "^1.72.0",
         "motion": "^14.0.0",
         "react": "^19.3.1",
@@ -91,7 +93,7 @@
     },
     "packages/cache": {
       "name": "@tsukaima/cache",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@keyv/sqlite": "6.1.0",
         "keyv": "6.1.0",
@@ -103,7 +105,7 @@
     },
     "packages/chaos": {
       "name": "@tsukaima/chaos",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@earendil-works/chord": "1.5.2",
         "@earendil-works/pi-durable": "1.5.2",
@@ -113,7 +115,7 @@
     },
     "packages/coding": {
       "name": "@tsukaima/coding",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@earendil-works/pi-ai": "1.5.2",
         "@earendil-works/pi-coding-agent": "1.5.2",
@@ -126,7 +128,7 @@
     },
     "packages/contracts": {
       "name": "@tsukaima/contracts",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@orpc/contract": "1.16.4",
         "zod": "4.6.7",
@@ -134,7 +136,7 @@
     },
     "packages/core": {
       "name": "@tsukaima/core",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@earendil-works/chord": "1.5.2",
         "@earendil-works/pi-ai": "1.5.2",
@@ -146,7 +148,7 @@
     },
     "packages/db": {
       "name": "@tsukaima/db",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "drizzle-orm": "0.45.4",
       },
@@ -156,7 +158,7 @@
     },
     "packages/durable": {
       "name": "@tsukaima/durable",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@earendil-works/chord": "1.5.2",
         "@earendil-works/pi-durable": "1.5.2",
@@ -164,7 +166,7 @@
     },
     "packages/migration": {
       "name": "@tsukaima/migration",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@tsukaima/db": "workspace:*",
         "drizzle-orm": "0.45.4",
@@ -173,14 +175,14 @@
     },
     "packages/plugin-registry": {
       "name": "@tsukaima/plugin-registry",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@tsukaima/sdk": "workspace:*",
       },
     },
     "packages/sdk": {
       "name": "@tsukaima/sdk",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/ui": "workspace:*",
@@ -205,7 +207,7 @@
     },
     "packages/ui": {
       "name": "@tsukaima/ui",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@ui-sdk/core": "0.1.0-beta.17",
         "@ui-sdk/react": "0.1.0-beta.17",
@@ -228,7 +230,7 @@
     },
     "plugins/mcp": {
       "name": "@tsukaima-plugin/mcp",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@modelcontextprotocol/sdk": "1.32.2",
@@ -248,7 +250,7 @@
     },
     "plugins/onebot-napcat": {
       "name": "@tsukaima-plugin/onebot-napcat",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -267,7 +269,7 @@
     },
     "plugins/openai-compatible": {
       "name": "@tsukaima-plugin/openai-compatible",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -286,7 +288,7 @@
     },
     "plugins/proactive-scheduler": {
       "name": "@tsukaima-plugin/proactive-scheduler",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -305,7 +307,7 @@
     },
     "plugins/skills": {
       "name": "@tsukaima-plugin/skills",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -324,7 +326,7 @@
     },
     "plugins/sticker-meme": {
       "name": "@tsukaima-plugin/sticker-meme",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -351,7 +353,7 @@
     },
     "tools/migration": {
       "name": "@tsukaima/migration-cli",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "bin": {
         "tsukaima-migration": "./src/cli.ts",
       },
@@ -361,7 +363,7 @@
     },
     "tools/ops": {
       "name": "@tsukaima/ops",
-      "version": "0.32.0",
+      "version": "0.35.0",
       "bin": {
         "tsukaima-backup-drill": "./backup-drill.ts",
         "tsukaima-secret-scan": "./secret-scan.ts",
@@ -576,11 +578,11 @@
 
     "@exodus/bytes": ["@exodus/bytes@1.16.0", "", { "peerDependencies": { "@noble/hashes": "^1.8.0 || ^2.0.0" }, "optionalPeers": ["@noble/hashes"] }, "sha512-IcpW84uEn3N7ETtNZMlxKhfl6Pec8rUNGOTBtWbK1FKhJxIFAptZyVrvVRVBimAJxJCgc3PxepxkdWWG4DVzfA=="],
 
-    "@fontsource-variable/newsreader": ["@fontsource-variable/newsreader@5.3.0", "", {}, "sha512-rrzYi43qMpbzwuFtf9OkWH8sxAPVPcQQQEwXpPtwaKYeJ8yVg5aLs5kawmo1f2Q1t1M38TLmEKCkGVDsYwgdFw=="],
+    "@fontsource-variable/bricolage-grotesque": ["@fontsource-variable/bricolage-grotesque@5.3.0", "", {}, "sha512-TLi9Q4hJjS2UvoTMRSS2nHu6c4R56lAw60NR9QYtVRCHn0XtsFpiEhNffZ8Glsoxu6wEEwLKBP8lb94J52PNBA=="],
+
+    "@fontsource-variable/outfit": ["@fontsource-variable/outfit@5.3.0", "", {}, "sha512-fPb5XnYK0k7SbR++HEmm4+ZqDszmLKQ+sPRUr8oQ/KNC0vy6r6hazJFe8iYozv4cqlHbvJ/JECkJWrfDodUMVQ=="],
 
     "@fontsource/ibm-plex-mono": ["@fontsource/ibm-plex-mono@5.3.0", "", {}, "sha512-eTgnZjZEGk1QtD3ZstF+Vclo2HLAni8YMy34/DxllwZvyz1lR/1RF/xTiAquOBO7MvqBx8D2Ig2WCPMVfdZu7Q=="],
-
-    "@fontsource/ibm-plex-sans": ["@fontsource/ibm-plex-sans@5.3.0", "", {}, "sha512-CbE4CbbEEZJX860XyUiRpsksXIQR8Rp2XDva2VO53NJox9tVNtusrysd2x5YkUEY3ErQ66W1IiiQL8/wihhw5w=="],
 
     "@fontsource/noto-sans-sc": ["@fontsource/noto-sans-sc@5.3.1", "", {}, "sha512-YxZ/VWAWo9FWzH08Q6fGTzIW6vYNP2TMhUFCnfhlimbhdXnWrxJLrzX3KWt2FKnV0s8XiM5vjpGHQiyFRlTj0w=="],
 
@@ -1085,6 +1087,10 @@
     "class-variance-authority": ["class-variance-authority@0.7.1", "", { "dependencies": { "clsx": "^2.1.1" } }, "sha512-Ka+9Trutv7G8M6WT6SeiRWz792K5qEqIGEGzXKhAE6xOWAY6pPH8U+9IY3oCMv6kqTmLsv7Xh/2w2RigkePMsg=="],
 
     "clsx": ["clsx@2.1.1", "", {}, "sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA=="],
+
+    "cn-fontsource-lxgw-neo-xi-hei-regular": ["cn-fontsource-lxgw-neo-xi-hei-regular@1.0.1", "", {}, "sha512-XsLW+HU9ms7reUfGnNRGN/nkriupBBTjdnEafThBL+0DUsBetKoUYf6M8L6jz8yGNag7ePiOeByRBQAPqPkxAw=="],
+
+    "cn-fontsource-smiley-sans-oblique-regular": ["cn-fontsource-smiley-sans-oblique-regular@1.0.1", "", {}, "sha512-F011I+Kic76lo/hoQbZGoVxd+P7/UeKazE3HbgwZkhjhA9AD//mmyyn6MIDbQe7lsQaPvRUKslrRIni/EusJtw=="],
 
     "comma-separated-tokens": ["comma-separated-tokens@2.0.3", "", {}, "sha512-Fu4hJdvzeylCfQPp9SGWidpzrMs7tTrlu6Vb8XGaRGck8QSNZJJp538Wrb60Lax4fPwR64ViY468OIUTbRlGZg=="],
 

@@ -109,9 +109,9 @@
 
 @theme inline {
 	--font-serif:
-		"Newsreader Variable", "Noto Serif SC", "Songti SC", "Source Han Serif SC", Georgia, serif;
+		"Bricolage Grotesque Variable", "Smiley Sans Oblique", "Noto Serif SC", Georgia, serif;
 	--font-sans:
-		"IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+		"Outfit Variable", "LXGW Neo XiHei", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
 	--font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
 	--ease-out: cubic-bezier(0.16, 1, 0.3, 1);
