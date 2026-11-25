@@ -16,8 +16,6 @@ import { orpc } from "@/lib/api";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
 
-type DeliveryTarget = "channel" | "tsukaima";
-
 /** Read the per-session mode, upgrading the old `queue` value written before steer existed. */
 function storedDeliveryMode(key: string): MessageDeliveryMode {
 	let stored: string | null = null;
@@ -38,35 +36,24 @@ function storedDeliveryMode(key: string): MessageDeliveryMode {
 }
 
 export function MessageComposer({
-	channelConnected,
 	disabled,
-	externalEligible,
 	onSend,
 	sending,
 	sessionId,
-	workspace = false,
 }: {
-	channelConnected: boolean;
 	disabled: boolean;
-	externalEligible: boolean;
 	onSend: (input: {
 		mode: MessageDeliveryMode;
 		references?: { messageId?: string; sessionId: string }[];
-		target: DeliveryTarget;
 		text: string;
 	}) => Promise<MessageSummary>;
 	sending: boolean;
 	sessionId: string;
-	workspace?: boolean;
 }) {
 	const draftKey = `tsukaima.webui.draft.${sessionId}`;
 	const modeKey = `tsukaima.webui.delivery-mode.${sessionId}`;
 	const [text, setText] = useState(() => localStorage.getItem(draftKey) ?? "");
 	const [mode, setMode] = useState<MessageDeliveryMode>(() => storedDeliveryMode(modeKey));
-	// External chats only send directly to the channel from the WebUI; internal Tsukaima turns
-	// are not exposed in the external composer so operator interventions never surface as chat UX.
-	const target: DeliveryTarget = externalEligible ? "channel" : "tsukaima";
-	const channelUnavailable = externalEligible && !channelConnected;
 	const [references, setReferences] = useState<
 		Array<{ kind: string; sessionId: string; title: string }>
 	>([]);
@@ -80,7 +67,7 @@ export function MessageComposer({
 				limit: 12,
 			},
 		}),
-		enabled: workspace && referenceOpen,
+		enabled: referenceOpen,
 	});
 
 	const updateText = (next: string) => {
@@ -100,7 +87,6 @@ export function MessageComposer({
 				...(references.length === 0
 					? {}
 					: { references: references.map((reference) => ({ sessionId: reference.sessionId })) }),
-				target,
 				text: value,
 			});
 			if (message.deliveryStatus !== "failed" && message.deliveryStatus !== "uncertain") {
@@ -124,7 +110,7 @@ export function MessageComposer({
 		setReferenceQuery("");
 	};
 
-	const referencePicker = workspace ? (
+	const referencePicker = (
 		<div className="relative">
 			<Button
 				type="button"
@@ -187,64 +173,63 @@ export function MessageComposer({
 				</div>
 			) : null}
 		</div>
-	) : null;
+	);
 
-	const modeSelect =
-		target === "tsukaima" ? (
-			<Select
-				value={mode}
-				onValueChange={(value) => updateMode(value as MessageDeliveryMode)}
-				disabled={disabled || sending}
+	const modeSelect = (
+		<Select
+			value={mode}
+			onValueChange={(value) => updateMode(value as MessageDeliveryMode)}
+			disabled={disabled || sending}
+		>
+			<SelectTrigger
+				className="h-7 w-auto max-w-44 rounded-md border-0 bg-transparent px-1.5 py-0 text-[11px] hover:bg-muted focus-visible:ring-2"
+				aria-label={m.delivery_mode()}
 			>
-				<SelectTrigger
-					className="h-7 w-auto max-w-44 rounded-md border-0 bg-transparent px-1.5 py-0 text-[11px] hover:bg-muted focus-visible:ring-2"
-					aria-label={m.delivery_mode()}
-				>
-					<span className="flex min-w-0 items-center gap-1.5">
-						{mode === "interrupt" ? (
-							<Zap className="size-3 text-muted-foreground" />
-						) : mode === "follow-up" ? (
-							<ListEnd className="size-3 text-muted-foreground" />
-						) : (
-							<CornerDownRight className="size-3 text-muted-foreground" />
-						)}
-						<span className="truncate text-muted-foreground">
-							{mode === "interrupt"
-								? m.delivery_mode_interrupt()
-								: mode === "follow-up"
-									? m.delivery_mode_follow_up()
-									: m.delivery_mode_steer()}
+				<span className="flex min-w-0 items-center gap-1.5">
+					{mode === "interrupt" ? (
+						<Zap className="size-3 text-muted-foreground" />
+					) : mode === "follow-up" ? (
+						<ListEnd className="size-3 text-muted-foreground" />
+					) : (
+						<CornerDownRight className="size-3 text-muted-foreground" />
+					)}
+					<span className="truncate text-muted-foreground">
+						{mode === "interrupt"
+							? m.delivery_mode_interrupt()
+							: mode === "follow-up"
+								? m.delivery_mode_follow_up()
+								: m.delivery_mode_steer()}
+					</span>
+				</span>
+			</SelectTrigger>
+			<SelectContent className="right-auto w-64 shadow-none">
+				<SelectItem value="steer" className="py-2">
+					<span className="block">
+						<span className="block text-sm text-foreground">{m.delivery_mode_steer()}</span>
+						<span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
+							{m.delivery_mode_steer_hint()}
 						</span>
 					</span>
-				</SelectTrigger>
-				<SelectContent className="right-auto w-64 shadow-none">
-					<SelectItem value="steer" className="py-2">
-						<span className="block">
-							<span className="block text-sm text-foreground">{m.delivery_mode_steer()}</span>
-							<span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
-								{m.delivery_mode_steer_hint()}
-							</span>
+				</SelectItem>
+				<SelectItem value="follow-up" className="py-2">
+					<span className="block">
+						<span className="block text-sm text-foreground">{m.delivery_mode_follow_up()}</span>
+						<span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
+							{m.delivery_mode_follow_up_hint()}
 						</span>
-					</SelectItem>
-					<SelectItem value="follow-up" className="py-2">
-						<span className="block">
-							<span className="block text-sm text-foreground">{m.delivery_mode_follow_up()}</span>
-							<span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
-								{m.delivery_mode_follow_up_hint()}
-							</span>
+					</span>
+				</SelectItem>
+				<SelectItem value="interrupt" className="py-2">
+					<span className="block">
+						<span className="block text-sm text-foreground">{m.delivery_mode_interrupt()}</span>
+						<span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
+							{m.delivery_mode_interrupt_hint()}
 						</span>
-					</SelectItem>
-					<SelectItem value="interrupt" className="py-2">
-						<span className="block">
-							<span className="block text-sm text-foreground">{m.delivery_mode_interrupt()}</span>
-							<span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">
-								{m.delivery_mode_interrupt_hint()}
-							</span>
-						</span>
-					</SelectItem>
-				</SelectContent>
-			</Select>
-		) : null;
+					</span>
+				</SelectItem>
+			</SelectContent>
+		</Select>
+	);
 
 	return (
 		<div className="shrink-0 bg-background px-3 pb-2.5 pt-1 sm:px-5">
@@ -280,28 +265,17 @@ export function MessageComposer({
 					onSubmit={(value) => void submit(value)}
 					placeholder={m.composer_placeholder()}
 					aria-label={m.composer_placeholder()}
-					disabled={disabled || sending || channelUnavailable}
+					disabled={disabled || sending}
 					minRows={1}
 					maxRows={8}
 					leadingAction={
-						modeSelect !== null || referencePicker !== null ? (
-							<span className="flex items-center gap-0.5">
-								{referencePicker}
-								{modeSelect}
-							</span>
-						) : null
+						<span className="flex items-center gap-0.5">
+							{referencePicker}
+							{modeSelect}
+						</span>
 					}
 					className={cn(sending && "opacity-80")}
 				/>
-				<p className="mt-1 px-1.5 text-[10px] leading-4 text-muted-foreground/80">
-					{target === "channel"
-						? channelConnected
-							? m.composer_hint_channel()
-							: m.channel_not_connected()
-						: workspace
-							? m.composer_hint_workspace()
-							: m.composer_hint_tsukaima()}
-				</p>
 			</div>
 		</div>
 	);

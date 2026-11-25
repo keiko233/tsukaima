@@ -91,13 +91,13 @@ The transcript renders persisted inbound/outbound messages and durable assistant
 entries. Text, image, and sticker metadata are shown with explicit fallbacks for
 unsupported content. Delivery state is shown for self-authored messages.
 
-The composer offers only capabilities that currently exist:
+Chat sessions are read-only in the WebUI. External private/group chats show the channel
+connection state but never send back to the external target from the browser. Local chats
+remain available for inspection only.
 
-- **Talk to Tsukaima** appends a WebUI envelope to the selected session and starts an
-  Tsukaima turn.
-- **Send to channel** is available for external private/group sessions only while the
-  OneBot WebSocket is connected. It sends directly to the external target without
-  asking Tsukaima to reply.
+Only workspace sessions keep a composer. It appends a WebUI envelope to the selected
+workspace session and starts a Tsukaima turn; the composer does not render destination or
+capability hint copy below the input.
 
 Drafts are stored per session in local storage. A failed or uncertain external send is
 not retried automatically.
