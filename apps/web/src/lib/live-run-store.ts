@@ -98,6 +98,13 @@ function sameRun(a: LiveRunState, b: LiveRunState): boolean {
 		a.partialText === b.partialText &&
 		a.partialThinking === b.partialThinking &&
 		a.phase === b.phase &&
+		a.runId === b.runId &&
+		a.segmentId === b.segmentId &&
+		a.segmentIndex === b.segmentIndex &&
+		a.seq === b.seq &&
+		a.status === b.status &&
+		a.triggerKind === b.triggerKind &&
+		sameJson(a.rounds ?? [], b.rounds ?? []) &&
 		a.retry?.at === b.retry?.at &&
 		a.retry?.error === b.retry?.error &&
 		a.revision === b.revision &&

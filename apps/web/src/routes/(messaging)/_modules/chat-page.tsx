@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@tsukaima/ui/components/motion/button";
 import { orpc, type DeliveryStatus } from "@/lib/api";
 import { messageListOptions, upsertMessagesInCache } from "@/lib/message-cache";
+import { mergeMessagePageRunSegments } from "@/lib/message-pages";
 import { errorMessage, useToast } from "@/lib/toast";
 import { useLiveRun } from "@/lib/live-run-store";
 import { cn } from "@tsukaima/ui/lib/utils";
@@ -134,13 +135,14 @@ export function ChatPage({
 		refetchInterval: surface === "workspace" ? 5_000 : false,
 	});
 	const messages = useInfiniteQuery(messageListOptions(sessionId));
-	const transcript = useMemo(
-		() =>
-			messages.data === undefined
-				? []
-				: messages.data.pages.toReversed().flatMap((page) => page.messages),
-		[messages.data],
-	);
+	const transcript = useMemo(() => {
+		if (messages.data === undefined) return { messages: [], runSegments: [] };
+		const pages = messages.data.pages.toReversed();
+		return {
+			messages: pages.flatMap((page) => page.messages),
+			runSegments: mergeMessagePageRunSegments(messages.data.pages),
+		};
+	}, [messages.data]);
 	const diagnostics = useQuery(orpc.admin.diagnostics.status.queryOptions());
 	const abort = useMutation(
 		orpc.admin.sessions.abort.mutationOptions({
@@ -409,7 +411,8 @@ export function ChatPage({
 								liveRun={liveRun}
 								loadingOlder={messages.isFetchingNextPage}
 								markdown={surface === "workspace"}
-								messages={transcript}
+								messages={transcript.messages}
+								runSegments={transcript.runSegments}
 								now={now}
 								onLoadOlder={() => void messages.fetchNextPage()}
 								sessionId={sessionId}

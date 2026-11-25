@@ -22,6 +22,13 @@ mock.module("@/paraglide/messages", () => ({
 		live_run_phase_settled: () => "\u5b8c\u6210",
 		live_run_tool_preparing: () => "\u751f\u6210\u8c03\u7528\u2026",
 		message_sender_tsukaima: () => "Tsukaima",
+		run_round_label: ({ n }: { n: number }) => `Round ${n}`,
+		run_round_model: () => "Model",
+		run_round_stop_aborted: () => "Aborted",
+		run_round_stop_error: () => "Error",
+		run_round_tools: () => "Tools",
+		run_segment_status_interrupted: () => "Interrupted",
+		run_segment_status_steered: () => "Steered",
 		run_step_text: () => "Output",
 		run_step_thinking: () => "Thinking",
 		run_steps_show: () => "Show steps",
@@ -240,5 +247,96 @@ describe("LiveRunMessage", () => {
 			}),
 		);
 		expect(html.split("half an ans")).toHaveLength(2);
+	});
+	test("groups structured rounds and renders the active round after them", () => {
+		const html = render(
+			run({
+				partialText: "active output",
+				partialThinking: "active thought",
+				rounds: [
+					{
+						durationMs: 1_200,
+						intermediateText: "interlude",
+						model: { modelId: "model-1", providerId: "provider-1" },
+						roundIndex: 0,
+						stopReason: "toolUse",
+						thinking: "round one thought",
+						toolCalls: [
+							{
+								argumentsText: '{"q":"x"}',
+								isError: false,
+								output: "hit",
+								toolName: "web_search",
+							},
+						],
+					},
+					{
+						roundIndex: 1,
+						stopReason: "stop",
+						thinking: "round two thought",
+						toolCalls: [],
+					},
+				],
+			}),
+		);
+		expect(html).toContain("Round 1");
+		expect(html).toContain("Round 2");
+		expect(html).toContain("Round 3");
+		expect(html).toContain("model-1");
+		expect(html).toContain("1.2s");
+		expect(html).toContain("round one thought");
+		expect(html).toContain("round two thought");
+		expect(html).toContain("web_search");
+		expect(html).toContain("interlude");
+		expect(html).toContain("Tools");
+		expect(html).toContain("active thought");
+		expect(html).toContain("active output");
+		expect(html.indexOf("round two thought")).toBeLessThan(html.indexOf("active thought"));
+	});
+
+	test("renders stop-reason pills on aborted rounds", () => {
+		const html = render(
+			run({
+				rounds: [
+					{
+						roundIndex: 0,
+						stopReason: "aborted",
+						thinking: "stopped",
+						toolCalls: [],
+					},
+				],
+			}),
+		);
+		expect(html).toContain("Aborted");
+	});
+
+	test("renders steered and interrupted segment statuses", () => {
+		expect(render(run({ rounds: [], status: "steered" }))).toContain("Steered");
+		expect(render(run({ rounds: [], status: "interrupted" }))).toContain("Interrupted");
+	});
+
+	test("renders the in-flight active round with tools and draft tools", () => {
+		const html = render(
+			run({
+				draftTools: [{ argumentsText: '{"query":"elai', callId: "draft-1", toolName: "web_search" }],
+				partialText: "streaming answer",
+				partialThinking: "streaming thought",
+				rounds: [],
+				tools: [
+					{
+						argumentsText: '{"path":"README.md"}',
+						callId: "tool-1",
+						output: "",
+						status: "running",
+						toolName: "read",
+					},
+				],
+			}),
+		);
+		expect(html).toContain("streaming thought");
+		expect(html).toContain("streaming answer");
+		expect(html).toContain("web_search");
+		expect(html).toContain("read");
+		expect(html.indexOf("streaming thought")).toBeLessThan(html.indexOf("streaming answer"));
 	});
 });

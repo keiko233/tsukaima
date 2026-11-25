@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
 	File as FileIcon,
@@ -22,15 +22,16 @@ import {
 	MessageHeader,
 	MessageScroller,
 } from "@tsukaima/ui/components/agents/message";
-import type { DeliveryStatus, MessageSummary } from "@/lib/api";
-import type { LiveRunState } from "@tsukaima/contracts";
+import type { DeliveryStatus, MessageDeliveryMode, MessageSummary } from "@/lib/api";
+import type { LiveRunState, RunSegmentSummary } from "@tsukaima/contracts";
 import { cn } from "@tsukaima/ui/lib/utils";
 import { m } from "@/paraglide/messages";
+import { buildConversationTimeline } from "@/lib/conversation-timeline";
 import { runtimeUrl } from "@/lib/runtime-url";
 import { formatDateTime, formatTimestamp } from "../../_modules/lib/format";
 import { LiveRunMessage } from "./live-run-message";
 import { MessageText } from "./message-text";
-import { RunSteps } from "./run-steps";
+import { RunSegmentCard, RunSteps } from "./run-steps";
 
 function deliveryLabel(status: DeliveryStatus): string {
 	switch (status) {
@@ -54,6 +55,43 @@ function deliveryClass(status: DeliveryStatus): string {
 	if (status === "uncertain") return "text-warning";
 	if (status === "pending") return "text-muted-foreground";
 	return "text-muted-foreground";
+}
+
+function deliveryModeLabel(mode: MessageDeliveryMode): string {
+	switch (mode) {
+		case "steer":
+			return m.message_delivery_steer();
+		case "follow-up":
+			return m.message_delivery_follow_up();
+		case "interrupt":
+			return m.message_delivery_interrupt();
+	}
+}
+
+function deliveryModeClass(mode: MessageDeliveryMode): string {
+	switch (mode) {
+		case "steer":
+			return "border-primary/20 bg-primary/10 text-primary";
+		case "follow-up":
+			return "border-border bg-muted text-muted-foreground";
+		case "interrupt":
+			return "border-destructive/20 bg-destructive/10 text-destructive";
+	}
+}
+
+/** A small tell for why this user message arrived mid-turn. */
+function DeliveryModeBadge({ mode }: { mode: MessageDeliveryMode }) {
+	return (
+		<span
+			title={m.delivery_mode()}
+			className={cn(
+				"inline-flex shrink-0 items-center rounded-full border px-1.5 text-[10px] leading-4 font-medium",
+				deliveryModeClass(mode),
+			)}
+		>
+			{deliveryModeLabel(mode)}
+		</span>
+	);
 }
 
 function senderName(message: MessageSummary): string {
@@ -292,6 +330,7 @@ function MessageRow({
 	markdown,
 	message,
 	onJumpToMessage,
+	segment,
 	sessionId,
 }: {
 	/** Follows an earlier message from the same sender, so the identity chrome is skipped. */
@@ -299,6 +338,8 @@ function MessageRow({
 	markdown: boolean;
 	message: MessageSummary;
 	onJumpToMessage?: ((messageId: string) => void) | undefined;
+	/** Persisted run segment attached to this answer, including its round-grouped steps. */
+	segment?: RunSegmentSummary | undefined;
 	/** Session the message belongs to, needed to expand a turn's steps. */
 	sessionId: string;
 }) {
@@ -337,12 +378,17 @@ function MessageRow({
 						</time>
 					</MessageHeader>
 				)}
+				{!assistant && message.deliveryMode !== null ? (
+					<DeliveryModeBadge mode={message.deliveryMode} />
+				) : null}
 				{/* Steps come first: they explain the answer rather than trailing it. */}
-				{assistant && message.durableEntryId !== null ? (
+				{assistant && segment !== undefined ? (
 					<RunSteps
 						answerText={message.contentText}
-						entryId={message.durableEntryId}
+						entryId={message.durableEntryId ?? undefined}
 						markdown={markdown}
+						runId={message.runId ?? undefined}
+						segment={segment}
 						sessionId={sessionId}
 					/>
 				) : null}
@@ -423,6 +469,7 @@ function MessageRow({
 
 export function MessageList({
 	messages,
+	runSegments,
 	markdown = false,
 	liveRun,
 	now,
@@ -432,10 +479,12 @@ export function MessageList({
 	onLoadOlder,
 }: {
 	messages: readonly MessageSummary[];
+	/** Persisted run segments already merged across every loaded cursor page. */
+	runSegments: readonly RunSegmentSummary[];
 	markdown?: boolean;
 	/** Session the messages belong to, needed to expand a turn's steps. */
 	sessionId: string;
-	/** In-flight assistant turn, appended below the persisted transcript. */
+	/** In-flight assistant turn, interleaved at its own timeline anchor. */
 	liveRun?: LiveRunState | undefined;
 	/** Wall clock used for the live run's elapsed label. */
 	now: number;
@@ -456,17 +505,31 @@ export function MessageList({
 		loadingOlderRef.current = loadingOlder;
 	}, [loadingOlder]);
 
-	const count = messages.length + (liveRun === undefined ? 0 : 1);
+	const timeline = useMemo(
+		() => buildConversationTimeline({ liveRun, messages, runSegments }),
+		[liveRun, messages, runSegments],
+	);
 	// Assistant bubbles that appeared while this run was working: narration, immediate
-	// stickers/files, and flushed stream lines. The live preview hides their text so the same
-	// line never renders twice inside the in-flight message.
+	// stickers/files, and flushed stream lines. Match by run/segment when the server gives us
+	// those ids; the timestamp fallback only covers a legacy run with no anchor at all.
 	const deliveredTexts =
 		liveRun === undefined
 			? []
 			: messages.flatMap((message) => {
 					if (message.senderKind !== "assistant") return [];
-					const occurredAtMs = Date.parse(message.occurredAt);
-					if (!Number.isFinite(occurredAtMs) || occurredAtMs < liveRun.startedAtMs) return [];
+					if (liveRun.runId !== undefined && message.runId !== null) {
+						if (message.runId !== liveRun.runId) return [];
+						if (
+							liveRun.segmentIndex !== undefined &&
+							message.segmentIndex !== null &&
+							message.segmentIndex !== liveRun.segmentIndex
+						) {
+							return [];
+						}
+					} else {
+						const occurredAtMs = Date.parse(message.occurredAt);
+						if (!Number.isFinite(occurredAtMs) || occurredAtMs < liveRun.startedAtMs) return [];
+					}
 					const text = message.contentText.trim();
 					return text.length === 0 ? [] : [text];
 				});
@@ -475,11 +538,16 @@ export function MessageList({
 		// row under the reader pinned when an older page is prepended, and follows the live edge
 		// when content is appended or a streaming turn grows.
 		anchorTo: "end",
-		count,
-		estimateSize: (index) => (index === messages.length ? 140 : 76),
+		count: timeline.length,
+		estimateSize: (index) => {
+			const item = timeline[index];
+			if (item?.kind === "segment") return 96;
+			if (item?.kind === "live-run") return 140;
+			return 76;
+		},
 		followOnAppend: "auto",
 		gap: 10,
-		getItemKey: (index) => messages[index]?.id ?? `live-run:${liveRun?.startedAtMs ?? "none"}`,
+		getItemKey: (index) => timeline[index]?.key ?? `timeline-missing-${index}`,
 		getScrollElement: () => viewportRef.current,
 		overscan: 8,
 		paddingEnd: 14,
@@ -504,12 +572,14 @@ export function MessageList({
 			loadingOlderRef.current = true;
 			loadOlderRef.current();
 		}
-	}, [hasOlder, loadingOlder, messages.length]);
+	}, [hasOlder, loadingOlder, timeline.length]);
 
-	const empty = messages.length === 0 && liveRun === undefined;
+	const empty = timeline.length === 0;
 	const jumpToMessage = (targetId: string) => {
-		const index = messages.findIndex(
-			(item) => item.id === targetId || item.platformMessageId === targetId,
+		const index = timeline.findIndex(
+			(item) =>
+				item.kind === "message" &&
+				(item.message.id === targetId || item.message.platformMessageId === targetId),
 		);
 		if (index >= 0) {
 			virtualizer.scrollToIndex(index, { align: "center" });
@@ -537,7 +607,8 @@ export function MessageList({
 				) : (
 					<div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
 						{virtualizer.getVirtualItems().map((virtualItem) => {
-							const message = messages[virtualItem.index];
+							const item = timeline[virtualItem.index];
+							const previous = timeline[virtualItem.index - 1];
 							return (
 								<div
 									key={virtualItem.key}
@@ -546,25 +617,30 @@ export function MessageList({
 									className="absolute top-0 left-0 w-full"
 									style={{ transform: `translateY(${virtualItem.start}px)` }}
 								>
-									{message === undefined ? (
-										liveRun === undefined ? null : (
-											<LiveRunMessage
-												deliveredTexts={deliveredTexts}
-												markdown={markdown}
-												now={now}
-												run={liveRun}
-											/>
-										)
-									) : (
+									{item === undefined ? null : item.kind === "message" ? (
 										<MessageRow
 											grouped={
-												messages[virtualItem.index - 1] !== undefined &&
-												sameSender(messages[virtualItem.index - 1]!, message)
+												previous?.kind === "message" && sameSender(previous.message, item.message)
 											}
 											markdown={markdown}
-											message={message}
+											message={item.message}
 											onJumpToMessage={jumpToMessage}
+											segment={item.segment}
 											sessionId={sessionId}
+										/>
+									) : item.kind === "segment" ? (
+										<RunSegmentCard
+											liveRun={item.liveRun}
+											markdown={markdown}
+											now={now}
+											segment={item.segment}
+										/>
+									) : (
+										<LiveRunMessage
+											deliveredTexts={deliveredTexts}
+											markdown={markdown}
+											now={now}
+											run={item.run}
 										/>
 									)}
 								</div>
