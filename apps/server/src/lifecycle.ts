@@ -109,6 +109,11 @@ import {
 	createAdminOpsToolsExtension,
 } from "./services/admin-ops-tools.ts";
 import {
+	ADMIN_RUNTIME_TOOL_NAMES,
+	authorizeAdminRuntimeToolCall,
+	createAdminRuntimeToolsExtension,
+} from "./services/admin-runtime-tools.ts";
+import {
 	ADMIN_SETTINGS_TOOL_NAMES,
 	authorizeAdminSettingsToolCall,
 	createAdminSettingsToolsExtension,
@@ -216,6 +221,7 @@ function reservedModelToolNames(): readonly string[] {
 		...CODING_AGENT_TOOL_NAMES,
 		...WORKSPACE_TOOL_NAMES,
 		...ADMIN_OPS_TOOL_NAMES,
+		...ADMIN_RUNTIME_TOOL_NAMES,
 		...ADMIN_SETTINGS_TOOL_NAMES,
 		...CHAT_SELF_TUNE_TOOL_NAMES,
 	];
@@ -375,6 +381,7 @@ export class TsukaimaLifecycle {
 	private scheduleToolsExtension: DurableExtension | undefined;
 	private codingAgentToolsExtension: DurableExtension | undefined;
 	private adminOpsToolsExtension: DurableExtension | undefined;
+	private adminRuntimeToolsExtension: DurableExtension | undefined;
 	private adminSettingsToolsExtension: DurableExtension | undefined;
 	private chatSelfTuneToolsExtension: DurableExtension | undefined;
 
@@ -837,6 +844,7 @@ export class TsukaimaLifecycle {
 				return await createPiModelRuntime(port, ref);
 			},
 			repositoryRoot: config.repositoryRoot,
+			runtimeRestart: this.restartCoordinator,
 			sessionDirRoot: join(config.dataDir, "workspace-sessions"),
 			taskPrompt: async (input) =>
 				[
@@ -1079,6 +1087,20 @@ export class TsukaimaLifecycle {
 				return authorizeAdminOpsToolCall({ caller, toolName });
 			},
 			logger: this.runtimeLog,
+		});
+		this.adminRuntimeToolsExtension = createAdminRuntimeToolsExtension({
+			audit: (entry) => this.writeAudit(entry),
+			authorize: async (durableConversationId, toolName) => {
+				const caller = await resolveImCallerContext({
+					conversationId: durableConversationId,
+					database: this.domainDatabase,
+					overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
+					settings: this.pluginSettings,
+				});
+				return authorizeAdminRuntimeToolCall({ caller, toolName });
+			},
+			logger: this.runtimeLog,
+			restart: this.restartCoordinator,
 		});
 		this.adminSettingsToolsExtension = createAdminSettingsToolsExtension({
 			applyRuntimeSettings: (settings) => this.applyRuntimeSettings(settings),
@@ -2235,6 +2257,7 @@ export class TsukaimaLifecycle {
 			...(this.scheduleToolsExtension === undefined ? [] : [this.scheduleToolsExtension]),
 			...(this.codingAgentToolsExtension === undefined ? [] : [this.codingAgentToolsExtension]),
 			...(this.adminOpsToolsExtension === undefined ? [] : [this.adminOpsToolsExtension]),
+			...(this.adminRuntimeToolsExtension === undefined ? [] : [this.adminRuntimeToolsExtension]),
 			...(this.adminSettingsToolsExtension === undefined ? [] : [this.adminSettingsToolsExtension]),
 			...(this.chatSelfTuneToolsExtension === undefined ? [] : [this.chatSelfTuneToolsExtension]),
 		];
