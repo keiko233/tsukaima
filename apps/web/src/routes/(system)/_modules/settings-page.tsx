@@ -1,23 +1,27 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useId, useState } from "react";
 import {
 	NATIVE_DECISION_MODELS,
 	type ModelCatalogEntry,
 	type ModelSelection,
 	type ThinkingLevel,
 } from "@tsukaima/contracts";
-import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
 import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@tsukaima/ui/components/motion/select";
+	EditorialGroup,
+	EditorialSelect,
+	EditorialSelectContent,
+	EditorialSelectItem,
+	EditorialSelectTrigger,
+	EditorialSelectValue,
+	PreferenceRow,
+	SegmentedControl,
+} from "@tsukaima/ui";
+import { Moon, Sun } from "lucide-react";
 import { logLevels as LOG_LEVELS, orpc, type LogLevel } from "@/lib/api";
 import { applyLocale } from "@/lib/locale";
+import { applyTheme, type Theme } from "@/lib/theme";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
 import { getLocale, locales, toLocale, type Locale } from "@/paraglide/runtime";
@@ -39,6 +43,68 @@ const ACTIVE_SIDECHAT_MODEL = "__active__";
 const ACTIVE_MODEL = "__active_model__";
 const DEFAULT_THINKING = "__default_thinking__";
 
+function currentTheme(): Theme {
+	if (typeof document === "undefined") return "light";
+	return document.documentElement.classList.contains("dark") ? "dark" : "light";
+}
+
+function useTheme(): [Theme, (theme: Theme) => void] {
+	const [theme, setTheme] = useState<Theme>(currentTheme);
+	// The app rail owns the theme class; follow it so this control never goes stale.
+	useEffect(() => {
+		const observer = new MutationObserver(() => setTheme(currentTheme()));
+		observer.observe(document.documentElement, { attributeFilter: ["class"], attributes: true });
+		return () => observer.disconnect();
+	}, []);
+	const change = (next: Theme) => {
+		setTheme(next);
+		applyTheme(next);
+	};
+	return [theme, change];
+}
+
+function SelectRow({
+	children,
+	disabled,
+	hint,
+	label,
+	onValueChange,
+	value,
+}: {
+	children: React.ReactNode;
+	disabled?: boolean;
+	hint?: string;
+	label: string;
+	onValueChange: (value: string) => void;
+	value: string;
+}) {
+	const id = useId();
+	const hintId = hint === undefined ? undefined : `${id}-hint`;
+	return (
+		<PreferenceRow
+			label={label}
+			htmlFor={id}
+			{...(hint === undefined ? {} : { hint })}
+			{...(hintId === undefined ? {} : { hintId })}
+		>
+			<EditorialSelect
+				value={value}
+				onValueChange={onValueChange}
+				{...(disabled === undefined ? {} : { disabled })}
+			>
+				<EditorialSelectTrigger
+					id={id}
+					className="w-full"
+					{...(hintId === undefined ? {} : { "aria-describedby": hintId })}
+				>
+					<EditorialSelectValue />
+				</EditorialSelectTrigger>
+				<EditorialSelectContent>{children}</EditorialSelectContent>
+			</EditorialSelect>
+		</PreferenceRow>
+	);
+}
+
 function ModelDefaultSelect({
 	disabled,
 	label,
@@ -57,41 +123,37 @@ function ModelDefaultSelect({
 		value !== undefined &&
 		!models.some((model) => model.id === value.modelId && model.providerId === value.providerId);
 	return (
-		<div className="space-y-1.5">
-			<div className="px-1 text-[11.5px] font-medium text-foreground">{label}</div>
-			<Select
-				value={selected}
-				disabled={disabled}
-				onValueChange={(next) => {
-					if (next === ACTIVE_MODEL) {
-						onChange(null);
-						return;
-					}
-					const parsed = parseModelSelectionKey(next);
-					if (parsed !== undefined) onChange(parsed);
-				}}
-			>
-				<SelectTrigger className="w-full">
-					<SelectValue />
-				</SelectTrigger>
-				<SelectContent>
-					<SelectItem value={ACTIVE_MODEL}>{m.settings_model_active()}</SelectItem>
-					{models.map((model) => (
-						<SelectItem
-							key={`${model.providerId}:${model.id}`}
-							value={modelSelectionKey({ modelId: model.id, providerId: model.providerId })}
-						>
-							{modelOptionLabel(model)}
-						</SelectItem>
-					))}
-					{missing && value !== undefined ? (
-						<SelectItem value={modelSelectionKey(value)}>
-							{value.modelId} · {m.settings_model_unavailable()}
-						</SelectItem>
-					) : null}
-				</SelectContent>
-			</Select>
-		</div>
+		<SelectRow
+			disabled={disabled}
+			label={label}
+			value={selected}
+			onValueChange={(next) => {
+				if (next === ACTIVE_MODEL) {
+					onChange(null);
+					return;
+				}
+				const parsed = parseModelSelectionKey(next);
+				if (parsed !== undefined) onChange(parsed);
+			}}
+		>
+			<EditorialSelectItem value={ACTIVE_MODEL}>{m.settings_model_active()}</EditorialSelectItem>
+			{models.map((model) => (
+				<EditorialSelectItem
+					key={`${model.providerId}:${model.id}`}
+					value={modelSelectionKey({ modelId: model.id, providerId: model.providerId })}
+				>
+					{modelOptionLabel(model)}
+				</EditorialSelectItem>
+			))}
+			{missing && value !== undefined ? (
+				<EditorialSelectItem
+					value={modelSelectionKey(value)}
+					label={`${value.modelId} · ${m.settings_model_unavailable()}`}
+				>
+					{value.modelId} · {m.settings_model_unavailable()}
+				</EditorialSelectItem>
+			) : null}
+		</SelectRow>
 	);
 }
 
@@ -107,32 +169,25 @@ function ThinkingDefaultSelect({
 	value: ThinkingLevel | undefined;
 }) {
 	return (
-		<div className="space-y-1.5">
-			<div className="px-1 text-[11.5px] font-medium text-foreground">{label}</div>
-			<Select
-				value={value ?? DEFAULT_THINKING}
-				disabled={disabled}
-				onValueChange={(next) => {
-					if (next === DEFAULT_THINKING) {
-						onChange(null);
-						return;
-					}
-					onChange(next as ThinkingLevel);
-				}}
-			>
-				<SelectTrigger className="w-full">
-					<SelectValue />
-				</SelectTrigger>
-				<SelectContent>
-					<SelectItem value={DEFAULT_THINKING}>{m.effort_default()}</SelectItem>
-					{THINKING_LEVELS.map((level) => (
-						<SelectItem key={level} value={level}>
-							{thinkingLevelLabel(level)}
-						</SelectItem>
-					))}
-				</SelectContent>
-			</Select>
-		</div>
+		<SelectRow
+			disabled={disabled}
+			label={label}
+			value={value ?? DEFAULT_THINKING}
+			onValueChange={(next) => {
+				if (next === DEFAULT_THINKING) {
+					onChange(null);
+					return;
+				}
+				onChange(next as ThinkingLevel);
+			}}
+		>
+			<EditorialSelectItem value={DEFAULT_THINKING}>{m.effort_default()}</EditorialSelectItem>
+			{THINKING_LEVELS.map((level) => (
+				<EditorialSelectItem key={level} value={level}>
+					{thinkingLevelLabel(level)}
+				</EditorialSelectItem>
+			))}
+		</SelectRow>
 	);
 }
 
@@ -151,9 +206,17 @@ export function SettingsPage() {
 		}),
 	);
 	const [locale, setLocaleState] = useState<Locale>(() => getLocale());
+	const [theme, setTheme] = useTheme();
+	const appearanceHintId = useId();
 
 	if (settingsQuery.isError) {
-		return <Card className="p-4">{settingsQuery.error.message}</Card>;
+		return (
+			<SystemPage description={m.settings_general_description()} title={m.settings_tab_general()}>
+				<p role="alert" className="text-sm text-destructive">
+					{settingsQuery.error.message}
+				</p>
+			</SystemPage>
+		);
 	}
 
 	const settings = settingsQuery.data;
@@ -185,186 +248,161 @@ export function SettingsPage() {
 
 	return (
 		<SystemPage description={m.settings_general_description()} title={m.settings_tab_general()}>
-			<div className="space-y-3">
-				<Card size="compact">
-					<CardHeader>
-						<CardTitle as="h2">{m.settings_interface_title()}</CardTitle>
-					</CardHeader>
-					<CardContent className="space-y-2">
-						<div className="space-y-1.5">
-							<div className="px-1 text-[11.5px] font-medium text-foreground">
-								{m.settings_language_label()}
-							</div>
-							<Select value={locale} onValueChange={changeLocale}>
-								<SelectTrigger className="w-full">
-									<span className="sr-only">{m.settings_language_label()}: </span>
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									{locales.map((value) => (
-										<SelectItem key={value} value={value}>
-											{LOCALE_LABELS[value]}
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						</div>
-						<p className="text-[11px] text-muted-foreground">{m.settings_language_hint()}</p>
-					</CardContent>
-				</Card>
-				<Card size="compact">
-					<CardHeader>
-						<CardTitle as="h2">{m.settings_title()}</CardTitle>
-					</CardHeader>
-					<CardContent className="space-y-3">
-						<div className="space-y-1.5">
-							<div className="px-1 text-[11.5px] font-medium text-foreground">
-								{m.settings_model_defaults_title()}
-							</div>
-							<p className="text-[11px] leading-4 text-muted-foreground">
-								{m.settings_model_defaults_description()}
-							</p>
-						</div>
-						<div className="grid gap-3 sm:grid-cols-2">
-							<ModelDefaultSelect
+			<div className="space-y-7">
+				<EditorialGroup title={m.settings_interface_title()}>
+					<PreferenceRow
+						label={m.settings_appearance_label()}
+						hint={m.settings_appearance_hint()}
+						hintId={appearanceHintId}
+					>
+						<SegmentedControl
+							size="sm"
+							value={theme}
+							onValueChange={setTheme}
+							aria-label={m.settings_appearance_label()}
+							aria-describedby={appearanceHintId}
+							options={[
+								{ value: "light", label: <Sun aria-hidden="true" className="size-3.5" /> },
+								{ value: "dark", label: <Moon aria-hidden="true" className="size-3.5" /> },
+							]}
+						/>
+					</PreferenceRow>
+					<SelectRow
+						label={m.settings_language_label()}
+						hint={m.settings_language_hint()}
+						value={locale}
+						onValueChange={changeLocale}
+					>
+						{locales.map((value) => (
+							<EditorialSelectItem key={value} value={value}>
+								{LOCALE_LABELS[value]}
+							</EditorialSelectItem>
+						))}
+					</SelectRow>
+				</EditorialGroup>
+				<EditorialGroup
+					title={m.settings_title()}
+					description={m.settings_model_defaults_description()}
+				>
+					<ModelDefaultSelect
+						disabled={updateSettings.isPending}
+						label={m.settings_chat_model_label()}
+						models={availableModels}
+						onChange={(value) => updateSettings.mutate({ chatModel: value })}
+						value={settings?.chatModel}
+					/>
+					<ThinkingDefaultSelect
+						disabled={updateSettings.isPending}
+						label={m.settings_chat_effort_label()}
+						onChange={(value) => updateSettings.mutate({ chatThinking: value })}
+						value={settings?.chatThinking}
+					/>
+					<ModelDefaultSelect
+						disabled={updateSettings.isPending}
+						label={m.settings_workspace_model_label()}
+						models={availableModels}
+						onChange={(value) => updateSettings.mutate({ workspaceModel: value })}
+						value={settings?.workspaceModel}
+					/>
+					<ThinkingDefaultSelect
+						disabled={updateSettings.isPending}
+						label={m.settings_workspace_effort_label()}
+						onChange={(value) => updateSettings.mutate({ workspaceThinking: value })}
+						value={settings?.workspaceThinking}
+					/>
+					{availableModels.length === 0 ? (
+						<p className="border-b border-border/70 py-3 text-xs text-muted-foreground">
+							{m.settings_model_defaults_empty()}
+						</p>
+					) : null}
+					<SelectRow
+						label={m.settings_log_level_label()}
+						value={settings?.logLevel ?? "info"}
+						onValueChange={(value) => updateSettings.mutate({ logLevel: value as LogLevel })}
+					>
+						{LOG_LEVELS.map((level) => (
+							<EditorialSelectItem key={level} value={level}>
+								{level}
+							</EditorialSelectItem>
+						))}
+					</SelectRow>
+					{classifierFields.map(({ key, label, fallback }) => {
+						const configured = settings?.[key];
+						const missing =
+							configured !== undefined &&
+							!models.some((model) => model.id === configured) &&
+							!NATIVE_DECISION_MODELS.some((model) => model.id === configured);
+						return (
+							<SelectRow
+								key={key}
 								disabled={updateSettings.isPending}
-								label={m.settings_chat_model_label()}
-								models={availableModels}
-								onChange={(value) => updateSettings.mutate({ chatModel: value })}
-								value={settings?.chatModel}
-							/>
-							<ThinkingDefaultSelect
-								disabled={updateSettings.isPending}
-								label={m.settings_chat_effort_label()}
-								onChange={(value) => updateSettings.mutate({ chatThinking: value })}
-								value={settings?.chatThinking}
-							/>
-							<ModelDefaultSelect
-								disabled={updateSettings.isPending}
-								label={m.settings_workspace_model_label()}
-								models={availableModels}
-								onChange={(value) => updateSettings.mutate({ workspaceModel: value })}
-								value={settings?.workspaceModel}
-							/>
-							<ThinkingDefaultSelect
-								disabled={updateSettings.isPending}
-								label={m.settings_workspace_effort_label()}
-								onChange={(value) => updateSettings.mutate({ workspaceThinking: value })}
-								value={settings?.workspaceThinking}
-							/>
-						</div>
-						{availableModels.length === 0 ? (
-							<p className="text-[11px] text-muted-foreground">
-								{m.settings_model_defaults_empty()}
-							</p>
-						) : null}
-						<div className="px-1 text-[11.5px] font-medium text-foreground">
-							{m.settings_log_level_label()}
-						</div>
-						<Select
-							value={settings?.logLevel ?? "info"}
-							onValueChange={(value) => updateSettings.mutate({ logLevel: value as LogLevel })}
-						>
-							<SelectTrigger className="w-full">
-								<SelectValue placeholder={m.settings_log_level_label()} />
-							</SelectTrigger>
-							<SelectContent>
-								{LOG_LEVELS.map((level) => (
-									<SelectItem key={level} value={level}>
-										{level}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
-						{classifierFields.map(({ key, label, fallback }) => {
-							const configured = settings?.[key];
-							const missing =
-								configured !== undefined &&
-								!models.some((model) => model.id === configured) &&
-								!NATIVE_DECISION_MODELS.some((model) => model.id === configured);
-							return (
-								<div key={key} className="space-y-1.5">
-									<div className="px-1 text-[11.5px] font-medium text-foreground">{label}</div>
-									<Select
-										value={configured ?? ACTIVE_SIDECHAT_MODEL}
-										disabled={updateSettings.isPending}
-										onValueChange={(value) => {
-											const next = value === ACTIVE_SIDECHAT_MODEL ? null : value;
-											if ((next ?? undefined) === configured) return;
-											updateSettings.mutate({ [key]: next });
-										}}
-									>
-										<SelectTrigger className="w-full">
-											<span className="sr-only">{label}</span>
-											<SelectValue placeholder={label} />
-										</SelectTrigger>
-										<SelectContent>
-											<SelectItem value={ACTIVE_SIDECHAT_MODEL}>{fallback}</SelectItem>
-											{NATIVE_DECISION_MODELS.map((model) => (
-												<SelectItem key={model.id} value={model.id}>
-													{model.label} · {model.apiKeyEnv}
-												</SelectItem>
-											))}
-											{models.map((model) => (
-												<SelectItem key={model.id} value={model.id}>
-													{modelOptionLabel(model)}
-												</SelectItem>
-											))}
-											{missing && configured !== undefined ? (
-												<SelectItem value={configured}>
-													{configured} · {m.settings_sidechat_model_unavailable()}
-												</SelectItem>
-											) : null}
-										</SelectContent>
-									</Select>
-									<p className="text-[11px] text-muted-foreground">
-										{m.settings_sidechat_model_hint()}
-									</p>
-								</div>
-							);
-						})}
-						<div className="space-y-1.5">
-							<div className="px-1 text-[11.5px] font-medium text-foreground">
-								{m.settings_memory_model_label()}
-							</div>
-							<Select
-								value={memoryModelValue}
-								disabled={updateSettings.isPending}
+								label={label}
+								hint={m.settings_sidechat_model_hint()}
+								value={configured ?? ACTIVE_SIDECHAT_MODEL}
 								onValueChange={(value) => {
 									const next = value === ACTIVE_SIDECHAT_MODEL ? null : value;
-									if ((next ?? undefined) === configuredMemoryModel) return;
-									updateSettings.mutate({ memoryModelId: next });
+									if ((next ?? undefined) === configured) return;
+									updateSettings.mutate({ [key]: next });
 								}}
 							>
-								<SelectTrigger className="w-full">
-									<span className="sr-only">{m.settings_memory_model_label()}: </span>
-									<SelectValue placeholder={m.settings_memory_model_placeholder()} />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value={ACTIVE_SIDECHAT_MODEL}>
-										{m.settings_memory_model_active()}
-									</SelectItem>
-									{availableModels.map((model) => (
-										<SelectItem key={model.id} value={model.id}>
-											{modelOptionLabel(model)}
-										</SelectItem>
-									))}
-									{configuredMemoryModel !== undefined && configuredMemoryModelMissing ? (
-										<SelectItem value={configuredMemoryModel}>
-											{configuredMemoryModel} · {m.settings_memory_model_unavailable()}
-										</SelectItem>
-									) : null}
-								</SelectContent>
-							</Select>
-							<p className="text-[11px] text-muted-foreground">{m.settings_memory_model_hint()}</p>
-							{availableModels.length === 0 ? (
-								<p className="text-[11px] text-muted-foreground">
-									{m.settings_memory_model_empty()}
-								</p>
-							) : null}
-						</div>
-					</CardContent>
-				</Card>
+								<EditorialSelectItem value={ACTIVE_SIDECHAT_MODEL}>{fallback}</EditorialSelectItem>
+								{NATIVE_DECISION_MODELS.map((model) => (
+									<EditorialSelectItem
+										key={model.id}
+										value={model.id}
+										label={`${model.label} · ${model.apiKeyEnv}`}
+									>
+										{model.label} · {model.apiKeyEnv}
+									</EditorialSelectItem>
+								))}
+								{models.map((model) => (
+									<EditorialSelectItem key={model.id} value={model.id}>
+										{modelOptionLabel(model)}
+									</EditorialSelectItem>
+								))}
+								{missing && configured !== undefined ? (
+									<EditorialSelectItem
+										value={configured}
+										label={`${configured} · ${m.settings_sidechat_model_unavailable()}`}
+									>
+										{configured} · {m.settings_sidechat_model_unavailable()}
+									</EditorialSelectItem>
+								) : null}
+							</SelectRow>
+						);
+					})}
+					<SelectRow
+						disabled={updateSettings.isPending}
+						label={m.settings_memory_model_label()}
+						hint={m.settings_memory_model_hint()}
+						value={memoryModelValue}
+						onValueChange={(value) => {
+							const next = value === ACTIVE_SIDECHAT_MODEL ? null : value;
+							if ((next ?? undefined) === configuredMemoryModel) return;
+							updateSettings.mutate({ memoryModelId: next });
+						}}
+					>
+						<EditorialSelectItem value={ACTIVE_SIDECHAT_MODEL}>
+							{m.settings_memory_model_active()}
+						</EditorialSelectItem>
+						{availableModels.map((model) => (
+							<EditorialSelectItem key={model.id} value={model.id}>
+								{modelOptionLabel(model)}
+							</EditorialSelectItem>
+						))}
+						{configuredMemoryModel !== undefined && configuredMemoryModelMissing ? (
+							<EditorialSelectItem
+								value={configuredMemoryModel}
+								label={`${configuredMemoryModel} · ${m.settings_memory_model_unavailable()}`}
+							>
+								{configuredMemoryModel} · {m.settings_memory_model_unavailable()}
+							</EditorialSelectItem>
+						) : null}
+					</SelectRow>
+					{availableModels.length === 0 ? (
+						<p className="py-3 text-xs text-muted-foreground">{m.settings_memory_model_empty()}</p>
+					) : null}
+				</EditorialGroup>
 			</div>
 		</SystemPage>
 	);

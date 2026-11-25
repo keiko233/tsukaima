@@ -9,44 +9,31 @@ import {
 	RefreshCw,
 	TriangleAlert,
 } from "lucide-react";
+import type { ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@tsukaima/ui/components/motion/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@tsukaima/ui/components/motion/card";
+import { EditorialGroup } from "@tsukaima/ui";
 import { orpc, type UpgradeCheck, type UpgradeRecord } from "@/lib/api";
 import { errorMessage, useToast } from "@/lib/toast";
 import { m } from "@/paraglide/messages";
-import { cn } from "@tsukaima/ui/lib/utils";
 import { InlineError } from "../../_modules/shell/primitives";
 
 function shortCommit(commit: string): string {
 	return commit.length > 12 ? commit.slice(0, 12) : commit;
 }
 
-function checkTone(status: UpgradeCheck["status"]): string {
-	switch (status) {
-		case "available":
-			return "border-primary/30 bg-primary/5";
-		case "diverged":
-			return "border-amber-500/30 bg-amber-500/5";
-		case "up_to_date":
-			return "border-emerald-500/25 bg-emerald-500/5";
-		default:
-			return "border-border bg-muted/40";
-	}
-}
-
 function recordTone(status: UpgradeRecord["status"]): string {
 	switch (status) {
 		case "completed":
-			return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+			return "text-success";
 		case "failed":
-			return "bg-destructive/10 text-destructive";
+			return "text-destructive";
 		case "restarting":
 		case "merging":
 		case "running":
-			return "bg-amber-500/10 text-amber-700 dark:text-amber-400";
+			return "text-warning";
 		default:
-			return "bg-muted text-muted-foreground";
+			return "text-muted-foreground";
 	}
 }
 
@@ -103,18 +90,18 @@ function reasonLabel(reason: string | undefined): string | undefined {
 
 function CheckSummary({ check }: { readonly check: UpgradeCheck }) {
 	return (
-		<div className={cn("rounded-lg border px-3 py-2.5", checkTone(check.status))}>
+		<div className="border-t border-border pt-3">
 			<div className="flex flex-wrap items-center gap-2">
 				<span className="text-[12px] font-semibold text-foreground">
 					{statusLabel(check.status)}
 				</span>
-				<span className="rounded bg-background/60 px-1.5 py-0.5 text-[9.5px] font-medium text-muted-foreground">
-					{check.mode === "none"
-						? statusLabel(check.status)
-						: check.mode === "fast_forward"
+				{check.mode !== "none" && (
+					<span className="text-xs text-muted-foreground">
+						{check.mode === "fast_forward"
 							? m.upgrade_mode_fast_forward()
 							: m.upgrade_mode_workspace()}
-				</span>
+					</span>
+				)}
 			</div>
 			<dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] sm:grid-cols-[auto_1fr_auto_1fr]">
 				<div className="contents">
@@ -127,23 +114,25 @@ function CheckSummary({ check }: { readonly check: UpgradeCheck }) {
 				</div>
 				<div className="contents">
 					<dt className="text-muted-foreground">{m.upgrade_current_version()}</dt>
-					<dd className="font-mono text-[10.5px] text-foreground">{check.currentVersion || "—"}</dd>
+					<dd className="font-mono tabular-nums text-[11px] text-foreground">
+						{check.currentVersion || "—"}
+					</dd>
 				</div>
 				<div className="contents">
 					<dt className="text-muted-foreground">{m.upgrade_target_version()}</dt>
-					<dd className="font-mono text-[10.5px] text-foreground">
+					<dd className="font-mono tabular-nums text-[11px] text-foreground">
 						{check.upstreamVersion || "—"}
 					</dd>
 				</div>
 				<div className="contents">
 					<dt className="text-muted-foreground">{m.upgrade_commit()}</dt>
-					<dd className="font-mono text-[10.5px] text-foreground">
+					<dd className="font-mono tabular-nums text-[11px] text-foreground">
 						{shortCommit(check.currentCommit) || "—"}
 					</dd>
 				</div>
 				<div className="contents">
 					<dt className="text-muted-foreground">{m.upgrade_upstream_commits()}</dt>
-					<dd className="flex items-center gap-1.5 font-medium text-foreground">
+					<dd className="flex items-center gap-1.5 font-mono tabular-nums text-foreground">
 						<ArrowUpFromLine className="size-3" /> {check.ahead}
 						<ArrowDownToLine className="size-3" /> {check.behind}
 					</dd>
@@ -158,7 +147,7 @@ function CheckSummary({ check }: { readonly check: UpgradeCheck }) {
 	);
 }
 
-export function UpgradeCenter() {
+export function UpgradeCenter({ fetchAction }: { fetchAction?: ReactNode } = {}) {
 	const toast = useToast();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
@@ -225,14 +214,11 @@ export function UpgradeCenter() {
 		finalize.isPending === false;
 
 	return (
-		<div className="space-y-3">
-			<Card size="compact">
-				<CardHeader>
-					<CardTitle as="h2">{m.upgrade_title()}</CardTitle>
-				</CardHeader>
-				<CardContent className="space-y-3">
-					<p className="text-[11px] leading-4 text-muted-foreground">{m.upgrade_description()}</p>
-					<div className="flex flex-wrap gap-1.5">
+		<div className="space-y-6">
+			<EditorialGroup title={m.upgrade_title()} description={m.upgrade_description()}>
+				<div className="space-y-3">
+					<div className="flex flex-wrap items-center gap-2">
+						{fetchAction}
 						<Button
 							leadingIcon={<RefreshCw className={checking ? "animate-spin" : undefined} />}
 							size="sm"
@@ -279,53 +265,43 @@ export function UpgradeCenter() {
 					) : null}
 					{check.data?.mode === "workspace" ? (
 						<p className="flex items-start gap-1.5 text-[11px] leading-4 text-muted-foreground">
-							<TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+							<TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" />
 							{m.upgrade_workspace_description()}
 						</p>
 					) : null}
 					{check.data?.dirty === true ? (
-						<p className="flex items-start gap-1.5 text-[11px] leading-4 text-amber-700 dark:text-amber-400">
+						<p className="flex items-start gap-1.5 text-[11px] leading-4 text-warning">
 							<TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
 							{m.upgrade_dirty_description()}
 						</p>
 					) : null}
-				</CardContent>
-			</Card>
+				</div>
+			</EditorialGroup>
 
-			<Card size="compact">
-				<CardHeader>
-					<CardTitle as="h2">{m.upgrade_status()}</CardTitle>
-				</CardHeader>
-				<CardContent className="space-y-3">
+			<EditorialGroup title={m.upgrade_status()}>
+				<div className="space-y-3">
 					{latest === null || latest === undefined ? (
 						<p className="text-[11px] text-muted-foreground">{m.upgrade_history_empty()}</p>
 					) : (
 						<>
 							<div className="flex flex-wrap items-center gap-2">
-								<span
-									className={cn(
-										"rounded px-1.5 py-0.5 text-[10px] font-medium",
-										recordTone(latest.status),
-									)}
-								>
+								<span className={recordTone(latest.status)}>
 									{recordStatusLabel(latest.status)}
 								</span>
-								<span className="text-[11px] text-muted-foreground">
+								<span className="font-mono tabular-nums text-xs text-muted-foreground">
 									{latest.currentVersion} → {latest.targetVersion}
 								</span>
-								<span className="rounded bg-muted px-1.5 py-0.5 text-[9.5px] text-muted-foreground">
+								<span className="text-xs text-muted-foreground">
 									{latest.mode === "fast_forward"
 										? m.upgrade_mode_fast_forward()
 										: m.upgrade_mode_workspace()}
 								</span>
 							</div>
-							<p className="font-mono text-[10.5px] text-muted-foreground">
+							<p className="font-mono tabular-nums text-[11px] text-muted-foreground">
 								{shortCommit(latest.currentCommit)} → {shortCommit(latest.targetCommit)}
 							</p>
 							{latest.error === null ? null : (
-								<p className="rounded-md border border-destructive/25 bg-destructive/5 px-2 py-1.5 text-[11px] text-destructive">
-									{latest.error}
-								</p>
+								<p className="text-xs text-destructive">{latest.error}</p>
 							)}
 							{latest.mode === "workspace" && latest.workspaceSessionId !== null ? (
 								<div className="flex flex-wrap items-center gap-2">
@@ -348,48 +324,66 @@ export function UpgradeCenter() {
 							) : null}
 						</>
 					)}
-				</CardContent>
-			</Card>
+				</div>
+			</EditorialGroup>
 
-			<Card size="compact">
-				<CardHeader>
-					<CardTitle as="h2">{m.upgrade_history()}</CardTitle>
-				</CardHeader>
-				<CardContent>
+			<EditorialGroup title={m.upgrade_history()}>
+				<div className="space-y-3">
 					{history.data === undefined || history.data.length === 0 ? (
 						<p className="text-[11px] text-muted-foreground">{m.upgrade_history_empty()}</p>
 					) : (
-						<ul className="divide-y divide-border/60">
-							{history.data.map((record) => (
-								<li
-									key={record.id}
-									className="flex flex-wrap items-center gap-2 py-1.5 text-[11px]"
-								>
-									<span
-										className={cn(
-											"rounded px-1.5 py-0.5 text-[9.5px] font-medium",
-											recordTone(record.status),
-										)}
-									>
-										{recordStatusLabel(record.status)}
-									</span>
-									<span className="font-mono text-[10.5px] text-foreground">
-										{record.currentVersion} → {record.targetVersion}
-									</span>
-									<span className="text-muted-foreground">
-										{record.mode === "fast_forward"
-											? m.upgrade_mode_fast_forward()
-											: m.upgrade_mode_workspace()}
-									</span>
-									<span className="ml-auto text-[10px] text-muted-foreground">
-										{new Date(record.createdAt).toLocaleString()}
-									</span>
-								</li>
-							))}
-						</ul>
+						<div className="overflow-x-auto">
+							<table
+								aria-label={m.upgrade_history()}
+								className="w-full whitespace-nowrap text-start text-xs"
+							>
+								<thead className="border-b border-border text-muted-foreground">
+									<tr>
+										<th scope="col" className="py-2 pe-4 text-start font-medium">
+											{m.request_status()}
+										</th>
+										<th scope="col" className="py-2 pe-4 text-start font-medium">
+											{m.repository_version()}
+										</th>
+										<th scope="col" className="py-2 pe-4 text-start font-medium">
+											{m.upgrade_commit()}
+										</th>
+										<th scope="col" className="py-2 pe-4 text-start font-medium">
+											{m.upgrade_mode()}
+										</th>
+										<th scope="col" className="py-2 text-start font-medium">
+											{m.tasks_created()}
+										</th>
+									</tr>
+								</thead>
+								<tbody className="divide-y divide-border/70">
+									{history.data.map((record) => (
+										<tr key={record.id}>
+											<td className={`py-2 pe-4 ${recordTone(record.status)}`}>
+												{recordStatusLabel(record.status)}
+											</td>
+											<td className="py-2 pe-4 font-mono tabular-nums">
+												{record.currentVersion} → {record.targetVersion}
+											</td>
+											<td className="py-2 pe-4 font-mono tabular-nums">
+												{shortCommit(record.currentCommit)} → {shortCommit(record.targetCommit)}
+											</td>
+											<td className="py-2 pe-4 text-muted-foreground">
+												{record.mode === "fast_forward"
+													? m.upgrade_mode_fast_forward()
+													: m.upgrade_mode_workspace()}
+											</td>
+											<td className="py-2 font-mono tabular-nums text-muted-foreground">
+												{new Date(record.createdAt).toLocaleString()}
+											</td>
+										</tr>
+									))}
+								</tbody>
+							</table>
+						</div>
 					)}
-				</CardContent>
-			</Card>
+				</div>
+			</EditorialGroup>
 		</div>
 	);
 }
