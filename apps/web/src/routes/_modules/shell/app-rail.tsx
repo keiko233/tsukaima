@@ -124,7 +124,9 @@ function RailLink({
 
 /**
  * Primary navigation rail. Every destination is a route; utility destinations sit at the bottom
- * of the rail in a stable order so the rail can replace the old top bar outright.
+ * of the rail in a stable order so the rail can replace the old top bar outright. The rail owns
+ * its own scroll: when a short viewport cannot fit both groups, focusing a hidden destination
+ * scrolls the rail instead of the shell, which must stay fixed.
  */
 export function AppRail() {
 	const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -175,7 +177,7 @@ export function AppRail() {
 		<>
 			<nav
 				aria-label="Tsukaima"
-				className="flex h-full w-[52px] shrink-0 flex-col items-center border-r border-border bg-sidebar py-2"
+				className="scrollbar-hide flex h-full w-[52px] shrink-0 flex-col items-center overflow-x-hidden overflow-y-auto border-r border-border bg-sidebar py-2"
 			>
 				<Link
 					to="/"
@@ -192,7 +194,7 @@ export function AppRail() {
 					/>
 				</Link>
 
-				<div className="mt-3 flex flex-col items-center gap-1">
+				<div className="scrollbar-hide mt-3 flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-x-hidden overflow-y-auto">
 					<RailLink
 						active={destinationActive("/", pathname)}
 						icon={MessageSquare}
@@ -233,7 +235,7 @@ export function AppRail() {
 					/>
 				</div>
 
-				<div className="mt-auto flex flex-col items-center gap-1">
+				<div className="mt-1 flex w-full shrink-0 flex-col items-center gap-1">
 					<RailLink
 						active={destinationActive("/plugins", pathname)}
 						icon={Puzzle}

@@ -166,7 +166,12 @@ export function AdminShell({ children }: { readonly children?: ReactNode }) {
 
 	return (
 		<ShellNavigationContext.Provider value={{ mobile, showContent, showSidebar }}>
-			<div className="flex h-dvh min-h-0 overflow-hidden bg-background text-foreground">
+			{/*
+			 * `overflow-clip` rather than `overflow-hidden`: hidden still makes this a scroll
+			 * container, so focus or `scrollIntoView` on a child that does not fit (the rail on a
+			 * short viewport) can scroll the whole shell off-screen. Only the panes may scroll.
+			 */}
+			<div className="flex h-dvh min-h-0 overflow-clip bg-background text-foreground">
 				<AppRail />
 				<div className="flex min-h-0 min-w-0 flex-1">
 					{hasSidebar ? (
