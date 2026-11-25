@@ -31,6 +31,7 @@ import { previewText, type Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 import type { ConversationPacingTracker } from "./conversation-pacing.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
+import type { ConversationRunService } from "./conversation-runs.ts";
 import type { HookBus } from "./hook-bus.ts";
 import type { FollowUpIntentStore } from "./follow-up-intents.ts";
 import type { ReplyExpectation, ReplyExpectationStore } from "./reply-expectations.ts";
@@ -346,6 +347,7 @@ export interface ReplyDispatcherOptions {
 	readonly now?: () => number;
 	readonly pacing?: ConversationPacingTracker;
 	readonly policy?: ConversationPolicyService;
+	readonly runs?: (() => ConversationRunService | undefined) | undefined;
 	/** Test seams for deterministic pacing. */
 	readonly random?: () => number;
 	readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -414,6 +416,7 @@ export class ReplyDispatcher {
 	readonly #splitMaxChars: number;
 	readonly #policy: ConversationPolicyService | undefined;
 	readonly #pacing: ConversationPacingTracker | undefined;
+	readonly #runs: ReplyDispatcherOptions["runs"];
 	readonly #random: () => number;
 	readonly #sleep: (ms: number, signal: AbortSignal) => Promise<void>;
 	readonly #lock: ConversationExecutionLock | undefined;
@@ -455,6 +458,7 @@ export class ReplyDispatcher {
 		this.#now = options.now ?? Date.now;
 		this.#policy = options.policy;
 		this.#pacing = options.pacing;
+		this.#runs = options.runs;
 		this.#random = options.random ?? Math.random;
 		this.#lock = options.lock;
 		this.#sleep =
@@ -744,6 +748,12 @@ export class ReplyDispatcher {
 				: undefined;
 		const now = new Date().toISOString();
 		const id = randomUUID();
+		const runs = this.#runs?.();
+		const anchor = await runs?.anchorForMessage({
+			conversationId: session.sessionId,
+			createIfMissing: true,
+		});
+		const seq = (await runs?.allocateSeq(session.sessionId)) ?? 0;
 		const inserted = await database
 			.insert(messages)
 			.values({
@@ -758,6 +768,8 @@ export class ReplyDispatcher {
 				kind: external ? (channelKind ?? "plugin") : chatKind,
 				occurredAt: now,
 				partsJson: JSON.stringify(prepared.parts),
+				...(anchor === undefined ? {} : { runId: anchor.runId, segmentIndex: anchor.segmentIndex }),
+				seq,
 				senderDisplayName: "Tsukaima",
 				senderExternalId: "tsukaima",
 				updatedAt: now,
@@ -947,6 +959,9 @@ export class ReplyDispatcher {
 				: undefined;
 		const now = new Date().toISOString();
 		const id = randomUUID();
+		const runs = this.#runs?.();
+		const anchor = await runs?.activeAnchor(session.sessionId);
+		const seq = (await runs?.allocateSeq(session.sessionId)) ?? 0;
 		const inserted = await database
 			.insert(messages)
 			.values({
@@ -961,6 +976,8 @@ export class ReplyDispatcher {
 				kind: external ? (channelKind ?? "plugin") : chatKind,
 				occurredAt: now,
 				partsJson: JSON.stringify(prepared.parts),
+				...(anchor === undefined ? {} : { runId: anchor.runId, segmentIndex: anchor.segmentIndex }),
+				seq,
 				senderDisplayName: "Tsukaima",
 				senderExternalId: "tsukaima",
 				updatedAt: now,
@@ -968,7 +985,17 @@ export class ReplyDispatcher {
 			.onConflictDoNothing()
 			.returning({ id: messages.id });
 		if (inserted.length === 0) return { deliveryStatus: "skipped", reason: "duplicate" };
-		if (!external) return { deliveryStatus: "sent", text: prepared.text };
+		if (!external) {
+			this.#emitAfterReply({
+				channelId: null,
+				chatObjectId: session.chatId,
+				deliveryStatus: "sent",
+				entryId: reply.interjectId,
+				sessionId: session.sessionId,
+				text: prepared.text,
+			});
+			return { deliveryStatus: "sent", text: prepared.text };
+		}
 		if (session.channelId === null || session.platformConversationId === null) {
 			const deliveryStatus = await this.#fail(
 				database,
@@ -977,6 +1004,14 @@ export class ReplyDispatcher {
 				"External chat has no destination",
 				{ channelId: session.channelId, platformConversationId: session.platformConversationId },
 			);
+			this.#emitAfterReply({
+				channelId: session.channelId,
+				chatObjectId: session.chatId,
+				deliveryStatus,
+				entryId: reply.interjectId,
+				sessionId: session.sessionId,
+				text: prepared.text,
+			});
 			return { deliveryStatus, text: prepared.text };
 		}
 		const deliveryStatus = await this.#deliverNow(
@@ -997,6 +1032,14 @@ export class ReplyDispatcher {
 			session.channelId,
 			session.platformConversationId,
 		);
+		this.#emitAfterReply({
+			channelId: session.channelId,
+			chatObjectId: session.chatId,
+			deliveryStatus,
+			entryId: reply.interjectId,
+			sessionId: session.sessionId,
+			text: prepared.text,
+		});
 		return { deliveryStatus, text: prepared.text };
 	}
 
@@ -1151,6 +1194,12 @@ export class ReplyDispatcher {
 			return { deliveryStatus: "skipped", reason: "no_domain_session" };
 		}
 
+		const runs = this.#runs?.();
+		const anchor = await runs?.anchorForMessage({
+			conversationId: session.sessionId,
+			createIfMissing: true,
+		});
+		const seq = (await runs?.allocateSeq(session.sessionId)) ?? 0;
 		this.#logger.debug("handling assistant answer", {
 			activityId: answer.activityId,
 			chatKind: session.chatKind,
@@ -1204,6 +1253,8 @@ export class ReplyDispatcher {
 				ingestedAt: now,
 				kind: "reply-lurk",
 				occurredAt: now,
+				...(anchor === undefined ? {} : { runId: anchor.runId, segmentIndex: anchor.segmentIndex }),
+				seq,
 				senderDisplayName: "Tsukaima",
 				senderExternalId: "tsukaima",
 				updatedAt: now,
@@ -1229,6 +1280,7 @@ export class ReplyDispatcher {
 			// never replays it.
 			await this.#settleIntent(database, session.sessionId, answer.entryId);
 			await this.#settleExpectation(answer, session.sessionId, "suppressed", "lurk");
+			await this.#settleRun(session.sessionId, "suppressed", undefined, anchor);
 			return { deliveryStatus: "suppressed", reason: "lurk", text: lurk.text };
 		}
 
@@ -1240,6 +1292,7 @@ export class ReplyDispatcher {
 			});
 			await this.#settleIntent(database, session.sessionId, answer.entryId);
 			await this.#settleExpectation(answer, session.sessionId, "suppressed", "already_shown");
+			await this.#settleRun(session.sessionId, "suppressed", undefined, anchor);
 			return { deliveryStatus: "suppressed", reason: "already_shown", text: stripped.text };
 		}
 		const answerText = stripped.text;
@@ -1254,6 +1307,7 @@ export class ReplyDispatcher {
 			});
 			await this.#settleIntent(database, session.sessionId, answer.entryId);
 			await this.#settleExpectation(answer, session.sessionId, "suppressed", "already_shown");
+			await this.#settleRun(session.sessionId, "suppressed", undefined, anchor);
 			return { deliveryStatus: "suppressed", reason: "already_shown", text: answerText };
 		}
 		if (answer.truncated === true) {
@@ -1303,6 +1357,7 @@ export class ReplyDispatcher {
 					"suppressed",
 					"already_sent_via_tool",
 				);
+				await this.#settleRun(session.sessionId, "suppressed", undefined, anchor);
 				return {
 					deliveryStatus: "suppressed",
 					reason: "already_sent_via_tool",
@@ -1324,6 +1379,7 @@ export class ReplyDispatcher {
 			});
 			await this.#settleIntent(database, session.sessionId, answer.entryId);
 			await this.#settleExpectation(answer, session.sessionId, "settled", "empty_output");
+			await this.#settleRun(session.sessionId, "suppressed", undefined, anchor);
 			return { deliveryStatus: "skipped", reason: "empty_output" };
 		}
 		const text = prepared.text;
@@ -1368,6 +1424,10 @@ export class ReplyDispatcher {
 					kind,
 					occurredAt: now,
 					partsJson: JSON.stringify(parts),
+					...(anchor === undefined
+						? {}
+						: { runId: anchor.runId, segmentIndex: anchor.segmentIndex }),
+					seq,
 					senderDisplayName: "Tsukaima",
 					senderExternalId: "tsukaima",
 					updatedAt: now,
@@ -1381,6 +1441,7 @@ export class ReplyDispatcher {
 			});
 			await this.#settleIntent(database, session.sessionId, answer.entryId);
 			await this.#settleExpectation(answer, session.sessionId, "settled", "duplicate");
+			await this.#settleRun(session.sessionId, "suppressed", undefined, anchor);
 			return { deliveryStatus: "skipped", reason: "duplicate" };
 		}
 		await database
@@ -1431,6 +1492,7 @@ export class ReplyDispatcher {
 		// for a failed send: the row's `deliveryStatus` carries the truth.
 		await this.#settleIntent(database, session.sessionId, answer.entryId);
 		await this.#settleExpectation(answer, session.sessionId, "settled", deliveryStatus);
+		await this.#settleRun(session.sessionId, "completed", id, anchor);
 		this.#pacing?.recordReply(answer.conversationId);
 		this.#hooks.emitDetached("after.reply", {
 			channelId,
@@ -1441,6 +1503,30 @@ export class ReplyDispatcher {
 			text,
 		});
 		return { deliveryStatus, text };
+	}
+
+	async #settleRun(
+		sessionId: string,
+		status: "completed" | "suppressed",
+		finalMessageId?: string,
+		anchor?: { readonly runId: string; readonly segmentId: string },
+	): Promise<void> {
+		const runs = this.#runs?.();
+		if (runs === undefined) return;
+		try {
+			await runs.settleRun({
+				conversationId: sessionId,
+				...(anchor === undefined ? {} : { runId: anchor.runId, segmentId: anchor.segmentId }),
+				...(finalMessageId === undefined ? {} : { finalMessageId }),
+				status,
+			});
+		} catch (error) {
+			this.#logger.warn("run segment could not be settled", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionId,
+				status,
+			});
+		}
 	}
 
 	/**

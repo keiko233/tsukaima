@@ -76,4 +76,36 @@ describe("LiveRunTimeline", () => {
 			expect(step.output.length).toBeLessThanOrEqual(LIVE_RUN_TOOL_OUTPUT_MAX_CHARS);
 		}
 	});
+	test("groups model reasoning and tool calls into structured rounds", () => {
+		const timeline = new LiveRunTimeline(1_000);
+		const model = { modelId: "model-1", providerId: "provider-1" };
+		timeline.observe(snapshot({ attempt: 1, model, partialThinking: "inspect first" }), 1_100);
+		timeline.observe(
+			snapshot({
+				attempt: 1,
+				draftTools: [
+					{
+						argumentsText: '{"path":"README.md"}',
+						callId: "call-1",
+						toolName: "read",
+					},
+				],
+				model,
+				partialThinking: "inspect first",
+			}),
+			1_200,
+		);
+		timeline.observe(snapshot({ attempt: 1, model, turns: 1, tools: [tool("call-1")] }), 1_300);
+		timeline.observe(snapshot({ attempt: 1, model, settled: true, turns: 1 }), 1_400);
+
+		expect(timeline.rounds).toMatchObject([
+			{
+				model,
+				roundIndex: 0,
+				stopReason: "toolUse",
+				thinking: "inspect first",
+				toolCalls: [{ callId: "call-1", output: "short output", status: "done", toolName: "read" }],
+			},
+		]);
+	});
 });

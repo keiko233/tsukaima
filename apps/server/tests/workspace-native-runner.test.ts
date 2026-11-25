@@ -112,7 +112,7 @@ describe("workspace native Pi integration", () => {
 		if (database === undefined) throw new Error("Database not ready");
 
 		await lifecycle.sessionMessaging.sendAgentMessage({
-			deliveryMode: "queue",
+			deliveryMode: "steer",
 			sessionId: workspace.sessionId,
 			source: "webui",
 			text: "Read the fixture and report the value.",
@@ -122,6 +122,19 @@ describe("workspace native Pi integration", () => {
 		);
 		expect(answer.contentText).toBe("native workspace answer");
 		expect(answer.deliveryStatus).toBe("sent");
+		expect(answer.runId).not.toBeNull();
+		expect(answer.segmentIndex).toBe(0);
+		expect(answer.seq).toBeGreaterThan(0);
+		const segments = await lifecycle.conversationRuns.listSegmentsForConversation(
+			workspace.sessionId,
+		);
+		expect(segments).toHaveLength(1);
+		expect(segments[0]).toMatchObject({
+			finalMessageId: answer.id,
+			runId: answer.runId,
+			segmentIndex: 0,
+			status: "completed",
+		});
 
 		const [workspaceRow] = await database
 			.select()
@@ -373,14 +386,14 @@ describe("workspace native Pi integration", () => {
 		const database = lifecycle.domainDatabase;
 		if (database === undefined) throw new Error("Database not ready");
 		await lifecycle.sessionMessaging.sendAgentMessage({
-			deliveryMode: "queue",
+			deliveryMode: "steer",
 			messageId: "native-idempotent-message",
 			sessionId: workspace.sessionId,
 			source: "webui",
 			text: "Start the slow request.",
 		});
 		await lifecycle.sessionMessaging.sendAgentMessage({
-			deliveryMode: "queue",
+			deliveryMode: "steer",
 			messageId: "native-idempotent-message",
 			sessionId: workspace.sessionId,
 			source: "webui",

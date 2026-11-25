@@ -112,7 +112,7 @@ function thinkingLevel(value: unknown): ThinkingLevel | undefined {
 }
 
 function deliveryMode(value: unknown): MessageDeliveryMode {
-	return value === "interrupt" || value === "follow-up" || value === "queue" ? value : "queue";
+	return value === "interrupt" || value === "follow-up" || value === "steer" ? value : "steer";
 }
 
 function tool(input: {
@@ -379,11 +379,11 @@ export function createWorkspaceToolsExtension(options: WorkspaceToolsOptions): D
 	const send = tool({
 		deferred: false,
 		description:
-			"Send a message to a workspace session. queue inserts after the current loop step, interrupt cancels the current generation, and follow-up waits for the turn to settle.",
+			"Send a message to a workspace session. steer inserts after the current loop step, interrupt cancels the current generation, and follow-up waits for the turn to settle.",
 		name: "workspace_send",
 		parameters: {
 			properties: {
-				mode: { enum: ["queue", "interrupt", "follow-up"], type: "string" },
+				mode: { enum: ["steer", "interrupt", "follow-up"], type: "string" },
 				sessionId: { type: "string" },
 				text: { type: "string" },
 			},

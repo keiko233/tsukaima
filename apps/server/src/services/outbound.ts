@@ -27,6 +27,7 @@ import {
 import { previewText, type Logger } from "../logging.ts";
 import type { ChannelRegistry } from "./channel-registry.ts";
 import type { ConversationRouter } from "./conversation-router.ts";
+import type { ConversationRunService } from "./conversation-runs.ts";
 import type { HookBus } from "./hook-bus.ts";
 
 export interface OutboundServiceOptions {
@@ -49,6 +50,7 @@ export interface OutboundServiceOptions {
 		readonly text: string;
 	}) => void;
 	readonly router: () => ConversationRouter;
+	readonly runs?: (() => ConversationRunService | undefined) | undefined;
 	/** Run a send on the target conversation's outbound lane, behind pending replies. */
 	readonly runOnOutboundLane?: <T>(conversationId: string, task: () => Promise<T>) => Promise<T>;
 }
@@ -80,6 +82,7 @@ export class OutboundService {
 	readonly #onToolSend: OutboundServiceOptions["onToolSend"];
 	readonly #runOnOutboundLane: OutboundServiceOptions["runOnOutboundLane"];
 	readonly #router: () => ConversationRouter;
+	readonly #runs: OutboundServiceOptions["runs"];
 
 	constructor(options: OutboundServiceOptions) {
 		this.#audit = options.audit;
@@ -91,6 +94,7 @@ export class OutboundService {
 		this.#onToolSend = options.onToolSend;
 		this.#runOnOutboundLane = options.runOnOutboundLane;
 		this.#router = options.router;
+		this.#runs = options.runs;
 	}
 
 	/** Absent without a channel permission, so plugins cannot reach the outbound path unauthorised. */
@@ -171,6 +175,9 @@ export class OutboundService {
 		const now = new Date().toISOString();
 		const id = randomUUID();
 		const durableEntryId = `outbound:${id}`;
+		const runs = this.#runs?.();
+		const anchor = await runs?.activeAnchor(session.sessionId);
+		const seq = (await runs?.allocateSeq(session.sessionId)) ?? 0;
 		const text = messagePartsText(parts);
 		const chatText = parts
 			.filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
@@ -188,6 +195,8 @@ export class OutboundService {
 			kind: external ? (adapter?.kind ?? "plugin") : session.chatKind,
 			occurredAt: now,
 			partsJson: JSON.stringify(parts),
+			...(anchor === undefined ? {} : { runId: anchor.runId, segmentIndex: anchor.segmentIndex }),
+			seq,
 			senderDisplayName: "Tsukaima",
 			senderExternalId: "tsukaima",
 			updatedAt: now,
@@ -346,6 +355,9 @@ export class OutboundService {
 		const now = new Date().toISOString();
 		const id = randomUUID();
 		const text = messagePartsText(parts);
+		const runs = this.#runs?.();
+		const anchor = await runs?.activeAnchor(resolved.sessionId);
+		const seq = (await runs?.allocateSeq(resolved.sessionId)) ?? 0;
 		const chatText = parts
 			.filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
 			.map((part) => part.text)
@@ -361,6 +373,8 @@ export class OutboundService {
 			kind,
 			occurredAt: now,
 			partsJson: JSON.stringify(parts),
+			...(anchor === undefined ? {} : { runId: anchor.runId, segmentIndex: anchor.segmentIndex }),
+			seq,
 			senderDisplayName: "Tsukaima",
 			senderExternalId: "tsukaima",
 			updatedAt: now,
@@ -444,6 +458,9 @@ export class OutboundService {
 		const id = randomUUID();
 		const nativeType = input.nativeType ?? "notice:interaction";
 		const parts: MessagePart[] = [{ nativeType, summary: input.summary, type: "channel-native" }];
+		const runs = this.#runs?.();
+		const anchor = await runs?.activeAnchor(resolved.sessionId);
+		const seq = (await runs?.allocateSeq(resolved.sessionId)) ?? 0;
 		await database.insert(messages).values({
 			chatObjectId: resolved.chatObjectId,
 			contentText: input.summary,
@@ -455,6 +472,8 @@ export class OutboundService {
 			kind: "notice",
 			occurredAt: now,
 			partsJson: JSON.stringify(parts),
+			...(anchor === undefined ? {} : { runId: anchor.runId, segmentIndex: anchor.segmentIndex }),
+			seq,
 			senderDisplayName: "Tsukaima",
 			senderExternalId: "tsukaima",
 			updatedAt: now,

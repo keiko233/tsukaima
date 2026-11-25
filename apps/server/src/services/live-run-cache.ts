@@ -1,6 +1,15 @@
-import type { LiveRunPatch, LiveRunPhase, LiveRunState, RunStep } from "@tsukaima/contracts";
+import type {
+	LiveRunPatch,
+	LiveRunPhase,
+	LiveRunState,
+	RunRound,
+	RunSegmentStatus,
+	RunSegmentTriggerKind,
+	RunStep,
+} from "@tsukaima/contracts";
 import type { KeyvCache } from "@tsukaima/cache";
 import { extractLurkMarker, sanitizeOutboundMetaLeaks, type LiveRunSnapshot } from "@tsukaima/core";
+import type { ConversationRunAnchor, ConversationRunService } from "./conversation-runs.ts";
 import { LiveRunTimeline } from "./live-run-timeline.ts";
 
 /** An active run is readable across a browser reload and a short host restart. */
@@ -14,6 +23,18 @@ const STREAM_MAX_BYTES = 256 * 1024;
 const STATE_PREFIX = "run.state.";
 const FINAL_PREFIX = "run.final.";
 const CHANNEL = "run";
+
+export interface LiveRunCacheOptions {
+	readonly runs?: ConversationRunService | undefined;
+}
+
+export interface LiveRunSegmentAdvance {
+	readonly runId: string;
+	readonly segmentId: string;
+	readonly segmentIndex: number;
+	readonly seq: number;
+	readonly triggerKind: RunSegmentTriggerKind;
+}
 
 export interface LiveRunUpdate {
 	readonly patch: LiveRunPatch;
@@ -50,6 +71,35 @@ interface QueuedRecord {
 interface Hydration {
 	readonly queued: QueuedRecord[];
 	ready: Promise<void>;
+}
+
+function sameRounds(
+	a: readonly RunRound[] | undefined,
+	b: readonly RunRound[] | undefined,
+): boolean {
+	if (a === b) return true;
+	if (a === undefined || b === undefined) return false;
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+
+interface LiveRunAnchorFields {
+	readonly runId: string;
+	readonly segmentId: string;
+	readonly segmentIndex: number;
+	readonly seq: number;
+	readonly status: RunSegmentStatus;
+	readonly triggerKind: RunSegmentTriggerKind;
+}
+
+function anchorFields(anchor: ConversationRunAnchor): LiveRunAnchorFields {
+	return {
+		seq: anchor.seq,
+		runId: anchor.runId,
+		segmentId: anchor.segmentId,
+		segmentIndex: anchor.segmentIndex,
+		status: anchor.status,
+		triggerKind: anchor.triggerKind,
+	};
 }
 
 function phaseOf(
@@ -135,6 +185,13 @@ function buildPatch(previous: LiveRunState | undefined, next: LiveRunState): Liv
 	const patch: LiveRunPatch = { revision: next.revision ?? 0 };
 	if (previous === undefined) {
 		if (next.attempt !== undefined) patch.attempt = next.attempt;
+		if (next.runId !== undefined) patch.runId = next.runId;
+		if (next.segmentId !== undefined) patch.segmentId = next.segmentId;
+		if (next.segmentIndex !== undefined) patch.segmentIndex = next.segmentIndex;
+		if (next.seq !== undefined) patch.seq = next.seq;
+		if (next.status !== undefined) patch.status = next.status;
+		if (next.triggerKind !== undefined) patch.triggerKind = next.triggerKind;
+		patch.rounds = next.rounds ?? [];
 		patch.draftTools = next.draftTools ?? [];
 		patch.partialText = next.partialText ?? "";
 		patch.partialThinking = next.partialThinking ?? "";
@@ -150,6 +207,19 @@ function buildPatch(previous: LiveRunState | undefined, next: LiveRunState): Liv
 		return patch;
 	}
 	if (next.attempt !== undefined && next.attempt !== previous.attempt) patch.attempt = next.attempt;
+	if (next.runId !== undefined && next.runId !== previous.runId) patch.runId = next.runId;
+	if (next.segmentId !== undefined && next.segmentId !== previous.segmentId) {
+		patch.segmentId = next.segmentId;
+	}
+	if (next.segmentIndex !== undefined && next.segmentIndex !== previous.segmentIndex) {
+		patch.segmentIndex = next.segmentIndex;
+	}
+	if (next.seq !== undefined && next.seq !== previous.seq) patch.seq = next.seq;
+	if (next.status !== undefined && next.status !== previous.status) patch.status = next.status;
+	if (next.triggerKind !== undefined && next.triggerKind !== previous.triggerKind) {
+		patch.triggerKind = next.triggerKind;
+	}
+	if (!sameRounds(next.rounds, previous.rounds)) patch.rounds = next.rounds ?? [];
 	if (!sameDrafts(next.draftTools, previous.draftTools)) patch.draftTools = next.draftTools ?? [];
 	if (next.partialText !== previous.partialText) patch.partialText = next.partialText ?? "";
 	if (next.partialThinking !== previous.partialThinking) {
@@ -173,6 +243,7 @@ function patchHasChange(patch: LiveRunPatch): boolean {
 function hasProcess(state: LiveRunState): boolean {
 	return (
 		(state.steps?.length ?? 0) > 0 ||
+		(state.rounds?.length ?? 0) > 0 ||
 		(state.partialText?.length ?? 0) > 0 ||
 		(state.partialThinking?.length ?? 0) > 0 ||
 		(state.draftTools?.length ?? 0) > 0 ||
@@ -273,8 +344,16 @@ export class LiveRunCache {
 	readonly #hydrated = new Set<string>();
 	readonly #hydrations = new Map<string, Hydration>();
 
-	constructor(cache: KeyvCache) {
+	readonly #runs: ConversationRunService | undefined;
+	readonly #chains = new Map<string, Promise<unknown>>();
+	readonly #anchors = new Map<string, ConversationRunAnchor>();
+	/** Recent run ids per session whose live view ended, so a stale settled snapshot cannot revive them. */
+	readonly #finishedRunIds = new Map<string, string[]>();
+	readonly #roundSignatures = new Map<string, string>();
+
+	constructor(cache: KeyvCache, options: LiveRunCacheOptions = {}) {
 		this.#cache = cache;
+		this.#runs = options.runs;
 	}
 
 	/**
@@ -282,7 +361,11 @@ export class LiveRunCache {
 	 * settle is lost, while SQLite persistence only keeps the latest pending state/patch.
 	 */
 	record(sessionId: string, snapshot: LiveRunSnapshot): Promise<LiveRunUpdate | undefined> {
-		if (this.#hydrated.has(sessionId)) return this.#recordObserved(sessionId, snapshot);
+		if (this.#hydrated.has(sessionId)) {
+			return this.#runs === undefined
+				? this.#recordObserved(sessionId, snapshot)
+				: this.#enqueueObserved(sessionId, snapshot);
+		}
 		const hydration = this.#hydrationFor(sessionId);
 		return new Promise((resolve, reject) => {
 			hydration.queued.push({ reject, resolve, snapshot });
@@ -375,6 +458,127 @@ export class LiveRunCache {
 		await Promise.all([...sessionIds].map(async (sessionId) => await this.#drain(sessionId)));
 	}
 
+	/** Rounds accumulated for the live segment, for a steer or interrupt to freeze. */
+	currentRounds(sessionId: string): RunRound[] {
+		return this.#timelines.get(sessionId)?.rounds ?? [];
+	}
+
+	segmentAnchor(sessionId: string): ConversationRunAnchor | undefined {
+		return this.#anchors.get(sessionId);
+	}
+
+	/**
+	 * Reset the live timeline when a steer opens the run's next segment.
+	 *
+	 * The previous segment was frozen durably by the caller; this only pivots the live view, so
+	 * the client sees `steered` at the old anchor and `running` at the message's new anchor.
+	 */
+	async advanceSegment(
+		sessionId: string,
+		anchor: LiveRunSegmentAdvance,
+	): Promise<LiveRunUpdate | undefined> {
+		await this.#drain(sessionId);
+		await this.#flushRounds(sessionId);
+		this.#timelines.set(
+			sessionId,
+			new LiveRunTimeline(this.#last.get(sessionId)?.startedAtMs ?? Date.now()),
+		);
+		this.#runIds.set(sessionId, anchor.runId);
+		const nextAnchor: ConversationRunAnchor = { ...anchor, status: "running" };
+		this.#anchors.set(sessionId, nextAnchor);
+		this.#roundSignatures.delete(sessionId);
+		const previous = this.#last.get(sessionId);
+		if (previous === undefined) return undefined;
+		const next: LiveRunState = {
+			...previous,
+			attempt: undefined,
+			draftTools: [],
+			failure: undefined,
+			model: undefined,
+			partialText: undefined,
+			partialThinking: undefined,
+			phase: "queued",
+			retry: undefined,
+			revision: (previous.revision ?? 0) + 1,
+			rounds: [],
+			settled: false,
+			steps: [],
+			tools: [],
+			turns: 0,
+			...anchorFields(nextAnchor),
+		};
+		this.#last.set(sessionId, next);
+		this.#process.set(sessionId, next);
+		return await this.#commitState(sessionId, next);
+	}
+
+	/** Flush partial rounds and close the live view after an interrupt. */
+	async markInterrupted(
+		sessionId: string,
+		status: "interrupted" | "failed" = "interrupted",
+	): Promise<LiveRunUpdate | undefined> {
+		await this.#drain(sessionId);
+		const rounds = await this.#flushRounds(sessionId);
+		const anchor = this.#anchors.get(sessionId);
+		if (anchor !== undefined) this.#markFinished(sessionId, anchor.runId);
+		const previous = this.#last.get(sessionId);
+		this.#timelines.delete(sessionId);
+		this.#runIds.delete(sessionId);
+		this.#anchors.delete(sessionId);
+		this.#roundSignatures.delete(sessionId);
+		if (previous === undefined) return undefined;
+		const next: LiveRunState = {
+			...previous,
+			...(anchor === undefined ? {} : { ...anchorFields(anchor), status }),
+			phase: "settled",
+			rounds,
+			revision: (previous.revision ?? 0) + 1,
+			settled: true,
+		};
+		this.#last.set(sessionId, next);
+		this.#process.set(sessionId, next);
+		return await this.#commitState(sessionId, next);
+	}
+
+	/** Persist the live segment's current rounds when they changed. */
+	async #flushRounds(sessionId: string): Promise<RunRound[]> {
+		const timeline = this.#timelines.get(sessionId);
+		const anchor = this.#anchors.get(sessionId);
+		const rounds = timeline?.rounds ?? [];
+		if (timeline === undefined || anchor === undefined || this.#runs === undefined) return rounds;
+		const signature = JSON.stringify(rounds);
+		if (this.#roundSignatures.get(sessionId) === signature) return rounds;
+		this.#roundSignatures.set(sessionId, signature);
+		try {
+			await this.#runs.syncSegmentRounds(anchor.segmentId, rounds);
+		} catch {
+			// Live state must survive a storage hiccup; the next observation retries the write.
+			this.#roundSignatures.delete(sessionId);
+		}
+		return rounds;
+	}
+
+	#enqueueObserved(
+		sessionId: string,
+		snapshot: LiveRunSnapshot,
+	): Promise<LiveRunUpdate | undefined> {
+		const previous = this.#chains.get(sessionId) ?? Promise.resolve();
+		const task = previous
+			.catch(() => undefined)
+			.then(() => this.#recordObserved(sessionId, snapshot));
+		this.#chains.set(sessionId, task);
+		void task.finally(() => {
+			if (this.#chains.get(sessionId) === task) this.#chains.delete(sessionId);
+		});
+		return task;
+	}
+
+	#markFinished(sessionId: string, runId: string): void {
+		const finished = this.#finishedRunIds.get(sessionId) ?? [];
+		if (!finished.includes(runId)) finished.push(runId);
+		this.#finishedRunIds.set(sessionId, finished.slice(-8));
+	}
+
 	#stream(sessionId: string) {
 		return this.#cache.stream(`run.${sessionId}.events`, {
 			maxBytes: STREAM_MAX_BYTES,
@@ -399,7 +603,11 @@ export class LiveRunCache {
 				this.#hydrated.add(sessionId);
 				// A same-tick burst queues here, then observes in order before one flush.
 				for (const queued of hydration.queued.splice(0)) {
-					void this.#recordObserved(sessionId, queued.snapshot).then(queued.resolve, queued.reject);
+					const observed =
+						this.#runs === undefined
+							? this.#recordObserved(sessionId, queued.snapshot)
+							: this.#enqueueObserved(sessionId, queued.snapshot);
+					void observed.then(queued.resolve, queued.reject);
 				}
 			} catch (error) {
 				this.#hydrated.add(sessionId);
@@ -418,6 +626,12 @@ export class LiveRunCache {
 		const hydration = this.#hydrations.get(sessionId);
 		if (hydration !== undefined) await hydration.ready.catch(() => undefined);
 		for (;;) {
+			const chain = this.#chains.get(sessionId);
+			if (chain !== undefined) {
+				await chain.catch(() => undefined);
+				if (this.#chains.get(sessionId) === chain) this.#chains.delete(sessionId);
+				continue;
+			}
 			const active = this.#flushing.get(sessionId);
 			if (active !== undefined) {
 				await active.catch(() => undefined);
@@ -431,17 +645,54 @@ export class LiveRunCache {
 		}
 	}
 
-	#recordObserved(
+	async #recordObserved(
 		sessionId: string,
 		snapshot: LiveRunSnapshot,
 	): Promise<LiveRunUpdate | undefined> {
 		const previous = this.#last.get(sessionId);
 		const previousRunId = this.#runIds.get(sessionId);
+		if (
+			snapshot.runId !== undefined &&
+			this.#finishedRunIds.get(sessionId)?.includes(snapshot.runId) === true &&
+			this.#anchors.get(sessionId)?.runId !== snapshot.runId
+		) {
+			return undefined;
+		}
 		const newRun = startsNewRun(previous, previousRunId, snapshot);
+		const previousAnchor = this.#anchors.get(sessionId);
+		let anchor = previousAnchor;
+		if (
+			this.#runs !== undefined &&
+			(snapshot.runId !== undefined || anchor !== undefined) &&
+			(snapshot.runId === undefined || anchor?.runId === snapshot.runId)
+		) {
+			// Same durable run: keep its segment anchor, including a settled one, so a repeated
+			// settled snapshot cannot start a phantom continuation run.
+		} else if (this.#runs !== undefined && snapshot.runId !== undefined) {
+			if (previousAnchor !== undefined && previousAnchor.runId !== snapshot.runId) {
+				this.#markFinished(sessionId, previousAnchor.runId);
+			}
+			const ensured = await this.#runs
+				.ensureLiveRun({
+					conversationId: sessionId,
+					durableRunKey: snapshot.runId,
+				})
+				.catch(() => undefined);
+			if (ensured !== undefined) {
+				anchor = ensured;
+				this.#anchors.set(sessionId, ensured);
+				this.#roundSignatures.delete(sessionId);
+			}
+		}
+		const segmentChanged =
+			anchor !== undefined &&
+			previousAnchor !== undefined &&
+			previousAnchor.segmentId !== anchor.segmentId;
 		let timeline = this.#timelines.get(sessionId);
-		if (timeline === undefined || newRun) {
+		if (timeline === undefined || newRun || segmentChanged) {
 			timeline = new LiveRunTimeline(snapshot.startedAtMs);
 			this.#timelines.set(sessionId, timeline);
+			this.#roundSignatures.delete(sessionId);
 		}
 		if (newRun) {
 			this.#runIds.delete(sessionId);
@@ -457,7 +708,23 @@ export class LiveRunCache {
 		// Keep the first observation's wall clock for a run that a newer watcher continues.
 		const startedAtMs =
 			newRun || previous === undefined ? snapshot.startedAtMs : previous.startedAtMs;
+		const rounds = timeline.rounds;
+		if (this.#runs !== undefined) await this.#flushRounds(sessionId);
+		const settledStatus =
+			snapshot.failure === undefined
+				? "completed"
+				: /abort|interrupt|cancel/iu.test(snapshot.failure)
+					? "interrupted"
+					: "failed";
+		const anchorStatus =
+			anchor === undefined ? undefined : snapshot.settled ? settledStatus : anchor.status;
 		const base = {
+			...(anchor === undefined
+				? {}
+				: {
+						...anchorFields(anchor),
+						...(anchorStatus === undefined ? {} : { status: anchorStatus }),
+					}),
 			attempt: snapshot.attempt,
 			draftTools: plainDrafts(snapshot),
 			failure: snapshot.failure,
@@ -466,6 +733,7 @@ export class LiveRunCache {
 			partialThinking: partialThinking.length === 0 ? undefined : partialThinking,
 			phase: phaseOf(snapshot, snapshot.settled, partialThinking, partialText),
 			retry: snapshot.retry,
+			rounds,
 			settled: snapshot.settled,
 			startedAtMs,
 			sessionId,
@@ -487,6 +755,33 @@ export class LiveRunCache {
 		}
 		this.#last.set(sessionId, next);
 
+		if (
+			snapshot.settled &&
+			anchor !== undefined &&
+			this.#runs !== undefined &&
+			settledStatus !== "completed"
+		) {
+			// A clean settle still has an answer callback behind it: the reply dispatcher settles
+			// the segment with its final message id. Only a run that ended without an answer is
+			// terminal here.
+			await this.#runs
+				.settleRun({
+					conversationId: sessionId,
+					...(snapshot.failure === undefined ? {} : { failureDetail: snapshot.failure }),
+					rounds,
+					runId: anchor.runId,
+					segmentId: anchor.segmentId,
+					status: settledStatus,
+				})
+				.catch(() => undefined);
+			if (anchorStatus !== undefined) {
+				this.#anchors.set(sessionId, { ...anchor, status: anchorStatus });
+			}
+		}
+		return await this.#commitState(sessionId, next);
+	}
+
+	async #commitState(sessionId: string, next: LiveRunState): Promise<LiveRunUpdate | undefined> {
 		// The patch is always relative to the last persisted state. When a burst coalesces
 		// several observations, the latest patch therefore carries all of their changes.
 		const patch = buildPatch(this.#published.get(sessionId), next);
@@ -496,7 +791,7 @@ export class LiveRunCache {
 				this.#pending.delete(sessionId);
 				for (const waiter of pending.waiters.splice(0)) waiter.resolve(undefined);
 			}
-			return Promise.resolve(undefined);
+			return undefined;
 		}
 		const update: LiveRunUpdate = {
 			patch,

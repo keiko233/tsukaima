@@ -39,6 +39,7 @@ import type { AuditEntry } from "@tsukaima/sdk";
 import { previewText, type Logger } from "../logging.ts";
 import type { ConversationPacingTracker } from "./conversation-pacing.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
+import type { ConversationRunService } from "./conversation-runs.ts";
 import { loadMentionLabels } from "./mention-labels.ts";
 import { isValidTimeZone, localParts } from "./schedule-time.ts";
 import { detectQuietFeedback, isLowSubstanceReaction } from "./social-profile.ts";
@@ -94,6 +95,15 @@ export interface ConversationRouterOptions {
 		sessionId: string,
 		durableConversationId: string,
 	) => Promise<string | undefined>;
+	/** Called once the inbound row exists, before the durable turn is submitted. */
+	readonly onInboundPersisted?: (input: {
+		readonly chatObjectId: string;
+		readonly classification: "ambient" | "direct" | "soft";
+		readonly envelope: MessageEnvelope;
+		readonly sessionId: string;
+	}) => void;
+	/** Durable run lookup for timeline sequencing and busy delivery-mode labels. */
+	readonly runs?: (() => ConversationRunService | undefined) | undefined;
 	/** IANA time zone for daily session boundaries (defaults to the host's local time zone). */
 	readonly timeZone?: string;
 }
@@ -177,7 +187,9 @@ export class ConversationRouter {
 	readonly #onQuietFeedback: ConversationRouterOptions["onQuietFeedback"];
 	readonly #pacing: ConversationPacingTracker | undefined;
 	readonly #policy: ConversationPolicyService | undefined;
+	readonly #onInboundPersisted: ConversationRouterOptions["onInboundPersisted"];
 	readonly #promptContext: ConversationRouterOptions["promptContext"];
+	readonly #runs: ConversationRouterOptions["runs"];
 	readonly #timeZone: string;
 	readonly #ingesting = new Set<string>();
 	readonly #ignoredAuditAt = new Map<string, number>();
@@ -203,10 +215,12 @@ export class ConversationRouter {
 		this.#logger = options.logger;
 		this.#now = options.now ?? Date.now;
 		this.#onInboundTrigger = options.onInboundTrigger;
+		this.#onInboundPersisted = options.onInboundPersisted;
 		this.#onQuietFeedback = options.onQuietFeedback;
 		this.#pacing = options.pacing;
 		this.#policy = options.policy;
 		this.#promptContext = options.promptContext;
+		this.#runs = options.runs;
 		this.#timeZone = resolveRouterTimeZone(options.timeZone);
 	}
 
@@ -538,23 +552,7 @@ export class ConversationRouter {
 					cooldownMs,
 					durableConversationId: target.durableConversationId,
 				});
-				const injected = await this.#injectedPrompt(target.sessionId, target.durableConversationId);
-				await host.append({
-					classification: effectiveTrigger.classification,
-					collectOnly: cooldownMs > 0,
-					conversationId: target.durableConversationId,
-					envelope: hydratedMessage,
-					submittedAtMs: Date.now(),
-					turnContext: turnContextFor(effectiveTrigger, hydratedMessage, injected),
-				});
-				if (cooldownMs > 0) {
-					host.scheduleActivityFlushAfter(target.durableConversationId, cooldownMs);
-				}
-			}
-			await this.#persistInbound(database, {
-				classification: effectiveTrigger.classification,
-				envelope: hydratedMessage,
-				replyDecision: {
+				const replyDecision = {
 					cooldownMs,
 					gate: replyGate,
 					reason:
@@ -571,10 +569,78 @@ export class ConversationRouter {
 												? "recent activity escalation disabled"
 												: "recent activity escalation throttled"
 								: trigger.reason,
-				},
-				sender,
-				target,
-			});
+				};
+				// Persist before the durable append so the inbound row and its timeline position exist
+				// before the assistant run that answers it can write anything.
+				const runs = this.#runs?.();
+				const activeRun = await runs?.activeAnchor(target.sessionId);
+				let busy = activeRun !== undefined;
+				if (!busy) {
+					try {
+						busy = (await host.conversationActivity(target.durableConversationId))?.busy === true;
+					} catch {
+						busy = false;
+					}
+				}
+				await this.#persistInbound(database, {
+					busy,
+					classification: effectiveTrigger.classification,
+					envelope: hydratedMessage,
+					replyDecision,
+					runs,
+					sender,
+					target,
+				});
+				this.#onInboundPersisted?.({
+					chatObjectId: target.chatObjectId,
+					classification: effectiveTrigger.classification,
+					envelope: hydratedMessage,
+					sessionId: target.sessionId,
+				});
+				const injected = await this.#injectedPrompt(target.sessionId, target.durableConversationId);
+				await host.append({
+					classification: effectiveTrigger.classification,
+					collectOnly: cooldownMs > 0,
+					conversationId: target.durableConversationId,
+					envelope: hydratedMessage,
+					submittedAtMs: Date.now(),
+					turnContext: turnContextFor(effectiveTrigger, hydratedMessage, injected),
+				});
+				if (cooldownMs > 0) {
+					host.scheduleActivityFlushAfter(target.durableConversationId, cooldownMs);
+				}
+			} else {
+				await this.#persistInbound(database, {
+					busy: false,
+					classification: effectiveTrigger.classification,
+					envelope: hydratedMessage,
+					replyDecision: {
+						cooldownMs: 0,
+						gate: replyGate,
+						reason:
+							trigger.reason === "group context only" && recentlyActive && !recentActivity
+								? temporaryQuietActive || quietFeedback.quietRequested
+									? "temporary quiet mode active"
+									: botRatioHigh
+										? "recent bot share high"
+										: lowSubstanceReaction
+											? "low-substance reaction"
+											: escalation === "off"
+												? "recent activity escalation disabled"
+												: "recent activity escalation throttled"
+								: trigger.reason,
+					},
+					runs: this.#runs?.(),
+					sender,
+					target,
+				});
+				this.#onInboundPersisted?.({
+					chatObjectId: target.chatObjectId,
+					classification: effectiveTrigger.classification,
+					envelope: hydratedMessage,
+					sessionId: target.sessionId,
+				});
+			}
 			messageLog.info("channel message processed", {
 				chatObjectId: target.chatObjectId,
 				classification: effectiveTrigger.classification,
@@ -804,9 +870,11 @@ export class ConversationRouter {
 	async #persistInbound(
 		database: TsukaimaDatabase,
 		input: {
+			busy: boolean;
 			classification: "ambient" | "direct" | "soft";
 			envelope: MessageEnvelope;
 			replyDecision: InboundReplyDecision;
+			runs: ConversationRunService | undefined;
 			sender: { displayName: string; userId: string };
 			target: { chatObjectId: string; sessionId: string };
 		},
@@ -814,6 +882,7 @@ export class ConversationRouter {
 		const message = input.envelope;
 		const parts = message.parts;
 		const now = new Date().toISOString();
+		const seq = (await input.runs?.allocateSeq(input.target.sessionId)) ?? 0;
 		// Local clock only: outbound rows are stamped from `Date.now()` and both share this
 		// ordering key, so a remote platform timestamp here would reorder the transcript.
 		const occurredAt = timelineAt(now);
@@ -823,6 +892,7 @@ export class ConversationRouter {
 				chatObjectId: input.target.chatObjectId,
 				contentText: messageText(parts),
 				conversationId: input.target.sessionId,
+				deliveryMode: input.busy ? "steer" : null,
 				direction: "inbound",
 				id: randomUUID(),
 				ingestedAt: now,
@@ -836,6 +906,7 @@ export class ConversationRouter {
 					: { replyToMessageId: message.target.replyToEnvelopeId }),
 				senderDisplayName: input.sender.displayName,
 				senderExternalId: message.sender.platformId,
+				seq,
 				senderUserId: input.sender.userId,
 				triggerClassification: input.classification,
 				updatedAt: now,
@@ -947,6 +1018,7 @@ export class ConversationRouter {
 		}
 		const now = new Date().toISOString();
 		const occurredAt = timelineAt(now);
+		const seq = (await this.#runs?.()?.allocateSeq(target.sessionId)) ?? 0;
 		await database
 			.insert(messages)
 			.values({
@@ -962,6 +1034,7 @@ export class ConversationRouter {
 				platformMessageId: value.id,
 				rawRefJson: JSON.stringify(value),
 				senderDisplayName: sender?.displayName ?? displayName,
+				seq,
 				senderExternalId: actorId ?? "system",
 				...(sender === undefined ? {} : { senderUserId: sender.userId }),
 				updatedAt: now,
