@@ -313,6 +313,8 @@ export interface AppendConversationInput {
 	readonly conversationId: string;
 	readonly envelope: MessageEnvelope;
 	readonly forceSubmit?: boolean;
+	/** Submit a system turn on its own, leaving the collecting chat window untouched. */
+	readonly isolated?: boolean;
 	/** Stable submission request id; retries with the same id reuse the durable submission. */
 	readonly requestId?: string;
 	readonly submittedAtMs: number;
@@ -464,6 +466,12 @@ export interface DurableConversationHostOptions {
 	 * must never start without a durable expectation of its reply.
 	 */
 	readonly onTurnAdmitted?: (turn: AdmittedTurn) => Promise<void> | void;
+	/** Restore host-side turn bindings before the durable runner starts recovered work. */
+	readonly onSubmissionResumed?: (input: {
+		readonly conversationId: string;
+		readonly requestId: string;
+		readonly placed: boolean;
+	}) => void;
 	/**
 	 * Called before a background turn is committed, so its reply can be recovered if the process
 	 * dies before the caller receives the result. Background answers need marker handling on
@@ -1098,7 +1106,10 @@ export class PiDurableConversationHost {
 		const policy = await this.readPolicy(conversationId);
 		if (!policy.enabled) throw new Error(`Conversation disabled: ${input.conversationId}`);
 		const pacing = policy.pacing;
-		const activityId = `${conversationId}:activity`;
+		const isolated = input.isolated === true;
+		const activityId = isolated
+			? `${conversationId}:activity:${input.envelope.id}`
+			: `${conversationId}:activity`;
 		const window = await harness.snapshot(
 			activityWindowDoc,
 			conversationId,
@@ -1141,12 +1152,13 @@ export class PiDurableConversationHost {
 				longMessage ||
 				windowClosed);
 		const arbitrationEnabled = policy.sidechat.enabled && this.options.busyArbiter !== undefined;
-		let shouldSubmit = input.forceSubmit === true || burstWantsSubmit;
+		const forceSubmit = input.forceSubmit === true || isolated;
+		let shouldSubmit = forceSubmit || burstWantsSubmit;
 		// Optional fail-open burst-completion gate: hold the window when the gate says `WAIT` and
 		// `burstMaxWaitMs` has not elapsed yet; errors/timeouts fall back to deterministic submit.
 		if (
 			shouldSubmit &&
-			input.forceSubmit !== true &&
+			!forceSubmit &&
 			!windowClosed &&
 			nextEnvelopes.length < pacing.burstMaxMessages &&
 			policy.gate.enabled &&
@@ -1168,7 +1180,7 @@ export class PiDurableConversationHost {
 		let deferredWhileWorking = false;
 		if (
 			shouldSubmit &&
-			input.forceSubmit !== true &&
+			!forceSubmit &&
 			arbitrationEnabled &&
 			// The in-process map avoids a live-document read on the hot path; after a restart it is
 			// empty, so fall back to the durable run state before letting a long message through.
@@ -1184,7 +1196,7 @@ export class PiDurableConversationHost {
 		const midRun = activeSinceMs !== undefined;
 		const disposition = busyDisposition(activeSinceMs, input.submittedAtMs, this.steerGraceMs);
 		const whenBusy =
-			input.whenBusy ??
+			(isolated ? "follow-up" : input.whenBusy) ??
 			(disposition === "steer"
 				? policy.steerWhenBusy === "reject"
 					? "follow-up"
@@ -1194,7 +1206,7 @@ export class PiDurableConversationHost {
 				: policy.followUpWhenBusy === "reject"
 					? "follow-up"
 					: "follow-up");
-		if (shouldSubmit) this.clearActivityTimer(input.conversationId);
+		if (shouldSubmit && !isolated) this.clearActivityTimer(input.conversationId);
 		this.logger.debug("Conversation message appended", {
 			burstSettleMs: pacing.burstSettleMs,
 			busyDisposition: disposition,
@@ -3152,6 +3164,13 @@ export class PiDurableConversationHost {
 		for (const submission of inspection.submissions) {
 			const conversationId = String(submission.conversationId);
 			const submissionId = String(submission.id);
+			if (submission.type === "input" && submission.requestId !== undefined) {
+				this.options.onSubmissionResumed?.({
+					conversationId,
+					placed: submission.status === "placed",
+					requestId: submission.requestId,
+				});
+			}
 			this.trackSubmission(conversationId, submissionId);
 			const handle = await harness.submission(submission.id, BACKGROUND_CONTEXT);
 			this.observeAnswer(harness, conversationId, handle, submissionId, submission.requestId);

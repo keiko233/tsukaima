@@ -3,13 +3,19 @@ import type { DurableExtension, DurableToolRegistration } from "@tsukaima/core";
 import type { AuditEntry } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import { record } from "../records.ts";
-import type { ScheduleService } from "./schedule-service.ts";
+import {
+	ADMIN_CHAT_SCHEDULE_SOURCE,
+	type SchedulePrincipal,
+	type ScheduledTurn,
+	type ScheduleService,
+} from "./schedule-service.ts";
 import { isValidTimeZone } from "./schedule-time.ts";
 import type { SessionMessagingService } from "./session-messaging.ts";
 
 export const SCHEDULE_TOOLS_EXTENSION_NAME = "tsukaima-schedule-tools";
 export const SCHEDULE_TOOL_NAMES = [
 	"schedule_create",
+	"schedule_continue",
 	"schedule_list",
 	"schedule_get",
 	"schedule_update",
@@ -21,6 +27,11 @@ export interface ScheduleToolsOptions {
 	readonly logger: Logger;
 	readonly messaging: SessionMessagingService;
 	readonly resolveSessionId: (durableConversationId: string) => Promise<string | undefined>;
+	readonly scheduledTurn?: (durableConversationId: string) => Promise<ScheduledTurn | undefined>;
+	readonly adminPrincipal?: (
+		durableConversationId: string,
+		turn?: ScheduledTurn,
+	) => Promise<SchedulePrincipal | undefined>;
 	readonly schedules: ScheduleService;
 }
 
@@ -176,12 +187,22 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 			return failure(error);
 		}
 	};
-	const ownedSchedule = async (sessionId: string, scheduleId: string) => {
+	const ownedSchedule = async (sessionId: string, scheduleId: string, conversationId: string) => {
 		const detail = await options.schedules.get(scheduleId);
 		if (detail === null) throw new Error("Schedule not found");
 		if (detail.targetSessionId !== sessionId) throw new Error("Schedule is outside this session");
-		if (detail.ownerKind !== "agent")
-			throw new Error("Agent tools may only change agent schedules");
+		if (detail.ownerKind !== "agent") {
+			const principal = await options.adminPrincipal?.(conversationId);
+			if (
+				detail.source !== ADMIN_CHAT_SCHEDULE_SOURCE ||
+				principal?.kind !== "im" ||
+				principal.id !== detail.ownerId
+			) {
+				throw new Error(
+					"Agent tools may only manage agent schedules or their administrator's schedules",
+				);
+			}
+		}
 		return detail;
 	};
 
@@ -242,6 +263,9 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 			const input = record(args);
 			const conversationId = String(api.conversationId);
 			return run("schedule_create", conversationId, async () => {
+				if (await options.scheduledTurn?.(conversationId)) {
+					throw new Error("Use schedule_continue to arrange the next check from a scheduled turn");
+				}
 				const sessionId = await resolveCurrentSession(conversationId);
 				const session = await options.messaging.session(sessionId);
 				const isImChat = session.chat.kind === "private" || session.chat.kind === "group";
@@ -258,6 +282,8 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 					session.session.kind === "workspace" && actionKind !== "notify"
 						? ("workspace_turn" as const)
 						: actionKind;
+				const principal = await options.adminPrincipal?.(conversationId);
+				const adminId = isImChat && principal?.kind === "im" ? principal.id : undefined;
 				const detail = await options.schedules.create({
 					actionKind: resolvedActionKind,
 					...(cancelIfReplied === undefined ? {} : { cancelIfReplied }),
@@ -268,12 +294,17 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 					...(numberValue(input, "maxRuns") === undefined
 						? {}
 						: { maxRuns: numberValue(input, "maxRuns")! }),
-					ownerId: "agent",
-					ownerKind: "agent",
+					ownerId: adminId ?? "agent",
+					ownerKind: adminId === undefined ? "agent" : "user",
 					prompt,
 					recurrence,
 					respectQuietHours,
-					source: session.session.kind === "workspace" ? "workspace-tool" : "chat-tool",
+					source:
+						adminId !== undefined
+							? ADMIN_CHAT_SCHEDULE_SOURCE
+							: session.session.kind === "workspace"
+								? "workspace-tool"
+								: "chat-tool",
 					targetSessionId: sessionId,
 					timeZone,
 					title,
@@ -287,6 +318,44 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 					status: detail.status,
 					timeZone: detail.timeZone,
 				};
+			});
+		},
+	});
+
+	const continuation = tool({
+		deferred: false,
+		description:
+			"During a scheduled agent turn, arrange one durable follow-up in this session if another check is needed. Supply a future delay and a self-contained prompt for that run. Finish without calling this tool when no further check is needed.",
+		name: "schedule_continue",
+		parameters: {
+			properties: {
+				delayMs: { minimum: 1, type: "integer" },
+				prompt: { type: "string" },
+			},
+			required: ["delayMs", "prompt"],
+			type: "object",
+		},
+		surface: "chat",
+		async execute(args, api) {
+			const input = record(args);
+			const conversationId = String(api.conversationId);
+			return run("schedule_continue", conversationId, async () => {
+				const turn = await options.scheduledTurn?.(conversationId);
+				if (turn === undefined) throw new Error("This tool requires an active scheduled turn");
+				const delayMs = numberValue(input, "delayMs");
+				if (delayMs === undefined || !Number.isSafeInteger(delayMs) || delayMs < 1) {
+					throw new Error("delayMs must be a positive whole number");
+				}
+				const sessionId = await resolveCurrentSession(conversationId);
+				const principal = await options.adminPrincipal?.(conversationId, turn);
+				const detail = await options.schedules.continueTurn({
+					atMs: api.now() + delayMs,
+					...(principal === undefined ? {} : { principal }),
+					prompt: stringValue(input, "prompt", true)!,
+					sessionId,
+					turn,
+				});
+				return { nextRunAt: detail.nextRunAt, scheduleId: detail.id, status: detail.status };
 			});
 		},
 	});
@@ -347,7 +416,11 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 			const conversationId = String(api.conversationId);
 			return run("schedule_get", conversationId, async () => {
 				const sessionId = await resolveCurrentSession(conversationId);
-				const detail = await ownedSchedule(sessionId, stringValue(input, "scheduleId", true)!);
+				const detail = await ownedSchedule(
+					sessionId,
+					stringValue(input, "scheduleId", true)!,
+					conversationId,
+				);
 				return {
 					occurrences: detail.occurrences.slice(0, 10),
 					schedule: detail,
@@ -380,7 +453,7 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 			return run("schedule_update", conversationId, async () => {
 				const sessionId = await resolveCurrentSession(conversationId);
 				const scheduleId = stringValue(input, "scheduleId", true)!;
-				await ownedSchedule(sessionId, scheduleId);
+				await ownedSchedule(sessionId, scheduleId, conversationId);
 				const cancelIfReplied = booleanValue(input, "cancelIfReplied");
 				const flexWindowMs = numberValue(input, "flexWindowMs");
 				const respectQuietHours = booleanValue(input, "respectQuietHours");
@@ -423,7 +496,7 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 			return run("schedule_cancel", conversationId, async () => {
 				const sessionId = await resolveCurrentSession(conversationId);
 				const scheduleId = stringValue(input, "scheduleId", true)!;
-				await ownedSchedule(sessionId, scheduleId);
+				await ownedSchedule(sessionId, scheduleId, conversationId);
 				const summary = await options.schedules.cancel(scheduleId);
 				return { scheduleId: summary.id, status: summary.status };
 			});
@@ -432,6 +505,6 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 
 	return {
 		name: SCHEDULE_TOOLS_EXTENSION_NAME,
-		tools: [create, list, get, update, cancel],
+		tools: [create, continuation, list, get, update, cancel],
 	};
 }

@@ -890,7 +890,8 @@ describe("PiDurableConversationHost turn sender binding", () => {
 			await firstHost.append({
 				conversationId,
 				envelope: envelope("interrupted-1", "hello before restart"),
-				forceSubmit: true,
+				isolated: true,
+				requestId: "synthetic-scheduled-submission",
 				submittedAtMs: Date.now(),
 			});
 			for (let step = 0; step < 40; step += 1) {
@@ -904,6 +905,7 @@ describe("PiDurableConversationHost turn sender binding", () => {
 			const secondStorage = await openDurableStorage(dbPath);
 			const answers: string[] = [];
 			const liveSettled: boolean[] = [];
+			const resumedRequests: string[] = [];
 			const secondHost = new PiDurableConversationHost({
 				model: createSlowStreamingModel(["resumed after restart"], { delayMs: 5 }),
 				onAnswer: (answer) => {
@@ -912,11 +914,13 @@ describe("PiDurableConversationHost turn sender binding", () => {
 				onLiveRun: (state) => {
 					if (state.settled) liveSettled.push(true);
 				},
+				onSubmissionResumed: ({ requestId }) => resumedRequests.push(requestId),
 				storage: secondStorage,
 			});
 			try {
 				const resumed = await secondHost.resumePendingRuns();
 				expect(resumed).toBe(1);
+				expect(resumedRequests).toEqual(["synthetic-scheduled-submission"]);
 				for (
 					let step = 0;
 					step < 300 && (answers.length === 0 || liveSettled.length === 0);

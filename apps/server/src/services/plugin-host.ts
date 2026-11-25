@@ -46,6 +46,7 @@ import type { HookBus } from "./hook-bus.ts";
 import type { PluginConversationService } from "./plugin-conversation-service.ts";
 import type { FollowUpIntentStore } from "./follow-up-intents.ts";
 import type { ScheduleService } from "./schedule-service.ts";
+import type { SchedulePrincipal } from "./schedule-service.ts";
 import type { PluginSettingsStore } from "./plugin-settings.ts";
 import type { PluginStatusStore } from "./plugin-status.ts";
 import type { PluginStorageStore } from "./plugin-storage.ts";
@@ -82,6 +83,9 @@ export interface PluginHostOptions {
 	 * ambient group message cannot upgrade a non-admin caller's privileges.
 	 */
 	readonly turnSender?: (conversationId: string) => string | null | undefined;
+	readonly scheduledMcpPrincipal?: (
+		conversationId: string,
+	) => Promise<SchedulePrincipal | undefined>;
 	readonly hooks: HookBus;
 	readonly logger: Logger;
 	readonly onModelMessage?: (message: unknown, pluginId: string) => void;
@@ -584,17 +588,25 @@ export class PluginHost {
 			return canonical === tool.name ? [canonical] : [];
 		});
 		const conversation = context.conversationId;
+		// Only tools advertised by configured MCP servers inherit schedule authority. The
+		// separate MCP management tools and other plugins keep their normal caller checks.
+		const scheduledPrincipal =
+			conversation !== undefined && owner === "mcp" && /^mcp\.[^.]+\..+$/u.test(tool.name)
+				? await this.#options.scheduledMcpPrincipal?.(conversation)
+				: undefined;
 		const caller = await resolveImCallerContext({
 			conversationId: conversation,
 			database: this.#database?.(),
 			overrides: {
 				channelId: context.channelId,
 				chatKind: context.chatKind,
-				isAdmin: context.isAdmin,
+				isAdmin: scheduledPrincipal === undefined ? context.isAdmin : true,
 				platformConversationId: context.platformConversationId,
 				role: context.role,
 				senderPlatformId: context.senderPlatformId,
-				turnBoundSender: conversation === undefined ? undefined : this.#turnSender?.(conversation),
+				turnBoundSender:
+					scheduledPrincipal?.id ??
+					(conversation === undefined ? undefined : this.#turnSender?.(conversation)),
 				userId: context.userId,
 			},
 			settings: this.settings,

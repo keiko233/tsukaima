@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { MessageEnvelope } from "@tsukaima/contracts";
+import { isAdminMcpCaller } from "@tsukaima-plugin/mcp";
 import { createOpenAICompatibleModelPort } from "@tsukaima/core";
 import { auditLog, chatObjects, conversations, messages, pluginInstallStates } from "@tsukaima/db";
 import type { DurableExtension } from "@tsukaima/core";
@@ -1082,6 +1083,158 @@ function lastUserText(request: WireRequest): string {
 	}
 	return "";
 }
+
+describe("scheduled chat execution", () => {
+	test("runs a separate scheduled instruction, dedupes its continuation, and rechecks MCP authority", async () => {
+		const scheduledInputs: string[] = [];
+		const mcpDecisions: boolean[] = [];
+		const continuationIds: string[] = [];
+		const completed: string[] = [];
+		let mcpName = "";
+		let rootId: string | undefined;
+		const { lifecycle } = await createHarness(async (_input, init) => {
+			const request = JSON.parse(String(init?.body ?? "{}")) as WireRequest;
+			const task = lastUserText(request);
+			const last = request.messages?.at(-1);
+			if (task.includes("Synthetic request to schedule a check")) {
+				if (last?.role === "tool") {
+					rootId = String(parseOutput(last.content).scheduleId);
+					return Response.json(textResponse("Synthetic schedule created"));
+				}
+				return Response.json(
+					toolCallResponse(
+						"schedule_create",
+						{
+							delayMs: 3_600_000,
+							prompt: "Synthetic first check",
+							timeZone: "Asia/Taipei",
+						},
+						"create-check",
+					),
+				);
+			}
+			if (!task.includes("[Scheduled task]") || !task.includes("Synthetic")) {
+				return Response.json(textResponse("Synthetic chat reply"));
+			}
+			if (last?.role !== "tool") {
+				scheduledInputs.push(task);
+				return Response.json(toolCallResponse(mcpName, {}, `mcp-check-${scheduledInputs.length}`));
+			}
+			if (task.includes("Synthetic next check") || task.includes("Synthetic WebUI check")) {
+				completed.push(task);
+				return Response.json(textResponse("Synthetic check finished"));
+			}
+			if (last.tool_call_id?.startsWith("mcp-check")) {
+				return Response.json(
+					toolCallResponse(
+						"schedule_continue",
+						{
+							delayMs: 3_600_000,
+							prompt: "Synthetic next check",
+						},
+						"continue-once",
+					),
+				);
+			}
+			const next = parseOutput(last.content);
+			continuationIds.push(String(next.scheduleId));
+			if (last.tool_call_id === "continue-once") {
+				return Response.json(
+					toolCallResponse(
+						"schedule_continue",
+						{
+							delayMs: 7_200_000,
+							prompt: "Synthetic duplicate check",
+						},
+						"continue-twice",
+					),
+				);
+			}
+			completed.push(task);
+			return Response.json(textResponse("Synthetic first check finished"));
+		});
+		const session = await seedImSession(lifecycle, {});
+		await lifecycle.updatePluginConfig("onebot-napcat", { adminUsers: ["10002"] });
+		const mcp = lifecycle.pluginHost.context("mcp");
+		if (mcp === undefined) throw new Error("MCP plugin missing");
+		const fakeTool = "mcp.synthetic.check";
+		mcp.tools.register({
+			description: "Check synthetic state",
+			execute: async (_input, invocation) => {
+				const allowed = isAdminMcpCaller(invocation);
+				mcpDecisions.push(allowed);
+				return {
+					content: [{ text: allowed ? "Synthetic MCP ok" : "admin_required", type: "text" }],
+				};
+			},
+			name: fakeTool,
+			parameters: { type: "object" },
+			policy: { lazy: false },
+			requiredPermissions: [],
+		});
+		mcpName = lifecycle.pluginHost.modelToolNames("mcp").find((name) => name.includes("check"))!;
+		expect(mcpName).toBeDefined();
+		const host = lifecycle.conversationHost!;
+		await host.append({
+			conversationId: session.durableConversationId,
+			envelope: envelope({
+				id: "synthetic-schedule-admin",
+				platformConversationId: session.platformConversationId,
+				senderId: "10002",
+				text: "Synthetic request to schedule a check",
+			}),
+			forceSubmit: true,
+			submittedAtMs: Date.now(),
+		});
+		const root = await waitFor(() => rootId);
+		expect((await lifecycle.schedules.get(root))?.ownerId).toBe("10002");
+		await host.append({
+			collectOnly: true,
+			conversationId: session.durableConversationId,
+			envelope: envelope({
+				id: "synthetic-unrelated-message",
+				platformConversationId: session.platformConversationId,
+				senderId: "10003",
+				text: "Synthetic unrelated chat already resolved",
+			}),
+			submittedAtMs: Date.now(),
+		});
+		const occurrence = await lifecycle.schedules.runNow(root);
+		await waitUntil(() => completed.length === 1);
+		expect(scheduledInputs[0]).toContain(occurrence.scheduledFor);
+		expect(scheduledInputs[0]).toContain("Asia/Taipei");
+		expect(scheduledInputs[0]).toContain("send the reminder anew");
+		expect(scheduledInputs[0]).not.toContain("Synthetic unrelated chat already resolved");
+		expect(mcpDecisions).toEqual([true]);
+		expect(continuationIds).toHaveLength(2);
+		expect(continuationIds[0]).toBe(continuationIds[1]);
+		const child = await lifecycle.schedules.get(continuationIds[0]!);
+		expect(child?.ownerId).toBe("10002");
+		expect(child?.prompt).toBe("Synthetic next check");
+		expect(child?.timeZone).toBe("Asia/Taipei");
+
+		await lifecycle.updatePluginConfig("onebot-napcat", { adminUsers: [] });
+		await lifecycle.schedules.runNow(child!.id);
+		await waitUntil(() => completed.length === 2);
+		expect(mcpDecisions).toEqual([true, false]);
+		expect(await lifecycle.schedules.list({ sessionId: session.sessionId })).toHaveLength(2);
+
+		const webui = await lifecycle.schedules.create({
+			actionKind: "agent_turn",
+			ownerId: "webui-admin",
+			ownerKind: "user",
+			prompt: "Synthetic WebUI check",
+			recurrence: { at: new Date(Date.now() + 3_600_000).toISOString(), kind: "once" },
+			source: "webui",
+			targetSessionId: session.sessionId,
+			timeZone: "UTC",
+			title: "Synthetic WebUI schedule",
+		});
+		await lifecycle.schedules.runNow(webui.id);
+		await waitUntil(() => completed.length === 3);
+		expect(mcpDecisions).toEqual([true, false, true]);
+	});
+});
 
 async function waitForDenialAudit(
 	lifecycle: TsukaimaLifecycle,

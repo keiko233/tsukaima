@@ -98,7 +98,7 @@ export async function resolveImCallerContext(
 					row.chat?.platformConversationId ??
 					undefined;
 				if (resolvedUserId === undefined || resolvedSenderPlatformId === undefined) {
-					if (row.conversation.kind === "private") {
+					if (!senderIsTurnBound && row.conversation.kind === "private") {
 						const privatePeerId =
 							row.conversation.platformConversationId ??
 							row.chat?.platformConversationId ??
