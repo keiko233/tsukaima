@@ -57,7 +57,7 @@ RUN mkdir -p /runtime \
 
 FROM oven/bun:latest AS runtime
 # Pin upstream CLIs so device-flow, token refresh, and runtime tooling stay reproducible.
-ARG GH_VERSION=2.105.0
+ARG GH_VERSION=2.106.0
 # `uv` runs Python-based stdio MCP servers and skills. JavaScript servers use the image's own
 # `bunx` (installed with Bun), so no separate Node/npm toolchain is packaged.
 ARG UV_VERSION=0.13.9
