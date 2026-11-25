@@ -114,7 +114,8 @@ function baseAuthorization(
 /**
  * Fail-closed admin authorization shared by the admin settings extension.
  *
- * `webui` is the single-admin authenticated surface, and a `workspace` turn is already governed.
+ * `webui` is the single-admin authenticated surface. A coding `workspace` turn is admin-gated
+ * by its resolved caller; a sandbox workspace always resolves `isAdmin: false` and is denied.
  * IM (`private`/`group`) requires a runtime-resolved trusted admin sender. A proactive/background
  * turn has no turn-bound sender, so `resolveImCallerContext` cannot resolve an admin and every
  * tool call is denied. Unknown kinds, missing callers, and transient read failures deny as well.
@@ -129,8 +130,13 @@ export function authorizeAdminSettingsToolCall(input: {
 		return { ...base, allowed: false, reason: "unknown_admin_tool" };
 	}
 	const chatKind = caller.chatKind;
-	if (chatKind === "webui" || chatKind === "workspace") {
+	if (chatKind === "webui") {
 		return { ...base, allowed: true };
+	}
+	if (chatKind === "workspace") {
+		return caller.isAdmin === true
+			? { ...base, allowed: true }
+			: { ...base, allowed: false, reason: "admin_required" };
 	}
 	if (chatKind !== "private" && chatKind !== "group") {
 		return { ...base, allowed: false, reason: "disallowed_chat_kind" };

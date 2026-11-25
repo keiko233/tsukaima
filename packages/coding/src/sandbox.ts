@@ -134,6 +134,15 @@ export interface BubblewrapSandboxOptions {
 	readonly pathDirs?: readonly string[];
 }
 
+export interface ScratchBubblewrapSandboxOptions {
+	/** Host root that holds disposable session directories. */
+	readonly sandboxRoot: string;
+	/** Host environment used to locate `bwrap`; defaults to the process environment. */
+	readonly env?: Readonly<Record<string, string | undefined>>;
+	/** Directories searched for sandboxed commands, in order; defaults to PATH dirs. */
+	readonly pathDirs?: readonly string[];
+}
+
 /**
  * A governed direct executor. It keeps the same allowlist, worktree boundary, scrubbed
  * environment, timeout, and output caps as the bubblewrap executor, but runs the process on the
@@ -196,6 +205,21 @@ const SYSTEM_READONLY_FILES: readonly string[] = Object.freeze([
 	"/etc/ssl",
 ]);
 
+/**
+ * Scratch workspaces cannot read host identity, DNS, or password files. Only the shared
+ * certificate/font/locale catalogs needed to start ordinary tools are exposed.
+ */
+const SCRATCH_SYSTEM_READONLY_FILES: readonly string[] = Object.freeze([
+	"/etc/ca-certificates",
+	"/etc/fonts",
+	"/etc/ld.so.cache",
+	"/etc/localtime",
+	"/etc/ssl",
+]);
+
+/** Files a command may need read-only at the sandbox root, never host identity or DNS. */
+export const SANDBOX_SYSTEM_READONLY_ROOTS: readonly string[] = SYSTEM_READONLY_ROOTS;
+
 const SANDBOX_ENV_DEFAULTS: Readonly<Record<string, string>> = Object.freeze({
 	HOME: "/tmp/home",
 	LANG: "C.UTF-8",
@@ -254,6 +278,13 @@ export interface BubblewrapArgvInput {
 	readonly writable: boolean;
 	/** Host directory bound at `cwd` instead of `cwd` itself (a disposable snapshot copy). */
 	readonly writableSource?: string;
+}
+
+export interface ScratchBubblewrapArgvInput {
+	readonly args: readonly string[];
+	readonly commandPath: string;
+	readonly cwd: string;
+	readonly env: Readonly<Record<string, string>>;
 }
 
 /** One explicit host path bound into the sandbox. */
@@ -317,6 +348,51 @@ export function buildBubblewrapArgv(input: BubblewrapArgvInput): string[] {
 		argv.push("--ro-bind", input.analysisPath, ANALYSIS_MOUNT);
 	}
 	argv.push(input.writable ? "--bind" : "--ro-bind", input.writableSource ?? input.cwd, input.cwd);
+	argv.push("--chdir", input.cwd);
+	argv.push("--", input.commandPath, ...input.args);
+	return argv;
+}
+
+/**
+ * Build the bubblewrap argv for a scratch workspace.
+ *
+ * This intentionally has no repository, dataDir, blob, git, node_modules, analysis, or writable
+ * snapshot inputs: the only writable bind is `cwd`, and the caller has already checked that it
+ * is a real directory inside the configured scratch root. Network namespaces are never shared.
+ */
+export function buildScratchBubblewrapArgv(input: ScratchBubblewrapArgvInput): string[] {
+	const argv: string[] = [
+		"--unshare-all",
+		"--die-with-parent",
+		"--new-session",
+		"--hostname",
+		"tsukaima-sandbox",
+		"--proc",
+		"/proc",
+		"--dev",
+		"/dev",
+		"--tmpfs",
+		"/tmp",
+		"--dir",
+		"/tmp/home",
+		"--clearenv",
+	];
+	for (const [key, value] of Object.entries(input.env)) {
+		argv.push("--setenv", key, value);
+	}
+	for (const root of SYSTEM_READONLY_ROOTS) {
+		argv.push("--ro-bind-try", root, root);
+	}
+	for (const file of SCRATCH_SYSTEM_READONLY_FILES) {
+		argv.push("--ro-bind-try", file, file);
+	}
+	const commandDir = dirname(input.commandPath);
+	if (
+		!SYSTEM_READONLY_ROOTS.some((root) => commandDir === root || commandDir.startsWith(`${root}/`))
+	) {
+		argv.push("--ro-bind-try", commandDir, commandDir);
+	}
+	argv.push("--bind", input.cwd, input.cwd);
 	argv.push("--chdir", input.cwd);
 	argv.push("--", input.commandPath, ...input.args);
 	return argv;
@@ -419,6 +495,26 @@ export function createBubblewrapSandbox(options: BubblewrapSandboxOptions): Sand
 	return () => {
 		cached ??= createExecutor(options).catch((error: unknown) => {
 			// A failed probe must stay failed: clear the cache only on explicit re-creation.
+			const reason = error instanceof Error ? error.message : String(error);
+			throw error instanceof SandboxUnavailableError ? error : new SandboxUnavailableError(reason);
+		});
+		return cached;
+	};
+}
+
+/**
+ * Bubblewrap provider for scratch document/data sandboxes.
+ *
+ * Unlike {@link createBubblewrapSandbox}, this has no repository root and no host fallback. Every
+ * execution must be a real directory inside `sandboxRoot`; the executor binds only that cwd plus
+ * the system runtime directories and never shares a network namespace.
+ */
+export function createScratchBubblewrapSandbox(
+	options: ScratchBubblewrapSandboxOptions,
+): SandboxProvider {
+	let cached: Promise<SandboxExecutor> | undefined;
+	return () => {
+		cached ??= createScratchExecutor(options).catch((error: unknown) => {
 			const reason = error instanceof Error ? error.message : String(error);
 			throw error instanceof SandboxUnavailableError ? error : new SandboxUnavailableError(reason);
 		});
@@ -755,6 +851,109 @@ async function createExecutor(options: BubblewrapSandboxOptions): Promise<Sandbo
 		},
 	};
 	return executor;
+}
+
+async function createScratchExecutor(
+	options: ScratchBubblewrapSandboxOptions,
+): Promise<SandboxExecutor> {
+	const hostEnv = options.env ?? process.env;
+	const pathDirs = options.pathDirs ?? runtimePathDirs();
+	const bwrapPath = await resolveExecutable("bwrap", hostPathDirs(hostEnv));
+	if (bwrapPath === undefined) {
+		throw new SandboxUnavailableError("bubblewrap (bwrap) is not installed on the host", {
+			code: "bwrap_missing",
+			remedy: "Install the bubblewrap package in the server environment, then restart the server.",
+		});
+	}
+	const sandboxRoot = await realpath(options.sandboxRoot).catch(() => {
+		throw new SandboxUnavailableError(`sandbox root does not exist: ${options.sandboxRoot}`, {
+			code: "repository_missing",
+			remedy: "Create the sandbox workspace root, then restart the server.",
+		});
+	});
+	const rootStats = await stat(sandboxRoot).catch(() => undefined);
+	if (rootStats === undefined || !rootStats.isDirectory()) {
+		throw new SandboxUnavailableError(`sandbox root is not a directory: ${options.sandboxRoot}`);
+	}
+	const probeCommand = await resolveExecutable(PROBE_COMMAND, pathDirs);
+	if (probeCommand === undefined) {
+		throw new SandboxUnavailableError(`sandbox probe command "${PROBE_COMMAND}" is unavailable`, {
+			code: "probe_command_missing",
+			remedy: "Make coreutils (true) available on the server PATH, then restart the server.",
+		});
+	}
+	if ((await resolveExecutable(SHELL_COMMAND, pathDirs)) === undefined) {
+		throw new SandboxUnavailableError(`sandbox shell "${SHELL_COMMAND}" is unavailable`, {
+			code: "shell_missing",
+			remedy: "Install bash in the server image; the Workspace shell runs under it.",
+		});
+	}
+	const probe = await runManagedProcess({
+		args: buildScratchBubblewrapArgv({
+			args: [],
+			commandPath: probeCommand,
+			cwd: sandboxRoot,
+			env: sandboxEnv(pathDirs, {}),
+		}),
+		command: bwrapPath,
+		cwd: sandboxRoot,
+		env: { PATH: hostPathDirs(hostEnv).join(delimiter) },
+		maxOutputBytes: 4096,
+		timeoutMs: PROBE_TIMEOUT_MS,
+	});
+	if (probe.exitCode !== 0) {
+		const detail = probe.stderr.trim() || probe.stdout.trim() || "unknown error";
+		throw new SandboxUnavailableError(`bubblewrap probe failed: ${detail}`, {
+			code: "namespace_denied",
+			remedy:
+				"Bubblewrap cannot create namespaces here. Allow unprivileged user namespaces for the server " +
+				"(a container seccomp or AppArmor profile that permits unshare), then restart the server.",
+		});
+	}
+
+	return {
+		id: "bubblewrap-scratch",
+		isolated: true,
+		async exec(input) {
+			if (input.snapshot === true) {
+				throw new SandboxUnavailableError("scratch sandboxes do not support snapshot execution");
+			}
+			if (!isAbsolute(input.cwd)) {
+				throw new SandboxUnavailableError(
+					`sandbox working directory must be absolute: ${input.cwd}`,
+				);
+			}
+			const cwd = await assertSandboxPathArg(input.cwd);
+			if (cwd === sandboxRoot || !isInside(sandboxRoot, cwd)) {
+				throw new SandboxUnavailableError("sandbox working directory is outside the scratch root");
+			}
+			if (input.analysisPath !== undefined || input.analysisTree !== undefined) {
+				throw new SandboxUnavailableError("scratch sandboxes do not mount analysis trees");
+			}
+			const commandPath = await resolveExecutable(input.command, pathDirs);
+			if (commandPath === undefined) {
+				throw new Error(`command_not_found:${input.command}`);
+			}
+			for (const arg of input.args) {
+				if (arg.includes("\0")) throw new Error("command arguments must not contain null bytes");
+			}
+			const argv = buildScratchBubblewrapArgv({
+				args: input.args,
+				commandPath,
+				cwd,
+				env: sandboxEnv(pathDirs, input.env ?? {}),
+			});
+			return await runManagedProcess({
+				args: argv,
+				command: bwrapPath,
+				cwd,
+				env: { PATH: hostPathDirs(hostEnv).join(delimiter) },
+				maxOutputBytes: input.maxOutputBytes,
+				...(input.signal === undefined ? {} : { signal: input.signal }),
+				timeoutMs: input.timeoutMs,
+			});
+		},
+	};
 }
 
 /**

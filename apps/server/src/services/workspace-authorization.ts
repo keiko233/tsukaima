@@ -1,6 +1,9 @@
 import type { ConversationPolicy } from "@tsukaima/contracts";
 import type { ResolvedImCallerContext } from "./im-caller-context.ts";
-import { IM_WORKSPACE_DELEGATION_TOOL_NAMES } from "./workspace-tools.ts";
+import {
+	IM_WORKSPACE_DELEGATION_TOOL_NAMES,
+	SANDBOX_WORKSPACE_TOOL_NAMES,
+} from "./workspace-tools.ts";
 
 export interface WorkspaceCallerAuthorization {
 	readonly allowed: boolean;
@@ -12,6 +15,8 @@ export interface WorkspaceCallerAuthorization {
 	readonly reason?: string;
 	readonly sessionId?: string;
 }
+
+export const SANDBOX_MAX_ACTIVE_PER_PARENT = 5;
 
 const IM_DELEGATION_TOOL_NAMES: ReadonlySet<string> = new Set(IM_WORKSPACE_DELEGATION_TOOL_NAMES);
 
@@ -51,6 +56,11 @@ export function authorizeWorkspaceToolCall(input: {
 	if (toolName === "workspace_spawn" && chatKind === "workspace") {
 		return { ...base, allowed: false, reason: "workspace_spawn_not_permitted" };
 	}
+	// Sandbox workspaces are deliberately a smaller execution surface than coding workspaces.
+	// The durable filter already removes this family; the runtime check closes direct calls.
+	if (chatKind === "workspace" && caller.workspaceKind === "sandbox") {
+		return { ...base, allowed: false, reason: "sandbox_workspace_tool_denied" };
+	}
 	if (chatKind === "webui" || chatKind === "workspace") {
 		return { ...base, allowed: true };
 	}
@@ -72,6 +82,59 @@ export function authorizeWorkspaceToolCall(input: {
 	}
 	if (caller.isAdmin !== true || caller.senderPlatformId === undefined) {
 		return { ...base, allowed: false, reason: "admin_required" };
+	}
+	return { ...base, allowed: true };
+}
+
+/**
+ * Runtime gate for the sandbox tool family. This is intentionally separate from the admin
+ * workspace delegation check: ordinary private/group participants may spawn a sandbox when the
+ * conversation policy allows it, but a sandbox is never a path to coding, admin, DB, or restart
+ * tools. Ownership and parent-session checks happen in the workspace service against the target
+ * row; this function only decides whether the caller may attempt the family at all.
+ */
+export function authorizeSandboxToolCall(input: {
+	readonly caller: ResolvedImCallerContext;
+	readonly policy?: Pick<ConversationPolicy, "sandboxWorkspaceEnabled"> | undefined;
+	readonly toolName: string;
+}): WorkspaceCallerAuthorization {
+	const { caller, toolName } = input;
+	const chatKind = caller.chatKind;
+	const base: Omit<WorkspaceCallerAuthorization, "allowed"> = {
+		...(caller.senderPlatformId === undefined ? {} : { callerId: caller.senderPlatformId }),
+		...(caller.channelId === undefined ? {} : { channelId: caller.channelId }),
+		...(chatKind === undefined ? {} : { chatKind }),
+		...(caller.isAdmin === undefined ? {} : { isAdmin: caller.isAdmin }),
+		...(caller.platformConversationId === undefined
+			? {}
+			: { platformConversationId: caller.platformConversationId }),
+		...(caller.domainConversationId === undefined
+			? {}
+			: { sessionId: caller.domainConversationId }),
+	};
+	if (!(SANDBOX_WORKSPACE_TOOL_NAMES as readonly string[]).includes(toolName)) {
+		return { ...base, allowed: false, reason: "sandbox_tool_not_permitted" };
+	}
+	if (chatKind === "workspace") {
+		return { ...base, allowed: false, reason: "sandbox_spawn_not_permitted" };
+	}
+	if (chatKind !== "webui" && chatKind !== "private" && chatKind !== "group") {
+		return { ...base, allowed: false, reason: "disallowed_chat_kind" };
+	}
+	if (input.policy === undefined) {
+		return { ...base, allowed: false, reason: "policy_unavailable" };
+	}
+	if (input.policy.sandboxWorkspaceEnabled !== true) {
+		return { ...base, allowed: false, reason: "sandbox_workspace_disabled" };
+	}
+	if (caller.domainConversationId === undefined) {
+		return { ...base, allowed: false, reason: "session_not_found" };
+	}
+	if (
+		(chatKind === "private" || chatKind === "group") &&
+		(caller.senderPlatformId === undefined || caller.senderPlatformId.trim().length === 0)
+	) {
+		return { ...base, allowed: false, reason: "sender_required" };
 	}
 	return { ...base, allowed: true };
 }

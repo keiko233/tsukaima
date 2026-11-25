@@ -203,6 +203,7 @@ export function mergeConversationPolicy(
 			memoryMinConfidence: patch.memoryMinConfidence,
 			memoryReviewRequired: patch.memoryReviewRequired,
 			model,
+			sandboxWorkspaceEnabled: patch.sandboxWorkspaceEnabled,
 			sharedMemoryEnabled: patch.sharedMemoryEnabled,
 			sharedMemoryWriteEnabled: patch.sharedMemoryWriteEnabled,
 			steerWhenBusy: patch.steerWhenBusy,

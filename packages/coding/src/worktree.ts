@@ -202,6 +202,7 @@ export function isPathWithinAllowlist(
 	}
 	return allowlist.some((entry) => {
 		const normalized = entry.replace(/\/+$/, "");
+		if (normalized === ".") return true;
 		return rel === normalized || rel.startsWith(`${normalized}/`);
 	});
 }

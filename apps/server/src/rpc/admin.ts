@@ -752,6 +752,7 @@ export const adminRouter = {
 				...(input.parentSessionId === undefined ? {} : { parentSessionId: input.parentSessionId }),
 				...(input.tags === undefined ? {} : { tags: input.tags }),
 				...(input.thinking === undefined ? {} : { thinking: input.thinking }),
+				...(input.workspaceKind === undefined ? {} : { workspaceKind: input.workspaceKind }),
 				requestedBy: "webui-admin",
 			});
 			return result;

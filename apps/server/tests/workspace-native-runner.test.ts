@@ -10,10 +10,16 @@ import {
 	createOpenAICompatibleModelPort,
 	createSlowStreamingModel,
 } from "@tsukaima/core";
-import { codingTasks, messages, workspaceSessions, type TsukaimaDatabase } from "@tsukaima/db";
+import {
+	codingTasks,
+	conversations,
+	messages,
+	workspaceSessions,
+	type TsukaimaDatabase,
+} from "@tsukaima/db";
 import { loadConfig } from "../src/config.ts";
 import { TsukaimaLifecycle } from "../src/lifecycle.ts";
-import { abortSessionRun, getSessionContextStats } from "../src/services/webui.ts";
+import { abortSessionRun, createLocalChat, getSessionContextStats } from "../src/services/webui.ts";
 import { WORKSPACE_NATIVE_LIVE_TOOL_OUTPUT_MAX_CHARS } from "../src/services/workspace-native-runner.ts";
 
 const directories: string[] = [];
@@ -357,6 +363,204 @@ describe("workspace native Pi integration", () => {
 		});
 	}, 60_000);
 
+	test("a sandbox workspace exposes only isolated document tools and returns output artifacts", async () => {
+		const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-native-sandbox-"));
+		directories.push(root);
+		const requests: string[][] = [];
+		const requestBodies: string[] = [];
+		const model = createOpenAICompatibleModelPort(
+			{
+				apiKey: "test-key",
+				baseUrl: "http://native-sandbox.invalid/v1",
+				fetch: (async (_input, init) => {
+					const body = JSON.parse(String(init?.body ?? "{}")) as {
+						messages?: readonly { readonly role?: string; readonly content?: unknown }[];
+						tools?: readonly { readonly function?: { readonly name?: string } }[];
+					};
+					const offered = (body.tools ?? []).map((tool) => tool.function?.name ?? "");
+					requests.push(offered);
+					requestBodies.push(JSON.stringify(body.messages ?? []));
+					const last = body.messages?.at(-1);
+					if (last?.role === "user" && offered.includes("write")) {
+						return Response.json({
+							choices: [
+								{
+									finish_reason: "tool_calls",
+									message: {
+										content: null,
+										tool_calls: [
+											{
+												function: {
+													arguments: JSON.stringify({
+														content: '{"ok":true}\n',
+														path: "output/result.json",
+													}),
+													name: "write",
+												},
+												id: "sandbox-write-1",
+												type: "function",
+											},
+										],
+									},
+								},
+							],
+							id: "scripted-native-sandbox",
+							model: "scripted-native",
+							usage: { completion_tokens: 1, prompt_tokens: 1, total_tokens: 2 },
+						});
+					}
+					return Response.json({
+						choices: [{ finish_reason: "stop", message: { content: "Created result.json." } }],
+						id: "scripted-native-sandbox-text",
+						model: "scripted-native",
+						usage: { completion_tokens: 1, prompt_tokens: 1, total_tokens: 2 },
+					});
+				}) as typeof fetch,
+			},
+			[{ capabilities: ["basic-chat", "tool-use"], modelId: "scripted-native" }],
+		);
+		const { lifecycle } = await start({ model: model as never, root });
+		const parent = await createLocalChat(lifecycle, {
+			sessionTitle: "Synthetic parent",
+			title: "Synthetic parent chat",
+		});
+		const created = await lifecycle.workspace.spawnFromSession(parent.sessionId, {
+			goal: "Write a synthetic JSON result under output/.",
+			requestedBy: "im:synthetic-owner",
+			workspaceKind: "sandbox",
+		});
+		const database = lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("Database not ready");
+		await lifecycle.sessionMessaging.sendAgentMessage({
+			messageId: "native-sandbox-message",
+			sessionId: created.sessionId,
+			source: "webui",
+			text: "Write output/result.json.",
+		});
+		const answer = await waitFor(async () => (await nativeAnswers(database, created.sessionId))[0]);
+		expect(answer.contentText).toContain("Created result.json");
+
+		const offered = requests[0] ?? [];
+		for (const name of ["read", "bash", "edit", "write", "todo_write", "todo_list"]) {
+			expect(offered).toContain(name);
+		}
+		for (const name of [
+			"session_context",
+			"db_schema",
+			"db_query",
+			"runtime_restart",
+			"runtime_restart_status",
+			"runtime_restart_cancel",
+			"workspace_git_identity",
+			"workspace_spawn",
+			"workspace_status",
+			"workspace_send",
+			"sandbox_spawn",
+			"prompt_list",
+			"admin_exec",
+			"settings_get",
+		]) {
+			expect(offered).not.toContain(name);
+		}
+		expect(requestBodies.join("\n")).toContain("isolated");
+		const stats = await getSessionContextStats(lifecycle, created.sessionId);
+		expect(stats?.tools.map((tool) => tool.name).toSorted()).toEqual(offered.toSorted());
+		const status = await lifecycle.workspace.status({ sessionId: created.sessionId });
+		expect(status.outputFiles).toEqual([
+			expect.objectContaining({ fileName: "result.json", mimeType: "application/json" }),
+		]);
+		const [workspaceRow] = await database
+			.select()
+			.from(workspaceSessions)
+			.where(eq(workspaceSessions.id, created.sessionId))
+			.limit(1);
+		expect(workspaceRow?.workspaceKind).toBe("sandbox");
+		expect(workspaceRow?.taskId).not.toBeNull();
+		const [task] = await database
+			.select()
+			.from(codingTasks)
+			.where(eq(codingTasks.id, workspaceRow?.taskId ?? ""))
+			.limit(1);
+		expect(task?.worktreePath).toBeNull();
+		await waitFor(async () => {
+			const rows = await database
+				.select()
+				.from(messages)
+				.where(eq(messages.conversationId, parent.sessionId));
+			return rows.find((row) => (row.contentText ?? "").includes("[Sandbox workspace finished]"));
+		});
+	}, 60_000);
+
+	test("stages only same-session input files into a sandbox workspace", async () => {
+		const { lifecycle } = await start();
+		const parent = await createLocalChat(lifecycle, {
+			sessionTitle: "Synthetic parent",
+			title: "Synthetic parent chat",
+		});
+		const other = await createLocalChat(lifecycle, {
+			sessionTitle: "Synthetic other",
+			title: "Synthetic other chat",
+		});
+		const database = lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("Database not ready");
+		const owned = await lifecycle.media.store({
+			bytes: new TextEncoder().encode("synthetic owned input\n"),
+			kind: "file",
+			mimeType: "text/plain",
+			source: "channel",
+		});
+		const foreign = await lifecycle.media.store({
+			bytes: new TextEncoder().encode("synthetic foreign input\n"),
+			kind: "file",
+			mimeType: "text/plain",
+			source: "channel",
+		});
+		const now = new Date().toISOString();
+		const insertFile = async (sessionId: string, mediaId: string, fileName: string) => {
+			const [chat] = await database
+				.select({ chatObjectId: conversations.chatObjectId })
+				.from(conversations)
+				.where(eq(conversations.id, sessionId))
+				.limit(1);
+			if (chat?.chatObjectId === null || chat?.chatObjectId === undefined) {
+				throw new Error("Chat object missing");
+			}
+			await database.insert(messages).values({
+				chatObjectId: chat.chatObjectId,
+				contentText: "synthetic staged attachment",
+				conversationId: sessionId,
+				direction: "inbound",
+				id: crypto.randomUUID(),
+				ingestedAt: now,
+				kind: "webui",
+				occurredAt: now,
+				partsJson: JSON.stringify([{ fileName, mediaId, type: "file" }]),
+				seq: 0,
+				senderExternalId: "webui-admin",
+				updatedAt: now,
+			});
+		};
+		await insertFile(parent.sessionId, owned.id, "owned.txt");
+		await insertFile(other.sessionId, foreign.id, "foreign.txt");
+		const created = await lifecycle.workspace.spawnFromSession(parent.sessionId, {
+			goal: "Read the staged synthetic file.",
+			mediaIds: [owned.id, foreign.id],
+			requestedBy: "webui-admin",
+			workspaceKind: "sandbox",
+		});
+		const [row] = await database
+			.select()
+			.from(workspaceSessions)
+			.where(eq(workspaceSessions.id, created.sessionId))
+			.limit(1);
+		const sandboxPath = row?.sandboxPath;
+		if (sandboxPath === null || sandboxPath === undefined) throw new Error("Missing sandbox path");
+		expect(await fs.readFile(join(sandboxPath, "inputs", "owned.txt"), "utf-8")).toContain(
+			"synthetic owned input",
+		);
+		await expect(fs.readFile(join(sandboxPath, "inputs", "foreign.txt"))).rejects.toThrow();
+	}, 60_000);
+
 	test("keeps multi-turn live tool state bounded and free of duplicate rounds", async () => {
 		const root = await fs.mkdtemp(join(tmpdir(), "tsukaima-native-multiturn-"));
 		directories.push(root);
@@ -584,6 +788,40 @@ describe("workspace native Pi integration", () => {
 		).rejects.toThrow("Workspace coding capability is disabled");
 		await Bun.sleep(50);
 		expect(await nativeAnswers(database, workspace.sessionId)).toHaveLength(0);
+	}, 60_000);
+
+	test("denies a native sandbox turn after the sandbox capability is withdrawn", async () => {
+		const { lifecycle } = await start();
+		const parent = await createLocalChat(lifecycle, {
+			sessionTitle: "Synthetic parent",
+			title: "Synthetic parent chat",
+		});
+		const workspace = await lifecycle.workspace.spawnFromSession(parent.sessionId, {
+			goal: "Keep the sandbox capability check honest.",
+			requestedBy: "test-admin",
+			workspaceKind: "sandbox",
+		});
+		await lifecycle.conversationPolicy.update({
+			conversationId: workspace.sessionId,
+			policy: { capabilities: [] },
+			scope: "conversation",
+		});
+		const database = lifecycle.domainDatabase;
+		if (database === undefined) throw new Error("Database not ready");
+		await expect(
+			lifecycle.sessionMessaging.sendAgentMessage({
+				sessionId: workspace.sessionId,
+				source: "webui",
+				text: "Write a document.",
+			}),
+		).rejects.toThrow("Workspace sandbox capability is disabled");
+		await Bun.sleep(50);
+		const rows = await database
+			.select()
+			.from(messages)
+			.where(eq(messages.conversationId, workspace.sessionId));
+		expect(rows.some((row) => row.contentText === "Write a document.")).toBe(true);
+		expect(rows.filter((row) => row.direction === "outbound")).toHaveLength(1);
 	}, 60_000);
 
 	test("keeps legacy coding task and proposal rows readable through the workspace", async () => {

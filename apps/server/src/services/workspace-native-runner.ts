@@ -64,6 +64,53 @@ export const WORKSPACE_NATIVE_TASK_CONSTRAINTS = {
 	timeoutMs: 120_000,
 } as const;
 
+export const SANDBOX_TASK_CONSTRAINTS = {
+	allowedCommands: [
+		"awk",
+		"base64",
+		"bun",
+		"cat",
+		"cp",
+		"cut",
+		"date",
+		"diff",
+		"echo",
+		"file",
+		"grep",
+		"head",
+		"iconv",
+		"jq",
+		"ls",
+		"mkdir",
+		"mv",
+		"node",
+		"pandoc",
+		"pdftotext",
+		"printf",
+		"pwd",
+		"python3",
+		"rg",
+		"rm",
+		"sed",
+		"sha256sum",
+		"sort",
+		"stat",
+		"tail",
+		"tar",
+		"touch",
+		"tr",
+		"uniq",
+		"unzip",
+		"wc",
+		"zip",
+	] as const,
+	maxFileBytes: 10 * 1024 * 1024,
+	maxOutputBytes: 64 * 1024,
+	maxWriteBytes: 2 * 1024 * 1024,
+	pathAllowlist: ["."],
+	timeoutMs: 30_000,
+} as const;
+
 /** Adapt the host-owned plugin ModelPort to the canonical Pi model runtime. */
 export async function createPiModelRuntime(
 	port: ModelPort,
@@ -106,6 +153,7 @@ export interface WorkspaceRunFinishedEvent {
 	readonly failure?: string;
 	readonly sessionId: string;
 	readonly taskId: string;
+	readonly workspaceKind: "coding" | "sandbox";
 }
 
 export interface WorkspaceNativeRunnerOptions {
@@ -123,6 +171,7 @@ export interface WorkspaceNativeRunnerOptions {
 	}) => void;
 	readonly ensureWorktree: (taskId: string) => Promise<WorkspaceTaskWorktree>;
 	readonly executor: () => Promise<SandboxExecutor>;
+	readonly sandboxExecutor: () => Promise<SandboxExecutor>;
 	readonly gitIdentity: () => Promise<GitIdentity> | GitIdentity;
 	readonly logger: Logger;
 	readonly onLiveRun: (
@@ -132,6 +181,7 @@ export interface WorkspaceNativeRunnerOptions {
 	) => void;
 	readonly onRunFinished?: (event: WorkspaceRunFinishedEvent) => Promise<void> | void;
 	readonly authorizeCoding: (sessionId: string) => Promise<boolean>;
+	readonly authorizeSandbox: (sessionId: string) => Promise<boolean>;
 	readonly references: WorkspaceReferenceService;
 	readonly resolveAgentSettings: (sessionId: string) => Promise<ConversationAgentSettings>;
 	readonly resolveModel: (ref: {
@@ -143,6 +193,11 @@ export interface WorkspaceNativeRunnerOptions {
 	/** Durable restart coordinator exposed to governed workspace turns. */
 	readonly runtimeRestart?: AdminRuntimeRestartPort | undefined;
 	readonly sessionDirRoot: string;
+	readonly sandboxRoot: string;
+	readonly sandboxPrompt: (input: {
+		readonly goal: string | null;
+		readonly sessionId: string;
+	}) => string;
 	readonly taskPrompt: (input: {
 		readonly baseRef: string;
 		readonly goal: string | null;
@@ -179,6 +234,7 @@ interface WorkspaceContext {
 	readonly repositoryRoot: string;
 	readonly sessionId: string;
 	readonly taskId: string;
+	readonly workspaceKind: "coding" | "sandbox";
 	readonly worktreePath: string;
 }
 
@@ -221,6 +277,7 @@ interface NativeSession {
 	readonly durableConversationId: string;
 	readonly sessionFile: string;
 	readonly taskId: string;
+	readonly workspaceKind: "coding" | "sandbox";
 	readonly worktreePath: string;
 }
 
@@ -362,10 +419,18 @@ export class WorkspaceNativeRunner {
 
 	async dispatch(input: WorkspaceNativeDispatchInput): Promise<void> {
 		await this.#withLock(input.sessionId, async () => {
-			if (!(await this.#options.authorizeCoding(input.sessionId))) {
-				throw new Error("Workspace coding capability is disabled");
-			}
 			const context = await this.#context(input.sessionId);
+			if (
+				context.workspaceKind === "sandbox"
+					? !(await this.#options.authorizeSandbox(input.sessionId))
+					: !(await this.#options.authorizeCoding(input.sessionId))
+			) {
+				throw new Error(
+					context.workspaceKind === "sandbox"
+						? "Workspace sandbox capability is disabled"
+						: "Workspace coding capability is disabled",
+				);
+			}
 			const native = await this.#ensureSession(context);
 			const prompt = this.#composePrompt(input.text, input.context);
 			if (native.activeRun !== undefined) {
@@ -525,6 +590,22 @@ export class WorkspaceNativeRunner {
 			.where(eq(codingTasks.id, row.workspace.taskId))
 			.limit(1);
 		if (task === undefined) throw new Error("workspace_task_not_found");
+		const workspaceKind = row.workspace.workspaceKind;
+		if (workspaceKind === "sandbox") {
+			const sandboxPath = row.workspace.sandboxPath;
+			if (sandboxPath === null) throw new Error("sandbox_path_missing");
+			return {
+				baseRef: "sandbox",
+				chatObjectId: row.chat.id,
+				durableConversationId: row.conversation.durableConversationId,
+				goal: row.workspace.goal,
+				repositoryRoot: row.workspace.repositoryRoot,
+				sessionId,
+				taskId: task.id,
+				workspaceKind: "sandbox",
+				worktreePath: sandboxPath,
+			};
+		}
 		const worktree = await this.#options.ensureWorktree(task.id);
 		return {
 			baseRef: worktree.baseRef,
@@ -534,6 +615,7 @@ export class WorkspaceNativeRunner {
 			repositoryRoot: row.workspace.repositoryRoot,
 			sessionId,
 			taskId: task.id,
+			workspaceKind: "coding",
 			worktreePath: worktree.path,
 		};
 	}
@@ -557,41 +639,67 @@ export class WorkspaceNativeRunner {
 		await mkdir(agentDir, { recursive: true });
 		await mkdir(sessionDir, { recursive: true });
 		const sessionFile = join(sessionDir, "session.jsonl");
-		const worktreeTask = await this.#options.ensureWorktree(context.taskId);
-		const nativeTools: readonly PiWorkspaceNativeToolName[] = worktreeTask.analysisOnly
-			? ["read"]
-			: ["read", "bash", "edit", "write"];
-		const runner = await createPiWorkspaceRunner({
-			agentDir,
-			allowedCommands: worktreeTask.constraints.allowedCommands,
-			bashMode: "host",
-			requireIsolatedSandbox: false,
-			appendPrompt: [
-				await this.#options.taskPrompt({
-					baseRef: context.baseRef,
-					goal: context.goal,
-					repositoryRoot: context.repositoryRoot,
-					taskId: context.taskId,
-				}),
-			],
-			additionalTools: [...this.#additionalTools(context), ...this.#runtimeRestartTools()],
-			executor: this.#options.executor,
-			...(worktreeTask.constraints.maxOutputBytes === undefined
-				? {}
-				: { maxOutputBytes: worktreeTask.constraints.maxOutputBytes }),
-			model,
-			modelRuntime: runtime,
-			nativeTools,
-			pathAllowlist: worktreeTask.constraints.pathAllowlist,
-			repositoryPath: this.#options.repositoryRoot,
-			sessionFile,
-			thinkingLevel: agentSettings.thinkingLevel ?? "off",
-			...(worktreeTask.constraints.timeoutMs === undefined
-				? {}
-				: { timeoutMs: worktreeTask.constraints.timeoutMs }),
-			worktreePath: context.worktreePath,
-			worktreeRoot: this.#options.worktreeRoot,
-		});
+		const runner =
+			context.workspaceKind === "sandbox"
+				? await createPiWorkspaceRunner({
+						agentDir,
+						allowedCommands: [...SANDBOX_TASK_CONSTRAINTS.allowedCommands],
+						appendPrompt: [this.#options.sandboxPrompt(context)],
+						additionalTools: this.#sandboxTools(context),
+						bashMode: "governed",
+						executor: this.#options.sandboxExecutor,
+						maxFileBytes: SANDBOX_TASK_CONSTRAINTS.maxFileBytes,
+						maxOutputBytes: SANDBOX_TASK_CONSTRAINTS.maxOutputBytes,
+						maxWriteBytes: SANDBOX_TASK_CONSTRAINTS.maxWriteBytes,
+						model,
+						modelRuntime: runtime,
+						nativeTools: ["read", "bash", "edit", "write"],
+						pathAllowlist: [...SANDBOX_TASK_CONSTRAINTS.pathAllowlist],
+						requireIsolatedSandbox: true,
+						sandboxMode: true,
+						sessionFile,
+						thinkingLevel: agentSettings.thinkingLevel ?? "off",
+						timeoutMs: SANDBOX_TASK_CONSTRAINTS.timeoutMs,
+						worktreePath: context.worktreePath,
+						worktreeRoot: this.#options.sandboxRoot,
+					})
+				: await (async () => {
+						const worktreeTask = await this.#options.ensureWorktree(context.taskId);
+						const nativeTools: readonly PiWorkspaceNativeToolName[] = worktreeTask.analysisOnly
+							? ["read"]
+							: ["read", "bash", "edit", "write"];
+						return await createPiWorkspaceRunner({
+							agentDir,
+							allowedCommands: worktreeTask.constraints.allowedCommands,
+							bashMode: "host",
+							requireIsolatedSandbox: false,
+							appendPrompt: [
+								await this.#options.taskPrompt({
+									baseRef: context.baseRef,
+									goal: context.goal,
+									repositoryRoot: context.repositoryRoot,
+									taskId: context.taskId,
+								}),
+							],
+							additionalTools: [...this.#additionalTools(context), ...this.#runtimeRestartTools()],
+							executor: this.#options.executor,
+							...(worktreeTask.constraints.maxOutputBytes === undefined
+								? {}
+								: { maxOutputBytes: worktreeTask.constraints.maxOutputBytes }),
+							model,
+							modelRuntime: runtime,
+							nativeTools,
+							pathAllowlist: worktreeTask.constraints.pathAllowlist,
+							repositoryPath: this.#options.repositoryRoot,
+							sessionFile,
+							thinkingLevel: agentSettings.thinkingLevel ?? "off",
+							...(worktreeTask.constraints.timeoutMs === undefined
+								? {}
+								: { timeoutMs: worktreeTask.constraints.timeoutMs }),
+							worktreePath: context.worktreePath,
+							worktreeRoot: this.#options.worktreeRoot,
+						});
+					})();
 		const native: NativeSession = {
 			activeRun: undefined,
 			agentDir,
@@ -611,6 +719,7 @@ export class WorkspaceNativeRunner {
 			},
 			sessionFile,
 			taskId: context.taskId,
+			workspaceKind: context.workspaceKind,
 			worktreePath: context.worktreePath,
 		};
 		this.#sessions.set(context.sessionId, native);
@@ -810,6 +919,64 @@ export class WorkspaceNativeRunner {
 		];
 	}
 
+	#sandboxTools(context: WorkspaceContext): ToolDefinition[] {
+		return [
+			defineTool({
+				description:
+					"Replace the sandbox todo list. Use this to keep a multi-step document/data task visible; at most one item may be in_progress.",
+				execute: async (_id, args) => {
+					const input = recordOf(args);
+					const items = Array.isArray(input.items) ? input.items : [];
+					const todos = await this.#options.todos.replace(
+						context.sessionId,
+						items
+							.map((item) => recordOf(item))
+							.map((item) => {
+								const status: WorkspaceTodoStatus | undefined =
+									item.status === "pending" ||
+									item.status === "in_progress" ||
+									item.status === "completed" ||
+									item.status === "cancelled"
+										? item.status
+										: undefined;
+								return {
+									content: typeof item.content === "string" ? item.content.trim() : "",
+									...(status === undefined ? {} : { status }),
+								};
+							})
+							.filter((item) => item.content.length > 0),
+					);
+					return toolResult({ todos });
+				},
+				label: "Sandbox todos",
+				name: "todo_write",
+				parameters: Type.Object({
+					items: Type.Array(
+						Type.Object({
+							content: Type.String(),
+							status: Type.Optional(
+								Type.Union([
+									Type.Literal("pending"),
+									Type.Literal("in_progress"),
+									Type.Literal("completed"),
+									Type.Literal("cancelled"),
+								]),
+							),
+						}),
+					),
+				}),
+			}),
+			defineTool({
+				description: "Read the current sandbox todo list.",
+				execute: async () =>
+					toolResult({ todos: await this.#options.todos.list(context.sessionId) }),
+				label: "Sandbox todos",
+				name: "todo_list",
+				parameters: Type.Object({}),
+			}),
+		];
+	}
+
 	async #startRun(
 		native: NativeSession,
 		context: WorkspaceContext,
@@ -980,6 +1147,7 @@ export class WorkspaceNativeRunner {
 						...(state.failure === undefined ? {} : { failure: state.failure }),
 						sessionId: context.sessionId,
 						taskId: context.taskId,
+						workspaceKind: context.workspaceKind,
 					}),
 				).catch((error: unknown) => {
 					this.#options.logger.warn("workspace run finished callback failed", {

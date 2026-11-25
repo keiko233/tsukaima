@@ -6,6 +6,7 @@ import type { MessagePart } from "@tsukaima/contracts";
 import { media, type TsukaimaDatabase } from "@tsukaima/db";
 import type { Logger } from "../logging.ts";
 import {
+	DOCUMENT_MEDIA_CONTENT_TYPES,
 	DEFAULT_MEDIA_FETCH_POLICY,
 	fetchGuardedMedia,
 	type MediaDnsResolver,
@@ -201,7 +202,7 @@ export class MediaService {
 		bytes: Uint8Array,
 		input: Omit<MediaStoreInput, "bytes">,
 	): Promise<StoredMedia> {
-		const sniffed = sniffImageMime(bytes);
+		const sniffed = input.kind === "file" ? undefined : sniffImageMime(bytes);
 		return this.store({
 			...input,
 			bytes,
@@ -219,14 +220,20 @@ export class MediaService {
 		const policy =
 			input.kind === "video"
 				? { ...this.#fetchPolicy, allowedContentTypes: VIDEO_MEDIA_CONTENT_TYPES }
-				: this.#fetchPolicy;
+				: input.kind === "file"
+					? {
+							...this.#fetchPolicy,
+							allowedContentTypes: DOCUMENT_MEDIA_CONTENT_TYPES,
+							mode: "document" as const,
+						}
+					: this.#fetchPolicy;
 		const fetched = await fetchGuardedMedia(url, {
 			policy,
 			...(this.#resolve === undefined ? {} : { resolve: this.#resolve }),
 			...(this.#transport === undefined ? {} : { transport: this.#transport }),
 		});
 		const bytes = fetched.bytes;
-		const sniffed = sniffImageMime(bytes);
+		const sniffed = input.kind === "file" ? undefined : sniffImageMime(bytes);
 		// Trust content sniffing over a declared type; fall back to the validated response type.
 		const mimeType = sniffed ?? fetched.mimeType;
 		return this.store({

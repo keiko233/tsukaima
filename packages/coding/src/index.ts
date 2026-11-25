@@ -32,18 +32,23 @@ export type { CommandResult, ExecOptions, ManagedProcessOptions, RunnerConfig } 
 export {
 	ANALYSIS_MOUNT,
 	buildBubblewrapArgv,
+	buildScratchBubblewrapArgv,
 	createBubblewrapSandbox,
 	createHostSandbox,
+	createScratchBubblewrapSandbox,
 	describeSandboxAvailability,
 	ISOLATED_BACKEND_REMEDY,
 	probeBubblewrapSandbox,
 	resolveExecutable,
+	SANDBOX_SYSTEM_READONLY_ROOTS,
 	SANDBOX_PATH_DIRS,
 	SandboxUnavailableError,
 } from "./sandbox.ts";
 export type {
 	BubblewrapArgvInput,
 	BubblewrapSandboxOptions,
+	ScratchBubblewrapArgvInput,
+	ScratchBubblewrapSandboxOptions,
 	HostSandboxOptions,
 	SandboxAvailability,
 	SandboxMount,

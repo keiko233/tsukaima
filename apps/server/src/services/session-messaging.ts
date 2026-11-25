@@ -59,6 +59,7 @@ export interface SendAgentMessageInput {
 	}[];
 	/** Stable durable submission id for an idempotent retry. */
 	readonly requestId?: string;
+	readonly parts?: readonly MessagePart[];
 	readonly senderExternalId?: string;
 	readonly senderName?: string;
 	readonly sessionId: string;
@@ -215,7 +216,10 @@ export class SessionMessagingService {
 			input.senderName ?? (direction === "system" ? "Tsukaima scheduler" : "WebUI admin");
 		const senderExternalId =
 			input.senderExternalId ?? (direction === "system" ? "tsukaima-system" : "webui-admin");
-		const parts: MessagePart[] = [{ text, type: "text" }];
+		const parts: MessagePart[] =
+			input.parts === undefined || input.parts.length === 0
+				? [{ text, type: "text" }]
+				: [...input.parts];
 		const runs = this.#runs?.();
 
 		const [existing] = await database

@@ -138,15 +138,35 @@ function createExtension(input: {
 }
 
 describe("admin runtime authorization", () => {
-	test("webui and workspace are allowed while unknown kinds and missing callers fail closed", () => {
-		for (const chatKind of ["webui", "workspace"] as const) {
-			expect(
-				authorizeAdminRuntimeToolCall({
-					caller: { chatKind, domainConversationId: "session-synthetic" },
-					toolName: "runtime_restart",
-				}),
-			).toMatchObject({ allowed: true });
-		}
+	test("webui and coding workspaces are allowed while sandbox workspaces and unknown kinds fail closed", () => {
+		expect(
+			authorizeAdminRuntimeToolCall({
+				caller: { chatKind: "webui", domainConversationId: "session-synthetic" },
+				toolName: "runtime_restart",
+			}),
+		).toMatchObject({ allowed: true });
+		expect(
+			authorizeAdminRuntimeToolCall({
+				caller: {
+					chatKind: "workspace",
+					domainConversationId: "session-synthetic",
+					isAdmin: true,
+					workspaceKind: "coding",
+				},
+				toolName: "runtime_restart",
+			}),
+		).toMatchObject({ allowed: true });
+		expect(
+			authorizeAdminRuntimeToolCall({
+				caller: {
+					chatKind: "workspace",
+					domainConversationId: "session-synthetic",
+					isAdmin: false,
+					workspaceKind: "sandbox",
+				},
+				toolName: "runtime_restart",
+			}),
+		).toMatchObject({ allowed: false, reason: "admin_required" });
 		for (const caller of [
 			{},
 			{ chatKind: "task" },

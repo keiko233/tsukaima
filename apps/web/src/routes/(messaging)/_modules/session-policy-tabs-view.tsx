@@ -17,6 +17,7 @@ import {
 	PolicyHumanizationFields,
 	PolicyMemoryConsolidationFields,
 	PolicyPacingFields,
+	PolicySandboxWorkspaceField,
 	PolicySidechatFields,
 	PolicySocialFields,
 	PolicyWorkspaceDelegationField,
@@ -304,6 +305,7 @@ export function PolicyTriggerTabView({
 
 					<div className="border-t border-border/60 pt-2.5">
 						<PolicyWorkspaceDelegationField draft={draft} onChange={onChange} />
+						<PolicySandboxWorkspaceField draft={draft} onChange={onChange} />
 					</div>
 
 					<Field label={m.policy_allowlist()} hint={m.policy_allowlist_hint()}>

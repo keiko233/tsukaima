@@ -239,6 +239,9 @@ mock.module("@/paraglide/messages", () => ({
 		policy_section_trigger: () => "Trigger and access rules",
 		policy_self_aliases: () => "Self aliases",
 		policy_self_aliases_hint: () => "Names that count as addressing Tsukaima without an @ mention.",
+		policy_sandbox_workspace: () => "Allow sandbox workspaces",
+		policy_sandbox_workspace_hint: () =>
+			"Let anyone in this chat spawn isolated document, file, and data sandboxes.",
 		policy_send_interval: () => "Send interval (ms)",
 		policy_sticker_only: () => "Sticker-only messages",
 		policy_strip_markdown: () => "Strip Markdown from replies",

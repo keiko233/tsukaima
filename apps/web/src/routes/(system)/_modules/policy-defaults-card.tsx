@@ -16,6 +16,7 @@ import {
 	PolicyHumanizationFields,
 	PolicyMemoryConsolidationFields,
 	PolicyPacingFields,
+	PolicySandboxWorkspaceField,
 	PolicySidechatFields,
 	PolicySocialFields,
 	PolicyWorkspaceDelegationField,
@@ -128,6 +129,7 @@ export function PolicyDefaultsCard() {
 		change((current) => ({
 			...current,
 			pacing: structuredClone(defaultConversationPolicy.pacing),
+			sandboxWorkspaceEnabled: defaultConversationPolicy.sandboxWorkspaceEnabled,
 			workspaceDelegationEnabled: false,
 		}));
 	const resetSidechat = () =>
@@ -225,6 +227,7 @@ export function PolicyDefaultsCard() {
 					<PolicySection id="policy-pacing" onReset={resetPacing} title={m.policy_section_pacing()}>
 						<PolicyPacingFields draft={draft} onChange={change} />
 						<PolicyWorkspaceDelegationField draft={draft} onChange={change} />
+						<PolicySandboxWorkspaceField draft={draft} onChange={change} />
 					</PolicySection>
 
 					<PolicySection

@@ -282,7 +282,9 @@ export function ChatPage({
 					) : null}
 					{surface === "workspace" ? (
 						<span className="shrink-0 font-mono text-[10px] tracking-[0.14em] text-violet uppercase">
-							{m.workspace_kind()}
+							{workspaceDetail?.workspace.workspaceKind === "sandbox"
+								? m.workspace_sandbox_badge()
+								: m.workspace_kind()}
 						</span>
 					) : null}
 					<span aria-hidden="true" className="hidden text-faint sm:inline">
@@ -368,15 +370,19 @@ export function ChatPage({
 									{workspaceDetail.workspace.taskStatus ?? m.workspace_status_draft()}
 								</span>
 							</span>
-							<span className="min-w-0 truncate">
-								{m.workspace_repo()}:{" "}
-								<span className="font-mono text-foreground">
-									{workspaceDetail.workspace.repositoryRoot}
-								</span>
-							</span>
-							<span>
-								{m.workspace_proposals()}: {workspaceDetail.proposals.length}
-							</span>
+							{workspaceDetail.workspace.workspaceKind === "sandbox" ? null : (
+								<>
+									<span className="min-w-0 truncate">
+										{m.workspace_repo()}:{" "}
+										<span className="font-mono text-foreground">
+											{workspaceDetail.workspace.repositoryRoot}
+										</span>
+									</span>
+									<span>
+										{m.workspace_proposals()}: {workspaceDetail.proposals.length}
+									</span>
+								</>
+							)}
 							{workspaceDetail.workspace.taskId !== null ? (
 								<span className="font-mono text-muted-foreground/70">
 									{workspaceDetail.workspace.taskId}

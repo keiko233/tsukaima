@@ -270,6 +270,9 @@ export const workspaceReferenceSchema = z.object({
 });
 export type WorkspaceReference = z.infer<typeof workspaceReferenceSchema>;
 
+export const workspaceKindSchema = z.enum(["coding", "sandbox"]);
+export type WorkspaceKind = z.infer<typeof workspaceKindSchema>;
+
 export const workspaceSummarySchema = z.object({
 	baseRef: z.string(),
 	chatObjectId: z.string(),
@@ -284,6 +287,7 @@ export const workspaceSummarySchema = z.object({
 	taskStatus: workspaceTaskStatusSchema.nullable(),
 	title: z.string(),
 	updatedAt: z.string(),
+	workspaceKind: workspaceKindSchema,
 });
 export type WorkspaceSummary = z.infer<typeof workspaceSummarySchema>;
 
@@ -1190,6 +1194,7 @@ export const workspaceCreateInputSchema = z.object({
 	parentSessionId: z.string().min(1).optional(),
 	tags: z.array(z.string().trim().min(1).max(32)).max(8).optional(),
 	thinking: thinkingLevelSchema.optional(),
+	workspaceKind: workspaceKindSchema.optional().default("coding"),
 });
 
 export const workspaceUpdateInputSchema = z.object({

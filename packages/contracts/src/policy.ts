@@ -459,6 +459,11 @@ export const conversationPolicySchema = z
 		 * `session_lookup`). Ordinary IM turns still never receive repository coding tools.
 		 */
 		workspaceDelegationEnabled: z.boolean().default(false),
+		/**
+		 * Allow any ordinary chat participant to use the isolated, capability-restricted
+		 * sandbox workspace surface (`sandbox_spawn`, `sandbox_status`, `sandbox_send`).
+		 */
+		sandboxWorkspaceEnabled: z.boolean().default(true),
 		enabled: z.boolean().default(true),
 		followUpWhenBusy: z.enum(["follow-up", "reject"]).default("follow-up"),
 		steerWhenBusy: z.enum(["steer", "follow-up", "reject"]).default("steer"),
@@ -552,6 +557,7 @@ export const defaultConversationPolicy: ConversationPolicy = {
 	version: 1,
 	capabilities: [],
 	workspaceDelegationEnabled: false,
+	sandboxWorkspaceEnabled: true,
 	enabled: true,
 	followUpWhenBusy: "follow-up",
 	steerWhenBusy: "steer",
@@ -785,6 +791,7 @@ export const conversationPolicyPatchSchema = z
 		version: z.number().int().min(1).optional(),
 		capabilities: z.array(z.string().min(1)).optional(),
 		workspaceDelegationEnabled: z.boolean().optional(),
+		sandboxWorkspaceEnabled: z.boolean().optional(),
 		enabled: z.boolean().optional(),
 		followUpWhenBusy: z.enum(["follow-up", "reject"]).optional(),
 		steerWhenBusy: z.enum(["steer", "follow-up", "reject"]).optional(),

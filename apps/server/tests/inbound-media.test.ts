@@ -94,4 +94,31 @@ describe("InboundMediaResolver", () => {
 			database.$client.close();
 		}
 	});
+
+	test("stores channel file parts as documents without image sniffing", async () => {
+		const { database, media } = await fixture();
+		const logger = createLogger({ level: "error", sink: () => {} });
+		try {
+			const resolver = new InboundMediaResolver({ logger, media });
+			const bytes = new TextEncoder().encode("synthetic,csv\n1,2\n");
+			const result = await resolver.resolve(
+				{
+					channelRef: "file-1",
+					fileName: "synthetic.csv",
+					mimeType: "text/csv",
+					type: "file",
+				},
+				{ fetchMedia: async () => bytes },
+			);
+			expect(result.kind).toBe("stored");
+			if (result.kind !== "stored") throw new Error("expected stored file");
+			expect(result.stored).toMatchObject({
+				kind: "file",
+				mimeType: "text/csv",
+				sizeBytes: bytes.byteLength,
+			});
+		} finally {
+			database.$client.close();
+		}
+	});
 });

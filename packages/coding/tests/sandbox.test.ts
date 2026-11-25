@@ -6,8 +6,10 @@ import { join } from "node:path";
 import {
 	ANALYSIS_MOUNT,
 	buildBubblewrapArgv,
+	buildScratchBubblewrapArgv,
 	createBubblewrapSandbox,
 	createHostSandbox,
+	createScratchBubblewrapSandbox,
 	probeBubblewrapSandbox,
 	resolveExecutable,
 	SANDBOX_PATH_DIRS,
@@ -24,6 +26,9 @@ await writeFile(join(worktreePath, "README.md"), "# sandbox fixture\n");
 const probe = await probeBubblewrapSandbox({ repositoryPath });
 const shellAvailable = existsSync("/bin/sh");
 const realSandboxUsable = probe.ok && shellAvailable;
+const scratchProbeRoot = join(root, "scratch-probe");
+await mkdir(scratchProbeRoot, { recursive: true });
+const scratchProbe = await probeBubblewrapSandbox({ repositoryPath: scratchProbeRoot });
 
 afterAll(async () => {
 	await rm(root, { force: true, recursive: true });
@@ -97,6 +102,116 @@ describe("buildBubblewrapArgv", () => {
 		expect(worktreeIndex).toBeGreaterThan(-1);
 		expect(argv[worktreeIndex - 1]).toBe("--bind");
 	});
+});
+
+describe("scratch bubblewrap sandbox", () => {
+	const sandboxRoot = join(root, "sandboxes");
+	const sessionPath = join(sandboxRoot, "session-a");
+
+	test("argv never shares the network or binds repository state", async () => {
+		await mkdir(sessionPath, { recursive: true });
+		const argv = buildScratchBubblewrapArgv({
+			args: ["report.txt"],
+			commandPath: "/usr/bin/cat",
+			cwd: sessionPath,
+			env: { HOME: "/tmp/home", PATH: "/usr/bin" },
+		});
+		const text = argv.join(" ");
+		expect(argv[0]).toBe("--unshare-all");
+		expect(text).not.toContain("--share-net");
+		expect(text).not.toContain("--ro-bind-try /etc/passwd");
+		expect(text).not.toContain("--ro-bind-try /etc/hosts");
+		expect(text).not.toContain("--ro-bind-try /etc/resolv.conf");
+		expect(text).not.toContain(repositoryPath);
+		expect(text).not.toContain(worktreePath);
+		const cwdIndex = argv.indexOf(sessionPath);
+		expect(argv[cwdIndex - 1]).toBe("--bind");
+		expect(argv.slice(argv.indexOf("--"))).toEqual(["--", "/usr/bin/cat", "report.txt"]);
+	});
+
+	test("fails closed when bwrap is missing and never falls back to the host", async () => {
+		await mkdir(sandboxRoot, { recursive: true });
+		const provider = createScratchBubblewrapSandbox({
+			env: { PATH: join(root, "missing-bwrap-path") },
+			sandboxRoot,
+		});
+		await expect(provider()).rejects.toBeInstanceOf(SandboxUnavailableError);
+		await expect(provider()).rejects.toMatchObject({ code: "bwrap_missing" });
+	});
+
+	test("rejects a cwd outside the scratch root", async () => {
+		await mkdir(sandboxRoot, { recursive: true });
+		const provider = createScratchBubblewrapSandbox({ sandboxRoot });
+		if (!(await probeBubblewrapSandbox({ repositoryPath })).ok) return;
+		const executor = await provider();
+		await expect(
+			executor.exec({
+				args: [],
+				command: "true",
+				cwd: worktreePath,
+				maxOutputBytes: 1024,
+				timeoutMs: 5_000,
+				writable: true,
+			}),
+		).rejects.toBeInstanceOf(SandboxUnavailableError);
+	});
+
+	test.skipIf(!scratchProbe.ok)(
+		"confines writes, hides host data, and has no network",
+		async () => {
+			const scratchRoot = join(root, "real-scratch");
+			const sessionDir = join(scratchRoot, "session");
+			await mkdir(sessionDir, { recursive: true });
+			await writeFile(join(root, "host-secret.txt"), "host-secret-marker");
+			const provider = createScratchBubblewrapSandbox({
+				pathDirs: ["/usr/local/bin", "/usr/bin", "/bin"],
+				sandboxRoot: scratchRoot,
+			});
+			const sandbox = await provider();
+			expect(sandbox.isolated).toBe(true);
+			const shell = existsSync("/bin/bash") ? "bash" : "sh";
+			const write = await sandbox.exec({
+				args: ["-c", "printf sandbox-ok > result.txt"],
+				command: shell,
+				cwd: sessionDir,
+				maxOutputBytes: 4096,
+				timeoutMs: 10_000,
+				writable: true,
+			});
+			expect(write.exitCode).toBe(0);
+			expect(await readFile(join(sessionDir, "result.txt"), "utf-8")).toBe("sandbox-ok");
+			expect(existsSync(join(root, "result.txt"))).toBe(false);
+
+			const hidden = await sandbox.exec({
+				args: [
+					"-c",
+					`cat ${join(root, "host-secret.txt")} ${repositoryPath}/README.md 2>&1 || true; cat /etc/passwd 2>&1 || true`,
+				],
+				command: shell,
+				cwd: sessionDir,
+				maxOutputBytes: 64 * 1024,
+				timeoutMs: 10_000,
+				writable: false,
+			});
+			expect(hidden.stdout).not.toContain("host-secret-marker");
+			expect(hidden.stdout).not.toContain("sandbox fixture");
+			expect(hidden.stdout).not.toContain("root:x:");
+
+			const network = await sandbox.exec({
+				args: [
+					"-c",
+					"command -v curl >/dev/null 2>&1 && curl -sS --max-time 2 http://127.0.0.1:1 2>&1 || echo network-unreachable",
+				],
+				command: shell,
+				cwd: sessionDir,
+				maxOutputBytes: 4096,
+				timeoutMs: 10_000,
+				writable: false,
+			});
+			expect(network.exitCode).toBe(0);
+			expect(network.stdout).toContain("network-unreachable");
+		},
+	);
 });
 
 describe("resolveExecutable", () => {

@@ -571,6 +571,7 @@ export async function getSessionContextStats(
 		codingSurfaceOmitted: host.modelToolNamesNotForSurface("coding"),
 		kind,
 		proactiveTools,
+		sandboxWorkspaceEnabled: policy.sandboxWorkspaceEnabled === true,
 		workspaceDelegationEnabled: policy.workspaceDelegationEnabled === true,
 	});
 	const [inspection, contextDetails] = await Promise.all([

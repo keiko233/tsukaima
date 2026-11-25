@@ -20,7 +20,10 @@ import {
 import { createApp } from "../src/app.ts";
 import type { TsukaimaLifecycle } from "../src/lifecycle.ts";
 import { resolveImCallerContext } from "../src/services/im-caller-context.ts";
-import { authorizeWorkspaceToolCall } from "../src/services/workspace-authorization.ts";
+import {
+	authorizeSandboxToolCall,
+	authorizeWorkspaceToolCall,
+} from "../src/services/workspace-authorization.ts";
 import type { PluginSettingsStore } from "../src/services/plugin-settings.ts";
 
 const directories: string[] = [];
@@ -1651,6 +1654,74 @@ describe("workspace tool authorization matrix", () => {
 					toolName: "workspace_spawn",
 				}),
 			).toMatchObject({ allowed: false, reason: "disallowed_chat_kind" });
+		}
+	});
+
+	test("sandbox tools allow ordinary IM senders while coding delegation stays admin-only", () => {
+		const policy = { sandboxWorkspaceEnabled: true };
+		for (const chatKind of ["private", "group"] as const) {
+			expect(
+				authorizeSandboxToolCall({
+					caller: {
+						chatKind,
+						domainConversationId: "session-1",
+						isAdmin: false,
+						senderPlatformId: "synthetic-user",
+					},
+					policy,
+					toolName: "sandbox_spawn",
+				}).allowed,
+			).toBe(true);
+			expect(
+				authorizeWorkspaceToolCall({
+					caller: {
+						chatKind,
+						domainConversationId: "session-1",
+						isAdmin: false,
+						senderPlatformId: "synthetic-user",
+					},
+					policy: { workspaceDelegationEnabled: true },
+					toolName: "workspace_spawn",
+				}),
+			).toMatchObject({ allowed: false, reason: "admin_required" });
+		}
+	});
+
+	test("sandbox tools fail closed for disabled policy, missing senders, and non-chat surfaces", () => {
+		expect(
+			authorizeSandboxToolCall({
+				caller: {
+					chatKind: "group",
+					domainConversationId: "session-1",
+					isAdmin: false,
+				},
+				policy: { sandboxWorkspaceEnabled: true },
+				toolName: "sandbox_spawn",
+			}),
+		).toMatchObject({ allowed: false, reason: "sender_required" });
+		expect(
+			authorizeSandboxToolCall({
+				caller: {
+					chatKind: "group",
+					domainConversationId: "session-1",
+					senderPlatformId: "synthetic-user",
+				},
+				policy: { sandboxWorkspaceEnabled: false },
+				toolName: "sandbox_spawn",
+			}),
+		).toMatchObject({ allowed: false, reason: "sandbox_workspace_disabled" });
+		for (const chatKind of ["workspace", "task", "plugin", undefined] as const) {
+			expect(
+				authorizeSandboxToolCall({
+					caller: {
+						...(chatKind === undefined ? {} : { chatKind }),
+						domainConversationId: "session-1",
+						senderPlatformId: "synthetic-user",
+					},
+					policy: { sandboxWorkspaceEnabled: true },
+					toolName: "sandbox_spawn",
+				}).allowed,
+			).toBe(false);
 		}
 	});
 });
