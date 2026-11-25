@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { createApp } from "../src/app.ts";
 import { writeRuntimeSettings } from "../src/runtime-settings.ts";
+import { createSlowStreamingModel } from "@tsukaima/core";
 import type { MessageEnvelope } from "@tsukaima/contracts";
 import { conversations } from "@tsukaima/db";
 import {
@@ -269,6 +270,73 @@ describe("server lifecycle with fake model", () => {
 			expect(logFiles.some((name) => /^tsukaima-\d{4}-\d{2}-\d{2}\.log$/.test(name))).toBe(true);
 			const logContent = await readFile(join(directory, "logs", logFiles[0]!), "utf8");
 			expect(logContent).toContain("tsukaima::server::lifecycle");
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("resolves inbound sticker parts into vision model context", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-server-sticker-"));
+		let observedContext: { messages?: Array<{ role: string; content: unknown }> } | undefined;
+		try {
+			const model = createSlowStreamingModel(["seen"], {
+				delayMs: 1,
+				onContext: (context) => {
+					observedContext = context as typeof observedContext;
+				},
+				supportsImage: true,
+			});
+			const { lifecycle } = createApp(
+				{
+					TSUKAIMA_DATA_DIR: directory,
+					TSUKAIMA_PORT: "7420",
+					TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
+				},
+				{ model },
+			);
+			await lifecycle.start();
+			const host = lifecycle.conversationHost;
+			if (host === undefined) throw new Error("Conversation host not initialized");
+			const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+			const stored = await lifecycle.media.storeFetchedBytes(pngBytes, {
+				kind: "sticker",
+				mimeType: "image/png",
+				source: "channel",
+			});
+			const conversationId = await host.createConversation();
+			await host.append({
+				conversationId,
+				envelope: {
+					...envelope("sticker-msg-1", "look at this"),
+					parts: [
+						{ text: "look at this", type: "text" },
+						{
+							mediaId: stored.id,
+							mimeType: stored.mimeType,
+							previewText: "[动画表情]",
+							sha256: stored.sha256,
+							type: "sticker",
+						},
+					],
+				},
+				forceSubmit: true,
+				submittedAtMs: Date.now(),
+			});
+			for (let attempt = 0; attempt < 40; attempt += 1) {
+				if (observedContext !== undefined) break;
+				await Bun.sleep(25);
+			}
+			const userMessage = observedContext?.messages?.find((m) => m.role === "user");
+			expect(Array.isArray(userMessage?.content)).toBe(true);
+			expect(userMessage?.content).toEqual([
+				{ text: expect.stringMatching(/^\[\d{2}:\d{2}\] Tester: look at this$/), type: "text" },
+				{
+					data: Buffer.from(pngBytes).toString("base64"),
+					mimeType: "image/png",
+					type: "image",
+				},
+			]);
+			await lifecycle.stop();
 		} finally {
 			await rm(directory, { force: true, recursive: true });
 		}
