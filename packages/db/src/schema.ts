@@ -209,6 +209,8 @@ export const conversations = sqliteTable(
 		kind: text("kind", {
 			enum: ["private", "group", "webui", "workspace", "task", "plugin"],
 		}).notNull(),
+		/** Monotonic timeline allocator for `messages.seq` and run segment anchors. */
+		nextSeq: integer("next_seq").notNull().default(1),
 		platformConversationId: text("platform_conversation_id"),
 		status: text("status").notNull().default("active"),
 		title: text("title"),
@@ -250,6 +252,8 @@ export const messages = sqliteTable(
 		conversationId: text("conversation_id")
 			.notNull()
 			.references(() => conversations.id, { onDelete: "cascade" }),
+		/** How an inbound user message was delivered while the session was busy; null when idle. */
+		deliveryMode: text("delivery_mode", { enum: ["steer", "follow-up", "interrupt"] }),
 		deliveryStatus: text("delivery_status", {
 			enum: ["received", "pending", "accepted", "sent", "failed", "uncertain"],
 		})
@@ -266,6 +270,11 @@ export const messages = sqliteTable(
 		platformMessageId: text("platform_message_id"),
 		rawRefJson: text("raw_ref_json"),
 		replyToMessageId: text("reply_to_message_id"),
+		/** Assistant/narration/stream row owner: the `conversation_runs.id` it belongs to. */
+		runId: text("run_id"),
+		segmentIndex: integer("segment_index"),
+		/** Strictly monotonic per-conversation timeline order; `0` for legacy rows. */
+		seq: integer("seq").notNull().default(0),
 		senderDisplayName: text("sender_display_name"),
 		senderExternalId: text("sender_external_id"),
 		senderUserId: text("sender_user_id").references(() => users.id, { onDelete: "set null" }),
@@ -284,9 +293,90 @@ export const messages = sqliteTable(
 		uniqueIndex("messages_chat_platform_unique").on(table.chatObjectId, table.platformMessageId),
 		uniqueIndex("messages_durable_entry_unique").on(table.conversationId, table.durableEntryId),
 		index("messages_conversation_time_idx").on(table.conversationId, table.occurredAt),
+		index("messages_conversation_seq_idx").on(table.conversationId, table.seq),
+		index("messages_run_idx").on(table.runId),
 		index("messages_sender_idx").on(table.senderUserId),
 		// Cross-session recency: the current speaker's latest messages across conversations.
 		index("messages_sender_time_idx").on(table.senderUserId, table.occurredAt),
+	],
+);
+
+/**
+ * One agent run of a conversation, anchored at the timeline position its first segment occupies.
+ *
+ * A run may be continued by steer messages while it is busy, so its durable answers and narration
+ * are grouped by run and split into segments rather than assumed to be a single contiguous turn.
+ */
+export const conversationRuns = sqliteTable(
+	"conversation_runs",
+	{
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		durationMs: integer("duration_ms"),
+		/** `pi.live.run.first` for durable runs, or the workspace native run id. */
+		durableRunKey: text("durable_run_key"),
+		endedAt: text("ended_at"),
+		failureDetail: text("failure_detail"),
+		id: text("id").primaryKey(),
+		/** Initial timeline anchor; mirrors the `seq` of the run's first segment. */
+		seq: integer("seq").notNull(),
+		startedAt: text("started_at").notNull(),
+		status: text("status", {
+			enum: ["running", "completed", "interrupted", "failed", "suppressed"],
+		})
+			.notNull()
+			.default("running"),
+		triggerMessageId: text("trigger_message_id"),
+		updatedAt: text("updated_at").notNull().default(now),
+	},
+	(table) => [
+		index("conversation_runs_conversation_seq_idx").on(table.conversationId, table.seq),
+		index("conversation_runs_durable_key_idx").on(table.conversationId, table.durableRunKey),
+	],
+);
+
+/**
+ * One contiguous stretch of a run: rounds the agent executed before yielding or settling.
+ *
+ * Segment `0` starts at the trigger message; a segment created by a steer message is anchored at
+ * that steer message's `seq`, which is how a transcript interleaves a steer message inside a run.
+ */
+export const conversationRunSegments = sqliteTable(
+	"conversation_run_segments",
+	{
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		durationMs: integer("duration_ms"),
+		endedAt: text("ended_at"),
+		failureDetail: text("failure_detail"),
+		finalMessageId: text("final_message_id"),
+		id: text("id").primaryKey(),
+		/** Serialized `RunRound[]`: model, thinking, tool calls, intermediate text, stop reason. */
+		roundsJson: text("rounds_json").notNull().default("[]"),
+		runId: text("run_id")
+			.notNull()
+			.references(() => conversationRuns.id, { onDelete: "cascade" }),
+		segmentIndex: integer("segment_index").notNull(),
+		/** Timeline anchor of this segment, always >= the run's own `seq`. */
+		seq: integer("seq").notNull(),
+		startedAt: text("started_at").notNull(),
+		status: text("status", {
+			enum: ["running", "steered", "completed", "interrupted", "failed", "suppressed"],
+		})
+			.notNull()
+			.default("running"),
+		triggerKind: text("trigger_kind", { enum: ["initial", "steer", "follow-up"] })
+			.notNull()
+			.default("initial"),
+		/** Initial user message for segment 0; the steer message for later segments. */
+		triggerMessageId: text("trigger_message_id"),
+		updatedAt: text("updated_at").notNull().default(now),
+	},
+	(table) => [
+		uniqueIndex("conversation_run_segments_run_index_unique").on(table.runId, table.segmentIndex),
+		index("conversation_run_segments_conversation_seq_idx").on(table.conversationId, table.seq),
 	],
 );
 

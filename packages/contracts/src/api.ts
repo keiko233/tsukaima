@@ -78,9 +78,90 @@ export const messageReplyPreviewSchema = z.object({
 });
 export type MessageReplyPreview = z.infer<typeof messageReplyPreviewSchema>;
 
+/** How a message enters a running or idle durable conversation. */
+export const messageDeliveryModeSchema = z.enum(["steer", "follow-up", "interrupt"]);
+export type MessageDeliveryMode = z.infer<typeof messageDeliveryModeSchema>;
+
+/** The provider and model selected for one model call, once the stream names them. */
+export const liveRunModelSchema = z.object({
+	modelId: z.string().min(1),
+	providerId: z.string().min(1),
+});
+export type LiveRunModel = z.infer<typeof liveRunModelSchema>;
+
+/**
+ * One structured round of an agent run: the model call, its reasoning, the tools it ran, and the
+ * text it produced before the round ended. Equivalent to a `runStepSchema` list, but kept as the
+ * durable unit so a completed segment and a live run render through the same shape.
+ */
+export const runToolCallSchema = z.object({
+	callId: z.string().optional(),
+	toolName: z.string().min(1),
+	/** Arguments the model passed, as a compact single-line JSON string. */
+	argumentsText: z.string(),
+	/** The tool's own text output, truncated. Empty when it produced none. */
+	output: z.string(),
+	isError: z.boolean(),
+	status: z.enum(["pending", "running", "done"]).optional(),
+	durationMs: z.number().int().nonnegative().optional(),
+});
+export type RunToolCall = z.infer<typeof runToolCallSchema>;
+
+export const runRoundSchema = z.object({
+	roundIndex: z.number().int().nonnegative(),
+	model: liveRunModelSchema.optional(),
+	/** Reason text for this round. */
+	thinking: z.string().optional(),
+	toolCalls: z.array(runToolCallSchema),
+	/** Text streamed before the tool calls of this round, if any. */
+	intermediateText: z.string().optional(),
+	stopReason: z.enum(["stop", "toolUse", "aborted", "length", "error"]).optional(),
+	durationMs: z.number().int().nonnegative().optional(),
+	failure: z.string().optional(),
+});
+export type RunRound = z.infer<typeof runRoundSchema>;
+
+export const runSegmentStatusSchema = z.enum([
+	"running",
+	"steered",
+	"completed",
+	"interrupted",
+	"failed",
+	"suppressed",
+]);
+export type RunSegmentStatus = z.infer<typeof runSegmentStatusSchema>;
+
+export const runSegmentTriggerKindSchema = z.enum(["initial", "steer", "follow-up"]);
+export type RunSegmentTriggerKind = z.infer<typeof runSegmentTriggerKindSchema>;
+
+/**
+ * One persisted stretch of an agent run, anchored at its own `seq` in the conversation timeline.
+ *
+ * A run continued by a steer message has several segments; each segment's `seq` places it after
+ * the message that triggered it, which is what keeps a steered timeline strictly interleaved.
+ */
+export const runSegmentSummarySchema = z.object({
+	id: z.string(),
+	runId: z.string(),
+	segmentIndex: z.number().int().nonnegative(),
+	seq: z.number().int().nonnegative(),
+	triggerMessageId: z.string().nullable(),
+	triggerKind: runSegmentTriggerKindSchema,
+	status: runSegmentStatusSchema,
+	rounds: z.array(runRoundSchema),
+	finalMessageId: z.string().nullable(),
+	startedAt: z.string(),
+	endedAt: z.string().nullable(),
+	durationMs: z.number().int().nonnegative().nullable(),
+	failureDetail: z.string().nullable(),
+});
+export type RunSegmentSummary = z.infer<typeof runSegmentSummarySchema>;
+
 export const messageSummarySchema = z.object({
 	contentText: z.string(),
 	deliveryStatus: deliveryStatusSchema,
+	/** How the user message was delivered while the session was busy; null for idle sends. */
+	deliveryMode: messageDeliveryModeSchema.nullable(),
 	direction: z.enum(["inbound", "outbound", "system"]),
 	/**
 	 * Durable entry this message was produced from, when it is an assistant answer. It is the
@@ -96,6 +177,12 @@ export const messageSummarySchema = z.object({
 	replyTo: messageReplyPreviewSchema.optional(),
 	replyToMessageId: z.string().nullable(),
 	replyDecision: inboundReplyDecisionSchema.optional(),
+	/** Run this row belongs to; `null` for user messages, notices, and legacy rows. */
+	runId: z.string().nullable(),
+	/** Segment within the run; `null` outside a run segment. */
+	segmentIndex: z.number().int().nonnegative().nullable(),
+	/** Strict per-conversation timeline order; `0` for legacy rows written before sequencing. */
+	seq: z.number().int().nonnegative(),
 	senderDisplayName: z.string(),
 	senderExternalId: z.string().nullable(),
 	senderKind: z.enum(["human", "bot", "assistant", "system"]),
@@ -112,6 +199,8 @@ export type MessageSummary = z.infer<typeof messageSummarySchema>;
 export const messagePageSchema = z.object({
 	messages: z.array(messageSummarySchema),
 	nextCursor: z.string().nullable(),
+	/** Persisted run segments in the page's timeline range, ordered by `seq` ascending. */
+	runSegments: z.array(runSegmentSummarySchema),
 });
 export type MessagePage = z.infer<typeof messagePageSchema>;
 
@@ -206,10 +295,6 @@ export const workspaceProposalSummarySchema = z.object({
 	title: z.string(),
 });
 export type WorkspaceProposalSummary = z.infer<typeof workspaceProposalSummarySchema>;
-
-/** How a message enters a running or idle durable conversation. */
-export const messageDeliveryModeSchema = z.enum(["queue", "interrupt", "follow-up"]);
-export type MessageDeliveryMode = z.infer<typeof messageDeliveryModeSchema>;
 
 export const restartModeSchema = z.enum(["restart", "update"]);
 export type RestartMode = z.infer<typeof restartModeSchema>;
@@ -1007,11 +1092,22 @@ export const sessionsMessageInputSchema = z
 		message: "Provide exactly one of messageId or durableEntryId",
 	});
 
-/** Which assistant turn to expand. `entryId` is `messages.durableEntryId`. */
-export const runStepsInputSchema = z.object({
-	entryId: z.string().min(1),
-	sessionId: z.string().min(1),
-});
+/** Which assistant turn to expand. Name the run segment, its run, or its durable entry. */
+export const runStepsInputSchema = z
+	.object({
+		/** `messages.durableEntryId` of the assistant answer. */
+		entryId: z.string().min(1).optional(),
+		/** `conversation_runs.id`; expands the newest segment of that run. */
+		runId: z.string().min(1).optional(),
+		/** `conversation_run_segments.id`. */
+		runSegmentId: z.string().min(1).optional(),
+		sessionId: z.string().min(1),
+	})
+	.refine(
+		(input) =>
+			input.entryId !== undefined || input.runId !== undefined || input.runSegmentId !== undefined,
+		{ message: "Provide at least one of entryId, runId, or runSegmentId" },
+	);
 
 export const chatsCreateLocalInputSchema = z.object({
 	sessionTitle: z.string().trim().min(1).max(120),
@@ -1068,8 +1164,8 @@ export const sessionsCreateInputSchema = z.object({
 
 export const sessionsSendInputSchema = z.object({
 	/**
-	 * `queue` is inserted at the next safe step, `interrupt` cancels the current generation,
-	 * and `follow-up` runs after the current turn settles.
+	 * `steer` continues the running turn at its next safe step, `interrupt` cancels the current
+	 * generation, and `follow-up` runs after the current turn settles.
 	 */
 	mode: messageDeliveryModeSchema.optional(),
 	references: z
@@ -1378,13 +1474,6 @@ export const liveDraftToolCallSchema = z.object({
 });
 export type LiveDraftToolCall = z.infer<typeof liveDraftToolCallSchema>;
 
-/** The provider and model selected for the in-flight request, once the first partial names them. */
-export const liveRunModelSchema = z.object({
-	modelId: z.string().min(1),
-	providerId: z.string().min(1),
-});
-export type LiveRunModel = z.infer<typeof liveRunModelSchema>;
-
 /** Durable backoff before the next model attempt. */
 export const liveRunRetrySchema = z.object({
 	at: z.number().int().nonnegative(),
@@ -1415,6 +1504,19 @@ export type LiveRunPhase = z.infer<typeof liveRunPhaseSchema>;
 export const liveRunStateSchema = z.object({
 	/** Current generation attempt, starting at 1 and growing across retries. */
 	attempt: z.number().int().positive().optional(),
+	/** Timeline anchor of the in-flight segment, so a client can interleave it with messages. */
+	seq: z.number().int().nonnegative().optional(),
+	/** Run this state belongs to. */
+	runId: z.string().optional(),
+	/** Segment being streamed; a steered run keeps the same `runId` and grows `segmentIndex`. */
+	segmentId: z.string().optional(),
+	segmentIndex: z.number().int().nonnegative().optional(),
+	/** What started this segment: the initial message, a steer message, or a follow-up. */
+	triggerKind: runSegmentTriggerKindSchema.optional(),
+	/** Lifecycle of the segment, so the UI can label a continued run. */
+	status: runSegmentStatusSchema.optional(),
+	/** Structured rounds of the in-flight segment, in run order. */
+	rounds: z.array(runRoundSchema).optional(),
 	/** Model calls, reasoning, and tools from rounds that already finished, in run order. */
 	steps: z.array(runStepSchema).optional(),
 	/** Tool calls the model is still emitting, before they start executing. */
@@ -1453,6 +1555,13 @@ export type LiveRunState = z.infer<typeof liveRunStateSchema>;
  */
 export const liveRunPatchSchema = z.object({
 	attempt: z.number().int().positive().optional(),
+	seq: z.number().int().nonnegative().optional(),
+	runId: z.string().optional(),
+	segmentId: z.string().optional(),
+	segmentIndex: z.number().int().nonnegative().optional(),
+	triggerKind: runSegmentTriggerKindSchema.optional(),
+	status: runSegmentStatusSchema.optional(),
+	rounds: z.array(runRoundSchema).optional(),
 	draftTools: z.array(liveDraftToolCallSchema).optional(),
 	failure: z.string().nullable().optional(),
 	model: liveRunModelSchema.optional(),
@@ -1500,6 +1609,10 @@ export const runStepsSchema = z.object({
 	durationSeconds: z.number().nonnegative().optional(),
 	/** Steps in transcript order. Empty when the turn produced none worth showing. */
 	steps: z.array(runStepSchema),
+	/** Same run as structured rounds, when the segment has been persisted. */
+	rounds: z.array(runRoundSchema).optional(),
+	/** The segment these steps came from, including its timeline anchor. */
+	segment: runSegmentSummarySchema.optional(),
 });
 export type RunSteps = z.infer<typeof runStepsSchema>;
 
