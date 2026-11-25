@@ -93,6 +93,18 @@ describe("conversation trigger classification", () => {
 		expect(alias.classification).toBe("soft");
 		expect(alias.aliasMentioned).toBe(true);
 
+		const cjkAliasPolicy = conversationPolicySchema.parse({
+			...policy,
+			trigger: { ...policy.trigger, selfAliases: ["蓝肥鱼"] },
+		});
+		const cjkShortAlias = classifyConversationTrigger({
+			chatKind: "group",
+			envelope: envelope({ parts: [{ text: "肥鱼再来点表情包", type: "text" }] }),
+			policy: cjkAliasPolicy,
+		});
+		expect(cjkShortAlias.classification).toBe("soft");
+		expect(cjkShortAlias.aliasMentioned).toBe(true);
+
 		const recent = classifyConversationTrigger({
 			chatKind: "group",
 			envelope: envelope({ parts: [{ text: "just chatting", type: "text" }] }),

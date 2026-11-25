@@ -142,11 +142,72 @@ describe("Batch 6 pre-model gate acceptance", () => {
 			const direct = await lifecycle.conversationRouter.ingest(
 				groupEnvelope("idle-bot-addressee", "你能帮我整理这段笔记吗？"),
 			);
+			const imperative = await lifecycle.conversationRouter.ingest(
+				groupEnvelope("idle-bot-imperative", "再来点表情包"),
+			);
 			expect(ambient.classification).toBe("ambient");
 			expect(quoted.classification).toBe("ambient");
 			expect(other.classification).toBe("ambient");
 			expect(direct.classification).toBe("soft");
-			expect(addressed).toEqual([true, true]);
+			expect(imperative.classification).toBe("soft");
+			expect(addressed).toEqual([true, true, true]);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("throttled active group still consults gate for undirected follow-ups without @mention", async () => {
+		const gateCalls: Array<{
+			aliases: readonly string[] | undefined;
+			requireDirectAddress: boolean | undefined;
+			text: string;
+		}> = [];
+		const lifecycle = await createLifecycle(
+			{
+				decideBurstCompletion: async () => ({ decision: "SEND", source: "fallback" }),
+				decideProactiveBubble: async () => ({ decision: "SHOULD", source: "fallback" }),
+				decideUndirectedGroupReply: async (input) => {
+					gateCalls.push({
+						aliases: input.assistantAliases,
+						requireDirectAddress: input.requireDirectAddress,
+						text: input.messageText,
+					});
+					return { decision: "REPLY", source: "gate" };
+				},
+			},
+			() => {},
+		);
+		try {
+			const group = await createGroupSession(lifecycle);
+			await enableGate(lifecycle, group.sessionId);
+			await lifecycle.conversationPolicy.update({
+				conversationId: group.sessionId,
+				policy: { trigger: { recentActivityMinIntervalMs: 60_000, selfAliases: ["蓝肥鱼"] } },
+				scope: "conversation",
+			});
+			lifecycle.conversationPacing.recordReply(group.durableConversationId);
+
+			// First undirected message consumes the throttled soft escalation budget.
+			const first = await lifecycle.conversationRouter.ingest(
+				groupEnvelope("throttled-1", "刚刚那个挺有意思"),
+			);
+			expect(first.classification).toBe("soft");
+
+			// Second undirected follow-up arrives within the 60s throttle window without @mention or "你".
+			const second = await lifecycle.conversationRouter.ingest(
+				groupEnvelope("throttled-2", "再来点表情包"),
+			);
+			expect(second.classification).toBe("soft");
+			expect(gateCalls).toEqual([
+				{ aliases: ["蓝肥鱼"], requireDirectAddress: undefined, text: "刚刚那个挺有意思" },
+				{ aliases: ["蓝肥鱼"], requireDirectAddress: true, text: "再来点表情包" },
+			]);
+			const stored = await listMessages(lifecycle, group.sessionId);
+			const secondMsg = stored.find((m) => m.platformMessageId === "throttled-2");
+			expect(secondMsg?.replyDecision).toMatchObject({
+				gate: { decision: "REPLY", source: "gate" },
+				reason: "group reply gate invited a response",
+			});
 		} finally {
 			await lifecycle.stop();
 		}

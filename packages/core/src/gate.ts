@@ -26,6 +26,7 @@ export interface BurstCompletionGateDecision {
 }
 
 export interface UndirectedGroupGateInput {
+	readonly assistantAliases?: readonly string[];
 	readonly conversationId: string;
 	readonly messageText: string;
 	readonly policy: ConversationGatePolicy;

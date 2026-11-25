@@ -93,10 +93,14 @@ export function buildUndirectedGroupPrompt(
 	structured = false,
 ): string {
 	const recent = (input.recentContext ?? []).slice(-6).map((line) => `- ${clip(line)}`);
+	const aliases = (input.assistantAliases ?? [])
+		.map((alias) => clip(alias, 40))
+		.filter((alias) => alias.length > 0);
 	return [
 		"Decide whether the assistant should join this undirected group message or stay quiet.",
+		...(aliases.length > 0 ? [`Assistant names/aliases: ${aliases.join(", ")}`] : []),
 		input.requireDirectAddress
-			? "Choose REPLY only if the latest speaker is addressing the assistant. Second-person wording is a clue, not proof. Choose SKIP when they address someone else or the addressee is unclear."
+			? "Choose REPLY if the latest speaker is addressing the assistant (including by name, nickname/shortened alias, second-person wording, or a clear follow-up request/question directed at the assistant's recent messages). Choose SKIP when they are addressing someone else or chatting among themselves."
 			: "Default to SKIP. Choose REPLY only if the assistant is clearly invited by context or has something genuinely natural and helpful to add. Choose SKIP when people are talking to each other, when the message is a brief reaction/laughter/acknowledgment, when the assistant already spoke frequently in recent context, or when chiming in would feel forced.",
 		...(recent.length > 0 ? ["Recent group context:", ...recent] : []),
 		`Latest message from ${clip(input.senderName, 60)}: ${clip(input.messageText)}`,

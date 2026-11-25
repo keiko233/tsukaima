@@ -49,6 +49,21 @@ const includesAny = (text: string, values: readonly string[]): string | undefine
 	return undefined;
 };
 
+const CJK_THREE_OR_MORE = /^\p{Script=Han}{3,}$/u;
+
+/** Match explicit aliases plus natural 2-character CJK trailing nicknames (e.g. "蓝肥鱼" -> "肥鱼"). */
+const includesAlias = (text: string, values: readonly string[]): string | undefined => {
+	const exact = includesAny(text, values);
+	if (exact !== undefined) return exact;
+	for (const value of values) {
+		const trimmed = value.trim();
+		if (CJK_THREE_OR_MORE.test(trimmed) && text.includes(trimmed.slice(-2))) {
+			return value;
+		}
+	}
+	return undefined;
+};
+
 const selfIds = (input: TriggerClassificationInput): string[] => {
 	const ids = new Set<string>(input.botIds ?? []);
 	if (input.envelope.target?.id !== undefined) ids.add(input.envelope.target.id);
@@ -194,7 +209,7 @@ export function classifyConversationTrigger(
 
 	const text = messagePartsText(envelope.parts);
 	const aliases = [...policy.trigger.selfAliases, ...(input.selfAliases ?? [])];
-	const alias = includesAny(text, aliases);
+	const alias = includesAlias(text, aliases);
 	const aliasMentioned = alias !== undefined;
 	const peerBotSpeaking =
 		envelope.sender.isBot === true ||
