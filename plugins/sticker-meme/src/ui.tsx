@@ -461,7 +461,12 @@ function StickerInspector({
 					<Input value={name} onChange={setName} />
 				</Field>
 				<Field label={t.t("item_description")}>
-					<Input value={description} onChange={setDescription} />
+					<textarea
+						className="min-h-20 w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm"
+						rows={3}
+						value={description}
+						onChange={(event) => setDescription(event.target.value)}
+					/>
 				</Field>
 				<Field label={t.t("item_keywords")}>
 					<Input value={keywords} onChange={setKeywords} />

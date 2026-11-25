@@ -83,7 +83,7 @@ export const stickerSemanticSourceSchema = z.enum(stickerSemanticSources);
 const semanticLabelSchema = z.string().trim().min(1).max(64);
 export const stickerSemanticProfileSchema = z.object({
 	confidence: z.number().finite().min(0).max(1).default(0),
-	description: z.string().max(500).default(""),
+	description: z.string().max(1200).default(""),
 	emotions: z.array(semanticLabelSchema).max(32).default([]),
 	emoji: z.string().max(64).optional(),
 	intents: z.array(semanticLabelSchema).max(32).default([]),

@@ -143,7 +143,7 @@ function withTelegramContext(
 					: "";
 	return {
 		...profile,
-		description: `${profile.description}${suffix}`.trim().slice(0, 240),
+		description: `${profile.description}${suffix}`.trim().slice(0, 1000),
 		keywords,
 	};
 }

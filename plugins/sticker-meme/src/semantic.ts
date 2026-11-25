@@ -619,7 +619,7 @@ export function mergeSemanticProfiles(
 		normalizeText(override.description).length > 0 ? override.description : base.description;
 	return {
 		confidence: Math.min(0.99, Math.max(base.confidence, override.confidence)),
-		description: sanitizeModelText(description).slice(0, 240),
+		description: sanitizeModelText(description).slice(0, 1000),
 		emotions,
 		...((override.emoji ?? base.emoji) === undefined
 			? {}
@@ -662,7 +662,7 @@ export interface VisionSemanticOptions {
 
 const visionResponseSchema = z.object({
 	confidence: z.number().finite().min(0).max(1).optional(),
-	description: z.string().max(500).optional(),
+	description: z.string().max(1200).optional(),
 	emotions: z.array(z.string()).max(32).optional(),
 	intents: z.array(z.string()).max(32).optional(),
 	keywords: z.array(z.string()).max(64).optional(),
@@ -688,11 +688,16 @@ function promptForVision(input: StickerSemanticInput, animationFrameCount = 0): 
 		"You classify Telegram stickers for a chat assistant's semantic sticker search.",
 		"Return one JSON object only, with keys: description, emotions, intents, tones, labels, keywords, confidence.",
 		`Allowed labels: ${allowedIds}.`,
-		"Use only allowed labels. Give 1-5 labels. description must be one short English sentence.",
+		"Use only allowed labels. Give 1-5 labels.",
+		"description must be a detailed, specific English description of the sticker, about 2-4 informative sentences and under 900 characters.",
+		"Say who or what is depicted: the character name, mascot, or series/IP when recognizable (the pack title is a useful hint), plus notable outfit, appearance, or props.",
+		"Describe the visual content: facial expression, pose/action, gestures, and any visible text, captions, speech bubbles, or symbols (for example ?, hearts, sweat drop, anger vein) and what they mean.",
+		"Briefly note the conversational vibe or usage context when it helps.",
+		"Do not include URLs, file paths, or markdown.",
 		"Include useful English and Chinese keywords when they fit.",
 		...(animationFrameCount > 1
 			? [
-					`The attached image is a single contact sheet merged from ${animationFrameCount} frames sampled across ONE animated sticker. Read the frames left-to-right, top-to-bottom as a time sequence and describe the whole motion, not just one frame.`,
+					`The attached image is a single contact sheet merged from ${animationFrameCount} frames sampled across ONE animated sticker. Read the frames left-to-right, top-to-bottom as a time sequence. Explicitly describe the full animation progression, the start -> middle -> end changes, the looping action, and any expression changes, not just a single frame.`,
 				]
 			: []),
 		`Pack title: ${sanitizeModelText(input.title ?? "") || "(unknown)"}.`,
@@ -791,7 +796,7 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 			const keywords = uniqueLabels(parsed.data.keywords ?? [], 64);
 			const profile: StickerSemanticProfile = {
 				confidence: Math.min(0.99, Math.max(0.5, parsed.data.confidence ?? 0.75)),
-				description: sanitizeModelText(parsed.data.description ?? base.description).slice(0, 240),
+				description: sanitizeModelText(parsed.data.description ?? base.description).slice(0, 1000),
 				emotions:
 					emotions.length > 0
 						? emotions
@@ -889,7 +894,7 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 			timeout: this.#timeoutMs,
 		});
 		const response = await client.chat.completions.create({
-			max_tokens: 450,
+			max_tokens: 900,
 			messages: [
 				{
 					content: [
@@ -938,7 +943,7 @@ function createHostModelClassifier(options: {
 	return new VisionSemanticClassifier({
 		complete: async ({ base64, mimeType, prompt }) => {
 			const response = await options.models.complete({
-				maxTokens: 450,
+				maxTokens: 900,
 				messages: [
 					{
 						content: [

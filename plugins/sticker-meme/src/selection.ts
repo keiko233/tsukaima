@@ -160,6 +160,51 @@ function candidate(item: StickerItem, pack: StickerPack): StickerCandidate {
 	};
 }
 
+export interface CompactStickerCandidate {
+	readonly description: string;
+	readonly emotions: readonly string[];
+	readonly itemId: string;
+	readonly keywords?: readonly string[];
+	readonly labels: readonly string[];
+	readonly name: string;
+	readonly packId: string;
+	readonly packName: string;
+}
+
+const COMPACT_DESCRIPTION_LIMIT = 120;
+const COMPACT_EMOTION_LIMIT = 4;
+const COMPACT_LABEL_LIMIT = 5;
+const COMPACT_KEYWORD_LIMIT = 6;
+
+function compactDescription(value: string): string {
+	const text = sanitizeModelText(value);
+	if (text.length <= COMPACT_DESCRIPTION_LIMIT) return text;
+	return `${text.slice(0, COMPACT_DESCRIPTION_LIMIT - 1).trimEnd()}…`;
+}
+
+/**
+ * Strips the fields the chat model never needs so a 25-candidate search response stays small
+ * even when vision descriptions are detailed. Ranking still sees the full item payload.
+ */
+export function toCompactStickerCandidate(sticker: StickerCandidate): CompactStickerCandidate {
+	const emotions = sticker.emotions.slice(0, COMPACT_EMOTION_LIMIT).map(sanitizeModelText);
+	const labels = sticker.labels.slice(0, COMPACT_LABEL_LIMIT).map(sanitizeModelText);
+	const excluded = new Set([...emotions, ...labels].map(normalizeLabel));
+	const keywords = uniq(sticker.keywords.map(normalizeLabel))
+		.filter((keyword) => keyword.length > 0 && !excluded.has(keyword))
+		.slice(0, COMPACT_KEYWORD_LIMIT);
+	return {
+		description: compactDescription(sticker.description),
+		emotions,
+		itemId: sticker.itemId,
+		...(keywords.length === 0 ? {} : { keywords }),
+		labels,
+		name: sanitizeModelText(sticker.name),
+		packId: sticker.packId,
+		packName: sanitizeModelText(sticker.packName),
+	};
+}
+
 /**
  * Models often send several synonyms or keywords separated by spaces/commas. Treat each term as
  * an alternative (OR) instead of requiring the entire phrase to appear verbatim.
