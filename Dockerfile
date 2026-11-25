@@ -44,8 +44,8 @@ RUN test -d /app/node_modules || { \
 COPY . .
 RUN bun run check:version
 RUN bun run --filter '@tsukaima/web' build
-# Runtime needs source + workspace links, not Vite/Playwright/TypeScript dev dependencies.
-RUN bun prune --production
+# Keep workspace dev dependencies (Vite, Tailwind, TanStack Router, Paraglide) so in-container
+# upgrades can install updated packages and rebuild `@tsukaima/web` without an external redeploy.
 
 # The runtime stage copies the tree in two layers. `node_modules` changes only with the lockfile,
 # so a code-only release reuses that layer and exports a few megabytes of source instead of
@@ -62,25 +62,34 @@ ARG GH_VERSION=2.105.0
 ARG NODE_VERSION=26.13.1
 ARG UV_VERSION=0.13.9
 # Canvas ships bundled shared libraries when it uses a prebuilt binary; a source build links
-# these system libraries instead, so both paths work at runtime. Python needs venv/pip because a
-# stdio MCP server or skill script may create its own virtualenv and install packages into it.
+# these system libraries instead, so both paths work at runtime. Keep the native build toolchain
+# in runtime as well so in-container upgrades can install or rebuild native packages without
+# requiring an external `FORCE_DEPS=1` host redeploy. Python needs venv/pip because a stdio MCP
+# server or skill script may create its own virtualenv and install packages into it.
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
 		bubblewrap \
+		build-essential \
 		ca-certificates \
 		curl \
 		ffmpeg \
 		git \
+		pkg-config \
 		python3 \
 		python3-pip \
 		python3-venv \
 		ripgrep \
 		tini \
 		libcairo2 \
+		libcairo2-dev \
 		libpango-1.0-0 \
+		libpango1.0-dev \
 		libjpeg62-turbo \
+		libjpeg-dev \
 		libgif7 \
+		libgif-dev \
 		librsvg2-2 \
+		librsvg2-dev \
 	&& gh_arch="$(dpkg --print-architecture)" \
 	&& curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${gh_arch}.tar.gz" -o /tmp/gh.tar.gz \
 	&& tar -xzf /tmp/gh.tar.gz -C /tmp \
@@ -119,9 +128,12 @@ ENV NODE_ENV=production \
 # /app/.git so governed workspace worktrees keep working.
 COPY --from=build --chown=bun:bun /app/node_modules /app/node_modules
 COPY --from=build --chown=bun:bun /runtime /app
-# /app itself keeps the WORKDIR owner, and a governed deployment reload has to create or
-# replace working-tree entries there. The tree below it already came in as bun:bun.
-RUN mkdir -p /data && chown bun:bun /app /data
+# /app itself keeps the WORKDIR owner, and a governed deployment reload or in-container upgrade
+# has to create or replace working-tree entries, node_modules, and WebUI dist there. Also ensure
+# the Bun install cache directory is writable by `bun` for in-container dependency installs.
+RUN mkdir -p /data /home/bun/.bun/install/cache \
+	&& chown -R bun:bun /home/bun/.bun \
+	&& chown bun:bun /app /data
 USER bun
 EXPOSE 7420
 VOLUME ["/data"]

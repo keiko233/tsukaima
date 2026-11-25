@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "../src/logging.ts";
@@ -73,6 +73,55 @@ describe("DependencyInstaller", () => {
 		expect(calls).toHaveLength(2);
 		expect(calls[0]?.args).toEqual(["install", "--frozen-lockfile"]);
 		expect(calls[1]?.args).toEqual(["install"]);
+	});
+
+	test("does not pass NODE_ENV to bun install", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-deps-"));
+		directories.push(directory);
+		await writeFile(join(directory, "package.json"), JSON.stringify({ name: "test-pkg" }));
+
+		const previousNodeEnv = process.env.NODE_ENV;
+		process.env.NODE_ENV = "production";
+		const environments: Array<Readonly<Record<string, string>>> = [];
+		const installer = new DependencyInstaller({
+			exec: async (_command, _args, options) => {
+				environments.push(options.env);
+				return { exitCode: 0, stderr: "", stdout: "" };
+			},
+			repositoryRoot: directory,
+		});
+		try {
+			await installer.install();
+		} finally {
+			if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+			else process.env.NODE_ENV = previousNodeEnv;
+		}
+
+		expect(environments).toHaveLength(1);
+		expect(environments[0]?.NODE_ENV).toBeUndefined();
+		expect(environments[0]?.CI).toBe("1");
+	});
+
+	test("restores bun.lock when the fallback install modifies it", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-deps-"));
+		directories.push(directory);
+		await writeFile(join(directory, "package.json"), JSON.stringify({ name: "test-pkg" }));
+		const originalLock = '{"lockfileVersion":0,"workspaces":{}}\n';
+		await writeFile(join(directory, "bun.lock"), originalLock);
+
+		const installer = new DependencyInstaller({
+			exec: async (_command, args) => {
+				if (args.includes("--frozen-lockfile")) {
+					return { exitCode: 1, stderr: "lockfile had changes", stdout: "" };
+				}
+				await writeFile(join(directory, "bun.lock"), '{"lockfileVersion":1}\n');
+				return { exitCode: 0, stderr: "", stdout: "fallback success" };
+			},
+			repositoryRoot: directory,
+		});
+
+		await installer.install();
+		expect(await readFile(join(directory, "bun.lock"), "utf8")).toBe(originalLock);
 	});
 
 	test("throws a descriptive error when both frozen-lockfile and fallback fail", async () => {

@@ -11,7 +11,7 @@ export const healthRouter = {
 			stage: state.stage,
 			state: state.state,
 			uptimeMs: Date.now() - context.lifecycle.startedAtMs,
-			version: runtimeVersion(),
+			version: runtimeVersion(process.env, context.lifecycle.config.repositoryRoot),
 		});
 	}),
 };

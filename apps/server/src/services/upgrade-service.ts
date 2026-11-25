@@ -34,6 +34,10 @@ export interface UpgradeTaskWorktree {
 	readonly path: string;
 }
 
+export interface UpgradeUpdatePreparer {
+	prepare(options?: { readonly signal?: AbortSignal | undefined }): Promise<void>;
+}
+
 export interface UpgradeServiceOptions {
 	readonly audit?: (entry: AuditEntry) => Promise<void> | void;
 	readonly coding: UpgradeCodingStore;
@@ -55,6 +59,8 @@ export interface UpgradeServiceOptions {
 	};
 	/** GitHub credential for the network fetch; local git calls stay credential-free. */
 	readonly token?: () => Promise<string | undefined>;
+	/** Installs dependencies and rebuilds runtime assets before an update restart. */
+	readonly updatePreparer?: UpgradeUpdatePreparer | undefined;
 	readonly workspace: WorkspaceService;
 }
 
@@ -150,6 +156,7 @@ export class UpgradeService {
 	readonly #repositoryRoot: string;
 	readonly #restart: UpgradeServiceOptions["restart"];
 	readonly #token: UpgradeServiceOptions["token"];
+	readonly #updatePreparer: UpgradeUpdatePreparer | undefined;
 	readonly #workspace: WorkspaceService;
 	#starting = false;
 
@@ -165,6 +172,7 @@ export class UpgradeService {
 		this.#repositoryRoot = options.repositoryRoot;
 		this.#restart = options.restart;
 		this.#token = options.token;
+		this.#updatePreparer = options.updatePreparer;
 		this.#workspace = options.workspace;
 	}
 
@@ -401,21 +409,7 @@ export class UpgradeService {
 				await this.#approveWorkspaceReview(row, requestedBy, review);
 			}
 			await this.#merge(row, requestedBy, review);
-			if (this.#dependencyInstaller !== undefined) {
-				try {
-					await this.#dependencyInstaller.install();
-				} catch (installError) {
-					const message =
-						installError instanceof Error ? installError.message : String(installError);
-					this.#logger.error("dependency installation failed during upgrade finalization", {
-						error: message,
-						upgradeId: row.id,
-					});
-					throw new Error(`upgrade_install_dependencies_failed:${message}`, {
-						cause: installError,
-					});
-				}
-			}
+			await this.#prepareRuntime(row, "upgrade finalization");
 			const restart = await this.#restart.schedule({
 				delaySeconds: DEFAULT_UPGRADE_DELAY_SECONDS,
 				mode: "update",
@@ -552,6 +546,64 @@ export class UpgradeService {
 		}
 	}
 
+	/**
+	 * Install dependencies and rebuild runtime assets after the merge. A failure here must undo
+	 * the merge commit in the live checkout: otherwise the container reports up_to_date on a
+	 * revision it can never successfully start.
+	 */
+	async #prepareRuntime(row: UpgradeRow, phase: string): Promise<void> {
+		try {
+			if (this.#updatePreparer !== undefined) {
+				await this.#updatePreparer.prepare();
+				return;
+			}
+			await this.#dependencyInstaller?.install();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.#logger.error("runtime preparation failed during upgrade", {
+				error: message,
+				phase,
+				upgradeId: row.id,
+			});
+			await this.#rollbackPreparation(row, phase, message);
+			throw new Error(`upgrade_install_dependencies_failed:${message}`, { cause: error });
+		}
+	}
+
+	async #rollbackPreparation(row: UpgradeRow, phase: string, reason: string): Promise<void> {
+		if (!SAFE_COMMIT.test(row.currentCommit)) {
+			this.#logger.error("cannot roll back live checkout after preparation failure", {
+				error: "invalid recorded current commit",
+				phase,
+				upgradeId: row.id,
+			});
+			return;
+		}
+		try {
+			const reset = await this.#git(["reset", "--hard", row.currentCommit], GIT_TIMEOUT_MS);
+			if (reset.exitCode === 0) {
+				this.#logger.warn("rolled back live checkout after failed runtime preparation", {
+					currentCommit: row.currentCommit,
+					phase,
+					reason,
+					upgradeId: row.id,
+				});
+				return;
+			}
+			this.#logger.error("failed to roll back live checkout after preparation failure", {
+				error: reset.stderr.trim() || `exit code ${reset.exitCode}`,
+				phase,
+				upgradeId: row.id,
+			});
+		} catch (error) {
+			this.#logger.error("failed to roll back live checkout after preparation failure", {
+				error: error instanceof Error ? error.message : String(error),
+				phase,
+				upgradeId: row.id,
+			});
+		}
+	}
+
 	async #fastForward(row: UpgradeRow, requestedBy: string): Promise<UpgradeRecord> {
 		const database = this.#db();
 		const merge = await this.#git(["merge", "--ff-only", row.targetCommit]);
@@ -584,28 +636,15 @@ export class UpgradeService {
 			version: version || row.targetVersion,
 		});
 		if (row.autoFinalize) {
-			if (this.#dependencyInstaller !== undefined) {
-				try {
-					await this.#dependencyInstaller.install();
-				} catch (installError) {
-					const message =
-						installError instanceof Error ? installError.message : String(installError);
-					this.#logger.error("dependency installation failed during fast-forward upgrade", {
-						error: message,
-						upgradeId: row.id,
-					});
-					await database
-						.update(runtimeUpgrades)
-						.set({
-							error: `upgrade_install_dependencies_failed:${message}`,
-							status: "failed",
-							updatedAtMs: Date.now(),
-						})
-						.where(eq(runtimeUpgrades.id, row.id));
-					throw new Error(`upgrade_install_dependencies_failed:${message}`, {
-						cause: installError,
-					});
-				}
+			try {
+				await this.#prepareRuntime(row, "fast-forward upgrade");
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				await database
+					.update(runtimeUpgrades)
+					.set({ error: message, status: "failed", updatedAtMs: Date.now() })
+					.where(eq(runtimeUpgrades.id, row.id));
+				throw error;
 			}
 			const restart = await this.#restart.schedule({
 				delaySeconds: DEFAULT_UPGRADE_DELAY_SECONDS,
