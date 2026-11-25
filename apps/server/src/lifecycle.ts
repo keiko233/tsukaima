@@ -113,6 +113,10 @@ import {
 	authorizeAdminSettingsToolCall,
 	createAdminSettingsToolsExtension,
 } from "./services/admin-settings-tools.ts";
+import {
+	CHAT_SELF_TUNE_TOOL_NAMES,
+	createChatSelfTuneToolsExtension,
+} from "./services/chat-self-tune-tools.ts";
 import { ConversationGateService } from "./services/conversation-gate.ts";
 import { NativeDecisionModels } from "./services/decision-models.ts";
 import { ConversationPacingTracker } from "./services/conversation-pacing.ts";
@@ -212,6 +216,7 @@ function reservedModelToolNames(): readonly string[] {
 		...WORKSPACE_TOOL_NAMES,
 		...ADMIN_OPS_TOOL_NAMES,
 		...ADMIN_SETTINGS_TOOL_NAMES,
+		...CHAT_SELF_TUNE_TOOL_NAMES,
 	];
 }
 
@@ -369,6 +374,7 @@ export class TsukaimaLifecycle {
 	private codingAgentToolsExtension: DurableExtension | undefined;
 	private adminOpsToolsExtension: DurableExtension | undefined;
 	private adminSettingsToolsExtension: DurableExtension | undefined;
+	private chatSelfTuneToolsExtension: DurableExtension | undefined;
 
 	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
 		this.config = config;
@@ -498,6 +504,24 @@ export class TsukaimaLifecycle {
 			logger: this.runtimeLog,
 			onInboundTrigger: (conversationId) =>
 				this.replyDispatcher.cancelPendingOutput(conversationId),
+			onQuietFeedback: async ({ matched, sessionId }) => {
+				const existing = await this.promptHooks.list({ includeFinished: false, sessionId });
+				for (const hook of existing) {
+					if (hook.createdBy === "harness-quiet-feedback" && hook.targetSessionId === sessionId) {
+						await this.promptHooks.cancel(hook.id, "replaced by newer quiet feedback");
+					}
+				}
+				const nowMs = Date.now();
+				await this.promptHooks.add({
+					createdBy: "harness-quiet-feedback",
+					expiresAtMs: nowMs + 30 * 60_000,
+					kind: "runtime",
+					metadata: matched === undefined ? {} : { matched },
+					prompt:
+						"[Room feedback] Someone recently asked you to be quieter or stop interrupting here. Keep replies brief, do not chime in uninvited, consider adjusting your chat settings (chat_settings_adjust), and prefer TSUKAIMA_LURK when unsure.",
+					targetSessionId: sessionId,
+				});
+			},
 			pacing: this.conversationPacing,
 			policy: this.conversationPolicy,
 			promptContext: async (sessionId) => this.promptHooks.renderContext(sessionId),
@@ -1062,6 +1086,34 @@ export class TsukaimaLifecycle {
 			},
 			policy: this.conversationPolicy,
 			resolveSessionId,
+		});
+		this.chatSelfTuneToolsExtension = createChatSelfTuneToolsExtension({
+			audit: (entry) => this.writeAudit(entry),
+			logger: this.runtimeLog,
+			onQuietUntilChanged: (durableConversationId, quietUntilMs) => {
+				this.conversationPacing.setTemporaryQuiet(durableConversationId, quietUntilMs);
+			},
+			policy: this.conversationPolicy,
+			promptHooks: this.promptHooks,
+			resolveSession: async (durableConversationId) => {
+				const database = this.domainDatabase;
+				if (database === undefined) return undefined;
+				const [row] = await database
+					.select({
+						chatKind: chatObjects.kind,
+						id: conversations.id,
+						sessionKind: conversations.kind,
+					})
+					.from(conversations)
+					.leftJoin(chatObjects, eq(chatObjects.id, conversations.chatObjectId))
+					.where(eq(conversations.durableConversationId, durableConversationId))
+					.limit(1);
+				if (row === undefined) return undefined;
+				return {
+					chatKind: row.chatKind ?? row.sessionKind,
+					sessionId: row.id,
+				};
+			},
 		});
 		this.pluginConversations = new PluginConversationService({
 			audit: (entry) => this.writeAudit(entry),
@@ -2154,6 +2206,7 @@ export class TsukaimaLifecycle {
 			...(this.codingAgentToolsExtension === undefined ? [] : [this.codingAgentToolsExtension]),
 			...(this.adminOpsToolsExtension === undefined ? [] : [this.adminOpsToolsExtension]),
 			...(this.adminSettingsToolsExtension === undefined ? [] : [this.adminSettingsToolsExtension]),
+			...(this.chatSelfTuneToolsExtension === undefined ? [] : [this.chatSelfTuneToolsExtension]),
 		];
 		if (conversationHost !== undefined && dynamicExtensions.length > 0) {
 			// Install before plugins connect so inbound messages always resolve the extension;

@@ -41,6 +41,24 @@ const REFUSAL_PATTERNS: readonly RegExp[] = [
 	/\b(?:stop\s+(?:messaging|texting|bothering|pinging)\s+me|leave\s+me\s+alone|don'?t\s+(?:message|text|bother|ping)\s+me|shut\s+up)\b/iu,
 ];
 
+/**
+ * Softer room feedback asking the bot to talk less, quiet down, or stop chiming in.
+ * Used by the router and turn-context harness to dial back undirected group participation
+ * without requiring manual operator intervention.
+ */
+const QUIET_FEEDBACK_PATTERNS: readonly RegExp[] = [
+	/(?:你|这(?:个)?(?:bot|机器人))?太吵了?/u,
+	/(?:好吵|吵死了|话太多|话好多|太话痨|刷屏了?|太刷屏)/u,
+	/(?:少说(?:两句|点|几句)|别老(?:插话|接话|接茬|说话|回)|别(?:乱)?(?:插话|插嘴|硬接|接茬)|不用每句都回|别一直回)/u,
+	/(?:安静(?:点|一点|一下|会|一会)|先安静|先潜水|潜水(?:吧|一会)|先别说话|先别插话)/u,
+	/\b(?:too\s+(?:noisy|loud|chatty)|talk\s+less|quiet\s+down|be\s+quiet|stop\s+(?:interrupting|chiming\s+in|spamming|talking)|shush|lurk\s+for\s+a\s+bit)\b/iu,
+];
+
+/** Brief reactions or dead-end acknowledgments that rarely warrant a forced reply in group chat. */
+const LOW_SUBSTANCE_REACTION_PATTERNS: readonly RegExp[] = [
+	/^(?:哈+|呵+|嘿+|嘻+|草+|笑死|确实|嗯+|哦+|噢+|啊+|行|好的?|收到|明白|了解|可以|行吧|好吧|没事|没关系|谢谢|多谢|6+|牛+|nb|nice|ok(?:ay)?|lol|lmao|haha+|hehe+|thx|thanks|cool|yep|yup|nope)[!！。.~～?？\s]*$/iu,
+];
+
 export interface RefusalDetectionResult {
 	readonly matched?: string;
 	readonly refused: boolean;
@@ -56,6 +74,36 @@ export function detectRefusal(text: string): RefusalDetectionResult {
 		}
 	}
 	return { refused: false };
+}
+
+export interface QuietFeedbackDetectionResult {
+	readonly matched?: string;
+	readonly quietRequested: boolean;
+}
+
+export function detectQuietFeedback(text: string): QuietFeedbackDetectionResult {
+	const trimmed = text.trim();
+	if (trimmed.length === 0) return { quietRequested: false };
+	const refusal = detectRefusal(trimmed);
+	if (refusal.refused) {
+		return {
+			...(refusal.matched === undefined ? {} : { matched: refusal.matched }),
+			quietRequested: true,
+		};
+	}
+	for (const pattern of QUIET_FEEDBACK_PATTERNS) {
+		const match = pattern.exec(trimmed);
+		if (match !== null) {
+			return { matched: match[0], quietRequested: true };
+		}
+	}
+	return { quietRequested: false };
+}
+
+export function isLowSubstanceReaction(text: string): boolean {
+	const trimmed = text.trim();
+	if (trimmed.length === 0 || trimmed.length > 24) return false;
+	return LOW_SUBSTANCE_REACTION_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
 export function localDayKey(nowMs: number, timezoneOffsetMinutes = 0): string {

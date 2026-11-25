@@ -41,6 +41,11 @@ import type { ConversationPacingTracker } from "./conversation-pacing.ts";
 import type { ConversationPolicyService } from "./conversation-policy.ts";
 import { loadMentionLabels } from "./mention-labels.ts";
 import { isValidTimeZone, localParts } from "./schedule-time.ts";
+import { detectQuietFeedback, isLowSubstanceReaction } from "./social-profile.ts";
+
+/** Default temporary quiet window armed automatically when room members ask the bot to quiet down. */
+const AUTO_QUIET_FEEDBACK_MS = 15 * 60_000;
+const MIN_BOT_RATIO_SAMPLE = 4;
 
 export interface ConversationIngestResult {
 	readonly chatObjectId: string;
@@ -74,6 +79,11 @@ export interface ConversationRouterOptions {
 	/** Clock override used for daily session boundaries (defaults to `Date.now`). */
 	readonly now?: () => number;
 	readonly onInboundTrigger?: (durableConversationId: string) => void;
+	/** Called when an inbound group message asks the bot to quiet down / talk less. */
+	readonly onQuietFeedback?: (input: {
+		readonly matched?: string;
+		readonly sessionId: string;
+	}) => Promise<void> | void;
 	readonly pacing?: ConversationPacingTracker;
 	readonly policy?: ConversationPolicyService;
 	/**
@@ -164,6 +174,7 @@ export class ConversationRouter {
 	readonly #logger: Logger;
 	readonly #now: () => number;
 	readonly #onInboundTrigger: ConversationRouterOptions["onInboundTrigger"];
+	readonly #onQuietFeedback: ConversationRouterOptions["onQuietFeedback"];
 	readonly #pacing: ConversationPacingTracker | undefined;
 	readonly #policy: ConversationPolicyService | undefined;
 	readonly #promptContext: ConversationRouterOptions["promptContext"];
@@ -192,6 +203,7 @@ export class ConversationRouter {
 		this.#logger = options.logger;
 		this.#now = options.now ?? Date.now;
 		this.#onInboundTrigger = options.onInboundTrigger;
+		this.#onQuietFeedback = options.onQuietFeedback;
 		this.#pacing = options.pacing;
 		this.#policy = options.policy;
 		this.#promptContext = options.promptContext;
@@ -287,21 +299,62 @@ export class ConversationRouter {
 				(message.target?.quote?.fromSelf === true
 					? { direction: "outbound" as const, senderKind: "assistant" as const }
 					: undefined);
+			const nowMs = this.#now();
+			const text = messageText(message.parts);
+			const quietFeedback =
+				message.conversationKey.kind === "group"
+					? detectQuietFeedback(text)
+					: { quietRequested: false };
+			if (quietFeedback.quietRequested) {
+				this.#pacing?.setTemporaryQuiet(
+					target.durableConversationId,
+					nowMs + AUTO_QUIET_FEEDBACK_MS,
+				);
+				try {
+					await this.#onQuietFeedback?.({
+						...(quietFeedback.matched === undefined ? {} : { matched: quietFeedback.matched }),
+						sessionId: target.sessionId,
+					});
+				} catch (error) {
+					messageLog.debug("quiet feedback hook failed", {
+						error: error instanceof Error ? error.message : String(error),
+						sessionId: target.sessionId,
+					});
+				}
+			}
+			const temporaryQuietActive =
+				(policy.pacing.quietUntilMs !== undefined && policy.pacing.quietUntilMs > nowMs) ||
+				(this.#pacing?.isTemporarilyQuiet(target.durableConversationId, nowMs) ?? false);
 			const recentlyActive =
 				this.#pacing?.isRecentlyActive(
 					target.durableConversationId,
 					Math.max(300_000, policy.pacing.burstMaxWaitMs),
+					nowMs,
 				) ?? false;
 			const escalation = policy.trigger.recentActivityEscalation;
+			const lowSubstanceReaction =
+				message.conversationKey.kind === "group" && isLowSubstanceReaction(text);
+			const botRatioHigh =
+				message.conversationKey.kind === "group" &&
+				(recentlyActive || policy.gate.ambientGroupReply) &&
+				!temporaryQuietActive &&
+				(await this.#isRecentBotRatioHigh(database, target.sessionId, policy));
 			// `throttled` lets at most one undirected message per interval start a full-model `soft`
 			// turn, so recent activity alone cannot burn a model call on every group message.
+			// Temporary quiet mode, high recent bot share, or a brief reaction also suppress
+			// undirected escalation so the bot does not barge into group chatter awkwardly.
 			const recentActivity =
 				recentlyActive &&
+				!temporaryQuietActive &&
+				!quietFeedback.quietRequested &&
+				!lowSubstanceReaction &&
+				!botRatioHigh &&
 				(escalation === "always" ||
 					(escalation === "throttled" &&
 						(this.#pacing?.softEscalationAvailable(
 							target.durableConversationId,
 							policy.trigger.recentActivityMinIntervalMs,
+							nowMs,
 						) ??
 							true)));
 			const trigger = classifyConversationTrigger({
@@ -317,15 +370,20 @@ export class ConversationRouter {
 			let effectiveTrigger = trigger;
 			let replyGate: InboundReplyDecision["gate"];
 			const gate = this.#conversationGate?.();
-			const text = messageText(message.parts);
 			const couldAddressBot =
 				!trigger.peerBotSpeaking &&
 				message.mentions.length === 0 &&
 				message.target?.replyToEnvelopeId === undefined &&
 				/(?:[你您妳]|\b(?:you|your|yours)\b)/iu.test(text);
-			const allowAmbientReply = policy.gate.ambientGroupReply && !recentlyActive;
+			const allowAmbientReply =
+				policy.gate.ambientGroupReply &&
+				!recentlyActive &&
+				!temporaryQuietActive &&
+				!quietFeedback.quietRequested &&
+				!lowSubstanceReaction &&
+				!botRatioHigh;
 			const classifyAmbient =
-				(allowAmbientReply || couldAddressBot) &&
+				(allowAmbientReply || (couldAddressBot && !temporaryQuietActive)) &&
 				trigger.classification === "ambient" &&
 				trigger.reason === "group context only";
 			if (
@@ -401,7 +459,7 @@ export class ConversationRouter {
 				!effectiveTrigger.aliasMentioned &&
 				recentActivity
 			) {
-				this.#pacing?.recordSoftEscalation(target.durableConversationId);
+				this.#pacing?.recordSoftEscalation(target.durableConversationId, nowMs);
 			}
 			this.#stats[effectiveTrigger.classification] += 1;
 			messageLog.debug("conversation trigger classified", {
@@ -488,9 +546,15 @@ export class ConversationRouter {
 					gate: replyGate,
 					reason:
 						trigger.reason === "group context only" && recentlyActive && !recentActivity
-							? escalation === "off"
-								? "recent activity escalation disabled"
-								: "recent activity escalation throttled"
+							? temporaryQuietActive || quietFeedback.quietRequested
+								? "temporary quiet mode active"
+								: botRatioHigh
+									? "recent bot share high"
+									: lowSubstanceReaction
+										? "low-substance reaction"
+										: escalation === "off"
+											? "recent activity escalation disabled"
+											: "recent activity escalation throttled"
 							: classifyAmbient && effectiveTrigger.classification === "soft"
 								? effectiveTrigger.reason
 								: trigger.reason,
@@ -514,6 +578,33 @@ export class ConversationRouter {
 			};
 		} finally {
 			this.#ingesting.delete(ingestionKey);
+		}
+	}
+
+	async #isRecentBotRatioHigh(
+		database: TsukaimaDatabase,
+		sessionId: string,
+		policy: ConversationPolicy,
+	): Promise<boolean> {
+		if (!policy.social.enabled || policy.social.maxSelfMessageRatio >= 1) return false;
+		try {
+			const rows = await database
+				.select({ direction: messages.direction })
+				.from(messages)
+				.where(
+					and(
+						eq(messages.conversationId, sessionId),
+						ne(messages.direction, "system"),
+						ne(messages.kind, "tool"),
+					),
+				)
+				.orderBy(desc(messages.occurredAt), desc(messages.id))
+				.limit(Math.max(MIN_BOT_RATIO_SAMPLE, policy.social.selfRatioWindowMessages));
+			if (rows.length < MIN_BOT_RATIO_SAMPLE) return false;
+			const outboundCount = rows.filter((row) => row.direction === "outbound").length;
+			return outboundCount / rows.length > policy.social.maxSelfMessageRatio;
+		} catch {
+			return false;
 		}
 	}
 

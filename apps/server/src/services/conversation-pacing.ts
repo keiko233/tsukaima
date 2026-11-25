@@ -4,6 +4,8 @@ type ConversationPacingState = {
 	lurkAtMs?: number;
 	/** Last undirected message promoted to a `soft` turn by recent activity. */
 	softEscalationAtMs?: number;
+	/** Temporary process-local quiet deadline (e.g. from room quiet feedback or self-tune). */
+	quietUntilMs?: number;
 	/** Last turn started by a poke notice. */
 	noticeWakeAtMs?: number;
 	lastReplyAtMs?: number;
@@ -63,6 +65,21 @@ export class ConversationPacingTracker {
 
 	recordSoftEscalation(conversationId: string, nowMs = Date.now()): void {
 		this.#entry(conversationId).softEscalationAtMs = nowMs;
+	}
+
+	/** Arm or clear a temporary quiet window that suppresses undirected group escalations. */
+	setTemporaryQuiet(conversationId: string, untilMs: number | null): void {
+		const state = this.#entry(conversationId);
+		if (untilMs === null || untilMs <= 0) {
+			delete state.quietUntilMs;
+			return;
+		}
+		state.quietUntilMs = Math.max(state.quietUntilMs ?? 0, untilMs);
+	}
+
+	isTemporarilyQuiet(conversationId: string, nowMs = Date.now()): boolean {
+		const until = this.#state.get(conversationId)?.quietUntilMs;
+		return until !== undefined && until > nowMs;
 	}
 
 	/** Consume the poke-wake cooldown; `false` while a previous wake is still cooling down. */

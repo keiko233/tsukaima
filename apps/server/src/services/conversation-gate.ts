@@ -97,7 +97,7 @@ export function buildUndirectedGroupPrompt(
 		"Decide whether the assistant should join this undirected group message or stay quiet.",
 		input.requireDirectAddress
 			? "Choose REPLY only if the latest speaker is addressing the assistant. Second-person wording is a clue, not proof. Choose SKIP when they address someone else or the addressee is unclear."
-			: "Choose SKIP unless the assistant is clearly invited by context or has something genuinely helpful to add.",
+			: "Default to SKIP. Choose REPLY only if the assistant is clearly invited by context or has something genuinely natural and helpful to add. Choose SKIP when people are talking to each other, when the message is a brief reaction/laughter/acknowledgment, when the assistant already spoke frequently in recent context, or when chiming in would feel forced.",
 		...(recent.length > 0 ? ["Recent group context:", ...recent] : []),
 		`Latest message from ${clip(input.senderName, 60)}: ${clip(input.messageText)}`,
 		...(structured
