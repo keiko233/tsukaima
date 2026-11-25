@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tsukaima Atelier</title>
+<style>
+:root{
+	--shell:#ECE9E2;--sheet:#FAF9F6;--plate:#F2F0EB;--plate-hi:#ECE9E3;--hair:rgba(35,38,42,.06);
+	--ink:#23262A;--ink-2:#5C6168;--ink-3:#8A8F95;--pill:rgba(35,38,42,.065);
+	--accent:#4F6D82;--accent-soft:rgba(79,109,130,.12);--sage:#3D7058;--sage-soft:rgba(61,112,88,.12);
+	--amber:#A6721F;--amber-soft:rgba(166,114,31,.13);
+	--shadow:0 1px 2px rgba(35,38,42,.05),0 12px 40px -12px rgba(35,38,42,.14);
+	--bubble-me:#E6ECF0;--bubble:#F2F0EB;
+}
+:root[data-theme=dark]{
+	--shell:#111316;--sheet:#191C21;--plate:#22262D;--plate-hi:#282D35;--hair:rgba(255,255,255,.055);
+	--ink:#E7E5E0;--ink-2:#A8ADB4;--ink-3:#757B83;--pill:rgba(255,255,255,.07);
+	--accent:#8FAEC4;--accent-soft:rgba(143,174,196,.14);--sage:#7FB79A;--sage-soft:rgba(127,183,154,.13);
+	--amber:#D9A65A;--amber-soft:rgba(217,166,90,.14);
+	--shadow:0 1px 2px rgba(0,0,0,.3),0 18px 50px -14px rgba(0,0,0,.6);
+	--bubble-me:#253039;--bubble:#22262D;
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{background:var(--shell);color:var(--ink);font:13.5px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif;-webkit-font-smoothing:antialiased;transition:background .3s}
+button,select,input,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:0;background:none}
+.app{display:grid;grid-template-columns:56px 212px 1fr;height:100vh;padding:10px 10px 10px 0;gap:0}
+/* rail */
+.rail{display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:6px}
+.rail .logo{margin-bottom:14px}
+.rbtn{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;color:var(--ink-3);transition:.18s}
+.rbtn:hover{background:var(--pill);color:var(--ink)}
+.rbtn.on{background:var(--pill);color:var(--ink)}
+.rbtn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.rail .sp{flex:1}
+/* sidebar */
+.side{padding:14px 10px 10px 4px;display:flex;flex-direction:column;gap:2px;overflow:auto}
+.side h6{font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--ink-3);text-transform:uppercase;padding:14px 10px 6px}
+.side h6:first-child{padding-top:2px}
+.sitem{display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:8px;color:var(--ink-2);text-align:left;width:100%;transition:.15s}
+.sitem:hover{background:var(--pill)}
+.sitem.on{background:var(--sheet);color:var(--ink);box-shadow:0 1px 2px rgba(35,38,42,.06)}
+.sitem .dot{width:7px;height:7px;border-radius:50%;background:var(--ink-3);opacity:.5}
+.sitem.on .dot{background:var(--accent);opacity:1}
+.sitem .ct{margin-left:auto;font-size:11px;color:var(--ink-3)}
+/* sheet */
+.sheet{background:var(--sheet);border-radius:14px;box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;min-width:0;transition:background .3s}
+.top{display:flex;align-items:center;gap:12px;padding:16px 28px 0}
+.crumb{color:var(--ink-3);font-size:12.5px}.crumb b{color:var(--ink);font-weight:600}
+.top .sp{flex:1}
+.scroll{overflow:auto;flex:1;padding:18px 28px 40px}
+.view{display:none;max-width:760px;margin:0 auto;animation:fade .25s ease}
+.view.on{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}}
+h1{font-size:22px;font-weight:650;letter-spacing:-.01em}
+.lede{color:var(--ink-2);margin:4px 0 22px}
+.gl{font-size:12px;font-weight:600;color:var(--ink-3);margin:22px 12px 7px;display:flex;justify-content:space-between}
+/* tonal group */
+.group{background:var(--plate);border-radius:11px;overflow:hidden}
+.row{display:flex;align-items:center;gap:14px;padding:11px 14px;position:relative;min-height:52px}
+.row+.row::before,.row+.disc::before,.disc+.row::before,.disc+.disc::before{content:"";position:absolute;top:0;left:14px;right:0;height:1px;background:var(--hair)}
+.disc{position:relative}
+.row .lbl{flex:1;min-width:0}
+.row .t{font-weight:550}
+.row .s{color:var(--ink-3);font-size:12px;margin-top:1px}
+.ic{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;font-size:13px;font-weight:650;flex:none;background:var(--accent-soft);color:var(--accent)}
+.ic.g{background:var(--sage-soft);color:var(--sage)}.ic.a{background:var(--amber-soft);color:var(--amber)}
+/* controls */
+.sel{appearance:none;background:var(--sheet) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238A8F95' fill='none' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 10px center;border:0;border-radius:7px;padding:5px 28px 5px 10px;box-shadow:0 0 0 1px var(--hair),0 1px 1px rgba(0,0,0,.03);font-size:12.5px}
+.sw{width:34px;height:20px;border-radius:20px;background:var(--pill);position:relative;transition:.2s;flex:none;box-shadow:inset 0 0 0 1px var(--hair)}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:.2s}
+.sw.on{background:var(--sage)}.sw.on::after{left:16px}
+.btn{padding:6px 12px;border-radius:8px;background:var(--sheet);box-shadow:0 0 0 1px var(--hair),0 1px 2px rgba(0,0,0,.04);font-size:12.5px;font-weight:550}
+.btn:hover{background:var(--plate-hi)}
+.btn.p{background:var(--ink);color:var(--sheet);box-shadow:none}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:20px;background:var(--pill);font-size:11.5px;color:var(--ink-2);white-space:nowrap}
+.pill.g{background:var(--sage-soft);color:var(--sage)}.pill.a{background:var(--amber-soft);color:var(--amber)}.pill.i{background:var(--accent-soft);color:var(--accent)}
+.pill .d{width:6px;height:6px;border-radius:50%;background:currentColor}
+.chev{color:var(--ink-3);transition:transform .2s;font-size:11px}
+.disc.open .chev{transform:rotate(90deg)}
+.disc>.row{cursor:pointer}
+.disc>.row:hover{background:var(--plate-hi)}
+.body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .25s ease}
+.disc.open .body{grid-template-rows:1fr}
+.body>div{overflow:hidden}
+.kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px 18px;padding:2px 14px 14px 56px}
+.kv label{font-size:11.5px;color:var(--ink-3);display:block}
+.kv input{width:100%;border:0;background:transparent;border-bottom:1px solid var(--hair);padding:3px 0 5px;font-variant-numeric:tabular-nums}
+.kv input:focus{outline:0;border-color:var(--accent)}
+/* segmented */
+.seg{display:inline-flex;background:var(--plate);padding:3px;border-radius:9px;gap:2px}
+.seg button{padding:5px 13px;border-radius:7px;color:var(--ink-2);font-size:12.5px;font-weight:550;transition:.15s}
+.seg button.on{background:var(--sheet);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.split{display:grid;grid-template-columns:190px 1fr;gap:0;min-height:230px}
+.split .lst{padding:6px;border-right:1px solid var(--hair)}
+.split .lst button{display:block;width:100%;text-align:left;padding:7px 10px;border-radius:7px;color:var(--ink-2)}
+.split .lst button.on{background:var(--sheet);color:var(--ink)}
+.split textarea{width:100%;height:100%;min-height:230px;border:0;background:transparent;padding:14px;resize:none;font:12.5px/1.6 "SF Mono",ui-monospace,Menlo,monospace;color:var(--ink-2)}
+.split textarea:focus{outline:0}
+/* hero */
+.hero{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:18px 4px 6px}
+.hero .ver{font-size:30px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.hero .meta{display:flex;gap:6px;flex-wrap:wrap}
+.hero .sp{flex:1}
+.stats{display:flex;gap:28px;padding:4px 4px 2px;flex-wrap:wrap}
+.stats div b{display:block;font-size:19px;font-weight:620;font-variant-numeric:tabular-nums}
+.stats div span{font-size:11.5px;color:var(--ink-3)}
+.mono{font:12px "SF Mono",ui-monospace,Menlo,monospace;color:var(--ink-3)}
+.tools{display:flex;flex-wrap:wrap;gap:5px;padding:0 14px 14px 56px}
+.caps{display:flex;flex-wrap:wrap;gap:16px;padding:2px 14px 14px 56px}
+.caps label{display:flex;align-items:center;gap:8px;color:var(--ink-2);font-size:12.5px;cursor:pointer}
+.oauth{display:flex;align-items:center;gap:10px;padding:0 14px 10px 56px;color:var(--ink-2);font-size:12.5px}
+.pane{display:none}.pane.on{display:block;animation:fade .2s}
+/* chat */
+.chatwrap{display:grid;grid-template-columns:1fr auto;height:100%;min-height:0}
+.view.chat{max-width:none;height:100%;margin:0}
+.view.chat.on{display:block}
+.msgs{display:flex;flex-direction:column;gap:14px;padding:6px 6px 20px;max-width:680px;margin:0 auto;width:100%}
+.m{display:flex;gap:10px;max-width:84%}
+.m .av{width:28px;height:28px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:11px;font-weight:650;background:var(--amber-soft);color:var(--amber)}
+.m .b{background:var(--bubble);padding:9px 13px;border-radius:14px 14px 14px 4px}
+.m .n{font-size:11.5px;color:var(--ink-3);margin-bottom:3px}
+.m.me{align-self:flex-end;flex-direction:row-reverse}
+.m.me .b{background:var(--bubble-me);border-radius:14px 14px 4px 14px}
+.m.bot .av{background:#292C30;color:#F4EFE4}
+.step{font-size:11.5px;color:var(--ink-3);display:flex;gap:6px;align-items:center;margin-top:6px}
+.compose{max-width:680px;margin:0 auto;width:100%;background:var(--plate);border-radius:13px;display:flex;align-items:center;padding:6px 6px 6px 14px;gap:8px}
+.compose input{flex:1;border:0;background:transparent;padding:6px 0}
+.compose input:focus{outline:0}
+.chatcol{display:flex;flex-direction:column;min-height:0;padding:0 0 18px}
+.chatcol .msgs{overflow:auto;flex:1}
+.insp{width:270px;border-left:1px solid var(--hair);padding:0 18px;overflow:auto;transition:width .25s,padding .25s,opacity .2s}
+.insp.closed{width:0;padding:0;opacity:0;border:0}
+.insp h5{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);margin:18px 0 8px}
+.insp .kvl{display:flex;justify-content:space-between;padding:5px 0;font-size:12.5px}
+.insp .kvl span:first-child{color:var(--ink-3)}
+.bar{height:6px;border-radius:6px;background:var(--pill);overflow:hidden;display:flex;margin:6px 0 4px}
+.bar i{display:block;height:100%}
+@media (max-width:1000px){.app{grid-template-columns:56px 1fr}.side{display:none}.insp{position:absolute;right:10px;top:60px;bottom:10px;background:var(--sheet);box-shadow:var(--shadow);border-radius:12px}}
+@media (max-width:760px){.scroll{padding:14px 16px 30px}.top{padding:14px 16px 0}.split{grid-template-columns:1fr}.split .lst{border:0;display:flex;overflow:auto}.kv,.tools,.caps,.oauth{padding-left:14px}}
+</style>
+</head>
+<body>
+<div class="app">
+	<nav class="rail">
+		<div class="logo"><svg width="34" height="34" viewBox="0 0 34 34"><rect width="34" height="34" rx="9" fill="#292C30"/><text x="7" y="22.5" font-family="-apple-system,system-ui,sans-serif" font-size="14" font-weight="600" fill="#F4EFE4" letter-spacing="-.3">ts</text><circle cx="25" cy="21" r="2.2" fill="#90A1AE"/></svg></div>
+		<button class="rbtn" data-go="chat" title="Chat"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg></button>
+		<button class="rbtn" data-go="plugins" title="Plugins"><svg viewBox="0 0 24 24"><path d="M9 3v4M15 3v4M6 7h12v5a6 6 0 0 1-12 0zM12 18v3"/></svg></button>
+		<button class="rbtn on" data-go="general" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg></button>
+		<div class="sp"></div>
+		<button class="rbtn" id="theme" title="Toggle theme"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
+	</nav>
+	<aside class="side">
+		<h6>Conversations</h6>
+		<button class="sitem" data-go="chat"><span class="dot"></span>Lab group · night shift<span class="ct">3</span></button>
+		<button class="sitem" data-go="chat"><span class="dot"></span>Direct · Mika R.</button>
+		<h6>Plugins</h6>
+		<button class="sitem" data-go="plugins"><span class="dot"></span>Integrations<span class="ct">7</span></button>
+		<h6>Settings</h6>
+		<button class="sitem on" data-go="general"><span class="dot"></span>General &amp; Policies</button>
+		<button class="sitem" data-go="upgrades"><span class="dot"></span>Upgrades &amp; Git</button>
+	</aside>
+	<main class="sheet">
+		<div class="top"><div class="crumb" id="crumb">Settings / <b>General &amp; Policies</b></div><div class="sp"></div><button class="btn" id="inspBtn" style="display:none">Inspector</button></div>
+		<div class="scroll" id="scroll">
+
+		<!-- GENERAL -->
+		<section class="view on" id="v-general">
+			<h1>General &amp; Policies</h1>
+			<p class="lede">How your familiar speaks, waits, and paces itself across every channel.</p>
+			<div class="seg" data-seg="gen"><button class="on" data-p="g-pref">Preferences</button><button data-p="g-prompts">Prompts</button></div>
+
+			<div class="pane on" id="g-pref">
+				<div class="gl">Identity</div>
+				<div class="group">
+					<div class="row"><div class="ic">A</div><div class="lbl"><div class="t">Display name</div><div class="s">Shown in group chats and the WebUI header</div></div><span class="mono">Tsukaima</span></div>
+					<div class="row"><div class="ic g">L</div><div class="lbl"><div class="t">Language</div><div class="s">Reply language when the sender's is unclear</div></div><select class="sel"><option>English</option><option>简体中文</option><option>日本語</option></select></div>
+					<div class="row"><div class="ic a">M</div><div class="lbl"><div class="t">Default model</div><div class="s">Used for chat turns without an override</div></div><select class="sel"><option>claude-sonnet-5-5</option><option>claude-opus-5-5</option><option>local / qwen3-32b</option></select></div>
+				</div>
+				<div class="gl">Behaviour</div>
+				<div class="group">
+					<div class="row"><div class="lbl"><div class="t">Reply only when mentioned</div><div class="s">In groups, stay quiet unless addressed or quoted</div></div><button class="sw on"></button></div>
+					<div class="row"><div class="lbl"><div class="t">Typing indicator</div><div class="s">Show “typing…” while the turn is streaming</div></div><button class="sw on"></button></div>
+					<div class="row"><div class="lbl"><div class="t">Sticker replies</div><div class="s">Allow the familiar to answer with stickers</div></div><button class="sw"></button></div>
+				</div>
+				<div class="gl">Policies <span style="font-weight:400">Click to expand</span></div>
+				<div class="group">
+					<div class="disc open"><div class="row"><span class="chev">▶</span><div class="lbl"><div class="t">Group chat pacing</div><div class="s">Debounce bursts before starting a turn</div></div><span class="pill i">Settle 1.2s · 6/min</span></div>
+						<div class="body"><div><div class="kv"><div><label>Settle window</label><input value="1.2s"></div><div><label>Max replies / min</label><input value="6"></div><div><label>Burst ceiling</label><input value="12 msgs"></div></div></div></div></div>
+					<div class="disc"><div class="row"><span class="chev">▶</span><div class="lbl"><div class="t">Interrupt &amp; steer</div><div class="s">What happens when a new message lands mid-turn</div></div><span class="pill g">Steer · queue 3</span></div>
+						<div class="body"><div><div class="kv"><div><label>Mode</label><input value="Steer current turn"></div><div><label>Queue depth</label><input value="3"></div><div><label>Follow-up delay</label><input value="800ms"></div></div></div></div></div>
+					<div class="disc"><div class="row"><span class="chev">▶</span><div class="lbl"><div class="t">Workspace spawning</div><div class="s">Chat may request governed coding sessions</div></div><span class="pill a">Admin approval</span></div>
+						<div class="body"><div><div class="kv"><div><label>Approver</label><input value="Owner only"></div><div><label>Max concurrent</label><input value="2"></div><div><label>Path allowlist</label><input value="plugins/**, docs/**"></div></div></div></div></div>
+				</div>
+			</div>
+
+			<div class="pane" id="g-prompts">
+				<div class="gl">System prompts</div>
+				<div class="group split">
+					<div class="lst"><button class="on">Persona</button><button>Group etiquette</button><button>Tool usage</button><button>Safety notes</button></div>
+					<textarea spellcheck="false">You are Tsukaima, a calm, quick-witted familiar living in a few group chats.
+
+- Keep replies short unless someone asks for depth.
+- Match the language of whoever addressed you.
+- Never run code from chat; offer to open a workspace session instead.
+- When unsure, ask one clarifying question.</textarea>
+				</div>
+			</div>
+		</section>
+
+		<!-- UPGRADES -->
+		<section class="view" id="v-upgrades">
+			<h1>Upgrades &amp; Git</h1>
+			<p class="lede">Graceful restarts, release channel, and repository status.</p>
+			<div class="hero">
+				<div><div class="ver">v0.32.0</div><div class="meta" style="margin-top:6px"><span class="pill"><span class="mono" style="color:inherit">main</span></span><span class="pill g"><span class="d"></span>GitHub connected</span><span class="pill">Checked 4 min ago</span></div></div>
+				<div class="sp"></div>
+				<button class="btn" id="chk">Check now</button><button class="btn p">Upgrade to 0.33.0</button>
+			</div>
+			<div class="gl">Channel</div>
+			<div class="group">
+				<div class="row"><div class="lbl"><div class="t">Release channel</div><div class="s">Stable follows tagged releases from publish workflow</div></div><select class="sel"><option>Stable</option><option>Main (nightly)</option></select></div>
+				<div class="row"><div class="lbl"><div class="t">Restart gracefully</div><div class="s">Drain in-flight turns and persist follow-ups first</div></div><button class="sw on"></button></div>
+				<div class="row"><div class="lbl"><div class="t">Auto-upgrade window</div><div class="s">Only apply upgrades during quiet hours</div></div><select class="sel"><option>03:00 – 05:00</option><option>Never</option></select></div>
+			</div>
+			<div class="gl">History</div>
+			<div class="group">
+				<div class="row"><div class="ic g">✓</div><div class="lbl"><div class="t">0.32.0 · Unified timeline</div><div class="s">Seq-ordered run steps, round grouping</div></div><span class="mono">33429ca</span><span class="pill g">Current</span></div>
+				<div class="row"><div class="ic">↻</div><div class="lbl"><div class="t">Graceful restart tools</div><div class="s">Exposed to admin and workspace agents</div></div><span class="mono">5422b46</span><span class="pill">Pending</span></div>
+				<div class="row"><div class="ic">✓</div><div class="lbl"><div class="t">0.31.2 · Sticker retry</div><div class="s">Transient vision provider failures</div></div><span class="mono">9b63185</span><span class="pill">Nov 19</span></div>
+				<div class="row"><div class="ic a">!</div><div class="lbl"><div class="t">0.31.0 · Rolled back</div><div class="s">Health check timed out after 90s</div></div><span class="mono">a1c07e2</span><span class="pill a">Reverted</span></div>
+			</div>
+		</section>
+
+		<!-- PLUGINS -->
+		<section class="view" id="v-plugins">
+			<h1>Integrations</h1>
+			<p class="lede">Tools and models your familiar can reach. Chat sessions never receive coding tools.</p>
+			<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+				<div class="seg" data-seg="plg"><button class="on" data-p="p-mcp">Servers</button><button data-p="p-oai">OpenAI Models</button><button data-p="p-ob">OneBot</button></div>
+				<div style="flex:1"></div><button class="btn">+ Add</button>
+			</div>
+			<div class="stats" style="margin-top:18px"><div><b>4</b><span>servers</span></div><div><b>31</b><span>tools exposed</span></div><div><b>212ms</b><span>median latency</span></div><div><b style="color:var(--sage)">99.6%</b><span>uptime · 7d</span></div></div>
+
+			<div class="pane on" id="p-mcp">
+				<div class="gl">MCP servers</div>
+				<div class="group">
+					<div class="disc open"><div class="row"><span class="chev">▶</span><div class="ic">G</div><div class="lbl"><div class="t">github</div><div class="s">streamable-http · 12 tools</div></div><span class="pill g"><span class="d"></span>Connected</span></div>
+						<div class="body"><div><div class="oauth">OAuth as <b>tsukaima-bot</b> · scopes repo, issues <button class="btn" style="margin-left:auto">Re-authorize</button></div><div class="tools"><span class="pill">search_issues</span><span class="pill">get_pull_request</span><span class="pill">list_commits</span><span class="pill">create_issue</span><span class="pill">+8</span></div></div></div></div>
+					<div class="disc"><div class="row"><span class="chev">▶</span><div class="ic g">W</div><div class="lbl"><div class="t">weather</div><div class="s">stdio · 3 tools</div></div><span class="pill g"><span class="d"></span>Connected</span></div>
+						<div class="body"><div><div class="tools"><span class="pill">forecast</span><span class="pill">alerts</span><span class="pill">air_quality</span></div></div></div></div>
+					<div class="disc"><div class="row"><span class="chev">▶</span><div class="ic a">C</div><div class="lbl"><div class="t">calendar</div><div class="s">streamable-http · needs sign-in</div></div><span class="pill a"><span class="d"></span>Auth required</span></div>
+						<div class="body"><div><div class="oauth">Token expired 2 days ago <button class="btn p" style="margin-left:auto">Sign in</button></div></div></div></div>
+					<div class="row"><div class="ic">S</div><div class="lbl"><div class="t">search</div><div class="s">stdio · 16 tools</div></div><button class="sw on"></button></div>
+				</div>
+			</div>
+			<div class="pane" id="p-oai">
+				<div class="gl">OpenAI-compatible endpoints</div>
+				<div class="group">
+					<div class="disc open"><div class="row"><span class="chev">▶</span><div class="ic">L</div><div class="lbl"><div class="t">local / qwen3-32b</div><div class="s mono">https://llm.example.internal/v1</div></div><span class="pill g">Healthy</span></div>
+						<div class="body"><div><div class="caps"><label><button class="sw on"></button>Tool calls</label><label><button class="sw"></button>Vision</label><label><button class="sw on"></button>Streaming</label><label><button class="sw"></button>Reasoning</label></div></div></div></div>
+					<div class="disc"><div class="row"><span class="chev">▶</span><div class="ic a">V</div><div class="lbl"><div class="t">vision / sticker-labeler</div><div class="s mono">https://vision.example.com/v1</div></div><span class="pill a">Retrying</span></div>
+						<div class="body"><div><div class="caps"><label><button class="sw"></button>Tool calls</label><label><button class="sw on"></button>Vision</label><label><button class="sw on"></button>Streaming</label></div></div></div></div>
+				</div>
+			</div>
+			<div class="pane" id="p-ob">
+				<div class="gl">OneBot adapter</div>
+				<div class="group">
+					<div class="row"><div class="lbl"><div class="t">Connection</div><div class="s mono">ws://onebot.example:3001</div></div><span class="pill g"><span class="d"></span>Online · 2h 14m</span></div>
+					<div class="row"><div class="lbl"><div class="t">Groups enabled</div><div class="s">Familiar listens in these groups only</div></div><span class="pill">3 groups</span></div>
+					<div class="row"><div class="lbl"><div class="t">Accept friend requests</div><div class="s">Automatically approve new direct contacts</div></div><button class="sw"></button></div>
+				</div>
+			</div>
+		</section>
+
+		<!-- CHAT -->
+		<section class="view chat" id="v-chat">
+			<div class="chatwrap">
+				<div class="chatcol">
+					<div class="msgs">
+						<div class="m"><div class="av">MR</div><div><div class="n">Mika R. · 22:14</div><div class="b">anyone know if the build broke after the last merge?</div></div></div>
+						<div class="m"><div class="av" style="background:var(--sage-soft);color:var(--sage)">JT</div><div><div class="n">Jun T. · 22:15</div><div class="b">@tsukaima can you check main?</div></div></div>
+						<div class="m bot"><div class="av">ts</div><div><div class="n">Tsukaima · 22:15</div><div class="b">Main is green — last run passed in 4m 12s on <span class="mono">5422b46</span>. The flaky lifecycle test retried once but succeeded.<div class="step">⌁ github.list_commits · 180ms</div></div></div></div>
+						<div class="m me"><div><div class="b">Nice. Could you open a workspace to look at the flake?</div></div></div>
+						<div class="m bot"><div class="av">ts</div><div><div class="n">Tsukaima · 22:16</div><div class="b">Requested a governed workspace session — waiting on owner approval. I'll post the summary here once it's done.<div class="step"><span class="pill a">Awaiting approval</span></div></div></div></div>
+					</div>
+					<div class="compose"><input placeholder="Message Lab group · night shift"><button class="btn p">Send</button></div>
+				</div>
+				<aside class="insp" id="insp">
+					<h5>Context</h5>
+					<div class="bar"><i style="width:22%;background:var(--accent)"></i><i style="width:31%;background:var(--sage)"></i><i style="width:9%;background:var(--amber)"></i></div>
+					<div class="mono">39.6k / 200k tokens</div>
+					<div class="kvl"><span>System + hooks</span><span>8.7k</span></div>
+					<div class="kvl"><span>History</span><span>24.1k</span></div>
+					<div class="kvl"><span>Tool results</span><span>6.8k</span></div>
+					<h5>Session</h5>
+					<div class="kvl"><span>Model</span><span>sonnet-5-5</span></div>
+					<div class="kvl"><span>Queue</span><span>0 pending</span></div>
+					<div class="kvl"><span>Mode</span><span>Chat (no coding)</span></div>
+					<h5>Prompt hooks</h5>
+					<div style="display:flex;flex-wrap:wrap;gap:5px"><span class="pill i">persona</span><span class="pill">group-etiquette</span><span class="pill g">time-of-day</span></div>
+				</aside>
+			</div>
+		</section>
+		</div>
+	</main>
+</div>
+<script>
+const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
+const names={general:"Settings / <b>General &amp; Policies</b>",upgrades:"Settings / <b>Upgrades &amp; Git</b>",plugins:"Plugins / <b>Integrations</b>",chat:"Chat / <b>Lab group · night shift</b>"};
+function go(v){
+	$$(".view").forEach(e=>e.classList.toggle("on",e.id==="v-"+v));
+	$$(".sitem").forEach(e=>e.classList.toggle("on",e.dataset.go===v&&(v!=="chat"||e===$(".sitem[data-go=chat]"))));
+	$$(".rbtn[data-go]").forEach(e=>e.classList.toggle("on",e.dataset.go===v||(v==="upgrades"&&e.dataset.go==="general")));
+	$("#crumb").innerHTML=names[v];$("#inspBtn").style.display=v==="chat"?"":"none";
+	$("#scroll").style.padding=v==="chat"?"0 0 0 28px":"";$("#scroll").style.overflow=v==="chat"?"hidden":"auto";
+}
+$$("[data-go]").forEach(b=>b.onclick=()=>go(b.dataset.go));
+$$(".sw").forEach(s=>s.onclick=e=>{e.stopPropagation();s.classList.toggle("on")});
+$$(".disc>.row").forEach(r=>r.onclick=()=>r.parentElement.classList.toggle("open"));
+$$(".seg").forEach(g=>$$("button",g).forEach(b=>b.onclick=()=>{
+	$$("button",g).forEach(x=>{x.classList.toggle("on",x===b);$("#"+x.dataset.p).classList.toggle("on",x===b)});
+}));
+$$(".split .lst button").forEach(b=>b.onclick=()=>$$(".split .lst button").forEach(x=>x.classList.toggle("on",x===b)));
+$("#inspBtn").onclick=()=>$("#insp").classList.toggle("closed");
+$("#chk").onclick=e=>{e.target.textContent="Checking…";setTimeout(()=>e.target.textContent="Up to date check ✓",900)};
+const root=document.documentElement;
+if(matchMedia("(prefers-color-scheme: dark)").matches)root.dataset.theme="dark";
+$("#theme").onclick=()=>root.dataset.theme=root.dataset.theme==="dark"?"light":"dark";
+</script>
+</body>
+</html>

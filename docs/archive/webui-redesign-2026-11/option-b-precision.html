@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tsukaima Precision Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+	--rail:#0C0E11;--side:#0C0E11;--canvas:#111317;--inset:#171A20;--hover:rgba(255,255,255,.035);
+	--line:rgba(255,255,255,.07);--line2:rgba(255,255,255,.12);
+	--text:#ECEEF2;--mute:#8B929C;--faint:#5C636D;
+	--accent:#7C9CB5;--accent-bg:rgba(124,156,181,.14);
+	--ok:#4ADE80;--warn:#FBBF24;--err:#F87171;
+	--knob:#ECEEF2;--track:#2A2E36;
+	--sans:'Inter',system-ui,sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace;
+}
+:root[data-theme="light"]{
+	--rail:#F1F2F4;--side:#F8F9FA;--canvas:#FFFFFF;--inset:#F6F7F9;--hover:rgba(0,0,0,.03);
+	--line:rgba(0,0,0,.08);--line2:rgba(0,0,0,.14);
+	--text:#16181D;--mute:#5E6570;--faint:#9097A1;
+	--accent:#4F7593;--accent-bg:rgba(79,117,147,.12);
+	--ok:#16A34A;--warn:#D97706;--err:#DC2626;--knob:#fff;--track:#D5D9DF;
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{background:var(--canvas);color:var(--text);font:13px/1.45 var(--sans);-webkit-font-smoothing:antialiased;overflow:hidden}
+button,input,select{font:inherit;color:inherit}
+button{background:none;border:0;cursor:pointer}
+.mono{font-family:var(--mono);font-size:12px}
+.app{display:grid;grid-template-columns:52px 216px 1fr;height:100vh}
+/* rail */
+.rail{background:var(--rail);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:4px}
+.rail .logo{margin-bottom:10px}
+.rbtn{width:34px;height:34px;border-radius:7px;display:grid;place-items:center;color:var(--mute)}
+.rbtn:hover{background:var(--hover);color:var(--text)}
+.rbtn.on{background:var(--accent-bg);color:var(--accent)}
+.rbtn svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.6}
+.rail .sp{flex:1}
+/* sidebar */
+.side{background:var(--side);border-right:1px solid var(--line);padding:14px 8px;overflow:auto}
+.side h6{font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:12px 10px 6px}
+.side h6:first-child{padding-top:2px}
+.nav{display:flex;align-items:center;gap:8px;width:100%;padding:6px 10px;border-radius:6px;color:var(--mute);text-align:left}
+.nav:hover{background:var(--hover);color:var(--text)}
+.nav.on{background:var(--hover);color:var(--text);box-shadow:inset 2px 0 0 var(--accent)}
+.nav .ct{margin-left:auto;font:11px var(--mono);color:var(--faint)}
+.led{width:7px;height:7px;border-radius:50%;flex:none;background:var(--faint)}
+.led.ok{background:var(--ok);box-shadow:0 0 6px var(--ok)}.led.warn{background:var(--warn)}.led.err{background:var(--err)}
+/* main */
+main{overflow:auto;position:relative}
+.top{position:sticky;top:0;z-index:5;height:48px;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--canvas) 88%,transparent);backdrop-filter:blur(8px)}
+.crumb{color:var(--mute)}.crumb b{color:var(--text);font-weight:500}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--mute);padding:2px 8px;border-radius:99px;background:var(--hover)}
+.top .r{margin-left:auto;display:flex;align-items:center;gap:10px}
+.view{display:none;padding:0 0 80px}.view.on{display:block}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:12px 20px;border-bottom:1px solid var(--line)}
+.fld{display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;border-radius:6px;background:var(--inset);border:1px solid var(--line);min-width:0}
+.fld label{font-size:11px;color:var(--faint);white-space:nowrap}
+.fld input{background:none;border:0;outline:0;min-width:0;width:100%;font:12px var(--mono)}
+.fld:focus-within{border-color:var(--accent)}
+.btn{height:30px;padding:0 12px;border-radius:6px;border:1px solid var(--line2);font-weight:500;font-size:12.5px;white-space:nowrap}
+.btn:hover{background:var(--hover)}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#0C0E11}
+.btn.pri:hover{filter:brightness(1.08)}
+.sect{display:flex;align-items:baseline;gap:10px;padding:18px 20px 8px}
+.sect h3{font-size:13px;font-weight:600}.sect span{color:var(--faint);font-size:12px}
+.sect .r{margin-left:auto}
+/* switch */
+.sw{position:relative;width:28px;height:16px;border-radius:99px;background:var(--track);flex:none;transition:.15s}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--knob);transition:.15s}
+.sw[aria-checked="true"]{background:var(--accent)}.sw[aria-checked="true"]::after{left:14px}
+/* table */
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;font-weight:500;color:var(--faint);text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;position:sticky;top:48px;background:var(--canvas);z-index:2}
+td{padding:0 10px;height:40px;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{padding-left:20px}th:last-child,td:last-child{padding-right:20px}
+tbody tr:hover>td{background:var(--hover)}
+.cap{width:26px;height:22px;border-radius:5px;display:inline-grid;place-items:center;color:var(--faint);border:1px solid transparent}
+.cap svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.7}
+.cap:hover{border-color:var(--line2)}
+.cap.on{color:var(--accent);background:var(--accent-bg)}
+.c{text-align:center}
+select.sel{height:24px;padding:0 6px;border-radius:5px;background:var(--inset);border:1px solid var(--line);font-size:12px}
+.chev{transition:.15s;color:var(--faint)}.open .chev{transform:rotate(90deg)}
+tr.drawer>td{background:var(--inset);height:auto;padding:14px 20px 16px 58px;white-space:normal}
+tr.drawer:hover>td{background:var(--inset)}
+.kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px 24px}
+.kv div{display:flex;flex-direction:column;gap:4px}
+.kv label{font-size:11px;color:var(--faint)}
+.kv input{height:28px;padding:0 8px;border-radius:5px;background:var(--canvas);border:1px solid var(--line);font:12px var(--mono);outline:0}
+.kv input:focus{border-color:var(--accent)}
+.dim{color:var(--mute)}.faint{color:var(--faint)}
+.tag{font:11px var(--mono);padding:1px 6px;border-radius:4px;background:var(--hover);color:var(--mute)}
+/* telemetry */
+.tele{display:flex;border-bottom:1px solid var(--line)}
+.tele div{flex:1;padding:12px 20px;border-right:1px solid var(--line)}
+.tele div:last-child{border:0}
+.tele small{display:block;font-size:11px;color:var(--faint)}
+.tele b{font:500 18px var(--mono)}
+.tools{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:2px 20px;margin-top:10px}
+.tools span{font:12px var(--mono);color:var(--mute);padding:3px 0;border-bottom:1px dashed var(--line)}
+/* settings groups */
+.wrap{max-width:760px;padding:4px 20px}
+.grp-t{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin:20px 0 8px}
+.grp{background:var(--inset);border-radius:8px}
+.row{display:flex;align-items:center;gap:16px;padding:11px 14px;border-top:1px solid var(--line)}
+.row:first-child{border:0}
+.row .t{flex:1;min-width:0}.row .t small{display:block;color:var(--faint);font-size:12px}
+.tabs{display:flex;gap:2px;padding:0 20px;border-bottom:1px solid var(--line);overflow:auto}
+.tab{padding:10px 10px;color:var(--mute);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.tab:hover{color:var(--text)}.tab.on{color:var(--text);border-color:var(--accent)}
+.pv input{width:110px;height:26px;padding:0 8px;text-align:right;border-radius:5px;background:transparent;border:1px solid transparent;font:12px var(--mono);outline:0}
+.pv input:hover{border-color:var(--line)}.pv input:focus{border-color:var(--accent);background:var(--inset)}
+tr.dirty td:first-child{box-shadow:inset 2px 0 0 var(--warn)}
+.save{position:fixed;left:50%;bottom:20px;transform:translate(-50%,120px);display:flex;align-items:center;gap:14px;padding:8px 8px 8px 16px;border-radius:10px;background:#1E2229;color:#ECEEF2;border:1px solid rgba(255,255,255,.1);box-shadow:0 12px 32px rgba(0,0,0,.45);transition:.2s;z-index:20}
+.save.on{transform:translate(-50%,0)}
+.save .btn{border-color:rgba(255,255,255,.14)}
+/* git strip */
+.strip{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+.strip>div{padding:12px 20px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:3px}
+.strip small{font-size:11px;color:var(--faint)}
+.strip .grow{flex:1;border:0;flex-direction:row;align-items:center;justify-content:flex-end;gap:8px}
+/* chat */
+.chat{display:grid;grid-template-columns:1fr 300px;height:calc(100vh - 48px)}
+.msgs{overflow:auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+.m{max-width:620px}.m .who{font-size:12px;color:var(--faint);margin-bottom:3px}.m .who b{color:var(--text);font-weight:500;margin-right:6px}
+.m.u{align-self:flex-end;background:var(--inset);padding:9px 12px;border-radius:10px}
+.step{font:12px var(--mono);color:var(--mute);display:flex;gap:8px;align-items:center;padding:4px 0}
+.comp{border-top:1px solid var(--line);padding:12px 20px}
+.comp .fld{height:40px}
+.insp{border-left:1px solid var(--line);overflow:auto;background:var(--side)}
+.insp h4{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);padding:14px 16px 6px}
+.ir{display:flex;justify-content:space-between;padding:5px 16px;font-size:12px}
+.meter{height:6px;margin:6px 16px 4px;border-radius:3px;background:var(--inset);display:flex;overflow:hidden}
+.meter i{display:block}
+@media (max-width:980px){.app{grid-template-columns:52px 180px 1fr}.chat{grid-template-columns:1fr}.insp{display:none}.hide-md{display:none}}
+@media (max-width:760px){.app{grid-template-columns:52px 1fr}.side{display:none}}
+</style>
+</head>
+<body>
+<div class="app">
+	<nav class="rail">
+		<svg class="logo" width="32" height="32" viewBox="0 0 32 32" aria-label="Tsukaima"><rect width="32" height="32" rx="8" fill="#292C30"/><text x="7" y="21.5" font-family="Inter,sans-serif" font-size="14" font-weight="600" fill="#F2EEE3">ts</text><circle cx="24.5" cy="20" r="2" fill="#90A1AE"/></svg>
+		<button class="rbtn" data-go="chat" title="Chat"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg></button>
+		<button class="rbtn" data-go="openai" title="Plugins"><svg viewBox="0 0 24 24"><path d="M9 3v4M15 3v4M6 7h12v5a6 6 0 0 1-12 0zM12 18v3"/></svg></button>
+		<button class="rbtn" data-go="general" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg></button>
+		<div class="sp"></div>
+		<button class="rbtn" id="theme" title="Toggle theme"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+	</nav>
+	<aside class="side">
+		<h6>Conversations</h6>
+		<button class="nav" data-go="chat"><span class="led ok"></span>dev-room<span class="ct">3</span></button>
+		<h6>Plugins</h6>
+		<button class="nav" data-go="openai"><span class="led ok"></span>OpenAI-Compatible<span class="ct">6</span></button>
+		<button class="nav" data-go="mcp"><span class="led warn"></span>MCP Servers<span class="ct">4</span></button>
+		<button class="nav" data-go="none"><span class="led"></span>Sticker Meme</button>
+		<h6>Settings</h6>
+		<button class="nav" data-go="general">General</button>
+		<button class="nav" data-go="policies">Policies</button>
+		<button class="nav" data-go="upgrades">Upgrades &amp; Git</button>
+	</aside>
+	<main>
+		<header class="top"><div class="crumb" id="crumb"></div><div class="r" id="topr"></div></header>
+
+		<!-- OPENAI -->
+		<section class="view" id="v-openai">
+			<div class="bar">
+				<div class="fld" style="flex:2 1 260px"><label>Base URL</label><input value="https://api.example.com/v1"></div>
+				<div class="fld" style="flex:1 1 200px"><label>API Key</label><input type="password" value="sk-synthetic-000000000000"></div>
+				<button class="btn" id="fetch">Fetch models</button>
+			</div>
+			<div class="sect"><h3>Model capability matrix</h3><span id="mcount"></span><div class="r"><button class="btn">Add model</button></div></div>
+			<table><thead><tr><th style="width:44px"></th><th>Model ID</th><th class="c">Tools</th><th class="c">Reason</th><th class="c">Image</th><th class="c">Audio</th><th class="c">Sidechat</th><th>Effort</th><th class="hide-md">Context</th><th style="width:30px"></th></tr></thead><tbody id="models"></tbody></table>
+		</section>
+
+		<!-- MCP -->
+		<section class="view" id="v-mcp">
+			<div class="tele"><div><small>Servers</small><b>4</b></div><div><small>Connected</small><b style="color:var(--ok)">3</b></div><div><small>Tools exposed</small><b>41</b></div><div class="hide-md"><small>p50 latency</small><b>84ms</b></div></div>
+			<table><thead><tr><th style="width:44px"></th><th>Server</th><th>Scope</th><th>Tools</th><th class="hide-md">Last seen</th><th style="text-align:right">Actions</th></tr></thead><tbody id="servers"></tbody></table>
+		</section>
+
+		<!-- GENERAL -->
+		<section class="view" id="v-general"><div class="wrap">
+			<div class="grp-t">Identity</div>
+			<div class="grp">
+				<div class="row"><div class="t">Display name<small>Shown in channels and the WebUI header</small></div><div class="fld" style="width:200px"><input value="tsukaima" style="font-family:var(--sans)"></div></div>
+				<div class="row"><div class="t">Default model<small>Used when a conversation has no override</small></div><select class="sel" style="height:30px"><option>gpt-5.1-mini</option><option>local-qwen-32b</option></select></div>
+			</div>
+			<div class="grp-t">Behavior</div>
+			<div class="grp">
+				<div class="row"><div class="t">Respond to mentions only<small>Ignore group messages that do not address the bot</small></div><button class="sw" aria-checked="true"></button></div>
+				<div class="row"><div class="t">Typing indicator<small>Emit presence while a turn is running</small></div><button class="sw" aria-checked="true"></button></div>
+				<div class="row"><div class="t">Spawn workspace sessions from chat<small>Chat may delegate repository work to governed worktrees</small></div><button class="sw" aria-checked="false"></button></div>
+			</div>
+			<div class="grp-t">Storage</div>
+			<div class="grp">
+				<div class="row"><div class="t">Database<small class="mono">data/tsukaima.sqlite · 182 MB</small></div><button class="btn">Vacuum</button></div>
+				<div class="row"><div class="t">Retain run traces<small>Older traces are compacted into summaries</small></div><select class="sel" style="height:30px"><option>30 days</option><option>90 days</option></select></div>
+			</div>
+		</div></section>
+
+		<!-- POLICIES -->
+		<section class="view" id="v-policies">
+			<div class="tabs" id="ptabs"></div>
+			<table><thead><tr><th>Key</th><th class="hide-md">Description</th><th style="text-align:right">Value</th><th style="width:60px">Unit</th></tr></thead><tbody id="pol"></tbody></table>
+		</section>
+
+		<!-- UPGRADES -->
+		<section class="view" id="v-upgrades">
+			<div class="strip">
+				<div><small>Branch</small><span class="mono">main @ 5422b46</span></div>
+				<div><small>GitHub</small><span style="display:flex;gap:6px;align-items:center"><span class="led ok"></span>example-org/tsukaima</span></div>
+				<div><small>Version</small><span class="mono">0.32.0 → <span style="color:var(--accent)">0.33.0</span></span></div>
+				<div class="grow"><button class="btn">Check</button><button class="btn pri">Upgrade &amp; restart</button></div>
+			</div>
+			<div class="tabs"><button class="tab on" data-ut="hist">Upgrade History</button><button class="tab" data-ut="ci">CI Runs</button></div>
+			<table><thead id="uh"></thead><tbody id="ub"></tbody></table>
+		</section>
+
+		<!-- CHAT -->
+		<section class="view" id="v-chat"><div class="chat">
+			<div style="display:flex;flex-direction:column;min-height:0">
+				<div class="msgs">
+					<div class="m u"><div class="who"><b>user-a</b>10:42</div>Can you check why the nightly digest skipped yesterday?</div>
+					<div class="m"><div class="who"><b>tsukaima</b>10:42 · gpt-5.1-mini</div>
+						<div class="step"><span class="led ok"></span>schedule.list <span class="faint">→ 3 jobs · 12ms</span></div>
+						<div class="step"><span class="led ok"></span>runs.read digest-nightly <span class="faint">→ 1 failure · 18ms</span></div>
+						<div style="margin-top:6px">The 02:00 run was deferred during the graceful restart for 0.32.0 and its follow-up was reserved but never resumed. I've requeued it — it will post within a minute.</div></div>
+					<div class="m u"><div class="who"><b>user-a</b>10:43</div>Thanks. Make sure that can't happen again.</div>
+					<div class="m"><div class="who"><b>tsukaima</b>10:43</div><div class="step"><span class="led warn"></span>workspace.spawn <span class="faint">→ awaiting approval</span></div></div>
+				</div>
+				<div class="comp"><div class="fld"><input placeholder="Message dev-room…" style="font-family:var(--sans);font-size:13px"><span class="faint mono">⏎</span></div></div>
+			</div>
+			<aside class="insp">
+				<h4>Context window</h4>
+				<div class="meter"><i style="width:14%;background:var(--accent)"></i><i style="width:22%;background:#5E7D96"></i><i style="width:9%;background:var(--warn)"></i></div>
+				<div class="ir"><span class="dim">Used</span><span class="mono">57.6k / 128k</span></div>
+				<div class="ir"><span class="dim">System + hooks</span><span class="mono">18.1k</span></div>
+				<div class="ir"><span class="dim">History</span><span class="mono">28.2k</span></div>
+				<div class="ir"><span class="dim">Tool results</span><span class="mono">11.3k</span></div>
+				<h4>Session</h4>
+				<div class="ir"><span class="dim">Model</span><span class="mono">gpt-5.1-mini</span></div>
+				<div class="ir"><span class="dim">Queue</span><span class="mono">0 pending</span></div>
+				<div class="ir"><span class="dim">Compaction</span><span class="mono">at 96k</span></div>
+				<h4>Prompt hooks</h4>
+				<div class="ir"><span class="mono">persona.base</span><span class="led ok"></span></div>
+				<div class="ir"><span class="mono">memory.recall</span><span class="led ok"></span></div>
+				<div class="ir"><span class="mono">gate.safety</span><span class="led warn"></span></div>
+			</aside>
+		</div></section>
+
+		<section class="view" id="v-none"><div class="wrap" style="padding-top:40px;color:var(--faint)">Plugin disabled.</div></section>
+	</main>
+</div>
+<div class="save" id="save"><span id="savemsg">Unsaved changes</span><button class="btn" id="discard">Discard</button><button class="btn pri" id="commit">Save</button></div>
+
+<script>
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const ic={tools:'<path d="M14 7l3-3 3 3-3 3M17 4v0M4 20l9-9"/>',reason:'<circle cx="12" cy="12" r="7"/><path d="M12 8v4l3 2"/>',image:'<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 16l5-4 5 4 3-2 3 2"/>',audio:'<path d="M5 10v4M9 7v10M13 4v16M17 8v8M21 11v2"/>',side:'<path d="M4 6h10v8H8l-4 3zM14 10h6v7l-3-2h-3"/>'};
+const chev='<svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>';
+const models=[
+	{id:'gpt-5.1-mini',on:1,c:[1,1,1,0,1],e:'medium',ctx:'128k'},
+	{id:'gpt-5.1',on:1,c:[1,1,1,1,0],e:'high',ctx:'256k'},
+	{id:'local-qwen-32b',on:1,c:[1,0,0,0,1],e:'—',ctx:'32k'},
+	{id:'vision-lite-2',on:0,c:[0,0,1,0,0],e:'—',ctx:'16k'},
+	{id:'reasoner-xl',on:1,c:[1,1,0,0,0],e:'high',ctx:'200k'},
+	{id:'embed-small-v3',on:0,c:[0,0,0,0,0],e:'—',ctx:'8k'}];
+const keys=['tools','reason','image','audio','side'];
+function sw(v){return `<button class="sw" role="switch" aria-checked="${!!v}"></button>`}
+function renderModels(){
+	$('#mcount').textContent=`${models.filter(m=>m.on).length} of ${models.length} enabled`;
+	$('#models').innerHTML=models.map((m,i)=>`<tr data-i="${i}" class="mr${m.open?' open':''}"><td>${sw(m.on)}</td><td class="mono" style="${m.on?'':'color:var(--faint)'}">${m.id}</td>${m.c.map((v,k)=>`<td class="c"><button class="cap${v?' on':''}" data-k="${k}" title="${keys[k]}"><svg viewBox="0 0 24 24">${ic[keys[k]]}</svg></button></td>`).join('')}<td><select class="sel">${['—','low','medium','high'].map(o=>`<option${o==m.e?' selected':''}>${o}</option>`).join('')}</select></td><td class="mono dim hide-md">${m.ctx}</td><td><button class="xp">${chev}</button></td></tr>${m.open?`<tr class="drawer"><td colspan="10"><div class="kv"><div><label>temperature</label><input value="0.7"></div><div><label>top_p</label><input value="1.0"></div><div><label>max_output_tokens</label><input value="8192"></div><div><label>alias</label><input value="${m.id.split('-')[0]}"></div></div></td></tr>`:''}`).join('');
+}
+$('#models').onclick=e=>{const tr=e.target.closest('tr.mr');if(!tr)return;const m=models[tr.dataset.i];
+	if(e.target.closest('.sw'))m.on=+!m.on;else if(e.target.closest('.cap')){const k=e.target.closest('.cap').dataset.k;m.c[k]=+!m.c[k]}else if(e.target.closest('.xp')||e.target.tagName=='TD')m.open=!m.open;else return;renderModels()};
+$('#fetch').onclick=e=>{e.target.textContent='Fetching…';setTimeout(()=>e.target.textContent='Fetched 6 models',700)};
+
+const servers=[
+	{n:'filesystem',t:'stdio',s:'workspace',st:'ok',tools:['fs.read','fs.list','fs.stat','fs.glob','fs.search'],seen:'now'},
+	{n:'github',t:'http+sse',s:'workspace',st:'ok',tools:['issues.list','issues.read','pr.read','pr.diff','checks.list','repo.tree'],seen:'now',oauth:'Authorized · expires in 41 days'},
+	{n:'calendar',t:'http',s:'chat',st:'warn',tools:['events.list','events.create'],seen:'4m ago',oauth:'Token refresh required'},
+	{n:'web-search',t:'http',s:'chat',st:'ok',tools:['search','fetch'],seen:'now'}];
+function renderServers(){$('#servers').innerHTML=servers.map((s,i)=>`<tr data-i="${i}" class="sr${s.open?' open':''}" style="cursor:pointer"><td><span class="led ${s.st}"></span></td><td><span style="font-weight:500">${s.n}</span> <span class="tag">${s.t}</span></td><td class="dim">${s.s}</td><td class="mono">${s.tools.length}</td><td class="dim hide-md">${s.seen}</td><td style="text-align:right"><button class="btn" style="height:24px">Restart</button> ${chev}</td></tr>${s.open?`<tr class="drawer"><td colspan="6">${s.oauth?`<div style="display:flex;gap:10px;align-items:center"><span class="faint" style="font-size:11px">OAUTH</span><span class="led ${s.st}"></span>${s.oauth}<button class="btn" style="height:24px;margin-left:auto">${s.st=='warn'?'Re-authorize':'Revoke'}</button></div>`:'<span class="faint">No authentication · local transport</span>'}<div class="tools">${s.tools.map(t=>`<span>${s.n}.${t}</span>`).join('')}</div></td></tr>`:''}`).join('')}
+$('#servers').onclick=e=>{const tr=e.target.closest('tr.sr');if(!tr||e.target.closest('.btn'))return;servers[tr.dataset.i].open^=1;renderServers()};
+
+const pol={Pacing:[['pacing.min_gap','Minimum gap between bot replies','1.5','s'],['pacing.burst','Replies allowed per burst','3',''],['pacing.cooldown','Cooldown after burst','20','s']],
+	Sidechat:[['sidechat.enabled','Allow side conversations','true',''],['sidechat.max_depth','Nested sidechat depth','2','']],
+	Generation:[['gen.max_tokens','Output token ceiling','4096','tok'],['gen.temperature','Default sampling temperature','0.7',''],['gen.stream','Stream partial replies','true','']],
+	Compaction:[['compact.threshold','Compact when context exceeds','0.75','ratio'],['compact.keep_recent','Messages kept verbatim','24','']],
+	Memory:[['memory.recall_k','Memories recalled per turn','6',''],['memory.ttl','Episodic memory lifetime','90','days']],
+	Gate:[['gate.rate','Gate checks per minute','60','/min'],['gate.block_on_fail','Block reply when gate fails','false','']]};
+let ptab='Pacing';const orig={};
+function renderPol(){$('#ptabs').innerHTML=Object.keys(pol).map(k=>`<button class="tab${k==ptab?' on':''}" data-t="${k}">${k}</button>`).join('');
+	$('#pol').innerHTML=pol[ptab].map((r,i)=>{const d=orig[r[0]]!==undefined&&orig[r[0]]!==r[2];return`<tr class="${d?'dirty':''}"><td class="mono">${r[0]}</td><td class="dim hide-md">${r[1]}</td><td class="pv" style="text-align:right"><input data-i="${i}" value="${r[2]}"></td><td class="faint mono">${r[3]}</td></tr>`}).join('')}
+function dirty(){return Object.keys(orig).filter(k=>Object.values(pol).flat().find(r=>r[0]==k)[2]!==orig[k])}
+function upd(){const n=dirty().length;$('#save').classList.toggle('on',n>0);$('#savemsg').textContent=`${n} unsaved change${n==1?'':'s'}`}
+$('#ptabs').onclick=e=>{const t=e.target.dataset.t;if(t){ptab=t;renderPol()}};
+$('#pol').oninput=e=>{const r=pol[ptab][e.target.dataset.i];if(!(r[0] in orig))orig[r[0]]=r[2];r[2]=e.target.value;e.target.closest('tr').classList.toggle('dirty',r[2]!==orig[r[0]]);upd()};
+$('#discard').onclick=()=>{Object.values(pol).flat().forEach(r=>{if(r[0] in orig)r[2]=orig[r[0]]});for(const k in orig)delete orig[k];renderPol();upd()};
+$('#commit').onclick=()=>{for(const k in orig)delete orig[k];renderPol();upd()};
+
+const ut={hist:{h:['Version','From','Trigger','Duration','Status'],r:[['0.32.0','0.31.4','admin · graceful','42s','ok'],['0.31.4','0.31.3','scheduled','38s','ok'],['0.31.3','0.31.2','workspace agent','—','err'],['0.31.2','0.31.0','admin · graceful','51s','ok']]},
+	ci:{h:['Run','Branch','Commit','Duration','Status'],r:[['#412 check','main','5422b46','3m 12s','ok'],['#411 check','feat/restart-tools','a81c0e2','3m 40s','ok'],['#410 publish','main','954ce87','1m 58s','ok'],['#409 check','fix/vision-retry','9b63185','—','warn']]}};
+function renderU(k){$('#uh').innerHTML='<tr>'+ut[k].h.map(h=>`<th>${h}</th>`).join('')+'</tr>';
+	$('#ub').innerHTML=ut[k].r.map(r=>`<tr><td class="mono">${r[0]}</td><td class="mono dim">${r[1]}</td><td class="dim">${r[2]}</td><td class="mono dim">${r[3]}</td><td><span style="display:inline-flex;gap:6px;align-items:center"><span class="led ${r[4]}"></span>${{ok:'Succeeded',err:'Rolled back',warn:'Running'}[r[4]]}</span></td></tr>`).join('');
+	$$('[data-ut]').forEach(b=>b.classList.toggle('on',b.dataset.ut==k))}
+$$('[data-ut]').forEach(b=>b.onclick=()=>renderU(b.dataset.ut));
+
+const meta={openai:['Plugins','OpenAI-Compatible',true],mcp:['Plugins','MCP Servers',true],none:['Plugins','Sticker Meme',false],general:['Settings','General'],policies:['Settings','Policies'],upgrades:['Settings','Upgrades &amp; Git'],chat:['Conversations','dev-room']};
+const railOf={openai:'openai',mcp:'openai',none:'openai',general:'general',policies:'general',upgrades:'general',chat:'chat'};
+function go(v){$$('.view').forEach(s=>s.classList.toggle('on',s.id=='v-'+v));$$('.nav').forEach(n=>n.classList.toggle('on',n.dataset.go==v));$$('.rbtn[data-go]').forEach(n=>n.classList.toggle('on',n.dataset.go==railOf[v]));
+	const[a,b,p]=meta[v];$('#crumb').innerHTML=`${a} <span class="faint">/</span> <b>${b}</b>`;
+	$('#topr').innerHTML=p!==undefined?`<span class="pill"><span class="led ${p?'ok':''}"></span>${p?'Connected':'Disabled'}</span><span class="dim" style="font-size:12px">Enabled</span>${sw(p)}`:v=='chat'?'<span class="pill"><span class="led ok"></span>Idle</span>':'';
+	if(v!='policies')$('#save').classList.remove('on');else upd()}
+document.addEventListener('click',e=>{const g=e.target.closest('[data-go]');if(g)go(g.dataset.go);const s=e.target.closest('.sw');if(s&&!s.closest('#models'))s.setAttribute('aria-checked',s.getAttribute('aria-checked')!='true')});
+$('#theme').onclick=()=>{const r=document.documentElement;r.dataset.theme=r.dataset.theme=='dark'?'light':'dark'};
+renderModels();renderServers();renderPol();renderU('hist');go('openai');
+</script>
+</body>
+</html>
