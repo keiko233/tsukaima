@@ -15,6 +15,7 @@ import {
 	classifyStickerSemantics,
 	mergeSemanticProfiles,
 	resolveSemanticClassifier,
+	type SemanticLogger,
 	VisionSemanticClassifier,
 } from "./semantic.ts";
 import { registerStickerTools } from "./tools.ts";
@@ -37,6 +38,27 @@ function stubLogger(): PluginLogger {
 		trace: () => undefined,
 		warn: () => undefined,
 	} as unknown as PluginLogger;
+}
+
+interface CapturedLog {
+	readonly fields: Record<string, unknown> | undefined;
+	readonly level: "debug" | "error" | "trace" | "warn";
+	readonly message: string;
+}
+
+function captureLogger(): { entries: CapturedLog[]; logger: SemanticLogger } {
+	const entries: CapturedLog[] = [];
+	const logger: SemanticLogger = {
+		debug: (message, fields) => entries.push({ fields, level: "debug", message }),
+		error: (message, fields) => entries.push({ fields, level: "error", message }),
+		trace: (message, fields) => entries.push({ fields, level: "trace", message }),
+		warn: (message, fields) => entries.push({ fields, level: "warn", message }),
+	};
+	return { entries, logger };
+}
+
+function providerError(status: number, message: string, headers?: Record<string, string>): Error {
+	return Object.assign(new Error(message), { headers, status });
 }
 
 describe("detailed vision sticker classification", () => {
@@ -148,6 +170,189 @@ describe("detailed vision sticker classification", () => {
 		expect(maxTokens).toEqual([2048, 2048]);
 		expect(profile.source).toBe("merged");
 		expect(profile.description).toBe("A blue fish waves from a fishbowl.");
+	});
+
+	test("retries a transient 429 and stores the eventual profile", async () => {
+		const { entries, logger } = captureLogger();
+		const delays: number[] = [];
+		let calls = 0;
+		const classifier = new VisionSemanticClassifier({
+			apiKey: "test-key",
+			complete: async () => {
+				calls += 1;
+				if (calls === 1) throw providerError(429, "rate limit exceeded");
+				return JSON.stringify({
+					confidence: 0.9,
+					description: "A mascot recovers after a transient failure.",
+					labels: ["happy"],
+				});
+			},
+			logger,
+			model: "vision-retry-429",
+			sleep: async (milliseconds) => {
+				delays.push(milliseconds);
+			},
+		});
+		const profile = await classifier.classify({
+			bytes: bytes("retry-bytes"),
+			mimeType: "image/png",
+			title: "Retry Pack",
+		});
+		expect(calls).toBe(2);
+		expect(profile.source).toBe("merged");
+		expect(profile.description).toBe("A mascot recovers after a transient failure.");
+		expect(delays).toHaveLength(1);
+		expect(delays[0]).toBeGreaterThanOrEqual(350);
+		expect(delays[0]).toBeLessThanOrEqual(650);
+		const retryWarning = entries.find(
+			(entry) =>
+				entry.level === "warn" && entry.message === "vision provider request failed; retrying",
+		);
+		expect(retryWarning?.fields?.attempt).toBe(1);
+		expect(retryWarning?.fields?.maxAttempts).toBe(4);
+		expect(retryWarning?.fields?.model).toBe("vision-retry-429");
+		expect(typeof retryWarning?.fields?.delayMs).toBe("number");
+		expect(
+			entries.some((entry) => entry.message === "vision provider request succeeded after retry"),
+		).toBe(true);
+	});
+
+	test("retries a transient 502 twice before succeeding", async () => {
+		const { entries, logger } = captureLogger();
+		let calls = 0;
+		const classifier = new VisionSemanticClassifier({
+			apiKey: "test-key",
+			complete: async () => {
+				calls += 1;
+				if (calls <= 2) throw providerError(502, "Bad Gateway");
+				return JSON.stringify({ description: "A gateway recovers.", labels: ["happy"] });
+			},
+			logger,
+			model: "vision-retry-502",
+			sleep: async () => undefined,
+		});
+		const profile = await classifier.classify({
+			bytes: bytes("retry-bytes"),
+			mimeType: "image/png",
+			title: "Gateway Pack",
+		});
+		expect(calls).toBe(3);
+		expect(profile.source).toBe("merged");
+		expect(
+			entries.filter(
+				(entry) =>
+					entry.level === "warn" && entry.message === "vision provider request failed; retrying",
+			),
+		).toHaveLength(2);
+	});
+
+	test("does not retry a permanent 400 and falls back to the heuristic profile", async () => {
+		const { entries, logger } = captureLogger();
+		let calls = 0;
+		const classifier = new VisionSemanticClassifier({
+			apiKey: "test-key",
+			complete: async () => {
+				calls += 1;
+				throw providerError(400, "bad request");
+			},
+			logger,
+			model: "vision-permanent-400",
+			sleep: async () => {
+				throw new Error("permanent failures must not sleep");
+			},
+		});
+		const profile = await classifier.classify({
+			bytes: bytes("permanent-bytes"),
+			mimeType: "image/png",
+			title: "Permanent failure",
+		});
+		expect(calls).toBe(1);
+		expect(profile.source).toBe("heuristic");
+		expect(
+			entries.some(
+				(entry) =>
+					entry.level === "warn" && entry.message === "vision provider request failed; retrying",
+			),
+		).toBe(false);
+		expect(
+			entries.some(
+				(entry) =>
+					entry.level === "warn" &&
+					entry.message === "vision sticker classification failed; using heuristic profile",
+			),
+		).toBe(true);
+	});
+
+	test("falls back to heuristic after exhausting the transient retry budget", async () => {
+		const { entries, logger } = captureLogger();
+		const delays: number[] = [];
+		let calls = 0;
+		const classifier = new VisionSemanticClassifier({
+			apiKey: "test-key",
+			complete: async () => {
+				calls += 1;
+				throw providerError(503, "service unavailable");
+			},
+			logger,
+			model: "vision-retry-exhausted",
+			sleep: async (milliseconds) => {
+				delays.push(milliseconds);
+			},
+		});
+		const profile = await classifier.classify({
+			bytes: bytes("exhausted-bytes"),
+			mimeType: "image/png",
+			title: "Exhausted retries",
+		});
+		expect(calls).toBe(4);
+		expect(delays).toHaveLength(3);
+		expect(profile.source).toBe("heuristic");
+		const exhausted = entries.find(
+			(entry) =>
+				entry.level === "warn" && entry.message === "vision provider request retries exhausted",
+		);
+		expect(exhausted?.fields?.attempt).toBe(4);
+		expect(exhausted?.fields?.maxAttempts).toBe(4);
+		expect(exhausted?.fields?.model).toBe("vision-retry-exhausted");
+		expect(
+			entries.some(
+				(entry) =>
+					entry.level === "warn" &&
+					entry.message === "vision sticker classification failed; using heuristic profile",
+			),
+		).toBe(true);
+	});
+
+	test("retries empty content without consuming the transient retry budget", async () => {
+		const { entries, logger } = captureLogger();
+		let calls = 0;
+		const classifier = new VisionSemanticClassifier({
+			apiKey: "test-key",
+			complete: async () => {
+				calls += 1;
+				return calls === 1
+					? "   "
+					: JSON.stringify({ description: "A late reply.", labels: ["happy"] });
+			},
+			logger,
+			model: "vision-empty-retry",
+			sleep: async () => undefined,
+		});
+		const profile = await classifier.classify({
+			bytes: bytes("empty-bytes"),
+			mimeType: "image/png",
+			title: "Empty retry",
+		});
+		expect(calls).toBe(2);
+		expect(profile.source).toBe("merged");
+		expect(profile.description).toBe("A late reply.");
+		expect(
+			entries.some(
+				(entry) =>
+					entry.level === "warn" &&
+					entry.message === "vision provider returned no content; retrying",
+			),
+		).toBe(true);
 	});
 
 	test("preserves long descriptions through classify, merge, and parsing", async () => {
