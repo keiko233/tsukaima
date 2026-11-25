@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { PluginContext, PluginLogger } from "@tsukaima/sdk";
+import { LocalModelRegistry, type PluginContext, type PluginLogger } from "@tsukaima/sdk";
 import {
 	EMPTY_SEMANTIC_PROFILE,
 	parseSemanticProfile,
@@ -14,6 +14,7 @@ import {
 import {
 	classifyStickerSemantics,
 	mergeSemanticProfiles,
+	resolveSemanticClassifier,
 	VisionSemanticClassifier,
 } from "./semantic.ts";
 import { registerStickerTools } from "./tools.ts";
@@ -97,6 +98,56 @@ describe("detailed vision sticker classification", () => {
 		expect(prompt).toContain("start -> middle -> end");
 		expect(prompt).toContain("looping action");
 		expect(prompt).toContain("expression changes");
+	});
+
+	test("retries once when the host model bridge returns empty content", async () => {
+		const registry = new LocalModelRegistry();
+		const maxTokens: number[] = [];
+		let calls = 0;
+		registry.registerProvider({
+			id: "provider-retry",
+			createPort: () => {
+				throw new Error("port not used");
+			},
+			listModels: () => [
+				{ capabilities: ["basic-chat", "vision"], id: "retry-vision", input: ["text", "image"] },
+			],
+			complete: async (request) => {
+				calls += 1;
+				maxTokens.push(request.maxTokens ?? 0);
+				return {
+					modelId: request.modelId ?? "retry-vision",
+					providerId: request.providerId ?? "provider-retry",
+					text:
+						calls === 1
+							? ""
+							: JSON.stringify({
+									confidence: 0.9,
+									description: "A blue fish waves from a fishbowl.",
+									emotions: ["happy"],
+									keywords: ["fish", "wave"],
+									labels: ["happy"],
+								}),
+				};
+			},
+		});
+		const classifier = await resolveSemanticClassifier(
+			{
+				semanticMode: "vision",
+				semanticModel: "retry-vision",
+				semanticProviderId: "provider-retry",
+			},
+			{ models: registry },
+		);
+		const profile = await classifier.classify({
+			bytes: bytes("image-bytes"),
+			mimeType: "image/png",
+			title: "Blue Fish",
+		});
+		expect(calls).toBe(2);
+		expect(maxTokens).toEqual([2048, 2048]);
+		expect(profile.source).toBe("merged");
+		expect(profile.description).toBe("A blue fish waves from a fishbowl.");
 	});
 
 	test("preserves long descriptions through classify, merge, and parsing", async () => {

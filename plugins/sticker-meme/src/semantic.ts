@@ -660,6 +660,8 @@ export interface VisionSemanticOptions {
 	}) => Promise<string>;
 }
 
+const VISION_MAX_TOKENS = 2048;
+
 const visionResponseSchema = z.object({
 	confidence: z.number().finite().min(0).max(1).optional(),
 	description: z.string().max(1200).optional(),
@@ -869,47 +871,51 @@ export class VisionSemanticClassifier implements StickerSemanticClassifier {
 			mimeType,
 			model: this.#model,
 		});
-		if (this.#complete !== undefined) {
-			const content = await this.#complete({
-				base64,
-				imageDataUrl,
-				mimeType,
-				model: this.#model,
-				prompt,
+		const requestOnce = async (): Promise<string> => {
+			if (this.#complete !== undefined) {
+				return await this.#complete({
+					base64,
+					imageDataUrl,
+					mimeType,
+					model: this.#model,
+					prompt,
+				});
+			}
+			if (this.#apiKey === undefined || this.#apiKey.length === 0) {
+				throw new Error("Semantic vision mode requires semanticApiKey and semanticModel");
+			}
+			const { default: OpenAI } = await import("openai");
+			const client = new OpenAI({
+				apiKey: this.#apiKey,
+				...(this.#baseUrl === undefined ? {} : { baseURL: this.#baseUrl }),
+				maxRetries: 0,
+				timeout: this.#timeoutMs,
 			});
-			this.#logger?.trace?.("vision provider request completed", {
-				contentLength: content.length,
+			const response = await client.chat.completions.create({
+				max_tokens: VISION_MAX_TOKENS,
+				messages: [
+					{
+						content: [
+							{ text: prompt, type: "text" },
+							{ image_url: { url: imageDataUrl }, type: "image_url" },
+						],
+						role: "user",
+					},
+				],
+				model: this.#model,
+				response_format: { type: "json_object" },
+				temperature: 0.2,
+			});
+			return response.choices[0]?.message.content ?? "";
+		};
+		let content = await requestOnce();
+		if (content.trim().length === 0) {
+			this.#logger?.warn("vision provider returned no content; retrying once", {
 				model: this.#model,
 			});
-			return content;
+			content = await requestOnce();
 		}
-		if (this.#apiKey === undefined || this.#apiKey.length === 0) {
-			throw new Error("Semantic vision mode requires semanticApiKey and semanticModel");
-		}
-		const { default: OpenAI } = await import("openai");
-		const client = new OpenAI({
-			apiKey: this.#apiKey,
-			...(this.#baseUrl === undefined ? {} : { baseURL: this.#baseUrl }),
-			maxRetries: 0,
-			timeout: this.#timeoutMs,
-		});
-		const response = await client.chat.completions.create({
-			max_tokens: 900,
-			messages: [
-				{
-					content: [
-						{ text: prompt, type: "text" },
-						{ image_url: { url: imageDataUrl }, type: "image_url" },
-					],
-					role: "user",
-				},
-			],
-			model: this.#model,
-			response_format: { type: "json_object" },
-			temperature: 0.2,
-		});
-		const content = response.choices[0]?.message.content ?? "";
-		if (content.length === 0) {
+		if (content.trim().length === 0) {
 			throw new Error(`Vision classifier returned no content (${base.labels.join("-")})`);
 		}
 		this.#logger?.trace?.("vision provider request completed", {
@@ -943,7 +949,7 @@ function createHostModelClassifier(options: {
 	return new VisionSemanticClassifier({
 		complete: async ({ base64, mimeType, prompt }) => {
 			const response = await options.models.complete({
-				maxTokens: 900,
+				maxTokens: VISION_MAX_TOKENS,
 				messages: [
 					{
 						content: [
@@ -958,9 +964,6 @@ function createHostModelClassifier(options: {
 				signal: AbortSignal.timeout(options.timeoutMs),
 				temperature: 0.2,
 			});
-			if (response.text.length === 0) {
-				throw new Error("Vision classifier returned no content");
-			}
 			return response.text;
 		},
 		...(options.logger === undefined ? {} : { logger: options.logger }),
