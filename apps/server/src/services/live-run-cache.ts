@@ -460,7 +460,7 @@ export class LiveRunCache {
 
 	/** Rounds accumulated for the live segment, for a steer or interrupt to freeze. */
 	currentRounds(sessionId: string): RunRound[] {
-		return this.#timelines.get(sessionId)?.rounds ?? [];
+		return this.#timelines.get(sessionId)?.allRounds ?? [];
 	}
 
 	segmentAnchor(sessionId: string): ConversationRunAnchor | undefined {
@@ -544,7 +544,7 @@ export class LiveRunCache {
 	async #flushRounds(sessionId: string): Promise<RunRound[]> {
 		const timeline = this.#timelines.get(sessionId);
 		const anchor = this.#anchors.get(sessionId);
-		const rounds = timeline?.rounds ?? [];
+		const rounds = timeline?.allRounds ?? [];
 		if (timeline === undefined || anchor === undefined || this.#runs === undefined) return rounds;
 		const signature = JSON.stringify(rounds);
 		if (this.#roundSignatures.get(sessionId) === signature) return rounds;

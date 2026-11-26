@@ -108,4 +108,76 @@ describe("LiveRunTimeline", () => {
 			},
 		]);
 	});
+
+	// `rounds` is the closed-round list the WebUI renders below the active round. Exposing the
+	// round still streaming there as well makes every token show twice.
+	test("keeps the streaming round out of closed rounds and preserves it after it ends", () => {
+		const timeline = new LiveRunTimeline(1_000);
+		const model = { modelId: "model-1", providerId: "provider-1" };
+
+		timeline.observe(
+			snapshot({ attempt: 1, model, partialText: "half an answer", partialThinking: "working" }),
+			1_100,
+		);
+		expect(timeline.rounds).toEqual([]);
+		expect(timeline.currentThinking).toBe("working");
+		expect(timeline.currentText).toBe("half an answer");
+
+		// The next request means the first round closed; its content moves into `rounds` and the
+		// new request owns the partials again.
+		timeline.observe(
+			snapshot({
+				attempt: 1,
+				model,
+				partialThinking: "second thought",
+				turns: 1,
+			}),
+			1_200,
+		);
+		expect(timeline.rounds).toMatchObject([{ thinking: "working", roundIndex: 0 }]);
+		expect(timeline.currentThinking).toBe("second thought");
+		expect(timeline.currentText).toBe("");
+	});
+
+	// A tool round that starts and ends between two polls leaves the next snapshot holding the
+	// previous round's partial. Copying it into the new round made consecutive rounds show the
+	// same reasoning in the WebUI.
+	test("does not copy the previous round's partial into the next round", () => {
+		const timeline = new LiveRunTimeline(1_000);
+		const model = { modelId: "model-1", providerId: "provider-1" };
+
+		timeline.observe(
+			snapshot({ attempt: 1, model, partialThinking: "first thought", partialText: "first text" }),
+			1_100,
+		);
+		// The tool round and its next request both happened between polls: one `turns` bump.
+		timeline.observe(
+			snapshot({
+				attempt: 1,
+				model,
+				partialThinking: "first thought",
+				partialText: "first text",
+				turns: 1,
+			}),
+			1_200,
+		);
+
+		expect(timeline.rounds).toMatchObject([{ roundIndex: 0, thinking: "first thought" }]);
+		expect(timeline.currentThinking).toBe("");
+		expect(timeline.currentText).toBe("");
+
+		// Once the new round streams something of its own, only that remainder is kept.
+		timeline.observe(
+			snapshot({
+				attempt: 1,
+				model,
+				partialThinking: "first thought\nsecond thought",
+				partialText: "first text\nsecond text",
+				turns: 1,
+			}),
+			1_300,
+		);
+		expect(timeline.currentThinking).toBe("second thought");
+		expect(timeline.currentText).toBe("second text");
+	});
 });
