@@ -230,6 +230,7 @@
 	"groups_select_title": "选择一个群组",
 	"inspector_action": "会话面板",
 	"inspector_close": "关闭会话面板",
+	"inspector_resize": "调整会话面板宽度",
 	"inspector_tab_commands": "指令",
 	"inspector_tab_context": "上下文",
 	"inspector_tab_model": "模型",

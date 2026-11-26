@@ -396,11 +396,8 @@ export function SessionInspectorSidebar({
 				}}
 				className="flex min-h-0 flex-1 flex-col"
 			>
-				<div className="shrink-0 px-2">
-					<EditorialTabsList
-						aria-label={m.inspector_title()}
-						className="flex-nowrap overflow-x-auto"
-					>
+				<div className="shrink-0 py-1">
+					<EditorialTabsList aria-label={m.inspector_title()} className="flex-wrap">
 						<EditorialTabsTrigger value="context" className="min-h-8 px-2 text-[11px]">
 							{m.inspector_tab_context()}
 						</EditorialTabsTrigger>

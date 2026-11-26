@@ -230,6 +230,7 @@
 	"groups_select_title": "Select a group",
 	"inspector_action": "Inspector",
 	"inspector_close": "Close inspector",
+	"inspector_resize": "Resize inspector",
 	"inspector_tab_commands": "Actions",
 	"inspector_tab_context": "Context",
 	"inspector_tab_model": "Model",

@@ -4,6 +4,11 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import { ChevronLeft, Circle, MessageCircle, PanelRight, Square } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@tsukaima/ui/components/motion/button";
+import {
+	Resizable,
+	ResizableHandle,
+	ResizablePanel,
+} from "@tsukaima/ui/components/editorial/resizable";
 import { orpc, type DeliveryStatus } from "@/lib/api";
 import { messageListOptions, upsertMessagesInCache } from "@/lib/message-cache";
 import { mergeMessagePageRunSegments } from "@/lib/message-pages";
@@ -355,109 +360,130 @@ export function ChatPage({
 				</div>
 			</header>
 
-			<div className="flex min-h-0 flex-1">
-				<div className="flex min-w-0 flex-1 flex-col">
-					{archived ? (
-						<div className="border-b border-border px-3.5 py-1.5 text-[11px] text-muted-foreground">
-							{m.session_archived_notice()}
-						</div>
-					) : null}
-					{surface === "workspace" && workspaceDetail !== undefined && workspaceDetail !== null ? (
-						<div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3.5 py-1.5 font-mono text-[11px] text-muted-foreground">
-							<span>
-								{m.workspace_task()}:{" "}
-								<span className="font-medium text-foreground">
-									{workspaceDetail.workspace.taskStatus ?? m.workspace_status_draft()}
-								</span>
-							</span>
-							{workspaceDetail.workspace.workspaceKind === "sandbox" ? null : (
-								<>
-									<span className="min-w-0 truncate">
-										{m.workspace_repo()}:{" "}
-										<span className="font-mono text-foreground">
-											{workspaceDetail.workspace.repositoryRoot}
-										</span>
+			<Resizable
+				orientation="horizontal"
+				autoSaveId="tsukaima.webui.session-inspector-width"
+				className="min-h-0 flex-1"
+			>
+				<ResizablePanel id="session-content" minSize="320px" className="flex min-w-0 flex-col">
+					<div className="flex min-h-0 min-w-0 flex-1 flex-col">
+						{archived ? (
+							<div className="border-b border-border px-3.5 py-1.5 text-[11px] text-muted-foreground">
+								{m.session_archived_notice()}
+							</div>
+						) : null}
+						{surface === "workspace" &&
+						workspaceDetail !== undefined &&
+						workspaceDetail !== null ? (
+							<div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3.5 py-1.5 font-mono text-[11px] text-muted-foreground">
+								<span>
+									{m.workspace_task()}:{" "}
+									<span className="font-medium text-foreground">
+										{workspaceDetail.workspace.taskStatus ?? m.workspace_status_draft()}
 									</span>
-									<span>
-										{m.workspace_proposals()}: {workspaceDetail.proposals.length}
-									</span>
-								</>
-							)}
-							{workspaceDetail.workspace.taskId !== null ? (
-								<span className="font-mono text-muted-foreground/70">
-									{workspaceDetail.workspace.taskId}
 								</span>
-							) : null}
-							{workspaceDetail.workspace.tags.length > 0 ? (
-								<span className="flex items-center gap-1">
-									{workspaceDetail.workspace.tags.map((tag) => (
-										<span key={tag} className="border-b border-border text-[11px]">
-											{tag}
+								{workspaceDetail.workspace.workspaceKind === "sandbox" ? null : (
+									<>
+										<span className="min-w-0 truncate">
+											{m.workspace_repo()}:{" "}
+											<span className="font-mono text-foreground">
+												{workspaceDetail.workspace.repositoryRoot}
+											</span>
 										</span>
-									))}
-								</span>
-							) : null}
-						</div>
-					) : null}
+										<span>
+											{m.workspace_proposals()}: {workspaceDetail.proposals.length}
+										</span>
+									</>
+								)}
+								{workspaceDetail.workspace.taskId !== null ? (
+									<span className="font-mono text-muted-foreground/70">
+										{workspaceDetail.workspace.taskId}
+									</span>
+								) : null}
+								{workspaceDetail.workspace.tags.length > 0 ? (
+									<span className="flex items-center gap-1">
+										{workspaceDetail.workspace.tags.map((tag) => (
+											<span key={tag} className="border-b border-border text-[11px]">
+												{tag}
+											</span>
+										))}
+									</span>
+								) : null}
+							</div>
+						) : null}
 
-					<div className="relative min-h-0 flex-1">
-						{messages.isPending ? (
-							<div className="grid h-full place-items-center text-sm text-muted-foreground">
-								{m.loading()}
-							</div>
-						) : messages.isError ? (
-							<div className="grid h-full place-items-center">
-								<InlineError
-									message={messages.error.message}
-									onRetry={() => void messages.refetch()}
-									retryLabel={m.retry()}
+						<div className="relative min-h-0 flex-1">
+							{messages.isPending ? (
+								<div className="grid h-full place-items-center text-sm text-muted-foreground">
+									{m.loading()}
+								</div>
+							) : messages.isError ? (
+								<div className="grid h-full place-items-center">
+									<InlineError
+										message={messages.error.message}
+										onRetry={() => void messages.refetch()}
+										retryLabel={m.retry()}
+									/>
+								</div>
+							) : (
+								<MessageList
+									key={sessionId}
+									hasOlder={messages.hasNextPage}
+									liveRun={liveRun}
+									loadingOlder={messages.isFetchingNextPage}
+									markdown={surface === "workspace"}
+									messages={transcript.messages}
+									runSegments={transcript.runSegments}
+									now={now}
+									onLoadOlder={() => void messages.fetchNextPage()}
+									sessionId={sessionId}
 								/>
-							</div>
-						) : (
-							<MessageList
-								key={sessionId}
-								hasOlder={messages.hasNextPage}
-								liveRun={liveRun}
-								loadingOlder={messages.isFetchingNextPage}
-								markdown={surface === "workspace"}
-								messages={transcript.messages}
-								runSegments={transcript.runSegments}
-								now={now}
-								onLoadOlder={() => void messages.fetchNextPage()}
-								sessionId={sessionId}
+							)}
+						</div>
+
+						{archived || surface !== "workspace" ? null : (
+							<MessageComposer
+								key={detail.id}
+								disabled={detail.chat.status !== "active"}
+								onSend={(input) => send.mutateAsync({ ...input, sessionId, target: "tsukaima" })}
+								sending={send.isPending}
+								sessionId={detail.id}
 							/>
 						)}
 					</div>
-
-					{/* Chat surfaces are read-only; message sending is workspace-only. */}
-					{archived || surface !== "workspace" ? null : (
-						<MessageComposer
-							key={detail.id}
-							disabled={detail.chat.status !== "active"}
-							onSend={(input) => send.mutateAsync({ ...input, sessionId, target: "tsukaima" })}
-							sending={send.isPending}
-							sessionId={detail.id}
-						/>
-					)}
-				</div>
+				</ResizablePanel>
 
 				{wideContextPane && desktopContextOpen ? (
-					<aside
-						aria-label={m.inspector_title()}
-						className="w-[280px] shrink-0 border-l border-border bg-sidebar xl:w-[300px]"
-					>
-						<SessionInspectorSidebar
-							activeTab={inspectorTab}
-							isRunning={liveRun !== undefined}
-							onClose={() => setDesktopContextOpen(false)}
-							onTabChange={setSurfaceInspectorTab}
-							session={detail}
-							surface={surface}
-							workspace={workspaceDetail}
+					<>
+						<ResizableHandle
+							aria-label={m.inspector_resize()}
+							className="-mx-[2px] w-[5px] cursor-col-resize bg-transparent outline-none transition-colors hover:bg-[var(--accent-ink)]/25 focus-visible:bg-[var(--accent-ink)]/35"
 						/>
-					</aside>
+						<ResizablePanel
+							id="session-inspector"
+							defaultSize="280px"
+							minSize="232px"
+							maxSize="420px"
+							className="min-w-0"
+						>
+							<aside
+								aria-label={m.inspector_title()}
+								className="h-full min-w-0 border-l border-border bg-sidebar"
+							>
+								<SessionInspectorSidebar
+									activeTab={inspectorTab}
+									isRunning={liveRun !== undefined}
+									onClose={() => setDesktopContextOpen(false)}
+									onTabChange={setSurfaceInspectorTab}
+									session={detail}
+									surface={surface}
+									workspace={workspaceDetail}
+								/>
+							</aside>
+						</ResizablePanel>
+					</>
 				) : null}
-			</div>
+			</Resizable>
 
 			{!wideContextPane && drawerContextOpen ? (
 				<div className="fixed inset-0 z-40 flex justify-end">

@@ -32,6 +32,9 @@ import {
 	ExpandableRow,
 	KpiStrip,
 	PreferenceRow,
+	Resizable,
+	ResizableHandle,
+	ResizablePanel,
 	SegmentedControl,
 } from "../../index.ts";
 
@@ -101,6 +104,24 @@ describe("editorial server rendering", () => {
 		expect(html).toContain('aria-expanded="false"');
 		expect(html).toMatch(/data-slot="select-value"[^>]*>Warm Paper<\/span>/);
 		expect(html).not.toContain("Deep Ink");
+	});
+
+	test("renders a named resize separator between panels", () => {
+		const html = renderToString(
+			<Resizable orientation="horizontal">
+				<ResizablePanel id="content" minSize="320px">
+					Content
+				</ResizablePanel>
+				<ResizableHandle aria-label="Resize inspector" />
+				<ResizablePanel id="inspector" defaultSize="280px" minSize="232px" maxSize="420px">
+					Inspector
+				</ResizablePanel>
+			</Resizable>,
+		);
+		expect(html).toContain('role="separator"');
+		expect(html).toContain('aria-label="Resize inspector"');
+		expect(html).toContain('data-slot="resizable-handle"');
+		expect(html).toContain("--resizable-panel-size");
 	});
 
 	test("renders disclosure state and a panel with only the accent rail", () => {
