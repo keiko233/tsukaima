@@ -97,3 +97,8 @@ export {
 	EditorialTabsTrigger,
 } from "./components/editorial/tabs.tsx";
 export type { EditorialTabsProps } from "./components/editorial/tabs.tsx";
+export { Resizable, ResizableHandle, ResizablePanel } from "./components/editorial/resizable.tsx";
+export type {
+	ResizableLayoutChangeDetails,
+	ResizableLayoutCommitDetails,
+} from "./components/editorial/resizable.tsx";
