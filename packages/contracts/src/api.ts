@@ -1520,7 +1520,11 @@ export const liveRunStateSchema = z.object({
 	triggerKind: runSegmentTriggerKindSchema.optional(),
 	/** Lifecycle of the segment, so the UI can label a continued run. */
 	status: runSegmentStatusSchema.optional(),
-	/** Structured rounds of the in-flight segment, in run order. */
+	/**
+	 * Rounds that already closed, in run order. The round still streaming is not included here:
+	 * `partialText`, `partialThinking`, `tools`, and `draftTools` describe it, so rendering both
+	 * would repeat the same reasoning and tool calls.
+	 */
 	rounds: z.array(runRoundSchema).optional(),
 	/** Model calls, reasoning, and tools from rounds that already finished, in run order. */
 	steps: z.array(runStepSchema).optional(),

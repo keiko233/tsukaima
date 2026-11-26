@@ -167,6 +167,44 @@ describe("LiveRunCache", () => {
 		expect(final?.steps.some((step) => step.kind === "model")).toBe(true);
 	});
 
+	// The live state carries the streaming round separately from closed rounds. Including it in
+	// both `rounds` and `partialThinking`/`partialText` is what made the WebUI render it twice.
+	test("does not repeat the streaming round in the closed round list", async () => {
+		const { live } = setup();
+		const model = { modelId: "model-1", providerId: "provider-1" };
+		await live.record(
+			"session-1",
+			snapshot({
+				attempt: 1,
+				generationStartedAtMs: 1_100,
+				model,
+				partialThinking: "first thought",
+				partialText: "first answer",
+			}),
+		);
+		let state = await live.snapshot("session-1");
+		expect(state?.partialThinking).toBe("first thought");
+		expect(state?.partialText).toBe("first answer");
+		expect(state?.rounds).toEqual([]);
+
+		// Once the round closes, the same content leaves the partials and appears in `rounds`
+		// exactly once, so the settled view can still show it.
+		await live.record(
+			"session-1",
+			snapshot({
+				attempt: 1,
+				generationStartedAtMs: 2_000,
+				model,
+				partialThinking: "second thought",
+				turns: 1,
+			}),
+		);
+		state = await live.snapshot("session-1");
+		expect(state?.partialThinking).toBe("second thought");
+		expect(state?.partialText).toBeUndefined();
+		expect(state?.rounds).toMatchObject([{ thinking: "first thought", roundIndex: 0 }]);
+	});
+
 	test("lists only in-flight runs and removes a settled run from reconnect snapshots", async () => {
 		const { live } = setup();
 		await live.record("session-1", snapshot({ partialText: "working" }));

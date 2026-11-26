@@ -42,6 +42,30 @@ function joinedText(current: string, next: string): string {
 }
 
 /**
+ * Drop text a snapshot repeats from a round that already committed it.
+ *
+ * Partials are cumulative within one model request, but after a tool round commits its content
+ * the next poll can still carry the previous round's partial. Merging that whole value again
+ * would show the same reasoning under the next model call. Matching only at a word boundary
+ * keeps a genuinely new round that starts with a shared prefix from being truncated mid-word.
+ */
+function uncommittedRemainder(value: string, committed: readonly (string | undefined)[]): string {
+	const right = value.trim();
+	if (right.length === 0) return "";
+	let remainder = right;
+	for (const text of committed) {
+		const left = text?.trim() ?? "";
+		if (left.length === 0 || !remainder.startsWith(left)) continue;
+		if (remainder.length === left.length) return "";
+		const next = remainder.charAt(left.length);
+		if (!/\s/u.test(next)) continue;
+		const candidate = remainder.slice(left.length).trim();
+		if (candidate.length < remainder.length) remainder = candidate;
+	}
+	return remainder;
+}
+
+/**
  * Accumulates one run's complete call flow from successive `LiveRunSnapshot`s.
  *
  * `pi.live` only shows the current round: when a tool round starts, the model's reasoning and
@@ -67,6 +91,10 @@ export class LiveRunTimeline {
 	/** Structured rounds of this segment; a steer replaces the timeline instance entirely. */
 	#rounds: MutableRunRound[] = [];
 	#currentRoundIndex: number | undefined;
+	/** Whether the current round has finished, so it can be exposed as a closed round. */
+	#currentRoundClosed = false;
+	/** Set when a failed/interrupted run closes with its last text still in `partialText`. */
+	#settled = false;
 	/** Tool calls already committed as steps, so a repeated snapshot cannot duplicate them. */
 	#committedToolCalls = new Set<string>();
 
@@ -80,15 +108,38 @@ export class LiveRunTimeline {
 	}
 
 	/**
-	 * Structured rounds of the current segment. Current-round partial text and pending tool calls
-	 * are included, so a live reader renders the same unit a settled segment stores.
+	 * Closed rounds of the current segment. The round still being streamed is deliberately
+	 * excluded: `partialText`, `partialThinking`, `tools`, and `draftTools` carry it, and a
+	 * reader that also rendered it here would show the same round twice. Once a round ends, it
+	 * moves into this list and stays readable while the next round streams.
 	 */
 	get rounds(): RunRound[] {
-		return this.#rounds.map((round, index) => {
-			const live = index === this.#currentRoundIndex;
+		return this.#renderRounds(false);
+	}
+
+	/**
+	 * Every round, including the one still streaming. Persistence and a steer/interrupt freeze
+	 * must keep the in-progress round, so those callers use this view rather than `rounds`.
+	 */
+	get allRounds(): RunRound[] {
+		return this.#renderRounds(true);
+	}
+
+	#currentRound(): MutableRunRound | undefined {
+		const index = this.#currentRoundIndex;
+		return index === undefined ? undefined : this.#rounds[index];
+	}
+
+	#renderRounds(includeOpenRound: boolean): RunRound[] {
+		const rounds: RunRound[] = [];
+		for (const [index, round] of this.#rounds.entries()) {
+			const current = index === this.#currentRoundIndex;
+			if (current && !includeOpenRound && !this.#currentRoundClosed) continue;
+			const live =
+				includeOpenRound && index === this.#currentRoundIndex && !this.#currentRoundClosed;
 			const thinking = joinedText(round.thinking, live ? this.#thinking : "");
 			const text = joinedText(round.intermediateText, live ? this.#text : "");
-			return {
+			rounds.push({
 				...(round.failure === undefined ? {} : { failure: round.failure }),
 				...(round.durationMs === undefined ? {} : { durationMs: round.durationMs }),
 				...(text.length === 0 || round.toolCalls.length === 0 ? {} : { intermediateText: text }),
@@ -97,26 +148,37 @@ export class LiveRunTimeline {
 				...(round.stopReason === undefined ? {} : { stopReason: round.stopReason }),
 				...(thinking.length === 0 ? {} : { thinking }),
 				toolCalls: round.toolCalls.map((tool) => ({ ...tool })),
-			};
-		});
+			});
+		}
+		return rounds;
 	}
 
 	/** Reasoning of the current round that has not been committed to `steps` yet. */
 	get currentThinking(): string {
-		return this.#thinking;
+		if (this.#currentRoundClosed) return "";
+		return joinedText(this.#currentRound()?.thinking ?? "", this.#thinking);
 	}
 
 	/** Answer text of the current round that has not been committed to `steps` yet. */
 	get currentText(): string {
-		return this.#text;
+		const round = this.#currentRound();
+		if (this.#currentRoundClosed) {
+			// A failed or interrupted run keeps its last answer in the bubble. A closed round
+			// without tools has no other body that would show that answer, so returning it here
+			// keeps the text visible without duplicating it inside the round.
+			return this.#settled && round !== undefined && round.toolCalls.length === 0
+				? round.intermediateText
+				: "";
+		}
+		return joinedText(round?.intermediateText ?? "", this.#text);
 	}
 
 	/** Fold one observation of the run and return the completed steps, in run order. */
 	observe(snapshot: LiveRunSnapshot, now = Date.now()): RunStep[] {
+		this.#settled = snapshot.settled;
 		const runningTools = snapshot.tools.length > 0;
 		const hasGeneration = snapshot.attempt !== undefined;
 		const newRound = snapshot.turns > this.#turns;
-
 		// A fast tool round can start and finish between two polls. `turns` is the durable
 		// signal that a round completed even when the poll never saw its tools, so commit the
 		// previous round here instead of letting the next partial overwrite its thinking.
@@ -128,6 +190,7 @@ export class LiveRunTimeline {
 			if (this.#tools.length > 0) this.#commitTools();
 			this.#modelIndex = undefined;
 			this.#currentAttempt = undefined;
+			this.#currentRoundClosed = true;
 		}
 
 		// A tool round ended: either the next model request started, or the run is over.
@@ -136,6 +199,9 @@ export class LiveRunTimeline {
 		}
 
 		if (runningTools) {
+			// Tools belong to the round that produced them: keep that round live so its reasoning
+			// and tool rows render together, and so it is not also exposed as a closed round.
+			this.#currentRoundClosed = false;
 			// At a round boundary the snapshot's partial still describes the round just
 			// committed; merging it again would duplicate that reasoning.
 			if (!newRound) this.#mergeCurrent(snapshot);
@@ -175,6 +241,7 @@ export class LiveRunTimeline {
 				this.#currentAttempt = undefined;
 			}
 			if (this.#tools.length > 0) this.#commitTools();
+			this.#currentRoundClosed = true;
 		}
 
 		this.#syncRoundTools(snapshot);
@@ -188,9 +255,25 @@ export class LiveRunTimeline {
 	 * value with that empty snapshot would erase reasoning the round already emitted.
 	 */
 	#mergeCurrent(snapshot: LiveRunSnapshot): void {
-		const thinking = snapshot.partialThinking ?? "";
+		// The provider's partial is cumulative for the whole turn, so it can still start with
+		// content that a previous round already committed after a tool call. Strip those
+		// prefixes before adding the value: keeping them would repeat the earlier reasoning.
+		const committedThinking: string[] = [];
+		const committedText: string[] = [];
+		for (const [index, round] of this.#rounds.entries()) {
+			if (index !== this.#currentRoundIndex) {
+				if (round.thinking.length > 0) committedThinking.push(round.thinking);
+				if (round.intermediateText.length > 0) committedText.push(round.intermediateText);
+			}
+		}
+		const round = this.#currentRound();
+		if (round !== undefined) {
+			if (round.thinking.length > 0) committedThinking.push(round.thinking);
+			if (round.intermediateText.length > 0) committedText.push(round.intermediateText);
+		}
+		const thinking = uncommittedRemainder(snapshot.partialThinking ?? "", committedThinking);
 		if (thinking.length >= this.#thinking.length) this.#thinking = thinking;
-		const text = snapshot.partialText ?? "";
+		const text = uncommittedRemainder(snapshot.partialText ?? "", committedText);
 		if (text.length >= this.#text.length) this.#text = text;
 	}
 
@@ -240,6 +323,7 @@ export class LiveRunTimeline {
 			toolCalls: [],
 		});
 		this.#currentRoundIndex = this.#rounds.length - 1;
+		this.#currentRoundClosed = false;
 		const step: RunStep = {
 			attempt,
 			call: this.#callCount,
