@@ -136,9 +136,13 @@ Use beUI's agent components for AI messages, streaming, activity, tool results a
 
 ### Composer and delivery
 
-Keep a composer at the bottom of the session view. The user must be able to understand the destination before sending: for example, **send to QQ** versus **talk only to Tsukaima**, if both modes actually exist. The exact available modes must follow the actual backend and permission model; do not claim local-only behavior without isolation. Identify account and target when ambiguity is possible.
-
-Show sending, confirmed success, failure and uncertain/timeout states; preserve drafts through navigation and disconnection where feasible. Avoid automatic retries that could duplicate an external send when the result is uncertain. Provide supported media and reply controls only when backed by capabilities. Explicitly handle read-only or disconnected sessions.
+Workspace sessions keep a composer at the bottom of the session view. Chat sessions are
+read-only in the WebUI and do not expose a composer. Do not render explanatory destination
+copy below the workspace input. Show sending, confirmed success, failure and
+uncertain/timeout states; preserve drafts through navigation and disconnection where feasible.
+Avoid automatic retries that could duplicate a send when the result is uncertain. Provide
+supported media and reply controls only when backed by capabilities. Explicitly handle
+read-only or disconnected sessions.
 
 ## 10. beUI visual language and components
 

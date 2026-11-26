@@ -429,16 +429,14 @@ export function ChatPage({
 						)}
 					</div>
 
-					{archived ? null : (
+					{/* Chat surfaces are read-only; message sending is workspace-only. */}
+					{archived || surface !== "workspace" ? null : (
 						<MessageComposer
 							key={detail.id}
-							channelConnected={channelConnected}
 							disabled={detail.chat.status !== "active"}
-							externalEligible={externalEligible}
-							onSend={(input) => send.mutateAsync({ ...input, sessionId })}
+							onSend={(input) => send.mutateAsync({ ...input, sessionId, target: "tsukaima" })}
 							sending={send.isPending}
 							sessionId={detail.id}
-							workspace={surface === "workspace"}
 						/>
 					)}
 				</div>
