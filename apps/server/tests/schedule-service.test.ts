@@ -14,6 +14,8 @@ import {
 } from "@tsukaima/db";
 import { createLogger } from "../src/logging.ts";
 import {
+	ADMIN_CHAT_SCHEDULE_SOURCE,
+	SCHEDULE_OCCURRENCE_REQUEST_PREFIX,
 	type ScheduleExecutionResult,
 	type ScheduleExecutor,
 	type ScheduleSnapshot,
@@ -127,6 +129,89 @@ describe("durable schedules", () => {
 			expect(row?.runCount).toBe(1);
 			const audits = await database.select().from(auditLog);
 			expect(audits.some((entry) => entry.action === "schedule.create")).toBe(true);
+		} finally {
+			service.stop();
+			database.$client.close();
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("persists and restores the creator admin snapshot across service restarts", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-schedules-"));
+		const database = await seed(directory);
+		let now = Date.parse("2026-11-17T00:00:00.000Z");
+		const executor = new RecordingExecutor();
+		const createService = () =>
+			new ScheduleService({
+				database: () => database,
+				executor,
+				logger,
+				now: () => now,
+			});
+		const service = createService();
+		try {
+			const created = await service.create({
+				actionKind: "agent_turn",
+				ownerId: "admin-1",
+				ownerIsAdmin: true,
+				ownerKind: "user",
+				prompt: "Synthetic admin reminder",
+				recurrence: { at: "2026-11-17T00:01:00.000Z", kind: "once" },
+				source: ADMIN_CHAT_SCHEDULE_SOURCE,
+				targetSessionId: "session-1",
+				timeZone: "UTC",
+				title: "Synthetic admin schedule",
+			});
+			const agent = await service.create({
+				actionKind: "agent_turn",
+				ownerId: "agent",
+				ownerKind: "agent",
+				prompt: "Synthetic agent reminder",
+				recurrence: { at: "2026-11-17T00:02:00.000Z", kind: "once" },
+				source: "chat-tool",
+				targetSessionId: "session-1",
+				timeZone: "UTC",
+				title: "Synthetic agent schedule",
+			});
+			const legacy = await service.create({
+				actionKind: "agent_turn",
+				// An older admin-created row had no snapshot; it must stay downgraded.
+				ownerId: "admin-1",
+				ownerKind: "user",
+				prompt: "Synthetic legacy reminder",
+				recurrence: { at: "2026-11-17T00:03:00.000Z", kind: "once" },
+				source: ADMIN_CHAT_SCHEDULE_SOURCE,
+				targetSessionId: "session-1",
+				timeZone: "UTC",
+				title: "Synthetic legacy schedule",
+			});
+			now = Date.parse("2026-11-17T00:04:00.000Z");
+			await service.tick();
+			const occurrences = await database.select().from(scheduleOccurrences);
+			const occurrenceFor = (scheduleId: string) =>
+				occurrences.find((occurrence) => occurrence.scheduleId === scheduleId)!;
+			const turnFor = async (activeService: ScheduleService, scheduleId: string) => {
+				const occurrence = occurrenceFor(scheduleId);
+				return await activeService.scheduledTurn(
+					"session-1",
+					`${SCHEDULE_OCCURRENCE_REQUEST_PREFIX}${occurrence.id}`,
+				);
+			};
+			const adminTurn = await turnFor(service, created.id);
+			expect(adminTurn?.principal).toEqual({ admin: true, id: "admin-1", kind: "im" });
+			expect((await turnFor(service, agent.id))?.principal).toBeUndefined();
+			expect((await turnFor(service, legacy.id))?.principal).toBeUndefined();
+
+			service.stop();
+			const restarted = createService();
+			try {
+				// The snapshot is on the schedule row, not in process memory.
+				expect(await turnFor(restarted, created.id)).toEqual(adminTurn);
+				expect((await turnFor(restarted, agent.id))?.principal).toBeUndefined();
+				expect((await turnFor(restarted, legacy.id))?.principal).toBeUndefined();
+			} finally {
+				restarted.stop();
+			}
 		} finally {
 			service.stop();
 			database.$client.close();

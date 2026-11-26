@@ -295,6 +295,7 @@ export function createScheduleToolsExtension(options: ScheduleToolsOptions): Dur
 						? {}
 						: { maxRuns: numberValue(input, "maxRuns")! }),
 					ownerId: adminId ?? "agent",
+					...(adminId === undefined ? {} : { ownerIsAdmin: true }),
 					ownerKind: adminId === undefined ? "agent" : "user",
 					prompt,
 					recurrence,

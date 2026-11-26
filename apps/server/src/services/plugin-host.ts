@@ -83,7 +83,8 @@ export interface PluginHostOptions {
 	 * ambient group message cannot upgrade a non-admin caller's privileges.
 	 */
 	readonly turnSender?: (conversationId: string) => string | null | undefined;
-	readonly scheduledMcpPrincipal?: (
+	/** Admin creator snapshot of the active scheduled turn, when the schedule was admin-created. */
+	readonly scheduledAdminPrincipal?: (
 		conversationId: string,
 	) => Promise<SchedulePrincipal | undefined>;
 	readonly hooks: HookBus;
@@ -588,12 +589,12 @@ export class PluginHost {
 			return canonical === tool.name ? [canonical] : [];
 		});
 		const conversation = context.conversationId;
-		// Only tools advertised by configured MCP servers inherit schedule authority. The
-		// separate MCP management tools and other plugins keep their normal caller checks.
+		// An admin-created scheduled turn carries the creator's persisted privilege snapshot.
+		// Non-admin or legacy schedules resolve no scheduled principal and stay fail-closed.
 		const scheduledPrincipal =
-			conversation !== undefined && owner === "mcp" && /^mcp\.[^.]+\..+$/u.test(tool.name)
-				? await this.#options.scheduledMcpPrincipal?.(conversation)
-				: undefined;
+			conversation === undefined
+				? undefined
+				: await this.#options.scheduledAdminPrincipal?.(conversation);
 		const caller = await resolveImCallerContext({
 			conversationId: conversation,
 			database: this.#database?.(),

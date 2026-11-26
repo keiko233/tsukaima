@@ -621,6 +621,7 @@ export const adminRouter = {
 			context.lifecycle.schedules.create({
 				...input,
 				ownerId: "webui-admin",
+				ownerIsAdmin: true,
 				ownerKind: "user",
 				source: "webui",
 			}),

@@ -655,12 +655,7 @@ export class TsukaimaLifecycle {
 				return parsed.success ? parsed.data.text : undefined;
 			},
 			resolveAdminCaller: async (conversationId) => {
-				const caller = await resolveImCallerContext({
-					conversationId,
-					database: this.domainDatabase,
-					overrides: { turnBoundSender: this.boundTurnSender(conversationId) },
-					settings: this.pluginSettings,
-				});
+				const caller = await this.resolveToolCallerContext(conversationId);
 				if (caller.chatKind === "webui") return true;
 				return (
 					(caller.chatKind === "private" || caller.chatKind === "group") &&
@@ -1027,12 +1022,7 @@ export class TsukaimaLifecycle {
 		this.workspaceToolsExtension = createWorkspaceToolsExtension({
 			audit: (entry) => this.writeAudit(entry),
 			authorizeCaller: async (durableConversationId, toolName) => {
-				const caller = await resolveImCallerContext({
-					conversationId: durableConversationId,
-					database: this.domainDatabase,
-					overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
-					settings: this.pluginSettings,
-				});
+				const caller = await this.resolveToolCallerContext(durableConversationId);
 				const isImChat = caller.chatKind === "private" || caller.chatKind === "group";
 				let policy: { readonly workspaceDelegationEnabled: boolean } | undefined;
 				if (isImChat && caller.domainConversationId !== undefined) {
@@ -1053,12 +1043,7 @@ export class TsukaimaLifecycle {
 				});
 			},
 			authorizeSandboxCaller: async (durableConversationId, toolName) => {
-				const caller = await resolveImCallerContext({
-					conversationId: durableConversationId,
-					database: this.domainDatabase,
-					overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
-					settings: this.pluginSettings,
-				});
+				const caller = await this.resolveToolCallerContext(durableConversationId);
 				let policy: { readonly sandboxWorkspaceEnabled: boolean } | undefined;
 				if (caller.domainConversationId !== undefined && sandboxTools.has(toolName)) {
 					try {
@@ -1083,12 +1068,7 @@ export class TsukaimaLifecycle {
 		this.codingAgentToolsExtension = createCodingAgentToolsExtension({
 			audit: (entry) => this.writeAudit(entry),
 			authorize: async (durableConversationId) => {
-				const caller = await resolveImCallerContext({
-					conversationId: durableConversationId,
-					database: this.domainDatabase,
-					overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
-					settings: this.pluginSettings,
-				});
+				const caller = await this.resolveToolCallerContext(durableConversationId);
 				const chatKind = caller.chatKind;
 				if (chatKind !== "workspace") {
 					return {
@@ -1140,12 +1120,7 @@ export class TsukaimaLifecycle {
 			allowedRoots: adminAllowedRoots,
 			audit: (entry) => this.writeAudit(entry),
 			authorize: async (durableConversationId, toolName) => {
-				const caller = await resolveImCallerContext({
-					conversationId: durableConversationId,
-					database: this.domainDatabase,
-					overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
-					settings: this.pluginSettings,
-				});
+				const caller = await this.resolveToolCallerContext(durableConversationId);
 				return authorizeAdminOpsToolCall({ caller, toolName });
 			},
 			logger: this.runtimeLog,
@@ -1154,12 +1129,7 @@ export class TsukaimaLifecycle {
 		this.adminRuntimeToolsExtension = createAdminRuntimeToolsExtension({
 			audit: (entry) => this.writeAudit(entry),
 			authorize: async (durableConversationId, toolName) => {
-				const caller = await resolveImCallerContext({
-					conversationId: durableConversationId,
-					database: this.domainDatabase,
-					overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
-					settings: this.pluginSettings,
-				});
+				const caller = await this.resolveToolCallerContext(durableConversationId);
 				return authorizeAdminRuntimeToolCall({ caller, toolName });
 			},
 			logger: this.runtimeLog,
@@ -1169,12 +1139,7 @@ export class TsukaimaLifecycle {
 			applyRuntimeSettings: (settings) => this.applyRuntimeSettings(settings),
 			audit: (entry) => this.writeAudit(entry),
 			authorize: async (durableConversationId, toolName) => {
-				const caller = await resolveImCallerContext({
-					conversationId: durableConversationId,
-					database: this.domainDatabase,
-					overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
-					settings: this.pluginSettings,
-				});
+				const caller = await this.resolveToolCallerContext(durableConversationId);
 				return authorizeAdminSettingsToolCall({ caller, toolName });
 			},
 			availableModels: async () => {
@@ -1376,10 +1341,8 @@ export class TsukaimaLifecycle {
 			conversationRole: (conversationId) =>
 				this.conversationPolicy.roleForDurableConversation(conversationId),
 			turnSender: (conversationId) => this.boundTurnSender(conversationId),
-			scheduledMcpPrincipal: async (conversationId) => {
-				const turn = await this.boundScheduledTurn(conversationId);
-				return turn === undefined ? undefined : this.scheduleAdminPrincipal(conversationId, turn);
-			},
+			scheduledAdminPrincipal: async (conversationId) =>
+				await this.boundScheduledAdminPrincipal(conversationId),
 			conversations: this.pluginConversations,
 			followUps: this.followUpIntents,
 			database: () => this.domainDatabase,
@@ -2387,12 +2350,7 @@ export class TsukaimaLifecycle {
 		const dynamicExtensions = [
 			createPromptTools(this.prompts, this.conversationPolicy, {
 				authorize: async (durableConversationId, _toolName) => {
-					const caller = await resolveImCallerContext({
-						conversationId: durableConversationId,
-						database: this.domainDatabase,
-						overrides: { turnBoundSender: this.boundTurnSender(durableConversationId) },
-						settings: this.pluginSettings,
-					});
+					const caller = await this.resolveToolCallerContext(durableConversationId);
 					if (caller.chatKind === "webui") return { allowed: true };
 					if (caller.chatKind === "workspace") {
 						const sessionId = caller.domainConversationId;
@@ -2881,15 +2839,18 @@ export class TsukaimaLifecycle {
 		const [requestId, bound] = head;
 		const scheduled =
 			turn ?? (bound.scheduled ? await this.boundScheduledTurn(conversationId) : undefined);
-		if (
-			scheduled !== undefined &&
-			(!bound.scheduled ||
-				requestId !== `${SCHEDULE_OCCURRENCE_REQUEST_PREFIX}${scheduled.occurrenceId}`)
-		)
-			return undefined;
-		const principal = scheduled?.principal;
-		if (principal?.kind === "webui") return principal;
-		const sender = principal?.id ?? bound?.sender;
+		if (scheduled !== undefined) {
+			if (
+				!bound.scheduled ||
+				requestId !== `${SCHEDULE_OCCURRENCE_REQUEST_PREFIX}${scheduled.occurrenceId}`
+			)
+				return undefined;
+			// A scheduled turn runs under the creator snapshot persisted with the schedule. Never
+			// re-read live admin settings here: removing an id from the admin list later must not
+			// silently erase privileges an administrator already delegated to a schedule.
+			return scheduled.principal;
+		}
+		const sender = bound.sender;
 		if (sender === undefined || sender === null) return undefined;
 		const caller = await resolveImCallerContext({
 			conversationId,
@@ -2902,8 +2863,34 @@ export class TsukaimaLifecycle {
 			(caller.chatKind === "private" || caller.chatKind === "group") &&
 			caller.isAdmin === true
 		)
-			return { id: sender, kind: "im" };
+			return { admin: true, id: sender, kind: "im" };
 		return undefined;
+	}
+
+	private async boundScheduledAdminPrincipal(
+		conversationId: string,
+	): Promise<SchedulePrincipal | undefined> {
+		const turn = await this.boundScheduledTurn(conversationId);
+		return turn === undefined ? undefined : await this.scheduleAdminPrincipal(conversationId, turn);
+	}
+
+	/**
+	 * Resolve the caller for every runtime admin gate. Scheduled turns inherit only the creator
+	 * snapshot persisted on their schedule; an absent snapshot keeps the old downgraded behavior.
+	 */
+	private async resolveToolCallerContext(
+		durableConversationId: string,
+	): Promise<Awaited<ReturnType<typeof resolveImCallerContext>>> {
+		const scheduledPrincipal = await this.scheduleAdminPrincipal(durableConversationId);
+		return await resolveImCallerContext({
+			conversationId: durableConversationId,
+			database: this.domainDatabase,
+			overrides:
+				scheduledPrincipal === undefined
+					? { turnBoundSender: this.boundTurnSender(durableConversationId) }
+					: { isAdmin: true, turnBoundSender: scheduledPrincipal.id },
+			settings: this.pluginSettings,
+		});
 	}
 
 	/**

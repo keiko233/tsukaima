@@ -1195,6 +1195,7 @@ export const schedules = sqliteTable(
 		maxRuns: integer("max_runs"),
 		nextRunAtMs: integer("next_run_at_ms"),
 		ownerId: text("owner_id").notNull(),
+		ownerIsAdmin: integer("owner_is_admin", { mode: "boolean" }),
 		ownerKind: text("owner_kind", {
 			enum: ["user", "agent", "plugin", "system"],
 		}).notNull(),

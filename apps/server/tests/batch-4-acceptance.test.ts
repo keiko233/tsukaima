@@ -18,6 +18,7 @@ import {
 	type TsukaimaPlugin,
 } from "@tsukaima/sdk";
 import { createApp } from "../src/app.ts";
+import { ADMIN_CHAT_SCHEDULE_SOURCE } from "../src/services/schedule-service.ts";
 import type { TsukaimaLifecycle } from "../src/lifecycle.ts";
 import { resolveImCallerContext } from "../src/services/im-caller-context.ts";
 import {
@@ -1088,7 +1089,7 @@ function lastUserText(request: WireRequest): string {
 }
 
 describe("scheduled chat execution", () => {
-	test("runs a separate scheduled instruction, dedupes its continuation, and rechecks MCP authority", async () => {
+	test("runs a separate scheduled instruction, dedupes its continuation, and honors the creator admin snapshot", async () => {
 		const scheduledInputs: string[] = [];
 		const mcpDecisions: boolean[] = [];
 		const continuationIds: string[] = [];
@@ -1219,12 +1220,30 @@ describe("scheduled chat execution", () => {
 		await lifecycle.updatePluginConfig("onebot-napcat", { adminUsers: [] });
 		await lifecycle.schedules.runNow(child!.id);
 		await waitUntil(() => completed.length === 2);
-		expect(mcpDecisions).toEqual([true, false]);
+		// The child was created by an administrator, so its persisted creator snapshot keeps the
+		// admin tool surface even after the live admin list changes.
+		expect(mcpDecisions).toEqual([true, true]);
 		expect(await lifecycle.schedules.list({ sessionId: session.sessionId })).toHaveLength(2);
+
+		const nonAdmin = await lifecycle.schedules.create({
+			actionKind: "agent_turn",
+			ownerId: "agent",
+			ownerKind: "agent",
+			prompt: "Synthetic non-admin check",
+			recurrence: { at: new Date(Date.now() + 3_600_000).toISOString(), kind: "once" },
+			source: "chat-tool",
+			targetSessionId: session.sessionId,
+			timeZone: "UTC",
+			title: "Synthetic non-admin schedule",
+		});
+		await lifecycle.schedules.runNow(nonAdmin.id);
+		await waitUntil(() => completed.length === 3);
+		expect(mcpDecisions).toEqual([true, true, false]);
 
 		const webui = await lifecycle.schedules.create({
 			actionKind: "agent_turn",
 			ownerId: "webui-admin",
+			ownerIsAdmin: true,
 			ownerKind: "user",
 			prompt: "Synthetic WebUI check",
 			recurrence: { at: new Date(Date.now() + 3_600_000).toISOString(), kind: "once" },
@@ -1234,8 +1253,74 @@ describe("scheduled chat execution", () => {
 			title: "Synthetic WebUI schedule",
 		});
 		await lifecycle.schedules.runNow(webui.id);
-		await waitUntil(() => completed.length === 3);
-		expect(mcpDecisions).toEqual([true, false, true]);
+		await waitUntil(() => completed.length === 4);
+		expect(mcpDecisions).toEqual([true, true, false, true]);
+	});
+
+	test("admin-created schedule turns can call admin_exec; non-admin schedules stay denied", async () => {
+		const adminExecResults: string[] = [];
+		const adminExecVisible: boolean[] = [];
+		const { lifecycle } = await createHarness(async (_input, init) => {
+			const request = JSON.parse(String(init?.body ?? "{}")) as WireRequest;
+			const task = lastUserText(request);
+			const last = request.messages?.at(-1);
+			if (!task.includes("[Scheduled task]") || !task.includes("admin-exec probe")) {
+				return Response.json(textResponse("Synthetic unrelated scheduled reply"));
+			}
+			if (last?.role !== "tool") {
+				// Admin ops tools are deferred; load them exactly like a model would.
+				return Response.json(
+					toolCallResponse("tool_search", { query: "admin_exec" }, "admin-exec-search"),
+				);
+			}
+			if (last.tool_call_id === "admin-exec-search") {
+				adminExecVisible.push(toolNames(request).includes("admin_exec"));
+				return Response.json(
+					toolCallResponse(
+						"admin_exec",
+						{ command: "printf synthetic-admin-exec-ok" },
+						"admin-exec-check",
+					),
+				);
+			}
+			adminExecResults.push(String(last.content ?? ""));
+			return Response.json(textResponse("Synthetic admin-exec probe finished"));
+		});
+		const session = await seedImSession(lifecycle, {});
+		const admin = await lifecycle.schedules.create({
+			actionKind: "agent_turn",
+			ownerId: "10002",
+			ownerIsAdmin: true,
+			ownerKind: "user",
+			prompt: "Synthetic admin-exec probe",
+			recurrence: { at: new Date(Date.now() + 3_600_000).toISOString(), kind: "once" },
+			source: ADMIN_CHAT_SCHEDULE_SOURCE,
+			targetSessionId: session.sessionId,
+			timeZone: "UTC",
+			title: "Synthetic admin-exec schedule",
+		});
+		await lifecycle.schedules.runNow(admin.id);
+		await waitUntil(() => adminExecResults.length === 1);
+		expect(adminExecVisible).toEqual([true]);
+		expect(adminExecResults[0]).not.toContain("admin_required");
+		expect(adminExecResults[0]).toContain("synthetic-admin-exec-ok");
+
+		const agent = await lifecycle.schedules.create({
+			actionKind: "agent_turn",
+			ownerId: "agent",
+			ownerKind: "agent",
+			prompt: "Synthetic non-admin admin-exec probe",
+			recurrence: { at: new Date(Date.now() + 3_600_000).toISOString(), kind: "once" },
+			source: "chat-tool",
+			targetSessionId: session.sessionId,
+			timeZone: "UTC",
+			title: "Synthetic non-admin admin-exec schedule",
+		});
+		await lifecycle.schedules.runNow(agent.id);
+		await waitUntil(() => adminExecResults.length === 2);
+		// The admin tool surface is discoverable on IM chats, but a non-creator schedule must
+		// still fail the runtime admin gate. This is the existing downgraded behavior.
+		expect(adminExecResults[1]).toContain("admin_required");
 	});
 });
 

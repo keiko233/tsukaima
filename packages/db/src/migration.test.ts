@@ -131,6 +131,10 @@ test("creates durable schedules and occurrence uniqueness indexes", async () => 
 				"schedules_dedupe_unique",
 			]),
 		);
+		const scheduleColumns = (
+			raw.query("PRAGMA table_info(schedules)").all() as { name: string }[]
+		).map((column) => column.name);
+		expect(scheduleColumns).toContain("owner_is_admin");
 		expect(raw.query("SELECT COUNT(*) AS count FROM schedules").get() as { count: number }).toEqual(
 			{ count: 0 },
 		);

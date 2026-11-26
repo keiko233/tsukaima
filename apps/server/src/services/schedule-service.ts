@@ -37,8 +37,8 @@ const CONTINUATION_KEY_PREFIX = "schedule-continuation:";
 export const ADMIN_CHAT_SCHEDULE_SOURCE = "admin-chat-tool";
 
 export type SchedulePrincipal =
-	| { readonly kind: "im"; readonly id: string }
-	| { readonly kind: "webui"; readonly id: "webui-admin" };
+	| { readonly admin: true; readonly kind: "im"; readonly id: string }
+	| { readonly admin: true; readonly kind: "webui"; readonly id: "webui-admin" };
 
 export interface ScheduledTurn {
 	readonly occurrenceId: string;
@@ -50,14 +50,16 @@ export interface ScheduledTurn {
 }
 
 function schedulePrincipal(row: ScheduleRow): SchedulePrincipal | undefined {
-	if (row.ownerKind !== "user") return undefined;
+	if (row.ownerKind !== "user" || row.ownerIsAdmin !== true) return undefined;
 	if (
 		row.ownerId === "webui-admin" &&
 		(row.source === "webui" || row.source === "webui-continuation")
 	) {
-		return { id: "webui-admin", kind: "webui" };
+		return { admin: true, id: "webui-admin", kind: "webui" };
 	}
-	if (row.source === ADMIN_CHAT_SCHEDULE_SOURCE) return { id: row.ownerId, kind: "im" };
+	if (row.source === ADMIN_CHAT_SCHEDULE_SOURCE) {
+		return { admin: true, id: row.ownerId, kind: "im" };
+	}
 	return undefined;
 }
 
@@ -104,6 +106,8 @@ export interface ScheduleExecutor {
 
 export interface CreateScheduleInput extends ScheduleCreateInput {
 	readonly ownerId: string;
+	/** Creator privilege snapshot. Missing/legacy rows stay downgraded. */
+	readonly ownerIsAdmin?: boolean;
 	readonly ownerKind: "user" | "agent" | "plugin" | "system";
 	readonly ownerPluginId?: string;
 	readonly source: string;
@@ -480,6 +484,7 @@ export class ScheduleService {
 				actionKind: "agent_turn",
 				dedupeKey: `${CONTINUATION_KEY_PREFIX}${turn.occurrenceId}`,
 				ownerId: principal?.id ?? "agent",
+				...(principal === undefined ? {} : { ownerIsAdmin: true }),
 				ownerKind: principal === undefined ? "agent" : "user",
 				prompt,
 				recurrence: { at: new Date(atMs).toISOString(), kind: "once" },
@@ -584,6 +589,7 @@ export class ScheduleService {
 					maxRuns: input.maxRuns ?? null,
 					nextRunAtMs: next,
 					ownerId: input.ownerId,
+					ownerIsAdmin: input.ownerIsAdmin ?? null,
 					ownerKind: input.ownerKind,
 					ownerPluginId: input.ownerPluginId ?? null,
 					prompt: input.prompt,

@@ -15,6 +15,7 @@ import {
 	openDomainDatabase,
 	pluginTasks,
 	scheduleOccurrences,
+	schedules as schedulesTable,
 	type TsukaimaDatabase,
 } from "@tsukaima/db";
 import { createOpenAICompatibleModelPort } from "@tsukaima/core";
@@ -662,6 +663,35 @@ describe("schedule_create IM tool semantics", () => {
 		} finally {
 			Date.now = originalNow;
 		}
+	});
+
+	test("ignores model-supplied owner privilege fields", async () => {
+		const harness = await createSchedulingHarness();
+		const { clock, database, durableConversationId, schedules, scheduleTools } = harness;
+		clock.now = Date.parse("2026-11-17T00:00:00.000Z");
+		const result = parseToolOutput(
+			await executeScheduleTool(
+				scheduleTools,
+				"schedule_create",
+				{
+					at: "2026-11-17T00:05:00.000Z",
+					ownerId: "admin-1",
+					ownerIsAdmin: true,
+					ownerKind: "user",
+					prompt: "Synthetic privilege probe",
+					timeZone: "UTC",
+				},
+				durableConversationId,
+			),
+		);
+		const detail = await schedules.get(String(result.scheduleId));
+		expect(detail?.ownerKind).toBe("agent");
+		expect(detail?.ownerId).toBe("agent");
+		const [row] = await database
+			.select()
+			.from(schedulesTable)
+			.where(eq(schedulesTable.id, String(result.scheduleId)));
+		expect(row?.ownerIsAdmin).toBeNull();
 	});
 
 	test("rejects a malformed recurrence before persisting a schedule", async () => {
