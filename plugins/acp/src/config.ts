@@ -13,14 +13,7 @@ export type AcpPreset = z.infer<typeof acpPresetSchema>;
 export const acpToolBridgeModeSchema = z.enum(["disabled", "mcp-bridge", "prompt-json"]);
 export type AcpToolBridgeMode = z.infer<typeof acpToolBridgeModeSchema>;
 
-export const acpReasoningLevelSchema = z.enum([
-	"minimal",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-	"max",
-]);
+export const acpReasoningLevelSchema = z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]);
 export type AcpReasoningLevel = z.infer<typeof acpReasoningLevelSchema>;
 
 const DEFAULT_REASONING_LEVELS = [
@@ -287,7 +280,9 @@ function readStringMap(raw: unknown): Record<string, string> {
 	return result;
 }
 
-function readProfileEnvSecrets(raw: Record<string, unknown>): Record<string, Record<string, string>> {
+function readProfileEnvSecrets(
+	raw: Record<string, unknown>,
+): Record<string, Record<string, string>> {
 	if (!isRecord(raw.profileEnvSecrets)) return {};
 	const map: Record<string, Record<string, string>> = {};
 	for (const [profileId, envRecord] of Object.entries(raw.profileEnvSecrets)) {
@@ -311,7 +306,7 @@ export function readAcpProfiles(raw: Record<string, unknown>): readonly ReadAcpP
 		seen.add(data.id);
 		const mergedEnv = {
 			...data.env,
-			...(secrets[data.id] ?? {}),
+			...secrets[data.id],
 		};
 		profiles.push({
 			allowedCapabilityChat: data.allowedCapabilityChat,

@@ -31,7 +31,10 @@
 					"properties": {
 						"id": { "type": "string" },
 						"name": { "type": "string" },
-						"preset": { "type": "string", "enum": ["antigravity", "codex", "claude-code", "custom"] },
+						"preset": {
+							"type": "string",
+							"enum": ["antigravity", "codex", "claude-code", "custom"]
+						},
 						"enabled": { "type": "boolean" },
 						"command": { "type": "string" },
 						"args": { "type": "array", "items": { "type": "string" } },
@@ -39,7 +42,10 @@
 						"idleTtlMs": { "type": "integer" },
 						"requestTimeoutMs": { "type": "integer" },
 						"enableAsModelProvider": { "type": "boolean" },
-						"toolBridgeMode": { "type": "string", "enum": ["disabled", "mcp-bridge", "prompt-json"] },
+						"toolBridgeMode": {
+							"type": "string",
+							"enum": ["disabled", "mcp-bridge", "prompt-json"]
+						},
 						"supportsImageGeneration": { "type": "boolean" },
 						"supportsVideoGeneration": { "type": "boolean" },
 						"supportsCapabilityTool": { "type": "boolean" },
