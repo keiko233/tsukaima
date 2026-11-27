@@ -49,6 +49,9 @@
 						"supportsImage": {
 							"type": "boolean"
 						},
+						"supportsImageGeneration": {
+							"type": "boolean"
+						},
 						"supportsAudio": {
 							"type": "boolean"
 						},
@@ -117,6 +120,9 @@
 										"type": "string"
 									},
 									"supportsImage": {
+										"type": "boolean"
+									},
+									"supportsImageGeneration": {
 										"type": "boolean"
 									},
 									"supportsAudio": {

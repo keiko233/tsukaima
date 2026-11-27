@@ -8,6 +8,7 @@ import { LocalModelRegistry } from "./bridges.ts";
 import { hasModelCapability, MODEL_CAPABILITIES } from "./model-capabilities.ts";
 import type {
 	PluginDecisionChoiceRequest,
+	PluginImageGenerateRequest,
 	PluginModelCompleteRequest,
 	PluginModelDescriptor,
 } from "./types.ts";
@@ -329,5 +330,189 @@ describe("decision choice port", () => {
 				providerId: "picker",
 			}),
 		).rejects.toThrow("not one of the provided options");
+	});
+});
+
+describe("image generation port", () => {
+	test("routes by capability to the first configured image provider", async () => {
+		const models = new LocalModelRegistry();
+		const calls: PluginImageGenerateRequest[] = [];
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			generateImage: () => {
+				throw new Error("chat provider must not generate images");
+			},
+			id: "chat",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.basicChat], id: "chat-1" }],
+		});
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			generateImage: (request) => {
+				calls.push(request);
+				return {
+					images: [{ mimeType: "image/png", url: "https://cdn.example/synthetic-1.png" }],
+					modelId: request.modelId ?? "image-1",
+					providerId: "image",
+				};
+			},
+			id: "image",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.imageGenerate], id: "image-1" }],
+		});
+
+		const result = await models.generateImage({ prompt: "synthetic prompt" });
+
+		expect(result).toEqual({
+			images: [{ mimeType: "image/png", url: "https://cdn.example/synthetic-1.png" }],
+			modelId: "image-1",
+			providerId: "image",
+		});
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toMatchObject({
+			modelId: "image-1",
+			prompt: "synthetic prompt",
+			providerId: "image",
+		});
+	});
+
+	test("honors providerId, modelId, and model-only targeting", async () => {
+		const models = new LocalModelRegistry();
+		const calls: PluginImageGenerateRequest[] = [];
+		const makeProvider = (id: string, modelId: string) => ({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			generateImage: (request: PluginImageGenerateRequest) => {
+				calls.push(request);
+				return {
+					images: [{ mimeType: "image/png" }],
+					modelId: request.modelId ?? modelId,
+					providerId: id,
+				};
+			},
+			id,
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.imageGenerate], id: modelId }],
+		});
+		models.registerProvider(makeProvider("alpha", "alpha-1"));
+		models.registerProvider(makeProvider("beta", "beta-2"));
+
+		const targeted = await models.generateImage({
+			modelId: "beta-2",
+			prompt: "synthetic prompt",
+			providerId: "beta",
+		});
+		expect(targeted).toMatchObject({ modelId: "beta-2", providerId: "beta" });
+
+		const byModel = await models.generateImage({
+			modelId: "alpha-1",
+			prompt: "synthetic prompt",
+		});
+		expect(byModel).toMatchObject({ modelId: "alpha-1", providerId: "alpha" });
+
+		expect(calls[0]).toMatchObject({ modelId: "beta-2", providerId: "beta" });
+		expect(calls[1]).toMatchObject({ modelId: "alpha-1", providerId: "alpha" });
+
+		await expect(
+			models.generateImage({ modelId: "missing-9", prompt: "synthetic prompt" }),
+		).rejects.toThrow("not available");
+	});
+
+	test("prefers image.edit when referenceImages are supplied", async () => {
+		const models = new LocalModelRegistry();
+		const generateCalls: PluginImageGenerateRequest[] = [];
+		const editCalls: PluginImageGenerateRequest[] = [];
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			generateImage: (request) => {
+				generateCalls.push(request);
+				return { images: [{ mimeType: "image/png" }], modelId: "gen-1", providerId: "gen" };
+			},
+			id: "gen",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.imageGenerate], id: "gen-1" }],
+		});
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "edit",
+			imageGenerate: {
+				generateImage: (request) => {
+					editCalls.push(request);
+					return { images: [{ mimeType: "image/png" }], modelId: "edit-1", providerId: "edit" };
+				},
+			},
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.imageEdit], id: "edit-1" }],
+		});
+
+		const result = await models.generateImage({
+			prompt: "synthetic restyle",
+			referenceImages: [{ bytes: new Uint8Array([1, 2, 3]), mimeType: "image/png" }],
+		});
+
+		expect(result).toMatchObject({ modelId: "edit-1", providerId: "edit" });
+		expect(generateCalls).toHaveLength(0);
+		expect(editCalls).toHaveLength(1);
+		expect(editCalls[0]?.referenceImages?.[0]?.mimeType).toBe("image/png");
+	});
+
+	test("rejects unconfigured, unregistered, non-image, and disabled-model targets", async () => {
+		const models = new LocalModelRegistry();
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			generateImage: () => ({ images: [], modelId: "off-1", providerId: "off" }),
+			id: "off",
+			isConfigured: () => false,
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.imageGenerate], id: "off-1" }],
+		});
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "chat",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.basicChat], id: "chat-1" }],
+		});
+		await expect(models.generateImage({ prompt: "synthetic prompt" })).rejects.toThrow(
+			"No configured model provider",
+		);
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			generateImage: () => ({ images: [], modelId: "image-1", providerId: "image" }),
+			id: "image",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.imageGenerate], id: "image-1" }],
+		});
+		await expect(
+			models.generateImage({ prompt: "synthetic prompt", providerId: "off" }),
+		).rejects.toThrow("not configured");
+		await expect(
+			models.generateImage({ prompt: "synthetic prompt", providerId: "unknown" }),
+		).rejects.toThrow("not registered");
+		await expect(
+			models.generateImage({ prompt: "synthetic prompt", providerId: "chat" }),
+		).rejects.toThrow("does not support image generation");
+		await expect(
+			models.generateImage({
+				modelId: "image-2",
+				prompt: "synthetic prompt",
+				providerId: "image",
+			}),
+		).rejects.toThrow("not enabled");
+	});
+
+	test("rejects already-aborted requests", async () => {
+		const models = new LocalModelRegistry();
+		const controller = new AbortController();
+		controller.abort();
+		await expect(
+			models.generateImage({ prompt: "synthetic prompt", signal: controller.signal }),
+		).rejects.toThrow("aborted");
 	});
 });

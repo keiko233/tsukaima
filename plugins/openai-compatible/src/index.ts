@@ -1,5 +1,12 @@
 import { createOpenAICompatibleModelPort } from "@tsukaima/core";
-import type { PluginContext, PluginModelProvider, TsukaimaPlugin } from "@tsukaima/sdk";
+import type {
+	PluginContext,
+	PluginGeneratedImage,
+	PluginImageGenerateRequest,
+	PluginImageGenerateResult,
+	PluginModelProvider,
+	TsukaimaPlugin,
+} from "@tsukaima/sdk";
 import { z } from "zod";
 import {
 	modelCapabilities,
@@ -54,6 +61,12 @@ const discoverInputSchema = z
 interface RuntimeState {
 	readonly providers: Map<string, () => void>;
 	readonly settingsUnsubscribers: Set<() => void>;
+}
+
+interface ImageResponseItem {
+	readonly b64_json?: string;
+	readonly revised_prompt?: string;
+	readonly url?: string;
 }
 
 const runtimeStates = new WeakMap<object, RuntimeState>();
@@ -231,6 +244,116 @@ function createProvider(
 				providerId,
 				text,
 			};
+		},
+		async generateImage(request: PluginImageGenerateRequest): Promise<PluginImageGenerateResult> {
+			const startedAt = performance.now();
+			if (!configured) throw new Error("OpenAI-compatible provider is not configured");
+			const supportsImage = (candidate: (typeof enabledModels)[number]): boolean => {
+				const capabilities = modelCapabilities(candidate);
+				return capabilities.includes("image.generate") || capabilities.includes("image.edit");
+			};
+			const model =
+				enabledModels.find(
+					(candidate) => candidate.id === request.modelId && supportsImage(candidate),
+				) ?? enabledModels.find(supportsImage);
+			if (model === undefined) {
+				throw new Error("No enabled image-generation model is configured");
+			}
+			const normalizedBaseUrl = baseUrl.replace(/\/$/u, "");
+			const referenceImages = request.referenceImages ?? [];
+			const usesReferenceImages = referenceImages.length > 0;
+			context.logger.trace("OpenAI-compatible image request", {
+				count: request.count,
+				modelId: model.id,
+				providerId,
+				referenceCount: referenceImages.length,
+				size: request.size,
+			});
+			let response: Response;
+			try {
+				if (usesReferenceImages) {
+					const form = new FormData();
+					form.set("model", model.id);
+					form.set("prompt", request.prompt);
+					if (request.count !== undefined && request.count > 0) {
+						form.set("n", String(request.count));
+					}
+					if (request.size !== undefined) form.set("size", request.size);
+					form.set("response_format", "b64_json");
+					for (const reference of referenceImages) {
+						form.append(
+							"image",
+							new Blob([reference.bytes], { type: reference.mimeType }),
+							"image",
+						);
+					}
+					response = await fetch(`${normalizedBaseUrl}/images/edits`, {
+						body: form,
+						headers: { authorization: `Bearer ${apiKey}` },
+						method: "POST",
+						...(request.signal === undefined ? {} : { signal: request.signal }),
+					});
+				} else {
+					response = await fetch(`${normalizedBaseUrl}/images/generations`, {
+						body: JSON.stringify({
+							model: model.id,
+							prompt: request.prompt,
+							...(request.count === undefined || request.count <= 0 ? {} : { n: request.count }),
+							...(request.size === undefined ? {} : { size: request.size }),
+							response_format: "b64_json",
+						}),
+						headers: {
+							"content-type": "application/json",
+							authorization: `Bearer ${apiKey}`,
+						},
+						method: "POST",
+						...(request.signal === undefined ? {} : { signal: request.signal }),
+					});
+				}
+			} catch (error) {
+				context.logger.error("OpenAI-compatible image request failed", {
+					durationMs: Math.round(performance.now() - startedAt),
+					modelId: model.id,
+					providerId,
+					error,
+				});
+				throw error;
+			}
+			if (!response.ok) {
+				context.logger.warn("OpenAI-compatible image request rejected", {
+					durationMs: Math.round(performance.now() - startedAt),
+					modelId: model.id,
+					providerId,
+					status: response.status,
+				});
+				throw new Error(`Image generation request failed with ${response.status}`);
+			}
+			const payload = (await response.json()) as {
+				readonly data?: readonly ImageResponseItem[];
+			};
+			const images: PluginGeneratedImage[] = [];
+			for (const item of payload.data ?? []) {
+				const revisedPrompt =
+					item.revised_prompt === undefined ? {} : { revisedPrompt: item.revised_prompt };
+				if (typeof item.b64_json === "string" && item.b64_json.length > 0) {
+					images.push({
+						...revisedPrompt,
+						bytes: Uint8Array.from(Buffer.from(item.b64_json, "base64")),
+						mimeType: "image/png",
+					});
+					continue;
+				}
+				if (typeof item.url === "string" && item.url.length > 0) {
+					images.push({ ...revisedPrompt, mimeType: "image/png", url: item.url });
+				}
+			}
+			context.logger.debug("OpenAI-compatible image request completed", {
+				durationMs: Math.round(performance.now() - startedAt),
+				imageCount: images.length,
+				modelId: model.id,
+				providerId,
+			});
+			return { images, modelId: model.id, providerId };
 		},
 		async createPort(options = {}) {
 			if (!configured) throw new Error("OpenAI-compatible provider is not configured");

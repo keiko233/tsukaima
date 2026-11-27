@@ -2,6 +2,7 @@ import { MODEL_CAPABILITIES } from "@tsukaima/sdk/model-capabilities";
 import type {
 	PluginModelDescriptor,
 	PluginModelInputModality,
+	PluginModelOutputModality,
 	PluginModelReasoningLevel,
 } from "@tsukaima/sdk";
 import { z } from "zod";
@@ -40,6 +41,7 @@ export const openAiCompatibleModelSchema = z.object({
 	defaultReasoningLevel: openAiCompatibleReasoningLevelSchema.default("medium"),
 	supportsImage: z.boolean().default(false),
 	supportsAudio: z.boolean().default(false),
+	supportsImageGeneration: z.boolean().default(false),
 	/** Whether the busy-run classifier may use this model; untick slow or costly models. */
 	supportsSidechat: z.boolean().default(true),
 	capabilities: z.array(z.string().trim().min(1)).default([]),
@@ -279,6 +281,7 @@ export function modelCapabilities(model: OpenAiCompatibleModel): readonly string
 		capabilities.add(MODEL_CAPABILITIES.vision);
 		capabilities.add(MODEL_CAPABILITIES.imageInput);
 	}
+	if (model.supportsImageGeneration) capabilities.add(MODEL_CAPABILITIES.imageGenerate);
 	if (model.supportsAudio) capabilities.add(MODEL_CAPABILITIES.audioInput);
 	if (model.supportsSidechat) capabilities.add(MODEL_CAPABILITIES.sidechat);
 	for (const capability of customCapabilities(model)) capabilities.add(capability);
@@ -295,6 +298,19 @@ export function modelInputModalities(
 	];
 }
 
+export function modelOutputModalities(
+	model: OpenAiCompatibleModel,
+): readonly PluginModelOutputModality[] {
+	const capabilities = modelCapabilities(model);
+	const supportsImageGeneration =
+		model.supportsImageGeneration || capabilities.includes(MODEL_CAPABILITIES.imageGenerate);
+	if (!supportsImageGeneration) return ["text"];
+	// basic-chat is advertised unconditionally, so tools, reasoning, and sidechat are the flags
+	// that distinguish a mixed text/image model from an image-only model.
+	const supportsTextChat = model.supportsTools || model.supportsReasoning || model.supportsSidechat;
+	return supportsTextChat ? ["text", "image"] : ["image"];
+}
+
 export function toPluginModelDescriptor(model: OpenAiCompatibleModel): PluginModelDescriptor {
 	return {
 		capabilities: modelCapabilities(model),
@@ -302,6 +318,7 @@ export function toPluginModelDescriptor(model: OpenAiCompatibleModel): PluginMod
 		id: model.id,
 		input: modelInputModalities(model),
 		maxOutputTokens: model.maxOutputTokens,
+		output: modelOutputModalities(model),
 		...(model.name === undefined ? {} : { name: model.name }),
 		...(model.supportsReasoning
 			? {

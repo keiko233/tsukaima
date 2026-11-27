@@ -50,7 +50,9 @@ function readDurationMs(record: LogRecord | undefined): unknown {
 	return (details as { durationMs?: unknown }).durationMs;
 }
 
-function asFetch(handler: () => Promise<Response>): typeof globalThis.fetch {
+function asFetch(
+	handler: (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => Promise<Response>,
+): typeof globalThis.fetch {
 	return handler as unknown as typeof globalThis.fetch;
 }
 
@@ -804,6 +806,197 @@ describe("openai-compatible plugin", () => {
 			expect(
 				findRecord(records, "OpenAI-compatible transcription request rejected")?.details,
 			).toMatchObject({ modelId: "whisper", status: 429 });
+		} finally {
+			fetchSpy.mockRestore();
+		}
+	});
+
+	test("generates images through the JSON generations endpoint", async () => {
+		const calls: { readonly init?: RequestInit; readonly url: string }[] = [];
+		const encoded = Buffer.from([1, 2, 3]).toString("base64");
+		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+			asFetch(async (input, init) => {
+				calls.push({ url: String(input), ...(init === undefined ? {} : { init }) });
+				return Response.json({
+					data: [
+						{ b64_json: encoded, revised_prompt: "synthetic revised" },
+						{ url: "https://cdn.example/synthetic.png" },
+					],
+				});
+			}),
+		);
+		try {
+			const context = createPluginContext({
+				grantedPermissions: ["model.call", "settings"],
+				manifest: openAiCompatibleManifest,
+				pluginId: "openai-compatible",
+				settings: {
+					get: async () => ({
+						apiKey: "test-key",
+						baseUrl: "https://models.example/v1",
+						models: [
+							{
+								enabled: true,
+								id: "image-1",
+								supportsImageGeneration: true,
+								supportsReasoning: false,
+								supportsSidechat: false,
+								supportsTools: false,
+							},
+						],
+					}),
+					onChange: () => () => {},
+				},
+			});
+			await openAiCompatiblePlugin.prepare?.(context);
+			const provider = context.models.getProvider(
+				OPENAI_COMPATIBLE_PROVIDER_ID,
+			) as PluginModelProvider;
+			if (provider.generateImage === undefined) throw new Error("image port missing");
+			const controller = new AbortController();
+			const result = await provider.generateImage({
+				count: 2,
+				prompt: "synthetic prompt",
+				signal: controller.signal,
+				size: "512x512",
+			});
+
+			expect(result.providerId).toBe(OPENAI_COMPATIBLE_PROVIDER_ID);
+			expect(result.modelId).toBe("image-1");
+			expect(result.images).toEqual([
+				{
+					bytes: new Uint8Array([1, 2, 3]),
+					mimeType: "image/png",
+					revisedPrompt: "synthetic revised",
+				},
+				{ mimeType: "image/png", url: "https://cdn.example/synthetic.png" },
+			]);
+			expect(calls).toHaveLength(1);
+			expect(calls[0]?.url).toBe("https://models.example/v1/images/generations");
+			expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+				model: "image-1",
+				n: 2,
+				prompt: "synthetic prompt",
+				response_format: "b64_json",
+				size: "512x512",
+			});
+			expect(calls[0]?.init?.signal).toBe(controller.signal);
+			expect(new Headers(calls[0]?.init?.headers).get("authorization")).toBe("Bearer test-key");
+		} finally {
+			fetchSpy.mockRestore();
+		}
+	});
+
+	test("edits images through the multipart edits endpoint", async () => {
+		const calls: { readonly init?: RequestInit; readonly url: string }[] = [];
+		const encoded = Buffer.from([4, 5, 6]).toString("base64");
+		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+			asFetch(async (input, init) => {
+				calls.push({ url: String(input), ...(init === undefined ? {} : { init }) });
+				return Response.json({ data: [{ b64_json: encoded }] });
+			}),
+		);
+		try {
+			const context = createPluginContext({
+				grantedPermissions: ["model.call", "settings"],
+				manifest: openAiCompatibleManifest,
+				pluginId: "openai-compatible",
+				settings: {
+					get: async () => ({
+						apiKey: "test-key",
+						baseUrl: "https://models.example/v1",
+						models: [
+							{
+								capabilities: ["image.edit"],
+								enabled: true,
+								id: "image-edit-1",
+								supportsImageGeneration: true,
+								supportsReasoning: false,
+								supportsSidechat: false,
+								supportsTools: false,
+							},
+						],
+					}),
+					onChange: () => () => {},
+				},
+			});
+			await openAiCompatiblePlugin.prepare?.(context);
+			const provider = context.models.getProvider(
+				OPENAI_COMPATIBLE_PROVIDER_ID,
+			) as PluginModelProvider;
+			if (provider.generateImage === undefined) throw new Error("image port missing");
+			const controller = new AbortController();
+			const firstReference = new Uint8Array([9, 8, 7]);
+			const secondReference = new Uint8Array([6, 5, 4]);
+			const result = await provider.generateImage({
+				count: 1,
+				prompt: "synthetic edit",
+				referenceImages: [
+					{ bytes: firstReference, mimeType: "image/png" },
+					{ bytes: secondReference, mimeType: "image/jpeg" },
+				],
+				signal: controller.signal,
+				size: "1024x1024",
+			});
+
+			expect(result).toEqual({
+				images: [{ bytes: new Uint8Array([4, 5, 6]), mimeType: "image/png" }],
+				modelId: "image-edit-1",
+				providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
+			});
+			expect(calls).toHaveLength(1);
+			expect(calls[0]?.url).toBe("https://models.example/v1/images/edits");
+			const form = calls[0]?.init?.body;
+			if (!(form instanceof FormData)) throw new Error("expected a FormData body");
+			expect(form.get("model")).toBe("image-edit-1");
+			expect(form.get("prompt")).toBe("synthetic edit");
+			expect(form.get("n")).toBe("1");
+			expect(form.get("size")).toBe("1024x1024");
+			expect(form.get("response_format")).toBe("b64_json");
+			const images = form.getAll("image");
+			expect(images).toHaveLength(2);
+			const [firstImage, secondImage] = images;
+			if (!(firstImage instanceof Blob) || !(secondImage instanceof Blob)) {
+				throw new Error("expected image blobs");
+			}
+			expect(firstImage.type).toBe("image/png");
+			expect(secondImage.type).toBe("image/jpeg");
+			expect(new Uint8Array(await firstImage.arrayBuffer())).toEqual(firstReference);
+			expect(new Uint8Array(await secondImage.arrayBuffer())).toEqual(secondReference);
+			expect(calls[0]?.init?.signal).toBe(controller.signal);
+			expect(new Headers(calls[0]?.init?.headers).get("authorization")).toBe("Bearer test-key");
+		} finally {
+			fetchSpy.mockRestore();
+		}
+	});
+
+	test("rejects image requests when no image-generation model is enabled", async () => {
+		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+			asFetch(async () => Response.json({ data: [] })),
+		);
+		try {
+			const context = createPluginContext({
+				grantedPermissions: ["model.call", "settings"],
+				manifest: openAiCompatibleManifest,
+				pluginId: "openai-compatible",
+				settings: {
+					get: async () => ({
+						apiKey: "test-key",
+						baseUrl: "https://models.example/v1",
+						models: [{ enabled: true, id: "chat-1" }],
+					}),
+					onChange: () => () => {},
+				},
+			});
+			await openAiCompatiblePlugin.prepare?.(context);
+			const provider = context.models.getProvider(
+				OPENAI_COMPATIBLE_PROVIDER_ID,
+			) as PluginModelProvider;
+			if (provider.generateImage === undefined) throw new Error("image port missing");
+			await expect(provider.generateImage({ prompt: "synthetic prompt" })).rejects.toThrow(
+				"No enabled image-generation model is configured",
+			);
+			expect(fetchSpy).not.toHaveBeenCalled();
 		} finally {
 			fetchSpy.mockRestore();
 		}

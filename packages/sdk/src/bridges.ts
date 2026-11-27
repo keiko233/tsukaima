@@ -34,6 +34,8 @@ import type {
 	PluginEmbeddingRequest,
 	PluginEmbeddingResult,
 	PluginFollowUpsApi,
+	PluginImageGenerateRequest,
+	PluginImageGenerateResult,
 	PluginSchedulesApi,
 	PluginMigrationsApi,
 	PluginModelCompleteMessage,
@@ -663,6 +665,10 @@ export class LocalModelRegistry implements PluginModelRegistry {
 		return await decideChoicePluginModel(this.#providers, request);
 	}
 
+	async generateImage(request: PluginImageGenerateRequest): Promise<PluginImageGenerateResult> {
+		return await generateImagePluginModel(this.#providers, request);
+	}
+
 	#providersFor(modelId: string | undefined, capability: string): readonly PluginModelProvider[] {
 		const providers = [...this.#providers.values()];
 		if (modelId === undefined) return providers;
@@ -935,6 +941,128 @@ export async function decideChoicePluginModel(
 		...(decision.confidence === undefined ? {} : { confidence: decision.confidence }),
 		...(decision.reason === undefined ? {} : { reason: decision.reason }),
 	};
+}
+
+interface ImageGenerateTarget {
+	readonly provider: PluginModelProvider;
+	readonly modelId?: string;
+}
+
+function firstCapabilityModel(
+	descriptors: readonly PluginModelDescriptor[],
+	capabilities: readonly string[],
+): PluginModelDescriptor | undefined {
+	for (const capability of capabilities) {
+		const matched = descriptors.find((descriptor) => descriptor.capabilities.includes(capability));
+		if (matched !== undefined) return matched;
+	}
+	return undefined;
+}
+
+function implementsImageGeneration(provider: PluginModelProvider): boolean {
+	return provider.generateImage !== undefined || provider.imageGenerate !== undefined;
+}
+
+async function resolveImageGenerateTarget(
+	providers: ReadonlyMap<string, PluginModelProvider>,
+	request: PluginImageGenerateRequest,
+): Promise<ImageGenerateTarget> {
+	const capabilities =
+		request.referenceImages !== undefined && request.referenceImages.length > 0
+			? [MODEL_CAPABILITIES.imageEdit, MODEL_CAPABILITIES.imageGenerate]
+			: [MODEL_CAPABILITIES.imageGenerate];
+
+	if (request.providerId !== undefined) {
+		const provider = providers.get(request.providerId);
+		if (provider === undefined) {
+			throw new Error(`Model provider ${request.providerId} is not registered`);
+		}
+		if ((await provider.isConfigured?.()) === false) {
+			throw new Error(`Model provider ${request.providerId} is not configured`);
+		}
+		if (!implementsImageGeneration(provider)) {
+			throw new Error(`Model provider ${request.providerId} does not support image generation`);
+		}
+		if (provider.listModels === undefined) {
+			return {
+				...(request.modelId === undefined ? {} : { modelId: request.modelId }),
+				provider,
+			};
+		}
+		const descriptors = await safeListModels(provider);
+		if (request.modelId !== undefined) {
+			const matched = descriptors.find((descriptor) => descriptor.id === request.modelId);
+			if (matched === undefined) {
+				throw new Error(
+					`Model ${request.modelId} is not enabled on provider ${request.providerId}`,
+				);
+			}
+			return { modelId: matched.id, provider };
+		}
+		const matched = firstCapabilityModel(descriptors, capabilities);
+		return { ...(matched === undefined ? {} : { modelId: matched.id }), provider };
+	}
+
+	const configured: PluginModelProvider[] = [];
+	for (const provider of providers.values()) {
+		if (!implementsImageGeneration(provider)) continue;
+		if ((await provider.isConfigured?.()) === false) continue;
+		configured.push(provider);
+	}
+
+	if (request.modelId !== undefined) {
+		for (const provider of configured) {
+			if (provider.listModels === undefined) continue;
+			const descriptors = await safeListModels(provider);
+			if (descriptors.some((descriptor) => descriptor.id === request.modelId)) {
+				return { modelId: request.modelId, provider };
+			}
+		}
+		const fallback = configured.find((provider) => provider.listModels === undefined);
+		if (fallback !== undefined) return { modelId: request.modelId, provider: fallback };
+		throw new Error(
+			`Model ${request.modelId} is not available from any configured image-generation provider`,
+		);
+	}
+
+	for (const capability of capabilities) {
+		for (const provider of configured) {
+			if (provider.listModels === undefined) continue;
+			const descriptors = await safeListModels(provider);
+			const matched = descriptors.find((descriptor) =>
+				descriptor.capabilities.includes(capability),
+			);
+			if (matched !== undefined) return { modelId: matched.id, provider };
+		}
+	}
+	const fallback = configured[0];
+	if (fallback === undefined) {
+		throw new Error("No configured model provider can generate images");
+	}
+	return { provider: fallback };
+}
+
+/** Runs image generation or editing through a registered provider capability port. */
+export async function generateImagePluginModel(
+	providers: ReadonlyMap<string, PluginModelProvider>,
+	request: PluginImageGenerateRequest,
+): Promise<PluginImageGenerateResult> {
+	if (request.signal?.aborted === true) {
+		throw new Error("Image generation request aborted");
+	}
+	const { modelId, provider } = await resolveImageGenerateTarget(providers, request);
+	const resolvedRequest: PluginImageGenerateRequest = {
+		...request,
+		providerId: provider.id,
+		...(modelId === undefined ? {} : { modelId }),
+	};
+	if (provider.generateImage !== undefined) {
+		return await provider.generateImage(resolvedRequest);
+	}
+	if (provider.imageGenerate !== undefined) {
+		return await provider.imageGenerate.generateImage(resolvedRequest);
+	}
+	throw new Error(`Model provider ${provider.id} does not support image generation`);
 }
 
 /**
