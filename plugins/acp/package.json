@@ -7,6 +7,7 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
+		"@earendil-works/pi-ai": "1.5.2",
 		"@inlang/paraglide-js": "^3.2.2",
 		"@tsukaima/contracts": "workspace:*",
 		"@tsukaima/core": "workspace:*",

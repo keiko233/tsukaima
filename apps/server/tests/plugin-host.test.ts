@@ -218,6 +218,7 @@ describe("plugin host", () => {
 			const plugins = await lifecycle.pluginHost.list();
 			expect(plugins.map((plugin) => plugin.name)).toEqual([
 				"openai-compatible",
+				"acp",
 				"onebot-napcat",
 				"history",
 				"memory",

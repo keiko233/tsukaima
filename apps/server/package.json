@@ -13,6 +13,7 @@
 		"@earendil-works/pi-ai": "1.5.2",
 		"@earendil-works/pi-coding-agent": "1.5.2",
 		"@orpc/server": "1.16.5",
+		"@tsukaima-plugin/acp": "workspace:*",
 		"@tsukaima-plugin/mcp": "workspace:*",
 		"@tsukaima-plugin/onebot-napcat": "workspace:*",
 		"@tsukaima-plugin/openai-compatible": "workspace:*",
