@@ -1,0 +1,5 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"plugin_name": "ACP CLI 提供方",
+	"plugin_description": "通过 ACP 协议接入 Antigravity、Codex、Claude Code 及自定义 CLI，提供模型与生图生视频能力。"
+}

@@ -1,0 +1,94 @@
+{
+	"name": "acp",
+	"version": "0.1.0",
+	"apiVersion": "1",
+	"kind": "builtin",
+	"permissions": [
+		"ui.panel",
+		"model.call",
+		"settings",
+		"media.read",
+		"media.write",
+		"channel.send",
+		"audit.write"
+	],
+	"tools": [],
+	"hooks": [],
+	"ui": [],
+	"configSchema": {
+		"type": "object",
+		"properties": {
+			"toolsRootDir": {
+				"type": "string"
+			},
+			"artifactsRootDir": {
+				"type": "string"
+			},
+			"profiles": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"id": { "type": "string" },
+						"name": { "type": "string" },
+						"preset": {
+							"type": "string",
+							"enum": ["antigravity", "codex", "claude-code", "custom"]
+						},
+						"enabled": { "type": "boolean" },
+						"command": { "type": "string" },
+						"args": { "type": "array", "items": { "type": "string" } },
+						"cwd": { "type": "string" },
+						"idleTtlMs": { "type": "integer" },
+						"requestTimeoutMs": { "type": "integer" },
+						"enableAsModelProvider": { "type": "boolean" },
+						"toolBridgeMode": {
+							"type": "string",
+							"enum": ["disabled", "mcp-bridge", "prompt-json"]
+						},
+						"supportsImageGeneration": { "type": "boolean" },
+						"supportsVideoGeneration": { "type": "boolean" },
+						"supportsCapabilityTool": { "type": "boolean" },
+						"allowedCapabilityChat": { "type": "boolean" },
+						"env": { "type": "object", "additionalProperties": { "type": "string" } },
+						"models": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"properties": {
+									"id": { "type": "string" },
+									"name": { "type": "string" },
+									"enabled": { "type": "boolean" },
+									"supportsTools": { "type": "boolean" },
+									"supportsReasoning": { "type": "boolean" },
+									"reasoningLevels": { "type": "array", "items": { "type": "string" } },
+									"defaultReasoningLevel": { "type": "string" },
+									"supportsImage": { "type": "boolean" },
+									"supportsAudio": { "type": "boolean" },
+									"supportsImageGeneration": { "type": "boolean" },
+									"supportsVideoGeneration": { "type": "boolean" },
+									"supportsSidechat": { "type": "boolean" },
+									"capabilities": { "type": "array", "items": { "type": "string" } },
+									"contextWindow": { "type": "integer" },
+									"maxOutputTokens": { "type": "integer" }
+								}
+							}
+						}
+					}
+				}
+			},
+			"profileEnvSecrets": {
+				"type": "object",
+				"additionalProperties": {
+					"type": "object",
+					"additionalProperties": { "type": "string" }
+				}
+			}
+		}
+	},
+	"configEnv": {
+		"toolsRootDir": "TSUKAIMA_ACP_TOOLS_DIR",
+		"artifactsRootDir": "TSUKAIMA_ACP_ARTIFACTS_DIR"
+	},
+	"secretKeys": ["profileEnvSecrets"]
+}

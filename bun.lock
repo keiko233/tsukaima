@@ -14,7 +14,7 @@
     },
     "apps/server": {
       "name": "@tsukaima/server",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@better-auth/drizzle-adapter": "1.7.27",
         "@earendil-works/pi-ai": "1.5.2",
@@ -45,7 +45,7 @@
     },
     "apps/web": {
       "name": "@tsukaima/web",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@fontsource-variable/bricolage-grotesque": "5.3.0",
         "@fontsource-variable/outfit": "5.3.0",
@@ -93,7 +93,7 @@
     },
     "packages/cache": {
       "name": "@tsukaima/cache",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@keyv/sqlite": "6.1.0",
         "keyv": "6.1.0",
@@ -105,7 +105,7 @@
     },
     "packages/chaos": {
       "name": "@tsukaima/chaos",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@earendil-works/chord": "1.5.2",
         "@earendil-works/pi-durable": "1.5.2",
@@ -115,7 +115,7 @@
     },
     "packages/coding": {
       "name": "@tsukaima/coding",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@earendil-works/pi-ai": "1.5.2",
         "@earendil-works/pi-coding-agent": "1.5.2",
@@ -128,7 +128,7 @@
     },
     "packages/contracts": {
       "name": "@tsukaima/contracts",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@orpc/contract": "1.16.5",
         "zod": "4.6.7",
@@ -136,7 +136,7 @@
     },
     "packages/core": {
       "name": "@tsukaima/core",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@earendil-works/chord": "1.5.2",
         "@earendil-works/pi-ai": "1.5.2",
@@ -148,7 +148,7 @@
     },
     "packages/db": {
       "name": "@tsukaima/db",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "drizzle-orm": "0.45.4",
       },
@@ -158,7 +158,7 @@
     },
     "packages/durable": {
       "name": "@tsukaima/durable",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@earendil-works/chord": "1.5.2",
         "@earendil-works/pi-durable": "1.5.2",
@@ -166,7 +166,7 @@
     },
     "packages/migration": {
       "name": "@tsukaima/migration",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@tsukaima/db": "workspace:*",
         "drizzle-orm": "0.45.4",
@@ -175,14 +175,14 @@
     },
     "packages/plugin-registry": {
       "name": "@tsukaima/plugin-registry",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@tsukaima/sdk": "workspace:*",
       },
     },
     "packages/sdk": {
       "name": "@tsukaima/sdk",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/ui": "workspace:*",
@@ -207,7 +207,7 @@
     },
     "packages/ui": {
       "name": "@tsukaima/ui",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@ui-sdk/core": "0.1.0-beta.17",
         "@ui-sdk/react": "0.1.0-beta.17",
@@ -228,9 +228,28 @@
         "react-dom": "^19.3.1",
       },
     },
+    "plugins/acp": {
+      "name": "@tsukaima-plugin/acp",
+      "version": "0.36.0",
+      "dependencies": {
+        "@inlang/paraglide-js": "^3.2.2",
+        "@tsukaima/contracts": "workspace:*",
+        "@tsukaima/core": "workspace:*",
+        "@tsukaima/sdk": "workspace:*",
+        "@tsukaima/ui": "workspace:*",
+        "lucide-react": "^1.72.0",
+        "zod": "4.6.7",
+      },
+      "devDependencies": {
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "react": "^19.3.1",
+        "react-dom": "^19.3.1",
+      },
+    },
     "plugins/mcp": {
       "name": "@tsukaima-plugin/mcp",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@modelcontextprotocol/sdk": "1.32.2",
@@ -250,7 +269,7 @@
     },
     "plugins/onebot-napcat": {
       "name": "@tsukaima-plugin/onebot-napcat",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -269,7 +288,7 @@
     },
     "plugins/openai-compatible": {
       "name": "@tsukaima-plugin/openai-compatible",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -288,7 +307,7 @@
     },
     "plugins/proactive-scheduler": {
       "name": "@tsukaima-plugin/proactive-scheduler",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -307,7 +326,7 @@
     },
     "plugins/skills": {
       "name": "@tsukaima-plugin/skills",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -326,7 +345,7 @@
     },
     "plugins/sticker-meme": {
       "name": "@tsukaima-plugin/sticker-meme",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -353,7 +372,7 @@
     },
     "tools/migration": {
       "name": "@tsukaima/migration-cli",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "bin": {
         "tsukaima-migration": "./src/cli.ts",
       },
@@ -363,7 +382,7 @@
     },
     "tools/ops": {
       "name": "@tsukaima/ops",
-      "version": "0.35.5",
+      "version": "0.36.0",
       "bin": {
         "tsukaima-backup-drill": "./backup-drill.ts",
         "tsukaima-secret-scan": "./secret-scan.ts",
@@ -923,6 +942,8 @@
     "@tokenizer/inflate": ["@tokenizer/inflate@0.6.0", "", { "dependencies": { "debug": "^4.4.3", "strtok3": "^10.6.2", "token-types": "^6.1.2" } }, "sha512-+0RDxhBkyT9xMnGdJAwmats9yxRLR8ypJrQgrnLqOu4Gv/aHlnxYgdGVy2QTwvBl6IF/w2Hr+ZNirH+iMUbVZA=="],
 
     "@tokenizer/token": ["@tokenizer/token@0.3.0", "", {}, "sha512-OvjF+z51L3ov0OyAU0duzsYuvO01PH7x4t6DJx+guahgTnBHkhJdG7soQeTSFLWN3efnHyibZ4Z8l2EuWwJN3A=="],
+
+    "@tsukaima-plugin/acp": ["@tsukaima-plugin/acp@workspace:plugins/acp"],
 
     "@tsukaima-plugin/mcp": ["@tsukaima-plugin/mcp@workspace:plugins/mcp"],
 
