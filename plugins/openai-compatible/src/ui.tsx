@@ -268,6 +268,16 @@ function ModelRow({
 					}
 				/>
 				<CapabilityButton
+					active={model.supportsVideoGeneration}
+					label={t.t("capability_video_generation")}
+					onClick={() =>
+						onChange({
+							...model,
+							supportsVideoGeneration: !model.supportsVideoGeneration,
+						})
+					}
+				/>
+				<CapabilityButton
 					active={model.supportsAudio}
 					label={t.t("capability_audio")}
 					onClick={() => onChange({ ...model, supportsAudio: !model.supportsAudio })}

@@ -36,6 +36,9 @@ import type {
 	PluginFollowUpsApi,
 	PluginImageGenerateRequest,
 	PluginImageGenerateResult,
+	PluginVideoGenerateRequest,
+	PluginVideoJobHandle,
+	PluginVideoJobStatus,
 	PluginSchedulesApi,
 	PluginMigrationsApi,
 	PluginModelCompleteMessage,
@@ -669,6 +672,21 @@ export class LocalModelRegistry implements PluginModelRegistry {
 		return await generateImagePluginModel(this.#providers, request);
 	}
 
+	async submitVideoJob(request: PluginVideoGenerateRequest): Promise<PluginVideoJobHandle> {
+		return await submitVideoJobPluginModel(this.#providers, request);
+	}
+
+	async pollVideoJob(
+		handle: PluginVideoJobHandle,
+		signal?: AbortSignal,
+	): Promise<PluginVideoJobStatus> {
+		return await pollVideoJobPluginModel(this.#providers, handle, signal);
+	}
+
+	async cancelVideoJob(handle: PluginVideoJobHandle): Promise<void> {
+		await cancelVideoJobPluginModel(this.#providers, handle);
+	}
+
 	#providersFor(modelId: string | undefined, capability: string): readonly PluginModelProvider[] {
 		const providers = [...this.#providers.values()];
 		if (modelId === undefined) return providers;
@@ -1063,6 +1081,161 @@ export async function generateImagePluginModel(
 		return await provider.imageGenerate.generateImage(resolvedRequest);
 	}
 	throw new Error(`Model provider ${provider.id} does not support image generation`);
+}
+
+interface VideoGenerateTarget {
+	readonly provider: PluginModelProvider;
+	readonly modelId?: string;
+}
+
+function implementsVideoGeneration(provider: PluginModelProvider): boolean {
+	return provider.submitVideoJob !== undefined || provider.videoGenerate !== undefined;
+}
+
+function videoCapabilities(request: PluginVideoGenerateRequest): readonly string[] {
+	return request.referenceImages !== undefined && request.referenceImages.length > 0
+		? [MODEL_CAPABILITIES.videoImageToVideo, MODEL_CAPABILITIES.videoGenerate]
+		: [MODEL_CAPABILITIES.videoGenerate];
+}
+
+async function resolveVideoGenerateTarget(
+	providers: ReadonlyMap<string, PluginModelProvider>,
+	request: PluginVideoGenerateRequest,
+): Promise<VideoGenerateTarget> {
+	const capabilities = videoCapabilities(request);
+
+	if (request.providerId !== undefined) {
+		const provider = providers.get(request.providerId);
+		if (provider === undefined) {
+			throw new Error(`Model provider ${request.providerId} is not registered`);
+		}
+		if ((await provider.isConfigured?.()) === false) {
+			throw new Error(`Model provider ${request.providerId} is not configured`);
+		}
+		if (!implementsVideoGeneration(provider)) {
+			throw new Error(`Model provider ${request.providerId} does not support video generation`);
+		}
+		if (provider.listModels === undefined) {
+			return {
+				...(request.modelId === undefined ? {} : { modelId: request.modelId }),
+				provider,
+			};
+		}
+		const descriptors = await safeListModels(provider);
+		if (request.modelId !== undefined) {
+			const matched = descriptors.find((descriptor) => descriptor.id === request.modelId);
+			if (matched === undefined) {
+				throw new Error(
+					`Model ${request.modelId} is not enabled on provider ${request.providerId}`,
+				);
+			}
+			return { modelId: matched.id, provider };
+		}
+		const matched = firstCapabilityModel(descriptors, capabilities);
+		return { ...(matched === undefined ? {} : { modelId: matched.id }), provider };
+	}
+
+	const configured: PluginModelProvider[] = [];
+	for (const provider of providers.values()) {
+		if (!implementsVideoGeneration(provider)) continue;
+		if ((await provider.isConfigured?.()) === false) continue;
+		configured.push(provider);
+	}
+
+	if (request.modelId !== undefined) {
+		for (const provider of configured) {
+			if (provider.listModels === undefined) continue;
+			const descriptors = await safeListModels(provider);
+			if (descriptors.some((descriptor) => descriptor.id === request.modelId)) {
+				return { modelId: request.modelId, provider };
+			}
+		}
+		const fallback = configured.find((provider) => provider.listModels === undefined);
+		if (fallback !== undefined) return { modelId: request.modelId, provider: fallback };
+		throw new Error(
+			`Model ${request.modelId} is not available from any configured video-generation provider`,
+		);
+	}
+
+	for (const capability of capabilities) {
+		for (const provider of configured) {
+			if (provider.listModels === undefined) continue;
+			const descriptors = await safeListModels(provider);
+			const matched = descriptors.find((descriptor) =>
+				descriptor.capabilities.includes(capability),
+			);
+			if (matched !== undefined) return { modelId: matched.id, provider };
+		}
+	}
+	const fallback = configured[0];
+	if (fallback === undefined) {
+		throw new Error("No configured model provider can generate video");
+	}
+	return { provider: fallback };
+}
+
+/** Submits an asynchronous video generation job to a registered provider capability port. */
+export async function submitVideoJobPluginModel(
+	providers: ReadonlyMap<string, PluginModelProvider>,
+	request: PluginVideoGenerateRequest,
+): Promise<PluginVideoJobHandle> {
+	if (request.signal?.aborted === true) {
+		throw new Error("Video generation request aborted");
+	}
+	const { modelId, provider } = await resolveVideoGenerateTarget(providers, request);
+	const resolvedRequest: PluginVideoGenerateRequest = {
+		...request,
+		providerId: provider.id,
+		...(modelId === undefined ? {} : { modelId }),
+	};
+	if (provider.submitVideoJob !== undefined) {
+		return await provider.submitVideoJob(resolvedRequest);
+	}
+	if (provider.videoGenerate !== undefined) {
+		return await provider.videoGenerate.submitVideoJob(resolvedRequest);
+	}
+	throw new Error(`Model provider ${provider.id} does not support video generation`);
+}
+
+/** Polls an asynchronous video generation job on the provider that submitted it. */
+export async function pollVideoJobPluginModel(
+	providers: ReadonlyMap<string, PluginModelProvider>,
+	handle: PluginVideoJobHandle,
+	signal?: AbortSignal,
+): Promise<PluginVideoJobStatus> {
+	if (signal?.aborted === true) {
+		throw new Error("Video job poll aborted");
+	}
+	const provider = providers.get(handle.providerId);
+	if (provider === undefined) {
+		throw new Error(`Model provider ${handle.providerId} is not registered`);
+	}
+	if ((await provider.isConfigured?.()) === false) {
+		throw new Error(`Model provider ${handle.providerId} is not configured`);
+	}
+	if (provider.pollVideoJob !== undefined) {
+		return await provider.pollVideoJob(handle, signal);
+	}
+	if (provider.videoGenerate !== undefined) {
+		return await provider.videoGenerate.pollVideoJob(handle, signal);
+	}
+	throw new Error(`Model provider ${provider.id} does not support video generation`);
+}
+
+/** Cancels an asynchronous video generation job when the owning provider supports it. */
+export async function cancelVideoJobPluginModel(
+	providers: ReadonlyMap<string, PluginModelProvider>,
+	handle: PluginVideoJobHandle,
+): Promise<void> {
+	const provider = providers.get(handle.providerId);
+	if (provider === undefined) {
+		throw new Error(`Model provider ${handle.providerId} is not registered`);
+	}
+	if (provider.cancelVideoJob !== undefined) {
+		await provider.cancelVideoJob(handle);
+		return;
+	}
+	await provider.videoGenerate?.cancelVideoJob?.(handle);
 }
 
 /**

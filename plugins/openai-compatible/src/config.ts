@@ -42,6 +42,7 @@ export const openAiCompatibleModelSchema = z.object({
 	supportsImage: z.boolean().default(false),
 	supportsAudio: z.boolean().default(false),
 	supportsImageGeneration: z.boolean().default(false),
+	supportsVideoGeneration: z.boolean().default(false),
 	/** Whether the busy-run classifier may use this model; untick slow or costly models. */
 	supportsSidechat: z.boolean().default(true),
 	capabilities: z.array(z.string().trim().min(1)).default([]),
@@ -272,6 +273,7 @@ function customCapabilities(model: OpenAiCompatibleModel): readonly string[] {
 
 export function modelCapabilities(model: OpenAiCompatibleModel): readonly string[] {
 	const capabilities = new Set<string>([MODEL_CAPABILITIES.basicChat]);
+	const custom = customCapabilities(model);
 	if (model.supportsTools) capabilities.add(MODEL_CAPABILITIES.toolUse);
 	if (model.supportsReasoning) {
 		capabilities.add(MODEL_CAPABILITIES.reasoning);
@@ -282,9 +284,15 @@ export function modelCapabilities(model: OpenAiCompatibleModel): readonly string
 		capabilities.add(MODEL_CAPABILITIES.imageInput);
 	}
 	if (model.supportsImageGeneration) capabilities.add(MODEL_CAPABILITIES.imageGenerate);
+	if (model.supportsVideoGeneration) {
+		capabilities.add(MODEL_CAPABILITIES.videoGenerate);
+		if (model.supportsImage || custom.includes(MODEL_CAPABILITIES.videoImageToVideo)) {
+			capabilities.add(MODEL_CAPABILITIES.videoImageToVideo);
+		}
+	}
 	if (model.supportsAudio) capabilities.add(MODEL_CAPABILITIES.audioInput);
 	if (model.supportsSidechat) capabilities.add(MODEL_CAPABILITIES.sidechat);
-	for (const capability of customCapabilities(model)) capabilities.add(capability);
+	for (const capability of custom) capabilities.add(capability);
 	return [...capabilities];
 }
 
@@ -304,11 +312,19 @@ export function modelOutputModalities(
 	const capabilities = modelCapabilities(model);
 	const supportsImageGeneration =
 		model.supportsImageGeneration || capabilities.includes(MODEL_CAPABILITIES.imageGenerate);
-	if (!supportsImageGeneration) return ["text"];
+	const supportsVideoGeneration =
+		model.supportsVideoGeneration ||
+		capabilities.includes(MODEL_CAPABILITIES.videoGenerate) ||
+		capabilities.includes(MODEL_CAPABILITIES.videoImageToVideo);
+	if (!supportsImageGeneration && !supportsVideoGeneration) return ["text"];
 	// basic-chat is advertised unconditionally, so tools, reasoning, and sidechat are the flags
-	// that distinguish a mixed text/image model from an image-only model.
+	// that distinguish a mixed text/media model from a media-only model.
 	const supportsTextChat = model.supportsTools || model.supportsReasoning || model.supportsSidechat;
-	return supportsTextChat ? ["text", "image"] : ["image"];
+	return [
+		...(supportsTextChat ? (["text"] as const) : []),
+		...(supportsImageGeneration ? (["image"] as const) : []),
+		...(supportsVideoGeneration ? (["video"] as const) : []),
+	];
 }
 
 export function toPluginModelDescriptor(model: OpenAiCompatibleModel): PluginModelDescriptor {

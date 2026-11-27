@@ -5,6 +5,9 @@ import type {
 	PluginImageGenerateRequest,
 	PluginImageGenerateResult,
 	PluginModelProvider,
+	PluginVideoGenerateRequest,
+	PluginVideoJobHandle,
+	PluginVideoJobStatus,
 	TsukaimaPlugin,
 } from "@tsukaima/sdk";
 import { z } from "zod";
@@ -354,6 +357,174 @@ function createProvider(
 				providerId,
 			});
 			return { images, modelId: model.id, providerId };
+		},
+		async submitVideoJob(request: PluginVideoGenerateRequest): Promise<PluginVideoJobHandle> {
+			const startedAt = performance.now();
+			if (!configured) throw new Error("OpenAI-compatible provider is not configured");
+			const supportsVideo = (candidate: (typeof enabledModels)[number]): boolean => {
+				const capabilities = modelCapabilities(candidate);
+				return (
+					capabilities.includes("video.generate") || capabilities.includes("video.image2video")
+				);
+			};
+			const model =
+				enabledModels.find(
+					(candidate) => candidate.id === request.modelId && supportsVideo(candidate),
+				) ?? enabledModels.find(supportsVideo);
+			if (model === undefined) {
+				throw new Error("No enabled video-generation model is configured");
+			}
+			const normalizedBaseUrl = baseUrl.replace(/\/$/u, "");
+			context.logger.trace("OpenAI-compatible video submission", {
+				aspectRatio: request.aspectRatio,
+				durationSeconds: request.durationSeconds,
+				modelId: model.id,
+				providerId,
+				resolution: request.resolution,
+			});
+			let response: Response;
+			try {
+				response = await fetch(`${normalizedBaseUrl}/videos`, {
+					body: JSON.stringify({
+						model: model.id,
+						prompt: request.prompt,
+						...(request.resolution === undefined ? {} : { resolution: request.resolution }),
+						...(request.aspectRatio === undefined ? {} : { aspect_ratio: request.aspectRatio }),
+						...(request.durationSeconds === undefined ? {} : { seconds: request.durationSeconds }),
+						...(request.seed === undefined ? {} : { seed: request.seed }),
+					}),
+					headers: {
+						"content-type": "application/json",
+						authorization: `Bearer ${apiKey}`,
+					},
+					method: "POST",
+					...(request.signal === undefined ? {} : { signal: request.signal }),
+				});
+			} catch (error) {
+				context.logger.error("OpenAI-compatible video submission failed", {
+					durationMs: Math.round(performance.now() - startedAt),
+					modelId: model.id,
+					providerId,
+					error,
+				});
+				throw error;
+			}
+			if (!response.ok) {
+				context.logger.warn("OpenAI-compatible video submission rejected", {
+					durationMs: Math.round(performance.now() - startedAt),
+					modelId: model.id,
+					providerId,
+					status: response.status,
+				});
+				throw new Error(`Video generation submission failed with ${response.status}`);
+			}
+			const payload = (await response.json()) as {
+				readonly id?: unknown;
+				readonly status?: unknown;
+			};
+			if (typeof payload.id !== "string" || payload.id.length === 0) {
+				throw new Error("Video generation submission returned no job id");
+			}
+			context.logger.debug("OpenAI-compatible video job submitted", {
+				durationMs: Math.round(performance.now() - startedAt),
+				jobId: payload.id,
+				modelId: model.id,
+				providerId,
+				status: typeof payload.status === "string" ? payload.status : undefined,
+			});
+			return {
+				providerId,
+				modelId: model.id,
+				jobId: payload.id,
+				pollAfterMs: 3_000,
+			};
+		},
+		async pollVideoJob(
+			handle: PluginVideoJobHandle,
+			signal?: AbortSignal,
+		): Promise<PluginVideoJobStatus> {
+			const startedAt = performance.now();
+			if (!configured) throw new Error("OpenAI-compatible provider is not configured");
+			const normalizedBaseUrl = baseUrl.replace(/\/$/u, "");
+			let response: Response;
+			try {
+				response = await fetch(`${normalizedBaseUrl}/videos/${encodeURIComponent(handle.jobId)}`, {
+					headers: { authorization: `Bearer ${apiKey}` },
+					method: "GET",
+					...(signal === undefined ? {} : { signal }),
+				});
+			} catch (error) {
+				context.logger.error("OpenAI-compatible video status request failed", {
+					durationMs: Math.round(performance.now() - startedAt),
+					jobId: handle.jobId,
+					providerId,
+					error,
+				});
+				throw error;
+			}
+			if (!response.ok) {
+				context.logger.warn("OpenAI-compatible video status request rejected", {
+					durationMs: Math.round(performance.now() - startedAt),
+					jobId: handle.jobId,
+					providerId,
+					status: response.status,
+				});
+				throw new Error(`Video generation status request failed with ${response.status}`);
+			}
+			const payload = (await response.json()) as {
+				readonly b64_json?: string;
+				readonly error?: { readonly message?: string };
+				readonly mime_type?: string;
+				readonly progress?: number;
+				readonly status?: string;
+				readonly url?: string;
+				readonly video_url?: string;
+			};
+			const status = (payload.status ?? "").toLowerCase();
+			const progress = typeof payload.progress === "number" ? payload.progress : undefined;
+			if (status === "queued" || status === "pending") {
+				return {
+					status: "queued",
+					...(progress ? { progress } : {}),
+					pollAfterMs: 3_000,
+				};
+			}
+			if (status === "in_progress" || status === "running" || status === "processing") {
+				return {
+					status: "running",
+					...(progress ? { progress } : {}),
+					pollAfterMs: 3_000,
+				};
+			}
+			if (status === "failed" || status === "cancelled" || status === "canceled") {
+				return {
+					status: "failed",
+					error: payload.error?.message ?? "Video generation failed",
+				};
+			}
+			if (status === "completed" || status === "succeeded") {
+				const url = payload.url ?? payload.video_url;
+				const bytes =
+					typeof payload.b64_json === "string" && payload.b64_json.length > 0
+						? Uint8Array.from(Buffer.from(payload.b64_json, "base64"))
+						: undefined;
+				context.logger.debug("OpenAI-compatible video job completed", {
+					durationMs: Math.round(performance.now() - startedAt),
+					hasBytes: bytes !== undefined,
+					hasUrl: url !== undefined,
+					jobId: handle.jobId,
+					providerId,
+				});
+				return {
+					status: "succeeded",
+					video: {
+						...(bytes === undefined ? {} : { bytes }),
+						...(url === undefined ? {} : { url }),
+						mimeType: payload.mime_type ?? "video/mp4",
+					},
+				};
+			}
+			throw new Error(`Unexpected video generation status: ${payload.status ?? "unknown"}`);
 		},
 		async createPort(options = {}) {
 			if (!configured) throw new Error("OpenAI-compatible provider is not configured");

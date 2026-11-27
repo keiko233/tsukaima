@@ -1,5 +1,6 @@
 import {
 	allocateModelToolNames,
+	cancelVideoJobPluginModel,
 	completePluginModel,
 	createPluginContext,
 	collectPluginModels,
@@ -7,9 +8,11 @@ import {
 	generateImagePluginModel,
 	hasPermission,
 	LocalStorageBridge,
+	pollVideoJobPluginModel,
 	providerSafeToolName,
 	resolveToolName,
 	resolveToolPolicy,
+	submitVideoJobPluginModel,
 	type AuditEntry,
 	type TsukaimaPlugin,
 	type PluginContext,
@@ -17,6 +20,9 @@ import {
 	type PluginDecisionChoiceResult,
 	type PluginImageGenerateRequest,
 	type PluginImageGenerateResult,
+	type PluginVideoGenerateRequest,
+	type PluginVideoJobHandle,
+	type PluginVideoJobStatus,
 	type PluginEvents,
 	type PluginLogger,
 	type PluginManifest,
@@ -448,6 +454,24 @@ export class PluginHost {
 		request: PluginImageGenerateRequest,
 	): Promise<PluginImageGenerateResult> {
 		return await generateImagePluginModel(this.#modelProviders, request);
+	}
+
+	/** Submits an async video generation job through a registered provider. */
+	async submitVideoJobModel(request: PluginVideoGenerateRequest): Promise<PluginVideoJobHandle> {
+		return await submitVideoJobPluginModel(this.#modelProviders, request);
+	}
+
+	/** Polls an async video generation job handle. */
+	async pollVideoJobModel(
+		handle: PluginVideoJobHandle,
+		signal?: AbortSignal,
+	): Promise<PluginVideoJobStatus> {
+		return await pollVideoJobPluginModel(this.#modelProviders, handle, signal);
+	}
+
+	/** Cancels an async video generation job if the provider supports cancellation. */
+	async cancelVideoJobModel(handle: PluginVideoJobHandle): Promise<void> {
+		await cancelVideoJobPluginModel(this.#modelProviders, handle);
 	}
 
 	/** Invoke a WebUI-visible plugin RPC method. Methods are namespaced by plugin id. */
@@ -1278,6 +1302,13 @@ export class PluginHost {
 				),
 			generateImage: async (request: PluginImageGenerateRequest) =>
 				await generateImagePluginModel(this.#modelProviders, request),
+			submitVideoJob: async (request: PluginVideoGenerateRequest) =>
+				await submitVideoJobPluginModel(this.#modelProviders, request),
+			pollVideoJob: async (handle: PluginVideoJobHandle, signal?: AbortSignal) =>
+				await pollVideoJobPluginModel(this.#modelProviders, handle, signal),
+			cancelVideoJob: async (handle: PluginVideoJobHandle) => {
+				await cancelVideoJobPluginModel(this.#modelProviders, handle);
+			},
 			registerProvider: (provider: PluginModelProvider): (() => void) =>
 				this.registerModelProvider(pluginId, provider),
 		};

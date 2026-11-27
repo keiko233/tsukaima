@@ -316,6 +316,55 @@ export interface PluginImageGeneratePort {
 	): Promise<PluginImageGenerateResult> | PluginImageGenerateResult;
 }
 
+export interface PluginVideoGenerateRequest {
+	readonly providerId?: string;
+	readonly modelId?: string;
+	readonly prompt: string;
+	readonly negativePrompt?: string;
+	readonly aspectRatio?: string;
+	readonly durationSeconds?: number;
+	readonly resolution?: string;
+	readonly referenceImages?: readonly PluginImageReference[];
+	readonly seed?: number;
+	readonly signal?: AbortSignal;
+}
+
+export interface PluginVideoJobHandle {
+	readonly providerId: string;
+	readonly modelId: string;
+	readonly jobId: string;
+	readonly pollAfterMs?: number;
+}
+
+export interface PluginGeneratedVideo {
+	readonly bytes?: Uint8Array;
+	readonly url?: string;
+	readonly mimeType: string;
+	readonly durationMs?: number;
+	readonly width?: number;
+	readonly height?: number;
+}
+
+export type PluginVideoJobStatus =
+	| {
+			readonly status: "queued" | "running";
+			readonly progress?: number;
+			readonly pollAfterMs?: number;
+	  }
+	| { readonly status: "succeeded"; readonly video: PluginGeneratedVideo }
+	| { readonly status: "failed"; readonly error: string; readonly retryable?: boolean };
+
+export interface PluginVideoGeneratePort {
+	submitVideoJob(
+		request: PluginVideoGenerateRequest,
+	): Promise<PluginVideoJobHandle> | PluginVideoJobHandle;
+	pollVideoJob(
+		handle: PluginVideoJobHandle,
+		signal?: AbortSignal,
+	): Promise<PluginVideoJobStatus> | PluginVideoJobStatus;
+	cancelVideoJob?(handle: PluginVideoJobHandle): Promise<void> | void;
+}
+
 export interface PluginModelProvider {
 	readonly id: string;
 	/** False when the plugin has no usable credentials yet; the host then falls back. */
@@ -351,6 +400,19 @@ export interface PluginModelProvider {
 	): Promise<PluginImageGenerateResult> | PluginImageGenerateResult;
 	/** Object-shaped image-generation port alias. */
 	imageGenerate?: PluginImageGeneratePort;
+	/** Optional text-to-video/image-to-video job submission port. */
+	submitVideoJob?(
+		request: PluginVideoGenerateRequest,
+	): Promise<PluginVideoJobHandle> | PluginVideoJobHandle;
+	/** Poll an asynchronous video job (`video.generate` / `video.image2video` capability). */
+	pollVideoJob?(
+		handle: PluginVideoJobHandle,
+		signal?: AbortSignal,
+	): Promise<PluginVideoJobStatus> | PluginVideoJobStatus;
+	/** Optional cancellation for an asynchronous video job. */
+	cancelVideoJob?(handle: PluginVideoJobHandle): Promise<void> | void;
+	/** Object-shaped video-generation port alias. */
+	videoGenerate?: PluginVideoGeneratePort;
 }
 
 export interface PluginModelRegistry {
@@ -375,6 +437,12 @@ export interface PluginModelRegistry {
 	decideChoice(request: PluginDecisionChoiceRequest): Promise<PluginDecisionChoiceResult>;
 	/** Run image generation or editing through the selected provider/model capability port. */
 	generateImage(request: PluginImageGenerateRequest): Promise<PluginImageGenerateResult>;
+	/** Submit an asynchronous video generation job through the selected provider/model port. */
+	submitVideoJob(request: PluginVideoGenerateRequest): Promise<PluginVideoJobHandle>;
+	/** Poll an asynchronous video generation job through its owning provider. */
+	pollVideoJob(handle: PluginVideoJobHandle, signal?: AbortSignal): Promise<PluginVideoJobStatus>;
+	/** Cancel an asynchronous video generation job when the provider supports it. */
+	cancelVideoJob?(handle: PluginVideoJobHandle): Promise<void>;
 }
 
 export type PluginRpcHandler = (input: unknown) => Promise<unknown> | unknown;
