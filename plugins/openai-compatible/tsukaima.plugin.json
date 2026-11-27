@@ -69,6 +69,85 @@
 						}
 					}
 				}
+			},
+			"profiles": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"id": {
+							"type": "string"
+						},
+						"name": {
+							"type": "string"
+						},
+						"enabled": {
+							"type": "boolean"
+						},
+						"baseUrl": {
+							"type": "string"
+						},
+						"models": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"properties": {
+									"id": {
+										"type": "string"
+									},
+									"name": {
+										"type": "string"
+									},
+									"enabled": {
+										"type": "boolean"
+									},
+									"supportsTools": {
+										"type": "boolean"
+									},
+									"supportsReasoning": {
+										"type": "boolean"
+									},
+									"reasoningLevels": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"defaultReasoningLevel": {
+										"type": "string"
+									},
+									"supportsImage": {
+										"type": "boolean"
+									},
+									"supportsAudio": {
+										"type": "boolean"
+									},
+									"supportsSidechat": {
+										"type": "boolean"
+									},
+									"capabilities": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"contextWindow": {
+										"type": "integer"
+									},
+									"maxOutputTokens": {
+										"type": "integer"
+									}
+								}
+							}
+						}
+					}
+				}
+			},
+			"profileApiKeys": {
+				"type": "object",
+				"additionalProperties": {
+					"type": "string"
+				}
 			}
 		}
 	},
@@ -77,6 +156,6 @@
 		"apiKey": "TSUKAIMA_OPENAI_API_KEY",
 		"modelId": "TSUKAIMA_OPENAI_MODEL_ID"
 	},
-	"secretKeys": ["apiKey"],
+	"secretKeys": ["apiKey", "profileApiKeys"],
 	"ui": []
 }

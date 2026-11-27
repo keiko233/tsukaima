@@ -154,12 +154,15 @@ async function settingsView(context: TsukaimaApiContext) {
 		if (existing === undefined || model.providerId === activeProviderId) byId.set(model.id, model);
 	}
 	const models = [...byId.values()].map(toCatalogEntry);
-	const availableModels =
+	const allAvailable = await context.lifecycle.pluginHost.listModels();
+	const orderedAvailable =
 		activeProviderId === undefined
-			? []
-			: (await context.lifecycle.pluginHost.listModels({ providerId: activeProviderId })).map(
-					toCatalogEntry,
-				);
+			? allAvailable
+			: [
+					...allAvailable.filter((model) => model.providerId === activeProviderId),
+					...allAvailable.filter((model) => model.providerId !== activeProviderId),
+				];
+	const availableModels = orderedAvailable.map(toCatalogEntry);
 	return {
 		...publicRuntimeSettings(settings),
 		...(availableModels.length === 0 ? {} : { availableModels }),

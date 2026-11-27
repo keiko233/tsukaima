@@ -8,6 +8,7 @@ import {
 	PiDurableConversationHost,
 	TOOL_SEARCH_TOOL_NAME,
 	composeInterjectPrompt,
+	createCompositeModelPort,
 	createFakeModel,
 	type ActivityWindowEvent,
 	type AdmittedTurn,
@@ -1143,10 +1144,16 @@ export class TsukaimaLifecycle {
 				return authorizeAdminSettingsToolCall({ caller, toolName });
 			},
 			availableModels: async () => {
-				const providerId = this.activeModelProviderId;
-				if (providerId === undefined) return [];
-				const models = await this.pluginHost.listModels({ providerId });
-				return models.map((model) => ({
+				const activeProviderId = this.activeModelProviderId;
+				const models = await this.pluginHost.listModels();
+				const ordered =
+					activeProviderId === undefined
+						? models
+						: [
+								...models.filter((model) => model.providerId === activeProviderId),
+								...models.filter((model) => model.providerId !== activeProviderId),
+							];
+				return ordered.map((model) => ({
 					capabilities: [...model.capabilities],
 					id: model.id,
 					providerId: model.providerId,
@@ -1920,8 +1927,8 @@ export class TsukaimaLifecycle {
 
 	private async createModelPort(settings: RuntimeSettings): Promise<ModelPort> {
 		if (this.modelOverride !== undefined) return this.modelOverride;
-		const providerId = settings.modelProviderId ?? this.pluginHost.modelProviders()[0]?.id;
-		if (providerId === undefined) {
+		const providers = this.pluginHost.modelProviders();
+		if (providers.length === 0) {
 			this.runtimeLog.info("No plugin model provider configured; using deterministic fake model");
 			return createFakeModel({
 				onMessage: (message) => {
@@ -1929,39 +1936,51 @@ export class TsukaimaLifecycle {
 				},
 			});
 		}
-		const provider = this.pluginHost.modelProvider(providerId);
-		if (provider !== undefined) {
+		const preferredProviderId = settings.modelProviderId ?? settings.chatModel?.providerId;
+		const orderedProviders =
+			preferredProviderId === undefined
+				? providers
+				: [
+						...providers.filter((provider) => provider.id === preferredProviderId),
+						...providers.filter((provider) => provider.id !== preferredProviderId),
+					];
+		const ports: ModelPort[] = [];
+		for (const provider of orderedProviders) {
 			try {
 				if ((await provider.isConfigured?.()) === false) {
-					this.runtimeLog.info("plugin model provider is not configured", { providerId });
-					return createFakeModel({
-						onMessage: (message) => {
-							this.modelUsageLedger.record(message, "basic-chat");
-						},
+					this.runtimeLog.debug("plugin model provider is not configured", {
+						providerId: provider.id,
 					});
+					continue;
 				}
-				const port = await provider.createPort({
+				const port = (await provider.createPort({
 					onMessage: (message) => {
 						this.modelUsageLedger.record(
 							message as Parameters<typeof this.modelUsageLedger.record>[0],
 							"basic-chat",
 						);
 					},
-				});
-				this.runtimeLog.info("plugin model provider configured", { providerId });
-				return port as ModelPort;
+				})) as ModelPort;
+				ports.push(port);
+				this.runtimeLog.info("plugin model provider configured", { providerId: provider.id });
 			} catch (error) {
-				this.runtimeLog.warn("plugin model provider unavailable; using fake model", {
+				this.runtimeLog.warn("plugin model provider unavailable; skipping", {
 					error: error instanceof Error ? error.message : String(error),
-					providerId,
+					providerId: provider.id,
 				});
 			}
 		}
-		this.runtimeLog.info("No plugin model provider configured; using deterministic fake model");
-		return createFakeModel({
-			onMessage: (message) => {
-				this.modelUsageLedger.record(message, "basic-chat");
-			},
+		if (ports.length === 0) {
+			this.runtimeLog.info("No plugin model provider configured; using deterministic fake model");
+			return createFakeModel({
+				onMessage: (message) => {
+					this.modelUsageLedger.record(message, "basic-chat");
+				},
+			});
+		}
+		return createCompositeModelPort(ports, {
+			...(preferredProviderId === undefined ? {} : { providerId: preferredProviderId }),
+			...(settings.chatModel?.modelId === undefined ? {} : { modelId: settings.chatModel.modelId }),
 		});
 	}
 
@@ -2308,7 +2327,9 @@ export class TsukaimaLifecycle {
 			}
 			await this.conversationHost.resumeActivityWindow(durableConversationId);
 		}
-		const models = model.models.getModels(model.providerId);
+		const models = model.models
+			.getProviders()
+			.flatMap((provider) => model.models.getModels(provider.id));
 		this.modelRouter = new ModelPolicyRouter(models);
 		this.routingPolicies = [
 			{
@@ -2522,7 +2543,10 @@ export class TsukaimaLifecycle {
 		const model = await this.createModelPort(effectiveSettings);
 		this.memoryModel = model;
 		this.activeProviderId = model.providerId;
-		this.modelRouter = new ModelPolicyRouter(model.models.getModels(model.providerId));
+		const allModels = model.models
+			.getProviders()
+			.flatMap((provider) => model.models.getModels(provider.id));
+		this.modelRouter = new ModelPolicyRouter(allModels);
 		this.routingPolicies = [
 			{
 				capability: "basic-chat",
@@ -2534,10 +2558,7 @@ export class TsukaimaLifecycle {
 		// against the new port instead of waiting for each one's next turn.
 		const portSignature = JSON.stringify({
 			modelId: model.modelId,
-			models: model.models
-				.getModels(model.providerId)
-				.map((entry) => entry.id)
-				.toSorted(),
+			models: allModels.map((entry) => `${entry.provider}:${entry.id}`).toSorted(),
 			providerId: model.providerId,
 		});
 		if (portSignature !== this.modelPortSignature) {
@@ -2547,7 +2568,9 @@ export class TsukaimaLifecycle {
 		}
 		const requestedProviderId = effectiveSettings.modelProviderId;
 		this.providerRestartRequired =
-			requestedProviderId !== undefined && requestedProviderId !== this.activeProviderId;
+			requestedProviderId !== undefined &&
+			model.models.getProvider(requestedProviderId) === undefined &&
+			requestedProviderId !== this.activeProviderId;
 		this.runtimeLog.debug("model port refreshed", {
 			modelId: model.modelId,
 			providerId: model.providerId,
@@ -2615,6 +2638,12 @@ export class TsukaimaLifecycle {
 		if (model === undefined) return undefined;
 		const selected =
 			model.models.getModel(model.providerId, modelId ?? model.modelId) ??
+			(modelId === undefined
+				? undefined
+				: model.models
+						.getProviders()
+						.map((provider) => model.models.getModel(provider.id, modelId))
+						.find((entry) => entry !== undefined)) ??
 			model.models.getModel(model.providerId, model.modelId);
 		if (selected === undefined) return undefined;
 		const startedAt = performance.now();
@@ -2622,7 +2651,7 @@ export class TsukaimaLifecycle {
 			modelId: selected.id,
 			promptChars: prompt.length,
 			promptPreview: previewText(prompt),
-			providerId: model.providerId,
+			providerId: selected.provider,
 		});
 		const response = await model.models.completeSimple(
 			selected,
@@ -2644,18 +2673,19 @@ export class TsukaimaLifecycle {
 			durationMs: Math.round(performance.now() - startedAt),
 			modelId: selected.id,
 			outputChars: text.length,
-			providerId: model.providerId,
+			providerId: selected.provider,
 		});
 		return text;
 	}
 
-	/** Embed through the first configured plugin provider; silently degrades when absent. */
+	/** Embed through the first configured plugin provider that succeeds; silently degrades when absent. */
 	private async embedMemoryTexts(
 		texts: readonly string[],
 	): Promise<MemoryEmbeddingOutput | undefined> {
-		try {
-			for (const provider of this.pluginHost.modelProviders()) {
-				const startedAt = performance.now();
+		for (const provider of this.pluginHost.modelProviders()) {
+			const startedAt = performance.now();
+			try {
+				if ((await provider.isConfigured?.()) === false) continue;
 				const result =
 					provider.embed !== undefined
 						? await provider.embed({ texts })
@@ -2671,13 +2701,14 @@ export class TsukaimaLifecycle {
 					});
 					return { modelId: result.modelId, vectors: result.vectors };
 				}
+			} catch (error) {
+				// Embedding is optional; try remaining providers before falling back to lexical ranking.
+				this.runtimeLog.debug("memory embedding provider skipped", {
+					count: texts.length,
+					error: error instanceof Error ? error.message : String(error),
+					providerId: provider.id,
+				});
 			}
-		} catch (error) {
-			// Embedding is optional; callers fall back to lexical/recency ranking.
-			this.runtimeLog.debug("memory embedding degraded to lexical fallback", {
-				count: texts.length,
-				error: error instanceof Error ? error.message : String(error),
-			});
 		}
 		return undefined;
 	}

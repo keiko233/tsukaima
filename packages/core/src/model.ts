@@ -20,6 +20,11 @@ export interface FakeModelOptions {
 	readonly responses?: readonly string[];
 }
 
+export interface CompositeModelPreference {
+	readonly providerId?: string;
+	readonly modelId?: string;
+}
+
 function responseMessage(model: Model<Api>, text: string): AssistantMessage {
 	return {
 		api: model.api,
@@ -108,6 +113,53 @@ export function createFakeModel(options: FakeModelOptions = {}): ModelPort {
 	models.setProvider(provider);
 
 	return { models, modelId, providerId };
+}
+
+/**
+ * Merge every provider from `ports` into one {@link Models} registry and pick a default model.
+ *
+ * Providers with a duplicate id are skipped after the first occurrence. The preferred provider
+ * and model win when both are registered; a missing model falls back to the preferred provider's
+ * first model, then to the first non-'fake' port, then to `ports[0]`, then to a fake model when
+ * no ports are supplied.
+ */
+export function createCompositeModelPort(
+	ports: readonly ModelPort[],
+	preferred: CompositeModelPreference = {},
+): ModelPort {
+	const models = createModels();
+	const seen = new Set<string>();
+	for (const port of ports) {
+		for (const provider of port.models.getProviders()) {
+			if (seen.has(provider.id)) continue;
+			seen.add(provider.id);
+			models.setProvider(provider);
+		}
+	}
+
+	const selectPreferred = (): { modelId: string; providerId: string } | undefined => {
+		const providerId = preferred.providerId;
+		if (providerId === undefined || models.getProvider(providerId) === undefined) {
+			return undefined;
+		}
+		if (preferred.modelId !== undefined) {
+			const model = models.getModel(providerId, preferred.modelId);
+			if (model !== undefined) return { modelId: model.id, providerId };
+		}
+		const first = models.getModels(providerId)[0];
+		return first === undefined ? undefined : { modelId: first.id, providerId };
+	};
+
+	const preferredSelection = selectPreferred();
+	if (preferredSelection) return { ...preferredSelection, models };
+
+	const nonFake = ports.find((port) => port.providerId !== "fake");
+	if (nonFake) return { modelId: nonFake.modelId, models, providerId: nonFake.providerId };
+
+	const firstPort = ports[0];
+	if (firstPort) return { modelId: firstPort.modelId, models, providerId: firstPort.providerId };
+
+	return createFakeModel();
 }
 
 /**

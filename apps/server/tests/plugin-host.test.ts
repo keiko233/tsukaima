@@ -436,4 +436,48 @@ describe("plugin host", () => {
 			// Ambiguous short name "send" does not resolve to either
 			expect(lifecycle.pluginHost.resolveModelToolName("send")).toBeUndefined();
 		}));
+
+	test("merges nested secret maps without leaking values and aggregates multiple model providers", async () =>
+		withApp({}, async (lifecycle) => {
+			await lifecycle.updatePluginConfig("openai-compatible", {
+				profileApiKeys: {
+					default: "secret-primary",
+					secondary: "secret-secondary",
+				},
+				profiles: [
+					{
+						baseUrl: "https://primary.example/v1",
+						enabled: true,
+						id: "default",
+						models: [{ enabled: true, id: "primary-chat" }],
+					},
+					{
+						baseUrl: "https://secondary.example/v1",
+						enabled: true,
+						id: "secondary",
+						models: [{ enabled: true, id: "secondary-chat" }],
+					},
+				],
+			});
+			const view = await lifecycle.pluginConfigView("openai-compatible");
+			expect(JSON.stringify(view)).not.toContain("secret-primary");
+			expect(JSON.stringify(view)).not.toContain("secret-secondary");
+			expect(view.secretsSet).toEqual(
+				expect.arrayContaining([
+					"profileApiKeys",
+					"profileApiKeys.default",
+					"profileApiKeys.secondary",
+				]),
+			);
+
+			// Updating one subkey preserves the sibling subkey.
+			await lifecycle.updatePluginConfig("openai-compatible", {
+				profileApiKeys: {
+					secondary: null,
+				},
+			});
+			const afterDelete = await lifecycle.pluginConfigView("openai-compatible");
+			expect(afterDelete.secretsSet).toContain("profileApiKeys.default");
+			expect(afterDelete.secretsSet).not.toContain("profileApiKeys.secondary");
+		}));
 });
