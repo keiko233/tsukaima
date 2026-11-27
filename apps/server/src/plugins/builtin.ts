@@ -1,3 +1,4 @@
+import { acpPlugin } from "@tsukaima-plugin/acp";
 import { mcpPlugin } from "@tsukaima-plugin/mcp";
 import { oneBotNapCatPlugin } from "@tsukaima-plugin/onebot-napcat";
 import { openAiCompatiblePlugin } from "@tsukaima-plugin/openai-compatible";
@@ -14,6 +15,7 @@ import { chatHistoryPlugin } from "./chat-history.ts";
  */
 export const builtinPlugins: readonly TsukaimaPlugin[] = [
 	openAiCompatiblePlugin,
+	acpPlugin,
 	oneBotNapCatPlugin,
 	chatHistoryPlugin,
 	memoryPlugin,

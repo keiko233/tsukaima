@@ -1236,6 +1236,10 @@ export class TsukaimaLifecycle {
 			},
 		};
 		pluginBindings.set(MCP_OAUTH_HOST_BINDING, oauthHost);
+		pluginBindings.set("acp.paths", {
+			artifactsRootDir: join(this.config.dataDir, "acp", "artifacts"),
+			toolsRootDir: join(this.config.dataDir, "acp", "tools"),
+		});
 		pluginBindings.set(MEMORY_SERVICE_BINDING, this.memory);
 		pluginBindings.set(CHAT_HISTORY_SERVICE_BINDING, this.chatHistory);
 		pluginBindings.set(SOCIAL_PROFILE_BINDING, this.socialProfiles);
@@ -2035,6 +2039,8 @@ export class TsukaimaLifecycle {
 		await mkdir(join(this.config.dataDir, "sandbox-workspaces"), { recursive: true });
 		await mkdir(join(this.config.dataDir, "skills"), { recursive: true });
 		await mkdir(join(this.config.dataDir, "mcp", "bin"), { recursive: true });
+		await mkdir(join(this.config.dataDir, "acp", "tools"), { recursive: true });
+		await mkdir(join(this.config.dataDir, "acp", "artifacts"), { recursive: true });
 		if (
 			this.config.logDir !== undefined &&
 			!this.customLoggerProvided &&

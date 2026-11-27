@@ -138,6 +138,7 @@ describe("admin RPC", () => {
 			logLevel: "info",
 			plugins: [
 				{ config: {}, id: "openai-compatible", secretsSet: [] },
+				{ config: {}, id: "acp", secretsSet: [] },
 				{ config: {}, id: "onebot-napcat", secretsSet: [] },
 				{ config: {}, id: "history", secretsSet: [] },
 				{ config: {}, id: "memory", secretsSet: [] },
@@ -152,6 +153,7 @@ describe("admin RPC", () => {
 			logLevel: "debug",
 			plugins: [
 				{ config: {}, id: "openai-compatible", secretsSet: [] },
+				{ config: {}, id: "acp", secretsSet: [] },
 				{ config: {}, id: "onebot-napcat", secretsSet: [] },
 				{ config: {}, id: "history", secretsSet: [] },
 				{ config: {}, id: "memory", secretsSet: [] },

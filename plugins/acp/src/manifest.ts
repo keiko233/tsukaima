@@ -2,6 +2,7 @@ import { pluginManifestSchema, type PluginManifest } from "@tsukaima/sdk/manifes
 
 export const ACP_PLUGIN_ID = "acp";
 export const ACP_PROVIDER_PREFIX = "acp";
+export const ACP_PATHS_BINDING = "acp.paths";
 export const ACP_PROBE_RPC = "acp.probe";
 export const ACP_RUNTIME_STATUS_RPC = "acp.runtime.status";
 export const ACP_RUNTIME_INSTALL_RPC = "acp.runtime.install";
