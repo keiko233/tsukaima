@@ -1209,48 +1209,20 @@ export class PluginHost {
 							},
 				),
 			embed: async (request: Parameters<NonNullable<PluginModelProvider["embed"]>>[0]) => {
-				for (const provider of this.#modelProviders.values()) {
-					if (provider.embed !== undefined) return await provider.embed(request);
-					if (provider.embedding !== undefined) {
-						return await provider.embedding.embed(request);
-					}
-				}
-				throw new Error(`No embedding provider for ${request.modelId ?? "default"}`);
+				return await this.#runEmbedding(request);
 			},
 			embedding: async (request: Parameters<NonNullable<PluginModelProvider["embed"]>>[0]) => {
-				for (const provider of this.#modelProviders.values()) {
-					if (provider.embed !== undefined) return await provider.embed(request);
-					if (provider.embedding !== undefined) {
-						return await provider.embedding.embed(request);
-					}
-				}
-				throw new Error(`No embedding provider for ${request.modelId ?? "default"}`);
+				return await this.#runEmbedding(request);
 			},
 			transcribeAudio: async (
 				request: Parameters<NonNullable<PluginModelProvider["transcribeAudio"]>>[0],
 			) => {
-				for (const provider of this.#modelProviders.values()) {
-					if (provider.transcribeAudio !== undefined) {
-						return await provider.transcribeAudio(request);
-					}
-					if (provider.audioTranscribe !== undefined) {
-						return await provider.audioTranscribe.transcribeAudio(request);
-					}
-				}
-				throw new Error(`No audio-transcribe provider for ${request.modelId ?? "default"}`);
+				return await this.#runAudioTranscribe(request);
 			},
 			audioTranscribe: async (
 				request: Parameters<NonNullable<PluginModelProvider["transcribeAudio"]>>[0],
 			) => {
-				for (const provider of this.#modelProviders.values()) {
-					if (provider.transcribeAudio !== undefined) {
-						return await provider.transcribeAudio(request);
-					}
-					if (provider.audioTranscribe !== undefined) {
-						return await provider.audioTranscribe.transcribeAudio(request);
-					}
-				}
-				throw new Error(`No audio-transcribe provider for ${request.modelId ?? "default"}`);
+				return await this.#runAudioTranscribe(request);
 			},
 			registerProvider: (provider: PluginModelProvider): (() => void) => {
 				if (this.#modelProviders.has(provider.id)) {
@@ -1364,5 +1336,71 @@ export class PluginHost {
 			settings,
 			audit: { record: async (entry: AuditEntry) => this.#audit(entry) },
 		});
+	}
+
+	async #providersForCapability(
+		modelId: string | undefined,
+		capability: string,
+	): Promise<readonly PluginModelProvider[]> {
+		const providers = [...this.#modelProviders.values()];
+		const matching: PluginModelProvider[] = [];
+		const fallback: PluginModelProvider[] = [];
+		for (const provider of providers) {
+			if ((await provider.isConfigured?.()) === false) continue;
+			let descriptors:
+				| Awaited<ReturnType<NonNullable<PluginModelProvider["listModels"]>>>
+				| undefined;
+			try {
+				descriptors = await provider.listModels?.();
+			} catch {
+				descriptors = undefined;
+			}
+			if (descriptors === undefined) {
+				fallback.push(provider);
+				continue;
+			}
+			const matches =
+				modelId === undefined
+					? descriptors.some((model) => model.capabilities.includes(capability))
+					: descriptors.some(
+							(model) => model.id === modelId && model.capabilities.includes(capability),
+						);
+			if (matches) matching.push(provider);
+		}
+		return matching.length > 0 ? matching : fallback;
+	}
+
+	async #runEmbedding(request: Parameters<NonNullable<PluginModelProvider["embed"]>>[0]) {
+		const candidates = await this.#providersForCapability(request.modelId, "embedding");
+		let lastError: unknown;
+		for (const provider of candidates) {
+			try {
+				if (provider.embed !== undefined) return await provider.embed(request);
+				if (provider.embedding !== undefined) return await provider.embedding.embed(request);
+			} catch (error) {
+				lastError = error;
+			}
+		}
+		if (lastError instanceof Error) throw lastError;
+		throw new Error(`No embedding provider for ${request.modelId ?? "default"}`);
+	}
+
+	async #runAudioTranscribe(
+		request: Parameters<NonNullable<PluginModelProvider["transcribeAudio"]>>[0],
+	) {
+		const candidates = await this.#providersForCapability(request.modelId, "audio.transcribe");
+		let lastError: unknown;
+		for (const provider of candidates) {
+			try {
+				if (provider.transcribeAudio !== undefined) return await provider.transcribeAudio(request);
+				if (provider.audioTranscribe !== undefined) {
+					return await provider.audioTranscribe.transcribeAudio(request);
+				}
+			} catch (error) {
+				lastError = error;
+			}
+		}
+		if (lastError instanceof Error) throw lastError;
+		throw new Error(`No audio-transcribe provider for ${request.modelId ?? "default"}`);
 	}
 }

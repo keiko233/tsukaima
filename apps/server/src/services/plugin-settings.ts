@@ -59,11 +59,26 @@ export class PluginSettingsStore {
 
 	async write(pluginId: string, patch: PluginConfigValue): Promise<PluginConfigValue> {
 		const manifest = this.#manifests.get(pluginId);
+		const secretKeys = new Set(manifest?.secretKeys ?? []);
 		const stored = await this.#readStored(pluginId);
 		const next: PluginConfigValue = { ...stored };
 		for (const [key, value] of Object.entries(patch)) {
 			if (isEmpty(value)) {
 				delete next[key];
+			} else if (secretKeys.has(key) && isRecord(value)) {
+				const merged: Record<string, unknown> = isRecord(stored[key]) ? { ...stored[key] } : {};
+				for (const [subKey, subValue] of Object.entries(value)) {
+					if (isEmpty(subValue)) {
+						delete merged[subKey];
+					} else {
+						merged[subKey] = subValue;
+					}
+				}
+				if (Object.keys(merged).length === 0) {
+					delete next[key];
+				} else {
+					next[key] = merged;
+				}
 			} else {
 				next[key] = value;
 			}
@@ -97,7 +112,18 @@ export class PluginSettingsStore {
 		const secretsSet: string[] = [];
 		for (const [key, value] of Object.entries(resolved)) {
 			if (secretKeys.has(key)) {
-				if (!isEmpty(value)) secretsSet.push(key);
+				if (isRecord(value)) {
+					let anySubkey = false;
+					for (const [subKey, subValue] of Object.entries(value)) {
+						if (!isEmpty(subValue)) {
+							anySubkey = true;
+							secretsSet.push(`${key}.${subKey}`);
+						}
+					}
+					if (anySubkey) secretsSet.push(key);
+				} else if (!isEmpty(value)) {
+					secretsSet.push(key);
+				}
 				continue;
 			}
 			config[key] = value;

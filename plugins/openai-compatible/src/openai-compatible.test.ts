@@ -8,7 +8,9 @@ import {
 import {
 	modelCapabilities,
 	modelInputModalities,
+	openAiCompatibleProviderIdForProfile,
 	resolveOpenAiCompatibleConfig,
+	resolveOpenAiCompatibleProfiles,
 	toPluginModelDescriptor,
 } from "./config.ts";
 import { discoverOpenAiCompatibleModels } from "./discovery.ts";
@@ -52,6 +54,26 @@ function asFetch(handler: () => Promise<Response>): typeof globalThis.fetch {
 	return handler as unknown as typeof globalThis.fetch;
 }
 
+function createMutableSettings(initial: Record<string, unknown>) {
+	let current = initial;
+	const listeners = new Set<(value: Record<string, unknown>) => void>();
+	return {
+		settings: {
+			get: async () => current,
+			onChange: (callback: (value: Record<string, unknown>) => void) => {
+				listeners.add(callback);
+				return () => {
+					listeners.delete(callback);
+				};
+			},
+		},
+		set(value: Record<string, unknown>) {
+			current = value;
+			for (const listener of listeners) listener(current);
+		},
+	};
+}
+
 describe("openai-compatible plugin", () => {
 	test("manifest matches the packaged tsukaima.plugin.json", async () => {
 		const packaged = (await Bun.file(
@@ -70,7 +92,7 @@ describe("openai-compatible plugin", () => {
 				onChange: () => () => {},
 			},
 		});
-		openAiCompatiblePlugin.prepare?.(context);
+		await openAiCompatiblePlugin.prepare?.(context);
 		const provider = context.models.getProvider(
 			OPENAI_COMPATIBLE_PROVIDER_ID,
 		) as PluginModelProvider;
@@ -92,7 +114,7 @@ describe("openai-compatible plugin", () => {
 				onChange: () => () => {},
 			},
 		});
-		openAiCompatiblePlugin.prepare?.(context);
+		await openAiCompatiblePlugin.prepare?.(context);
 		const provider = context.models.getProvider(
 			OPENAI_COMPATIBLE_PROVIDER_ID,
 		) as PluginModelProvider;
@@ -116,6 +138,231 @@ describe("openai-compatible plugin", () => {
 			}),
 		]);
 		expect(config?.enabledModels.map((model) => model.id)).toEqual(["legacy-chat"]);
+	});
+
+	test("resolves legacy settings as the default profile and provider id", () => {
+		const profiles = resolveOpenAiCompatibleProfiles({
+			apiKey: "legacy-key",
+			baseUrl: "https://legacy.example/v1",
+			models: [{ enabled: true, id: "legacy-chat" }],
+		});
+		expect(profiles).toHaveLength(1);
+		expect(profiles[0]).toMatchObject({
+			apiKey: "legacy-key",
+			id: "default",
+			providerId: "openai-compatible",
+		});
+		expect(profiles[0]?.enabledModels.map((model) => model.id)).toEqual(["legacy-chat"]);
+		expect(openAiCompatibleProviderIdForProfile("default")).toBe("openai-compatible");
+		expect(openAiCompatibleProviderIdForProfile("secondary")).toBe("openai-compatible:secondary");
+	});
+
+	test("registers a distinct provider for every configured profile", async () => {
+		const context = createPluginContext({
+			grantedPermissions: ["model.call", "settings"],
+			manifest: openAiCompatibleManifest,
+			pluginId: "openai-compatible",
+			settings: {
+				get: async () => ({
+					profileApiKeys: { default: "primary-key", secondary: "secondary-key" },
+					profiles: [
+						{
+							baseUrl: "https://primary.example/v1",
+							enabled: true,
+							id: "default",
+							models: [{ enabled: true, id: "primary-chat" }],
+						},
+						{
+							baseUrl: "https://secondary.example/v1",
+							enabled: true,
+							id: "secondary",
+							models: [{ enabled: true, id: "secondary-chat" }],
+						},
+					],
+				}),
+				onChange: () => () => {},
+			},
+		});
+		await openAiCompatiblePlugin.prepare?.(context);
+
+		const primary = context.models.getProvider("openai-compatible") as
+			| PluginModelProvider
+			| undefined;
+		const secondary = context.models.getProvider(
+			openAiCompatibleProviderIdForProfile("secondary"),
+		) as PluginModelProvider | undefined;
+		expect(primary).toBeDefined();
+		expect(secondary).toBeDefined();
+		expect(await primary?.isConfigured?.()).toBe(true);
+		expect(await secondary?.isConfigured?.()).toBe(true);
+		expect((await primary?.listModels?.())?.map((model) => model.id)).toEqual(["primary-chat"]);
+		expect((await secondary?.listModels?.())?.map((model) => model.id)).toEqual(["secondary-chat"]);
+		const port = await secondary?.createPort();
+		expect(port?.providerId).toBe("openai-compatible:secondary");
+		expect(port?.modelId).toBe("secondary-chat");
+	});
+
+	test("skips an incomplete secondary profile without breaking the default profile", async () => {
+		const context = createPluginContext({
+			grantedPermissions: ["model.call", "settings"],
+			manifest: openAiCompatibleManifest,
+			pluginId: "openai-compatible",
+			settings: {
+				get: async () => ({
+					profileApiKeys: { default: "primary-key" },
+					profiles: [
+						{
+							baseUrl: "https://primary.example/v1",
+							enabled: true,
+							id: "default",
+							models: [{ enabled: true, id: "primary-chat" }],
+						},
+						{
+							baseUrl: "https://secondary.example/v1",
+							enabled: true,
+							id: "secondary",
+							models: [{ enabled: true, id: "secondary-chat" }],
+						},
+						{
+							baseUrl: "",
+							enabled: true,
+							id: "broken",
+							models: [{ enabled: true, id: "broken-chat" }],
+						},
+					],
+				}),
+				onChange: () => () => {},
+			},
+		});
+		await openAiCompatiblePlugin.prepare?.(context);
+
+		expect(context.models.listProviders().map((provider) => provider.id)).toEqual([
+			"openai-compatible",
+		]);
+		const primary = context.models.getProvider("openai-compatible") as PluginModelProvider;
+		expect(await primary.isConfigured?.()).toBe(true);
+		expect(
+			context.models.getProvider(openAiCompatibleProviderIdForProfile("secondary")),
+		).toBeUndefined();
+		expect(
+			context.models.getProvider(openAiCompatibleProviderIdForProfile("broken")),
+		).toBeUndefined();
+	});
+
+	test("syncs provider registrations when settings change", async () => {
+		const controller = createMutableSettings({
+			apiKey: "primary-key",
+			baseUrl: "https://primary.example/v1",
+			models: [{ enabled: true, id: "primary-chat" }],
+		});
+		const context = createPluginContext({
+			grantedPermissions: ["model.call", "settings"],
+			manifest: openAiCompatibleManifest,
+			pluginId: "openai-compatible",
+			settings: controller.settings,
+		});
+		await openAiCompatiblePlugin.prepare?.(context);
+		expect(
+			context.models.getProvider(openAiCompatibleProviderIdForProfile("secondary")),
+		).toBeUndefined();
+
+		controller.set({
+			profileApiKeys: { default: "primary-key", secondary: "secondary-key" },
+			profiles: [
+				{
+					baseUrl: "https://primary.example/v1",
+					enabled: true,
+					id: "default",
+					models: [{ enabled: true, id: "primary-chat" }],
+				},
+				{
+					baseUrl: "https://secondary.example/v1",
+					enabled: true,
+					id: "secondary",
+					models: [{ enabled: true, id: "secondary-chat" }],
+				},
+			],
+		});
+		expect(await context.models.getProvider("openai-compatible")?.isConfigured?.()).toBe(true);
+		expect(
+			await context.models
+				.getProvider(openAiCompatibleProviderIdForProfile("secondary"))
+				?.isConfigured?.(),
+		).toBe(true);
+
+		controller.set({
+			profileApiKeys: { default: "primary-key" },
+			profiles: [
+				{
+					baseUrl: "https://primary.example/v1",
+					enabled: true,
+					id: "default",
+					models: [{ enabled: true, id: "primary-chat" }],
+				},
+			],
+		});
+		expect(
+			context.models.getProvider(openAiCompatibleProviderIdForProfile("secondary")),
+		).toBeUndefined();
+		expect(context.models.getProvider("openai-compatible")).toBeDefined();
+
+		openAiCompatiblePlugin.teardown?.(context);
+		expect(context.models.listProviders()).toHaveLength(0);
+	});
+
+	test("uses the selected profile's key for model discovery", async () => {
+		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+			asFetch(async () => Response.json({ data: [{ id: "secondary-chat" }] })),
+		);
+		try {
+			const context = createPluginContext({
+				grantedPermissions: ["model.call", "settings"],
+				manifest: openAiCompatibleManifest,
+				pluginId: "openai-compatible",
+				settings: {
+					get: async () => ({
+						profileApiKeys: {
+							default: "primary-key",
+							secondary: "secondary-key",
+						},
+						profiles: [
+							{
+								baseUrl: "https://primary.example/v1",
+								enabled: true,
+								id: "default",
+								models: [{ enabled: true, id: "primary-chat" }],
+							},
+							{
+								baseUrl: "https://secondary.example/v1",
+								enabled: true,
+								id: "secondary",
+								models: [{ enabled: true, id: "secondary-chat" }],
+							},
+						],
+					}),
+					onChange: () => () => {},
+				},
+			});
+			await openAiCompatiblePlugin.setup?.(context);
+			const invokeRpc = (
+				context.rpc as unknown as {
+					invoke(method: string, input: unknown): Promise<unknown>;
+				}
+			).invoke.bind(context.rpc);
+			const result = (await invokeRpc("models.discover", {
+				profileId: "secondary",
+			})) as { readonly models: readonly { readonly id: string }[] };
+			expect(result.models.map((model) => model.id)).toEqual(["secondary-chat"]);
+			expect(fetchSpy).toHaveBeenCalledWith("https://secondary.example/v1/models", {
+				headers: {
+					accept: "application/json",
+					authorization: "Bearer secondary-key",
+				},
+				method: "GET",
+			});
+		} finally {
+			fetchSpy.mockRestore();
+		}
 	});
 
 	test("publishes only enabled models with capability and modality metadata", async () => {
@@ -148,7 +395,7 @@ describe("openai-compatible plugin", () => {
 				onChange: () => () => {},
 			},
 		});
-		openAiCompatiblePlugin.prepare?.(context);
+		await openAiCompatiblePlugin.prepare?.(context);
 		const provider = context.models.getProvider(
 			OPENAI_COMPATIBLE_PROVIDER_ID,
 		) as PluginModelProvider;
@@ -291,7 +538,7 @@ describe("openai-compatible plugin", () => {
 				onChange: () => () => {},
 			},
 		});
-		openAiCompatiblePlugin.prepare?.(context);
+		await openAiCompatiblePlugin.prepare?.(context);
 		const provider = context.models.getProvider(
 			OPENAI_COMPATIBLE_PROVIDER_ID,
 		) as PluginModelProvider;
@@ -341,6 +588,7 @@ describe("openai-compatible plugin", () => {
 				baseUrl: "https://models.example/v1",
 				configured: true,
 				enabledModels: 1,
+				profiles: 1,
 			});
 			refresh?.();
 			await new Promise((resolve) => setTimeout(resolve, 0));
@@ -466,7 +714,7 @@ describe("openai-compatible plugin", () => {
 					onChange: () => () => {},
 				},
 			});
-			openAiCompatiblePlugin.prepare?.(context);
+			await openAiCompatiblePlugin.prepare?.(context);
 			const provider = context.models.getProvider(
 				OPENAI_COMPATIBLE_PROVIDER_ID,
 			) as PluginModelProvider;
@@ -522,7 +770,7 @@ describe("openai-compatible plugin", () => {
 					onChange: () => () => {},
 				},
 			});
-			openAiCompatiblePlugin.prepare?.(context);
+			await openAiCompatiblePlugin.prepare?.(context);
 			const provider = context.models.getProvider(
 				OPENAI_COMPATIBLE_PROVIDER_ID,
 			) as PluginModelProvider;

@@ -131,25 +131,34 @@ export {
 	defaultConversationExecutionLock,
 	withConversationLock,
 } from "./execution-lock.ts";
-export { createFakeModel, createSlowStreamingModel, type ModelPort } from "./model.ts";
+export {
+	createCompositeModelPort,
+	createFakeModel,
+	createSlowStreamingModel,
+	type CompositeModelPreference,
+	type ModelPort,
+} from "./model.ts";
+export {
+	ModelPolicyRouter,
+	ModelUsageLedger,
+	type ModelCapability,
+	type ModelPolicy,
+	type ModelRef,
+	type ModelUsageKind,
+	type ModelUsageRecord,
+	type RoutedModel,
+	type RouteModelRequest,
+} from "./model-routing.ts";
 export { TOOL_SEARCH_TOOL_NAME } from "@earendil-works/pi-durable/tool-search";
 export { createFallbackCoreLogger, previewText, type CoreLogger } from "./logger.ts";
 export {
 	DEFAULT_REQUEST_TIMEOUT_MS,
-	ModelPolicyRouter,
 	OpenAIRequestTimeoutError,
-	ModelUsageLedger,
 	createOpenAICompatibleProvider,
 	createOpenAICompatibleModelPort,
 	createOpenAICompatibleStreams,
-	type ModelCapability,
-	type ModelPolicy,
-	type ModelRef,
-	type ModelUsageRecord,
 	type OpenAICompatibleConfig,
 	type OpenAICompatibleModelConfig,
-	type RoutedModel,
-	type RouteModelRequest,
 } from "./openai.ts";
 export {
 	LURK_MARKER,
