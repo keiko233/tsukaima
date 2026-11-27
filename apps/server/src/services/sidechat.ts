@@ -1,5 +1,9 @@
 import type { BusyArbitrationInput, BusyArbitrationResult } from "@tsukaima/core";
-import type { PluginModelReasoningLevel } from "@tsukaima/sdk";
+import type {
+	PluginDecisionChoiceRequest,
+	PluginDecisionChoiceResult,
+	PluginModelReasoningLevel,
+} from "@tsukaima/sdk";
 import { clamp } from "es-toolkit";
 import type { Logger } from "../logging.ts";
 import type { NativeDecisionModels } from "./decision-models.ts";
@@ -10,6 +14,13 @@ const MAX_REQUEST_CHARS = 1_500;
 const MAX_ANSWER_CHARS = 1_000;
 const MAX_PARTIAL_CHARS = 800;
 const MAX_REASON_CHARS = 240;
+
+const SIDECHAT_DECISION_OPTIONS = {
+	interrupt:
+		"Stop the current response because the new request explicitly cancels, supersedes, or urgently replaces it.",
+	steer: "Keep the active tool work and incorporate the new information into this run.",
+	wait: "Finish the current run and handle the pending messages afterward.",
+} as const;
 
 const clip = (value: string, limit: number): string =>
 	value.length <= limit ? value : `${value.slice(0, limit)}…`;
@@ -47,6 +58,23 @@ function parseDecision(
 	};
 }
 
+function parseChoiceDecision(
+	choice: string,
+	confidence: number | undefined,
+	reason: string | undefined,
+): { confidence?: number; decision: "interrupt" | "steer" | "wait"; reason?: string } | undefined {
+	if (choice !== "interrupt" && choice !== "steer" && choice !== "wait") return undefined;
+	return {
+		decision: choice,
+		...(confidence === undefined || !Number.isFinite(confidence)
+			? {}
+			: { confidence: clamp(confidence, 0, 1) }),
+		...(reason === undefined || reason.trim().length === 0
+			? {}
+			: { reason: clip(reason.trim(), MAX_REASON_CHARS) }),
+	};
+}
+
 export interface SidechatModelTarget {
 	readonly modelId: string;
 	readonly providerId: string;
@@ -70,6 +98,9 @@ export interface SidechatModels {
 			readonly temperature: number;
 		},
 	) => Promise<string>;
+	readonly decideChoice?: (
+		request: PluginDecisionChoiceRequest,
+	) => Promise<PluginDecisionChoiceResult>;
 }
 
 export interface SidechatServiceOptions {
@@ -90,6 +121,13 @@ export function resolveSidechatTarget(
 	modelId: string,
 	active: SidechatModelTarget | undefined,
 ): SidechatModelTarget | undefined {
+	const separator = modelId.indexOf(":");
+	if (separator > 0) {
+		const providerId = modelId.slice(0, separator);
+		const id = modelId.slice(separator + 1);
+		const exact = eligible.find((model) => model.providerId === providerId && model.modelId === id);
+		if (exact !== undefined) return exact;
+	}
 	const matches = eligible.filter((model) => model.modelId === modelId);
 	return (
 		matches.find((model) => model.providerId === active?.providerId) ??
@@ -166,14 +204,20 @@ export class SidechatService {
 				parsed = await native.choose<"interrupt" | "steer" | "wait">(nativeModelId, {
 					context: buildSidechatContext(input),
 					instructions,
-					options: {
-						interrupt:
-							"Stop the current response because the new request explicitly cancels, supersedes, or urgently replaces it.",
-						steer: "Keep the active tool work and incorporate the new information into this run.",
-						wait: "Finish the current run and handle the pending messages afterward.",
-					},
+					options: SIDECHAT_DECISION_OPTIONS,
 					signal: controller.signal,
 				});
+			} else if (target !== undefined && this.#models.decideChoice !== undefined) {
+				const result = await this.#models.decideChoice({
+					context: buildSidechatContext(input),
+					instructions,
+					maxTokens: 512,
+					modelId: target.modelId,
+					options: SIDECHAT_DECISION_OPTIONS,
+					providerId: target.providerId,
+					signal: controller.signal,
+				});
+				parsed = parseChoiceDecision(result.choice, result.confidence, result.reason);
 			} else if (target !== undefined) {
 				const text = await this.#models.complete(target, buildSidechatPrompt(input, instructions), {
 					maxTokens: 512,

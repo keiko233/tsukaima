@@ -23,6 +23,8 @@ import {
 const MAX_PROMPT_ITEM_CHARS = 240;
 // Allow enough budget for reasoning/thinking tokens before the short JSON decision.
 const GATE_MAX_TOKENS = 512;
+const GATE_INSTRUCTIONS =
+	"Apply the conversation guidelines to the supplied context and choose the applicable outcome.";
 
 const clip = (value: string, max = MAX_PROMPT_ITEM_CHARS): string => {
 	const single = value.replace(/\s+/gu, " ").trim();
@@ -70,6 +72,28 @@ function parseBinaryDecision<A extends string, B extends string>(
 	if (tokenMatch === first) return { decision: first };
 	if (tokenMatch === second) return { decision: second };
 	return undefined;
+}
+
+function decisionFromChoice<A extends string, B extends string>(
+	choice: string,
+	first: A,
+	second: B,
+	confidence: number | undefined,
+	reason: string | undefined,
+):
+	| { readonly confidence?: number; readonly decision: A | B; readonly reason?: string }
+	| undefined {
+	const decision = choice === first ? first : choice === second ? second : undefined;
+	if (decision === undefined) return undefined;
+	return {
+		decision,
+		...(confidence === undefined || !Number.isFinite(confidence)
+			? {}
+			: { confidence: clamp(confidence, 0, 1) }),
+		...(reason === undefined || reason.trim().length === 0
+			? {}
+			: { reason: clip(reason.trim(), 160) }),
+	};
 }
 
 export function buildBurstCompletionPrompt(
@@ -267,10 +291,12 @@ export class ConversationGateService implements ConversationGatePort {
 	async #hasBackend(policyModelId: string | undefined): Promise<boolean> {
 		if (this.#customDriver !== undefined) return true;
 		const requested = await this.#requestedModel(policyModelId);
-		return (
-			this.#decisionModels?.supports(requested) === true ||
-			(await this.#resolveTarget(requested)) !== undefined
-		);
+		if (this.#decisionModels?.supports(requested) === true) return true;
+		if ((await this.#resolveTarget(requested)) !== undefined) return true;
+		const models = this.#models;
+		if (models?.decideChoice === undefined || requested === undefined) return false;
+		if (models.active() !== undefined) return true;
+		return (await models.eligible().catch(() => [])).length > 0;
 	}
 
 	async #requestedModel(policyModelId: string | undefined): Promise<string | undefined> {
@@ -302,8 +328,7 @@ export class ConversationGateService implements ConversationGatePort {
 		if (this.#decisionModels?.supports(requested)) {
 			const result = await this.#decisionModels.choose<A | B>(requested, {
 				context: prompt(true),
-				instructions:
-					"Apply the conversation guidelines to the supplied context and choose the applicable outcome.",
+				instructions: GATE_INSTRUCTIONS,
 				options,
 				signal,
 			});
@@ -313,6 +338,33 @@ export class ConversationGateService implements ConversationGatePort {
 		if (models === undefined) return undefined;
 		const target = await this.#resolveTarget(requested);
 		if (target === undefined) return undefined;
+		if (models.decideChoice !== undefined) {
+			const chosen = await models.decideChoice({
+				context: prompt(true),
+				instructions: GATE_INSTRUCTIONS,
+				maxTokens: GATE_MAX_TOKENS,
+				modelId: target.modelId,
+				options,
+				providerId: target.providerId,
+				signal,
+			});
+			const result = decisionFromChoice(
+				chosen.choice,
+				first,
+				second,
+				chosen.confidence,
+				chosen.reason,
+			);
+			if (result === undefined) {
+				this.#logger.debug("conversation gate returned an unknown decision choice", {
+					choice: chosen.choice,
+					modelId: chosen.modelId,
+					providerId: chosen.providerId,
+				});
+				return undefined;
+			}
+			return { ...result, modelId: chosen.modelId };
+		}
 		const text = await models.complete(target, prompt(false), {
 			maxTokens: GATE_MAX_TOKENS,
 			reasoning: "minimal",

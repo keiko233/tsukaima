@@ -977,8 +977,10 @@ export const modelCatalogEntrySchema = z.object({
 	capabilities: z.array(z.string()),
 	contextWindow: z.number().int().nonnegative().optional(),
 	id: z.string(),
+	input: z.array(z.string()).optional(),
 	maxOutputTokens: z.number().int().nonnegative().optional(),
 	name: z.string().optional(),
+	output: z.array(z.string()).optional(),
 	/** Plugin that registered the provider, when the host knows it. */
 	pluginId: z.string().optional(),
 	providerId: z.string(),
@@ -1134,9 +1136,11 @@ export const groupsGetInputSchema = z.object({ groupId: z.string().min(1) });
 
 export const modelPoliciesSetInputSchema = z.object({
 	capability: z.string().min(1),
+	fallbacks: z.array(modelRefSchema).optional(),
 	maxOutputTokens: z.number().int().positive().optional(),
 	primaryModel: z.string().min(1),
 	primaryProvider: z.string().min(1),
+	thinking: z.enum(["off", "low", "medium", "high"]).optional(),
 });
 
 export const requestsGetInputSchema = z.object({ requestId: z.string().min(1) });

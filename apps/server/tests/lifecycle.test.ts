@@ -7,7 +7,7 @@ import { createApp } from "../src/app.ts";
 import { writeRuntimeSettings } from "../src/runtime-settings.ts";
 import { createSlowStreamingModel } from "@tsukaima/core";
 import type { MessageEnvelope } from "@tsukaima/contracts";
-import { conversations } from "@tsukaima/db";
+import { conversations, modelPolicies } from "@tsukaima/db";
 import {
 	ONEBOT_TRANSPORT_FACTORY_BINDING,
 	type OneBotTransportFactory,
@@ -341,6 +341,53 @@ describe("server lifecycle with fake model", () => {
 				},
 			]);
 			await lifecycle.stop();
+		} finally {
+			await rm(directory, { force: true, recursive: true });
+		}
+	});
+
+	test("hydrates persisted model_policies and registers configured native decision providers", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tsukaima-server-policies-"));
+		try {
+			const first = createApp({
+				GEMINI_API_KEY: "synthetic-gemini-key",
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			});
+			await first.lifecycle.start();
+			const models = await first.lifecycle.pluginHost.listModels({
+				capability: "decision.choice",
+			});
+			expect(models.some((entry) => entry.id === "gemini-decision-1")).toBe(true);
+			await first.lifecycle.domainDatabase?.insert(modelPolicies).values({
+				capability: "decision.gate",
+				fallbacksJson: JSON.stringify([{ modelId: "fast-chat", providerId: "openai-compatible" }]),
+				id: "decision.gate",
+				primaryModel: "gemini-decision-1",
+				primaryProvider: "gemini-decision",
+				thinkingLevel: "low",
+			});
+			await first.lifecycle.stop();
+
+			const second = createApp({
+				GEMINI_API_KEY: "synthetic-gemini-key",
+				TSUKAIMA_DATA_DIR: directory,
+				TSUKAIMA_PORT: "7420",
+				TSUKAIMA_WEB_ORIGIN: "http://127.0.0.1:7421",
+			});
+			await second.lifecycle.start();
+			expect(second.lifecycle.routingPolicies[0]?.capability).toBe("basic-chat");
+			const gatePolicy = second.lifecycle.routingPolicies.find(
+				(policy) => policy.capability === "decision.gate",
+			);
+			expect(gatePolicy).toEqual({
+				capability: "decision.gate",
+				fallbacks: [{ modelId: "fast-chat", providerId: "openai-compatible" }],
+				primary: { modelId: "gemini-decision-1", providerId: "gemini-decision" },
+				thinking: "low",
+			});
+			await second.lifecycle.stop();
 		} finally {
 			await rm(directory, { force: true, recursive: true });
 		}

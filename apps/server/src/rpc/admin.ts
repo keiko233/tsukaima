@@ -119,8 +119,10 @@ function toCatalogEntry(model: PluginModelInfo) {
 		capabilities: [...model.capabilities],
 		...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
 		id: model.id,
+		...(model.input === undefined ? {} : { input: [...model.input] }),
 		...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
 		...(model.name === undefined ? {} : { name: model.name }),
+		...(model.output === undefined ? {} : { output: [...model.output] }),
 		...(model.pluginId === undefined ? {} : { pluginId: model.pluginId }),
 		providerId: model.providerId,
 		...(model.reasoning === undefined
@@ -145,9 +147,15 @@ function toCatalogEntry(model: PluginModelInfo) {
 async function settingsView(context: TsukaimaApiContext) {
 	const settings = await readRuntimeSettings(context.lifecycle.domainDatabase);
 	const activeProviderId = context.lifecycle.activeModelProviderId;
-	const catalog = await context.lifecycle.pluginHost.listModels({
-		capability: MODEL_CAPABILITIES.sidechat,
-	});
+	const [sidechatCatalog, decisionCatalog] = await Promise.all([
+		context.lifecycle.pluginHost.listModels({
+			capability: MODEL_CAPABILITIES.sidechat,
+		}),
+		context.lifecycle.pluginHost.listModels({
+			capability: MODEL_CAPABILITIES.decisionChoice,
+		}),
+	]);
+	const catalog = [...decisionCatalog, ...sidechatCatalog];
 	const byId = new Map<string, (typeof catalog)[number]>();
 	for (const model of catalog) {
 		const existing = byId.get(model.id);
@@ -405,34 +413,48 @@ export const adminRouter = {
 		set: adminBase.admin.modelPolicies.set.handler(async ({ context, input }) => {
 			const database = context.lifecycle.domainDatabase;
 			if (database === undefined) throw new Error("Database not ready");
+			const fallbacks = input.fallbacks ?? [];
 			await database
 				.insert(modelPolicies)
 				.values({
 					capability: input.capability,
-					fallbacksJson: "[]",
+					fallbacksJson: JSON.stringify(fallbacks),
 					id: input.capability,
+					...(input.maxOutputTokens === undefined
+						? {}
+						: { maxOutputTokens: input.maxOutputTokens }),
 					primaryModel: input.primaryModel,
 					primaryProvider: input.primaryProvider,
+					...(input.thinking === undefined ? {} : { thinkingLevel: input.thinking }),
 				})
 				.onConflictDoUpdate({
 					target: modelPolicies.capability,
 					set: {
+						fallbacksJson: JSON.stringify(fallbacks),
+						maxOutputTokens: input.maxOutputTokens ?? null,
 						primaryModel: input.primaryModel,
 						primaryProvider: input.primaryProvider,
+						thinkingLevel: input.thinking ?? null,
+						updatedAt: new Date().toISOString(),
 					},
 				});
-			context.lifecycle.routingPolicies = [
-				...context.lifecycle.routingPolicies.filter(
-					(policy) => policy.capability !== input.capability,
-				),
-				{
-					capability: input.capability,
-					primary: {
-						modelId: input.primaryModel,
-						providerId: input.primaryProvider,
-					},
+			const nextPolicy: LifecycleModelPolicy = {
+				capability: input.capability,
+				...(fallbacks.length === 0 ? {} : { fallbacks }),
+				...(input.maxOutputTokens === undefined ? {} : { maxOutputTokens: input.maxOutputTokens }),
+				primary: {
+					modelId: input.primaryModel,
+					providerId: input.primaryProvider,
 				},
-			];
+				...(input.thinking === undefined ? {} : { thinking: input.thinking }),
+			};
+			const withoutCapability = context.lifecycle.routingPolicies.filter(
+				(policy) => policy.capability !== input.capability,
+			);
+			context.lifecycle.routingPolicies =
+				input.capability === "basic-chat"
+					? [nextPolicy, ...withoutCapability]
+					: [...withoutCapability, nextPolicy];
 			return toContractPolicies(context.lifecycle.routingPolicies);
 		}),
 	},

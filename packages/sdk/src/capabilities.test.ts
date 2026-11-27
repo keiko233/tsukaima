@@ -6,6 +6,11 @@ import {
 } from "./host.ts";
 import { LocalModelRegistry } from "./bridges.ts";
 import { hasModelCapability, MODEL_CAPABILITIES } from "./model-capabilities.ts";
+import type {
+	PluginDecisionChoiceRequest,
+	PluginModelCompleteRequest,
+	PluginModelDescriptor,
+} from "./types.ts";
 
 describe("channel capabilities", () => {
 	test("maps legacy capabilities to the granular machine-readable set", () => {
@@ -203,5 +208,126 @@ describe("model capabilities", () => {
 		expect(hasModelCapability({ capabilities: ["basic-chat"] }, MODEL_CAPABILITIES.sidechat)).toBe(
 			false,
 		);
+	});
+
+	test("exposes the standardized capability tags", () => {
+		expect(MODEL_CAPABILITIES.audioTranscribe).toBe("audio.transcribe");
+		expect(MODEL_CAPABILITIES.audioTts).toBe("audio.tts");
+		expect(MODEL_CAPABILITIES.decisionChoice).toBe("decision.choice");
+		expect(MODEL_CAPABILITIES.embedding).toBe("embedding");
+		expect(MODEL_CAPABILITIES.imageEdit).toBe("image.edit");
+		expect(MODEL_CAPABILITIES.imageGenerate).toBe("image.generate");
+		expect(MODEL_CAPABILITIES.videoGenerate).toBe("video.generate");
+		expect(MODEL_CAPABILITIES.videoImageToVideo).toBe("video.image2video");
+	});
+
+	test("describes output modalities on model descriptors", async () => {
+		const models = new LocalModelRegistry();
+		const descriptor: PluginModelDescriptor = {
+			capabilities: [MODEL_CAPABILITIES.imageGenerate],
+			id: "image-1",
+			input: ["text"],
+			output: ["image"],
+		};
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "media",
+			listModels: () => [descriptor],
+		});
+		const [model] = await models.listModels({ capability: MODEL_CAPABILITIES.imageGenerate });
+		expect(model?.output).toEqual(["image"]);
+	});
+});
+
+describe("decision choice port", () => {
+	test("calls a native decideChoice provider port directly", async () => {
+		const models = new LocalModelRegistry();
+		const calls: PluginDecisionChoiceRequest[] = [];
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			decideChoice: (request) => {
+				calls.push(request);
+				return {
+					choice: "approve",
+					modelId: request.modelId ?? "pick-1",
+					providerId: "picker",
+				};
+			},
+			id: "picker",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.decisionChoice], id: "pick-1" }],
+		});
+		const result = await models.decideChoice({
+			context: "synthetic context",
+			instructions: "choose",
+			options: { approve: "yes", reject: "no" },
+			providerId: "picker",
+		});
+		expect(result).toEqual({ choice: "approve", modelId: "pick-1", providerId: "picker" });
+		expect(calls[0]?.modelId).toBe("pick-1");
+		expect(calls[0]?.providerId).toBe("picker");
+	});
+
+	test("falls back to a JSON completion adapter when no native port exists", async () => {
+		const models = new LocalModelRegistry();
+		const completions: PluginModelCompleteRequest[] = [];
+		models.registerProvider({
+			complete: (request) => {
+				completions.push(request);
+				return {
+					modelId: request.modelId ?? "chat-1",
+					providerId: "fallback",
+					text: '{"decision":"Second","confidence":1.4,"reason":"better fit"}',
+				};
+			},
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "fallback",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.decisionChoice], id: "chat-1" }],
+		});
+		const result = await models.decideChoice({
+			context: "synthetic context",
+			instructions: "choose wisely",
+			maxTokens: 128,
+			options: { first: "first option", second: "second option" },
+		});
+		expect(result).toEqual({
+			choice: "second",
+			confidence: 1,
+			modelId: "chat-1",
+			providerId: "fallback",
+			reason: "better fit",
+		});
+		const prompt = String(completions[0]?.messages[0]?.content);
+		expect(prompt).toContain("choose wisely");
+		expect(prompt).toContain("synthetic context");
+		expect(prompt).toContain("second: second option");
+		expect(completions[0]?.maxTokens).toBe(128);
+		expect(completions[0]?.reasoning).toBe("minimal");
+		expect(completions[0]?.temperature).toBe(0);
+	});
+
+	test("rejects a native choice that is not a provided option", async () => {
+		const models = new LocalModelRegistry();
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			decideChoice: () => ({ choice: "maybe", modelId: "pick-1", providerId: "picker" }),
+			id: "picker",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.decisionChoice], id: "pick-1" }],
+		});
+		await expect(
+			models.decideChoice({
+				context: "synthetic context",
+				instructions: "choose",
+				options: { approve: "yes", reject: "no" },
+				providerId: "picker",
+			}),
+		).rejects.toThrow("not one of the provided options");
 	});
 });

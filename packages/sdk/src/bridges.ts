@@ -29,6 +29,8 @@ import type {
 	PluginAudioTranscribeRequest,
 	PluginAudioTranscribeResult,
 	PluginDatabaseApi,
+	PluginDecisionChoiceRequest,
+	PluginDecisionChoiceResult,
 	PluginEmbeddingRequest,
 	PluginEmbeddingResult,
 	PluginFollowUpsApi,
@@ -59,6 +61,7 @@ import type {
 } from "./types.ts";
 import { pluginStatusInputSchema } from "@tsukaima/contracts";
 import type { PluginStatusSnapshot } from "@tsukaima/contracts";
+import { MODEL_CAPABILITIES } from "./model-capabilities.ts";
 
 export {
 	DEFAULT_TOOL_POLICY,
@@ -388,6 +391,208 @@ export class LocalUiBridge {
 	}
 }
 
+interface DecisionChoiceTarget {
+	readonly provider: PluginModelProvider;
+	readonly modelId?: string;
+}
+
+async function safeListModels(
+	provider: PluginModelProvider,
+): Promise<readonly PluginModelDescriptor[]> {
+	try {
+		return (await provider.listModels?.()) ?? [];
+	} catch {
+		return [];
+	}
+}
+
+function preferredDecisionModel(
+	descriptors: readonly PluginModelDescriptor[],
+): PluginModelDescriptor | undefined {
+	return (
+		descriptors.find((descriptor) =>
+			descriptor.capabilities.includes(MODEL_CAPABILITIES.decisionChoice),
+		) ??
+		descriptors.find((descriptor) =>
+			descriptor.capabilities.includes(MODEL_CAPABILITIES.sidechat),
+		) ??
+		descriptors[0]
+	);
+}
+
+async function resolveDecisionChoiceTarget(
+	providers: ReadonlyMap<string, PluginModelProvider>,
+	request: PluginDecisionChoiceRequest,
+): Promise<DecisionChoiceTarget> {
+	if (request.providerId !== undefined) {
+		const provider = providers.get(request.providerId);
+		if (provider === undefined) {
+			throw new Error(`Model provider ${request.providerId} is not registered`);
+		}
+		if ((await provider.isConfigured?.()) === false) {
+			throw new Error(`Model provider ${request.providerId} is not configured`);
+		}
+		if (request.modelId !== undefined) return { modelId: request.modelId, provider };
+		if (provider.listModels === undefined) return { provider };
+		const modelId = preferredDecisionModel(await safeListModels(provider))?.id;
+		return { ...(modelId === undefined ? {} : { modelId }), provider };
+	}
+
+	const configured: PluginModelProvider[] = [];
+	for (const provider of providers.values()) {
+		if ((await provider.isConfigured?.()) === false) continue;
+		configured.push(provider);
+	}
+
+	if (request.modelId !== undefined) {
+		for (const provider of configured) {
+			if (provider.listModels === undefined) continue;
+			const descriptors = await safeListModels(provider);
+			if (descriptors.some((descriptor) => descriptor.id === request.modelId)) {
+				return { modelId: request.modelId, provider };
+			}
+		}
+		const fallback = configured.find(
+			(provider) =>
+				provider.decideChoice !== undefined ||
+				provider.decisionChoice !== undefined ||
+				provider.listModels === undefined,
+		);
+		if (fallback !== undefined) return { modelId: request.modelId, provider: fallback };
+		throw new Error(`Model ${request.modelId} is not available from any configured provider`);
+	}
+
+	for (const capability of [MODEL_CAPABILITIES.decisionChoice, MODEL_CAPABILITIES.sidechat]) {
+		for (const provider of configured) {
+			if (provider.listModels === undefined) continue;
+			const matched = (await safeListModels(provider)).find((descriptor) =>
+				descriptor.capabilities.includes(capability),
+			);
+			if (matched !== undefined) return { modelId: matched.id, provider };
+		}
+	}
+
+	const fallback = configured[0];
+	if (fallback === undefined) {
+		throw new Error("No configured model provider can decide a choice");
+	}
+	if (fallback.listModels === undefined) return { provider: fallback };
+	const modelId = preferredDecisionModel(await safeListModels(fallback))?.id;
+	return { ...(modelId === undefined ? {} : { modelId }), provider: fallback };
+}
+
+function buildDecisionChoicePrompt(request: PluginDecisionChoiceRequest): string {
+	const options = Object.entries(request.options);
+	const optionLines =
+		options.length === 0
+			? "- (no options)"
+			: options.map(([key, description]) => `- ${key}: ${description}`).join("\n");
+	return [
+		"Choose exactly one option for the task below.",
+		"",
+		"Instructions:",
+		request.instructions,
+		"",
+		"Context:",
+		request.context,
+		"",
+		"Options:",
+		optionLines,
+		"",
+		'Respond with strict JSON only, for example {"decision":"<option key>","confidence":0.0,"reason":"short reason"}.',
+		"The decision must be one of the option keys above.",
+	].join("\n");
+}
+
+function extractJsonObject(text: string): string | undefined {
+	const start = text.indexOf("{");
+	if (start === -1) return undefined;
+	let depth = 0;
+	let escaped = false;
+	let inString = false;
+	for (let index = start; index < text.length; index += 1) {
+		const char = text[index];
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (char === "\\") escaped = true;
+			else if (char === '"') inString = false;
+			continue;
+		}
+		if (char === '"') {
+			inString = true;
+			continue;
+		}
+		if (char === "{") depth += 1;
+		else if (char === "}") {
+			depth -= 1;
+			if (depth === 0) return text.slice(start, index + 1);
+		}
+	}
+	return undefined;
+}
+
+function matchDecisionChoiceKey(
+	options: Readonly<Record<string, string>>,
+	candidate: string,
+): string | undefined {
+	const keys = Object.keys(options);
+	if (keys.includes(candidate)) return candidate;
+	const lowered = candidate.toLowerCase();
+	return keys.find((key) => key.toLowerCase() === lowered);
+}
+
+function clampDecisionConfidence(value: unknown): number | undefined {
+	if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+	return Math.min(1, Math.max(0, value));
+}
+
+function parseDecisionChoiceText(
+	text: string,
+	options: Readonly<Record<string, string>>,
+): { readonly choice: string; readonly confidence?: number; readonly reason?: string } {
+	const trimmed = text.trim();
+	if (trimmed.length > 0) {
+		const jsonText = extractJsonObject(trimmed) ?? trimmed;
+		try {
+			const parsed: unknown = JSON.parse(jsonText);
+			if (isPlainObject(parsed)) {
+				const rawDecision = parsed.decision ?? parsed.choice;
+				if (typeof rawDecision === "string") {
+					const choice = matchDecisionChoiceKey(options, rawDecision.trim());
+					if (choice !== undefined) {
+						const confidence = clampDecisionConfidence(parsed.confidence);
+						const reason =
+							typeof parsed.reason === "string" && parsed.reason.trim().length > 0
+								? parsed.reason.trim()
+								: undefined;
+						return {
+							choice,
+							...(confidence === undefined ? {} : { confidence }),
+							...(reason === undefined ? {} : { reason }),
+						};
+					}
+				}
+			}
+		} catch {}
+		const token = trimmed
+			.replace(/^[`"']+/, "")
+			.replace(/[`"']+$/, "")
+			.trim();
+		const choice = matchDecisionChoiceKey(options, token);
+		if (choice !== undefined) return { choice };
+	}
+	throw new Error("Model response did not contain a valid decision choice");
+}
+
+function assertValidDecisionChoice(
+	options: Readonly<Record<string, string>>,
+	choice: string,
+): void {
+	if (!Object.hasOwn(options, choice)) {
+		throw new Error(`Decision choice ${choice} is not one of the provided options`);
+	}
+}
+
 export class LocalModelRegistry implements PluginModelRegistry {
 	readonly #providers = new Map<string, PluginModelProvider>();
 
@@ -452,6 +657,10 @@ export class LocalModelRegistry implements PluginModelRegistry {
 		request: PluginAudioTranscribeRequest,
 	): Promise<PluginAudioTranscribeResult> {
 		return await this.transcribeAudio(request);
+	}
+
+	async decideChoice(request: PluginDecisionChoiceRequest): Promise<PluginDecisionChoiceResult> {
+		return await decideChoicePluginModel(this.#providers, request);
 	}
 
 	#providersFor(modelId: string | undefined, capability: string): readonly PluginModelProvider[] {
@@ -683,6 +892,51 @@ export async function completePluginModel(
 	};
 }
 
+/** Runs a constrained decision choice through a registered provider or JSON completion fallback. */
+export async function decideChoicePluginModel(
+	providers: ReadonlyMap<string, PluginModelProvider>,
+	request: PluginDecisionChoiceRequest,
+	options: { readonly onMessage?: (message: unknown) => void } = {},
+): Promise<PluginDecisionChoiceResult> {
+	const { modelId, provider } = await resolveDecisionChoiceTarget(providers, request);
+	const resolvedRequest: PluginDecisionChoiceRequest = {
+		...request,
+		...(modelId === undefined ? {} : { modelId }),
+		providerId: provider.id,
+	};
+	if (provider.decideChoice !== undefined) {
+		const result = await provider.decideChoice(resolvedRequest);
+		assertValidDecisionChoice(request.options, result.choice);
+		return result;
+	}
+	if (provider.decisionChoice !== undefined) {
+		const result = await provider.decisionChoice.decideChoice(resolvedRequest);
+		assertValidDecisionChoice(request.options, result.choice);
+		return result;
+	}
+	const completion = await completePluginModel(
+		providers,
+		{
+			messages: [{ content: buildDecisionChoicePrompt(request), role: "user" }],
+			maxTokens: request.maxTokens ?? 512,
+			reasoning: "minimal",
+			temperature: 0,
+			providerId: provider.id,
+			...(modelId === undefined ? {} : { modelId }),
+			...(request.signal === undefined ? {} : { signal: request.signal }),
+		},
+		options,
+	);
+	const decision = parseDecisionChoiceText(completion.text, request.options);
+	return {
+		choice: decision.choice,
+		modelId: completion.modelId,
+		providerId: completion.providerId,
+		...(decision.confidence === undefined ? {} : { confidence: decision.confidence }),
+		...(decision.reason === undefined ? {} : { reason: decision.reason }),
+	};
+}
+
 /**
  * Builds a stable, secret-free catalog from provider descriptors. A broken provider must not
  * prevent unrelated models from being discovered by another plugin.
@@ -694,6 +948,11 @@ export async function collectPluginModels(
 	const models: PluginModelInfo[] = [];
 	for (const provider of providers) {
 		if (query.providerId !== undefined && provider.id !== query.providerId) continue;
+		try {
+			if ((await provider.isConfigured?.()) === false) continue;
+		} catch {
+			continue;
+		}
 		let descriptors: readonly PluginModelDescriptor[];
 		try {
 			descriptors = (await provider.listModels?.()) ?? [];
