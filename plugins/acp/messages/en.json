@@ -1,0 +1,5 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"plugin_name": "ACP CLI providers",
+	"plugin_description": "Connect Antigravity, Codex, Claude Code, and custom ACP CLI agents as models and media capabilities."
+}
