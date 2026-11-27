@@ -58,7 +58,7 @@ function LoginPage() {
 	const errorText = login.error === null ? null : loginErrorMessage(login.error);
 
 	return (
-		<div className="grid h-dvh place-items-center bg-background px-4">
+		<div className="grid h-dvh place-items-center overflow-y-auto bg-background px-4 py-4">
 			<div className="w-full max-w-[320px] rounded-xl border border-border bg-card p-5 shadow-sm">
 				<div className="mb-5">
 					<img
