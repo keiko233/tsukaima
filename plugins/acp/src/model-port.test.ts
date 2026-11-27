@@ -7,6 +7,7 @@ import type {
 	Api,
 } from "@earendil-works/pi-ai";
 import { resolveAcpProfiles, type ResolvedAcpProfile } from "./config.ts";
+import type { AcpMcpStdioServerConfig } from "./protocol.ts";
 import { createAcpModelPort } from "./model-port.ts";
 import { AcpProcessManager, type AcpManagedClient, type AcpSpawnSpec } from "./process-manager.ts";
 import { connectAcpStdio, type AcpClientHandlers, type AcpSessionUpdate } from "./protocol.ts";
@@ -18,6 +19,10 @@ const managers: AcpProcessManager[] = [];
 afterEach(async () => {
 	await Promise.all(managers.splice(0).map((manager) => manager.disposeAll()));
 });
+
+function jsonRpcLine(payload: Record<string, unknown>): string {
+	return `${JSON.stringify(payload)}\n`;
+}
 
 function createProfile(overrides: Record<string, unknown> = {}): ResolvedAcpProfile {
 	const profiles = resolveAcpProfiles({
@@ -253,6 +258,124 @@ describe("createAcpModelPort", () => {
 		if (toolEnd?.type === "toolcall_end") {
 			expect(toolEnd.toolCall.name).toBe("synthetic_tool");
 			expect(toolEnd.toolCall.arguments).toEqual({ value: 42 });
+		}
+		const done = events.at(-1);
+		expect(done?.type).toBe("done");
+		if (done?.type === "done") {
+			expect(done.reason).toBe("toolUse");
+			expect(done.message.stopReason).toBe("toolUse");
+		}
+	});
+
+	test("exposes only scoped chat tools over mcp-bridge and captures tool calls", async () => {
+		let receivedMcpServers: readonly AcpMcpStdioServerConfig[] = [];
+		const manager = new AcpProcessManager({
+			connect: async () => {
+				const client: AcpManagedClient & {
+					prompt: (input: { sessionId: string }) => Promise<{ stopReason: string }>;
+				} = {
+					closed: false,
+					async initialize() {
+						return {};
+					},
+					async newSession(params) {
+						receivedMcpServers = (params.mcpServers ?? []) as readonly AcpMcpStdioServerConfig[];
+						return { sessionId: "mcp-session-1" };
+					},
+					async prompt() {
+						const mcp = receivedMcpServers[0];
+						if (mcp === undefined) throw new Error("expected mcpServer in session/new");
+						const env: Record<string, string> = { PATH: process.env.PATH ?? "" };
+						if (Array.isArray(mcp.env)) {
+							for (const entry of mcp.env) env[entry.name] = entry.value;
+						} else if (mcp.env !== undefined) {
+							for (const [key, value] of Object.entries(mcp.env)) env[key] = value;
+						}
+						const proc = Bun.spawn([mcp.command, ...(mcp.args ?? [])], {
+							env,
+							stdin: "pipe",
+							stdout: "pipe",
+						});
+						try {
+							proc.stdin.write(
+								jsonRpcLine({ id: 1, jsonrpc: "2.0", method: "tools/list", params: {} }),
+							);
+							proc.stdin.write(
+								jsonRpcLine({
+									id: 2,
+									jsonrpc: "2.0",
+									method: "tools/call",
+									params: { arguments: { query: "weather" }, name: "chat_lookup" },
+								}),
+							);
+							proc.stdin.write(
+								jsonRpcLine({
+									id: 3,
+									jsonrpc: "2.0",
+									method: "tools/call",
+									params: { arguments: { path: "/etc/passwd" }, name: "bash" },
+								}),
+							);
+							await proc.stdin.end();
+							const raw = await new Response(proc.stdout).text();
+							const responses = raw
+								.trim()
+								.split("\n")
+								.map((line) => JSON.parse(line) as Record<string, unknown>);
+							const listResult = (responses[0]?.result ?? {}) as {
+								tools?: readonly { name: string }[];
+							};
+							expect(listResult.tools?.map((t) => t.name)).toEqual(["chat_lookup"]);
+							expect(responses[1]?.error).toBeUndefined();
+							expect((responses[2]?.error as { code?: number } | undefined)?.code).toBe(-32602);
+						} finally {
+							proc.kill();
+							await proc.exited;
+						}
+						return { stopReason: "end_turn" };
+					},
+					async close() {},
+				};
+				return client;
+			},
+			hostEnv: {
+				HOME: process.env.HOME ?? "/tmp",
+				PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+			},
+		});
+		managers.push(manager);
+
+		const port = createAcpModelPort({
+			processManager: manager,
+			profile: createProfile({ toolBridgeMode: "mcp-bridge" }),
+		});
+		const model = requireModel(port, port.modelId);
+		const context: Context = {
+			messages: [{ content: "Look it up", role: "user", timestamp: Date.now() }],
+			tools: [
+				{
+					description: "Safe chat lookup tool.",
+					name: "chat_lookup",
+					parameters: {
+						properties: { query: { type: "string" } },
+						required: ["query"],
+						type: "object",
+					},
+				},
+			],
+		};
+
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of port.models.streamSimple(model, context)) {
+			events.push(event);
+		}
+
+		expect(receivedMcpServers).toHaveLength(1);
+		const toolEnd = events.find((event) => event.type === "toolcall_end");
+		expect(toolEnd).toBeDefined();
+		if (toolEnd?.type === "toolcall_end") {
+			expect(toolEnd.toolCall.name).toBe("chat_lookup");
+			expect(toolEnd.toolCall.arguments).toEqual({ query: "weather" });
 		}
 		const done = events.at(-1);
 		expect(done?.type).toBe("done");
