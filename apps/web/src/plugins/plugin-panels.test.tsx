@@ -3,12 +3,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { PluginI18n } from "@tsukaima/sdk/i18n";
 import { PluginPanelProvider, type PluginSummary } from "@tsukaima/sdk/ui";
 import mcpUi from "../../../../plugins/mcp/src/ui.tsx";
+import acpUi from "../../../../plugins/acp/src/ui.tsx";
 import { oneBotNapCatManifest } from "../../../../plugins/onebot-napcat/src/manifest.ts";
 import oneBotUi from "../../../../plugins/onebot-napcat/src/ui.tsx";
 import openAiUi from "../../../../plugins/openai-compatible/src/ui.tsx";
 import proactiveUi from "../../../../plugins/proactive-scheduler/src/ui.tsx";
 import skillsUi from "../../../../plugins/skills/src/ui.tsx";
 import stickerUi from "../../../../plugins/sticker-meme/src/ui.tsx";
+import { i18n as acpI18n } from "../../../../plugins/acp/src/i18n.ts";
 import { i18n as mcpI18n } from "../../../../plugins/mcp/src/i18n.ts";
 import { i18n as oneBotI18n } from "../../../../plugins/onebot-napcat/src/i18n.ts";
 import { i18n as openAiI18n } from "../../../../plugins/openai-compatible/src/i18n.ts";
@@ -246,5 +248,34 @@ describe("built-in plugin panels", () => {
 		expect(zh).toContain("启用表情包决策提示词注入");
 		expect(zh).toContain("保存提示词设置");
 		expect(zh).toContain("展开表情包即可浏览素材");
+	});
+
+	test("renders the ACP CLI providers panel in en and zh-cn", () => {
+		const acpPluginSummary: PluginSummary = {
+			...plugin,
+			id: "acp",
+			name: "acp",
+			permissions: [
+				"ui.panel",
+				"models.provide",
+				"tools",
+				"audit.write",
+				"net.outbound",
+				"fs.scoped",
+				"proc.spawn",
+			],
+		};
+		const html = renderPanel(acpUi, acpI18n.bind("en"), acpPluginSummary);
+		expect(html).toContain("CLI &amp; ACP runtime manager");
+		expect(html).toContain("ACP profiles");
+		expect(html).toContain("+ Antigravity");
+		expect(html).toContain("+ Codex");
+		expect(html).toContain("+ Claude Code");
+		expect(html).toContain("Custom packages");
+		const zh = renderPanel(acpUi, acpI18n.bind("zh-cn"), acpPluginSummary);
+		expect(zh).toContain("CLI 与 ACP 运行时管理");
+		expect(zh).toContain("ACP 配置");
+		expect(zh).toContain("+ 自定义");
+		expect(zh).toContain("自定义包");
 	});
 });
