@@ -21,6 +21,7 @@ import {
 import type { ModelPort } from "@tsukaima/core";
 import type { PluginLogger, PluginModelPort } from "@tsukaima/sdk";
 import { createAcpModel, type AcpModelConfig, type ResolvedAcpProfile } from "./config.ts";
+import { startAcpChatToolBridge, type AcpChatToolBridge } from "./mcp-bridge.ts";
 import type { AcpManagedClient, AcpProcessManager, AcpSessionContext } from "./process-manager.ts";
 import type {
 	AcpClientHandlers,
@@ -267,19 +268,14 @@ async function runAcpStream(input: RunAcpStreamInput): Promise<void> {
 
 	const tools = getCurrentTools(context.messages);
 	const promptJson = profile.toolBridgeMode === "prompt-json" && tools.length > 0;
+	const useMcpBridge = profile.toolBridgeMode === "mcp-bridge" && tools.length > 0;
 	let sawToolCall = false;
 	let toolCallId = 0;
 	let messageBuffer = "";
 	let toolCallBuffer = "";
 	let insideToolCall = false;
 
-	const emitToolCall = (raw: string): void => {
-		const parsed = parsePromptJsonToolCall(raw, `acp-tool-${toolCallId}`);
-		if (parsed === undefined) {
-			emitText(`${TOOL_CALL_OPEN}${raw}${TOOL_CALL_CLOSE}`);
-			return;
-		}
-		toolCallId += 1;
+	const emitToolCallBlock = (parsed: ToolCall): void => {
 		closeThinking();
 		closeText();
 		output.push({ contentIndex: content.length, partial: partial(), type: "toolcall_start" });
@@ -298,6 +294,16 @@ async function runAcpStream(input: RunAcpStreamInput): Promise<void> {
 			type: "toolcall_end",
 		});
 		sawToolCall = true;
+	};
+
+	const emitToolCall = (raw: string): void => {
+		const parsed = parsePromptJsonToolCall(raw, `acp-tool-${toolCallId}`);
+		if (parsed === undefined) {
+			emitText(`${TOOL_CALL_OPEN}${raw}${TOOL_CALL_CLOSE}`);
+			return;
+		}
+		toolCallId += 1;
+		emitToolCallBlock(parsed);
 	};
 
 	const flushMessageBuffer = (final: boolean): void => {
@@ -368,10 +374,15 @@ async function runAcpStream(input: RunAcpStreamInput): Promise<void> {
 		toolBridgeMode: profile.toolBridgeMode,
 	});
 
+	let bridge: AcpChatToolBridge | undefined;
 	try {
 		throwIfAborted(signal);
+		if (useMcpBridge) {
+			bridge = await startAcpChatToolBridge(tools);
+		}
 		const sessionOptions = {
 			...(profile.cwd === undefined ? {} : { cwd: profile.cwd }),
+			...(bridge === undefined ? {} : { mcpServers: [bridge.mcpServer] }),
 			...(fixedModelIds.has(model.id) ? { modelId: model.id } : {}),
 			...(signal === undefined ? {} : { signal }),
 			...(toolsRootDir === undefined ? {} : { toolsRootDir }),
@@ -404,6 +415,11 @@ async function runAcpStream(input: RunAcpStreamInput): Promise<void> {
 					});
 					throwIfAborted(signal);
 					if (promptJson) flushMessageBuffer(true);
+					if (bridge !== undefined) {
+						for (const captured of bridge.getToolCalls()) {
+							emitToolCallBlock(captured);
+						}
+					}
 					if (result.stopReason === "cancelled" || result.stopReason === "canceled") {
 						throw abortError();
 					}
@@ -453,6 +469,8 @@ async function runAcpStream(input: RunAcpStreamInput): Promise<void> {
 		}
 		output.push({ error: message, reason: aborted ? "aborted" : "error", type: "error" });
 		output.end(message);
+	} finally {
+		await bridge?.close();
 	}
 }
 

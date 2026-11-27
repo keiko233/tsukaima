@@ -58,6 +58,7 @@ export {
 export * from "./artifacts.ts";
 export * from "./installer.ts";
 export * from "./probe.ts";
+export * from "./mcp-bridge.ts";
 export * from "./model-port.ts";
 export * from "./provider.ts";
 
