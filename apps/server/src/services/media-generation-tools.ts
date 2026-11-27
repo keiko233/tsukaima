@@ -5,14 +5,20 @@ import type {
 	PluginImageGenerateRequest,
 	PluginImageGenerateResult,
 	PluginImageReference,
+	PluginVideoGenerateRequest,
 } from "@tsukaima/sdk";
 import type { Logger } from "../logging.ts";
 import { record } from "../records.ts";
 import type { MediaService, StoredMedia } from "./media-service.ts";
 import type { OutboundService } from "./outbound.ts";
+import type { VideoGenerationService } from "./video-generation-service.ts";
 
 export const MEDIA_GENERATION_TOOLS_EXTENSION_NAME = "tsukaima-media-generation-tools";
-export const MEDIA_GENERATION_TOOL_NAMES = ["generate_image"] as const;
+export const MEDIA_GENERATION_TOOL_NAMES = [
+	"generate_image",
+	"generate_video",
+	"video_job_status",
+] as const;
 
 export interface MediaGenerationToolsOptions {
 	readonly audit?: (entry: AuditEntry) => Promise<void> | void;
@@ -29,6 +35,7 @@ export interface MediaGenerationToolsOptions {
 		readonly providerId: string;
 	}) => void;
 	readonly routingPolicies?: () => readonly ModelPolicy[];
+	readonly videoGeneration?: VideoGenerationService | undefined;
 }
 
 function textOutput(value: unknown) {
@@ -81,6 +88,17 @@ function optionalStringArray(input: Record<string, unknown>, key: string): strin
 	return items.length > 0 ? items : undefined;
 }
 
+function extractSignal(context: unknown): AbortSignal | undefined {
+	if (context === null || typeof context !== "object") return undefined;
+	if ("abortSignal" in context && context.abortSignal instanceof AbortSignal) {
+		return context.abortSignal;
+	}
+	if ("signal" in context && context.signal instanceof AbortSignal) {
+		return context.signal;
+	}
+	return undefined;
+}
+
 async function resolveReferenceImages(
 	media: MediaService,
 	mediaIds: readonly string[] | undefined,
@@ -131,9 +149,9 @@ async function generateWithPolicy(
 }
 
 /**
- * Built-in media generation tools (`generate_image`). Generated assets are persisted into the
- * content-addressed media store (with SSRF guard for upstream URLs) and optionally sent directly
- * to the active conversation via `OutboundService`.
+ * Built-in media generation tools (`generate_image`, `generate_video`, `video_job_status`).
+ * Image generation stores assets and delivers them synchronously; video generation submits an
+ * async durable task polled by `VideoGenerationService` without holding the conversation lock.
  */
 export function createMediaGenerationTools(options: MediaGenerationToolsOptions): DurableExtension {
 	const log = options.logger.child("tsukaima::server::media-gen");
@@ -203,14 +221,7 @@ export function createMediaGenerationTools(options: MediaGenerationToolsOptions)
 				const providerId = optionalString(args, "providerId");
 				const referenceMediaIds = optionalStringArray(args, "referenceMediaIds");
 				const sendToChat = args.sendToChat !== false;
-				const signal =
-					context !== null && typeof context === "object"
-						? "abortSignal" in context && context.abortSignal instanceof AbortSignal
-							? context.abortSignal
-							: "signal" in context && context.signal instanceof AbortSignal
-								? context.signal
-								: undefined
-						: undefined;
+				const signal = extractSignal(context);
 
 				const referenceImages = await resolveReferenceImages(options.media, referenceMediaIds);
 				const capability = referenceImages.length > 0 ? "image.edit" : "image.generate";
@@ -343,8 +354,153 @@ export function createMediaGenerationTools(options: MediaGenerationToolsOptions)
 		},
 	};
 
+	const generateVideoTool: DurableToolRegistration = {
+		deferred: true,
+		description:
+			"Submit an asynchronous video generation job from a prompt (and optional reference image media IDs). Returns immediately with a taskId; the completed video is delivered to the chat automatically.",
+		name: "generate_video",
+		parameters: {
+			additionalProperties: false,
+			properties: {
+				aspectRatio: {
+					description: "Optional aspect ratio (e.g. '16:9', '9:16', '1:1').",
+					type: "string",
+				},
+				durationSeconds: {
+					description: "Optional target duration in seconds.",
+					minimum: 1,
+					type: "integer",
+				},
+				modelId: {
+					description: "Optional specific video model id.",
+					type: "string",
+				},
+				negativePrompt: {
+					description: "Optional negative prompt describing what to avoid.",
+					type: "string",
+				},
+				prompt: {
+					description: "Text description of the video to generate.",
+					type: "string",
+				},
+				providerId: {
+					description: "Optional specific model provider id.",
+					type: "string",
+				},
+				referenceMediaIds: {
+					description: "Optional stored image media IDs for image-to-video generation.",
+					items: { type: "string" },
+					type: "array",
+				},
+				resolution: {
+					description: "Optional output resolution (e.g. '720p', '1080p', '1280x720').",
+					type: "string",
+				},
+				sendToChat: {
+					description: "When true (default), deliver the completed video to this chat.",
+					type: "boolean",
+				},
+			},
+			required: ["prompt"],
+			type: "object",
+		},
+		surface: "both",
+		async execute(rawArgs, api, context) {
+			const conversationId = String(api.conversationId);
+			try {
+				const videoGeneration = options.videoGeneration;
+				if (videoGeneration === undefined) {
+					throw new Error("Video generation service is unavailable");
+				}
+				const args = record(rawArgs);
+				const prompt = requiredString(args, "prompt");
+				const negativePrompt = optionalString(args, "negativePrompt");
+				const aspectRatio = optionalString(args, "aspectRatio");
+				const durationSeconds = optionalInt(args, "durationSeconds");
+				const resolution = optionalString(args, "resolution");
+				const modelId = optionalString(args, "modelId");
+				const providerId = optionalString(args, "providerId");
+				const referenceMediaIds = optionalStringArray(args, "referenceMediaIds");
+				const sendToChat = args.sendToChat !== false;
+				const signal = extractSignal(context);
+
+				const referenceImages = await resolveReferenceImages(options.media, referenceMediaIds);
+				const request: PluginVideoGenerateRequest = {
+					prompt,
+					...(aspectRatio === undefined ? {} : { aspectRatio }),
+					...(durationSeconds === undefined ? {} : { durationSeconds }),
+					...(modelId === undefined ? {} : { modelId }),
+					...(negativePrompt === undefined ? {} : { negativePrompt }),
+					...(providerId === undefined ? {} : { providerId }),
+					...(referenceImages.length === 0 ? {} : { referenceImages }),
+					...(resolution === undefined ? {} : { resolution }),
+					...(signal === undefined ? {} : { signal }),
+				};
+				const submission = await videoGeneration.submit({
+					conversationId,
+					request,
+					sendToChat,
+				});
+				return textOutput(submission);
+			} catch (error) {
+				await options.audit?.({
+					action: "media.generate_video.failed",
+					actorId: conversationId,
+					actorKind: "agent",
+					payload: { error: error instanceof Error ? error.message : String(error) },
+					reason: error instanceof Error ? error.message : String(error),
+					result: "failed",
+					targetId: conversationId,
+					targetKind: "conversation",
+				});
+				return errorOutput(error);
+			}
+		},
+	};
+
+	const videoJobStatusTool: DurableToolRegistration = {
+		deferred: true,
+		description: "Check the durable status and outcome of a submitted video generation task.",
+		name: "video_job_status",
+		parameters: {
+			additionalProperties: false,
+			properties: {
+				taskId: {
+					description: "The taskId returned by generate_video.",
+					type: "string",
+				},
+			},
+			required: ["taskId"],
+			type: "object",
+		},
+		surface: "both",
+		async execute(rawArgs) {
+			try {
+				const videoGeneration = options.videoGeneration;
+				if (videoGeneration === undefined) {
+					throw new Error("Video generation service is unavailable");
+				}
+				const args = record(rawArgs);
+				const taskId = requiredString(args, "taskId");
+				const task = await videoGeneration.getStatus(taskId);
+				if (task === undefined) {
+					throw new Error(`Video task ${taskId} was not found`);
+				}
+				return textOutput({
+					attempts: task.attempts,
+					nextRunAtMs: task.nextRunAtMs,
+					outcome: task.outcome ?? null,
+					status: task.status,
+					taskId: task.id,
+				});
+			} catch (error) {
+				return errorOutput(error);
+			}
+		},
+	};
+
 	return {
 		name: MEDIA_GENERATION_TOOLS_EXTENSION_NAME,
-		tools: [generateImageTool],
+		tools: [generateImageTool, generateVideoTool, videoJobStatusTool],
 	};
 }

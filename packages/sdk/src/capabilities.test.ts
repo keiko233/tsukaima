@@ -11,6 +11,8 @@ import type {
 	PluginImageGenerateRequest,
 	PluginModelCompleteRequest,
 	PluginModelDescriptor,
+	PluginVideoGenerateRequest,
+	PluginVideoJobHandle,
 } from "./types.ts";
 
 describe("channel capabilities", () => {
@@ -513,6 +515,347 @@ describe("image generation port", () => {
 		controller.abort();
 		await expect(
 			models.generateImage({ prompt: "synthetic prompt", signal: controller.signal }),
+		).rejects.toThrow("aborted");
+	});
+});
+
+const jobHandle = (providerId: string, modelId: string, jobId: string): PluginVideoJobHandle => ({
+	jobId,
+	modelId,
+	providerId,
+});
+
+describe("video generation port", () => {
+	test("submits through the first configured video provider and resolves model + provider", async () => {
+		const models = new LocalModelRegistry();
+		const calls: PluginVideoGenerateRequest[] = [];
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "chat",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.basicChat], id: "chat-1" }],
+		});
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "video",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.videoGenerate], id: "video-1" }],
+			submitVideoJob: (request) => {
+				calls.push(request);
+				return {
+					jobId: "job-1",
+					modelId: request.modelId ?? "video-1",
+					providerId: "video",
+				};
+			},
+		});
+
+		const submitted = await models.submitVideoJob({ prompt: "synthetic prompt" });
+
+		expect(submitted).toEqual({ jobId: "job-1", modelId: "video-1", providerId: "video" });
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toMatchObject({
+			modelId: "video-1",
+			prompt: "synthetic prompt",
+			providerId: "video",
+		});
+	});
+
+	test("submits through an object-shaped videoGenerate port", async () => {
+		const models = new LocalModelRegistry();
+		const calls: PluginVideoGenerateRequest[] = [];
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "video",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.videoGenerate], id: "video-1" }],
+			videoGenerate: {
+				pollVideoJob: () => ({ status: "running" }),
+				submitVideoJob: (request) => {
+					calls.push(request);
+					return {
+						jobId: "job-port",
+						modelId: request.modelId ?? "video-1",
+						providerId: "video",
+					};
+				},
+			},
+		});
+
+		const submitted = await models.submitVideoJob({ prompt: "synthetic prompt" });
+
+		expect(submitted).toEqual({ jobId: "job-port", modelId: "video-1", providerId: "video" });
+		expect(calls[0]).toMatchObject({ providerId: "video" });
+	});
+
+	test("honors explicit providerId and modelId targeting", async () => {
+		const models = new LocalModelRegistry();
+		const calls: PluginVideoGenerateRequest[] = [];
+		const makeProvider = (id: string, modelId: string) => ({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id,
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.videoGenerate], id: modelId }],
+			submitVideoJob: (request: PluginVideoGenerateRequest) => {
+				calls.push(request);
+				return { jobId: `${id}-job`, modelId: request.modelId ?? modelId, providerId: id };
+			},
+		});
+		models.registerProvider(makeProvider("alpha", "alpha-1"));
+		models.registerProvider(makeProvider("beta", "beta-2"));
+
+		const targeted = await models.submitVideoJob({
+			modelId: "beta-2",
+			prompt: "synthetic prompt",
+			providerId: "beta",
+		});
+		expect(targeted).toMatchObject({ modelId: "beta-2", providerId: "beta" });
+
+		const byModel = await models.submitVideoJob({ modelId: "alpha-1", prompt: "synthetic prompt" });
+		expect(byModel).toMatchObject({ modelId: "alpha-1", providerId: "alpha" });
+
+		await expect(
+			models.submitVideoJob({ modelId: "missing-9", prompt: "synthetic prompt" }),
+		).rejects.toThrow("not available");
+	});
+
+	test("prefers video.image2video when referenceImages are supplied", async () => {
+		const models = new LocalModelRegistry();
+		const generateCalls: PluginVideoGenerateRequest[] = [];
+		const imageToVideoCalls: PluginVideoGenerateRequest[] = [];
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "gen",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.videoGenerate], id: "gen-1" }],
+			submitVideoJob: (request) => {
+				generateCalls.push(request);
+				return { jobId: "gen-job", modelId: "gen-1", providerId: "gen" };
+			},
+		});
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "i2v",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.videoImageToVideo], id: "i2v-1" }],
+			submitVideoJob: (request) => {
+				imageToVideoCalls.push(request);
+				return { jobId: "i2v-job", modelId: "i2v-1", providerId: "i2v" };
+			},
+		});
+
+		const imageToVideo = await models.submitVideoJob({
+			prompt: "synthetic animate",
+			referenceImages: [{ bytes: new Uint8Array([1, 2, 3]), mimeType: "image/png" }],
+		});
+		expect(imageToVideo).toMatchObject({ modelId: "i2v-1", providerId: "i2v" });
+		expect(imageToVideoCalls).toHaveLength(1);
+		expect(generateCalls).toHaveLength(0);
+
+		const textToVideo = await models.submitVideoJob({ prompt: "synthetic prompt" });
+		expect(textToVideo).toMatchObject({ modelId: "gen-1", providerId: "gen" });
+		expect(generateCalls).toHaveLength(1);
+		expect(imageToVideoCalls).toHaveLength(1);
+	});
+
+	test("polls queued, running, succeeded, and failed job states", async () => {
+		const models = new LocalModelRegistry();
+		const polled: PluginVideoJobHandle[] = [];
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "video",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.videoGenerate], id: "video-1" }],
+			pollVideoJob: (handle) => {
+				polled.push(handle);
+				switch (handle.jobId) {
+					case "queued":
+						return { pollAfterMs: 500, progress: 5, status: "queued" };
+					case "running":
+						return { pollAfterMs: 250, progress: 60, status: "running" };
+					case "succeeded":
+						return {
+							status: "succeeded",
+							video: { durationMs: 4000, mimeType: "video/mp4", url: "https://cdn.example/v.mp4" },
+						};
+					default:
+						return { error: "synthetic failure", retryable: true, status: "failed" };
+				}
+			},
+			submitVideoJob: () => ({ jobId: "queued", modelId: "video-1", providerId: "video" }),
+		});
+
+		expect(await models.pollVideoJob(jobHandle("video", "video-1", "queued"))).toEqual({
+			pollAfterMs: 500,
+			progress: 5,
+			status: "queued",
+		});
+		expect(await models.pollVideoJob(jobHandle("video", "video-1", "running"))).toEqual({
+			pollAfterMs: 250,
+			progress: 60,
+			status: "running",
+		});
+		expect(await models.pollVideoJob(jobHandle("video", "video-1", "succeeded"))).toEqual({
+			status: "succeeded",
+			video: { durationMs: 4000, mimeType: "video/mp4", url: "https://cdn.example/v.mp4" },
+		});
+		expect(await models.pollVideoJob(jobHandle("video", "video-1", "failed"))).toEqual({
+			error: "synthetic failure",
+			retryable: true,
+			status: "failed",
+		});
+		expect(polled.map((handle) => handle.jobId)).toEqual([
+			"queued",
+			"running",
+			"succeeded",
+			"failed",
+		]);
+	});
+
+	test("polls through an object-shaped videoGenerate port", async () => {
+		const models = new LocalModelRegistry();
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "video",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.videoGenerate], id: "video-1" }],
+			videoGenerate: {
+				pollVideoJob: () => ({ status: "running" }),
+				submitVideoJob: () => ({ jobId: "job-port", modelId: "video-1", providerId: "video" }),
+			},
+		});
+
+		expect(await models.pollVideoJob(jobHandle("video", "video-1", "job-port"))).toEqual({
+			status: "running",
+		});
+	});
+
+	test("cancels through provider.cancelVideoJob, the port, or a no-op", async () => {
+		const models = new LocalModelRegistry();
+		const cancelled: PluginVideoJobHandle[] = [];
+		const portCancelled: PluginVideoJobHandle[] = [];
+		models.registerProvider({
+			cancelVideoJob: (handle) => {
+				cancelled.push(handle);
+			},
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "direct",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.videoGenerate], id: "direct-1" }],
+			pollVideoJob: () => ({ status: "running" }),
+			submitVideoJob: () => ({ jobId: "direct-job", modelId: "direct-1", providerId: "direct" }),
+		});
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "port",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.videoGenerate], id: "port-1" }],
+			videoGenerate: {
+				cancelVideoJob: (handle) => {
+					portCancelled.push(handle);
+				},
+				pollVideoJob: () => ({ status: "running" }),
+				submitVideoJob: () => ({ jobId: "port-job", modelId: "port-1", providerId: "port" }),
+			},
+		});
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "plain",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.videoGenerate], id: "plain-1" }],
+			pollVideoJob: () => ({ status: "running" }),
+			submitVideoJob: () => ({ jobId: "plain-job", modelId: "plain-1", providerId: "plain" }),
+		});
+
+		await models.cancelVideoJob(jobHandle("direct", "direct-1", "direct-job"));
+		await models.cancelVideoJob(jobHandle("port", "port-1", "port-job"));
+		await expect(
+			models.cancelVideoJob(jobHandle("plain", "plain-1", "plain-job")),
+		).resolves.toBeUndefined();
+		expect(cancelled.map((handle) => handle.jobId)).toEqual(["direct-job"]);
+		expect(portCancelled.map((handle) => handle.jobId)).toEqual(["port-job"]);
+		await expect(models.cancelVideoJob(jobHandle("unknown", "video-1", "job-1"))).rejects.toThrow(
+			"not registered",
+		);
+	});
+
+	test("rejects unconfigured, unregistered, non-video, and disabled-model targets", async () => {
+		const models = new LocalModelRegistry();
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "off",
+			isConfigured: () => false,
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.videoGenerate], id: "off-1" }],
+			pollVideoJob: () => ({ status: "running" }),
+			submitVideoJob: () => ({ jobId: "off-job", modelId: "off-1", providerId: "off" }),
+		});
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "chat",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.basicChat], id: "chat-1" }],
+		});
+
+		await expect(models.submitVideoJob({ prompt: "synthetic prompt" })).rejects.toThrow(
+			"No configured model provider",
+		);
+		await expect(
+			models.submitVideoJob({ prompt: "synthetic prompt", providerId: "unknown" }),
+		).rejects.toThrow("not registered");
+		await expect(
+			models.submitVideoJob({ prompt: "synthetic prompt", providerId: "off" }),
+		).rejects.toThrow("not configured");
+		await expect(
+			models.submitVideoJob({ prompt: "synthetic prompt", providerId: "chat" }),
+		).rejects.toThrow("does not support video generation");
+
+		models.registerProvider({
+			createPort: () => {
+				throw new Error("chat port not used");
+			},
+			id: "video",
+			listModels: () => [{ capabilities: [MODEL_CAPABILITIES.videoGenerate], id: "video-1" }],
+			pollVideoJob: () => ({ status: "running" }),
+			submitVideoJob: () => ({ jobId: "job-1", modelId: "video-1", providerId: "video" }),
+		});
+		await expect(
+			models.submitVideoJob({
+				modelId: "video-2",
+				prompt: "synthetic prompt",
+				providerId: "video",
+			}),
+		).rejects.toThrow("not enabled");
+		await expect(models.pollVideoJob(jobHandle("unknown", "video-1", "job-1"))).rejects.toThrow(
+			"not registered",
+		);
+		await expect(models.pollVideoJob(jobHandle("off", "off-1", "job-1"))).rejects.toThrow(
+			"not configured",
+		);
+	});
+
+	test("rejects already-aborted submission and poll requests", async () => {
+		const models = new LocalModelRegistry();
+		const controller = new AbortController();
+		controller.abort();
+		await expect(
+			models.submitVideoJob({ prompt: "synthetic prompt", signal: controller.signal }),
+		).rejects.toThrow("aborted");
+		await expect(
+			models.pollVideoJob(jobHandle("video", "video-1", "job-1"), controller.signal),
 		).rejects.toThrow("aborted");
 	});
 });

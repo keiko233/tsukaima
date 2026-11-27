@@ -8,6 +8,7 @@ import {
 import {
 	modelCapabilities,
 	modelInputModalities,
+	modelOutputModalities,
 	openAiCompatibleProviderIdForProfile,
 	resolveOpenAiCompatibleConfig,
 	resolveOpenAiCompatibleProfiles,
@@ -1000,6 +1001,265 @@ describe("openai-compatible plugin", () => {
 		} finally {
 			fetchSpy.mockRestore();
 		}
+	});
+
+	test("submits and polls a video job until it completes with a URL", async () => {
+		const calls: { readonly init?: RequestInit; readonly url: string }[] = [];
+		let pollCount = 0;
+		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+			asFetch(async (input, init) => {
+				calls.push({ url: String(input), ...(init === undefined ? {} : { init }) });
+				if (init?.method === "POST") {
+					return Response.json({ id: "video-job-1", status: "queued" });
+				}
+				pollCount += 1;
+				if (pollCount === 1) return Response.json({ progress: 25, status: "queued" });
+				if (pollCount === 2) return Response.json({ progress: 80, status: "in_progress" });
+				return Response.json({
+					mime_type: "video/mp4",
+					status: "completed",
+					url: "https://cdn.example/synthetic.mp4",
+				});
+			}),
+		);
+		try {
+			const context = createPluginContext({
+				grantedPermissions: ["model.call", "settings"],
+				manifest: openAiCompatibleManifest,
+				pluginId: "openai-compatible",
+				settings: {
+					get: async () => ({
+						apiKey: "test-key",
+						baseUrl: "https://models.example/v1",
+						models: [
+							{
+								enabled: true,
+								id: "video-1",
+								supportsSidechat: false,
+								supportsTools: false,
+								supportsVideoGeneration: true,
+							},
+						],
+					}),
+					onChange: () => () => {},
+				},
+			});
+			await openAiCompatiblePlugin.prepare?.(context);
+			const provider = context.models.getProvider(
+				OPENAI_COMPATIBLE_PROVIDER_ID,
+			) as PluginModelProvider;
+			if (provider.submitVideoJob === undefined || provider.pollVideoJob === undefined) {
+				throw new Error("video port missing");
+			}
+			const controller = new AbortController();
+			const handle = await provider.submitVideoJob({
+				aspectRatio: "16:9",
+				durationSeconds: 4,
+				modelId: "video-1",
+				prompt: "synthetic prompt",
+				resolution: "1280x720",
+				seed: 7,
+				signal: controller.signal,
+			});
+
+			expect(handle).toEqual({
+				jobId: "video-job-1",
+				modelId: "video-1",
+				pollAfterMs: 3_000,
+				providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
+			});
+			expect(calls[0]?.url).toBe("https://models.example/v1/videos");
+			expect(calls[0]?.init?.method).toBe("POST");
+			expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+				aspect_ratio: "16:9",
+				model: "video-1",
+				prompt: "synthetic prompt",
+				resolution: "1280x720",
+				seconds: 4,
+				seed: 7,
+			});
+			expect(calls[0]?.init?.signal).toBe(controller.signal);
+			expect(new Headers(calls[0]?.init?.headers).get("authorization")).toBe("Bearer test-key");
+
+			expect(await provider.pollVideoJob(handle, controller.signal)).toEqual({
+				pollAfterMs: 3_000,
+				progress: 25,
+				status: "queued",
+			});
+			expect(await provider.pollVideoJob(handle, controller.signal)).toEqual({
+				pollAfterMs: 3_000,
+				progress: 80,
+				status: "running",
+			});
+			expect(await provider.pollVideoJob(handle, controller.signal)).toEqual({
+				status: "succeeded",
+				video: { mimeType: "video/mp4", url: "https://cdn.example/synthetic.mp4" },
+			});
+			expect(calls[1]?.url).toBe("https://models.example/v1/videos/video-job-1");
+			expect(calls[1]?.init?.method).toBe("GET");
+			expect(calls[1]?.init?.signal).toBe(controller.signal);
+			expect(new Headers(calls[1]?.init?.headers).get("authorization")).toBe("Bearer test-key");
+		} finally {
+			fetchSpy.mockRestore();
+		}
+	});
+
+	test("maps a completed video job with inline base64 bytes", async () => {
+		const encoded = Buffer.from([7, 8, 9]).toString("base64");
+		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+			asFetch(async (_input, init) =>
+				init?.method === "POST"
+					? Response.json({ id: "video-job-b64" })
+					: Response.json({
+							b64_json: encoded,
+							mime_type: "video/webm",
+							status: "succeeded",
+						}),
+			),
+		);
+		try {
+			const context = createPluginContext({
+				grantedPermissions: ["model.call", "settings"],
+				manifest: openAiCompatibleManifest,
+				pluginId: "openai-compatible",
+				settings: {
+					get: async () => ({
+						apiKey: "test-key",
+						baseUrl: "https://models.example/v1",
+						models: [{ enabled: true, id: "video-1", supportsVideoGeneration: true }],
+					}),
+					onChange: () => () => {},
+				},
+			});
+			await openAiCompatiblePlugin.prepare?.(context);
+			const provider = context.models.getProvider(
+				OPENAI_COMPATIBLE_PROVIDER_ID,
+			) as PluginModelProvider;
+			if (provider.submitVideoJob === undefined || provider.pollVideoJob === undefined) {
+				throw new Error("video port missing");
+			}
+			const handle = await provider.submitVideoJob({ prompt: "synthetic prompt" });
+			expect(handle.modelId).toBe("video-1");
+			expect(await provider.pollVideoJob(handle)).toEqual({
+				status: "succeeded",
+				video: { bytes: new Uint8Array([7, 8, 9]), mimeType: "video/webm" },
+			});
+		} finally {
+			fetchSpy.mockRestore();
+		}
+	});
+
+	test("maps failed and cancelled video jobs", async () => {
+		let pollCount = 0;
+		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+			asFetch(async (_input, init) => {
+				if (init?.method === "POST") return Response.json({ id: "video-job-failed" });
+				pollCount += 1;
+				return pollCount === 1
+					? Response.json({ error: { message: "synthetic failure" }, status: "failed" })
+					: Response.json({ status: "cancelled" });
+			}),
+		);
+		try {
+			const context = createPluginContext({
+				grantedPermissions: ["model.call", "settings"],
+				manifest: openAiCompatibleManifest,
+				pluginId: "openai-compatible",
+				settings: {
+					get: async () => ({
+						apiKey: "test-key",
+						baseUrl: "https://models.example/v1",
+						models: [{ enabled: true, id: "video-1", supportsVideoGeneration: true }],
+					}),
+					onChange: () => () => {},
+				},
+			});
+			await openAiCompatiblePlugin.prepare?.(context);
+			const provider = context.models.getProvider(
+				OPENAI_COMPATIBLE_PROVIDER_ID,
+			) as PluginModelProvider;
+			if (provider.submitVideoJob === undefined || provider.pollVideoJob === undefined) {
+				throw new Error("video port missing");
+			}
+			const handle = await provider.submitVideoJob({ prompt: "synthetic prompt" });
+			expect(await provider.pollVideoJob(handle)).toEqual({
+				error: "synthetic failure",
+				status: "failed",
+			});
+			expect(await provider.pollVideoJob(handle)).toEqual({
+				error: "Video generation failed",
+				status: "failed",
+			});
+		} finally {
+			fetchSpy.mockRestore();
+		}
+	});
+
+	test("rejects video requests when no video model is enabled", async () => {
+		const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+			asFetch(async () => Response.json({ id: "unused" })),
+		);
+		try {
+			const context = createPluginContext({
+				grantedPermissions: ["model.call", "settings"],
+				manifest: openAiCompatibleManifest,
+				pluginId: "openai-compatible",
+				settings: {
+					get: async () => ({
+						apiKey: "test-key",
+						baseUrl: "https://models.example/v1",
+						models: [{ enabled: true, id: "chat-1" }],
+					}),
+					onChange: () => () => {},
+				},
+			});
+			await openAiCompatiblePlugin.prepare?.(context);
+			const provider = context.models.getProvider(
+				OPENAI_COMPATIBLE_PROVIDER_ID,
+			) as PluginModelProvider;
+			if (provider.submitVideoJob === undefined) throw new Error("video port missing");
+			await expect(provider.submitVideoJob({ prompt: "synthetic prompt" })).rejects.toThrow(
+				"No enabled video-generation model is configured",
+			);
+			expect(fetchSpy).not.toHaveBeenCalled();
+		} finally {
+			fetchSpy.mockRestore();
+		}
+	});
+
+	test("maps video flags to capabilities and output modalities", () => {
+		const config = resolveOpenAiCompatibleConfig({
+			apiKey: "test-key",
+			baseUrl: "https://models.example/v1",
+			models: [
+				{
+					enabled: true,
+					id: "video-1",
+					supportsImage: true,
+					supportsReasoning: false,
+					supportsSidechat: false,
+					supportsTools: false,
+					supportsVideoGeneration: true,
+				},
+				{
+					capabilities: ["video.image2video"],
+					enabled: true,
+					id: "video-2",
+					supportsReasoning: false,
+					supportsSidechat: false,
+					supportsTools: false,
+				},
+			],
+		});
+		const first = config?.models[0];
+		const second = config?.models[1];
+		if (first === undefined || second === undefined) throw new Error("model missing");
+		expect(modelCapabilities(first)).toEqual(
+			expect.arrayContaining(["video.generate", "video.image2video"]),
+		);
+		expect(modelOutputModalities(first)).toEqual(["video"]);
+		expect(modelCapabilities(second)).toContain("video.image2video");
+		expect(modelOutputModalities(second)).toEqual(["video"]);
 	});
 
 	test("maps model flags to the shared plugin catalog vocabulary", () => {

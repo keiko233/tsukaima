@@ -157,6 +157,7 @@ import {
 	createMediaGenerationTools,
 	MEDIA_GENERATION_TOOL_NAMES,
 } from "./services/media-generation-tools.ts";
+import { VideoGenerationService } from "./services/video-generation-service.ts";
 import { HookBus } from "./services/hook-bus.ts";
 import { createMentionIdentityStore } from "./services/mention-identity-store.ts";
 import { PluginConversationService } from "./services/plugin-conversation-service.ts";
@@ -321,6 +322,7 @@ export class TsukaimaLifecycle {
 	private chatSnapshotService: ChatSnapshotService | undefined;
 	private readonly plugins: readonly TsukaimaPlugin[];
 	readonly media: MediaService;
+	readonly videoGeneration: VideoGenerationService;
 	private readonly inboundMedia: InboundMediaResolver;
 	readonly promptHooks: PromptHookService;
 	readonly prompts: PromptService;
@@ -1385,6 +1387,20 @@ export class TsukaimaLifecycle {
 			settings: this.pluginSettings,
 			statuses: this.pluginStatuses,
 			storage: this.pluginStorage,
+			tasks: this.pluginTasks,
+		});
+		this.videoGeneration = new VideoGenerationService({
+			audit: (entry) => this.writeAudit(entry),
+			cancelVideoJob: (handle) => this.pluginHost.cancelVideoJobModel(handle),
+			logger: this.logger,
+			media: this.media,
+			outbound: this.outbound,
+			pollVideoJob: (handle, signal) => this.pluginHost.pollVideoJobModel(handle, signal),
+			recordUsage: (usage) => {
+				this.modelUsageLedger.recordUsage({ ...usage, kind: "video" });
+			},
+			routingPolicies: () => this.routingPolicies,
+			submitVideoJob: (request) => this.pluginHost.submitVideoJobModel(request),
 			tasks: this.pluginTasks,
 		});
 	}
@@ -2457,6 +2473,7 @@ export class TsukaimaLifecycle {
 					this.modelUsageLedger.recordUsage({ ...usage, kind: "image" });
 				},
 				routingPolicies: () => this.routingPolicies,
+				videoGeneration: this.videoGeneration,
 			}),
 		];
 		if (conversationHost !== undefined && dynamicExtensions.length > 0) {
@@ -2466,6 +2483,7 @@ export class TsukaimaLifecycle {
 		}
 		this.transition("plugins");
 		await this.pluginHost.start();
+		this.videoGeneration.register();
 		this.pluginTasks.start();
 		await this.memory.start();
 		if (conversationHost !== undefined && dynamicExtensions.length > 0) {
@@ -3259,6 +3277,7 @@ export class TsukaimaLifecycle {
 		}
 		this.stopListeners.clear();
 		this.pluginTasks.stop();
+		this.videoGeneration.dispose();
 		this.schedules.stop();
 		this.replyDispatcher.stopPendingReconciliation();
 		await this.workspaceNative.dispose();
