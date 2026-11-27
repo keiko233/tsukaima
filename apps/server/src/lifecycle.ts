@@ -153,6 +153,10 @@ import {
 	authorizeWorkspaceToolCall,
 } from "./services/workspace-authorization.ts";
 import { MediaService } from "./services/media-service.ts";
+import {
+	createMediaGenerationTools,
+	MEDIA_GENERATION_TOOL_NAMES,
+} from "./services/media-generation-tools.ts";
 import { HookBus } from "./services/hook-bus.ts";
 import { createMentionIdentityStore } from "./services/mention-identity-store.ts";
 import { PluginConversationService } from "./services/plugin-conversation-service.ts";
@@ -238,6 +242,7 @@ function reservedModelToolNames(): readonly string[] {
 		...ADMIN_RUNTIME_TOOL_NAMES,
 		...ADMIN_SETTINGS_TOOL_NAMES,
 		...CHAT_SELF_TUNE_TOOL_NAMES,
+		...MEDIA_GENERATION_TOOL_NAMES,
 	];
 }
 
@@ -2442,6 +2447,17 @@ export class TsukaimaLifecycle {
 			...(this.adminRuntimeToolsExtension === undefined ? [] : [this.adminRuntimeToolsExtension]),
 			...(this.adminSettingsToolsExtension === undefined ? [] : [this.adminSettingsToolsExtension]),
 			...(this.chatSelfTuneToolsExtension === undefined ? [] : [this.chatSelfTuneToolsExtension]),
+			createMediaGenerationTools({
+				audit: (entry) => this.writeAudit(entry),
+				generateImage: (request) => this.pluginHost.generateImageModel(request),
+				logger: this.runtimeLog,
+				media: this.media,
+				outbound: this.outbound,
+				recordUsage: (usage) => {
+					this.modelUsageLedger.recordUsage({ ...usage, kind: "image" });
+				},
+				routingPolicies: () => this.routingPolicies,
+			}),
 		];
 		if (conversationHost !== undefined && dynamicExtensions.length > 0) {
 			// Install before plugins connect so inbound messages always resolve the extension;

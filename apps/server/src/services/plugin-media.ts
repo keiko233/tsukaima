@@ -59,6 +59,20 @@ export function createPluginMediaBridge(
 			});
 			return toRecord(stored);
 		},
+		async storeFromUrl(url, input) {
+			requireWrite();
+			const stored = await media.storeFromUrl(url, {
+				...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
+				...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
+				...(input.height === undefined ? {} : { height: input.height }),
+				kind: mediaKind(input.kind),
+				...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+				...(input.mimeType === undefined ? {} : { mimeType: input.mimeType }),
+				source: input.source ?? "generated",
+				...(input.width === undefined ? {} : { width: input.width }),
+			});
+			return toRecord(stored);
+		},
 		async findById(mediaId) {
 			requireRead();
 			const stored = await media.findById(mediaId);

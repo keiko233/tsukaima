@@ -44,6 +44,7 @@
 	"capability_tools": "工具调用",
 	"capability_reasoning": "思考",
 	"capability_image": "图片输入",
+	"capability_image_generation": "图像生成",
 	"capability_audio": "语音输入",
 	"reasoning_effort": "默认程度",
 	"advanced_parameters": "高级参数",

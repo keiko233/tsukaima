@@ -4,6 +4,7 @@ import {
 	createPluginContext,
 	collectPluginModels,
 	decideChoicePluginModel,
+	generateImagePluginModel,
 	hasPermission,
 	LocalStorageBridge,
 	providerSafeToolName,
@@ -14,6 +15,8 @@ import {
 	type PluginContext,
 	type PluginDecisionChoiceRequest,
 	type PluginDecisionChoiceResult,
+	type PluginImageGenerateRequest,
+	type PluginImageGenerateResult,
 	type PluginEvents,
 	type PluginLogger,
 	type PluginManifest,
@@ -436,6 +439,15 @@ export class PluginHost {
 		return await decideChoicePluginModel(this.#modelProviders, request, {
 			onMessage: (message) => this.#options.onHostModelMessage?.(message, capability),
 		});
+	}
+
+	/**
+	 * Runs image generation through a registered provider implementing `generateImage`.
+	 */
+	async generateImageModel(
+		request: PluginImageGenerateRequest,
+	): Promise<PluginImageGenerateResult> {
+		return await generateImagePluginModel(this.#modelProviders, request);
 	}
 
 	/** Invoke a WebUI-visible plugin RPC method. Methods are namespaced by plugin id. */
@@ -1264,6 +1276,8 @@ export class PluginHost {
 								},
 							},
 				),
+			generateImage: async (request: PluginImageGenerateRequest) =>
+				await generateImagePluginModel(this.#modelProviders, request),
 			registerProvider: (provider: PluginModelProvider): (() => void) =>
 				this.registerModelProvider(pluginId, provider),
 		};

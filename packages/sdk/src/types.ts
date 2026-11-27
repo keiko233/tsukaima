@@ -108,6 +108,11 @@ export interface PluginMediaRecord {
 /** Content-addressed media access. The host enforces `media.read` / `media.write`. */
 export interface PluginMediaApi {
 	store(input: PluginMediaStoreInput): Promise<PluginMediaRecord>;
+	/** Fetch a remote URL through the host's safe URL policy and store the bytes. */
+	storeFromUrl?(
+		url: string,
+		input: Omit<PluginMediaStoreInput, "bytes">,
+	): Promise<PluginMediaRecord>;
 	findById(mediaId: string): Promise<PluginMediaRecord | undefined>;
 	findBySha(sha256: string): Promise<PluginMediaRecord | undefined>;
 	/** Read bytes by canonical media id. Throws when the blob is missing. */
@@ -272,6 +277,45 @@ export interface PluginDecisionChoicePort {
 	): Promise<PluginDecisionChoiceResult> | PluginDecisionChoiceResult;
 }
 
+export interface PluginImageReference {
+	readonly bytes: Uint8Array;
+	readonly mimeType: string;
+}
+
+export interface PluginImageGenerateRequest {
+	readonly providerId?: string;
+	readonly modelId?: string;
+	readonly prompt: string;
+	readonly negativePrompt?: string;
+	readonly size?: string;
+	readonly aspectRatio?: string;
+	readonly count?: number;
+	readonly referenceImages?: readonly PluginImageReference[];
+	readonly seed?: number;
+	readonly signal?: AbortSignal;
+}
+
+export interface PluginGeneratedImage {
+	readonly bytes?: Uint8Array;
+	readonly url?: string;
+	readonly mimeType: string;
+	readonly width?: number;
+	readonly height?: number;
+	readonly revisedPrompt?: string;
+}
+
+export interface PluginImageGenerateResult {
+	readonly providerId: string;
+	readonly modelId: string;
+	readonly images: readonly PluginGeneratedImage[];
+}
+
+export interface PluginImageGeneratePort {
+	generateImage(
+		request: PluginImageGenerateRequest,
+	): Promise<PluginImageGenerateResult> | PluginImageGenerateResult;
+}
+
 export interface PluginModelProvider {
 	readonly id: string;
 	/** False when the plugin has no usable credentials yet; the host then falls back. */
@@ -301,6 +345,12 @@ export interface PluginModelProvider {
 	): Promise<PluginDecisionChoiceResult> | PluginDecisionChoiceResult;
 	/** Object-shaped decision-choice port alias. */
 	decisionChoice?: PluginDecisionChoicePort;
+	/** Optional text-to-image/image-edit port (`image.generate` / `image.edit` capability). */
+	generateImage?(
+		request: PluginImageGenerateRequest,
+	): Promise<PluginImageGenerateResult> | PluginImageGenerateResult;
+	/** Object-shaped image-generation port alias. */
+	imageGenerate?: PluginImageGeneratePort;
 }
 
 export interface PluginModelRegistry {
@@ -323,6 +373,8 @@ export interface PluginModelRegistry {
 	audioTranscribe?(request: PluginAudioTranscribeRequest): Promise<PluginAudioTranscribeResult>;
 	/** Run a constrained decision choice through the selected provider/model capability port. */
 	decideChoice(request: PluginDecisionChoiceRequest): Promise<PluginDecisionChoiceResult>;
+	/** Run image generation or editing through the selected provider/model capability port. */
+	generateImage(request: PluginImageGenerateRequest): Promise<PluginImageGenerateResult>;
 }
 
 export type PluginRpcHandler = (input: unknown) => Promise<unknown> | unknown;

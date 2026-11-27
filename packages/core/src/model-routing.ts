@@ -69,6 +69,31 @@ export class ModelUsageLedger {
 		this.#records.push(record);
 		return record;
 	}
+
+	/** Record usage for non-AssistantMessage calls (image/video generation, decision, etc.). */
+	recordUsage(entry: {
+		readonly capability: ModelCapability;
+		readonly count?: number;
+		readonly costUsd?: number;
+		readonly inputTokens?: number;
+		readonly kind?: ModelUsageKind;
+		readonly modelId: string;
+		readonly outputTokens?: number;
+		readonly providerId: string;
+	}): ModelUsageRecord {
+		const record: ModelUsageRecord = {
+			capability: entry.capability,
+			inputTokens: entry.inputTokens ?? 0,
+			modelId: entry.modelId,
+			outputTokens: entry.outputTokens ?? 0,
+			providerId: entry.providerId,
+			...(entry.count === undefined ? {} : { count: entry.count }),
+			...(entry.costUsd === undefined ? {} : { costUsd: entry.costUsd }),
+			...(entry.kind === undefined ? {} : { kind: entry.kind }),
+		};
+		this.#records.push(record);
+		return record;
+	}
 }
 
 export interface RouteModelRequest {
