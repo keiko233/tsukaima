@@ -6,13 +6,21 @@
  */
 export const MODEL_CAPABILITIES = {
 	audioInput: "audio-input",
+	audioTranscribe: "audio.transcribe",
+	audioTts: "audio.tts",
 	basicChat: "basic-chat",
+	decisionChoice: "decision.choice",
+	embedding: "embedding",
+	imageEdit: "image.edit",
+	imageGenerate: "image.generate",
 	imageInput: "image-input",
 	reasoning: "reasoning",
 	/** The model may run the busy-run sidechat classifier. */
 	sidechat: "chat.sidechat",
 	thinking: "thinking",
 	toolUse: "tool-use",
+	videoGenerate: "video.generate",
+	videoImageToVideo: "video.image2video",
 	vision: "vision",
 } as const;
 

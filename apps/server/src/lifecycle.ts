@@ -36,6 +36,7 @@ import {
 	chatObjects,
 	conversations,
 	media,
+	modelPolicies,
 	workspaceSessions,
 	type TsukaimaDatabase,
 	migrateDomainDatabase,
@@ -126,7 +127,7 @@ import {
 	createChatSelfTuneToolsExtension,
 } from "./services/chat-self-tune-tools.ts";
 import { ConversationGateService } from "./services/conversation-gate.ts";
-import { NativeDecisionModels } from "./services/decision-models.ts";
+import { createNativeDecisionProviders, NativeDecisionModels } from "./services/decision-models.ts";
 import { ConversationPacingTracker } from "./services/conversation-pacing.ts";
 import { ConversationPolicyService } from "./services/conversation-policy.ts";
 import { ConversationRouter } from "./services/conversation-router.ts";
@@ -362,6 +363,7 @@ export class TsukaimaLifecycle {
 	private conversationGateService: ConversationGatePort | undefined;
 	private readonly conversationGateOverride: ConversationGatePort | undefined;
 	private readonly decisionModels: NativeDecisionModels;
+	private readonly env: Readonly<Record<string, string | undefined>>;
 	private readonly codingStore = new DomainCodingStore(() => this.domainDatabase);
 	/**
 	 * Sender bound to each active turn, keyed by conversation and then by submission request id.
@@ -403,7 +405,8 @@ export class TsukaimaLifecycle {
 
 	constructor(config: TsukaimaConfig, options?: LifecycleOptions) {
 		this.config = config;
-		this.decisionModels = new NativeDecisionModels(options?.env ?? process.env);
+		this.env = options?.env ?? process.env;
+		this.decisionModels = new NativeDecisionModels(this.env);
 		this.logLevel = config.logLevel;
 		this.customLoggerProvided = options?.logger !== undefined;
 		this.logger =
@@ -1944,6 +1947,16 @@ export class TsukaimaLifecycle {
 						...providers.filter((provider) => provider.id === preferredProviderId),
 						...providers.filter((provider) => provider.id !== preferredProviderId),
 					];
+		const CHAT_CAPABILITIES = new Set<string>([
+			MODEL_CAPABILITIES.basicChat,
+			MODEL_CAPABILITIES.reasoning,
+			MODEL_CAPABILITIES.thinking,
+			MODEL_CAPABILITIES.toolUse,
+			MODEL_CAPABILITIES.vision,
+			"coding",
+			"chat.persona",
+			"chat.fast",
+		]);
 		const ports: ModelPort[] = [];
 		for (const provider of orderedProviders) {
 			try {
@@ -1952,6 +1965,17 @@ export class TsukaimaLifecycle {
 						providerId: provider.id,
 					});
 					continue;
+				}
+				if (provider.listModels !== undefined) {
+					const descriptors = await provider.listModels();
+					if (
+						descriptors.length > 0 &&
+						!descriptors.some((descriptor) =>
+							descriptor.capabilities.some((capability) => CHAT_CAPABILITIES.has(capability)),
+						)
+					) {
+						continue;
+					}
 				}
 				const port = (await provider.createPort({
 					onMessage: (message) => {
@@ -2090,16 +2114,34 @@ export class TsukaimaLifecycle {
 		// host therefore prepares plugin surfaces first, then resolves the active provider.
 		this.transition("plugins");
 		await this.pluginHost.prepare();
+		for (const decisionProvider of createNativeDecisionProviders(this.env)) {
+			if (this.pluginHost.modelProvider(decisionProvider.id) === undefined) {
+				this.pluginHost.registerModelProvider("system", decisionProvider);
+			}
+		}
 		this.transition("domain-services");
 		const model = await this.createModelPort(settings);
 		this.memoryModel = model;
 		this.activeProviderId = model.providerId;
 		const sidechatModels = {
 			active: () => this.activeModelTarget(),
-			eligible: async () =>
-				(await this.pluginHost.listModels({ capability: MODEL_CAPABILITIES.sidechat })).map(
-					(candidate) => ({ modelId: candidate.id, providerId: candidate.providerId }),
-				),
+			eligible: async () => {
+				const [sidechat, decision] = await Promise.all([
+					this.pluginHost.listModels({ capability: MODEL_CAPABILITIES.sidechat }),
+					this.pluginHost.listModels({ capability: MODEL_CAPABILITIES.decisionChoice }),
+				]);
+				const seen = new Set<string>();
+				const combined: { modelId: string; providerId: string }[] = [];
+				for (const candidate of [...decision, ...sidechat]) {
+					const key = `${candidate.providerId}:${candidate.id}`;
+					if (seen.has(key)) continue;
+					seen.add(key);
+					combined.push({ modelId: candidate.id, providerId: candidate.providerId });
+				}
+				return combined;
+			},
+			decideChoice: async (request: Parameters<PluginHost["decideChoiceModel"]>[0]) =>
+				await this.pluginHost.decideChoiceModel(request, MODEL_CAPABILITIES.sidechat),
 			complete: async (
 				target: { readonly modelId: string; readonly providerId: string },
 				prompt: string,
@@ -2331,12 +2373,7 @@ export class TsukaimaLifecycle {
 			.getProviders()
 			.flatMap((provider) => model.models.getModels(provider.id));
 		this.modelRouter = new ModelPolicyRouter(models);
-		this.routingPolicies = [
-			{
-				capability: "basic-chat",
-				primary: { modelId: model.modelId, providerId: model.providerId },
-			},
-		];
+		this.routingPolicies = await this.resolveRoutingPolicies(model);
 
 		const conversationHost = this.conversationHost;
 		const toolLog = this.logger.child("tsukaima::server::tools");
@@ -2547,12 +2584,7 @@ export class TsukaimaLifecycle {
 			.getProviders()
 			.flatMap((provider) => model.models.getModels(provider.id));
 		this.modelRouter = new ModelPolicyRouter(allModels);
-		this.routingPolicies = [
-			{
-				capability: "basic-chat",
-				primary: { modelId: model.modelId, providerId: model.providerId },
-			},
-		];
+		this.routingPolicies = await this.resolveRoutingPolicies(model);
 		this.conversationHost?.setModel(model);
 		// A provider swap can invalidate a stored model id, so re-resolve every conversation
 		// against the new port instead of waiting for each one's next turn.
@@ -2576,6 +2608,55 @@ export class TsukaimaLifecycle {
 			providerId: model.providerId,
 			providerRestartRequired: this.providerRestartRequired,
 		});
+	}
+
+	private async resolveRoutingPolicies(model: ModelPort): Promise<readonly ModelPolicy[]> {
+		const fallbackBasic: ModelPolicy = {
+			capability: "basic-chat",
+			primary: { modelId: model.modelId, providerId: model.providerId },
+		};
+		const database = this.domainDatabase;
+		if (database === undefined) return [fallbackBasic];
+		const rows = await database.select().from(modelPolicies);
+		const persisted: ModelPolicy[] = [];
+		for (const row of rows) {
+			if (row.isActive !== 1) continue;
+			let fallbacks: ModelPolicy["fallbacks"];
+			try {
+				const parsed = JSON.parse(row.fallbacksJson) as unknown;
+				if (Array.isArray(parsed)) {
+					const valid = parsed.filter(
+						(item): item is { modelId: string; providerId: string } =>
+							typeof item === "object" &&
+							item !== null &&
+							typeof (item as { modelId?: unknown }).modelId === "string" &&
+							typeof (item as { providerId?: unknown }).providerId === "string",
+					);
+					if (valid.length > 0) fallbacks = valid;
+				}
+			} catch {}
+			const thinking =
+				row.thinkingLevel === "off" ||
+				row.thinkingLevel === "low" ||
+				row.thinkingLevel === "medium" ||
+				row.thinkingLevel === "high"
+					? row.thinkingLevel
+					: undefined;
+			persisted.push({
+				capability: row.capability,
+				...(fallbacks === undefined ? {} : { fallbacks }),
+				...(row.maxOutputTokens === null ? {} : { maxOutputTokens: row.maxOutputTokens }),
+				primary: { modelId: row.primaryModel, providerId: row.primaryProvider },
+				...(thinking === undefined ? {} : { thinking }),
+			});
+		}
+		const persistedBasic = persisted.find((policy) => policy.capability === "basic-chat");
+		const basicAvailable =
+			persistedBasic !== undefined &&
+			model.models.getModel(persistedBasic.primary.providerId, persistedBasic.primary.modelId) !==
+				undefined;
+		const basicPolicy = basicAvailable ? persistedBasic : fallbackBasic;
+		return [basicPolicy, ...persisted.filter((policy) => policy.capability !== "basic-chat")];
 	}
 
 	async applyRuntimeSettings(settings: RuntimeSettings): Promise<void> {

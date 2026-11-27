@@ -148,6 +148,8 @@ export interface PluginUiRegistry {
 
 export type PluginModelInputModality = "text" | "image" | "audio" | "video" | "file";
 
+export type PluginModelOutputModality = "text" | "image" | "audio" | "video";
+
 export type PluginModelReasoningLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface PluginModelReasoning {
@@ -160,6 +162,7 @@ export interface PluginModelDescriptor {
 	readonly name?: string;
 	readonly capabilities: readonly string[];
 	readonly input?: readonly PluginModelInputModality[];
+	readonly output?: readonly PluginModelOutputModality[];
 	readonly reasoning?: PluginModelReasoning;
 	readonly contextWindow?: number;
 	readonly maxOutputTokens?: number;
@@ -245,6 +248,30 @@ export interface PluginAudioTranscribePort {
 	): Promise<PluginAudioTranscribeResult> | PluginAudioTranscribeResult;
 }
 
+export interface PluginDecisionChoiceRequest {
+	readonly providerId?: string;
+	readonly modelId?: string;
+	readonly context: string;
+	readonly instructions: string;
+	readonly options: Readonly<Record<string, string>>;
+	readonly maxTokens?: number;
+	readonly signal?: AbortSignal;
+}
+
+export interface PluginDecisionChoiceResult {
+	readonly providerId: string;
+	readonly modelId: string;
+	readonly choice: string;
+	readonly confidence?: number;
+	readonly reason?: string;
+}
+
+export interface PluginDecisionChoicePort {
+	decideChoice(
+		request: PluginDecisionChoiceRequest,
+	): Promise<PluginDecisionChoiceResult> | PluginDecisionChoiceResult;
+}
+
 export interface PluginModelProvider {
 	readonly id: string;
 	/** False when the plugin has no usable credentials yet; the host then falls back. */
@@ -268,6 +295,12 @@ export interface PluginModelProvider {
 	): Promise<PluginAudioTranscribeResult> | PluginAudioTranscribeResult;
 	/** Object-shaped audio-transcribe port alias. */
 	audioTranscribe?: PluginAudioTranscribePort;
+	/** Optional native decision-choice port (`decision.choice` capability). */
+	decideChoice?(
+		request: PluginDecisionChoiceRequest,
+	): Promise<PluginDecisionChoiceResult> | PluginDecisionChoiceResult;
+	/** Object-shaped decision-choice port alias. */
+	decisionChoice?: PluginDecisionChoicePort;
 }
 
 export interface PluginModelRegistry {
@@ -288,6 +321,8 @@ export interface PluginModelRegistry {
 	transcribeAudio(request: PluginAudioTranscribeRequest): Promise<PluginAudioTranscribeResult>;
 	/** Object-shaped alias for `transcribeAudio`. */
 	audioTranscribe?(request: PluginAudioTranscribeRequest): Promise<PluginAudioTranscribeResult>;
+	/** Run a constrained decision choice through the selected provider/model capability port. */
+	decideChoice(request: PluginDecisionChoiceRequest): Promise<PluginDecisionChoiceResult>;
 }
 
 export type PluginRpcHandler = (input: unknown) => Promise<unknown> | unknown;

@@ -3,6 +3,7 @@ import {
 	completePluginModel,
 	createPluginContext,
 	collectPluginModels,
+	decideChoicePluginModel,
 	hasPermission,
 	LocalStorageBridge,
 	providerSafeToolName,
@@ -11,6 +12,8 @@ import {
 	type AuditEntry,
 	type TsukaimaPlugin,
 	type PluginContext,
+	type PluginDecisionChoiceRequest,
+	type PluginDecisionChoiceResult,
 	type PluginEvents,
 	type PluginLogger,
 	type PluginManifest,
@@ -388,6 +391,19 @@ export class PluginHost {
 		return this.#modelProviders.get(providerId);
 	}
 
+	/** Registers a host-owned or plugin-owned model provider into the shared registry. */
+	registerModelProvider(ownerId: string, provider: PluginModelProvider): () => void {
+		if (this.#modelProviders.has(provider.id)) {
+			throw new Error(`Model provider ${provider.id} is already registered`);
+		}
+		this.#modelProviders.set(provider.id, provider);
+		this.#modelProviderOwners.set(provider.id, ownerId);
+		return () => {
+			this.#modelProviders.delete(provider.id);
+			this.#modelProviderOwners.delete(provider.id);
+		};
+	}
+
 	/** Secret-free model catalog reported by started providers, stamped with plugin owners. */
 	async listModels(query?: PluginModelQuery): Promise<readonly PluginModelInfo[]> {
 		const catalog = await collectPluginModels(this.#modelProviders.values(), query);
@@ -406,6 +422,18 @@ export class PluginHost {
 		capability: string,
 	): Promise<PluginModelCompleteResult> {
 		return await completePluginModel(this.#modelProviders, request, {
+			onMessage: (message) => this.#options.onHostModelMessage?.(message, capability),
+		});
+	}
+
+	/**
+	 * Runs a constrained decision choice on behalf of a host service (e.g. gate or sidechat).
+	 */
+	async decideChoiceModel(
+		request: PluginDecisionChoiceRequest,
+		capability = "decision.choice",
+	): Promise<PluginDecisionChoiceResult> {
+		return await decideChoicePluginModel(this.#modelProviders, request, {
 			onMessage: (message) => this.#options.onHostModelMessage?.(message, capability),
 		});
 	}
@@ -1224,17 +1252,20 @@ export class PluginHost {
 			) => {
 				return await this.#runAudioTranscribe(request);
 			},
-			registerProvider: (provider: PluginModelProvider): (() => void) => {
-				if (this.#modelProviders.has(provider.id)) {
-					throw new Error(`Model provider ${provider.id} is already registered`);
-				}
-				this.#modelProviders.set(provider.id, provider);
-				this.#modelProviderOwners.set(provider.id, pluginId);
-				return () => {
-					this.#modelProviders.delete(provider.id);
-					this.#modelProviderOwners.delete(provider.id);
-				};
-			},
+			decideChoice: async (request: PluginDecisionChoiceRequest) =>
+				await decideChoicePluginModel(
+					this.#modelProviders,
+					request,
+					this.#options.onModelMessage === undefined
+						? {}
+						: {
+								onMessage: (message) => {
+									this.#options.onModelMessage?.(message, pluginId);
+								},
+							},
+				),
+			registerProvider: (provider: PluginModelProvider): (() => void) =>
+				this.registerModelProvider(pluginId, provider),
 		};
 		const rpc = {
 			list: () => [...this.#rpcHandlers.keys()].map((method) => ({ method })),
