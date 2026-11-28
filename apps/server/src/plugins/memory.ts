@@ -160,13 +160,6 @@ async function resolveMemoryTool(
 	return { policy, service, session };
 }
 
-function ownedBySession(
-	memory: { conversationId: string | null; scope: string },
-	sessionId: string,
-): boolean {
-	return memory.conversationId === null || memory.conversationId === sessionId;
-}
-
 function effectiveWrite(
 	resolved: ResolvedMemoryTool,
 	requestedScope: MemoryScope | undefined,
@@ -397,7 +390,7 @@ function updateTool(context: PluginContext, log: PluginLogger): PluginTool {
 				});
 				return text("Memory not found.");
 			}
-			if (!ownedBySession(existing, resolved.session.id)) {
+			if (!(await resolved.service.ownsConversationMemory(resolved.session.id, existing))) {
 				log.warn("memory.update denied", {
 					conversationId: invocation.conversationId,
 					durationMs: elapsedMs(startedAt),
@@ -518,7 +511,7 @@ function forgetTool(context: PluginContext, log: PluginLogger): PluginTool {
 				});
 				return text("Memory not found.");
 			}
-			if (!ownedBySession(existing, resolved.session.id)) {
+			if (!(await resolved.service.ownsConversationMemory(resolved.session.id, existing))) {
 				log.warn("memory.forget denied", {
 					conversationId: invocation.conversationId,
 					durationMs: elapsedMs(startedAt),

@@ -23,6 +23,7 @@ import type {
 	WarmStatePayload,
 } from "@tsukaima/contracts";
 import {
+	chatSnapshots,
 	conversations,
 	memories,
 	memoryConsolidationState,
@@ -1168,12 +1169,63 @@ export class MemoryService {
 		return { created: result.status === "consolidated", memory: warm?.memory };
 	}
 
-	/** Warm summary/state row for prompt injection: latest active `summary` memory. */
-	async warmState(conversationId: string): Promise<
+	/**
+	 * Active chat sessions under the same `chatObjectId`, so daily session rotation preserves
+	 * `conversation`-scoped memories, warm state, and Q&A consistency. Workspace sessions and
+	 * snapshot-restored sessions stay bounded to a single `conversationId`.
+	 */
+	async chatSessionIds(conversationId: string): Promise<string[]> {
+		const database = this.#db();
+		const [current] = await database
+			.select({
+				chatObjectId: conversations.chatObjectId,
+				id: conversations.id,
+				kind: conversations.kind,
+			})
+			.from(conversations)
+			.where(eq(conversations.id, conversationId))
+			.limit(1);
+		if (current === undefined || current.kind === "workspace" || current.chatObjectId === null) {
+			return [conversationId];
+		}
+		const [applied] = await database
+			.select({ id: chatSnapshots.id })
+			.from(chatSnapshots)
+			.where(and(eq(chatSnapshots.conversationId, current.id), eq(chatSnapshots.status, "applied")))
+			.limit(1);
+		if (applied !== undefined) return [current.id];
+		const siblings = await database
+			.select({ id: conversations.id })
+			.from(conversations)
+			.where(
+				and(
+					eq(conversations.chatObjectId, current.chatObjectId),
+					ne(conversations.kind, "workspace"),
+					eq(conversations.status, "active"),
+				),
+			)
+			.orderBy(desc(conversations.updatedAt));
+		const ids = new Set<string>([current.id]);
+		for (const row of siblings) ids.add(row.id);
+		return [...ids];
+	}
+
+	async ownsConversationMemory(
+		sessionId: string,
+		memory: { readonly conversationId: string | null; readonly scope: string },
+	): Promise<boolean> {
+		if (memory.conversationId === null) return true;
+		if (memory.conversationId === sessionId) return true;
+		if (memory.scope === "workspace" || memory.scope === "project") return false;
+		const sessionIds = await this.chatSessionIds(sessionId);
+		return sessionIds.includes(memory.conversationId);
+	}
+
+	/** Warm summary/state row for a single session (ignoring sibling daily sessions). */
+	async #sessionWarmState(conversationId: string): Promise<
 		| {
 				readonly evidence: Record<string, unknown>;
 				readonly memory: MemoryRow;
-				/** Structured merged state; `undefined` for pre-Batch-5 regex rows. */
 				readonly state: WarmStatePayload | undefined;
 		  }
 		| undefined
@@ -1189,8 +1241,42 @@ export class MemoryService {
 					isNull(memories.revokedAt),
 				),
 			)
-			.orderBy(desc(memories.updatedAt))
+			.orderBy(desc(memories.updatedAt), desc(memories.id))
 			.limit(1);
+		if (row === undefined) return undefined;
+		const evidence = parseEvidence(row.evidenceJson);
+		return { evidence, memory: row, state: parseWarmState(evidence) };
+	}
+
+	/** Warm summary/state row for prompt injection: latest active `summary` memory across this chat. */
+	async warmState(conversationId: string): Promise<
+		| {
+				readonly evidence: Record<string, unknown>;
+				readonly memory: MemoryRow;
+				/** Structured merged state; `undefined` for pre-Batch-5 regex rows. */
+				readonly state: WarmStatePayload | undefined;
+		  }
+		| undefined
+	> {
+		const sessionIds = await this.chatSessionIds(conversationId);
+		const rows = await this.#db()
+			.select()
+			.from(memories)
+			.where(
+				and(
+					inArray(memories.conversationId, sessionIds),
+					eq(memories.kind, "summary"),
+					eq(memories.status, "active"),
+					isNull(memories.revokedAt),
+				),
+			)
+			.orderBy(desc(memories.updatedAt), desc(memories.id))
+			.limit(5);
+		const row =
+			rows.find(
+				(candidate) =>
+					candidate.updatedAt === rows[0]?.updatedAt && candidate.conversationId === conversationId,
+			) ?? rows[0];
 		if (row === undefined) return undefined;
 		const evidence = parseEvidence(row.evidenceJson);
 		return { evidence, memory: row, state: parseWarmState(evidence) };
@@ -1229,16 +1315,18 @@ export class MemoryService {
 		limit = 10,
 		filters?: { readonly kind?: string | undefined; readonly scope?: MemoryScope | undefined },
 	) {
+		const sessionIds =
+			conversationId === undefined ? undefined : await this.chatSessionIds(conversationId);
 		const scopeCondition =
-			conversationId === undefined
+			sessionIds === undefined
 				? undefined
 				: or(
 						eq(memories.scope, "global"),
 						and(
 							eq(memories.scope, "persona"),
-							or(eq(memories.conversationId, conversationId), isNull(memories.conversationId)),
+							or(inArray(memories.conversationId, sessionIds), isNull(memories.conversationId)),
 						),
-						and(eq(memories.scope, "conversation"), eq(memories.conversationId, conversationId)),
+						and(eq(memories.scope, "conversation"), inArray(memories.conversationId, sessionIds)),
 					);
 		const extraConditions: (SQL | undefined)[] = [scopeCondition];
 		if (filters?.kind !== undefined) extraConditions.push(eq(memories.kind, filters.kind));
@@ -1739,7 +1827,8 @@ export class MemoryService {
 				watermarkOccurredAt: row.watermarkOccurredAt,
 			};
 		}
-		const legacy = await this.warmState(conversationId);
+		// Only a single-session warm row carries a valid watermark for this session's transcript.
+		const legacy = await this.#sessionWarmState(conversationId);
 		const legacyId = legacy?.evidence.compactedThroughMessageId;
 		const legacyAt = legacy?.evidence.compactedThroughAt;
 		// `ChatSnapshotService` deletes this row when it restores a transcript, so a restored
@@ -2221,11 +2310,15 @@ export class MemoryService {
 	async #resolveSessionInput(input: {
 		readonly conversationId?: string;
 		readonly durableConversationId?: string;
-	}): Promise<{ id: string; kind: string } | undefined> {
+	}): Promise<{ chatObjectId: string | null; id: string; kind: string } | undefined> {
 		if (input.conversationId !== undefined) return this.#session(input.conversationId);
 		if (input.durableConversationId === undefined) return undefined;
 		const [row] = await this.#db()
-			.select({ id: conversations.id, kind: conversations.kind })
+			.select({
+				chatObjectId: conversations.chatObjectId,
+				id: conversations.id,
+				kind: conversations.kind,
+			})
 			.from(conversations)
 			.where(eq(conversations.durableConversationId, input.durableConversationId))
 			.orderBy(desc(conversations.updatedAt))
@@ -2233,9 +2326,15 @@ export class MemoryService {
 		return row;
 	}
 
-	async #session(conversationId: string): Promise<{ id: string; kind: string } | undefined> {
+	async #session(
+		conversationId: string,
+	): Promise<{ chatObjectId: string | null; id: string; kind: string } | undefined> {
 		const [row] = await this.#db()
-			.select({ id: conversations.id, kind: conversations.kind })
+			.select({
+				chatObjectId: conversations.chatObjectId,
+				id: conversations.id,
+				kind: conversations.kind,
+			})
 			.from(conversations)
 			.where(eq(conversations.id, conversationId))
 			.limit(1);
