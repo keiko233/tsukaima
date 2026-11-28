@@ -31,7 +31,7 @@
 		"@tsukaima/contracts": "workspace:*",
 		"@tsukaima/sdk": "workspace:*",
 		"@tsukaima/ui": "workspace:*",
-		"better-auth": "1.7.27",
+		"better-auth": "1.7.28",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
 		"cn-fontsource-lxgw-neo-xi-hei-regular": "1.0.1",
