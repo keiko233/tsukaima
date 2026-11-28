@@ -23,6 +23,7 @@ import type {
 	WarmStatePayload,
 } from "@tsukaima/contracts";
 import {
+	chatSnapshots,
 	conversations,
 	memories,
 	memoryConsolidationState,
@@ -36,6 +37,7 @@ import type { ConversationPolicyService } from "./conversation-policy.ts";
 import {
 	consolidationBatchKey,
 	deterministicWarmState,
+	isMetaPersonaNoise,
 	isPhaticMessage,
 	MEMORY_CONSOLIDATION_PROMPT_VERSION,
 	mergeWarmState,
@@ -44,6 +46,7 @@ import {
 	parseWarmState,
 	renderConsolidationPrompt,
 	renderWarmStateLines,
+	sanitizeConsolidationOutput,
 	WARM_STATE_EVIDENCE_KEY,
 	type ConsolidationMessage,
 } from "./memory-consolidation.ts";
@@ -99,6 +102,12 @@ type MessageRow = typeof messages.$inferSelect;
 export type MemoryRecord = MemoryRow;
 
 export interface MemoryCreateInput {
+	/**
+	 * Explicit caller opt-in to re-activate a `revoked`/`rejected` row matched by `dedupeKey`.
+	 * Ignored when `createdBy === "task"` so background consolidation never silently resurrects
+	 * forgotten or rejected memories.
+	 */
+	readonly allowRevive?: boolean | undefined;
 	readonly confidence?: number | undefined;
 	readonly content?: string | undefined;
 	readonly conversationId?: string | undefined;
@@ -285,7 +294,125 @@ const STOPWORDS = new Set([
 	"your",
 ]);
 
+const CJK_STOPWORDS = new Set([
+	"一个",
+	"一种",
+	"一下",
+	"一点",
+	"一直",
+	"也是",
+	"以及",
+	"以后",
+	"以前",
+	"但是",
+	"或者",
+	"所以",
+	"因为",
+	"如果",
+	"虽然",
+	"不过",
+	"而且",
+	"然后",
+	"其实",
+	"已经",
+	"现在",
+	"时候",
+	"自己",
+	"大家",
+	"他们",
+	"她们",
+	"它们",
+	"我们",
+	"你们",
+	"我的",
+	"你的",
+	"他的",
+	"她的",
+	"它的",
+	"谁的",
+	"啥的",
+	"的是",
+	"了的",
+	"的了",
+	"好的",
+	"真的",
+	"是的",
+	"有的",
+	"别的",
+	"那个",
+	"这个",
+	"哪个",
+	"这么",
+	"那么",
+	"怎么",
+	"什么",
+	"为什么",
+	"可以",
+	"可以吗",
+	"能不能",
+	"要不要",
+	"不是",
+	"没有",
+	"不会",
+	"不能",
+	"不要",
+	"就是",
+	"还是",
+	"都是",
+	"就会",
+	"也就",
+	"有点",
+	"觉得",
+	"知道",
+	"好像",
+	"正在",
+	"这样",
+	"那样",
+	"只是",
+	"应该",
+	"可能",
+	"的话",
+	"到底",
+	"关于",
+	"对于",
+	"好吗",
+	"行吧",
+	"嗯嗯",
+	"哈哈",
+	"呵呵",
+]);
+
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const CJK_PARTICLES = /^[的了呢吗啊吧呀嘛哦嗯]$/u;
+
+function isCjkStopwordToken(token: string): boolean {
+	if (CJK_STOPWORDS.has(token)) return true;
+	return (
+		token.length === 2 && CJK_PARTICLES.test(token[0] ?? "") && CJK_PARTICLES.test(token[1] ?? "")
+	);
+}
+
+function cjkBigrams(raw: string): string[] {
+	const grams: string[] = [];
+	const push = (index: number) => {
+		const gram = raw.slice(index, index + 2);
+		if (!isCjkStopwordToken(gram)) grams.push(gram);
+	};
+	if (raw.length <= 6) {
+		for (let index = 0; index + 2 <= raw.length; index += 1) push(index);
+		return grams;
+	}
+	// Walk outside-in so long unpunctuated CJK runs preserve tail predicates/nouns as well as heads.
+	let left = 0;
+	let right = raw.length - 2;
+	while (left <= right) {
+		push(right);
+		if (left < right) push(left);
+		left += 1;
+		right -= 1;
+	}
+	return grams;
+}
 
 function nowIso(date: Date): string {
 	return date.toISOString();
@@ -329,23 +456,30 @@ export function canonicalTextStem(text: string): string {
 }
 
 export function extractMemoryTokens(text: string, limit = MAX_QUERY_TOKENS): string[] {
-	const tokens = new Set<string>();
+	const buckets: string[][] = [];
 	for (const raw of text
 		.toLowerCase()
 		.normalize("NFKC")
 		.split(/[^\p{L}\p{N}]+/u)) {
-		if (raw.length < 2 || STOPWORDS.has(raw)) continue;
+		if (raw.length < 2 || STOPWORDS.has(raw) || isCjkStopwordToken(raw)) continue;
 		if (CJK.test(raw)) {
-			if (raw.length <= 12) tokens.add(raw);
-			if (raw.length > 4) {
-				for (let index = 0; index + 2 <= raw.length && tokens.size < limit; index += 1) {
-					tokens.add(raw.slice(index, index + 2));
-				}
-			}
+			const bucket: string[] = [];
+			if (raw.length <= 12) bucket.push(raw);
+			if (raw.length >= 3) bucket.push(...cjkBigrams(raw));
+			if (bucket.length > 0) buckets.push(bucket);
 		} else {
-			tokens.add(raw.slice(0, 32));
+			buckets.push([raw.slice(0, 32)]);
 		}
-		if (tokens.size >= limit) break;
+	}
+	const tokens = new Set<string>();
+	const maxBucketLength = buckets.reduce((max, bucket) => Math.max(max, bucket.length), 0);
+	for (let offset = 0; offset < maxBucketLength && tokens.size < limit; offset += 1) {
+		for (const bucket of buckets) {
+			const token = bucket[offset];
+			if (token === undefined) continue;
+			tokens.add(token);
+			if (tokens.size >= limit) break;
+		}
 	}
 	return [...tokens].slice(0, limit);
 }
@@ -815,6 +949,19 @@ export class MemoryService {
 				.where(eq(memories.dedupeKey, dedupeKey))
 				.limit(1);
 			if (existing !== undefined) {
+				if (existing.status === "revoked" || existing.status === "rejected") {
+					const allowRevive = input.allowRevive === true && input.createdBy !== "task";
+					if (!allowRevive) {
+						this.#logger.debug("memory create skipped for tombstoned dedupe key", {
+							createdBy: input.createdBy ?? "agent",
+							kind: existing.kind,
+							memoryId: existing.id,
+							scope: existing.scope,
+							status: existing.status,
+						});
+						return { memory: existing, merged: false };
+					}
+				}
 				const status =
 					existing.status === "revoked" || existing.status === "rejected"
 						? (input.status ?? "active")
@@ -1168,12 +1315,63 @@ export class MemoryService {
 		return { created: result.status === "consolidated", memory: warm?.memory };
 	}
 
-	/** Warm summary/state row for prompt injection: latest active `summary` memory. */
-	async warmState(conversationId: string): Promise<
+	/**
+	 * Active chat sessions under the same `chatObjectId`, so daily session rotation preserves
+	 * `conversation`-scoped memories, warm state, and Q&A consistency. Workspace sessions and
+	 * snapshot-restored sessions stay bounded to a single `conversationId`.
+	 */
+	async chatSessionIds(conversationId: string): Promise<string[]> {
+		const database = this.#db();
+		const [current] = await database
+			.select({
+				chatObjectId: conversations.chatObjectId,
+				id: conversations.id,
+				kind: conversations.kind,
+			})
+			.from(conversations)
+			.where(eq(conversations.id, conversationId))
+			.limit(1);
+		if (current === undefined || current.kind === "workspace" || current.chatObjectId === null) {
+			return [conversationId];
+		}
+		const [applied] = await database
+			.select({ id: chatSnapshots.id })
+			.from(chatSnapshots)
+			.where(and(eq(chatSnapshots.conversationId, current.id), eq(chatSnapshots.status, "applied")))
+			.limit(1);
+		if (applied !== undefined) return [current.id];
+		const siblings = await database
+			.select({ id: conversations.id })
+			.from(conversations)
+			.where(
+				and(
+					eq(conversations.chatObjectId, current.chatObjectId),
+					ne(conversations.kind, "workspace"),
+					eq(conversations.status, "active"),
+				),
+			)
+			.orderBy(desc(conversations.updatedAt));
+		const ids = new Set<string>([current.id]);
+		for (const row of siblings) ids.add(row.id);
+		return [...ids];
+	}
+
+	async ownsConversationMemory(
+		sessionId: string,
+		memory: { readonly conversationId: string | null; readonly scope: string },
+	): Promise<boolean> {
+		if (memory.conversationId === null) return true;
+		if (memory.conversationId === sessionId) return true;
+		if (memory.scope === "workspace" || memory.scope === "project") return false;
+		const sessionIds = await this.chatSessionIds(sessionId);
+		return sessionIds.includes(memory.conversationId);
+	}
+
+	/** Warm summary/state row for a single session (ignoring sibling daily sessions). */
+	async #sessionWarmState(conversationId: string): Promise<
 		| {
 				readonly evidence: Record<string, unknown>;
 				readonly memory: MemoryRow;
-				/** Structured merged state; `undefined` for pre-Batch-5 regex rows. */
 				readonly state: WarmStatePayload | undefined;
 		  }
 		| undefined
@@ -1189,8 +1387,42 @@ export class MemoryService {
 					isNull(memories.revokedAt),
 				),
 			)
-			.orderBy(desc(memories.updatedAt))
+			.orderBy(desc(memories.updatedAt), desc(memories.id))
 			.limit(1);
+		if (row === undefined) return undefined;
+		const evidence = parseEvidence(row.evidenceJson);
+		return { evidence, memory: row, state: parseWarmState(evidence) };
+	}
+
+	/** Warm summary/state row for prompt injection: latest active `summary` memory across this chat. */
+	async warmState(conversationId: string): Promise<
+		| {
+				readonly evidence: Record<string, unknown>;
+				readonly memory: MemoryRow;
+				/** Structured merged state; `undefined` for pre-Batch-5 regex rows. */
+				readonly state: WarmStatePayload | undefined;
+		  }
+		| undefined
+	> {
+		const sessionIds = await this.chatSessionIds(conversationId);
+		const rows = await this.#db()
+			.select()
+			.from(memories)
+			.where(
+				and(
+					inArray(memories.conversationId, sessionIds),
+					eq(memories.kind, "summary"),
+					eq(memories.status, "active"),
+					isNull(memories.revokedAt),
+				),
+			)
+			.orderBy(desc(memories.updatedAt), desc(memories.id))
+			.limit(5);
+		const row =
+			rows.find(
+				(candidate) =>
+					candidate.updatedAt === rows[0]?.updatedAt && candidate.conversationId === conversationId,
+			) ?? rows[0];
 		if (row === undefined) return undefined;
 		const evidence = parseEvidence(row.evidenceJson);
 		return { evidence, memory: row, state: parseWarmState(evidence) };
@@ -1229,16 +1461,18 @@ export class MemoryService {
 		limit = 10,
 		filters?: { readonly kind?: string | undefined; readonly scope?: MemoryScope | undefined },
 	) {
+		const sessionIds =
+			conversationId === undefined ? undefined : await this.chatSessionIds(conversationId);
 		const scopeCondition =
-			conversationId === undefined
+			sessionIds === undefined
 				? undefined
 				: or(
 						eq(memories.scope, "global"),
 						and(
 							eq(memories.scope, "persona"),
-							or(eq(memories.conversationId, conversationId), isNull(memories.conversationId)),
+							or(inArray(memories.conversationId, sessionIds), isNull(memories.conversationId)),
 						),
-						and(eq(memories.scope, "conversation"), eq(memories.conversationId, conversationId)),
+						and(eq(memories.scope, "conversation"), inArray(memories.conversationId, sessionIds)),
 					);
 		const extraConditions: (SQL | undefined)[] = [scopeCondition];
 		if (filters?.kind !== undefined) extraConditions.push(eq(memories.kind, filters.kind));
@@ -1372,12 +1606,18 @@ export class MemoryService {
 				let output: MemoryConsolidationOutput | undefined;
 				let failure = "malformed consolidation output";
 				try {
+					const persona = await this.#policyService.personaForSession({
+						chatKind: session.kind,
+						chatObjectId: session.chatObjectId,
+						conversationId: session.id,
+					});
 					const prompt = renderConsolidationPrompt({
 						chatKind: session.kind,
 						delta,
 						instructions:
 							(await this.#extractionPrompt?.()) ?? DEFAULT_PROMPTS["memory-extraction"],
 						nowIso: now,
+						...(persona?.name === undefined ? {} : { personaName: persona.name }),
 						policy: config,
 						previous,
 					});
@@ -1387,7 +1627,7 @@ export class MemoryService {
 					} else {
 						const parseResult = parseConsolidationOutputDetailed(text);
 						if (parseResult.ok) {
-							output = parseResult.data;
+							output = sanitizeConsolidationOutput(parseResult.data);
 						} else {
 							failure = parseResult.error;
 							this.#logger.warn("failed to parse memory consolidation output", {
@@ -1739,7 +1979,8 @@ export class MemoryService {
 				watermarkOccurredAt: row.watermarkOccurredAt,
 			};
 		}
-		const legacy = await this.warmState(conversationId);
+		// Only a single-session warm row carries a valid watermark for this session's transcript.
+		const legacy = await this.#sessionWarmState(conversationId);
 		const legacyId = legacy?.evidence.compactedThroughMessageId;
 		const legacyAt = legacy?.evidence.compactedThroughAt;
 		// `ChatSnapshotService` deletes this row when it restores a transcript, so a restored
@@ -2018,6 +2259,7 @@ export class MemoryService {
 		for (const candidate of candidates) {
 			if (written >= policy.memoryMaxWritesPerActivity) break;
 			if (candidate.confidence < policy.memoryMinConfidence) continue;
+			if (isMetaPersonaNoise(candidate.summary, candidate.content)) continue;
 			const expiresAt =
 				candidate.expiresAt === undefined ? undefined : parseDate(candidate.expiresAt);
 			// Only a subject that actually spoke in this batch is linked; never invent user ids.
@@ -2060,6 +2302,9 @@ export class MemoryService {
 				summary: snippet(candidate.summary, 1_000),
 				visibility: userScoped ? "shared" : "private",
 			});
+			if (result.memory.status === "revoked" || result.memory.status === "rejected") {
+				continue;
+			}
 			written += 1;
 			await this.#recordAudit(
 				status === "pending" ? "memory.extract.pending" : "memory.extract",
@@ -2124,6 +2369,7 @@ export class MemoryService {
 		for (const candidate of candidates) {
 			if (written >= policy.memoryMaxWritesPerActivity) break;
 			if (candidate.confidence < policy.memoryMinConfidence) continue;
+			if (isMetaPersonaNoise(candidate.summary, candidate.content)) continue;
 			const status: MemoryStatus = reviewRequired ? "pending" : "active";
 			const messageIds = chronological.map((row) => row.id);
 			const source = chronological.at(-1);
@@ -2153,6 +2399,9 @@ export class MemoryService {
 				summary: candidate.summary,
 				visibility: "private",
 			});
+			if (result.memory.status === "revoked" || result.memory.status === "rejected") {
+				continue;
+			}
 			written += 1;
 			await this.#recordAudit(
 				status === "pending" ? "memory.extract.pending" : "memory.extract",
@@ -2221,11 +2470,15 @@ export class MemoryService {
 	async #resolveSessionInput(input: {
 		readonly conversationId?: string;
 		readonly durableConversationId?: string;
-	}): Promise<{ id: string; kind: string } | undefined> {
+	}): Promise<{ chatObjectId: string | null; id: string; kind: string } | undefined> {
 		if (input.conversationId !== undefined) return this.#session(input.conversationId);
 		if (input.durableConversationId === undefined) return undefined;
 		const [row] = await this.#db()
-			.select({ id: conversations.id, kind: conversations.kind })
+			.select({
+				chatObjectId: conversations.chatObjectId,
+				id: conversations.id,
+				kind: conversations.kind,
+			})
 			.from(conversations)
 			.where(eq(conversations.durableConversationId, input.durableConversationId))
 			.orderBy(desc(conversations.updatedAt))
@@ -2233,9 +2486,15 @@ export class MemoryService {
 		return row;
 	}
 
-	async #session(conversationId: string): Promise<{ id: string; kind: string } | undefined> {
+	async #session(
+		conversationId: string,
+	): Promise<{ chatObjectId: string | null; id: string; kind: string } | undefined> {
 		const [row] = await this.#db()
-			.select({ id: conversations.id, kind: conversations.kind })
+			.select({
+				chatObjectId: conversations.chatObjectId,
+				id: conversations.id,
+				kind: conversations.kind,
+			})
 			.from(conversations)
 			.where(eq(conversations.id, conversationId))
 			.limit(1);

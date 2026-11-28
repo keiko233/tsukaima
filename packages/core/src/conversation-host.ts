@@ -2626,7 +2626,10 @@ export class PiDurableConversationHost {
 	async seedConversationBaseline(
 		targetConversationId: string,
 		sourceConversationId: string,
-		options: { readonly instructions?: string } = {},
+		options: {
+			readonly carryForwardPreviousSummary?: boolean;
+			readonly instructions?: string;
+		} = {},
 	): Promise<SeedConversationBaselineResult> {
 		const parsedSource = Number(sourceConversationId);
 		const parsedTarget = Number(targetConversationId);
@@ -2645,7 +2648,10 @@ export class PiDurableConversationHost {
 			source.agent(BACKGROUND_CONTEXT),
 			source.context(BACKGROUND_CONTEXT),
 		]);
-		const previousSummary = previousCompactionSummary(sourceView.messages);
+		const previousSummary =
+			options.carryForwardPreviousSummary === false
+				? undefined
+				: previousCompactionSummary(sourceView.messages);
 		const transcript = chatCompactionTranscript(sourceView.messages).trim();
 		if (transcript.length === 0) {
 			if (previousSummary !== undefined && previousSummary.length > 0) {
@@ -2666,12 +2672,10 @@ export class PiDurableConversationHost {
 		if (summarize !== undefined) {
 			try {
 				const modelRef = this.effectiveModelRef(sourceAgent.model);
-				const instructions =
-					options.instructions?.trim() ||
-					"Produce a concise baseline summary of the previous session so the new session can continue naturally without losing ongoing topics, promises, or relationships.";
+				const instructions = options.instructions?.trim();
 				const summary = await summarize.call(this.options.contextProvider, {
 					conversationId: sourceConversationId,
-					instructions,
+					...(instructions === undefined || instructions.length === 0 ? {} : { instructions }),
 					model: { modelId: modelRef.modelId, providerId: modelRef.provider },
 					reason: "manual",
 					transcript,

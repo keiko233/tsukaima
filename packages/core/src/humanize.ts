@@ -197,16 +197,12 @@ export function detectRigidRhythm(
 		return { pattern, rigid: false };
 	}
 	const first = pattern[0];
-	const identical = first !== undefined && pattern.every((count) => count === first);
+	const identical = first !== undefined && first > 1 && pattern.every((count) => count === first);
 	if (!identical) {
 		return { pattern, rigid: false };
 	}
-	const suggestion =
-		first === 1
-			? "try splitting into 2 short messages or changing length when it feels natural"
-			: "try replying in a single concise message or a different number of lines when it fits";
 	return {
-		nudgeText: `Rhythm note: your last ${window} replies all used ${first} message${first === 1 ? "" : "s"}; ${suggestion}.`,
+		nudgeText: `Rhythm note: your last ${window} replies all used ${first} messages; try replying in a single concise message or varying the line count when it fits.`,
 		pattern,
 		rigid: true,
 	};
@@ -305,6 +301,11 @@ const META_LEAK_RULES: readonly MetaLeakRule[] = [
 	{
 		name: "harness-instruction-echo",
 		pattern: /^Never explain these markers\. Never send them to the chat\.\s*(?:\n|$)/gmu,
+	},
+	{
+		name: "self-check-draft-leak",
+		pattern:
+			/^(?:标点[:：]\s*(?:用空格|不[打用加]?句号|不用标点|不加标点)[^\n]*|(?:标点|排版|格式|语气|人设|字数)(?:自检|检查|规范|要点|草稿)[:：][^\n]*)(?:\n|$)/gmu,
 	},
 ];
 

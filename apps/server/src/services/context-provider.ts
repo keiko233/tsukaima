@@ -34,7 +34,7 @@ import {
 	type PersonaBehavior,
 } from "./conversation-policy.ts";
 import { queryCrossSession, renderCrossSession } from "./cross-session.ts";
-import { renderWarmStateLines } from "./memory-consolidation.ts";
+import { parseWarmState, renderWarmStateLines } from "./memory-consolidation.ts";
 import { MemoryService, type RankedMemory } from "./memory-service.ts";
 import { ADMIN_SETTINGS_TOOL_NAMES } from "./admin-settings-tools.ts";
 import { detectQuietFeedback, isLowSubstanceReaction } from "./social-profile.ts";
@@ -88,12 +88,27 @@ const ADMIN_TOOL_NAMES = [
 	"persona_prompt_update",
 ] as const;
 const ADMIN_CAPABILITIES_TEXT = [
-	"The current speaker is an authenticated administrator. Deferred administrator tools are available:",
+	"Background capability note (keep silent unless technical or admin help is actually requested): the current speaker is an authenticated administrator, so deferred administrator tools are available if needed:",
 	ADMIN_TOOL_NAMES.map((name) => `- ${name}`).join("\n"),
 	`- Settings & config: ${ADMIN_SETTINGS_TOOL_NAMES.join(", ")}`,
 	"Store downloaded Agent Skills under <TSUKAIMA_DATA_DIR>/skills/<name>/ (or via skill_install) and local stdio MCP servers, virtualenvs, or binaries under <TSUKAIMA_DATA_DIR>/mcp/<name>/ or <TSUKAIMA_DATA_DIR>/mcp/bin/ (the default directory for admin_exec and admin_file_*). Never write or clone runtime files into the repository checkout (such as ops/), because it breaks git-based upgrades and is lost on image rebuilds.",
-	"Load the tool you need with tool_search first, then call it. Confirm destructive intent before running commands, writing files, installing skills or MCP servers, or spawning workspaces.",
+	"When the administrator just greets you or chats casually, reply casually in character and never bring up admin tools or wait for a work ticket. Only load a tool with tool_search when the conversation asks for it, and confirm destructive intent before running commands, writing files, installing skills or MCP servers, or spawning workspaces.",
 ].join("\n");
+
+function isWarmStateRow(memory: {
+	readonly dedupeKey: string | null;
+	readonly evidenceJson: string | null;
+	readonly kind: string;
+}): boolean {
+	if (memory.kind !== "summary") return false;
+	if (memory.dedupeKey?.startsWith("warm:") === true) return true;
+	if (memory.evidenceJson === null || memory.evidenceJson.trim().length === 0) return false;
+	try {
+		return parseWarmState(JSON.parse(memory.evidenceJson)) !== undefined;
+	} catch {
+		return false;
+	}
+}
 const QA_HEADER = "You answered similar questions here before; stay consistent:";
 const LONG_TERM_HEADER = "Known memories, most relevant first:";
 const OBSERVATION_HEADER = "Recent messages in this group, oldest first (you = your own messages):";
@@ -689,7 +704,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			...(previousSummary === undefined || previousSummary.length === 0
 				? []
 				: [
-						"Earlier summary to carry forward (preserve still-relevant facts and fold in the new messages):",
+						"Earlier summary to fold forward (preserve real ongoing topics, facts, and commitments; drop outdated persona claims, brief teasing/banter, and style/sticker rules):",
 						"<previous-summary>",
 						previousSummary,
 						"</previous-summary>",
@@ -947,15 +962,24 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			return { enabled: false as const, policy };
 		}
 		const recent = await this.#recentMessages(database, session?.sessionId);
+		const sessionIds =
+			session === undefined
+				? []
+				: session.chatKind === "workspace"
+					? [session.sessionId]
+					: await this.#memoryService.chatSessionIds(session.sessionId);
 		const warm =
 			session === undefined || session.chatKind === "workspace"
 				? undefined
 				: await this.#memoryService.warmState(session.sessionId);
-		const scopeFilter = await this.#scopeFilter(database, session, policy);
+		const scopeFilter = await this.#scopeFilter(database, session, sessionIds, policy);
 		const query = compact(
 			uniq([
-				...inputs.slice(-RECALL_QUERY_MESSAGE_LIMIT).map((input) => snippet(input.text ?? "", 600)),
-				...recent.map((row) => snippet(row.contentText ?? "", 600)),
+				...inputs
+					.slice(-RECALL_QUERY_MESSAGE_LIMIT)
+					.toReversed()
+					.map((input) => snippet(input.text ?? "", 600)),
+				...recent.toReversed().map((row) => snippet(row.contentText ?? "", 600)),
 				...(warm?.state?.topics ?? []),
 			]),
 		).join("\n");
@@ -974,13 +998,16 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 						query,
 						scopeFilter,
 					});
-		const longTerm = ranked.filter((entry) => entry.memory.id !== warm?.memory.id);
+		const longTerm = ranked.filter(
+			(entry) => entry.memory.id !== warm?.memory.id && !isWarmStateRow(entry.memory),
+		);
 		return { enabled: true as const, longTerm, policy, recent, warm };
 	}
 
 	async #scopeFilter(
 		database: TsukaimaDatabase,
 		session: { chatKind: string; chatObjectId: string | null; sessionId: string } | undefined,
+		sessionIds: readonly string[],
 		policy: ConversationPolicy,
 	): Promise<SQL | undefined> {
 		const scopes: SQL[] = [eq(memories.scope, "global")];
@@ -989,10 +1016,11 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			// may leak into a repository-mutating agent, and coding work must not write into the
 			// chat memory graph either.
 			if (session.chatKind === "workspace") return undefined;
+			const targetSessionIds = sessionIds.length > 0 ? [...sessionIds] : [session.sessionId];
 			scopes.push(
 				combine([
 					eq(memories.scope, "conversation"),
-					eq(memories.conversationId, session.sessionId),
+					inArray(memories.conversationId, targetSessionIds),
 				]),
 			);
 			if (
@@ -1004,11 +1032,11 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 				scopes.push(
 					combine([
 						eq(memories.scope, "persona"),
-						or(eq(memories.conversationId, session.sessionId), isNull(memories.conversationId)),
+						or(inArray(memories.conversationId, targetSessionIds), isNull(memories.conversationId)),
 					]),
 				);
 			}
-			const participants = await this.#resolveParticipants(database, session.sessionId);
+			const participants = await this.#resolveParticipants(database, targetSessionIds);
 			if (participants.length > 0) {
 				scopes.push(
 					combine([eq(memories.scope, "user"), inArray(memories.subjectUserId, participants)]),
@@ -1049,16 +1077,21 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 	 * Conversation participants for `scope = 'user'` memories: recorded members plus recent
 	 * inbound senders. Private chats have no member rows today, so the sender set carries them.
 	 */
-	async #resolveParticipants(database: TsukaimaDatabase, sessionId: string): Promise<string[]> {
+	async #resolveParticipants(
+		database: TsukaimaDatabase,
+		sessionIds: readonly string[],
+	): Promise<string[]> {
+		if (sessionIds.length === 0) return [];
+		const targetIds = [...sessionIds];
 		const [memberRows, senderRows] = await Promise.all([
 			database
 				.select({ userId: conversationMembers.userId })
 				.from(conversationMembers)
-				.where(eq(conversationMembers.conversationId, sessionId)),
+				.where(inArray(conversationMembers.conversationId, targetIds)),
 			database
 				.select({ userId: messages.senderUserId })
 				.from(messages)
-				.where(and(eq(messages.conversationId, sessionId), eq(messages.direction, "inbound")))
+				.where(and(inArray(messages.conversationId, targetIds), eq(messages.direction, "inbound")))
 				.orderBy(desc(messages.occurredAt))
 				.limit(50),
 		]);

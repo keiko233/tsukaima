@@ -77,7 +77,9 @@ export function stripMarkdownFormatting(text: string): string {
 			if (marker !== undefined && marker.startsWith(fence)) fence = undefined;
 			continue;
 		}
-		output.push(stripInlineMarkdown(line));
+		const stripped = stripInlineMarkdown(line);
+		if (stripped.trim().length === 0) continue;
+		output.push(stripped);
 	}
 	return output.join("\n");
 }

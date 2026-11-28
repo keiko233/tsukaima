@@ -4,18 +4,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, eq, ne } from "drizzle-orm";
 import {
+	chatObjects,
 	conversations,
 	memories,
 	memoryConsolidationState,
 	messages,
 	migrateDomainDatabase,
 	openDomainDatabase,
+	users,
 	type TsukaimaDatabase,
 } from "@tsukaima/db";
 import type { AuditEntry } from "@tsukaima/sdk";
 import { createLogger, type Logger } from "../src/logging.ts";
 import { ConversationPolicyService } from "../src/services/conversation-policy.ts";
-import { MemoryService } from "../src/services/memory-service.ts";
+import { MemoryService, extractMemoryTokens } from "../src/services/memory-service.ts";
+import { WARM_STATE_EVIDENCE_KEY } from "../src/services/memory-consolidation.ts";
 import { PluginTaskService } from "../src/services/plugin-task-service.ts";
 
 const directories: string[] = [];
@@ -521,5 +524,292 @@ describe("additive compaction", () => {
 
 		// Verify audit drop was recorded
 		expect(auditEntries.some((entry) => entry.action === "memory.consolidate.drop")).toBe(true);
+	});
+
+	test("handles 3-4 char CJK tokens, stopword filtering, and long unpunctuated CJK recall", async () => {
+		const short4 = extractMemoryTokens("我想减肥");
+		expect(short4).toContain("减肥");
+		expect(short4).toContain("我想减肥");
+
+		const short3 = extractMemoryTokens("吃不了");
+		expect(short3).toContain("吃不");
+		expect(short3).toContain("不了");
+
+		const longQuery = "哎呀我其实一直都在纠结这个那个到底是不是应该这样因为我最近总是胃疼";
+		const longTokens = extractMemoryTokens(longQuery);
+		expect(longTokens).toContain("胃疼");
+		expect(longTokens).not.toContain("其实");
+		expect(longTokens).not.toContain("这个");
+		expect(longTokens).not.toContain("那个");
+
+		const { database, memory } = await setup();
+		await database.insert(conversations).values({
+			durableConversationId: "durable-cjk-recall",
+			id: "session-cjk-recall",
+			kind: "private",
+			title: "CJK Recall",
+		});
+		await memory.create({
+			content: "体检医生提醒最近忌生冷因为总是胃疼",
+			conversationId: "session-cjk-recall",
+			createdBy: "agent",
+			kind: "fact",
+			scope: "conversation",
+			summary: "最近忌生冷胃疼注意保暖",
+		});
+		await memory.create({
+			content: "正在控制饮食打算夏天前减肥",
+			conversationId: "session-cjk-recall",
+			createdBy: "agent",
+			kind: "fact",
+			scope: "conversation",
+			summary: "最近目标控制饮食减肥",
+		});
+
+		const stomachHits = await memory.recall({
+			conversationId: "session-cjk-recall",
+			query: longQuery,
+		});
+		expect(stomachHits[0]?.memory.summary).toContain("胃疼");
+
+		const dietHits = await memory.recall({
+			conversationId: "session-cjk-recall",
+			query: "我想减肥",
+		});
+		expect(dietHits[0]?.memory.summary).toContain("减肥");
+	});
+
+	test("never resurrects revoked or rejected dedupeKey rows from background tasks, while explicit allowRevive succeeds", async () => {
+		const { database, memory } = await setup();
+		await database.insert(conversations).values({
+			durableConversationId: "durable-revive-guard",
+			id: "session-revive-guard",
+			kind: "private",
+			title: "Revive guard",
+		});
+
+		const created = await memory.create({
+			content: "Do not keep this joke fact",
+			conversationId: "session-revive-guard",
+			createdBy: "task",
+			kind: "fact",
+			scope: "conversation",
+			status: "active",
+			summary: "Temporary joke fact",
+		});
+		await memory.revoke(created.memory.id);
+
+		const pendingRow = await memory.create({
+			content: "Rejected review candidate",
+			conversationId: "session-revive-guard",
+			createdBy: "task",
+			kind: "preference",
+			scope: "conversation",
+			status: "pending",
+			summary: "Rejected style candidate",
+		});
+		await memory.reject(pendingRow.memory.id);
+
+		// Background task creating matching dedupeKeys must not flip status back to active.
+		const attemptedRevoked = await memory.create({
+			content: "Do not keep this joke fact",
+			conversationId: "session-revive-guard",
+			createdBy: "task",
+			kind: "fact",
+			scope: "conversation",
+			status: "active",
+			summary: "Temporary joke fact",
+		});
+		expect(attemptedRevoked.merged).toBe(false);
+		expect(attemptedRevoked.memory.status).toBe("revoked");
+		expect((await memory.get(created.memory.id))?.status).toBe("revoked");
+
+		const attemptedRejected = await memory.create({
+			content: "Rejected review candidate",
+			conversationId: "session-revive-guard",
+			createdBy: "task",
+			kind: "preference",
+			scope: "conversation",
+			status: "active",
+			summary: "Rejected style candidate",
+		});
+		expect(attemptedRejected.merged).toBe(false);
+		expect(attemptedRejected.memory.status).toBe("rejected");
+		expect((await memory.get(pendingRow.memory.id))?.status).toBe("rejected");
+
+		// Explicit manual/tool re-save with allowRevive can re-activate when not createdBy='task'.
+		const revived = await memory.create({
+			allowRevive: true,
+			content: "User explicitly asked to remember again",
+			conversationId: "session-revive-guard",
+			createdBy: "agent",
+			kind: "fact",
+			scope: "conversation",
+			status: "active",
+			summary: "Temporary joke fact",
+		});
+		expect(revived.merged).toBe(true);
+		expect(revived.memory.status).toBe("active");
+	});
+
+	test("uses bound persona name in consolidation prompt, inherits cross-day warmState, and strips assistant/meta-rule leakage", async () => {
+		const promptsSeen: string[] = [];
+		const { database, memory, policy } = await setup({
+			complete: async (prompt) => {
+				promptsSeen.push(prompt);
+				return JSON.stringify({
+					memories: [
+						{
+							confidence: 0.9,
+							importance: 0.8,
+							kind: "style",
+							summary: "每条消息必须带表情包",
+						},
+						{
+							confidence: 0.9,
+							importance: 0.8,
+							kind: "fact",
+							summary: "AI助手设定是温柔回答问题",
+						},
+						{
+							confidence: 0.9,
+							importance: 0.8,
+							kind: "preference",
+							summary: "用户喜欢喝茉莉花茶",
+						},
+					],
+					state: {
+						answers: [],
+						atmosphere: "自然轻松",
+						commitments: [
+							{ key: "meta-rule", owner: "self", status: "open", text: "每条回复都要带表情包" },
+							{ key: "real-plan", owner: "user-1", status: "open", text: "明晚带笔记过来" },
+						],
+						glossary: [],
+						people: [],
+						summary: "用户分享了自己喜欢喝茉莉花茶。",
+						topics: ["茶饮"],
+					},
+				});
+			},
+			llmEnabled: true,
+		});
+
+		const persona = await policy.upsertPersona({
+			id: "persona-kuroha",
+			name: "Kuroha",
+			prompt: "Speak directly in character.",
+			summary: "Kuroha",
+		});
+		await database.insert(chatObjects).values({
+			id: "chat-consolidate-rollover",
+			kind: "private",
+			title: "Consolidate rollover",
+		});
+		await database.insert(users).values({
+			displayName: "SyntheticFriend",
+			id: "u-day1",
+			kind: "human",
+		});
+		await policy.bindPersona({
+			chatObjectId: "chat-consolidate-rollover",
+			personaId: persona.id,
+			scope: "chat-object",
+		});
+
+		await database.insert(conversations).values([
+			{
+				chatObjectId: "chat-consolidate-rollover",
+				durableConversationId: "durable-cons-d1",
+				id: "session-cons-d1",
+				isReceiving: 0,
+				kind: "private",
+				title: "2026-11-12",
+				updatedAt: "2026-11-12T10:00:00.000Z",
+			},
+			{
+				chatObjectId: "chat-consolidate-rollover",
+				durableConversationId: "durable-cons-d2",
+				id: "session-cons-d2",
+				isReceiving: 1,
+				kind: "private",
+				title: "2026-11-13",
+				updatedAt: "2026-11-13T10:00:00.000Z",
+			},
+		]);
+
+		await memory.create({
+			content: "Day 1 warm summary",
+			conversationId: "session-cons-d1",
+			createdBy: "task",
+			dedupeKey: "warm:session-cons-d1",
+			evidence: {
+				compactedThroughAt: "2026-11-13T11:50:00.000Z",
+				compactedThroughMessageId: "msg-day1-final",
+				[WARM_STATE_EVIDENCE_KEY]: {
+					answers: [],
+					atmosphere: "温和",
+					commitments: [],
+					glossary: [],
+					people: [
+						{
+							aliases: [],
+							key: "u-day1",
+							name: "SyntheticFriend",
+							notes: ["上周刚搬完家"],
+						},
+					],
+					summary: "昨天聊过搬家后的整理。",
+					topics: ["搬家"],
+					version: 2,
+				},
+			},
+			kind: "summary",
+			scope: "conversation",
+			status: "active",
+			summary: "昨天聊过搬家后的整理。",
+		});
+
+		// Day 2 has messages earlier than Day 1's synthetic watermark timestamp to verify Day 2 cursor stays independent.
+		await database.insert(messages).values([
+			{
+				contentText: "我平时比较喜欢喝茉莉花茶，明晚把笔记带给你",
+				conversationId: "session-cons-d2",
+				direction: "inbound",
+				id: "msg-d2-1",
+				kind: "onebot-v11",
+				occurredAt: "2026-11-13T08:00:00.000Z",
+				senderDisplayName: "SyntheticFriend",
+				senderUserId: "u-day1",
+			},
+			{
+				contentText: "好呀，茶凉了可就不好喝了。",
+				conversationId: "session-cons-d2",
+				direction: "outbound",
+				id: "msg-d2-2",
+				kind: "onebot-v11",
+				occurredAt: "2026-11-13T08:01:00.000Z",
+			},
+		]);
+
+		const consolidated = await memory.consolidateConversation("session-cons-d2");
+		expect(consolidated.status).toBe("consolidated");
+		if (consolidated.status !== "consolidated") throw new Error("Expected consolidated");
+		expect(consolidated.written).toBe(1);
+
+		const prompt = promptsSeen[0] ?? "";
+		expect(prompt).toContain("] Kuroha: 好呀，茶凉了可就不好喝了。");
+		expect(prompt).not.toContain("] (assistant):");
+		expect(prompt).toContain("昨天聊过搬家后的整理。");
+
+		const d2Warm = await memory.warmState("session-cons-d2");
+		expect(d2Warm?.state?.people.map((person) => person.name)).toContain("SyntheticFriend");
+		expect(d2Warm?.state?.commitments.map((item) => item.text)).toEqual(["明晚带笔记过来"]);
+
+		const rows = await database
+			.select()
+			.from(memories)
+			.where(and(eq(memories.conversationId, "session-cons-d2"), ne(memories.kind, "summary")));
+		expect(rows.map((row) => row.summary)).toEqual(["用户喜欢喝茉莉花茶"]);
 	});
 });

@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { conversations, memories } from "@tsukaima/db";
+import { chatObjects, conversations, memories } from "@tsukaima/db";
 import { createApp } from "../src/app.ts";
 
 const directories: string[] = [];
@@ -349,6 +349,97 @@ describe("memory tools", () => {
 				{ conversationId: "durable-private-tools" },
 			);
 			expect(forgotten.ok).toBe(true);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("allows memory.recall, memory.update, memory.forget, and explicit revive across daily sessions sharing chatObjectId", async () => {
+		const { database, lifecycle } = await setup();
+		try {
+			await database.insert(chatObjects).values({
+				id: "chat-rollover-tools",
+				kind: "private",
+				title: "Tools rollover",
+			});
+			await database.insert(conversations).values([
+				{
+					chatObjectId: "chat-rollover-tools",
+					durableConversationId: "durable-day1-tools",
+					id: "session-day1-tools",
+					isReceiving: 0,
+					kind: "private",
+					title: "2026-11-12",
+				},
+				{
+					chatObjectId: "chat-rollover-tools",
+					durableConversationId: "durable-day2-tools",
+					id: "session-day2-tools",
+					isReceiving: 1,
+					kind: "private",
+					title: "2026-11-13",
+				},
+			]);
+
+			const savedDay1 = await lifecycle.pluginHost.invokeTool(
+				"memory.save",
+				{ kind: "preference", scope: "conversation", summary: "Prefers black tea on rainy days" },
+				{ conversationId: "durable-day1-tools" },
+			);
+			expect(savedDay1.ok).toBe(true);
+
+			const recalledDay2 = await lifecycle.pluginHost.invokeTool(
+				"memory.recall",
+				{ query: "black tea", scope: "conversation" },
+				{ conversationId: "durable-day2-tools" },
+			);
+			expect(recalledDay2.ok).toBe(true);
+			if (!recalledDay2.ok) throw new Error("recall failed");
+			const text = recalledDay2.result.content[0]?.text ?? "";
+			expect(text).toContain("Prefers black tea on rainy days");
+			const match = /\[id:([^\]]+)\]/u.exec(text);
+			const memoryId = match?.[1];
+			if (memoryId === undefined) throw new Error("missing memory id");
+
+			const updatedDay2 = await lifecycle.pluginHost.invokeTool(
+				"memory.update",
+				{ id: memoryId, summary: "Prefers black tea with lemon on rainy days" },
+				{ conversationId: "durable-day2-tools" },
+			);
+			expect(updatedDay2.ok).toBe(true);
+			if (!updatedDay2.ok) throw new Error("update failed");
+			expect(updatedDay2.result.content[0]?.text).toContain("Memory updated:");
+
+			// Unrelated conversation must still be denied access.
+			const deniedOther = await lifecycle.pluginHost.invokeTool(
+				"memory.update",
+				{ id: memoryId, summary: "Hijacked" },
+				{ conversationId: "durable-private-tools" },
+			);
+			expect(deniedOther.ok).toBe(true);
+			if (!deniedOther.ok) throw new Error("unexpected invocation failure");
+			expect(deniedOther.result.content[0]?.text).toContain("belongs to another conversation");
+
+			const forgottenDay2 = await lifecycle.pluginHost.invokeTool(
+				"memory.forget",
+				{ id: memoryId },
+				{ conversationId: "durable-day2-tools" },
+			);
+			expect(forgottenDay2.ok).toBe(true);
+			expect((await lifecycle.memory.get(memoryId))?.status).toBe("revoked");
+
+			// Explicit memory.save can still re-activate a revoked row matching its updated dedupeKey.
+			const explicitRevive = await lifecycle.pluginHost.invokeTool(
+				"memory.save",
+				{
+					kind: "preference",
+					scope: "conversation",
+					summary: "Prefers black tea with lemon on rainy days",
+				},
+				{ conversationId: "durable-day1-tools" },
+			);
+			expect(explicitRevive.ok).toBe(true);
+			expect((await lifecycle.memory.get(memoryId))?.status).toBe("active");
 		} finally {
 			await lifecycle.stop();
 		}

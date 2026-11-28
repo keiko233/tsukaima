@@ -10,6 +10,8 @@ import {
 	type DurableToolRegistration,
 } from "@tsukaima/core";
 import {
+	chatObjects,
+	chatSnapshots,
 	conversationMembers,
 	conversations,
 	memories,
@@ -842,6 +844,16 @@ test("injects a dynamic style avoid-list and rhythm nudge into ephemeral turn co
 			occurredAt: new Date(now - (4 - index) * 60_000).toISOString(),
 		});
 	}
+	const policyService = new ConversationPolicyService({
+		database: () => database,
+		host: () => undefined,
+		logger,
+	});
+	await policyService.update({
+		conversationId: "session-style",
+		policy: { humanization: { rhythmVarietyEnabled: true } },
+		scope: "conversation",
+	});
 	const context = provider(database);
 	const sections = await context.renderTurnContext({
 		conversationId: "durable-style",
@@ -1167,4 +1179,229 @@ describe("activity and reply hooks", () => {
 			await lifecycle.stop();
 		}
 	}, 25_000);
+});
+
+describe("cross-day chatObjectId memory continuity and isolation", () => {
+	test("carries warmState, conversation/persona/user memories, and Q&A answers across daily sessions while preserving workspace and snapshot boundaries", async () => {
+		const { database } = await openFixture();
+		const now = Date.UTC(2026, 0, 2, 10, 0);
+		await database.insert(chatObjects).values({
+			id: "chat-obj-daily",
+			kind: "private",
+			title: "Daily chat",
+		});
+		await database.insert(users).values({
+			displayName: "SyntheticUser",
+			id: "user-day-1",
+			kind: "human",
+		});
+		await database.insert(personas).values({
+			aliasesJson: "[]",
+			behaviorJson: "{}",
+			createdAt: new Date(now - 10_000).toISOString(),
+			createdBy: "admin",
+			id: "persona-cross-day",
+			isActive: 1,
+			name: "Chrona",
+			promptJson: JSON.stringify("Stay warm and concise."),
+			summary: "Chrona",
+			version: 1,
+		});
+		await database.insert(personaBindings).values({
+			chatObjectId: "chat-obj-daily",
+			createdAt: new Date(now - 9_000).toISOString(),
+			id: "binding-cross-day",
+			isActive: 1,
+			isGlobal: 0,
+			personaId: "persona-cross-day",
+		});
+		await database.insert(conversations).values([
+			{
+				chatObjectId: "chat-obj-daily",
+				durableConversationId: "durable-day-1",
+				id: "session-day-1",
+				isReceiving: 0,
+				kind: "private",
+				title: "2026-01-01",
+				updatedAt: new Date(now - 3_600_000).toISOString(),
+			},
+			{
+				chatObjectId: "chat-obj-daily",
+				durableConversationId: "durable-day-2",
+				id: "session-day-2",
+				isReceiving: 1,
+				kind: "private",
+				title: "2026-01-02",
+				updatedAt: new Date(now).toISOString(),
+			},
+			{
+				chatObjectId: "chat-obj-daily",
+				durableConversationId: "durable-workspace-same-obj",
+				id: "session-workspace-same-obj",
+				isReceiving: 0,
+				kind: "workspace",
+				title: "Workspace task",
+				updatedAt: new Date(now).toISOString(),
+			},
+		]);
+		await database.insert(messages).values({
+			contentText: "昨天我定了周末一起爬山的计划",
+			conversationId: "session-day-1",
+			direction: "inbound",
+			id: "msg-day1-user",
+			kind: "onebot-v11",
+			occurredAt: new Date(now - 3_600_000).toISOString(),
+			senderDisplayName: "SyntheticUser",
+			senderUserId: "user-day-1",
+		});
+		await database.insert(memories).values([
+			{
+				content: "Day 1 warm summary",
+				conversationId: "session-day-1",
+				createdBy: "task",
+				dedupeKey: "warm:session-day-1",
+				evidenceJson: JSON.stringify({
+					state: {
+						answers: [
+							{
+								answeredAt: new Date(now - 3_500_000).toISOString(),
+								key: "hike-time",
+								question: "周六几点出发爬山？",
+								answer: "早上八点在地铁口集合。",
+							},
+						],
+						atmosphere: "轻松",
+						commitments: [
+							{
+								key: "bring-water",
+								owner: "user-day-1",
+								status: "open",
+								text: "记得带水",
+							},
+						],
+						glossary: [],
+						people: [
+							{
+								aliases: [],
+								key: "user-day-1",
+								lastSeenAt: new Date(now - 3_500_000).toISOString(),
+								name: "SyntheticUser",
+								notes: ["喜欢乌龙茶"],
+							},
+						],
+						summary: "昨天约好周末爬山。",
+						topics: ["爬山"],
+						version: 2,
+					},
+				}),
+				id: "mem-day1-warm",
+				importance: 0.65,
+				kind: "summary",
+				scope: "conversation",
+				status: "active",
+				summary: "昨天约好周末爬山。",
+				updatedAt: new Date(now - 3_500_000).toISOString(),
+			},
+			{
+				content: "不能喝黑咖啡会胃疼，偏好无糖乌龙茶",
+				conversationId: "session-day-1",
+				createdBy: "task",
+				id: "mem-day1-conv",
+				importance: 0.9,
+				kind: "preference",
+				scope: "conversation",
+				status: "active",
+				summary: "胃不好偏好无糖乌龙茶",
+			},
+			{
+				content: "Chrona在私聊里答应提醒对方别忘了防晒",
+				conversationId: "session-day-1",
+				createdBy: "agent",
+				id: "mem-day1-persona",
+				importance: 0.85,
+				kind: "persona",
+				scope: "persona",
+				status: "active",
+				summary: "私聊提醒防晒",
+			},
+			{
+				content: "User allergy note",
+				createdBy: "agent",
+				id: "mem-day1-user",
+				importance: 0.8,
+				kind: "fact",
+				scope: "user",
+				status: "active",
+				subjectUserId: "user-day-1",
+				summary: "SyntheticUser对花生过敏",
+			},
+		]);
+
+		const context = provider(database);
+		const day2Sections = await context.renderTurnContext({
+			conversationId: "durable-day-2",
+			inputs: [{ text: "周六几点出发爬山？记得防晒吗" }],
+			nowMs: now,
+			triggers: [{ classification: "direct" }],
+		});
+		const day2Memories = day2Sections.find((section) => section.key === "memories")?.text ?? "";
+		const day2Consistency =
+			day2Sections.find((section) => section.key === "consistency")?.text ?? "";
+
+		expect(day2Memories).toContain("昨天约好周末爬山");
+		expect(day2Memories).toContain("胃不好偏好无糖乌龙茶");
+		expect(day2Memories).toContain("私聊提醒防晒");
+		expect(day2Memories).toContain("SyntheticUser对花生过敏");
+		expect(day2Consistency).toContain("早上八点在地铁口集合");
+
+		// When day 2 writes its own warm:day2, day 1's stale warm row does not duplicate into long-term bullets.
+		await database.insert(memories).values({
+			content: "Day 2 warm summary",
+			conversationId: "session-day-2",
+			createdBy: "task",
+			dedupeKey: "warm:session-day-2",
+			evidenceJson: JSON.stringify({
+				state: {
+					answers: [],
+					atmosphere: "愉快",
+					commitments: [],
+					glossary: [],
+					people: [],
+					summary: "第二天继续准备爬山物品。",
+					topics: ["爬山", "防晒"],
+					version: 2,
+				},
+			}),
+			id: "mem-day2-warm",
+			importance: 0.65,
+			kind: "summary",
+			scope: "conversation",
+			status: "active",
+			summary: "第二天继续准备爬山物品。",
+			updatedAt: new Date(now + 1000).toISOString(),
+		});
+		const afterDay2Warm = (await context.renderMemories("durable-day-2")) ?? "";
+		expect(afterDay2Warm).toContain("第二天继续准备爬山物品");
+		expect(afterDay2Warm).not.toContain("昨天约好周末爬山");
+
+		// Workspace sessions remain strictly isolated even if chatObjectId matches.
+		const wsInspect = await context.inspectContext("durable-workspace-same-obj");
+		expect(wsInspect.memories.enabled).toBe(false);
+		expect(wsInspect.memories.items).toHaveLength(0);
+
+		// Snapshot-restored session stays isolated to its post-restore state.
+		await database.insert(chatSnapshots).values({
+			appliedAt: new Date(now + 2000).toISOString(),
+			conversationId: "session-day-2",
+			createdAt: new Date(now + 2000).toISOString(),
+			createdBy: "admin",
+			id: "snap-applied-day2",
+			payloadJson: "{}",
+			status: "applied",
+			title: "Restored boundary",
+		});
+		const postRestoreText = (await context.renderMemories("durable-day-2")) ?? "";
+		expect(postRestoreText).toContain("第二天继续准备爬山物品");
+		expect(postRestoreText).not.toContain("胃不好偏好无糖乌龙茶");
+	});
 });

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { durableDocumentKinds, type MessageEnvelope } from "@tsukaima/contracts";
+import { formatCompactionSummary } from "@tsukaima/core";
 import { auditLog, conversations, identities, media, messages, users } from "@tsukaima/db";
 import type { ChannelAdapter, ChannelDiagnostics } from "@tsukaima/sdk";
 import { createApp } from "../src/app.ts";
@@ -528,6 +529,69 @@ describe("ConversationRouter ingestion boundary", () => {
 				.where(eq(auditLog.action, "session.rollover"));
 			expect(audits).toHaveLength(1);
 			expect(audits[0]?.targetId).toBe(rolledA.sessionId);
+		} finally {
+			await lifecycle.stop();
+		}
+	});
+
+	test("drops stale carried-forward baseline on daily rollover after persona change", async () => {
+		const lifecycle = await createLifecycle();
+		try {
+			const database = lifecycle.domainDatabase;
+			const host = lifecycle.conversationHost;
+			if (database === undefined || host === undefined) {
+				throw new Error("domain database or host not ready");
+			}
+			const first = await lifecycle.conversationRouter.ingest(envelope("persona-d1-1", "hi day 1"));
+			const idleDay2Durable = await host.createConversation();
+			await host.resetConversation(
+				idleDay2Durable,
+				formatCompactionSummary("Old persona habit that must not carry forever"),
+			);
+			const yesterdayIso = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
+			await database
+				.update(conversations)
+				.set({ isReceiving: 0 })
+				.where(eq(conversations.chatObjectId, first.chatObjectId));
+			await database.insert(conversations).values({
+				channelId: "onebot-test",
+				chatObjectId: first.chatObjectId,
+				createdAt: yesterdayIso,
+				durableConversationId: idleDay2Durable,
+				id: "session-idle-prev",
+				isReceiving: 1,
+				kind: "private",
+				platformConversationId: "user-1",
+				title: "Idle previous day",
+				updatedAt: yesterdayIso,
+			});
+
+			const updatedPersona = await lifecycle.conversationPolicy.upsertPersona({
+				id: "persona-fresh-rollover",
+				name: "Nozomi",
+				prompt: "Fresh persona",
+				summary: "Fresh",
+			});
+			await lifecycle.conversationPolicy.bindPersona({
+				chatObjectId: first.chatObjectId,
+				personaId: updatedPersona.id,
+				scope: "chat-object",
+			});
+
+			const day3 = await lifecycle.conversationRouter.ingest(envelope("persona-d3-1", "hi day 3"));
+			expect(day3.sessionId).not.toBe("session-idle-prev");
+
+			const audits = await database
+				.select()
+				.from(auditLog)
+				.where(eq(auditLog.action, "session.rollover"));
+			const rolloverAudit = audits.find((entry) => entry.targetId === day3.sessionId);
+			expect(rolloverAudit).toBeDefined();
+			expect(JSON.parse(rolloverAudit?.payloadJson ?? "{}")).toMatchObject({
+				baselineMethod: "none",
+				baselineSeeded: false,
+				previousSessionId: "session-idle-prev",
+			});
 		} finally {
 			await lifecycle.stop();
 		}
