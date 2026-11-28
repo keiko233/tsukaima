@@ -10,6 +10,7 @@ export const ACP_RUNTIME_UNINSTALL_RPC = "acp.runtime.uninstall";
 export const ACP_AUTH_STATUS_RPC = "acp.auth.status";
 export const ACP_AUTH_LOGIN_START_RPC = "acp.auth.loginStart";
 export const ACP_AUTH_LOGIN_POLL_RPC = "acp.auth.loginPoll";
+export const ACP_AUTH_LOGIN_SUBMIT_RPC = "acp.auth.loginSubmit";
 export const ACP_AUTH_LOGIN_CANCEL_RPC = "acp.auth.loginCancel";
 
 const acpModelJsonSchema = {

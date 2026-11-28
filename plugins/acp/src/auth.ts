@@ -64,6 +64,7 @@ export interface AcpAuthStatusSnapshot {
 
 export interface AcpAuthLoginResult {
 	readonly message?: string;
+	readonly needsInput?: boolean;
 	readonly output?: string;
 	readonly preset: AcpAuthPreset;
 	readonly status: AcpAuthLoginState;
@@ -83,6 +84,7 @@ export interface AcpAuthLoginProcess {
 	onError(listener: (error: Error) => void): void;
 	onExit(listener: (exitCode: number | null) => void): void;
 	onOutput(listener: (chunk: string) => void): void;
+	writeInput?(text: string): void;
 }
 
 export interface AcpAuthServiceOptions {
@@ -289,7 +291,7 @@ export class AcpAuthService {
 				} else {
 					session.status = "failed";
 					session.error =
-						firstLine(stripAnsi(session.output)) ||
+						lastLine(stripAnsi(session.output)) ||
 						`Login exited with code ${exitCode ?? "unknown"}`;
 				}
 			}
@@ -338,6 +340,29 @@ export class AcpAuthService {
 		return result;
 	}
 
+	async submitLoginInput(preset: AcpAuthPreset, input: string): Promise<AcpAuthLoginResult> {
+		const session = this.#sessions.get(preset);
+		if (session === undefined) {
+			return { message: "No active login session.", preset, status: "idle" };
+		}
+		if (session.status !== "pending") {
+			const result = this.#toLoginResult(session);
+			this.#sessions.delete(preset);
+			return result;
+		}
+		const trimmed = input.trim();
+		if (trimmed.length === 0) {
+			return this.#toLoginResult(session);
+		}
+		session.process.writeInput?.(`${trimmed}\n`);
+		await new Promise<void>((resolve) => setTimeout(resolve, Math.min(this.#initialWaitMs, 1_500)));
+		const result = this.#toLoginResult(session);
+		if (session.status !== "pending") {
+			this.#sessions.delete(preset);
+		}
+		return result;
+	}
+
 	cancelLogin(preset: AcpAuthPreset): AcpAuthLoginResult {
 		this.#cancelSession(preset);
 		return { preset, status: "idle" };
@@ -365,9 +390,14 @@ export class AcpAuthService {
 
 	#toLoginResult(session: ActiveLoginSession): AcpAuthLoginResult {
 		const cleaned = stripAnsi(session.output).trim();
+		const needsInput =
+			session.status === "pending" &&
+			(session.preset === "antigravity" ||
+				/paste the authorization code|press enter|paste.*code/iu.test(cleaned));
 		return {
 			preset: session.preset,
 			status: session.status,
+			...(needsInput ? { needsInput: true } : {}),
 			...(session.error === undefined ? {} : { message: session.error }),
 			...(cleaned.length === 0 ? {} : { output: cleaned }),
 			...(session.userCode === undefined ? {} : { userCode: session.userCode }),
@@ -502,6 +532,14 @@ function firstLine(value: string): string {
 	).slice(0, 240);
 }
 
+function lastLine(value: string): string {
+	const lines = value
+		.split(/\r?\n/u)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	return (lines.at(-1) ?? "").slice(0, 240);
+}
+
 async function isRegularFile(filePath: string): Promise<boolean> {
 	try {
 		return (await stat(filePath)).isFile();
@@ -559,7 +597,7 @@ function defaultSpawnLogin(
 ): AcpAuthLoginProcess {
 	const child = spawn(command, [...args], {
 		env: options.env,
-		stdio: ["ignore", "pipe", "pipe"],
+		stdio: ["pipe", "pipe", "pipe"],
 	});
 	return {
 		get exitCode() {
@@ -577,6 +615,11 @@ function defaultSpawnLogin(
 		onOutput: (listener) => {
 			child.stdout?.on("data", (chunk: Buffer) => listener(chunk.toString("utf8")));
 			child.stderr?.on("data", (chunk: Buffer) => listener(chunk.toString("utf8")));
+		},
+		writeInput: (text) => {
+			if (!child.stdin.destroyed && child.stdin.writable) {
+				child.stdin.write(text);
+			}
 		},
 	};
 }

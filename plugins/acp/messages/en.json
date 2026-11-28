@@ -138,6 +138,8 @@
 	"auth_login_title": "Sign in to {name}",
 	"auth_login_open_link": "Open sign-in link",
 	"auth_login_code_label": "One-time code",
+	"auth_login_input_placeholder": "Paste the authorization code or full callback URL",
+	"auth_login_submit": "Submit",
 	"auth_login_waiting": "Complete sign-in in your browser. Status will update automatically…",
 	"auth_login_success": "Signed in to {name}",
 	"auth_login_failed": "Could not sign in to {name}",
