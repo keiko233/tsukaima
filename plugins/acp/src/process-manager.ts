@@ -48,6 +48,7 @@ export function buildAcpProcessEnv(options: AcpProcessEnvOptions = {}): Record<s
 	const pathEntries: string[] = [];
 	const toolsRootDir = options.toolsRootDir;
 	if (toolsRootDir !== undefined && toolsRootDir.trim().length > 0) {
+		pathEntries.push(join(toolsRootDir, "bin"));
 		pathEntries.push(join(toolsRootDir, "node_modules", ".bin"));
 	}
 	if (home !== undefined) {
