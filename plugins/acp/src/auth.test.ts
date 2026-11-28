@@ -169,6 +169,31 @@ describe("AcpAuthService", () => {
 		}
 	});
 
+	test("detects antigravity auth status from oauth token file", async () => {
+		const root = await tempDir("tsukaima-acp-auth-agy-");
+		const homeDir = join(root, "home");
+		const binDir = join(root, "bin");
+		await mkdir(binDir, { recursive: true });
+		await writeFile(join(binDir, "agy"), "#!/bin/sh\nexit 0\n");
+
+		const service = new AcpAuthService({
+			homeDir,
+			resolvePathBinary: () => undefined,
+			toolsRootDir: root,
+		});
+
+		const before = await service.status("antigravity");
+		expect(before.providers[0]?.available).toBe(true);
+		expect(before.providers[0]?.authenticated).toBe(false);
+
+		const tokenDir = join(homeDir, ".gemini", "antigravity-cli");
+		await mkdir(tokenDir, { recursive: true });
+		await writeFile(join(tokenDir, "antigravity-oauth-token"), "synthetic-token");
+
+		const after = await service.status("antigravity");
+		expect(after.providers[0]?.authenticated).toBe(true);
+	});
+
 	test("returns failed when binary is not installed", async () => {
 		const root = await tempDir("tsukaima-acp-auth-missing-");
 		const service = new AcpAuthService({
