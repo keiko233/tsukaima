@@ -294,7 +294,125 @@ const STOPWORDS = new Set([
 	"your",
 ]);
 
+const CJK_STOPWORDS = new Set([
+	"一个",
+	"一种",
+	"一下",
+	"一点",
+	"一直",
+	"也是",
+	"以及",
+	"以后",
+	"以前",
+	"但是",
+	"或者",
+	"所以",
+	"因为",
+	"如果",
+	"虽然",
+	"不过",
+	"而且",
+	"然后",
+	"其实",
+	"已经",
+	"现在",
+	"时候",
+	"自己",
+	"大家",
+	"他们",
+	"她们",
+	"它们",
+	"我们",
+	"你们",
+	"我的",
+	"你的",
+	"他的",
+	"她的",
+	"它的",
+	"谁的",
+	"啥的",
+	"的是",
+	"了的",
+	"的了",
+	"好的",
+	"真的",
+	"是的",
+	"有的",
+	"别的",
+	"那个",
+	"这个",
+	"哪个",
+	"这么",
+	"那么",
+	"怎么",
+	"什么",
+	"为什么",
+	"可以",
+	"可以吗",
+	"能不能",
+	"要不要",
+	"不是",
+	"没有",
+	"不会",
+	"不能",
+	"不要",
+	"就是",
+	"还是",
+	"都是",
+	"就会",
+	"也就",
+	"有点",
+	"觉得",
+	"知道",
+	"好像",
+	"正在",
+	"这样",
+	"那样",
+	"只是",
+	"应该",
+	"可能",
+	"的话",
+	"到底",
+	"关于",
+	"对于",
+	"好吗",
+	"行吧",
+	"嗯嗯",
+	"哈哈",
+	"呵呵",
+]);
+
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const CJK_PARTICLES = /^[的了呢吗啊吧呀嘛哦嗯]$/u;
+
+function isCjkStopwordToken(token: string): boolean {
+	if (CJK_STOPWORDS.has(token)) return true;
+	return (
+		token.length === 2 && CJK_PARTICLES.test(token[0] ?? "") && CJK_PARTICLES.test(token[1] ?? "")
+	);
+}
+
+function cjkBigrams(raw: string): string[] {
+	const grams: string[] = [];
+	const push = (index: number) => {
+		const gram = raw.slice(index, index + 2);
+		if (!isCjkStopwordToken(gram)) grams.push(gram);
+	};
+	if (raw.length <= 6) {
+		for (let index = 0; index + 2 <= raw.length; index += 1) push(index);
+		return grams;
+	}
+	// Walk outside-in so long unpunctuated CJK runs preserve tail predicates/nouns as well as heads.
+	let left = 0;
+	let right = raw.length - 2;
+	while (left <= right) {
+		push(right);
+		if (left < right) push(left);
+		left += 1;
+		right -= 1;
+	}
+	return grams;
+}
 
 function nowIso(date: Date): string {
 	return date.toISOString();
@@ -338,23 +456,30 @@ export function canonicalTextStem(text: string): string {
 }
 
 export function extractMemoryTokens(text: string, limit = MAX_QUERY_TOKENS): string[] {
-	const tokens = new Set<string>();
+	const buckets: string[][] = [];
 	for (const raw of text
 		.toLowerCase()
 		.normalize("NFKC")
 		.split(/[^\p{L}\p{N}]+/u)) {
-		if (raw.length < 2 || STOPWORDS.has(raw)) continue;
+		if (raw.length < 2 || STOPWORDS.has(raw) || isCjkStopwordToken(raw)) continue;
 		if (CJK.test(raw)) {
-			if (raw.length <= 12) tokens.add(raw);
-			if (raw.length > 4) {
-				for (let index = 0; index + 2 <= raw.length && tokens.size < limit; index += 1) {
-					tokens.add(raw.slice(index, index + 2));
-				}
-			}
+			const bucket: string[] = [];
+			if (raw.length <= 12) bucket.push(raw);
+			if (raw.length >= 3) bucket.push(...cjkBigrams(raw));
+			if (bucket.length > 0) buckets.push(bucket);
 		} else {
-			tokens.add(raw.slice(0, 32));
+			buckets.push([raw.slice(0, 32)]);
 		}
-		if (tokens.size >= limit) break;
+	}
+	const tokens = new Set<string>();
+	const maxBucketLength = buckets.reduce((max, bucket) => Math.max(max, bucket.length), 0);
+	for (let offset = 0; offset < maxBucketLength && tokens.size < limit; offset += 1) {
+		for (const bucket of buckets) {
+			const token = bucket[offset];
+			if (token === undefined) continue;
+			tokens.add(token);
+			if (tokens.size >= limit) break;
+		}
 	}
 	return [...tokens].slice(0, limit);
 }

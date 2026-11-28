@@ -17,7 +17,7 @@ import {
 import type { AuditEntry } from "@tsukaima/sdk";
 import { createLogger, type Logger } from "../src/logging.ts";
 import { ConversationPolicyService } from "../src/services/conversation-policy.ts";
-import { MemoryService } from "../src/services/memory-service.ts";
+import { MemoryService, extractMemoryTokens } from "../src/services/memory-service.ts";
 import { WARM_STATE_EVIDENCE_KEY } from "../src/services/memory-consolidation.ts";
 import { PluginTaskService } from "../src/services/plugin-task-service.ts";
 
@@ -524,6 +524,59 @@ describe("additive compaction", () => {
 
 		// Verify audit drop was recorded
 		expect(auditEntries.some((entry) => entry.action === "memory.consolidate.drop")).toBe(true);
+	});
+
+	test("handles 3-4 char CJK tokens, stopword filtering, and long unpunctuated CJK recall", async () => {
+		const short4 = extractMemoryTokens("我想减肥");
+		expect(short4).toContain("减肥");
+		expect(short4).toContain("我想减肥");
+
+		const short3 = extractMemoryTokens("吃不了");
+		expect(short3).toContain("吃不");
+		expect(short3).toContain("不了");
+
+		const longQuery = "哎呀我其实一直都在纠结这个那个到底是不是应该这样因为我最近总是胃疼";
+		const longTokens = extractMemoryTokens(longQuery);
+		expect(longTokens).toContain("胃疼");
+		expect(longTokens).not.toContain("其实");
+		expect(longTokens).not.toContain("这个");
+		expect(longTokens).not.toContain("那个");
+
+		const { database, memory } = await setup();
+		await database.insert(conversations).values({
+			durableConversationId: "durable-cjk-recall",
+			id: "session-cjk-recall",
+			kind: "private",
+			title: "CJK Recall",
+		});
+		await memory.create({
+			content: "体检医生提醒最近忌生冷因为总是胃疼",
+			conversationId: "session-cjk-recall",
+			createdBy: "agent",
+			kind: "fact",
+			scope: "conversation",
+			summary: "最近忌生冷胃疼注意保暖",
+		});
+		await memory.create({
+			content: "正在控制饮食打算夏天前减肥",
+			conversationId: "session-cjk-recall",
+			createdBy: "agent",
+			kind: "fact",
+			scope: "conversation",
+			summary: "最近目标控制饮食减肥",
+		});
+
+		const stomachHits = await memory.recall({
+			conversationId: "session-cjk-recall",
+			query: longQuery,
+		});
+		expect(stomachHits[0]?.memory.summary).toContain("胃疼");
+
+		const dietHits = await memory.recall({
+			conversationId: "session-cjk-recall",
+			query: "我想减肥",
+		});
+		expect(dietHits[0]?.memory.summary).toContain("减肥");
 	});
 
 	test("never resurrects revoked or rejected dedupeKey rows from background tasks, while explicit allowRevive succeeds", async () => {

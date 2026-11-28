@@ -975,8 +975,11 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 		const scopeFilter = await this.#scopeFilter(database, session, sessionIds, policy);
 		const query = compact(
 			uniq([
-				...inputs.slice(-RECALL_QUERY_MESSAGE_LIMIT).map((input) => snippet(input.text ?? "", 600)),
-				...recent.map((row) => snippet(row.contentText ?? "", 600)),
+				...inputs
+					.slice(-RECALL_QUERY_MESSAGE_LIMIT)
+					.toReversed()
+					.map((input) => snippet(input.text ?? "", 600)),
+				...recent.toReversed().map((row) => snippet(row.contentText ?? "", 600)),
 				...(warm?.state?.topics ?? []),
 			]),
 		).join("\n");
