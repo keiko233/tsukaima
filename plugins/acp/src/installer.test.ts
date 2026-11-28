@@ -276,26 +276,52 @@ describe("AcpRuntimeInstaller.install", () => {
 		expect(isValidPackageSpec("@scope/pkg@>=1.2.3 <2.0.0")).toBe(false);
 	});
 
-	test("returns the manual install hint for system runtimes", async () => {
-		const toolsRootDir = await tempDir("tsukaima-acp-install-system-");
+	test("installs antigravity-cli via its official bootstrap script into toolsRootDir/bin", async () => {
+		const toolsRootDir = await tempDir("tsukaima-acp-install-agy-");
 		const fake = createFakeExec();
 		const installer = new AcpRuntimeInstaller({
 			exec: fake.exec,
 			pathEnv: "",
 			toolsRootDir,
 		});
-		const spec = ACP_RUNTIME_PACKAGES.find((candidate) => candidate.id === "antigravity-cli");
+		const controller = new AbortController();
+
+		const result = await installer.install({ id: "antigravity-cli", signal: controller.signal });
+
+		expect(result).toMatchObject({
+			id: "antigravity-cli",
+			ok: true,
+			packages: [],
+		});
+		expect(fake.calls).toHaveLength(1);
+		expect(fake.calls[0]).toMatchObject({
+			command: "bash",
+			cwd: toolsRootDir,
+			signal: controller.signal,
+		});
+		expect(fake.calls[0]?.args[0]).toBe("-c");
+		expect(fake.calls[0]?.args[2]).toBe("_");
+		expect(fake.calls[0]?.args[3]).toBe("https://antigravity.google/cli/install.sh");
+		expect(fake.calls[0]?.args[4]).toBe(join(toolsRootDir, "bin"));
+	});
+
+	test("restores existing managed agy binary when reinstall fails", async () => {
+		const toolsRootDir = await tempDir("tsukaima-acp-reinstall-agy-fail-");
+		const binDir = join(toolsRootDir, "bin");
+		await mkdir(binDir, { recursive: true });
+		const existingBinary = await writeExecutable(join(binDir, "agy"));
+		const fake = createFakeExec({ failCommands: true });
+		const installer = new AcpRuntimeInstaller({
+			exec: fake.exec,
+			pathEnv: "",
+			toolsRootDir,
+		});
 
 		const result = await installer.install({ id: "antigravity-cli" });
 
-		expect(result.message).toBe(spec?.installHint ?? "");
-		expect(result).toMatchObject({
-			id: "antigravity-cli",
-			ok: false,
-			packages: [],
-			requiresManualInstall: true,
-		});
-		expect(fake.calls).toHaveLength(0);
+		expect(result.ok).toBe(false);
+		expect(result.message).toContain("install failed");
+		expect(await readFile(existingBinary, "utf8")).toBe("#!/bin/sh\nexit 0\n");
 	});
 
 	test("reports bun failures without throwing", async () => {
@@ -354,8 +380,11 @@ describe("AcpRuntimeInstaller.uninstall", () => {
 		]);
 	});
 
-	test("refuses to uninstall system runtimes and unknown ids", async () => {
-		const toolsRootDir = await tempDir("tsukaima-acp-uninstall-system-");
+	test("uninstalls script-managed antigravity-cli binary and rejects unknown ids", async () => {
+		const toolsRootDir = await tempDir("tsukaima-acp-uninstall-agy-");
+		const binDir = join(toolsRootDir, "bin");
+		await mkdir(binDir, { recursive: true });
+		const managedAgy = await writeExecutable(join(binDir, "agy"));
 		const fake = createFakeExec();
 		const installer = new AcpRuntimeInstaller({
 			exec: fake.exec,
@@ -363,13 +392,19 @@ describe("AcpRuntimeInstaller.uninstall", () => {
 			toolsRootDir,
 		});
 
-		const systemResult = await installer.uninstall({ id: "antigravity-cli" });
+		const statusBefore = await installer.status();
+		expect(runtimeById(statusBefore, "antigravity-cli")).toMatchObject({
+			binaryPath: managedAgy,
+			source: "managed",
+		});
+
+		const removeResult = await installer.uninstall({ id: "antigravity-cli" });
+		const removeAgain = await installer.uninstall({ id: "antigravity-cli" });
 		const unknownResult = await installer.uninstall({ id: "missing-runtime" });
 
-		expect(systemResult).toMatchObject({ ok: false, requiresManualInstall: true });
-		expect(systemResult.message).toContain("OS package manager");
+		expect(removeResult).toMatchObject({ id: "antigravity-cli", ok: true });
+		expect(removeAgain.ok).toBe(false);
 		expect(unknownResult.ok).toBe(false);
-		expect(fake.calls).toHaveLength(0);
 	});
 });
 
@@ -401,8 +436,7 @@ describe("AcpRuntimeInstaller audit", () => {
 			targetId: "codex-acp",
 			targetKind: "acp-runtime",
 		});
-		expect(entries[1]).toMatchObject({ result: "failed", targetId: "antigravity-cli" });
-		expect(entries[1]?.payload).toMatchObject({ requiresManualInstall: true });
+		expect(entries[1]).toMatchObject({ result: "ok", targetId: "antigravity-cli" });
 		expect(entries[2]).toMatchObject({ result: "failed", targetId: "--save-dev" });
 	});
 

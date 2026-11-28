@@ -139,7 +139,8 @@ describe("buildAcpProcessEnv", () => {
 		expect(env.LANG).toBe("C.UTF-8");
 		expect(env.TZ).toBe("Asia/Taipei");
 		expect(env.ACP_PROFILE_FLAG).toBe("enabled");
-		expect(env.PATH?.split(delimiter).slice(0, 5)).toEqual([
+		expect(env.PATH?.split(delimiter).slice(0, 6)).toEqual([
+			join(SYNTHETIC_TOOLS_ROOT, "bin"),
 			toolsBin,
 			join(SYNTHETIC_HOME, ".local", "bin"),
 			join(SYNTHETIC_HOME, ".bun", "bin"),

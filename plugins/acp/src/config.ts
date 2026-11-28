@@ -156,13 +156,16 @@ export const ACP_PRESET_TEMPLATES: Readonly<Record<AcpPreset, AcpPresetTemplate>
 	},
 };
 
+export type AcpRuntimeInstallMethod = "bun" | "script" | "system";
+
 export interface AcpRuntimePackageSpec {
 	readonly id: string;
 	readonly preset: AcpPreset;
 	readonly displayName: string;
 	readonly binaryName: string;
 	readonly packages: readonly string[];
-	readonly installMethod: "bun" | "system";
+	readonly installMethod: AcpRuntimeInstallMethod;
+	readonly installScriptUrl?: string;
 	readonly installHint?: string;
 }
 
@@ -203,8 +206,10 @@ export const ACP_RUNTIME_PACKAGES: readonly AcpRuntimePackageSpec[] = [
 		binaryName: "agy",
 		displayName: "Antigravity CLI (agy)",
 		id: "antigravity-cli",
-		installHint: "Install the Antigravity desktop/CLI package so `agy` is available on PATH.",
-		installMethod: "system",
+		installHint:
+			"Installed via https://antigravity.google/cli/install.sh into the plugin tools directory.",
+		installMethod: "script",
+		installScriptUrl: "https://antigravity.google/cli/install.sh",
 		packages: [],
 		preset: "antigravity",
 	},

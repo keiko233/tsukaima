@@ -1,7 +1,12 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { PluginAuditApi, PluginLogger } from "@tsukaima/sdk";
-import { ACP_RUNTIME_PACKAGES, type AcpPreset, type AcpRuntimePackageSpec } from "./config.ts";
+import {
+	ACP_RUNTIME_PACKAGES,
+	type AcpPreset,
+	type AcpRuntimeInstallMethod,
+	type AcpRuntimePackageSpec,
+} from "./config.ts";
 
 const VERSION_TIMEOUT_MS = 3_000;
 const INSTALL_TIMEOUT_MS = 300_000;
@@ -20,7 +25,7 @@ export interface AcpRuntimeBinaryStatus {
 	readonly binaryName: string;
 	readonly preset: AcpPreset;
 	readonly packages: readonly string[];
-	readonly installMethod: "bun" | "system";
+	readonly installMethod: AcpRuntimeInstallMethod;
 	readonly source: AcpRuntimeBinarySource;
 	readonly binaryPath?: string;
 	readonly version?: string;
@@ -158,6 +163,11 @@ export class AcpRuntimeInstaller {
 				};
 				auditTarget = spec.id;
 				auditPackages = spec.packages;
+			} else if (spec.installMethod === "script") {
+				const commandResult = await this.#runScriptInstall(spec, input.signal);
+				result = { ...commandResult, id: spec.id };
+				auditTarget = spec.id;
+				auditPackages = spec.packages;
 			} else {
 				const commandResult = await this.#runPackageCommand("add", spec.packages, input.signal);
 				result = { ...commandResult, id: spec.id };
@@ -207,6 +217,11 @@ export class AcpRuntimeInstaller {
 				};
 				auditTarget = spec.id;
 				auditPackages = spec.packages;
+			} else if (spec.installMethod === "script") {
+				const commandResult = await this.#runScriptUninstall(spec);
+				result = { ...commandResult, id: spec.id };
+				auditTarget = spec.id;
+				auditPackages = spec.packages;
 			} else {
 				const commandResult = await this.#runPackageCommand("remove", spec.packages, input.signal);
 				result = { ...commandResult, id: spec.id };
@@ -231,6 +246,126 @@ export class AcpRuntimeInstaller {
 		await this.#recordAudit("acp.runtime.uninstall", auditTarget, auditPackages, result);
 		this.#logOperation("uninstall", auditTarget, result);
 		return result;
+	}
+
+	async #runScriptInstall(
+		spec: AcpRuntimePackageSpec,
+		signal: AbortSignal | undefined,
+	): Promise<AcpRuntimeOperationResult> {
+		if (process.platform === "win32") {
+			return {
+				message:
+					spec.installHint ??
+					`${spec.displayName} script installation is only supported on macOS and Linux.`,
+				ok: false,
+				packages: spec.packages,
+				requiresManualInstall: true,
+			};
+		}
+		if (spec.installScriptUrl === undefined || spec.installScriptUrl.trim().length === 0) {
+			return failure(`No install script URL configured for ${spec.displayName}.`, spec.packages);
+		}
+		const binDir = join(this.#toolsRootDir, "bin");
+		const targetPath = join(binDir, spec.binaryName);
+		const backupPath = join(binDir, `.${spec.binaryName}.bak`);
+		try {
+			await mkdir(binDir, { recursive: true });
+		} catch (error) {
+			return failure(`Unable to prepare ${binDir}: ${errorMessage(error)}`, spec.packages);
+		}
+
+		// The upstream bootstrapper exits early when the binary already exists, so move an
+		// existing managed binary aside and restore it if the fresh download fails.
+		let hadExisting = false;
+		if (await isRegularFile(targetPath)) {
+			try {
+				await rm(backupPath, { force: true });
+				await rename(targetPath, backupPath);
+				hadExisting = true;
+			} catch (error) {
+				return failure(
+					`Unable to back up existing ${spec.binaryName} before reinstall: ${errorMessage(error)}`,
+					spec.packages,
+				);
+			}
+		}
+
+		const restoreBackup = async (): Promise<void> => {
+			if (!hadExisting) return;
+			try {
+				await rename(backupPath, targetPath);
+			} catch {
+				// Ignore cleanup failure; the primary error is returned to the caller.
+			}
+		};
+
+		const bootstrapScript = [
+			"set -euo pipefail",
+			"if command -v curl >/dev/null 2>&1; then",
+			'  curl -fsSL "$1" | bash -s -- --dir "$2"',
+			"elif command -v wget >/dev/null 2>&1; then",
+			'  wget -qO- "$1" | bash -s -- --dir "$2"',
+			"else",
+			'  echo "Neither curl nor wget is available." >&2',
+			"  exit 1",
+			"fi",
+		].join("\n");
+
+		try {
+			const result = await this.#exec(
+				"bash",
+				["-c", bootstrapScript, "_", spec.installScriptUrl, binDir],
+				{
+					cwd: this.#toolsRootDir,
+					timeoutMs: INSTALL_TIMEOUT_MS,
+					...(signal === undefined ? {} : { signal }),
+				},
+			);
+			if (result.exitCode !== 0) {
+				await restoreBackup();
+				return {
+					message: `Install script for ${spec.displayName} failed with exit code ${result.exitCode}: ${commandDetail(result)}`,
+					ok: false,
+					packages: spec.packages,
+					...(result.stderr.length === 0 ? {} : { stderr: truncate(result.stderr) }),
+					...(result.stdout.length === 0 ? {} : { stdout: truncate(result.stdout) }),
+				};
+			}
+			if (hadExisting) {
+				await rm(backupPath, { force: true });
+			}
+			return {
+				message: `Installed ${spec.displayName} in ${binDir}.`,
+				ok: true,
+				packages: spec.packages,
+				...(result.stderr.length === 0 ? {} : { stderr: truncate(result.stderr) }),
+				...(result.stdout.length === 0 ? {} : { stdout: truncate(result.stdout) }),
+			};
+		} catch (error) {
+			await restoreBackup();
+			return failure(
+				`Install script for ${spec.displayName} failed: ${errorMessage(error)}`,
+				spec.packages,
+			);
+		}
+	}
+
+	async #runScriptUninstall(spec: AcpRuntimePackageSpec): Promise<AcpRuntimeOperationResult> {
+		const binDir = join(this.#toolsRootDir, "bin");
+		const targetPath = join(binDir, spec.binaryName);
+		if (!(await isRegularFile(targetPath))) {
+			return failure(`${spec.displayName} is not installed in ${binDir}.`, spec.packages);
+		}
+		try {
+			await rm(targetPath, { force: true });
+			return {
+				message: `Removed ${spec.displayName} from ${binDir}.`,
+				ok: true,
+				packages: spec.packages,
+			};
+		} catch (error) {
+			return failure(`Unable to remove ${targetPath}: ${errorMessage(error)}`, spec.packages);
+		}
 	}
 
 	async #runPackageCommand(
@@ -370,14 +505,19 @@ export class AcpRuntimeInstaller {
 	}
 
 	async #findManagedBinary(binaryName: string): Promise<string | undefined> {
-		const binDir = join(this.#toolsRootDir, "node_modules", ".bin");
+		const binDirs = [
+			join(this.#toolsRootDir, "bin"),
+			join(this.#toolsRootDir, "node_modules", ".bin"),
+		];
 		const candidates =
 			process.platform === "win32"
 				? [binaryName, `${binaryName}.cmd`, `${binaryName}.exe`]
 				: [binaryName];
-		for (const candidate of candidates) {
-			const binaryPath = join(binDir, candidate);
-			if (await isRegularFile(binaryPath)) return binaryPath;
+		for (const binDir of binDirs) {
+			for (const candidate of candidates) {
+				const binaryPath = join(binDir, candidate);
+				if (await isRegularFile(binaryPath)) return binaryPath;
+			}
 		}
 		return undefined;
 	}
