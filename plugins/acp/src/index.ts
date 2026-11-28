@@ -17,6 +17,7 @@ import {
 	resolveAcpProfiles,
 	type ResolvedAcpProfile,
 } from "./config.ts";
+import { AcpAuthService } from "./auth.ts";
 import { AcpRuntimeInstaller } from "./installer.ts";
 import { ACP_PATHS_BINDING, ACP_PLUGIN_ID, acpManifest } from "./manifest.ts";
 import { createAcpModelPort, type CreateAcpModelPortOptions } from "./model-port.ts";
@@ -56,6 +57,7 @@ export {
 	type AcpWithSessionOptions,
 } from "./process-manager.ts";
 export * from "./artifacts.ts";
+export * from "./auth.ts";
 export * from "./installer.ts";
 export * from "./probe.ts";
 export * from "./mcp-bridge.ts";
@@ -70,6 +72,7 @@ export interface AcpHostPathsBinding {
 export type AcpModelPortFactory = (options: CreateAcpModelPortOptions) => PluginModelPort;
 
 export interface AcpPluginOptions {
+	readonly auth?: AcpAuthService;
 	readonly connect?: (spec: AcpSpawnSpec) => Promise<AcpManagedClient>;
 	readonly createModelPort?: AcpModelPortFactory;
 	readonly installer?: AcpRuntimeInstaller;
@@ -90,8 +93,19 @@ const runtimeActionInputSchema = z.object({
 	packageName: z.string().trim().min(1).optional(),
 });
 
+const authPresetSchema = z.enum(["antigravity", "codex", "claude-code"]);
+
+const authStatusInputSchema = z.object({
+	preset: authPresetSchema.optional(),
+});
+
+const authLoginInputSchema = z.object({
+	preset: authPresetSchema,
+});
+
 interface AcpPluginRuntime {
 	artifactsRootDir: string;
+	auth: AcpAuthService;
 	readonly connect: (spec: AcpSpawnSpec) => Promise<AcpManagedClient>;
 	readonly createModelPort: AcpModelPortFactory;
 	installer: AcpRuntimeInstaller;
@@ -159,6 +173,14 @@ function createRuntime(
 					toolsRootDir: paths.toolsRootDir,
 				});
 			}
+			if (options.auth === undefined) {
+				existing.auth.dispose();
+				existing.auth = new AcpAuthService({
+					...(context.audit === undefined ? {} : { audit: context.audit }),
+					logger: context.logger,
+					toolsRootDir: paths.toolsRootDir,
+				});
+			}
 		}
 		return existing;
 	}
@@ -176,8 +198,16 @@ function createRuntime(
 			logger: context.logger,
 			toolsRootDir: paths.toolsRootDir,
 		});
+	const auth =
+		options.auth ??
+		new AcpAuthService({
+			...(context.audit === undefined ? {} : { audit: context.audit }),
+			logger: context.logger,
+			toolsRootDir: paths.toolsRootDir,
+		});
 	const runtime: AcpPluginRuntime = {
 		artifactsRootDir: paths.artifactsRootDir,
+		auth,
 		connect,
 		createModelPort,
 		installer,
@@ -567,6 +597,22 @@ export function createAcpPlugin(options: AcpPluginOptions = {}): TsukaimaPlugin 
 					...(parsed.packageName === undefined ? {} : { packageName: parsed.packageName }),
 				});
 			});
+			context.rpc.register("auth.status", async (input) => {
+				const parsed = authStatusInputSchema.parse(input ?? {});
+				return await runtime.auth.status(parsed.preset);
+			});
+			context.rpc.register("auth.loginStart", async (input) => {
+				const parsed = authLoginInputSchema.parse(input ?? {});
+				return await runtime.auth.startLogin(parsed.preset);
+			});
+			context.rpc.register("auth.loginPoll", async (input) => {
+				const parsed = authLoginInputSchema.parse(input ?? {});
+				return runtime.auth.pollLogin(parsed.preset);
+			});
+			context.rpc.register("auth.loginCancel", async (input) => {
+				const parsed = authLoginInputSchema.parse(input ?? {});
+				return runtime.auth.cancelLogin(parsed.preset);
+			});
 			context.logger.info("ACP plugin ready", {
 				artifactsRootDir: runtime.artifactsRootDir,
 				toolsRootDir: runtime.toolsRootDir,
@@ -576,6 +622,7 @@ export function createAcpPlugin(options: AcpPluginOptions = {}): TsukaimaPlugin 
 			const runtime = runtimes.get(context);
 			if (runtime === undefined) return;
 			runtimes.delete(context);
+			runtime.auth.dispose();
 			runtime.videoJobs.dispose();
 			for (const unregister of runtime.providers.values()) unregister();
 			runtime.providers.clear();

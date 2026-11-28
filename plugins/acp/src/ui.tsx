@@ -22,8 +22,14 @@ import {
 	usePluginRpc,
 	usePluginToast,
 } from "@tsukaima/sdk/ui";
-import { Plus, RefreshCw, Save, Search, Trash2 } from "lucide-react";
+import { ExternalLink, LogIn, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
+import type {
+	AcpAuthLoginResult,
+	AcpAuthPreset,
+	AcpAuthProviderStatus,
+	AcpAuthStatusSnapshot,
+} from "./auth.ts";
 import {
 	ACP_PRESET_TEMPLATES,
 	acpProfileSchema,
@@ -44,6 +50,10 @@ import type {
 	AcpRuntimeStatusSnapshot,
 } from "./installer.ts";
 import {
+	ACP_AUTH_LOGIN_CANCEL_RPC,
+	ACP_AUTH_LOGIN_POLL_RPC,
+	ACP_AUTH_LOGIN_START_RPC,
+	ACP_AUTH_STATUS_RPC,
 	ACP_PROBE_RPC,
 	ACP_RUNTIME_INSTALL_RPC,
 	ACP_RUNTIME_STATUS_RPC,
@@ -266,16 +276,32 @@ function CapabilityButton({
 	);
 }
 
+const LOGIN_RUNTIME_IDS: Readonly<Record<string, AcpAuthPreset>> = {
+	"antigravity-cli": "antigravity",
+	"claude-cli": "claude-code",
+	"codex-cli": "codex",
+};
+
+function isAuthPreset(preset: AcpPreset): preset is AcpAuthPreset {
+	return preset === "antigravity" || preset === "codex" || preset === "claude-code";
+}
+
 function RuntimeRow({
+	authStatus,
 	busy,
+	loggingIn,
 	onCheck,
 	onInstall,
+	onLogin,
 	onUninstall,
 	runtime,
 }: {
+	readonly authStatus?: AcpAuthProviderStatus;
 	readonly busy: boolean;
+	readonly loggingIn: boolean;
 	readonly onCheck: () => void;
 	readonly onInstall: () => void;
+	readonly onLogin?: () => void;
 	readonly onUninstall: () => void;
 	readonly runtime: AcpRuntimeBinaryStatus;
 }) {
@@ -297,6 +323,18 @@ function RuntimeRow({
 					<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
 						<span>{sourceLabel(t.t, runtime.source)}</span>
 						<span className="font-mono">{runtime.version ?? t.t("version_unknown")}</span>
+						{authStatus === undefined || authStatus.authenticated === null ? null : (
+							<span
+								className={
+									authStatus.authenticated
+										? "font-medium text-emerald-600 dark:text-emerald-400"
+										: "text-amber-600 dark:text-amber-400"
+								}
+							>
+								{authStatus.authenticated ? t.t("auth_signed_in") : t.t("auth_signed_out")}
+								{authStatus.detail === undefined ? "" : ` · ${authStatus.detail}`}
+							</span>
+						)}
 					</div>
 					{runtime.binaryPath === undefined ? null : (
 						<div className="font-mono text-[11px] break-all text-muted-foreground">
@@ -309,6 +347,18 @@ function RuntimeRow({
 				</div>
 			</div>
 			<div className="flex flex-wrap items-center gap-1.5">
+				{installed && onLogin !== undefined ? (
+					<Button
+						disabled={busy || loggingIn}
+						leadingIcon={<LogIn />}
+						loading={loggingIn}
+						size="xs"
+						variant="secondary"
+						onClick={onLogin}
+					>
+						{loggingIn ? t.t("auth_logging_in") : t.t("auth_login")}
+					</Button>
+				) : null}
 				{runtime.installMethod === "system" ? (
 					<>
 						<Button disabled={busy} size="xs" variant="secondary" onClick={onCheck}>
@@ -386,6 +436,55 @@ function CustomPackageRow({
 				{t.t("runtime_uninstall")}
 			</Button>
 		</div>
+	);
+}
+
+function AuthLoginCard({
+	onCancel,
+	session,
+}: {
+	readonly onCancel: () => void;
+	readonly session: AcpAuthLoginResult;
+}) {
+	const t = usePluginI18n();
+	const name = presetLabel(t.t, session.preset);
+	return (
+		<Alert tone="info" title={t.t("auth_login_title", { name })}>
+			<div className="space-y-2">
+				{session.userCode === undefined ? null : (
+					<div className="flex flex-wrap items-center gap-2">
+						<span className="text-[11px] text-muted-foreground">{t.t("auth_login_code_label")}:</span>
+						<code className="rounded bg-muted px-2 py-0.5 font-mono text-sm font-semibold tracking-widest">
+							{session.userCode}
+						</code>
+					</div>
+				)}
+				{session.verificationUri === undefined ? null : (
+					<div className="flex flex-wrap items-center gap-2">
+						<a
+							className="inline-flex items-center gap-1 font-mono text-[11px] text-primary underline underline-offset-4 break-all"
+							href={session.verificationUri}
+							rel="noreferrer"
+							target="_blank"
+						>
+							<span>{session.verificationUri}</span>
+							<ExternalLink className="h-3 w-3 shrink-0" />
+						</a>
+					</div>
+				)}
+				{session.output === undefined ? null : (
+					<pre className="max-h-36 overflow-auto rounded bg-muted/60 p-2 font-mono text-[11px] whitespace-pre-wrap">
+						{session.output}
+					</pre>
+				)}
+				<div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+					<span className="text-[11px] text-muted-foreground">{t.t("auth_login_waiting")}</span>
+					<Button leadingIcon={<X />} size="xs" variant="ghost" onClick={onCancel}>
+						{t.t("auth_cancel")}
+					</Button>
+				</div>
+			</div>
+		</Alert>
 	);
 }
 
@@ -621,6 +720,9 @@ function AcpPanel() {
 	const [runtimeError, setRuntimeError] = useState<string | null>(null);
 	const [runtimeLoading, setRuntimeLoading] = useState(true);
 	const [runtimeBusy, setRuntimeBusy] = useState<string | null>(null);
+	const [authProviders, setAuthProviders] = useState<readonly AcpAuthProviderStatus[]>([]);
+	const [activeLogin, setActiveLogin] = useState<AcpAuthLoginResult | null>(null);
+	const [loginStarting, setLoginStarting] = useState<AcpAuthPreset | null>(null);
 	const [newPackageName, setNewPackageName] = useState("");
 	const [probeState, setProbeState] = useState<ProbeState | null>(null);
 	const [probing, setProbing] = useState(false);
@@ -721,12 +823,22 @@ function AcpPanel() {
 		setSecretEnvDrafts((current) => ({ ...current, [id]: value }));
 	};
 
+	const refreshAuthStatus = async (): Promise<void> => {
+		try {
+			const snapshot = await rpc.call<AcpAuthStatusSnapshot>(ACP_AUTH_STATUS_RPC, {});
+			setAuthProviders(snapshot.providers);
+		} catch {
+			// Auth status is supplemental; keep runtime panel usable if it fails.
+		}
+	};
+
 	const refreshRuntimeStatus = async (silent = false): Promise<void> => {
 		setRuntimeLoading(true);
 		try {
 			const next = await rpc.call<AcpRuntimeStatusSnapshot>(ACP_RUNTIME_STATUS_RPC);
 			setRuntimeStatus(next);
 			setRuntimeError(null);
+			void refreshAuthStatus();
 			if (!silent) toast.success(t.t("runtime_refreshed"));
 		} catch (error) {
 			const message = errorMessage(error);
@@ -736,6 +848,77 @@ function AcpPanel() {
 			setRuntimeLoading(false);
 		}
 	};
+
+	const startAuthLogin = async (preset: AcpAuthPreset): Promise<void> => {
+		setLoginStarting(preset);
+		const name = presetLabel(t.t, preset);
+		try {
+			const result = await rpc.call<AcpAuthLoginResult>(ACP_AUTH_LOGIN_START_RPC, { preset });
+			if (result.status === "authorized") {
+				setActiveLogin(null);
+				toast.success(t.t("auth_login_success", { name }));
+				void refreshAuthStatus();
+				return;
+			}
+			if (result.status === "failed" || result.status === "expired") {
+				setActiveLogin(null);
+				toast.error(t.t("auth_login_failed", { name }), result.message ?? t.t("unknown_error"));
+				return;
+			}
+			if (result.status === "pending") {
+				setActiveLogin(result);
+			}
+		} catch (error) {
+			toast.error(t.t("auth_login_failed", { name }), errorMessage(error));
+		} finally {
+			setLoginStarting(null);
+		}
+	};
+
+	const cancelAuthLogin = async (preset: AcpAuthPreset): Promise<void> => {
+		setActiveLogin(null);
+		try {
+			await rpc.call<AcpAuthLoginResult>(ACP_AUTH_LOGIN_CANCEL_RPC, { preset });
+		} catch {
+			// Ignore cancel errors.
+		}
+		toast.info(t.t("auth_login_cancelled"));
+	};
+
+	useEffect(() => {
+		if (activeLogin === null || activeLogin.status !== "pending") return;
+		const preset = activeLogin.preset;
+		const name = presetLabel(t.t, preset);
+		let cancelled = false;
+		const timer = setInterval(() => {
+			void rpc
+				.call<AcpAuthLoginResult>(ACP_AUTH_LOGIN_POLL_RPC, { preset })
+				.then((next) => {
+					if (cancelled) return;
+					if (next.status === "pending") {
+						setActiveLogin(next);
+						return;
+					}
+					setActiveLogin(null);
+					if (next.status === "authorized") {
+						toast.success(t.t("auth_login_success", { name }));
+						void refreshAuthStatus();
+					} else if (next.status === "expired") {
+						toast.error(t.t("auth_login_expired", { name }));
+					} else if (next.status === "failed") {
+						toast.error(t.t("auth_login_failed", { name }), next.message ?? t.t("unknown_error"));
+					}
+				})
+				.catch(() => {
+					// Keep polling on transient network errors.
+				});
+		}, 2_500);
+		return () => {
+			cancelled = true;
+			clearInterval(timer);
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [activeLogin?.preset, activeLogin?.status]);
 
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	useEffect(() => {
@@ -1010,16 +1193,40 @@ function AcpPanel() {
 							<EmptyState title={t.t("no_runtimes")} />
 						) : (
 							<div>
-								{runtimeStatus.runtimes.map((runtime) => (
-									<RuntimeRow
-										key={runtime.id}
-										busy={runtimeBusy !== null}
-										runtime={runtime}
-										onCheck={() => void refreshRuntimeStatus()}
-										onInstall={() => installRuntime(runtime)}
-										onUninstall={() => uninstallRuntime(runtime)}
-									/>
-								))}
+								{runtimeStatus.runtimes.map((runtime) => {
+									const loginPreset = LOGIN_RUNTIME_IDS[runtime.id];
+									const authStatus =
+										loginPreset === undefined
+											? undefined
+											: authProviders.find((provider) => provider.preset === loginPreset);
+									const isLoggingIn =
+										loginPreset !== undefined &&
+										(loginStarting === loginPreset ||
+											(activeLogin?.preset === loginPreset && activeLogin.status === "pending"));
+									return (
+										<RuntimeRow
+											key={runtime.id}
+											{...(authStatus === undefined ? {} : { authStatus })}
+											busy={runtimeBusy !== null}
+											loggingIn={isLoggingIn}
+											runtime={runtime}
+											onCheck={() => void refreshRuntimeStatus()}
+											onInstall={() => installRuntime(runtime)}
+											{...(loginPreset === undefined
+												? {}
+												: { onLogin: () => void startAuthLogin(loginPreset) })}
+											onUninstall={() => uninstallRuntime(runtime)}
+										/>
+									);
+								})}
+							</div>
+						)}
+						{activeLogin === null ? null : (
+							<div className="pt-3">
+								<AuthLoginCard
+									session={activeLogin}
+									onCancel={() => void cancelAuthLogin(activeLogin.preset)}
+								/>
 							</div>
 						)}
 						<div className="pt-2 font-mono text-[11px] break-all text-muted-foreground">
@@ -1327,6 +1534,28 @@ function AcpPanel() {
 						</PreferenceRow>
 
 						<div className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3">
+							{isAuthPreset(activeProfile.preset) ? (
+								<Button
+									disabled={
+										loginStarting === activeProfile.preset ||
+										(activeLogin?.preset === activeProfile.preset &&
+											activeLogin.status === "pending")
+									}
+									leadingIcon={<LogIn />}
+									loading={loginStarting === activeProfile.preset}
+									size="sm"
+									variant="secondary"
+									onClick={() => {
+										if (isAuthPreset(activeProfile.preset)) {
+											void startAuthLogin(activeProfile.preset);
+										}
+									}}
+								>
+									{loginStarting === activeProfile.preset
+										? t.t("auth_logging_in")
+										: t.t("auth_login")}
+								</Button>
+							) : null}
 							<Button
 								disabled={probing}
 								leadingIcon={<RefreshCw />}

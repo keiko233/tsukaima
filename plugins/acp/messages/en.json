@@ -129,5 +129,18 @@
 	"effort_medium": "Medium",
 	"effort_high": "High",
 	"effort_xhigh": "Extra high",
-	"effort_max": "Maximum"
+	"effort_max": "Maximum",
+	"auth_login": "Sign in",
+	"auth_logging_in": "Signing in…",
+	"auth_cancel": "Cancel",
+	"auth_signed_in": "Signed in",
+	"auth_signed_out": "Not signed in",
+	"auth_login_title": "Sign in to {name}",
+	"auth_login_open_link": "Open sign-in link",
+	"auth_login_code_label": "One-time code",
+	"auth_login_waiting": "Complete sign-in in your browser. Status will update automatically…",
+	"auth_login_success": "Signed in to {name}",
+	"auth_login_failed": "Could not sign in to {name}",
+	"auth_login_expired": "Sign-in for {name} timed out. Please try again.",
+	"auth_login_cancelled": "Sign-in cancelled"
 }
