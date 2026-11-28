@@ -127,6 +127,48 @@ describe("AcpAuthService", () => {
 		}
 	});
 
+	test("submits authorization code to interactive login process", async () => {
+		const root = await tempDir("tsukaima-acp-auth-submit-");
+		const binDir = join(root, "bin");
+		await mkdir(binDir, { recursive: true });
+		await writeFile(join(binDir, "agy"), "#!/bin/sh\nexit 0\n");
+
+		const written: string[] = [];
+		const fakeProc = createFakeLoginProcess();
+		const service = new AcpAuthService({
+			initialWaitMs: 50,
+			resolvePathBinary: () => undefined,
+			spawnLogin: () => {
+				queueMicrotask(() => {
+					fakeProc.emitOutput(
+						"Open this link in a browser to log in with Google:\nhttps://accounts.google.com/o/oauth2/auth?state=abc\nThen paste the authorization code and press Enter:\n",
+					);
+				});
+				return {
+					...fakeProc.process,
+					writeInput: (text) => {
+						written.push(text);
+						fakeProc.emitExit(0);
+					},
+				};
+			},
+			toolsRootDir: root,
+		});
+
+		try {
+			const started = await service.startLogin("antigravity");
+			expect(started.status).toBe("pending");
+			expect(started.needsInput).toBe(true);
+			expect(started.verificationUri).toBe("https://accounts.google.com/o/oauth2/auth?state=abc");
+
+			const submitted = await service.submitLoginInput("antigravity", "4/0AfJohX-code");
+			expect(written).toEqual(["4/0AfJohX-code\n"]);
+			expect(submitted.status).toBe("authorized");
+		} finally {
+			service.dispose();
+		}
+	});
+
 	test("returns failed when binary is not installed", async () => {
 		const root = await tempDir("tsukaima-acp-auth-missing-");
 		const service = new AcpAuthService({

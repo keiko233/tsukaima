@@ -103,6 +103,11 @@ const authLoginInputSchema = z.object({
 	preset: authPresetSchema,
 });
 
+const authLoginSubmitInputSchema = z.object({
+	input: z.string().trim().min(1),
+	preset: authPresetSchema,
+});
+
 interface AcpPluginRuntime {
 	artifactsRootDir: string;
 	auth: AcpAuthService;
@@ -608,6 +613,10 @@ export function createAcpPlugin(options: AcpPluginOptions = {}): TsukaimaPlugin 
 			context.rpc.register("auth.loginPoll", async (input) => {
 				const parsed = authLoginInputSchema.parse(input ?? {});
 				return runtime.auth.pollLogin(parsed.preset);
+			});
+			context.rpc.register("auth.loginSubmit", async (input) => {
+				const parsed = authLoginSubmitInputSchema.parse(input ?? {});
+				return await runtime.auth.submitLoginInput(parsed.preset, parsed.input);
 			});
 			context.rpc.register("auth.loginCancel", async (input) => {
 				const parsed = authLoginInputSchema.parse(input ?? {});

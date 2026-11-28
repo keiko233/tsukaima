@@ -53,6 +53,7 @@ import {
 	ACP_AUTH_LOGIN_CANCEL_RPC,
 	ACP_AUTH_LOGIN_POLL_RPC,
 	ACP_AUTH_LOGIN_START_RPC,
+	ACP_AUTH_LOGIN_SUBMIT_RPC,
 	ACP_AUTH_STATUS_RPC,
 	ACP_PROBE_RPC,
 	ACP_RUNTIME_INSTALL_RPC,
@@ -441,13 +442,24 @@ function CustomPackageRow({
 
 function AuthLoginCard({
 	onCancel,
+	onSubmitInput,
 	session,
+	submitting,
 }: {
 	readonly onCancel: () => void;
+	readonly onSubmitInput: (value: string) => void;
 	readonly session: AcpAuthLoginResult;
+	readonly submitting: boolean;
 }) {
 	const t = usePluginI18n();
+	const [codeInput, setCodeInput] = useState("");
 	const name = presetLabel(t.t, session.preset);
+	const handleSubmit = () => {
+		const trimmed = codeInput.trim();
+		if (trimmed.length === 0 || submitting) return;
+		onSubmitInput(trimmed);
+		setCodeInput("");
+	};
 	return (
 		<Alert tone="info" title={t.t("auth_login_title", { name })}>
 			<div className="space-y-2">
@@ -472,6 +484,28 @@ function AuthLoginCard({
 						</a>
 					</div>
 				)}
+				{session.needsInput === true ? (
+					<div className="flex flex-wrap items-center gap-2 pt-1">
+						<Input
+							aria-label={t.t("auth_login_input_placeholder")}
+							className="min-w-0 flex-1 basis-56"
+							placeholder={t.t("auth_login_input_placeholder")}
+							value={codeInput}
+							onChange={setCodeInput}
+							onKeyDown={(event) => {
+								if (event.key === "Enter") handleSubmit();
+							}}
+						/>
+						<Button
+							disabled={submitting || codeInput.trim().length === 0}
+							loading={submitting}
+							size="sm"
+							onClick={handleSubmit}
+						>
+							{t.t("auth_login_submit")}
+						</Button>
+					</div>
+				) : null}
 				{session.output === undefined ? null : (
 					<pre className="max-h-36 overflow-auto rounded bg-muted/60 p-2 font-mono text-[11px] whitespace-pre-wrap">
 						{session.output}
@@ -723,6 +757,7 @@ function AcpPanel() {
 	const [authProviders, setAuthProviders] = useState<readonly AcpAuthProviderStatus[]>([]);
 	const [activeLogin, setActiveLogin] = useState<AcpAuthLoginResult | null>(null);
 	const [loginStarting, setLoginStarting] = useState<AcpAuthPreset | null>(null);
+	const [loginSubmitting, setLoginSubmitting] = useState(false);
 	const [newPackageName, setNewPackageName] = useState("");
 	const [probeState, setProbeState] = useState<ProbeState | null>(null);
 	const [probing, setProbing] = useState(false);
@@ -883,6 +918,34 @@ function AcpPanel() {
 			// Ignore cancel errors.
 		}
 		toast.info(t.t("auth_login_cancelled"));
+	};
+
+	const submitAuthLoginInput = async (preset: AcpAuthPreset, input: string): Promise<void> => {
+		setLoginSubmitting(true);
+		const name = presetLabel(t.t, preset);
+		try {
+			const result = await rpc.call<AcpAuthLoginResult>(ACP_AUTH_LOGIN_SUBMIT_RPC, {
+				input,
+				preset,
+			});
+			if (result.status === "pending") {
+				setActiveLogin(result);
+				return;
+			}
+			setActiveLogin(null);
+			if (result.status === "authorized") {
+				toast.success(t.t("auth_login_success", { name }));
+				void refreshAuthStatus();
+			} else if (result.status === "expired") {
+				toast.error(t.t("auth_login_expired", { name }));
+			} else if (result.status === "failed") {
+				toast.error(t.t("auth_login_failed", { name }), result.message ?? t.t("unknown_error"));
+			}
+		} catch (error) {
+			toast.error(t.t("auth_login_failed", { name }), errorMessage(error));
+		} finally {
+			setLoginSubmitting(false);
+		}
 	};
 
 	useEffect(() => {
@@ -1225,7 +1288,9 @@ function AcpPanel() {
 							<div className="pt-3">
 								<AuthLoginCard
 									session={activeLogin}
+									submitting={loginSubmitting}
 									onCancel={() => void cancelAuthLogin(activeLogin.preset)}
+									onSubmitInput={(value) => void submitAuthLoginInput(activeLogin.preset, value)}
 								/>
 							</div>
 						)}
