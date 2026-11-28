@@ -181,9 +181,26 @@ describe("humanize: reply delay curve", () => {
 });
 
 describe("humanize: rhythm nudge", () => {
-	test("nudges only mechanically identical bubble counts", () => {
+	test("nudges only mechanically repeated multi-bubble patterns", () => {
 		expect(detectRigidRhythm(["a\nb", "c\nd", "e\nf", "g\nh"]).rigid).toBe(true);
 		expect(detectRigidRhythm(["a\nb", "c", "e\nf\ng", "h"]).rigid).toBe(false);
+		expect(detectRigidRhythm(["嗯", "好啊", "知道了", "没问题"]).rigid).toBe(false);
+	});
+});
+
+describe("humanize: self-check draft leak", () => {
+	test("strips leaked punctuation or formatting check lines outside fenced code blocks", () => {
+		const result = sanitizeOutboundMetaLeaks(
+			[
+				"标点：用空格，不打句号，口语化",
+				"排版自检：保持两行",
+				"没问题，晚上七点见",
+				"```md\n标点：用空格\n```",
+			].join("\n"),
+		);
+		expect(result.modified).toBe(true);
+		expect(result.stripped).toContain("self-check-draft-leak");
+		expect(result.text).toBe("没问题，晚上七点见\n```md\n标点：用空格\n```");
 	});
 });
 

@@ -293,7 +293,7 @@ describe("chat_settings_get", () => {
 			});
 			expect(decoded.humanization).toEqual({
 				antiRepetitionEnabled: true,
-				rhythmVarietyEnabled: true,
+				rhythmVarietyEnabled: false,
 			});
 			expect(decoded.gate).toEqual({
 				ambientGroupReply: false,
@@ -457,7 +457,7 @@ describe("chat_settings_adjust", () => {
 					replyCooldownMs: 500,
 					replyDelayEnabled: true,
 					replyDelayMaxMs: 3_000,
-					rhythmVarietyEnabled: false,
+					rhythmVarietyEnabled: true,
 					stickerOnly: "text-only",
 					streamingLineFlushEnabled: false,
 				},
@@ -485,7 +485,7 @@ describe("chat_settings_adjust", () => {
 			});
 			expect(effective.humanization).toMatchObject({
 				antiRepetitionEnabled: false,
-				rhythmVarietyEnabled: false,
+				rhythmVarietyEnabled: true,
 			});
 			expect(effective.gate).toMatchObject({
 				ambientGroupReply: true,

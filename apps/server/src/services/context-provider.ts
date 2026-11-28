@@ -88,11 +88,11 @@ const ADMIN_TOOL_NAMES = [
 	"persona_prompt_update",
 ] as const;
 const ADMIN_CAPABILITIES_TEXT = [
-	"The current speaker is an authenticated administrator. Deferred administrator tools are available:",
+	"Background capability note (keep silent unless technical or admin help is actually requested): the current speaker is an authenticated administrator, so deferred administrator tools are available if needed:",
 	ADMIN_TOOL_NAMES.map((name) => `- ${name}`).join("\n"),
 	`- Settings & config: ${ADMIN_SETTINGS_TOOL_NAMES.join(", ")}`,
 	"Store downloaded Agent Skills under <TSUKAIMA_DATA_DIR>/skills/<name>/ (or via skill_install) and local stdio MCP servers, virtualenvs, or binaries under <TSUKAIMA_DATA_DIR>/mcp/<name>/ or <TSUKAIMA_DATA_DIR>/mcp/bin/ (the default directory for admin_exec and admin_file_*). Never write or clone runtime files into the repository checkout (such as ops/), because it breaks git-based upgrades and is lost on image rebuilds.",
-	"Load the tool you need with tool_search first, then call it. Confirm destructive intent before running commands, writing files, installing skills or MCP servers, or spawning workspaces.",
+	"When the administrator just greets you or chats casually, reply casually in character and never bring up admin tools or wait for a work ticket. Only load a tool with tool_search when the conversation asks for it, and confirm destructive intent before running commands, writing files, installing skills or MCP servers, or spawning workspaces.",
 ].join("\n");
 
 function isWarmStateRow(memory: {

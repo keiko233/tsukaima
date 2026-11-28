@@ -844,6 +844,16 @@ test("injects a dynamic style avoid-list and rhythm nudge into ephemeral turn co
 			occurredAt: new Date(now - (4 - index) * 60_000).toISOString(),
 		});
 	}
+	const policyService = new ConversationPolicyService({
+		database: () => database,
+		host: () => undefined,
+		logger,
+	});
+	await policyService.update({
+		conversationId: "session-style",
+		policy: { humanization: { rhythmVarietyEnabled: true } },
+		scope: "conversation",
+	});
 	const context = provider(database);
 	const sections = await context.renderTurnContext({
 		conversationId: "durable-style",
@@ -1395,4 +1405,3 @@ describe("cross-day chatObjectId memory continuity and isolation", () => {
 		expect(postRestoreText).not.toContain("胃不好偏好无糖乌龙茶");
 	});
 });
-

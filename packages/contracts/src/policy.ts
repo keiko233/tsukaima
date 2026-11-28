@@ -391,7 +391,7 @@ export const humanizationPolicySchema = z
 		antiRepetitionThreshold: z.number().int().min(2).max(20).default(3),
 		/** Bounded single-retry rewrite when an answer still repeats flagged catchphrases severely. */
 		repetitionRewriteEnabled: z.boolean().default(false),
-		rhythmVarietyEnabled: z.boolean().default(true),
+		rhythmVarietyEnabled: z.boolean().default(false),
 		rhythmWindow: z.number().int().min(2).max(20).default(4),
 		metaLeakSanitizeEnabled: z.boolean().default(true),
 		/** Shape `pacing.replyDelayMaxMs` by local hour and reply length instead of uniform jitter. */
@@ -408,7 +408,7 @@ export const defaultHumanizationPolicy: HumanizationPolicy = {
 	delayCurveEnabled: false,
 	metaLeakSanitizeEnabled: true,
 	repetitionRewriteEnabled: false,
-	rhythmVarietyEnabled: true,
+	rhythmVarietyEnabled: false,
 	rhythmWindow: 4,
 };
 

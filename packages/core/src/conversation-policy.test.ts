@@ -243,15 +243,25 @@ describe("activity window and pacing helpers", () => {
 		]);
 	});
 
-	test("strips Markdown without mangling links or code", () => {
+	test("defaults rhythmVarietyEnabled to false", () => {
+		expect(policy.humanization.rhythmVarietyEnabled).toBe(false);
+	});
+
+	test("strips Markdown and extra blank lines without mangling links or code", () => {
 		const text =
-			"# Title\n\n**bold** and *italic* with [docs](https://example.test/a_b)\n- bullet\n```ts\nconst x = **not stripped**;\n```";
+			"# Title\n\n**bold** and *italic* with [docs](https://example.test/a_b)\n\n- bullet\n```ts\nconst x = **not stripped**;\n\nconst y = 2;\n```";
 		const stripped = stripMarkdownFormatting(text);
 		expect(stripped).toContain("Title");
 		expect(stripped).toContain("bold and italic");
 		expect(stripped).toContain("docs (https://example.test/a_b)");
 		expect(stripped).toContain("• bullet");
-		expect(stripped).toContain("const x = **not stripped**;");
+		expect(stripped).toContain("const x = **not stripped**;\n\nconst y = 2;");
+		expect(stripped).not.toContain("\n\n• bullet");
+		const prepared = prepareOutboundParts(
+			[{ text: "第一句\n\n第二句\n\n```ts\nconst a = 1;\n\nconst b = 2;\n```", type: "text" }],
+			{ ...policy.pacing, stripMarkdown: true },
+		);
+		expect(prepared.text).toBe("第一句\n第二句\n```ts\nconst a = 1;\n\nconst b = 2;\n```");
 	});
 
 	test("caps immediate output and folds overflow into the last unit", () => {
