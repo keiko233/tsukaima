@@ -862,6 +862,15 @@ function AcpPanel() {
 		try {
 			const snapshot = await rpc.call<AcpAuthStatusSnapshot>(ACP_AUTH_STATUS_RPC, {});
 			setAuthProviders(snapshot.providers);
+			const pending = snapshot.providers.find((provider) => provider.loginPending);
+			if (pending !== undefined) {
+				const polled = await rpc.call<AcpAuthLoginResult>(ACP_AUTH_LOGIN_POLL_RPC, {
+					preset: pending.preset,
+				});
+				if (polled.status === "pending") {
+					setActiveLogin(polled);
+				}
+			}
 		} catch {
 			// Auth status is supplemental; keep runtime panel usable if it fails.
 		}
@@ -1225,6 +1234,15 @@ function AcpPanel() {
 			description={t.t("plugin_description")}
 			title={t.t("panel_acp")}
 		>
+			{activeLogin === null ? null : (
+				<AuthLoginCard
+					key={activeLogin.preset}
+					session={activeLogin}
+					submitting={loginSubmitting}
+					onCancel={() => void cancelAuthLogin(activeLogin.preset)}
+					onSubmitInput={(value) => void submitAuthLoginInput(activeLogin.preset, value)}
+				/>
+			)}
 			<PluginSection
 				actions={
 					<Button
@@ -1282,16 +1300,6 @@ function AcpPanel() {
 										/>
 									);
 								})}
-							</div>
-						)}
-						{activeLogin === null ? null : (
-							<div className="pt-3">
-								<AuthLoginCard
-									session={activeLogin}
-									submitting={loginSubmitting}
-									onCancel={() => void cancelAuthLogin(activeLogin.preset)}
-									onSubmitInput={(value) => void submitAuthLoginInput(activeLogin.preset, value)}
-								/>
 							</div>
 						)}
 						<div className="pt-2 font-mono text-[11px] break-all text-muted-foreground">
