@@ -14,9 +14,9 @@
     },
     "apps/server": {
       "name": "@tsukaima/server",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
-        "@better-auth/drizzle-adapter": "1.7.27",
+        "@better-auth/drizzle-adapter": "1.7.28",
         "@earendil-works/pi-ai": "1.5.2",
         "@earendil-works/pi-coding-agent": "1.5.2",
         "@orpc/server": "1.16.5",
@@ -36,7 +36,7 @@
         "@tsukaima/migration": "workspace:*",
         "@tsukaima/plugin-registry": "workspace:*",
         "@tsukaima/sdk": "workspace:*",
-        "better-auth": "1.7.27",
+        "better-auth": "1.7.28",
         "drizzle-orm": "0.45.4",
         "elysia": "1.4.32",
         "es-toolkit": "1.53.2",
@@ -46,7 +46,7 @@
     },
     "apps/web": {
       "name": "@tsukaima/web",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@fontsource-variable/bricolage-grotesque": "5.3.0",
         "@fontsource-variable/outfit": "5.3.0",
@@ -65,7 +65,7 @@
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/sdk": "workspace:*",
         "@tsukaima/ui": "workspace:*",
-        "better-auth": "1.7.27",
+        "better-auth": "1.7.28",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "cn-fontsource-lxgw-neo-xi-hei-regular": "1.0.1",
@@ -94,7 +94,7 @@
     },
     "packages/cache": {
       "name": "@tsukaima/cache",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@keyv/sqlite": "6.1.0",
         "keyv": "6.1.0",
@@ -106,7 +106,7 @@
     },
     "packages/chaos": {
       "name": "@tsukaima/chaos",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@earendil-works/chord": "1.5.2",
         "@earendil-works/pi-durable": "1.5.2",
@@ -116,7 +116,7 @@
     },
     "packages/coding": {
       "name": "@tsukaima/coding",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@earendil-works/pi-ai": "1.5.2",
         "@earendil-works/pi-coding-agent": "1.5.2",
@@ -129,7 +129,7 @@
     },
     "packages/contracts": {
       "name": "@tsukaima/contracts",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@orpc/contract": "1.16.5",
         "zod": "4.6.7",
@@ -137,7 +137,7 @@
     },
     "packages/core": {
       "name": "@tsukaima/core",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@earendil-works/chord": "1.5.2",
         "@earendil-works/pi-ai": "1.5.2",
@@ -149,7 +149,7 @@
     },
     "packages/db": {
       "name": "@tsukaima/db",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "drizzle-orm": "0.45.4",
       },
@@ -159,7 +159,7 @@
     },
     "packages/durable": {
       "name": "@tsukaima/durable",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@earendil-works/chord": "1.5.2",
         "@earendil-works/pi-durable": "1.5.2",
@@ -167,7 +167,7 @@
     },
     "packages/migration": {
       "name": "@tsukaima/migration",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@tsukaima/db": "workspace:*",
         "drizzle-orm": "0.45.4",
@@ -176,14 +176,14 @@
     },
     "packages/plugin-registry": {
       "name": "@tsukaima/plugin-registry",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@tsukaima/sdk": "workspace:*",
       },
     },
     "packages/sdk": {
       "name": "@tsukaima/sdk",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@tsukaima/contracts": "workspace:*",
         "@tsukaima/ui": "workspace:*",
@@ -208,7 +208,7 @@
     },
     "packages/ui": {
       "name": "@tsukaima/ui",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@ui-sdk/core": "0.1.0-beta.17",
         "@ui-sdk/react": "0.1.0-beta.17",
@@ -231,7 +231,7 @@
     },
     "plugins/acp": {
       "name": "@tsukaima-plugin/acp",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@earendil-works/pi-ai": "1.5.2",
         "@inlang/paraglide-js": "^3.2.2",
@@ -251,7 +251,7 @@
     },
     "plugins/mcp": {
       "name": "@tsukaima-plugin/mcp",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@modelcontextprotocol/sdk": "1.32.2",
@@ -271,7 +271,7 @@
     },
     "plugins/onebot-napcat": {
       "name": "@tsukaima-plugin/onebot-napcat",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -290,7 +290,7 @@
     },
     "plugins/openai-compatible": {
       "name": "@tsukaima-plugin/openai-compatible",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -309,7 +309,7 @@
     },
     "plugins/proactive-scheduler": {
       "name": "@tsukaima-plugin/proactive-scheduler",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -328,7 +328,7 @@
     },
     "plugins/skills": {
       "name": "@tsukaima-plugin/skills",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -347,7 +347,7 @@
     },
     "plugins/sticker-meme": {
       "name": "@tsukaima-plugin/sticker-meme",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "dependencies": {
         "@inlang/paraglide-js": "^3.2.2",
         "@tsukaima/contracts": "workspace:*",
@@ -374,7 +374,7 @@
     },
     "tools/migration": {
       "name": "@tsukaima/migration-cli",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "bin": {
         "tsukaima-migration": "./src/cli.ts",
       },
@@ -384,7 +384,7 @@
     },
     "tools/ops": {
       "name": "@tsukaima/ops",
-      "version": "0.36.0",
+      "version": "0.37.1",
       "bin": {
         "tsukaima-backup-drill": "./backup-drill.ts",
         "tsukaima-secret-scan": "./secret-scan.ts",
@@ -469,19 +469,19 @@
 
     "@babel/types": ["@babel/types@7.29.14", "", { "dependencies": { "@babel/helper-string-parser": "^7.29.14", "@babel/helper-validator-identifier": "^7.29.7" } }, "sha512-UjI/dKmwJwT9pOszJitq2G6EObZPnsZUfdCr92z2TlF3EZK9J3EdfOKUrCzHl6wFthbzwhzl1Soc/UIwxRiq6w=="],
 
-    "@better-auth/core": ["@better-auth/core@1.7.27", "", { "dependencies": { "@standard-schema/spec": "^1.1.0", "zod": "^4.5.4" }, "peerDependencies": { "@better-auth/utils": "^0.4.2 || ^0.5.0", "@better-fetch/fetch": "1.3.3", "@opentelemetry/api": "^1.9.0", "better-call": "~1.4.5", "jose": "^6.1.0", "kysely": "^0.28.5 || ^0.29.0", "nanostores": "^1.0.1" }, "optionalPeers": ["@opentelemetry/api"] }, "sha512-g66vJqg82xUM6kIsY2Sb03UnbcIuFojUoe+tuBh7eyHOCgHXWBcoI/ZLEIUPo0DVTrCwFzZ9PUPoSxm6fmJXig=="],
+    "@better-auth/core": ["@better-auth/core@1.7.28", "", { "dependencies": { "@standard-schema/spec": "^1.1.0", "zod": "^4.5.4" }, "peerDependencies": { "@better-auth/utils": "^0.4.2 || ^0.5.0", "@better-fetch/fetch": "1.3.3", "@opentelemetry/api": "^1.9.0", "better-call": "~1.4.5", "jose": "^6.1.0", "kysely": "^0.28.5 || ^0.29.0", "nanostores": "^1.0.1" }, "optionalPeers": ["@opentelemetry/api"] }, "sha512-hg2RD1FWup0zAbdVG+LqOquho7LW166OzcQXFp05a/GKlLZyYzhSDussFd5Rlzh8sNnwWKeiSK5Wz3QEBzoWWA=="],
 
-    "@better-auth/drizzle-adapter": ["@better-auth/drizzle-adapter@1.7.27", "", { "peerDependencies": { "@better-auth/core": "^1.7.27", "@better-auth/utils": "^0.4.2 || ^0.5.0", "drizzle-orm": "^0.45.2 || >=1.0.0-rc.1 <2.0.0" }, "optionalPeers": ["drizzle-orm"] }, "sha512-dVqcVLUGzMFMGt5Wv8xQy/PcpuBMPgqIeiht6+kj8FX9Gk+6dxa9QZh1CMcg4ZhxOC/NO13OZyatR3ztYqmqLQ=="],
+    "@better-auth/drizzle-adapter": ["@better-auth/drizzle-adapter@1.7.28", "", { "peerDependencies": { "@better-auth/core": "^1.7.28", "@better-auth/utils": "^0.4.2 || ^0.5.0", "drizzle-orm": "^0.45.2 || >=1.0.0-rc.1 <2.0.0" }, "optionalPeers": ["drizzle-orm"] }, "sha512-L8Xw/3hDpXvEZwlPAOogpgFSQ8sPunGQM3BG6dFXWZkXRIXjp3ZJOITu2oS2oWkIRn7L/8V1FGJJY6pbqYmraQ=="],
 
-    "@better-auth/kysely-adapter": ["@better-auth/kysely-adapter@1.7.27", "", { "peerDependencies": { "@better-auth/core": "^1.7.27", "@better-auth/utils": "^0.4.2 || ^0.5.0", "kysely": "^0.28.17 || ^0.29.0" }, "optionalPeers": ["kysely"] }, "sha512-VKaYAZbkXgDP7bREZXdR4eznYBFqOFKGZWF2vXUdydHWNpzxG/CJMhDq4nCM8ce42JJQvOXDibwzEa9Jhal14g=="],
+    "@better-auth/kysely-adapter": ["@better-auth/kysely-adapter@1.7.28", "", { "peerDependencies": { "@better-auth/core": "^1.7.28", "@better-auth/utils": "^0.4.2 || ^0.5.0", "kysely": "^0.28.17 || ^0.29.0" }, "optionalPeers": ["kysely"] }, "sha512-4YVzRfcGtyrFaltk0Nv9TnN6bba2KUxP6pSmw+lqt5KO6vnXSg1gpTGAgZwuMKhpvVLvnO7Eilc+CWXet2c3Gg=="],
 
-    "@better-auth/memory-adapter": ["@better-auth/memory-adapter@1.7.27", "", { "peerDependencies": { "@better-auth/core": "^1.7.27", "@better-auth/utils": "^0.4.2 || ^0.5.0" } }, "sha512-0D1/9zYI/U4JgYtQsOrGF4H0hVZe7jHq+1yhZmzNUkEYbr9LADJy149B+OKBW0OxL7XmtC+9xY8YtrUJA8EYzQ=="],
+    "@better-auth/memory-adapter": ["@better-auth/memory-adapter@1.7.28", "", { "peerDependencies": { "@better-auth/core": "^1.7.28", "@better-auth/utils": "^0.4.2 || ^0.5.0" } }, "sha512-LPGyUbkQDinwRq7bE42sVeNvy8Q4ynear6TZwkZF34OAheaTsfKZnvIVFMjUZkIJ+Japv9ziALD4x15OZtyoJA=="],
 
-    "@better-auth/mongo-adapter": ["@better-auth/mongo-adapter@1.7.27", "", { "peerDependencies": { "@better-auth/core": "^1.7.27", "@better-auth/utils": "^0.4.2 || ^0.5.0", "mongodb": "^6.0.0 || ^7.0.0" }, "optionalPeers": ["mongodb"] }, "sha512-Jpy4bsGpFVi51uIv9ZKyk0LM3LLa5VTikEhhAhILFqX49w5kX2Q8EqXkEtbd3AgC2eC/bpH5hp5+46/QiuA1Lg=="],
+    "@better-auth/mongo-adapter": ["@better-auth/mongo-adapter@1.7.28", "", { "peerDependencies": { "@better-auth/core": "^1.7.28", "@better-auth/utils": "^0.4.2 || ^0.5.0", "mongodb": "^6.0.0 || ^7.0.0" }, "optionalPeers": ["mongodb"] }, "sha512-k1jaHxALobvohPHtt1qjhQKCAVtINVT88ae7b3ZPh7QSM+otuPDlh4MuNhT+RZ/4DNYa6UL30Fq6HhpetzaqqA=="],
 
-    "@better-auth/prisma-adapter": ["@better-auth/prisma-adapter@1.7.27", "", { "peerDependencies": { "@better-auth/core": "^1.7.27", "@better-auth/utils": "^0.4.2 || ^0.5.0", "@prisma/client": "^5.0.0 || ^6.0.0 || ^7.0.0", "prisma": "^5.0.0 || ^6.0.0 || ^7.0.0" }, "optionalPeers": ["@prisma/client", "prisma"] }, "sha512-IuyThkvPYLeHP9NHSYZuTXisx9Ps1goe6wtEDSqXf4ndhaMY940S8Z9hgcD8NCn7LqI9FHrJFvCbq1XHIb0GWg=="],
+    "@better-auth/prisma-adapter": ["@better-auth/prisma-adapter@1.7.28", "", { "peerDependencies": { "@better-auth/core": "^1.7.28", "@better-auth/utils": "^0.4.2 || ^0.5.0", "@prisma/client": "^5.0.0 || ^6.0.0 || ^7.0.0", "prisma": "^5.0.0 || ^6.0.0 || ^7.0.0" }, "optionalPeers": ["@prisma/client", "prisma"] }, "sha512-30Q/+HMqwsFQ+HeLLUwZ01F52Dh6F65Syl4o88QoNDn1VN9CFDvhPl2lojHr2dREzQoRlov6VMZBE/PMrFoB+w=="],
 
-    "@better-auth/telemetry": ["@better-auth/telemetry@1.7.27", "", { "peerDependencies": { "@better-auth/core": "^1.7.27", "@better-auth/utils": "^0.4.2 || ^0.5.0", "@better-fetch/fetch": "1.3.3" } }, "sha512-cbp4qo/Tia70+FJp3a8pC+jiCcOMbZAkuJlnx9ffpzWt+tTVAj22L1sq91BcwheuCWBWehK15yGYkb5UjN4uWA=="],
+    "@better-auth/telemetry": ["@better-auth/telemetry@1.7.28", "", { "peerDependencies": { "@better-auth/core": "^1.7.28", "@better-auth/utils": "^0.4.2 || ^0.5.0", "@better-fetch/fetch": "1.3.3" } }, "sha512-a798mVvOqvUHEikjggFDLnxgm+1MJI7f03eslJc4zp/vElsNw9TC2gnT4Flg/BeLuemMe8liD5SRJmM3TaG9XQ=="],
 
     "@better-auth/utils": ["@better-auth/utils@0.5.1", "", { "dependencies": { "@noble/hashes": "^2.0.1" } }, "sha512-WETqw5vQ52uQ/xwWR4E8rTgT6fDEr/wnS+otDNkBCa/69281FCF32OKDdQUcahMCnjsvqXBNiEvAQHFB0EVRRg=="],
 
@@ -1053,7 +1053,7 @@
 
     "bcp-47-match": ["bcp-47-match@2.0.3", "", {}, "sha512-JtTezzbAibu8G0R9op9zb3vcWZd9JF6M0xOYGPn0fNCd7wOpRB1mU2mH9T8gaBGbAAyIIVgB2G7xG0GP98zMAQ=="],
 
-    "better-auth": ["better-auth@1.7.27", "", { "dependencies": { "@better-auth/core": "1.7.27", "@better-auth/drizzle-adapter": "1.7.27", "@better-auth/kysely-adapter": "1.7.27", "@better-auth/memory-adapter": "1.7.27", "@better-auth/mongo-adapter": "1.7.27", "@better-auth/prisma-adapter": "1.7.27", "@better-auth/telemetry": "1.7.27", "@better-auth/utils": "0.5.1", "@better-fetch/fetch": "1.3.3", "@noble/ciphers": "^2.2.0", "@noble/hashes": "^2.2.0", "better-call": "1.4.6", "defu": "^6.1.4", "jose": "^6.2.3", "kysely": "^0.28.17 || ^0.29.0", "nanostores": "^1.3.0", "zod": "^4.5.4" }, "peerDependencies": { "@lynx-js/react": "*", "@prisma/client": "^5.0.0 || ^6.0.0 || ^7.0.0", "@sveltejs/kit": "^2.0.0 || ^3.0.0", "@tanstack/react-start": "^1.0.0", "@tanstack/solid-start": "^1.0.0", "drizzle-kit": ">=0.31.4 || >=1.0.0-beta.1", "drizzle-orm": "^0.45.2 || >=1.0.0-rc.1 <2.0.0", "mongodb": "^6.0.0 || ^7.0.0", "mysql2": "^3.0.0", "next": "^14.0.0 || ^15.0.0 || ^16.0.0", "pg": "^8.0.0", "prisma": "^5.0.0 || ^6.0.0 || ^7.0.0", "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0", "solid-js": "^1.0.0", "svelte": "^4.0.0 || ^5.0.0", "vitest": "^2.0.0 || ^3.0.0 || ^4.0.0 || ^5.0.0", "vue": "^3.0.0" }, "optionalPeers": ["@lynx-js/react", "@prisma/client", "@sveltejs/kit", "@tanstack/react-start", "@tanstack/solid-start", "drizzle-kit", "drizzle-orm", "mongodb", "mysql2", "next", "pg", "prisma", "react", "react-dom", "solid-js", "svelte", "vitest", "vue"] }, "sha512-UPkaFZ16tjxXa6BeTCqu1H8Tfw9xY38nPhxBb6Sh88RjJNrO4GBXSDRfpxTn61uMFC0q/XrIUJ6i0/MEPOw7zg=="],
+    "better-auth": ["better-auth@1.7.28", "", { "dependencies": { "@better-auth/core": "1.7.28", "@better-auth/drizzle-adapter": "1.7.28", "@better-auth/kysely-adapter": "1.7.28", "@better-auth/memory-adapter": "1.7.28", "@better-auth/mongo-adapter": "1.7.28", "@better-auth/prisma-adapter": "1.7.28", "@better-auth/telemetry": "1.7.28", "@better-auth/utils": "0.5.1", "@better-fetch/fetch": "1.3.3", "@noble/ciphers": "^2.2.0", "@noble/hashes": "^2.2.0", "better-call": "1.4.6", "defu": "^6.1.4", "jose": "^6.2.3", "kysely": "^0.28.17 || ^0.29.0", "nanostores": "^1.3.0", "zod": "^4.5.4" }, "peerDependencies": { "@lynx-js/react": "*", "@prisma/client": "^5.0.0 || ^6.0.0 || ^7.0.0", "@sveltejs/kit": "^2.0.0 || ^3.0.0", "@tanstack/react-start": "^1.0.0", "@tanstack/solid-start": "^1.0.0", "drizzle-kit": ">=0.31.4 || >=1.0.0-beta.1", "drizzle-orm": "^0.45.2 || >=1.0.0-rc.1 <2.0.0", "mongodb": "^6.0.0 || ^7.0.0", "mysql2": "^3.0.0", "next": "^14.0.0 || ^15.0.0 || ^16.0.0", "pg": "^8.0.0", "prisma": "^5.0.0 || ^6.0.0 || ^7.0.0", "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0", "solid-js": "^1.0.0", "svelte": "^4.0.0 || ^5.0.0", "vitest": "^2.0.0 || ^3.0.0 || ^4.0.0 || ^5.0.0", "vue": "^3.0.0" }, "optionalPeers": ["@lynx-js/react", "@prisma/client", "@sveltejs/kit", "@tanstack/react-start", "@tanstack/solid-start", "drizzle-kit", "drizzle-orm", "mongodb", "mysql2", "next", "pg", "prisma", "react", "react-dom", "solid-js", "svelte", "vitest", "vue"] }, "sha512-Ux3LBegiy6O8txablum7sGB4+6SXefOeEoiiHbs8Aj0bOmW6uPNgzLj8BTNZV1Ov10UmH7CFf0fvgqX9TUeIjQ=="],
 
     "better-call": ["better-call@1.4.6", "", { "dependencies": { "@better-auth/utils": "^0.5.0", "@better-fetch/fetch": "^1.3.1", "rou3": "^0.9.1", "set-cookie-parser": "^3.1.2" }, "peerDependencies": { "zod": "^4.0.0" }, "optionalPeers": ["zod"] }, "sha512-tJ3lkMFeQProwiuZiQApwgVmYmBfXM4sAP7HxMsnAFtl4NWZhamG+RGoMNgHwGYkmcB+3eWyo3vgt4sWUUSdQA=="],
 
