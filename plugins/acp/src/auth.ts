@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PluginAuditApi, PluginLogger } from "@tsukaima/sdk";
 import type { AcpPreset } from "./config.ts";
@@ -94,6 +95,7 @@ export interface AcpAuthServiceOptions {
 		args: readonly string[],
 		options: { readonly env: Readonly<Record<string, string>>; readonly timeoutMs: number },
 	) => Promise<AcpAuthCommandResult>;
+	readonly homeDir?: string;
 	readonly initialWaitMs?: number;
 	readonly loginLifetimeMs?: number;
 	readonly logger?: PluginLogger;
@@ -189,6 +191,7 @@ export function parseAuthStatusOutput(
 export class AcpAuthService {
 	readonly #audit: PluginAuditApi | undefined;
 	readonly #exec: NonNullable<AcpAuthServiceOptions["exec"]>;
+	readonly #homeDir: string;
 	readonly #initialWaitMs: number;
 	readonly #loginLifetimeMs: number;
 	readonly #logger: PluginLogger | undefined;
@@ -202,6 +205,7 @@ export class AcpAuthService {
 	constructor(options: AcpAuthServiceOptions) {
 		this.#audit = options.audit;
 		this.#exec = options.exec ?? defaultAuthExec;
+		this.#homeDir = options.homeDir ?? homedir();
 		this.#initialWaitMs = options.initialWaitMs ?? INITIAL_OUTPUT_WAIT_MS;
 		this.#loginLifetimeMs = options.loginLifetimeMs ?? LOGIN_LIFETIME_MS;
 		this.#logger = options.logger;
@@ -422,6 +426,24 @@ export class AcpAuthService {
 			};
 		}
 		if (spec.statusArgs === undefined) {
+			if (preset === "antigravity") {
+				const tokenPath = join(
+					this.#homeDir,
+					".gemini",
+					"antigravity-cli",
+					"antigravity-oauth-token",
+				);
+				const authenticated = await isNonEmptyFile(tokenPath);
+				return {
+					authenticated,
+					available: true,
+					binaryName: spec.binaryName,
+					binaryPath,
+					displayName: spec.displayName,
+					loginPending,
+					preset,
+				};
+			}
 			return {
 				authenticated: null,
 				available: true,
@@ -543,6 +565,15 @@ function lastLine(value: string): string {
 async function isRegularFile(filePath: string): Promise<boolean> {
 	try {
 		return (await stat(filePath)).isFile();
+	} catch {
+		return false;
+	}
+}
+
+async function isNonEmptyFile(filePath: string): Promise<boolean> {
+	try {
+		const info = await stat(filePath);
+		return info.isFile() && info.size > 0;
 	} catch {
 		return false;
 	}
