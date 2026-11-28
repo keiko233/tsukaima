@@ -704,7 +704,7 @@ export class DrizzleContextProvider implements ContextPromptProvider {
 			...(previousSummary === undefined || previousSummary.length === 0
 				? []
 				: [
-						"Earlier summary to carry forward (preserve still-relevant facts and fold in the new messages):",
+						"Earlier summary to fold forward (preserve real ongoing topics, facts, and commitments; drop outdated persona claims, brief teasing/banter, and style/sticker rules):",
 						"<previous-summary>",
 						previousSummary,
 						"</previous-summary>",

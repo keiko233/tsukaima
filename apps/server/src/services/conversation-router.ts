@@ -1412,6 +1412,7 @@ export class ConversationRouter {
 					nowIso,
 					platformConversationId,
 					previous: {
+						createdAt: receiving.createdAt,
 						durableConversationId: receiving.durableConversationId,
 						id: receiving.id,
 					},
@@ -1446,6 +1447,7 @@ export class ConversationRouter {
 					nowIso,
 					platformConversationId,
 					previous: {
+						createdAt: latest.createdAt,
 						durableConversationId: latest.durableConversationId,
 						id: latest.id,
 					},
@@ -1473,7 +1475,11 @@ export class ConversationRouter {
 		readonly kind: "private" | "group";
 		readonly nowIso: string;
 		readonly platformConversationId: string;
-		readonly previous?: { readonly durableConversationId: string; readonly id: string };
+		readonly previous?: {
+			readonly createdAt: string;
+			readonly durableConversationId: string;
+			readonly id: string;
+		};
 		readonly todayKey: string;
 	}): Promise<{
 		chatObjectId: string;
@@ -1488,9 +1494,21 @@ export class ConversationRouter {
 		} = { method: "none", seeded: false, summaryChars: 0 };
 		if (input.previous !== undefined) {
 			try {
+				const personaChanged =
+					this.#policy === undefined
+						? false
+						: await this.#policy.personaChangedSince(
+								{
+									chatKind: input.kind,
+									chatObjectId: input.chatObjectId,
+									conversationId: input.previous.id,
+								},
+								input.previous.createdAt,
+							);
 				baseline = await input.host.seedConversationBaseline(
 					durableConversationId,
 					input.previous.durableConversationId,
+					{ carryForwardPreviousSummary: !personaChanged },
 				);
 			} catch (error) {
 				this.#logger.warn("failed to seed daily session baseline", {

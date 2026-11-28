@@ -345,13 +345,18 @@ describe("inspectConversationContext", () => {
 		const directory = await mkdtemp(join(tmpdir(), "tsukaima-baseline-"));
 		try {
 			const storage = await openDurableStorage(join(directory, "durable.sqlite"));
-			const summaryCalls: Array<{ previousSummary?: string; transcript: string }> = [];
+			const summaryCalls: Array<{
+				instructions?: string;
+				previousSummary?: string;
+				transcript: string;
+			}> = [];
 			let shouldFail = false;
 			const host = new PiDurableConversationHost({
 				contextProvider: {
 					renderPersona: async () => "persona",
 					summarizeCompaction: async (request) => {
 						summaryCalls.push({
+							...(request.instructions === undefined ? {} : { instructions: request.instructions }),
 							...(request.previousSummary === undefined
 								? {}
 								: { previousSummary: request.previousSummary }),
@@ -393,6 +398,7 @@ describe("inspectConversationContext", () => {
 			expect(day2Seed.seeded).toBe(true);
 			expect(day2Seed.method).toBe("llm");
 			expect(summaryCalls).toHaveLength(1);
+			expect(summaryCalls[0]?.instructions).toBeUndefined();
 			expect(summaryCalls[0]?.previousSummary).toBeUndefined();
 			expect(summaryCalls[0]?.transcript).toContain("weekend hike");
 			expect((await host.inspectConversationContext(day2))?.messageCount).toBe(1);
@@ -432,6 +438,13 @@ describe("inspectConversationContext", () => {
 			expect(day5Seed.seeded).toBe(true);
 			expect(day5Seed.method).toBe("fallback");
 			expect((await host.inspectConversationContext(day5))?.messageCount).toBe(1);
+
+			// Disabling carryForwardPreviousSummary drops stale summary without resetting unrelated empty days.
+			const day6 = await host.createConversation();
+			const day6Seed = await host.seedConversationBaseline(day6, day2, {
+				carryForwardPreviousSummary: false,
+			});
+			expect(day6Seed).toEqual({ method: "none", seeded: false, summaryChars: 0 });
 
 			await host.close();
 			await storage.close(BACKGROUND_CONTEXT);

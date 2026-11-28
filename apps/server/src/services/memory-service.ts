@@ -37,6 +37,7 @@ import type { ConversationPolicyService } from "./conversation-policy.ts";
 import {
 	consolidationBatchKey,
 	deterministicWarmState,
+	isMetaPersonaNoise,
 	isPhaticMessage,
 	MEMORY_CONSOLIDATION_PROMPT_VERSION,
 	mergeWarmState,
@@ -45,6 +46,7 @@ import {
 	parseWarmState,
 	renderConsolidationPrompt,
 	renderWarmStateLines,
+	sanitizeConsolidationOutput,
 	WARM_STATE_EVIDENCE_KEY,
 	type ConsolidationMessage,
 } from "./memory-consolidation.ts";
@@ -100,6 +102,12 @@ type MessageRow = typeof messages.$inferSelect;
 export type MemoryRecord = MemoryRow;
 
 export interface MemoryCreateInput {
+	/**
+	 * Explicit caller opt-in to re-activate a `revoked`/`rejected` row matched by `dedupeKey`.
+	 * Ignored when `createdBy === "task"` so background consolidation never silently resurrects
+	 * forgotten or rejected memories.
+	 */
+	readonly allowRevive?: boolean | undefined;
 	readonly confidence?: number | undefined;
 	readonly content?: string | undefined;
 	readonly conversationId?: string | undefined;
@@ -816,6 +824,19 @@ export class MemoryService {
 				.where(eq(memories.dedupeKey, dedupeKey))
 				.limit(1);
 			if (existing !== undefined) {
+				if (existing.status === "revoked" || existing.status === "rejected") {
+					const allowRevive = input.allowRevive === true && input.createdBy !== "task";
+					if (!allowRevive) {
+						this.#logger.debug("memory create skipped for tombstoned dedupe key", {
+							createdBy: input.createdBy ?? "agent",
+							kind: existing.kind,
+							memoryId: existing.id,
+							scope: existing.scope,
+							status: existing.status,
+						});
+						return { memory: existing, merged: false };
+					}
+				}
 				const status =
 					existing.status === "revoked" || existing.status === "rejected"
 						? (input.status ?? "active")
@@ -1460,12 +1481,18 @@ export class MemoryService {
 				let output: MemoryConsolidationOutput | undefined;
 				let failure = "malformed consolidation output";
 				try {
+					const persona = await this.#policyService.personaForSession({
+						chatKind: session.kind,
+						chatObjectId: session.chatObjectId,
+						conversationId: session.id,
+					});
 					const prompt = renderConsolidationPrompt({
 						chatKind: session.kind,
 						delta,
 						instructions:
 							(await this.#extractionPrompt?.()) ?? DEFAULT_PROMPTS["memory-extraction"],
 						nowIso: now,
+						...(persona?.name === undefined ? {} : { personaName: persona.name }),
 						policy: config,
 						previous,
 					});
@@ -1475,7 +1502,7 @@ export class MemoryService {
 					} else {
 						const parseResult = parseConsolidationOutputDetailed(text);
 						if (parseResult.ok) {
-							output = parseResult.data;
+							output = sanitizeConsolidationOutput(parseResult.data);
 						} else {
 							failure = parseResult.error;
 							this.#logger.warn("failed to parse memory consolidation output", {
@@ -2107,6 +2134,7 @@ export class MemoryService {
 		for (const candidate of candidates) {
 			if (written >= policy.memoryMaxWritesPerActivity) break;
 			if (candidate.confidence < policy.memoryMinConfidence) continue;
+			if (isMetaPersonaNoise(candidate.summary, candidate.content)) continue;
 			const expiresAt =
 				candidate.expiresAt === undefined ? undefined : parseDate(candidate.expiresAt);
 			// Only a subject that actually spoke in this batch is linked; never invent user ids.
@@ -2149,6 +2177,9 @@ export class MemoryService {
 				summary: snippet(candidate.summary, 1_000),
 				visibility: userScoped ? "shared" : "private",
 			});
+			if (result.memory.status === "revoked" || result.memory.status === "rejected") {
+				continue;
+			}
 			written += 1;
 			await this.#recordAudit(
 				status === "pending" ? "memory.extract.pending" : "memory.extract",
@@ -2213,6 +2244,7 @@ export class MemoryService {
 		for (const candidate of candidates) {
 			if (written >= policy.memoryMaxWritesPerActivity) break;
 			if (candidate.confidence < policy.memoryMinConfidence) continue;
+			if (isMetaPersonaNoise(candidate.summary, candidate.content)) continue;
 			const status: MemoryStatus = reviewRequired ? "pending" : "active";
 			const messageIds = chronological.map((row) => row.id);
 			const source = chronological.at(-1);
@@ -2242,6 +2274,9 @@ export class MemoryService {
 				summary: candidate.summary,
 				visibility: "private",
 			});
+			if (result.memory.status === "revoked" || result.memory.status === "rejected") {
+				continue;
+			}
 			written += 1;
 			await this.#recordAudit(
 				status === "pending" ? "memory.extract.pending" : "memory.extract",

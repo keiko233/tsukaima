@@ -297,6 +297,7 @@ function saveTool(context: PluginContext, log: PluginLogger): PluginTool {
 				});
 			}
 			const result = await resolved.service.create({
+				allowRevive: true,
 				confidence: Math.min(1, Math.max(0, inputNumber(input, "confidence") ?? 0.7)),
 				content: inputString(input, "content") ?? summary,
 				...(target.scope === "conversation" ? { conversationId: resolved.session.id } : {}),

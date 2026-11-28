@@ -23,6 +23,43 @@ export const MEMORY_CONSOLIDATION_PROMPT_VERSION = "memory-consolidate-v2";
 /** Evidence key that carries the structured {@link WarmStatePayload} on a `summary` memory. */
 export const WARM_STATE_EVIDENCE_KEY = "state";
 
+const META_PERSONA_OR_BANTER_NOISE_PATTERNS: readonly RegExp[] = [
+	// Meta output/formatting rules directed at how every bot reply or sticker must behave.
+	/(?:每条|每次|每一条).{0,10}(?:消息|回复|发言).{0,10}(?:带|配|发|加|附).{0,6}(?:表情包|表情|贴纸|颜文字)|(?:every|each)\s+(?:message|reply)\s+(?:must|should|will)\s+(?:include|have|send)\s+(?:a\s+)?sticker/iu,
+	/(?:回复|说话)时?.{0,6}(?:不打句号|不用句号|用空格代替句号|每次必须分段)/u,
+	// Generic AI-assistant persona leakage from ungrounded consolidation prompts.
+	/(?:AI\s*助手|\bthe assistant\b|助手(?:的人设|身份|性格|角色设定|自称|被设定为)|^(?:助手|assistant)\s*(?:建议|提醒|同意|决定|承诺|需要|必须|是|叫))/iu,
+];
+
+/**
+ * Guard against consolidating assistant-persona leaks or meta-formatting promises into long-term
+ * memory rows or warm-state commitments.
+ */
+export function isMetaPersonaNoise(summary: string, content?: string): boolean {
+	for (const text of [summary, content]) {
+		if (text === undefined || text.trim().length === 0) continue;
+		if (META_PERSONA_OR_BANTER_NOISE_PATTERNS.some((pattern) => pattern.test(text))) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** Drop obviously leaked assistant-persona or meta-formatting items from parsed consolidation JSON. */
+export function sanitizeConsolidationOutput(
+	output: MemoryConsolidationOutput,
+): MemoryConsolidationOutput {
+	return {
+		memories: output.memories.filter(
+			(memory) => !isMetaPersonaNoise(memory.summary, memory.content),
+		),
+		state: {
+			...output.state,
+			commitments: output.state.commitments.filter((item) => !isMetaPersonaNoise(item.text)),
+		},
+	};
+}
+
 /** Settled message as the consolidation pass sees it. */
 export interface ConsolidationMessage {
 	readonly id: string;
@@ -484,16 +521,18 @@ export function renderConsolidationPrompt(input: {
 	readonly delta: readonly ConsolidationMessage[];
 	readonly instructions: string;
 	readonly nowIso: string;
+	readonly personaName?: string | undefined;
 	readonly previous: WarmStatePayload | undefined;
 	readonly policy: Pick<MemoryConsolidationPolicy, "maxPersonCards" | "summaryMaxChars">;
 }): string {
+	const selfLabel = input.personaName?.trim() || "(assistant)";
 	const transcript = input.delta
 		.filter((message) => message.text.trim().length > 0)
 		.map((message) => {
 			const id = message.senderUserId?.trim() || message.senderExternalId?.trim() || null;
 			const speaker =
 				message.direction === "outbound"
-					? "(assistant)"
+					? selfLabel
 					: `${message.senderDisplayName?.trim() || "Unknown"}${id === null ? "" : ` <${id}>`}`;
 			return `[${message.occurredAt}] ${speaker}: ${clip(message.text, 500)}`;
 		})
@@ -508,6 +547,7 @@ export function renderConsolidationPrompt(input: {
 		`- state is the COMPLETE merged state (not a diff) with: summary (<= ${input.policy.summaryMaxChars} chars), topics (<= 6 short strings), people (<= ${input.policy.maxPersonCards} cards: key, name, aliases, notes, lastSeenAt), atmosphere, glossary (term, meaning), commitments (key, text, owner, status open|done|cancelled, expiresAt ISO), answers (key, question, answer, answeredAt).`,
 		"- Person card keys: use the unique <id> shown after a speaker name (e.g. user_xxx or platform id). Never use a display name or nickname as a key; never use name:<display name>. If no <id> is present, do not create a person card. Never invent keys.",
 		"- memories: only new durable facts worth remembering beyond this chat window: kind (fact|preference|person|relationship|event|todo|glossary|style), summary, optional content, optional subject (unique <id> of the person, NEVER a nickname or display name), confidence 0..1, importance 0..1, optional expiresAt.",
+		`- Never rewrite or record the bot's (${selfLabel}) own persona, identity, aliases, reply-style/punctuation/sticker-frequency promises, brief teasing/banter, or playful fictional boasts as facts, glossary, or open commitments.`,
 		"- Return an empty memories array when nothing durable was said.",
 		"",
 		`Chat kind: ${input.chatKind}. Current time: ${input.nowIso}.`,

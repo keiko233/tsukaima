@@ -428,6 +428,18 @@ describe("memory tools", () => {
 			expect(forgottenDay2.ok).toBe(true);
 			expect((await lifecycle.memory.get(memoryId))?.status).toBe("revoked");
 
+			// Explicit memory.save can still re-activate a revoked row matching its updated dedupeKey.
+			const explicitRevive = await lifecycle.pluginHost.invokeTool(
+				"memory.save",
+				{
+					kind: "preference",
+					scope: "conversation",
+					summary: "Prefers black tea with lemon on rainy days",
+				},
+				{ conversationId: "durable-day1-tools" },
+			);
+			expect(explicitRevive.ok).toBe(true);
+			expect((await lifecycle.memory.get(memoryId))?.status).toBe("active");
 		} finally {
 			await lifecycle.stop();
 		}

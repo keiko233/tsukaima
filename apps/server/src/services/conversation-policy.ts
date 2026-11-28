@@ -757,6 +757,49 @@ export class ConversationPolicyService {
 			: { behavior: parsePersonaBehavior(row.behaviorJson), persona: toPersonaSummary(row) };
 	}
 
+	/**
+	 * Whether a binding or persona version applicable to `session` was created after `sinceIso`,
+	 * so session rollover avoids carrying forward stale compaction summaries across persona edits.
+	 */
+	async personaChangedSince(
+		session: {
+			chatKind: string;
+			chatObjectId: string | null;
+			conversationId: string;
+		},
+		sinceIso: string,
+	): Promise<boolean> {
+		const database = this.#db();
+		const activeBindings = await database
+			.select()
+			.from(personaBindings)
+			.where(eq(personaBindings.isActive, 1))
+			.orderBy(desc(personaBindings.createdAt));
+		const binding =
+			activeBindings.find((row) => row.conversationId === session.conversationId) ??
+			(session.chatObjectId === null
+				? undefined
+				: activeBindings.find((row) => row.chatObjectId === session.chatObjectId)) ??
+			activeBindings.find(
+				(row) =>
+					row.isGlobal === 0 &&
+					row.chatKind !== null &&
+					row.chatKind === session.chatKind &&
+					row.chatObjectId === null &&
+					row.conversationId === null,
+			) ??
+			activeBindings.find((row) => row.isGlobal === 1);
+		if (binding !== undefined && binding.createdAt > sinceIso) return true;
+		if (binding === undefined) return false;
+		const [persona] = await database
+			.select({ createdAt: personas.createdAt })
+			.from(personas)
+			.where(and(eq(personas.id, binding.personaId), eq(personas.isActive, 1)))
+			.orderBy(desc(personas.version))
+			.limit(1);
+		return persona !== undefined && persona.createdAt > sinceIso;
+	}
+
 	async #resolvePersona(
 		database: TsukaimaDatabase,
 		session: { chatKind: string; chatObjectId: string | null; conversationId: string },
